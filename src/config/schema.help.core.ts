@@ -158,6 +158,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Execution isolation for newly created sessions: "inherit" (default) uses the agent policy; "required" permanently requires a sandbox, even when the agent sandbox mode is off, and fails closed if the backend is unavailable.',
   "gateway.roles.definitions.*.agents":
     'Agents available when this role creates sessions or starts runs: set "*" to allow every agent, list agent IDs to allow only those agents, or use an empty list to disable both.',
+  "gateway.roles.definitions.*.modelPolicy":
+    "Optional model ceiling for this role's requests and descendants. An empty object allows only the source agent's configured primary and fallback models; omitting the policy leaves model access unchanged. Model aliases resolve before enforcement, and denied models cannot be used by retries or fallbacks. With config reload enabled, changes confined to existing roles' model policies apply when committed without restarting permitted work. Other role changes hot-apply and reconnect clients with current authority.",
+  "gateway.roles.definitions.*.modelPolicy.sourceAgent":
+    "Agent whose primary, fallbacks, and model aliases supply this role's model policy. Defaults to the configured system/default agent or the sole agent. Set this explicitly when a multi-agent Gateway has no ambient owner.",
+  "gateway.roles.definitions.*.modelPolicy.allow":
+    'Optional replacement allowlist of model references, configured aliases, or trailing prefix wildcards such as "provider/*" or "provider/family-*". Omitted uses the source agent primary and fallbacks; an empty list denies all models. The first permitted source model remains Default, followed by explicit allowed models.',
+  "gateway.roles.definitions.*.modelPolicy.deny":
+    'Model references, source-agent aliases, or trailing prefix wildcards excluded from this role. A pattern such as "provider/family-*" excludes future members of that family too. Exclusions match resolved model identities and take precedence over allowed and source-agent models.',
   "gateway.roles.definitions.*.scopes":
     "Closed list of operator scopes granted as this role's maximum connection authority. Requested, paired, identity-granted, and upgraded scopes are intersected with this list.",
   "gateway.roles.definitions.*.accessPolicyPlugin":

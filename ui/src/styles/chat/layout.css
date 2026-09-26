@@ -201,20 +201,24 @@ openclaw-pending-session-create {
   opacity: 0.5;
 }
 
-/* Transcript search sits above the workbench. Keep the shared SVG icon from
-   taking its intrinsic flex width and size the controls as compact chrome. */
-.chat:has(> .agent-chat__search-bar) {
-  border-radius: 0;
-}
-
+/* Center search in its own pane, including narrow split views. */
 .agent-chat__search-bar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--border);
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  flex: 0 0 auto;
+  align-self: center;
+  width: min(560px, calc(100% - 32px));
+  margin: 10px auto 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   background: var(--card);
+}
+
+.agent-chat__search-bar:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .agent-chat__search-bar svg {
@@ -226,10 +230,15 @@ openclaw-pending-session-create {
 
 .agent-chat__search-bar input {
   flex: 1;
+  min-width: 0;
   border: none;
   background: transparent;
   color: var(--text);
   font-size: 0.88rem;
+}
+
+.agent-chat__search-bar input:focus-visible {
+  outline: none;
 }
 
 .agent-chat__search-bar input::placeholder {
@@ -941,11 +950,9 @@ openclaw-pending-session-create {
 }
 
 .context-usage__popover {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 10px);
-  z-index: 70;
   width: min(300px, calc(100vw - 42px));
+  max-height: var(--auto-size-available-height, calc(100dvh - 16px));
+  overflow-y: auto;
   padding: 14px;
   color: var(--popover-foreground);
   animation: fade-in 150ms var(--ease-out);
@@ -2924,13 +2931,7 @@ openclaw-chat-ci-details {
 
 @media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .context-usage__popover {
-    position: fixed;
-    left: max(12px, var(--safe-area-left));
-    right: max(12px, var(--safe-area-right));
-    bottom: var(--chat-composer-popover-bottom, calc(96px + var(--safe-area-bottom)));
-    width: auto;
-    max-height: var(--chat-composer-popover-max-height, calc(100dvh - 116px));
-    overflow-y: auto;
+    width: calc(100vw - max(12px, var(--safe-area-left)) - max(12px, var(--safe-area-right)));
   }
 }
 

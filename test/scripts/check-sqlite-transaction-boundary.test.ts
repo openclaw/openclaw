@@ -1,14 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { findSqliteTransactionBoundaryViolations } from "../../scripts/check-sqlite-transaction-boundary.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+
+function parseFixture(content: string) {
+  return [content, "source.ts", parser.parseSourceFile("source.ts", content)] as const;
+}
 
 describe("SQLite transaction boundary guard", () => {
   it("rejects removed async transaction primitives", () => {
     expect(
-      findSqliteTransactionBoundaryViolations(`
+      findSqliteTransactionBoundaryViolations(
+        ...parseFixture(`
         import { runSqliteImmediateTransactionAsync } from "./sqlite-transaction.js";
         export async function runOpenClawAgentWriteTransactionAsync() {}
         await database.runSqliteImmediateTransactionAsync(async () => undefined);
       `),
+      ),
     ).toEqual([
       {
         line: 2,
@@ -30,11 +40,13 @@ describe("SQLite transaction boundary guard", () => {
 
   it("rejects inline async callbacks passed to synchronous transaction helpers", () => {
     expect(
-      findSqliteTransactionBoundaryViolations(`
+      findSqliteTransactionBoundaryViolations(
+        ...parseFixture(`
         runSqliteImmediateTransactionSync(db, async () => await prepare());
         runOpenClawAgentWriteTransaction(async (database) => await write(database), options);
         runOpenClawStateWriteTransaction(async (database) => await write(database));
       `),
+      ),
     ).toEqual([
       {
         line: 2,
@@ -56,12 +68,14 @@ describe("SQLite transaction boundary guard", () => {
 
   it("rejects local async function references passed as callbacks", () => {
     expect(
-      findSqliteTransactionBoundaryViolations(`
+      findSqliteTransactionBoundaryViolations(
+        ...parseFixture(`
         async function writeRows() {}
         const writeAgentRows = async () => undefined;
         runSqliteImmediateTransactionSync(db, writeRows);
         runOpenClawAgentWriteTransaction(writeAgentRows, options);
       `),
+      ),
     ).toEqual([
       {
         line: 4,
@@ -78,10 +92,12 @@ describe("SQLite transaction boundary guard", () => {
 
   it("tracks aliases of synchronous transaction imports", () => {
     expect(
-      findSqliteTransactionBoundaryViolations(`
+      findSqliteTransactionBoundaryViolations(
+        ...parseFixture(`
         import { runSqliteImmediateTransactionSync as transact } from "./sqlite-transaction.js";
         transact(db, async () => undefined);
       `),
+      ),
     ).toEqual([
       {
         line: 3,
@@ -93,13 +109,15 @@ describe("SQLite transaction boundary guard", () => {
 
   it("allows asynchronous preparation followed by a synchronous commit callback", () => {
     expect(
-      findSqliteTransactionBoundaryViolations(`
+      findSqliteTransactionBoundaryViolations(
+        ...parseFixture(`
         const prepared = await prepareMutation();
         runOpenClawAgentWriteTransaction((database) => {
           validate(database, prepared.expected);
           apply(database, prepared.patch);
         }, options);
       `),
+      ),
     ).toEqual([]);
   });
 });

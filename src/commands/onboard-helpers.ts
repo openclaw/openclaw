@@ -116,20 +116,7 @@ function summarizeGatewayConfig(config: OpenClawConfig): string | null {
 }
 
 function formatGatewayBind(value: string | undefined): string | undefined {
-  switch (value) {
-    case "lan":
-      return "LAN";
-    case "loopback":
-      return "loopback";
-    case "tailnet":
-      return "tailnet";
-    case "auto":
-      return "auto";
-    case "custom":
-      return "custom";
-    default:
-      return normalizeOptionalString(value);
-  }
+  return value === "lan" ? "LAN" : normalizeOptionalString(value);
 }
 
 /** Normalizes gateway token prompts while rejecting JS stringification sentinels. */

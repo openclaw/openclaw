@@ -395,13 +395,27 @@ describe("OpenClaw database schema preflight", () => {
         expect.objectContaining({
           discovery: expect.objectContaining({
             targets: [],
-            retainedDeletions: "unavailable",
+            deletionJournal: {
+              status: "unavailable",
+              cause: "missing",
+              reason: "shared state database missing",
+            },
+            retainedTargets: [],
+            unverifiedTargets: [
+              {
+                agentId: "main",
+                path: agent.path,
+                realPath: fs.realpathSync.native(agent.path),
+                source: layout === "configured" ? "configured" : "disk",
+              },
+            ],
             registryRemovals: [],
             failures: [],
             warnings: [
               expect.stringContaining(
                 `Held agent main database ${agent.path} (deletion journal unavailable); run openclaw doctor --fix`,
               ),
+              "Agent deletion journal missing; 1 store held back. Run openclaw doctor --fix to record recovery, then restore or delete each held agent explicitly.",
             ],
           }),
         }),

@@ -81,6 +81,7 @@ describe("resident profile display and reference catalog", () => {
         assignedRole: null,
       });
       expect(current.aliases).toEqual(new Set([first.id]));
+      expect(prepared.readCurrentProfile()).toEqual({ profileId: first.id, assignedRole: null });
       expect(native).not.toHaveBeenCalled();
       native.mockRestore();
       setDisplayName(first.id, "Cosmetic update", options);
@@ -90,6 +91,10 @@ describe("resident profile display and reference catalog", () => {
       );
       linkEmail("later@example.test", target.id, options);
       setUserProfileRole(first.id, "reader", options);
+      expect(prepared.readCurrentProfile()).toEqual({
+        profileId: first.id,
+        assignedRole: "reader",
+      });
       prepared.readCurrentFacts(bindings);
       if (producer === "email") {
         linkEmail(email, target.id, options);
@@ -132,6 +137,7 @@ describe("resident profile display and reference catalog", () => {
     await closeOpenClawStateDatabaseByPathAsync(replacement.path);
     fs.renameSync(replacement.path, options.path);
     expect(() => prepared.readCurrentFacts()).toThrow();
+    expect(() => prepared.readCurrentProfile()).toThrow();
     const next = await prepareUserProfileIdentity(current.id, options);
     releases.push(next.release);
     expect(next.emailBindingIds).toEqual([expect.any(String)]);
@@ -144,6 +150,7 @@ describe("resident profile display and reference catalog", () => {
     const missing = await prepareUserProfileIdentity(prior.id, options);
     releases.push(missing.release);
     expect(() => missing.readCurrentFacts()).toThrow("user profile not found");
+    expect(() => missing.readCurrentProfile()).toThrow("user profile not found");
   });
 
   it.each(["email", "github"])(

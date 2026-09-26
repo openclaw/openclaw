@@ -95,7 +95,13 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     progressText ? `Progress: ${progressText}` : undefined,
     taskSummaryText ? `Task summary: ${taskSummaryText}` : undefined,
     taskErrorText ? `Task error: ${taskErrorText}` : undefined,
-    linkedTask ? `Delivery: ${linkedTask.deliveryStatus}` : undefined,
+    linkedTask || run.delivery
+      ? `Delivery: ${linkedTask?.deliveryStatus ?? run.delivery?.status}`
+      : undefined,
+    run.delivery?.discardReason ? `Delivery disposition: ${run.delivery.discardReason}` : undefined,
+    run.delivery?.discardedAt
+      ? `Delivery retired: ${formatTimestampWithAge(run.delivery.discardedAt)}`
+      : undefined,
   ].filter(Boolean);
 
   return commandReply(lines.join("\n"));

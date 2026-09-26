@@ -22,6 +22,7 @@ import { preserveCreationStamp } from "../config/sessions/session-entry-provenan
 import { serializeJsonlLines } from "../config/sessions/transcript-jsonl.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveTargetSqliteOptions } from "../infra/session-sqlite-migration-readers.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
@@ -33,7 +34,6 @@ import {
   type CanonicalSessionCandidate,
   type CanonicalSessionCandidateFact,
 } from "./doctor-session-canonical-candidates.js";
-import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
 
 function createCanonicalRepairRemoval(
   candidate: CanonicalSessionCandidate,

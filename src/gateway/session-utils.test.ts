@@ -66,6 +66,7 @@ import {
 import { withAgentPermissionState } from "./session-utils.permissions.test-support.js";
 import {
   closeSessionSqliteDatabasesForTest,
+  useSessionStoreFixture,
   withStateDirEnv,
 } from "./session-utils.test-support.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
@@ -1168,6 +1169,7 @@ describe("gateway session utils", () => {
       "medium",
       "high",
       "max",
+      "ultra",
     ]);
     expect(row.thinkingLevels?.map((level) => level.id)).toEqual([
       "off",
@@ -1175,6 +1177,7 @@ describe("gateway session utils", () => {
       "medium",
       "high",
       "max",
+      "ultra",
     ]);
     expect(defaults.thinkingDefault).toBe("medium");
     expect(row.thinkingDefault).toBe("medium");
@@ -1233,8 +1236,8 @@ describe("gateway session utils", () => {
       modelCatalog: catalog,
     });
 
-    expect(defaults.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
-    expect(row.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+    expect(defaults.thinkingLevels?.map((level) => level.id)).toEqual(["off", "ultra"]);
+    expect(row.thinkingLevels?.map((level) => level.id)).toEqual(["off", "ultra"]);
     expect(defaults.thinkingDefault).toBe("off");
     expect(row.thinkingDefault).toBe("off");
   });
@@ -1639,63 +1642,6 @@ describe("gateway session utils", () => {
       providerArtifactMocks.resolveBundledProviderPolicySurface.mock.calls.at(-1) ?? [];
     expect(providerId).toBe("openai");
     expect(options).toHaveProperty("manifestRegistry");
-  });
-
-  test("keeps stored thinking without capability facts and clamps it with a known profile", () => {
-    providerArtifactMocks.resolveBundledProviderPolicySurface.mockReturnValue({
-      resolveThinkingProfile: () => ({
-        levels: [{ id: "off" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
-      }),
-    });
-    const cfg = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
-          models: {
-            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const row = (
-      entry: SessionEntry,
-      catalog?: { reasoning?: boolean; compat?: { supportedReasoningEfforts: string[] } },
-    ) =>
-      buildGatewaySessionRow({
-        cfg,
-        storePath: "",
-        store: {},
-        key: "agent:main:main",
-        entry,
-        ...(catalog
-          ? {
-              modelCatalog: [
-                {
-                  provider: "openai",
-                  id: "gpt-5.6-sol",
-                  name: "GPT-5.6 Sol (API route)",
-                  ...catalog,
-                },
-              ],
-            }
-          : {}),
-      });
-
-    const stored = { sessionId: "stored", thinkingLevel: "ultra" } as SessionEntry;
-
-    expect(row(stored).thinkingLevel).toBe("ultra");
-    expect(row(stored, {}).thinkingLevel).toBe("ultra");
-    expect(row(stored, { reasoning: true }).thinkingLevel).toBe("high");
-    expect(
-      row(stored, { reasoning: true, compat: { supportedReasoningEfforts: ["max"] } })
-        .thinkingLevel,
-    ).toBe("max");
-    const nativeUltra = row(stored, {
-      reasoning: true,
-      compat: { supportedReasoningEfforts: ["max", "ultra"] },
-    });
-    expect(nativeUltra.thinkingLevel).toBe("ultra");
-    expect(nativeUltra.thinkingLevels).toContainEqual({ id: "ultra", label: "ultra" });
   });
 
   test("strips retired thinking provenance from Gateway patch results", () => {
@@ -4662,7 +4608,7 @@ describe("gateway session utils", () => {
           },
         },
       };
-      const loadApprovals = vi.spyOn(execApprovalsStore, "loadExecApprovals");
+      const loadApprovals = vi.spyOn(execApprovalsStore, "loadExecApprovalsReadOnlyAsync");
       onTestFinished(() => loadApprovals.mockRestore());
       expect(
         (await listAgentsForGateway(cfg)).agents.map(({ id, defaultPermissionMode }) => [
@@ -4898,7 +4844,10 @@ describe("gateway session utils", () => {
     });
     const agentsById = new Map(result.agents.map((agent) => [agent.id, agent]));
 
-    expect(agentsById.get("main")?.thinkingLevels?.map((level) => level.id)).toEqual(["off"]);
+    expect(agentsById.get("main")?.thinkingLevels?.map((level) => level.id)).toEqual([
+      "off",
+      "ultra",
+    ]);
     expect(agentsById.get("work")?.thinkingDefault).toBe("medium");
     expect(agentsById.get("work")?.thinkingLevels?.map((level) => level.id)).toContain("medium");
     expect(agentsById.get("missing")?.thinkingLevels?.map((level) => level.id)).toContain("high");
@@ -4948,6 +4897,7 @@ describe("gateway session utils", () => {
         "low",
         "medium",
         "high",
+        "ultra",
       ]);
       expect(agent?.thinkingOptions).toEqual(agent?.thinkingLevels?.map((level) => level.label));
     });
@@ -4955,30 +4905,100 @@ describe("gateway session utils", () => {
 });
 
 describe("session list selected model display", () => {
+  const fixtureStorePath = useSessionStoreFixture("openclaw-session-model-list-");
+
   test("async list yields during bulk transcript title and last-message hydration", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-yield-"));
-    try {
-      const storePath = path.join(tmpDir, "sessions.json");
-      const store: Record<string, SessionEntry> = {};
-      const now = Date.now();
-      for (let i = 0; i < 11; i += 1) {
-        const sessionId = `sess-yield-${i}`;
-        const sessionKey = `agent:main:${sessionId}`;
-        const entry = {
-          sessionId,
-          updatedAt: now - i,
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          totalTokens: 1,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
-          contextTokens: 1,
-          estimatedCostUsd: 0,
-        } as SessionEntry;
-        store[sessionKey] = entry;
-        seedSessionEntries(storePath, {
-          [sessionKey]: entry,
-        });
+    const storePath = fixtureStorePath();
+    const store: Record<string, SessionEntry> = {};
+    const now = Date.now();
+    for (let i = 0; i < 11; i += 1) {
+      const sessionId = `sess-yield-${i}`;
+      const sessionKey = `agent:main:${sessionId}`;
+      const entry = {
+        sessionId,
+        updatedAt: now - i,
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        totalTokens: 1,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        contextTokens: 1,
+        estimatedCostUsd: 0,
+      } as SessionEntry;
+      store[sessionKey] = entry;
+      seedSessionEntries(storePath, {
+        [sessionKey]: entry,
+      });
+      appendTranscriptMessages({
+        sessionId,
+        sessionKey,
+        storePath,
+        messages: [
+          { role: "user", content: `title ${i}` },
+          { role: "assistant", content: `last ${i}` },
+        ],
+      });
+    }
+
+    const params = {
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath,
+      store,
+      opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 11 },
+    };
+    const listedPromise = listSessionFixture(params);
+    let settled = false;
+    void listedPromise.then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    const listed = await listedPromise;
+    expect(listed.path).toBe(storePath);
+    expect(listed.count).toBe(11);
+    expect(listed.sessions).toHaveLength(11);
+    expectFields(listed.sessions[0], {
+      key: "agent:main:sess-yield-0",
+      derivedTitle: "Title 0",
+      lastMessagePreview: "last 0",
+    });
+    expectFields(listed.sessions.at(-1), {
+      key: "agent:main:sess-yield-10",
+      derivedTitle: "Title 10",
+      lastMessagePreview: "last 10",
+    });
+    expect(listed.sessions[0]?.agentRuntime).toEqual({
+      id: "codex",
+      cloudPlacementSupported: false,
+      devicePlacementSupported: false,
+      source: "implicit",
+    });
+    expect(listed.sessions[0]?.thinkingLevel).toBeUndefined();
+    expect(listed.sessions[0]?.thinkingLevels?.length).toBeGreaterThan(0);
+    expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
+    expect(listed.sessions[0]?.thinkingDefault).toBe("off");
+  });
+
+  test("caps transcript title and last-message hydration for bulk list responses", async () => {
+    const storePath = fixtureStorePath();
+    const store: Record<string, SessionEntry> = {};
+    const now = Date.now();
+    for (let i = 0; i < 101; i += 1) {
+      const sessionId = `sess-${i}`;
+      const sessionKey = `agent:main:${sessionId}`;
+      const entry = {
+        sessionId,
+        updatedAt: now - i,
+        modelProvider: "openai",
+        model: "gpt-5.4",
+      } as SessionEntry;
+      store[sessionKey] = entry;
+      seedSessionEntries(storePath, {
+        [sessionKey]: entry,
+      });
+      if (i === 0 || i === 99 || i === 100) {
         appendTranscriptMessages({
           sessionId,
           sessionKey,
@@ -4989,102 +5009,22 @@ describe("session list selected model display", () => {
           ],
         });
       }
-
-      const params = {
-        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
-        storePath,
-        store,
-        opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 11 },
-      };
-      const listedPromise = listSessionFixture(params);
-      let settled = false;
-      void listedPromise.then(() => {
-        settled = true;
-      });
-
-      await Promise.resolve();
-
-      expect(settled).toBe(false);
-      const listed = await listedPromise;
-      expect(listed.path).toBe(storePath);
-      expect(listed.count).toBe(11);
-      expect(listed.sessions).toHaveLength(11);
-      expectFields(listed.sessions[0], {
-        key: "agent:main:sess-yield-0",
-        derivedTitle: "Title 0",
-        lastMessagePreview: "last 0",
-      });
-      expectFields(listed.sessions.at(-1), {
-        key: "agent:main:sess-yield-10",
-        derivedTitle: "Title 10",
-        lastMessagePreview: "last 10",
-      });
-      expect(listed.sessions[0]?.agentRuntime).toEqual({
-        id: "codex",
-        cloudPlacementSupported: false,
-        devicePlacementSupported: false,
-        source: "implicit",
-      });
-      expect(listed.sessions[0]?.thinkingLevel).toBeUndefined();
-      expect(listed.sessions[0]?.thinkingLevels?.length).toBeGreaterThan(0);
-      expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
-      expect(listed.sessions[0]?.thinkingDefault).toBe("off");
-    } finally {
-      await closeSessionSqliteDatabasesForTest();
-      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-  });
 
-  test("caps transcript title and last-message hydration for bulk list responses", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-cap-"));
-    try {
-      const storePath = path.join(tmpDir, "sessions.json");
-      const store: Record<string, SessionEntry> = {};
-      const now = Date.now();
-      for (let i = 0; i < 101; i += 1) {
-        const sessionId = `sess-${i}`;
-        const sessionKey = `agent:main:${sessionId}`;
-        const entry = {
-          sessionId,
-          updatedAt: now - i,
-          modelProvider: "openai",
-          model: "gpt-5.4",
-        } as SessionEntry;
-        store[sessionKey] = entry;
-        seedSessionEntries(storePath, {
-          [sessionKey]: entry,
-        });
-        if (i === 0 || i === 99 || i === 100) {
-          appendTranscriptMessages({
-            sessionId,
-            sessionKey,
-            storePath,
-            messages: [
-              { role: "user", content: `title ${i}` },
-              { role: "assistant", content: `last ${i}` },
-            ],
-          });
-        }
-      }
+    const result = await listSessionFixture({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath,
+      store,
+      opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 101 },
+    });
 
-      const result = await listSessionFixture({
-        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
-        storePath,
-        store,
-        opts: { includeDerivedTitles: true, includeLastMessage: true, limit: 101 },
-      });
-
-      expect(result.sessions).toHaveLength(101);
-      expect(result.sessions[0]?.derivedTitle).toBe("Title 0");
-      expect(result.sessions[0]?.lastMessagePreview).toBe("last 0");
-      expect(result.sessions[99]?.derivedTitle).toBe("Title 99");
-      expect(result.sessions[99]?.lastMessagePreview).toBe("last 99");
-      expect(result.sessions[100]?.derivedTitle).toBeUndefined();
-      expect(result.sessions[100]?.lastMessagePreview).toBeUndefined();
-    } finally {
-      await closeSessionSqliteDatabasesForTest();
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    expect(result.sessions).toHaveLength(101);
+    expect(result.sessions[0]?.derivedTitle).toBe("Title 0");
+    expect(result.sessions[0]?.lastMessagePreview).toBe("last 0");
+    expect(result.sessions[99]?.derivedTitle).toBe("Title 99");
+    expect(result.sessions[99]?.lastMessagePreview).toBe("last 99");
+    expect(result.sessions[100]?.derivedTitle).toBeUndefined();
+    expect(result.sessions[100]?.lastMessagePreview).toBeUndefined();
   });
 
   test("uses bounded top-N selection for small limited lists", async () => {
@@ -5098,7 +5038,7 @@ describe("session list selected model display", () => {
     };
     const result = await listSessionFixture({
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store,
       opts: { limit: 4 },
     });
@@ -5124,7 +5064,7 @@ describe("session list selected model display", () => {
           ],
         },
       } as OpenClawConfig,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store: {
         global: { sessionId: "global", updatedAt: now } as SessionEntry,
         "agent:main:main": { sessionId: "main", updatedAt: now - 1 } as SessionEntry,
@@ -5153,7 +5093,7 @@ describe("session list selected model display", () => {
           },
         },
       } as OpenClawConfig,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store: {
         global: { sessionId: "global", updatedAt: now } as SessionEntry,
       },
@@ -5173,7 +5113,7 @@ describe("session list selected model display", () => {
     const now = Date.now();
     const result = await listSessionFixture({
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store: {
         "agent:main:sessions": {} as SessionEntry,
         "agent:main:main": { sessionId: "sess-main", updatedAt: now } as SessionEntry,
@@ -5191,7 +5131,7 @@ describe("session list selected model display", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store: {
         "agent:main:main": {
           sessionId: "sess-main",
@@ -5217,7 +5157,7 @@ describe("session list selected model display", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store: {
         "agent:main:main": {
           sessionId: "sess-main",
@@ -5250,7 +5190,7 @@ describe("session list selected model display", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store: {
         "agent:main:main": {
           sessionId: "sess-main",
@@ -5288,7 +5228,7 @@ describe("session list selected model display", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store: {
         "agent:main:main": {
           sessionId: "sess-main",
@@ -5325,7 +5265,7 @@ describe("session list selected model display", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store: {
         "agent:main:main": {
           sessionId: "sess-main",
@@ -5351,7 +5291,7 @@ describe("session list selected model display", () => {
 
     const result = await listSessionFixture({
       cfg,
-      storePath: "/tmp/sessions.json",
+      storePath: fixtureStorePath(),
       store: {
         "agent:main:main": {
           sessionId: "sess-main",

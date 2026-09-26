@@ -24,6 +24,8 @@ export type SessionCapabilityEntry = {
 
 /** A complete store view; reads are memoized only for the current synchronous resolution. */
 export type SessionCapabilityLookup = {
+  /** Cross-agent owner projection: missing rows are authoritative, never a database fallback. */
+  authoritative?: true;
   /** Reuse this memo when depth fallback revisits the same logical store. */
   scope?: { storePath: string; agentId: string };
   get: (sessionKey: string) => SessionCapabilityEntry | undefined;

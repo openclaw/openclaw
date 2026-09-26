@@ -101,6 +101,65 @@ test.each(["close", "replacement", "restart"])(
   },
 );
 
+test.each(["release", "abort"])(
+  "nested approval scopes retain their original worker through %s and reentrant cleanup",
+  (closure) => {
+    const root = claimAgentRunDelegatedAuthority({
+      instanceId: "nested-instance",
+      runId: "nested-run",
+    });
+    const workerLifetime = new AbortController();
+    const worker = claimAgentRunApprovalAuthority(root, [workerLifetime.signal]);
+    const request = claimAgentRunApprovalAuthority({ ...worker }, [new AbortController().signal]);
+    const child = claimAgentRunApprovalAuthority(request, [new AbortController().signal]);
+    const sibling = claimAgentRunApprovalAuthority(root, [new AbortController().signal]);
+    const copiedChild = structuredClone(child);
+    expect(validateAgentRunDelegatedAuthority(copiedChild, worker)).toBe(true);
+    expect(validateAgentRunDelegatedAuthority(worker, request)).toBe(false);
+    expect(validateAgentRunDelegatedAuthority(sibling, worker)).toBe(false);
+    const closed: Array<{
+      claimId: string;
+      reason: string | undefined;
+      childCurrent: boolean;
+      rootCurrent: boolean;
+      siblingCurrent: boolean;
+      releasedAgain: boolean;
+    }> = [];
+    const stop = registerAgentRunDelegatedAuthorityClosedHandler((authority, reason) => {
+      closed.push({
+        claimId: authority.claimId,
+        reason,
+        childCurrent: validateAgentRunDelegatedAuthority(copiedChild),
+        rootCurrent: validateAgentRunDelegatedAuthority(root),
+        siblingCurrent: validateAgentRunDelegatedAuthority(sibling),
+        releasedAgain: releaseAgentRunDelegatedAuthority(child),
+      });
+    });
+    try {
+      if (closure === "release") {
+        releaseAgentRunDelegatedAuthority(worker);
+      } else {
+        workerLifetime.abort();
+      }
+      expect(closed).toEqual(
+        [child.claimId, request.claimId, worker.claimId].map((claimId) => ({
+          claimId,
+          reason: "approval-scope-closed",
+          childCurrent: false,
+          rootCurrent: true,
+          siblingCurrent: true,
+          releasedAgain: false,
+        })),
+      );
+      expect(validateAgentRunDelegatedAuthority(copiedChild)).toBe(false);
+      expect(() => claimAgentRunApprovalAuthority(worker, [])).toThrow("no longer active");
+    } finally {
+      stop();
+      releaseAgentRunDelegatedAuthority(root);
+    }
+  },
+);
+
 test("stale projection sweeping cannot retire a live delegated authority claim", () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(100);
   const authority = claimAgentRunDelegatedAuthority({

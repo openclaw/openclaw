@@ -130,7 +130,7 @@ export async function runQaConvexLookup(
         ? "AUTH_REQUIRED"
         : /project|deployment|forbidden|permission|403/iu.test(diagnostic)
           ? "PROJECT_ACCESS"
-          : /not found|not installed|missing packages|could not determine executable|ENOTCACHED|ENOENT/iu.test(
+          : /not found|not installed|missing packages|could not determine executable|could not find an existing 'convex' binary to run|ENOTCACHED|ENOENT/iu.test(
                 diagnostic,
               )
             ? "UNAVAILABLE"

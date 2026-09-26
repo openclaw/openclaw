@@ -25,6 +25,16 @@ export type RuntimeContextFragment = {
   text: string;
 };
 
+export type CurrentInboundPromptContext = {
+  text: string;
+  /** Producer-owned fragments for model projection; text remains the legacy rendering. */
+  fragments?: RuntimeContextFragment[];
+  resumableText?: string;
+  promptJoiner?: "\n\n" | "\n" | " ";
+  /** Generated goal blocks owned by inbound-context assembly, never user text. */
+  injectedGoalContexts?: string[];
+};
+
 const LEGACY_INTERNAL_CONTEXT_HEADER =
   ["OpenClaw runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") + "\n";
 
@@ -215,6 +225,14 @@ const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
   "OpenClaw runtime context for the immediately preceding user message.",
   "OpenClaw runtime event.",
 ];
+const RUNTIME_CONTEXT_CARRIER_PREFIX_PATTERN = new RegExp(
+  RUNTIME_CONTEXT_PROMPT_HEADERS.flatMap((header) => {
+    const sentences = header.split(". ");
+    return sentences.map((_, index) => sentences.slice(index).join(". "));
+  })
+    .map((prefix) => prefix.split(/\s+/).map(escapeRegExp).join("\\s+"))
+    .join("|"),
+);
 
 const RUNTIME_CONTEXT_NOTICE_PATTERN = new RegExp(
   OPENCLAW_RUNTIME_CONTEXT_NOTICE.split(/\s+/).map(escapeRegExp).join("\\s+"),
@@ -232,6 +250,11 @@ const RUNTIME_CONTEXT_PREFACE_PATTERN = new RegExp(
 
 function stripRuntimeContextPromptPreface(text: string): string {
   // Each alternative has a fixed word count; unrelated lines never grow a candidate scan.
+  // The notice can also occur in ordinary authored text. Avoid running the
+  // large generated regexp unless a recognized carrier prefix is present.
+  if (!RUNTIME_CONTEXT_CARRIER_PREFIX_PATTERN.test(text)) {
+    return text;
+  }
   const stripped = text.replace(RUNTIME_CONTEXT_PREFACE_PATTERN, "");
   return stripped === text ? text : stripped.replace(/\n{3,}/g, "\n\n").trim();
 }

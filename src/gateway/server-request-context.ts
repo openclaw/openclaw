@@ -48,6 +48,8 @@ type GatewayRequestContextRuntime = Pick<
   | "questionManager"
   | "forwardPluginApprovalRequest"
   | "forwardExecApprovalRequest"
+  | "forwardSystemAgentApprovalRequest"
+  | "forwardSystemAgentApprovalResolved"
   | "execApprovalIosPushDelivery"
   | "approvalWebPushDelivery"
   | "pluginApprovalIosPushDelivery"
@@ -291,6 +293,8 @@ export function createGatewayRequestContext(
       : undefined,
     forwardPluginApprovalRequest: runtime.forwardPluginApprovalRequest,
     forwardExecApprovalRequest: runtime.forwardExecApprovalRequest,
+    forwardSystemAgentApprovalRequest: runtime.forwardSystemAgentApprovalRequest,
+    forwardSystemAgentApprovalResolved: runtime.forwardSystemAgentApprovalResolved,
     execApprovalIosPushDelivery: runtime.execApprovalIosPushDelivery,
     approvalWebPushDelivery: runtime.approvalWebPushDelivery,
     pluginApprovalIosPushDelivery: runtime.pluginApprovalIosPushDelivery,

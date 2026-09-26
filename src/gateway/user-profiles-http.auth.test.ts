@@ -21,7 +21,7 @@ import {
   syncGitHubIdentity,
 } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { authorizeGatewayHttpRequestOrReply } from "./http-auth-utils.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
@@ -408,7 +408,7 @@ describe("personal avatar HTTP authentication", () => {
 
   it("does not spend the shared-secret failure budget on valid paired reads", async () => {
     const { token } = await pairDevice();
-    rateLimiter = createAuthRateLimiter({ maxAttempts: 1, exemptLoopback: false });
+    rateLimiter = createGatewayAuthRateLimiter({ maxAttempts: 1, exemptLoopback: false });
     expect((await request(token)).status).toBe(200);
     expect((await request(token)).status).toBe(200);
     expect((await request("test-shared-secret")).status).toBe(200);

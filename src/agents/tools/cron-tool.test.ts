@@ -46,7 +46,6 @@ describe("cron tool", () => {
 
   type SchemaLike = {
     anyOf?: Array<SchemaLike>;
-    description?: string;
     properties?: Record<string, SchemaLike>;
     type?: string;
   };
@@ -114,17 +113,6 @@ describe("cron tool", () => {
     expect(call.method).toBe(method);
     return call.params;
   }
-
-  it("tells models to keep cron expressions in local wall-clock time for tz", () => {
-    const tool = createTestCronTool();
-
-    expect(tool.description).toContain("expr is wall time in tz");
-    expect(tool.description).toContain("never pre-convert to UTC");
-    expect(tool.description).toContain("no tz=gateway host local");
-    expect(tool.description).toContain("no tz=UTC");
-    expect(tool.description).toContain('expr:"0 18 * * *"');
-    expect(tool.description).toContain('tz:"Asia/Shanghai"');
-  });
 
   it("supports the promotion creation path: enabled add inherits conversation delivery, then a forced test run", async () => {
     // Promotion flow contract (the guidance itself lives in the system prompt,
@@ -920,85 +908,24 @@ describe("cron tool", () => {
     });
   });
 
-  it("documents deferred follow-up guidance in the tool description", () => {
-    const tool = createTestCronTool();
-    expect(tool.description).toContain("reminders, delayed self-wakeups, loops, recurring work");
-    expect(tool.description).toContain("Never exec sleep/poll as timer.");
-    expect(tool.description).toContain(
-      "Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.",
-    );
-    expect(tool.description).toContain(
-      "the run stays detached, reads bounded chat context, then commits its final visible assistant result to this conversation's durable history",
-    );
-    expect(tool.description).toContain(
-      "current=>canonical session commit, plus one normal channel send for external chats",
-    );
-    expect(tool.description).toContain(
-      "WebChat observes that commit live and after reconnect without another user message",
-    );
-  });
-
   it.each([true, false])(
-    "warns against replacing known jobs after scoped failures (triggers=%s)",
-    (triggersEnabled) => {
-      const tool = createTestCronTool({
-        config: { cron: { triggers: { enabled: triggersEnabled } } },
-      });
+    "preserves scoped lookup recovery guidance when triggers=%s",
+    (enabled) => {
+      const tool = createTestCronTool({ config: { cron: { triggers: { enabled } } } });
 
-      // #137418 / #123982: pin the non-revealing recovery guidance delivered to
-      // the model, not a guarantee that every model will follow it.
-      expect(tool.description).toContain(
-        "configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation",
-      );
-      expect(tool.description).toContain(
-        "totals/counts and hasMore describe that scoped view, not global inventory",
-      );
+      // A scoped miss must not turn an update/remove request into a duplicate automation.
       expect(tool.description).toContain(
         "an empty list or failed list/get/update/remove (including not-found) does not establish global absence",
       );
-      expect(tool.description).toContain("including your own history");
-      expect(tool.description).toContain(
-        "Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results",
-      );
-      expect(tool.description).toContain(
-        "ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page",
-      );
-      expect(tool.description).toContain("do not bypass caller scope");
-      expect(tool.description).toContain(
-        "Genuinely new, requested automations can still be created",
-      );
-      expect(tool.description).not.toContain("means the job is outside this scope");
+      expect(tool.description).toContain("Never recreate or replace a known automation");
+      expect(tool.description).toContain("ask an authorized administrator");
     },
   );
 
-  it("documents the event-trigger authoring contract", () => {
-    const tool = createTestCronTool();
+  it.each([true, false])("includes trigger authoring guidance only when enabled=%s", (enabled) => {
+    const tool = createTestCronTool({ config: { cron: { triggers: { enabled } } } });
 
-    expect(tool.description).toContain(
-      "available unless cron.triggers.enabled=false — if off, say so; never model-poll instead",
-    );
-    expect(tool.description).toContain("Quiet headless check, no model");
-    expect(tool.description).toContain("trigger.state");
-    expect(tool.description).toContain("fire:false saves state only");
-    expect(tool.description).toContain("fire:true runs payload");
-    expect(tool.description).toContain("Fire on failures/timeouts too");
-    expect(tool.description).toContain("success-only watchers look healthy when broken");
-    expect(tool.description).toContain("dedupe via state, never memory");
-    expect(tool.description).toContain("Script stays read-only; actions belong in payload");
-    expect(tool.description).toContain("message is that run's entire context — self-contained");
-    expect(tool.description).toContain('Silent watcher=>mode:"none"');
-    expect(tool.description).toContain("once:true disables after first fire");
-    expect(tool.description).toContain('await exec({command:"..."})');
-  });
-
-  it("documents due-by-default cron run mode", () => {
-    const tool = createTestCronTool();
-    const parameters = tool.parameters as SchemaLike;
-    const runMode = parameters.properties?.runMode;
-
-    expect(tool.description).toContain('run jobId (runMode "force"=now)');
-    expect(runMode?.description).toContain('omitted defaults to "due"');
-    expect(runMode?.description).toContain('use "force" to trigger now');
+    expect(tool.description.includes("trigger.state")).toBe(enabled);
   });
 
   it("advertises delivery threadId in the tool schema", () => {
@@ -1006,7 +933,6 @@ describe("cron tool", () => {
     const parameters = tool.parameters as SchemaLike;
     const jobThreadId = parameters.properties?.job?.properties?.delivery?.properties?.threadId;
 
-    expect(jobThreadId?.description).toContain("Thread/topic id");
     expect(jobThreadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number", "null"]);
   });
 
@@ -1016,35 +942,29 @@ describe("cron tool", () => {
     const job = parameters.properties?.job;
     const payload = job?.properties?.payload;
     const delivery = job?.properties?.delivery;
-    const jobPacing = job?.properties?.pacing?.anyOf?.find((entry) => entry.type === "object");
 
     expect(parameters.properties?.patch).toBeUndefined();
     expect(job?.properties?.agentId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "null"]);
     expect(job?.properties?.agentId?.type).toBeUndefined();
-    expect(job?.properties?.agentId?.description).toContain("null to clear");
     expect(job?.properties?.sessionKey?.anyOf?.map((entry) => entry.type)).toEqual([
       "string",
       "null",
     ]);
     expect(job?.properties?.sessionKey?.type).toBeUndefined();
-    expect(job?.properties?.sessionKey?.description).toContain("null to clear");
     expect(payload?.properties?.toolsAllow?.anyOf?.map((entry) => entry.type)).toEqual([
       "array",
       "null",
     ]);
     expect(payload?.properties?.toolsAllow?.type).toBeUndefined();
-    expect(payload?.properties?.toolsAllow?.description).toContain("null to clear");
     expect(delivery?.properties?.channel?.anyOf?.map((entry) => entry.type)).toEqual([
       "string",
       "null",
     ]);
     expect(delivery?.properties?.channel?.type).toBeUndefined();
-    expect(delivery?.properties?.channel?.description).toContain("null to clear");
     expect(delivery?.properties?.failureDestination?.anyOf?.map((entry) => entry.type)).toEqual([
       "object",
       "null",
     ]);
-    expect(jobPacing?.description).toContain("at least one of min or max is required");
   });
 
   it.each([

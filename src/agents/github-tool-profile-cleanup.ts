@@ -1,5 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { root as fsRoot, type Root } from "@openclaw/fs-safe/root";
 import { isManagedGitHubProfileId } from "../config/github-identity-profile-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -16,178 +18,94 @@ const MANAGED_AGENT_KEY_PATTERN = /^[a-f0-9]{64}$/u;
 
 type GitHubProfileCleanupResult = { removed: number; warnings: string[] };
 
-async function cleanupProfileRoot(params: {
-  root: string;
-  preservedProfileIds: ReadonlySet<string>;
-  warnings: string[];
-}): Promise<number> {
-  let rootStat: Awaited<ReturnType<typeof fs.lstat>>;
+async function readCleanupDirectory(candidate: string, label: string, warnings: string[]) {
+  let identity;
   try {
-    rootStat = await fs.lstat(params.root);
+    identity = await readDirectoryIdentity(candidate);
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
-      return 0;
+      return undefined;
+    }
+    if (error instanceof FsSafeError && error.code === "not-file") {
+      warnings.push(`refused unsafe ${label}: ${candidate}`);
+      return undefined;
     }
     throw error;
   }
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-    params.warnings.push(`refused non-directory managed GitHub profile root: ${params.root}`);
+  if (identity.realPath !== path.resolve(candidate)) {
+    warnings.push(`refused escaped ${label}: ${candidate}`);
+    return undefined;
+  }
+  return identity;
+}
+
+async function openCleanupRoot(candidate: string, label: string, warnings: string[]) {
+  const identity = await readCleanupDirectory(candidate, label, warnings);
+  if (!identity) {
+    return undefined;
+  }
+  const root = await fsRoot(candidate, {
+    assertBeforeMutation: () => assertDirectoryIdentitySync(candidate, identity),
+  });
+  if (root.rootReal !== identity.realPath) {
+    throw new FsSafeError("path-mismatch", "managed GitHub profile root changed during cleanup");
+  }
+  return root;
+}
+
+async function cleanupProfileRoot(params: {
+  root: Root;
+  directory: string;
+  preservedProfileIds: ReadonlySet<string> | undefined;
+  warnings: string[];
+}): Promise<number> {
+  const orphanAgent = params.preservedProfileIds === undefined;
+  const label = orphanAgent ? "managed GitHub agent profile" : "managed GitHub profile";
+  const directory = path.join(params.root.rootReal, params.directory);
+  const identity = await readCleanupDirectory(directory, `${label} root`, params.warnings);
+  if (!identity) {
     return 0;
   }
-  const root = path.resolve(params.root);
-  if ((await fs.realpath(root)) !== root) {
-    params.warnings.push(`refused symlinked managed GitHub profile root: ${params.root}`);
-    return 0;
+  const candidates: string[] = [];
+  for (const entry of await params.root.list(params.directory, { withFileTypes: true })) {
+    const candidate = path.join(directory, entry.name);
+    if (!isManagedGitHubProfileId(entry.name) && !entry.name.startsWith(STAGING_PROFILE_PREFIX)) {
+      params.warnings.push(`ignored unexpected ${label} entry: ${candidate}`);
+    } else if (!entry.isDirectory || entry.isSymbolicLink) {
+      params.warnings.push(`refused unsafe ${label} cleanup candidate: ${candidate}`);
+    } else {
+      if (!params.preservedProfileIds?.has(entry.name)) {
+        candidates.push(path.join(params.directory, entry.name));
+      }
+      continue;
+    }
+    // An orphan root is retired only after every direct child is admitted.
+    if (orphanAgent) {
+      return 0;
+    }
   }
   let removed = 0;
-  for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-    const candidate = path.join(root, entry.name);
-    const isProfile = isManagedGitHubProfileId(entry.name);
-    const isStaging = entry.name.startsWith(STAGING_PROFILE_PREFIX);
-    if (!isProfile && !isStaging) {
-      params.warnings.push(`ignored unexpected managed GitHub profile entry: ${candidate}`);
-      continue;
-    }
-    let stat: Awaited<ReturnType<typeof fs.lstat>>;
-    try {
-      stat = await fs.lstat(candidate);
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
-    }
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      params.warnings.push(`refused unsafe managed GitHub profile cleanup candidate: ${candidate}`);
-      continue;
-    }
-    if (isProfile && params.preservedProfileIds.has(entry.name)) {
-      continue;
-    }
-    const resolved = await fs.realpath(candidate);
-    if (path.dirname(resolved) !== root || path.basename(resolved) !== entry.name) {
-      params.warnings.push(
-        `refused escaped managed GitHub profile cleanup candidate: ${candidate}`,
-      );
+  for (const relativePath of orphanAgent ? [params.directory] : candidates) {
+    const candidate = path.join(params.root.rootReal, relativePath);
+    const candidateIdentity = orphanAgent
+      ? identity
+      : await readCleanupDirectory(candidate, `${label} cleanup candidate`, params.warnings);
+    if (!candidateIdentity) {
       continue;
     }
     // Gateway startup cannot overlap a valid setup transaction; staging trees here are orphans.
-    await fs.rm(candidate, { recursive: true });
-    removed += 1;
-  }
-  return removed;
-}
-
-async function validateDirectDirectory(params: {
-  candidate: string;
-  parent: string;
-  warnings: string[];
-  label: string;
-}): Promise<boolean> {
-  let stat: Awaited<ReturnType<typeof fs.lstat>>;
-  try {
-    stat = await fs.lstat(params.candidate);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
-  }
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    params.warnings.push(`refused unsafe ${params.label}: ${params.candidate}`);
-    return false;
-  }
-  const resolved = await fs.realpath(params.candidate);
-  if (
-    path.dirname(resolved) !== params.parent ||
-    path.basename(resolved) !== path.basename(params.candidate)
-  ) {
-    params.warnings.push(`refused escaped ${params.label}: ${params.candidate}`);
-    return false;
-  }
-  return true;
-}
-
-async function removeOrphanAgentRoot(params: {
-  root: string;
-  registryRoot: string;
-  warnings: string[];
-}): Promise<number> {
-  if (
-    !(await validateDirectDirectory({
-      candidate: params.root,
-      parent: params.registryRoot,
-      warnings: params.warnings,
-      label: "managed GitHub agent profile root",
-    }))
-  ) {
-    return 0;
-  }
-  for (const entry of await fs.readdir(params.root, { withFileTypes: true })) {
-    if (!isManagedGitHubProfileId(entry.name) && !entry.name.startsWith(STAGING_PROFILE_PREFIX)) {
-      params.warnings.push(
-        `ignored unexpected managed GitHub agent profile entry: ${path.join(params.root, entry.name)}`,
-      );
-      return 0;
-    }
-    if (
-      !(await validateDirectDirectory({
-        candidate: path.join(params.root, entry.name),
-        parent: params.root,
-        warnings: params.warnings,
-        label: "managed GitHub agent profile cleanup candidate",
-      }))
-    ) {
-      return 0;
-    }
-  }
-  await fs.rm(params.root, { recursive: true });
-  return 1;
-}
-
-async function cleanupAgentProfileRegistry(params: {
-  root: string;
-  preservedProfiles: ReadonlyMap<string, ReadonlySet<string>>;
-  warnings: string[];
-}): Promise<number> {
-  let rootStat: Awaited<ReturnType<typeof fs.lstat>>;
-  try {
-    rootStat = await fs.lstat(params.root);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return 0;
-    }
-    throw error;
-  }
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-    params.warnings.push(`refused non-directory managed GitHub agent registry: ${params.root}`);
-    return 0;
-  }
-  const registryRoot = path.resolve(params.root);
-  if ((await fs.realpath(registryRoot)) !== registryRoot) {
-    params.warnings.push(`refused symlinked managed GitHub agent registry: ${params.root}`);
-    return 0;
-  }
-  let removed = 0;
-  for (const entry of await fs.readdir(registryRoot, { withFileTypes: true })) {
-    const candidate = path.join(registryRoot, entry.name);
-    if (!MANAGED_AGENT_KEY_PATTERN.test(entry.name)) {
-      params.warnings.push(`ignored unexpected managed GitHub agent entry: ${candidate}`);
-      continue;
-    }
-    if (params.preservedProfiles.has(entry.name)) {
-      removed += await cleanupProfileRoot({
-        root: candidate,
-        preservedProfileIds: params.preservedProfiles.get(entry.name) ?? new Set(),
-        warnings: params.warnings,
-      });
-      continue;
-    }
-    removed += await removeOrphanAgentRoot({
-      root: candidate,
-      registryRoot,
-      warnings: params.warnings,
+    await params.root.remove(relativePath, {
+      recursive: true,
+      maxEntries: Infinity,
+      maxDepth: Infinity,
+      assertBeforeMutation: () => {
+        assertDirectoryIdentitySync(directory, identity);
+        if (!orphanAgent) {
+          assertDirectoryIdentitySync(candidate, candidateIdentity);
+        }
+      },
     });
+    removed += 1;
   }
   return removed;
 }
@@ -227,16 +145,37 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
     profiles.add(record.profileId);
     agentProfiles.set(agentKey, profiles);
   }
-  let removed = await cleanupProfileRoot({
-    root: systemRoot,
-    preservedProfileIds: systemProfiles,
+  let removed = 0;
+  const system = await openCleanupRoot(systemRoot, "managed GitHub profile root", warnings);
+  if (system) {
+    removed += await cleanupProfileRoot({
+      root: system,
+      directory: ".",
+      preservedProfileIds: systemProfiles,
+      warnings,
+    });
+  }
+  const registry = await openCleanupRoot(
+    path.join(path.dirname(systemRoot), "agents"),
+    "managed GitHub agent registry",
     warnings,
-  });
-  removed += await cleanupAgentProfileRegistry({
-    root: path.join(path.dirname(systemRoot), "agents"),
-    preservedProfiles: agentProfiles,
-    warnings,
-  });
+  );
+  if (registry) {
+    for (const entry of await registry.list(".", { withFileTypes: true })) {
+      if (!MANAGED_AGENT_KEY_PATTERN.test(entry.name)) {
+        warnings.push(
+          `ignored unexpected managed GitHub agent entry: ${path.join(registry.rootReal, entry.name)}`,
+        );
+        continue;
+      }
+      removed += await cleanupProfileRoot({
+        root: registry,
+        directory: entry.name,
+        preservedProfileIds: agentProfiles.get(entry.name),
+        warnings,
+      });
+    }
+  }
   if (warnings.length <= MAX_CLEANUP_WARNINGS) {
     return { removed, warnings };
   }

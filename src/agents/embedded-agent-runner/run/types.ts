@@ -221,6 +221,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   observeToolTerminal?: EmbeddedRunAttemptToolTerminalObserver;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
+  /** Host-only originals retained across native image projection. */
+  inputAttachmentMedia?: RunEmbeddedAgentParams["media"];
   /** Storage-aware trajectory recorder owned by the OpenClaw host. */
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
   /** Live observer called after wrapped tool outcomes are recorded. */

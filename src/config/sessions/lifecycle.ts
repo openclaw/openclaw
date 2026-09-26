@@ -5,9 +5,14 @@ import {
   assertProviderReviewAcknowledgment,
   type ProviderReviewAcknowledgment,
 } from "../../sessions/provider-review.js";
+import {
+  resolveIncognitoSessionExpiresAt,
+  isIncognitoSessionKey,
+} from "../../shared/incognito-session-key.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { loadTranscriptHeaderSync, readTranscriptMutationStateSync } from "./session-accessor.js";
+import { readSessionTranscriptHeaderStartedAt } from "./transcript-header.js";
 import {
   isTerminalSessionStatus,
   type InternalSessionEntry,
@@ -28,6 +33,8 @@ type SessionLifecycleEntry = Pick<
 type SessionWorkStartEntry = Pick<
   InternalSessionEntry,
   | "archivedAt"
+  | "createdAt"
+  | "incognito"
   | "initializationPending"
   | "mainRestartRecovery"
   | "modelSelectionLocked"
@@ -36,7 +43,8 @@ type SessionWorkStartEntry = Pick<
   | "pendingWorktree"
   | "providerReview"
   | "lifecycleRevision"
->;
+> &
+  Partial<Pick<InternalSessionEntry, "updatedAt">>;
 
 type SessionWorkStartOptions = {
   /** Already-accepted transcript/delivery results settle without dispatching new model work. */
@@ -108,7 +116,7 @@ export class SessionRestartRecoveryTombstoneError extends Error {
   }
 }
 
-/** Lifecycle-owned initializing, restart-tombstoned, and archived sessions reject new work. */
+/** Lifecycle-owned expired, initializing, restart-tombstoned, and archived sessions reject work. */
 export function resolveSessionWorkStartError(
   sessionKey: string,
   entry: SessionWorkStartEntry | null | undefined,
@@ -119,6 +127,14 @@ export function resolveSessionWorkStartError(
   }
   if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
     return `Session "${sessionKey}" changed while starting work. Retry.`;
+  }
+  const incognitoExpiresAt = entry ? resolveIncognitoSessionExpiresAt(entry) : undefined;
+  if (
+    (entry?.incognito || isIncognitoSessionKey(sessionKey)) &&
+    incognitoExpiresAt !== undefined &&
+    Date.now() >= incognitoExpiresAt
+  ) {
+    return `Incognito session "${sessionKey}" expired. Start a new Incognito session.`;
   }
   if (entry?.initializationPending === true) {
     return `Session "${sessionKey}" is still initializing. Retry after initialization completes.`;
@@ -185,16 +201,6 @@ function resolvePositiveTimestamp(value: number | undefined): number | undefined
   return timestampMs !== undefined && timestampMs > 0 ? timestampMs : undefined;
 }
 
-function parseTimestampMs(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return resolveTimestamp(value);
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  return resolveTimestamp(Date.parse(value));
-}
-
 function readSessionHeaderStartedAtMs(params: {
   entry: SessionLifecycleEntry;
   agentId?: string;
@@ -210,23 +216,15 @@ function readSessionHeaderStartedAtMs(params: {
     return undefined;
   }
   try {
-    const header = (
-      params.readHeader
-        ? params.readHeader(sessionId)
-        : loadTranscriptHeaderSync({
-            agentId,
-            sessionId,
-            ...(params.storePath ? { storePath: params.storePath } : {}),
-            ...(sessionKey ? { sessionKey } : {}),
-          })
-    ) as { type?: unknown; id?: unknown; timestamp?: unknown } | undefined;
-    if (
-      header?.type !== "session" ||
-      (typeof header.id === "string" && header.id.trim() && header.id !== sessionId)
-    ) {
-      return undefined;
-    }
-    return parseTimestampMs(header.timestamp);
+    const header = params.readHeader
+      ? params.readHeader(sessionId)
+      : loadTranscriptHeaderSync({
+          agentId,
+          sessionId,
+          ...(params.storePath ? { storePath: params.storePath } : {}),
+          ...(sessionKey ? { sessionKey } : {}),
+        });
+    return readSessionTranscriptHeaderStartedAt(header, sessionId);
   } catch {
     return undefined;
   }

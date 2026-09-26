@@ -8,13 +8,19 @@ import {
   writeOutboxPayload,
   type OutboxPayloadFailure,
 } from "../../lib/chat/outbox-payload-store.runtime.ts";
-import { storageTargetForGateway, type ChatComposerScope } from "../../lib/chat/outbox-store.ts";
+import {
+  storageTargetForGateway,
+  type ChatComposerScope,
+  type StoredChatOutboxScope,
+} from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   captureDurableChatAttachments,
   readBlobAsDataUrl,
 } from "./durable-composer-persistence.ts";
 
-type Host = ChatComposerScope;
+type Host = ChatComposerScope & { sessionKey?: string };
 type PayloadUpdate = Pick<ChatQueueItem, "attachments" | "attachmentPayload"> & {
   attachmentStorageError?: undefined;
 } & (
@@ -49,16 +55,27 @@ export function failOutboxPayload(item: ChatQueueItem, reason: OutboxPayloadFail
   };
 }
 
-export function captureOutboxPayloadOwner(host: Host): () => boolean {
+function payloadScope(host: Host, item?: ChatQueueItem) {
+  return resolveUiConversationIdentity(
+    host,
+    item?.sessionKey ?? host.sessionKey ?? "",
+    item?.agentId,
+  );
+}
+
+export function captureOutboxPayloadOwner(
+  host: Host,
+  scope: StoredChatOutboxScope = payloadScope(host),
+): () => boolean {
   const client = host.client;
   const gateway = host.settings?.gatewayUrl;
   const recoveryScope = observeOutboxRecoveryOwner(host);
-  const incognito = host.selectedChatSessionIncognito;
+  const incognito = isIncognitoComposerScope(host, scope);
   return () =>
     host.client === client &&
     host.settings?.gatewayUrl === gateway &&
     observeOutboxRecoveryOwner(host) === recoveryScope &&
-    host.selectedChatSessionIncognito === incognito;
+    isIncognitoComposerScope(host, scope) === incognito;
 }
 
 async function preparePayload(
@@ -71,7 +88,8 @@ async function preparePayload(
   }
   // Incognito keeps the existing tab-only inline outbox and its quota. It must
   // never acquire restart-persistent Blob ownership or hydrate a regular row.
-  if (host.selectedChatSessionIncognito) {
+  const scope = payloadScope(host, item);
+  if (isIncognitoComposerScope(host, scope)) {
     return item.attachmentPayload
       ? { status: "failed", reason: "unavailable" }
       : { status: "ready", update: {} };
@@ -80,7 +98,7 @@ async function preparePayload(
   if (!recoveryScope) {
     return { status: "failed", reason: "unavailable" };
   }
-  const isCurrent = captureOutboxPayloadOwner(host);
+  const isCurrent = captureOutboxPayloadOwner(host, scope);
   let tabId: string;
   try {
     tabId = await outboxPayloadTab();
@@ -196,7 +214,8 @@ export async function prepareOutboxPayload(
   purpose: "send" | "handoff" = "send",
 ): Promise<PayloadResult> {
   const reference = item.attachmentPayload;
-  if (!reference || host.selectedChatSessionIncognito || !observeOutboxRecoveryOwner(host)) {
+  const scope = payloadScope(host, item);
+  if (!reference || isIncognitoComposerScope(host, scope) || !observeOutboxRecoveryOwner(host)) {
     return preparePayload(host, item, purpose);
   }
   const key = JSON.stringify([
@@ -204,6 +223,7 @@ export async function prepareOutboxPayload(
     reference.key,
     reference.tabId,
     reference.recoveryScope,
+    scope,
     host.settings?.gatewayUrl,
     host.client?.recoveryScope,
     purpose,
@@ -214,7 +234,7 @@ export async function prepareOutboxPayload(
       origin,
     ]),
   ]);
-  const isCurrent = captureOutboxPayloadOwner(host);
+  const isCurrent = captureOutboxPayloadOwner(host, scope);
   let pending = pendingPayloads.get(key);
   if (!pending) {
     pending = preparePayload(host, item, purpose).finally(() => pendingPayloads.delete(key));

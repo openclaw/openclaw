@@ -2,14 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import * as sqliteImport from "../config/sessions/session-accessor.sqlite-import.js";
 import { prepareGithubIssue } from "../infra/github-issue.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import {
   claimSessionSqliteMigrationGithubIssue,
   clearSessionSqliteMigrationGithubIssueClaim,
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
-import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
 import { createDoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
@@ -26,6 +27,58 @@ import {
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
+  it.each([false, true])(
+    "records a rejected SQLite import (journal failure=%s)",
+    async (journalFailure) => {
+      const store = createLegacyStore();
+      const failure = "attempt to write a readonly database";
+      const importError = new Error(failure);
+      const recordError = new Error("fixture migration journal write failed");
+      const importSpy = vi
+        .spyOn(sqliteImport, "importSqliteSessionRowsBatch")
+        .mockRejectedValueOnce(importError);
+      const journalSpy = journalFailure
+        ? vi.spyOn(migrationRun, "updateMigrationManifestTarget").mockImplementationOnce(() => {
+            throw recordError;
+          })
+        : undefined;
+      try {
+        const imported = importLegacyStore(store);
+        if (journalFailure) {
+          await expect(imported).rejects.toMatchObject({
+            cause: importError,
+            errors: [importError, recordError],
+            message: `${failure}; could not record session SQLite migration failure: ${recordError.message}`,
+          });
+        } else {
+          await expect(imported).rejects.toBe(importError);
+        }
+      } finally {
+        importSpy.mockRestore();
+        journalSpy?.mockRestore();
+      }
+      expect(fs.existsSync(store.transcriptPath)).toBe(true);
+      if (journalFailure) {
+        return;
+      }
+      const manifests = migrationRun.listSessionSqliteMigrationManifestPaths(store.env);
+      expect(manifests).toHaveLength(1);
+      const manifestPath = requireMigrationManifestPath(manifests[0]);
+      const manifest = readMigrationManifest(manifestPath);
+      expect(manifest.failedAt).toEqual(expect.any(String));
+      expect(manifest.targets[0]?.issues).toContainEqual({
+        code: "sqlite_import_failed",
+        message: failure,
+      });
+      expect(manifest.targets[0]?.completedMoves).toEqual([]);
+      expect(fs.existsSync(store.transcriptPath)).toBe(true);
+      expect(manifest.completedAt).toBeUndefined();
+      const recovered = await runDoctorSessionSqlite({ cfg: {}, env: store.env, mode: "recover" });
+      expect(recovered.supportIssue?.body).toContain(`[sqlite_import_failed] ${failure}`);
+      expect(recovered.supportIssue?.body).toContain(`- Failed: ${manifest.failedAt}`);
+    },
+  );
+
   it.each(["clean", "pending", "unselected"] as const)(
     "distinguishes recorded failures from current recovery findings (%s)",
     (outcome) => {
@@ -122,6 +175,7 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.existsSync(store.transcriptPath)).toBe(true);
     expect(recover.supportIssue?.title).toContain(manifest.runId);
     expect(recover.supportIssue?.body).toContain("startup_failure");
+    expect(recover.supportIssue?.body).toContain(`- Failed: ${manifest.failedAt}`);
     expect(recover.supportIssue?.body).not.toContain("agent:main:main");
     expect(recover.supportIssue?.body).not.toContain("supersecret");
     expect(recover.supportIssue?.body).not.toContain(store.storePath);
@@ -155,9 +209,9 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(replacement);
   });
 
-  it.each([false, true])(
-    "does not prepare failure reports for clean recovery (existing reports=%s)",
-    async (existingReports) => {
+  it.each(["none", "empty-report", "recorded-failure", "restored"] as const)(
+    "reports clean recovery only with failure evidence or recovery work (%s)",
+    async (evidence) => {
       const store = createLegacyStore();
       for (const file of [
         store.storePath,
@@ -180,16 +234,43 @@ describe("runDoctorSessionSqlite", () => {
           {
             ...trustedMigrationTarget(store),
             completedMoves: [],
-            issues: [],
+            issues:
+              evidence === "recorded-failure"
+                ? [
+                    {
+                      code: "sqlite_import_failed",
+                      message: "attempt to write a readonly database",
+                    },
+                  ]
+                : [],
             plannedMoves: [],
             validationBeforeArchive: "not_run",
           },
         ],
       };
+      if (evidence === "restored") {
+        const archivePath = path.join(
+          store.stateDir,
+          "agents",
+          "main",
+          "session-sqlite-import-archive",
+          "legacy-store.sessions.json.imported-1",
+        );
+        fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+        fs.writeFileSync(archivePath, "{}\n");
+        const move = {
+          archivePath,
+          kind: "legacy-store" as const,
+          sourcePath: manifest.targets[0]!.storePath,
+        };
+        manifest.targets[0]!.plannedMoves.push(move);
+        manifest.targets[0]!.completedMoves.push(move);
+      }
       fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-      const previousReports = existingReports
-        ? writeSessionSqliteMigrationFailureReports(manifestPath, { reason: "Earlier recovery" })
-        : undefined;
+      const previousReports =
+        evidence === "empty-report"
+          ? writeSessionSqliteMigrationFailureReports(manifestPath, { reason: "Earlier recovery" })
+          : undefined;
       const previousBytes = previousReports
         ? [previousReports.jsonPath, previousReports.markdownPath].map((file) =>
             fs.readFileSync(file),
@@ -199,6 +280,23 @@ describe("runDoctorSessionSqlite", () => {
       const recover = await runDoctorSessionSqlite({ cfg: {}, env: store.env, mode: "recover" });
 
       expect(recover.totals.issues).toBe(0);
+      if (evidence === "restored") {
+        expect(recover.targets[0]?.restore?.restoredFiles).toEqual([
+          manifest.targets[0]!.storePath,
+        ]);
+        expect(recover.supportIssue?.body).toContain("- Restore status: restored");
+        expect(recover.supportIssue?.body).toContain("- Current recovery issues: 0");
+        return;
+      }
+      if (evidence === "recorded-failure") {
+        expect(recover.supportIssue?.body).toContain(
+          "[sqlite_import_failed] attempt to write a readonly database",
+        );
+        expect(recover.supportIssue?.body).toContain(`- Failed: ${manifest.failedAt}`);
+        expect(recover.supportIssue?.body).toContain("- Restore status: noop");
+        expect(recover.supportIssue?.body).toContain("- Current recovery issues: 0");
+        return;
+      }
       expect(recover.migrationRun).toEqual({ manifestPath, runId: "clean-recovery" });
       expect(recover.supportIssue).toBeUndefined();
       if (previousReports && previousBytes) {

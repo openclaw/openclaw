@@ -72,20 +72,22 @@ describe("prepared project retention compatibility", () => {
       profileSnapshot: { ...profileSnapshot, project: { ...project, preparation } },
     });
     let artifactsCurrent = true;
+    const prepareNodeArtifacts = vi.fn(async () => ({
+      artifacts,
+      assertCurrent: () => {
+        if (!artifactsCurrent) {
+          throw new Error("Runtime artifacts changed");
+        }
+      },
+    }));
+    const providerFor = vi.fn(() => fixture.provider);
     const owner = createWorkerProviderIntent({
       store: fixture.store,
       getConfig: () => fixture.config,
       projectNamespace: "gateway",
-      providerFor: () => fixture.provider,
+      providerFor,
       requireWorkerProfile: (value) => z.record(z.string(), z.json()).parse(value),
-      prepareNodeArtifacts: async () => ({
-        artifacts,
-        assertCurrent: () => {
-          if (!artifactsCurrent) {
-            throw new Error("Runtime artifacts changed");
-          }
-        },
-      }),
+      prepareNodeArtifacts,
       isStopping: () => false,
       inState: () => false,
       withLock: async (_id, run) => await run(),
@@ -97,6 +99,8 @@ describe("prepared project retention compatibility", () => {
       owner,
       project,
       artifacts,
+      prepareNodeArtifacts,
+      providerFor,
       invalidateArtifacts: () => {
         artifactsCurrent = false;
       },
@@ -207,7 +211,7 @@ describe("prepared project retention compatibility", () => {
     const { record, owner } = await setup();
     const retained = await owner.prepareRetention(record, fixture.abort.signal);
     expect(retained).toBeDefined();
-    expect(() => retained!.assertCurrent()).not.toThrow();
+    expect(retained!.isCurrent()).toBe(true);
     expect(sourceAdmission).not.toHaveBeenCalled();
     expect(fixture.store.get(record.environmentId)).toEqual(record);
     expect(() =>
@@ -218,7 +222,7 @@ describe("prepared project retention compatibility", () => {
     ).toThrow("not owned by this lifecycle");
   });
 
-  it.each(["profile", "target", "owner selection", "agent deletion", "runtime"])(
+  it.each(["profile", "provider", "target", "owner selection", "agent deletion", "runtime"])(
     "rechecks %s drift without acquiring external source authority",
     async (mutation) => {
       const { record, owner, invalidateArtifacts } = await setup();
@@ -226,6 +230,8 @@ describe("prepared project retention compatibility", () => {
       expect(retained).toBeDefined();
       if (mutation === "profile") {
         fixture.developmentProfile.settings = { region: "changed" };
+      } else if (mutation === "provider") {
+        fixture.developmentProfile.provider = "another-provider";
       } else if (mutation === "target") {
         fixture.provider.resolvePreparationTarget = () => ({
           machineClass: "large",
@@ -239,10 +245,48 @@ describe("prepared project retention compatibility", () => {
       } else {
         invalidateArtifacts();
       }
-      expect(() => retained!.assertCurrent()).toThrow();
+      if (mutation === "runtime") {
+        expect(() => retained!.isCurrent()).toThrow("Runtime artifacts changed");
+      } else {
+        expect(retained!.isCurrent()).toBe(false);
+        expect(await owner.prepareRetention(record, fixture.abort.signal)).toBeUndefined();
+      }
       expect(sourceAdmission).not.toHaveBeenCalled();
     },
   );
+
+  it.each(["owner selection", "agent deletion"] as const)(
+    "rejects known %s drift while provider observation is unavailable",
+    async (mutation) => {
+      const { record, owner, providerFor } = await setup();
+      const retained = await owner.prepareRetention(record, fixture.abort.signal);
+      expect(retained?.isCurrent()).toBe(true);
+      providerFor.mockClear().mockImplementation(() => {
+        throw new Error("Worker provider registry temporarily unavailable");
+      });
+      if (mutation === "owner selection") {
+        fixture.config.tools = { github: { kind: "oauth", profileId: `ghp_${"a".repeat(32)}` } };
+      } else {
+        fixture.config.agents = { list: [{ id: "other" }] };
+      }
+
+      expect(retained?.isCurrent()).toBe(false);
+      expect(await owner.prepareRetention(record, fixture.abort.signal)).toBeUndefined();
+      expect(providerFor).not.toHaveBeenCalled();
+      expect(sourceAdmission).not.toHaveBeenCalled();
+    },
+  );
+
+  it("distinguishes unavailable artifact observations from incompatible contents", async () => {
+    const { record, owner, prepareNodeArtifacts } = await setup();
+    const unavailable = new Error("Artifact archive temporarily unavailable");
+    prepareNodeArtifacts.mockRejectedValueOnce(unavailable);
+
+    await expect(owner.prepareRetention(record, fixture.abort.signal)).rejects.toBe(unavailable);
+    expect((await owner.prepareRetention(record, fixture.abort.signal))?.isCurrent()).toBe(true);
+    expect(fixture.store.get(record.environmentId)).toEqual(record);
+    expect(sourceAdmission).not.toHaveBeenCalled();
+  });
 
   it("rejects an old runtime fingerprint when reconstructing retention after restart", async () => {
     const { record, owner, artifacts } = await setup();

@@ -7,10 +7,17 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI Stop response ownership" });
 
 suite.define(() => {
-  it.each(["current", "replacement"] as const)(
-    "keeps a delayed Stop rejection with its original run after %s work",
-    async (owner) => {
-      await suite.withPage({ viewport: { width: 1200, height: 800 } }, async ({ page }) => {
+  it.each(["current", "replacement", "button", "command"] as const)(
+    "keeps a delayed Stop response with its original run (%s)",
+    async (scenario) => {
+      const saveWarning = scenario === "button" || scenario === "command";
+      const pageOptions = {
+        viewport: { width: 1200, height: 800 },
+        ...(saveWarning
+          ? { recordVideo: { dir: suite.artifactDir, size: { width: 1200, height: 800 } } }
+          : {}),
+      };
+      await suite.withPage(pageOptions, async ({ page }) => {
         const sessionKey = "agent:main:main";
         const gateway = await installMockGateway(page, { sessionKey });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -22,66 +29,87 @@ suite.define(() => {
         const original = await gateway.waitForRequest("chat.send");
         expect(original.params).toMatchObject({ sessionKey, idempotencyKey: expect.any(String) });
         const runId = String(asOptionalRecord(original.params)?.idempotencyKey);
-        await stop.waitFor();
-        await gateway.deferNext("chat.abort");
-        await stop.click();
-        const abort = await gateway.waitForRequest("chat.abort");
-        expect(abort.params).toEqual({ sessionKey, runId });
-
-        let activeRunId = runId;
-        if (owner === "replacement") {
-          // The old run can settle before its held Stop acknowledgement reaches the browser.
-          await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "aborted" });
-          await stop.waitFor({ state: "detached" });
-          await composer.fill("Start the replacement task.");
-          await send.click();
-          const replacement = await gateway.waitForRequest("chat.send", { after: 1 });
-          expect(replacement.params).toMatchObject({
-            sessionKey,
-            idempotencyKey: expect.any(String),
-          });
-          activeRunId = String(asOptionalRecord(replacement.params)?.idempotencyKey);
-          expect(activeRunId).not.toBe(runId);
-          await stop.waitFor();
-        }
-        const progress =
-          owner === "replacement" ? "Replacement task is working." : "Original task is working.";
+        const progress = "Original task is working.";
         await gateway.emitGatewayEvent("chat", {
           sessionKey,
-          runId: activeRunId,
+          runId,
           state: "delta",
           deltaText: progress,
         });
-        const activeReply = page.locator(".chat-bubble").getByText(progress, { exact: true });
-        await activeReply.waitFor();
+        await page.locator(".chat-bubble").getByText(progress, { exact: true }).waitFor();
+        await gateway.deferNext("chat.abort");
+        if (scenario === "command") {
+          await composer.fill("/stop");
+          await composer.press("Enter");
+        } else {
+          await stop.click();
+        }
+        const abort = await gateway.waitForRequest("chat.abort");
+        expect(abort.params).toEqual({ sessionKey, runId });
+
+        if (scenario !== "current") {
+          await gateway.emitGatewayEvent("chat", {
+            sessionKey,
+            runId,
+            state: "aborted",
+            message: { role: "assistant", content: [{ type: "text", text: progress }] },
+          });
+          await stop.waitFor({ state: "detached" });
+        }
+        let visibleReply = progress;
+        if (scenario === "replacement") {
+          await composer.fill("Start the replacement task.");
+          await send.click();
+          const replacement = await gateway.waitForRequest("chat.send", { after: 1 });
+          const replacementRunId = String(asOptionalRecord(replacement.params)?.idempotencyKey);
+          expect(replacementRunId).not.toBe(runId);
+          visibleReply = "Replacement task is working.";
+          await gateway.emitGatewayEvent("chat", {
+            sessionKey,
+            runId: replacementRunId,
+            state: "delta",
+            deltaText: visibleReply,
+          });
+        }
+        const reply = page.locator(".chat-bubble").getByText(visibleReply, { exact: true });
+        await reply.waitFor();
         await composer.fill("Keep this next-message draft.");
-        const failure = "The original Stop acknowledgement failed.";
-        await gateway.rejectDeferred("chat.abort", { code: "UNAVAILABLE", message: failure });
-        // The mock delivers synchronously; cross a rendered frame after its promise handlers.
+        const notice = saveWarning
+          ? "Stopped, but a reply could not be saved to history. Copy any visible text before leaving this chat."
+          : "The original Stop acknowledgement failed.";
+        if (saveWarning) {
+          await gateway.resolveDeferred("chat.abort", {
+            aborted: true,
+            runIds: [runId],
+            warning: notice,
+          });
+        } else {
+          await gateway.rejectDeferred("chat.abort", { code: "UNAVAILABLE", message: notice });
+        }
+        // A replacement must remain unchanged after the old response's promise handlers.
         await page.evaluate(
           () =>
             new Promise<void>((resolve) => {
               requestAnimationFrame(() => resolve());
             }),
         );
+        if (scenario === "replacement") {
+          expect(await page.getByText(notice, { exact: false }).count()).toBe(0);
+        } else {
+          await page.getByText(notice, { exact: true }).waitFor();
+        }
         await page.screenshot({
-          path: path.join(suite.artifactDir, `${owner}-after-stop-rejection.png`),
+          path: path.join(suite.artifactDir, scenario + "-stop-response.png"),
           fullPage: false,
         });
-
-        expect(await activeReply.isVisible()).toBe(true);
+        expect(await reply.isVisible()).toBe(true);
         expect(await composer.inputValue()).toBe("Keep this next-message draft.");
         await composer.fill("");
-        await stop.waitFor({ state: "visible" });
+        await stop.waitFor({ state: saveWarning ? "detached" : "visible" });
         expect(await gateway.getRequests("chat.abort")).toEqual([abort]);
         expect(await gateway.getRequests("chat.send")).toHaveLength(
-          owner === "replacement" ? 2 : 1,
+          scenario === "replacement" ? 2 : 1,
         );
-        if (owner === "current") {
-          await page.getByText(failure, { exact: true }).waitFor();
-        } else {
-          expect(await page.getByText(failure, { exact: false }).count()).toBe(0);
-        }
       });
     },
   );

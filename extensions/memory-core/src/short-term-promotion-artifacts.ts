@@ -41,13 +41,8 @@ import {
   normalizeShortTermRecallStore,
 } from "./short-term-promotion-utils.js";
 
-export function resolveShortTermRecallStorePath(workspaceDir: string): string {
-  return resolveStorePath(workspaceDir);
-}
-
-export function resolveShortTermRecallLockPath(workspaceDir: string): string {
-  return resolveLockPath(workspaceDir);
-}
+export { resolveStorePath as resolveShortTermRecallStorePath } from "./short-term-promotion-store.js";
+export { resolveLockPath as resolveShortTermRecallLockPath } from "./memory-workspace-lock.js";
 
 export async function auditShortTermPromotionArtifacts(params: {
   workspaceDir: string;

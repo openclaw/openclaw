@@ -4,6 +4,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { hasErrnoCode } from "./errno.js";
+import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { DEV_BRANCH, resolveDevUpstreamRefs } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import {
@@ -29,8 +30,8 @@ import type {
   RunStepOptions,
   UpdateRunResult,
   UpdateRunnerOptions,
-  UpdateStepResult,
 } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const PREFLIGHT_MAX_COMMITS = 10;
 const PREFLIGHT_TEMP_PREFIX =
@@ -70,34 +71,20 @@ function resolveTagFetchRef(candidate: string): string | null {
 
 function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
   const trimmed = devTargetRef.trim();
-  const candidates: string[] = [];
-  const addCandidate = (candidate?: string | null) => {
-    if (candidate && !candidates.includes(candidate)) {
-      candidates.push(candidate);
-    }
-  };
   if (looksLikeFullCommitSha(trimmed) || trimmed.startsWith("refs/remotes/")) {
-    addCandidate(trimmed);
-    return candidates;
+    return [trimmed];
   }
   if (trimmed.startsWith("refs/heads/")) {
-    addCandidate(`refs/remotes/origin/${trimmed.slice("refs/heads/".length)}`);
-    return candidates;
+    return [`refs/remotes/origin/${trimmed.slice("refs/heads/".length)}`];
   }
   if (trimmed.startsWith("origin/")) {
-    addCandidate(`refs/remotes/${trimmed}`);
-    return candidates;
+    return [`refs/remotes/${trimmed}`];
   }
   if (trimmed.startsWith("refs/tags/")) {
-    addCandidate(`${trimmed}^{}`);
-    addCandidate(trimmed);
-    return candidates;
+    return [`${trimmed}^{}`, trimmed];
   }
   // Plain branch names resolve from the freshly fetched remote ref.
-  addCandidate(`refs/remotes/origin/${trimmed}`);
-  addCandidate(`refs/tags/${trimmed}^{}`);
-  addCandidate(`refs/tags/${trimmed}`);
-  return candidates;
+  return [`refs/remotes/origin/${trimmed}`, `refs/tags/${trimmed}^{}`, `refs/tags/${trimmed}`];
 }
 
 function resolvePreflightWorktreeDir(preflightRoot: string) {
@@ -541,6 +528,7 @@ export async function runGitCandidatePreflight(params: {
   refreshedRemotes: readonly string[];
   targetRevision?: string;
   beforeSha?: string | null;
+  beforeBuiltCommit: string | null;
   beforeGitStaging?: UpdateRunnerOptions["beforeGitStaging"];
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
@@ -613,8 +601,12 @@ export async function runGitCandidatePreflight(params: {
     localDevBranchExists = upstream.localDevBranchExists;
   }
 
-  // A resolved no-op must not enter validation, stop the service, or rewrite its runtime.
-  if (!params.prepareGitExposure && preflightBaseSha === params.beforeSha) {
+  // A matching source revision cannot prove an unrecorded runtime is current.
+  const canSkipActivation =
+    !params.prepareGitExposure &&
+    params.beforeBuiltCommit !== null &&
+    gitCommitPrefixesMatch(params.beforeBuiltCommit, params.beforeSha ?? "");
+  if (canSkipActivation && preflightBaseSha === params.beforeSha) {
     return { status: "skipped", reason: "already-current" };
   }
   if (params.beforeGitStaging) {
@@ -665,7 +657,7 @@ export async function runGitCandidatePreflight(params: {
       };
     }
     for (const sha of candidates) {
-      if (!params.prepareGitExposure && sha === params.beforeSha) {
+      if (canSkipActivation && sha === params.beforeSha) {
         return { status: "skipped", reason: "already-current" };
       }
       if (sha !== preflightBaseSha) {

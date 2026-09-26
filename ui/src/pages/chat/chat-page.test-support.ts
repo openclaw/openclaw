@@ -3,7 +3,11 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts"
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "../../lib/sessions/session-capability.test-support.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatPage } from "./chat-page.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
@@ -156,4 +160,27 @@ export function stubMatchMedia(matches: boolean) {
       dispatchEvent: vi.fn(),
     })),
   );
+}
+
+export function createChatPageStateContext() {
+  const { gateway, publish } = createGatewayHarness(createTestGatewayClient(vi.fn()));
+  publish(false, null);
+  return {
+    agents: {
+      state: { agentsList: null },
+      ensureList: vi.fn(async () => null),
+    },
+    agentSelection: { state: { selectedId: "main" } },
+    basePath: "",
+    config: {
+      current: {
+        allowExternalEmbedUrls: false,
+        assistantIdentity: { name: "Assistant" },
+        embedSandboxMode: "scripts",
+      },
+    },
+    gateway,
+    chatSubmissions: createChatSubmissions(),
+    sessions: {},
+  } as unknown as ApplicationContext;
 }

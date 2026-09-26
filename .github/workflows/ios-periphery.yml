@@ -76,6 +76,8 @@ jobs:
               "scripts/ios-write-swift-filelist.mjs",
               "scripts/ios-write-swift-filelist.mts",
               "scripts/lint-swift.sh",
+              "scripts/run-swiftlint.mts",
+              "scripts/lib/check-limits.mts",
             ], { ignoreReturnCode: true, silent: true });
             if (result.exitCode !== 0 && result.exitCode !== 1) {
               throw new Error(`git diff failed with exit code ${result.exitCode}`);

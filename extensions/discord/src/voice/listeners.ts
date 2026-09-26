@@ -1,4 +1,3 @@
-// Discord plugin module wires Gateway lifecycle events into the voice manager.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -11,19 +10,9 @@ import {
   VoiceStateUpdateListener,
 } from "../internal/discord.js";
 import type { GatewayPlugin } from "../internal/gateway.js";
+import type { DiscordVoiceListenerManager } from "./listener-contract.js";
 
 const logger = createSubsystemLogger("discord/voice");
-
-// Keep this leaf contract structural so manager.ts can re-export listeners without a cycle.
-type DiscordVoiceListenerManager = {
-  autoJoin: () => Promise<unknown>;
-  reconcileAutoJoinGuild: (guildId: string) => Promise<unknown>;
-  refreshGuildRoster: (guildId: string) => void;
-  handleVoiceStateUpdate: (
-    state: APIVoiceState,
-    previousState?: APIVoiceState | null,
-  ) => Promise<void>;
-};
 
 function startAutoJoin(operation: () => Promise<unknown>, context = "") {
   void operation().catch((err: unknown) =>

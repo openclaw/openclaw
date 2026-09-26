@@ -633,13 +633,17 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
     }
 
-    /// The Control UI posts this from mousedown on passive pane-header chrome
-    /// (split-view session titles). WKWebView swallows titlebar-style drags, so
-    /// the web side asks the window to take over the in-flight mouse gesture.
+    /// The Control UI's passive chrome and the native failure page's background
+    /// ask the window to take over the in-flight mouse gesture because
+    /// WKWebView swallows titlebar-style drags.
     fileprivate func receiveWindowDragMessage(_ message: WKScriptMessage) {
+        let isNativeFailureDocument = self.isShowingFailurePage &&
+            message.frameInfo.request.url?.absoluteString == "about:blank" &&
+            self.webView.url?.absoluteString == "about:blank"
         guard message.name == Self.windowDragMessageHandlerName,
               message.webView === self.webView,
               message.frameInfo.isMainFrame,
+              isNativeFailureDocument ||
               Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
               Self.isWindowDragRequest(message.body),
               let window

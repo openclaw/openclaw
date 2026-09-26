@@ -28,6 +28,7 @@ export type DiagnosticProfileOutcome<Result> =
 
 type ProfileMeasurement = {
   durationMs: number;
+  startBlockedMs: number;
   before: NodeJS.MemoryUsage;
   after: NodeJS.MemoryUsage;
 };
@@ -159,6 +160,7 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
   let before: NodeJS.MemoryUsage | undefined;
   let after: NodeJS.MemoryUsage | undefined;
   let durationMs = 0;
+  let startBlockedMs = 0;
   let packageRoot: string | null = null;
   const assertActive = () => {
     if (options.signal.aborted || !options.hasAuthority()) {
@@ -200,7 +202,10 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     before = process.memoryUsage();
     const startedAt = performance.now();
     startAttempted = true;
-    await options.start(session);
+    // Inspector dispatch can synchronously scan V8's heap before returning a promise.
+    const starting = options.start(session);
+    startBlockedMs = performance.now() - startedAt;
+    await starting;
     // The event loop owns this timer. Requested duration is not a hard wall-time
     // or V8 allocation bound when the Gateway is blocked; return native actual timing.
     await delay(options.durationMs, undefined, { signal: options.signal });
@@ -247,6 +252,7 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
       status: "complete",
       result: options.sanitize(profile!, packageRoot, {
         durationMs,
+        startBlockedMs,
         before: before!,
         after: after!,
       }),

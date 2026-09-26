@@ -258,7 +258,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
             // Non-turn actions preserve their existing detached webhook path.
             let event: GoogleChatEvent;
             try {
-              event = normalizeGoogleChatInboundPayload(parsedInbound.raw).event;
+              event = normalizeGoogleChatInboundPayload(parsedInbound.raw);
             } catch {
               res.statusCode = 400;
               res.end("invalid payload");

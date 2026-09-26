@@ -31,8 +31,8 @@ import {
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
-  resolvePnpmGlobalDirFromGlobalRoot,
 } from "./update-global.js";
+import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,

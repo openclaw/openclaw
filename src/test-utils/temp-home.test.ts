@@ -8,10 +8,19 @@ import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.j
 import { resolveEffectiveHomeDir } from "../infra/home-dir.js";
 import { withTempHomeCore } from "../plugin-sdk/test-helpers/temp-home.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import {
   captureOpenClawStateDatabaseReadAdmission,
   closeOpenClawStateDatabaseByPathAsync,
   registerOpenClawStateDatabaseAsyncResource,
 } from "../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, captureFullEnv, withEnvAsync } from "./env.js";
 import { createTempHomeEnv } from "./temp-home.js";
@@ -27,6 +36,57 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("createTempHomeEnv", () => {
+  it.each(["shared", "plugin-sdk"] as const)(
+    "closes a configured agent database anywhere in the owned %s home before removal",
+    async (fixtureKind) => {
+      const prefix = `openclaw-temp-home-${fixtureKind}-`;
+      let home = "";
+      let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
+      let databaseOpenAtRemoval: boolean | undefined;
+      const remove = fs.rm;
+      const removeSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        if (home && path.resolve(String(target)) === path.resolve(home)) {
+          databaseOpenAtRemoval = database?.db.isOpen;
+          return;
+        }
+        await remove(target, options);
+      });
+      const openConfiguredDatabase = (fixtureHome: string) => {
+        home = fixtureHome;
+        database = openOpenClawAgentDatabase({
+          agentId: "main",
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") },
+          path: path.join(home, "configured-sessions.sqlite"),
+        });
+      };
+      try {
+        if (fixtureKind === "shared") {
+          const temporary = await createTempHomeEnv(prefix);
+          openConfiguredDatabase(temporary.home);
+          await temporary.restore();
+        } else {
+          await withTempHomeCore(
+            async (fixtureHome) => {
+              openConfiguredDatabase(fixtureHome);
+            },
+            { prefix },
+          );
+        }
+        expect(databaseOpenAtRemoval).toBe(false);
+        expect(database?.db.isOpen).toBe(false);
+      } finally {
+        removeSpy.mockRestore();
+        await closeOpenClawAgentDatabasesAsync();
+        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        if (home) {
+          await fs.rm(home, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
   it("restores the environment and retains home after resource drainage fails", async () => {
     const envKeys = [
       "HOME",

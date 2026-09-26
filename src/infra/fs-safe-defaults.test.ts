@@ -2,6 +2,11 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { nativeProcessTestEntrypoints } from "./native-process-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+
+const coreUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.fsSafeCore);
+const memoryUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.memoryFsUtils);
 
 type NativeMode = "auto" | "off" | "require";
 
@@ -23,15 +28,14 @@ function inspectNativeDefaults(params: {
   const output = execFileSync(
     process.execPath,
     [
-      "--import",
-      fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+      ...resolveRuntimeWorkerArgv(coreUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
       `
       const options = JSON.parse(process.argv[1]);
       const config = await import("@openclaw/fs-safe/config");
       if (options.beforeImport) config.configureFsSafeNative({ mode: options.beforeImport });
-      await import(options.defaultsUrl);
+      await import(options.coreUrl);
       await import(options.memoryUrl);
       const before = config.getFsSafeNativeConfig().mode;
       if (options.afterImport) config.configureFsSafeNative({ mode: options.afterImport });
@@ -40,9 +44,8 @@ function inspectNativeDefaults(params: {
     `,
       JSON.stringify({
         ...params,
-        defaultsUrl: new URL("./fs-safe-defaults.ts", import.meta.url).href,
-        memoryUrl: new URL("../../packages/memory-host-sdk/src/host/fs-utils.ts", import.meta.url)
-          .href,
+        coreUrl: coreUrl.href,
+        memoryUrl: memoryUrl.href,
       }),
     ],
     {

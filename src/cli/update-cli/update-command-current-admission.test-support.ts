@@ -26,7 +26,6 @@ type CurrentAdmissionFixture = {
     serviceStop: Mock;
     serviceStart: Mock;
     serviceRestart: Mock;
-    prepareRestartScript: Mock;
   };
 };
 
@@ -98,7 +97,6 @@ export function registerAlreadyCurrentAdmissionTests(f: CurrentAdmissionFixture)
         f.mocks.serviceStop,
         f.mocks.serviceStart,
         f.mocks.serviceRestart,
-        f.mocks.prepareRestartScript,
       );
       expect(f.packageInstallCommandCall()).toBeUndefined();
       expect(f.freshRestartCalls()).toHaveLength(0);

@@ -48,6 +48,45 @@ describe("login gate failure recovery", () => {
     }),
   ).replace(/=+$/g, "");
 
+  it("drags only the empty native background and preserves login recovery controls", async () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawWindowDrag: { postMessage } } });
+    const element = await mountFailure("unauthorized", ConnectErrorDetailCodes.AUTH_TOKEN_MISSING);
+    const onOpenGatewaySettings = vi.fn();
+    element.props = { ...element.props, onOpenGatewaySettings };
+    await element.updateComplete;
+    const press = (target: Element) => {
+      const event = new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        button: 0,
+      });
+      target.dispatchEvent(event);
+      return event;
+    };
+
+    expect(press(element.querySelector(".login-gate")!).defaultPrevented).toBe(true);
+    expect(postMessage).toHaveBeenCalledExactlyOnceWith({ type: "window-drag" });
+
+    for (const selector of [
+      ".login-gate__card",
+      ".login-gate__failure-title",
+      ".login-gate__failure-summary",
+      "#login-gate-url",
+      ".login-gate__connect",
+      ".login-gate__recovery button",
+    ]) {
+      expect(press(element.querySelector(selector)!).defaultPrevented).toBe(false);
+    }
+    expect(postMessage).toHaveBeenCalledOnce();
+
+    element.querySelector<HTMLButtonElement>(".login-gate__recovery button")!.click();
+    expect(onOpenGatewaySettings).toHaveBeenCalledOnce();
+    element.querySelector<HTMLButtonElement>(".login-gate__connect")!.click();
+    expect(element.props.onConnect).toHaveBeenCalledOnce();
+  });
+
   it("explains a pasted setup code before connecting and clears the hint when replaced", async () => {
     const element = await mountFailure("", null, setupCode);
     const hint = element.querySelector("#login-gate-secret-hint");

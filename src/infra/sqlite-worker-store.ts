@@ -184,7 +184,7 @@ export function openAgentDatabaseSqliteWorkerStore<Operations extends SqliteWork
   custody: {
     stateContext?: SqliteWorkerStateContext;
     stateDatabasePath?: string;
-    onNativeStopped?: (stopped: Promise<void>) => void;
+    onNativeStopped?: SqliteWorkerOpenCustody["onNativeStopped"];
     assertCurrent(): void;
     createAdmission: SqliteWorkerAdmissionFactory;
   },

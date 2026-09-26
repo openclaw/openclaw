@@ -2,11 +2,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  createSessionSqliteMigrationRun,
-  updateMigrationManifestTarget,
-  writeSessionSqliteMigrationManifest,
-} from "../../commands/doctor-session-sqlite-migration-run.js";
 import { buildStatusUpdateRows } from "../../commands/status-update-restart.js";
 import * as configModule from "../../config/config.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
@@ -15,6 +10,11 @@ import {
   recordGatewayBootStart,
 } from "../../infra/gateway-boot-lifecycle.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
+import {
+  createSessionSqliteMigrationRun,
+  updateMigrationManifestTarget,
+  writeSessionSqliteMigrationManifest,
+} from "../../infra/session-sqlite-migration-manifest.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
@@ -258,16 +258,17 @@ describe("update status Node runtime findings", () => {
         prepare: (this: DatabaseSync, sql: string) => ReturnType<DatabaseSync["prepare"]>;
       } = DatabaseSync.prototype;
       const realPrepare = sqlitePrototype.prepare;
-      const prepare = vi
-        .spyOn(DatabaseSync.prototype, "prepare")
-        .mockImplementation(function (this: DatabaseSync, sql) {
-          return realPrepare.call(
-            this,
-            sql === "SELECT sqlite_version() AS version"
-              ? `SELECT '${sqliteVersion}' AS version`
-              : sql,
-          );
-        });
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        return realPrepare.call(
+          this,
+          sql === "SELECT sqlite_version() AS version"
+            ? `SELECT '${sqliteVersion}' AS version`
+            : sql,
+        );
+      });
       const freshGuard = await import("../../infra/runtime-guard.js");
       vi.spyOn(freshGuard, "detectRuntime").mockResolvedValue({
         kind: "node",
@@ -547,6 +548,9 @@ describe("update status abandoned-run reporting", () => {
       expect(output).not.toContain("version mismatch");
       expect(runtime.log).not.toHaveBeenCalledWith(advice);
       expect(output).toContain("Historical recovery advice:");
+      expect(output).toContain(
+        `Last recorded update (${new Date(created.createdAtMs).toISOString()}):`,
+      );
       expect(output).toContain(
         responding ? "supersedes saved claims" : "Current health unavailable",
       );
@@ -829,6 +833,9 @@ describe("update status abandoned-run reporting", () => {
       });
       expect(output).toContain("treated as abandoned after 24 h");
       expect(output.includes("Historical update:")).toBe(laterRun !== "none");
+      if (surface === "text") {
+        expect(output.includes("Last recorded update (")).toBe(laterRun !== "active");
+      }
       expect(output.includes("run `openclaw update` to retry.")).toBe(laterRun === "none");
       expect(findActiveUpdateRun()?.runId).toBe(laterRun === "active" ? currentRunId : undefined);
       // A later read must still surface the advisory after the terminal write.

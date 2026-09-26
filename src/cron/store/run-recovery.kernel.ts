@@ -2,7 +2,6 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
 import { resolveCronRunReceiptTerminalStatus } from "../service/run-receipts.js";
 import {
-  type InterruptedStartupRun,
   markInterruptedStartupRun,
   restoreFinalizedStartupRun,
 } from "../service/startup-run-repair.js";
@@ -17,7 +16,7 @@ import {
 } from "./run-receipt-store.js";
 import { isCronRunTriggerStateRetiredInDatabase } from "./run-receipt-trigger-state.js";
 import type { CronRunRecoveryProposal } from "./run-recovery-read.types.js";
-import type { CronRunRecoveryResult } from "./run-recovery.types.js";
+import type { CronRunRecoveryResult, InterruptedStartupRun } from "./run-recovery.types.js";
 import type { CronJobReadRow } from "./schema.js";
 
 export function repairCronRunInDatabase(params: {

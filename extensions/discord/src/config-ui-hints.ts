@@ -276,7 +276,7 @@ export const discordChannelConfigUiHints = {
   },
   allowBots: {
     label: "Discord Allow Bot Messages",
-    help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+    help: 'Allow bot-authored messages through normal Discord mention and access rules (default: true). Set false to disable bot-triggered turns, or "mentions" to require a bot mention. Accessible bot messages remain available as conversation context.',
   },
   botLoopProtection: {
     label: "Discord Bot Loop Protection",

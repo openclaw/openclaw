@@ -53,12 +53,17 @@ on:
         default: false
         type: boolean
       installed_startup_package:
-        description: "Optional Package Acceptance binding, or {baseline, candidate} bindings for a matched comparison"
+        description: "Package Acceptance binding for installed proof, or {baseline, candidate} for a startup comparison"
         required: false
         default: ""
         type: string
+      installed_repair_worker:
+        description: "Use the installed package binding for legacy repair controllers and native worker cleanup"
+        required: false
+        default: false
+        type: boolean
       startup_node_version:
-        description: "Exact Node version for installed startup only"
+        description: "Exact Node version for installed package probes"
         required: false
         default: "26.8.2"
         type: string
@@ -94,6 +99,90 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Qualify fresh native runner isolation
+        if: ${{ inputs.installed_repair_worker }}
+        id: repair_isolation
+        shell: pwsh
+        env:
+          NATIVE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+          NATIVE_ISOLATION_PROOF_NAME: ${{ inputs.installed_repair_worker && 'windows-repair-isolation.json' || 'windows-schtasks-isolation.json' }}
+        run: &windows_native_isolation |
+          $ErrorActionPreference = "Stop"
+          $proofPath = Join-Path $env:RUNNER_TEMP $env:NATIVE_ISOLATION_PROOF_NAME
+          $evidence = [ordered]@{ result = "unqualified"; runnerEnvironment = $env:NATIVE_RUNNER_ENVIRONMENT; image = $env:ImageOS }
+          try {
+            # Standard GitHub-hosted Windows jobs receive a fresh VM per job.
+            # ImageOS also names toolchain variants; it is evidence, not isolation authority.
+            if ($env:NATIVE_RUNNER_ENVIRONMENT -ne "github-hosted" -or $env:RUNNER_OS -ne "Windows") {
+              throw "Expected a newly allocated GitHub-hosted Windows runner."
+            }
+            if ($env:EXPECTED_HEAD -notmatch '^[0-9a-f]{40}$') {
+              throw "Native proof requires an exact 40-character target_ref."
+            }
+            # Actions artifact/cache credentials are infrastructure-only. The
+            # native probe separately bounds its environment before owner imports.
+            $credentialNames = @(
+              "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+              "GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN", "NODE_AUTH_TOKEN",
+              "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_WEB_IDENTITY_TOKEN_FILE",
+              "AZURE_CLIENT_SECRET", "AZURE_FEDERATED_TOKEN_FILE", "ARM_CLIENT_SECRET", "GOOGLE_APPLICATION_CREDENTIALS",
+              "SSH_AUTH_SOCK", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
+              "OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH",
+              "OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD", "OPENCLAW_SUPERVISOR_MODE"
+            ) | Where-Object { -not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($_)) }
+            $credentialNames = @($credentialNames)
+            $evidence.forwardedCredentialCount = $credentialNames.Count
+            if ($credentialNames.Count -ne 0) { throw "Forwarded credential environment is not permitted." }
+            $tailnetServices = @(Get-Service | Where-Object { $_.Name -match 'tailscale|zerotier' })
+            $tailnetAdapters = @(Get-NetAdapter -IncludeHidden | Where-Object { $_.InterfaceDescription -match 'tailscale|zerotier' })
+            $tailnetRoutes = @(Get-NetRoute | Where-Object { $_.DestinationPrefix -eq '100.64.0.0/10' })
+            $networkDisks = @(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=4")
+            $networkDrives = @(Get-PSDrive -PSProvider FileSystem | Where-Object { $_.DisplayRoot -like '\\*' })
+            $smbMappings = @(Get-SmbMapping)
+            $evidence.tailnetSurfaceCount = $tailnetServices.Count + $tailnetAdapters.Count + $tailnetRoutes.Count
+            $evidence.operatorMountCount = $networkDisks.Count + $networkDrives.Count + $smbMappings.Count
+            if ($evidence.tailnetSurfaceCount -ne 0 -or $evidence.operatorMountCount -ne 0) {
+              throw "Native proof requires no Tailnet attachment or operator network mounts."
+            }
+            # Do not use proxies, follow redirects, or read a successful token
+            # response. Unknown/temporary failures do not establish no identity.
+            $handler = [Net.Http.HttpClientHandler]::new()
+            $handler.UseProxy = $false
+            $handler.AllowAutoRedirect = $false
+            $client = [Net.Http.HttpClient]::new($handler)
+            $client.Timeout = [TimeSpan]::FromSeconds(5)
+            $deadline = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
+            $client.DefaultRequestHeaders.Add("Metadata", "true")
+            try {
+              $uri = "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fmanagement.azure.com%2F"
+              $response = $client.GetAsync($uri, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $deadline.Token).GetAwaiter().GetResult()
+              try {
+                $evidence.managedIdentityStatus = [int]$response.StatusCode
+                if ([int]$response.StatusCode -ne 400) { throw "Managed identity absence is unproven." }
+                $body = $response.Content.ReadAsStringAsync($deadline.Token).GetAwaiter().GetResult() | ConvertFrom-Json
+                # Accept only this known negative; changed error wording blocks
+                # qualification instead of treating every 400 as no identity.
+                if ($body.access_token -or $body.error -ne "invalid_request" -or $body.error_description -cne "Identity not found") {
+                  throw "Managed identity absence is unproven."
+                }
+                $evidence.managedIdentity = "explicit-identity-not-found"
+              } finally {
+                $body = $null
+                $response.Dispose()
+              }
+            } catch {
+              # Never include endpoint bodies or exception data in logs/artifacts.
+              throw "IMDS did not establish identity absence; native product execution is blocked."
+            } finally {
+              $deadline.Dispose()
+              $client.Dispose()
+            }
+            $evidence.result = "qualified"
+          } finally {
+            $evidence | ConvertTo-Json | Set-Content -LiteralPath $proofPath
+          }
+
       - name: Validate exact Windows replay
         id: replay_input
         if: ${{ inputs.windows_ci_replay != '' }}
@@ -102,7 +191,7 @@ jobs:
           TARGET_REF: ${{ inputs.target_ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
-          MIXED_PROOF: ${{ inputs.run_windows_ci || inputs.run_private_node_provisioning || inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}
+          MIXED_PROOF: ${{ inputs.run_windows_ci || inputs.run_private_node_provisioning || inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.installed_repair_worker || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}
         run: |
           $ErrorActionPreference = "Stop"
           if ($env:KEEPALIVE_MINUTES -ne "0" -or $env:MIXED_PROOF -eq "true") {
@@ -169,7 +258,7 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           RUNNER_LABEL: ${{ inputs.runner_label }}
           KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
-          MIXED_PROOF: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}
+          MIXED_PROOF: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.installed_repair_worker || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}
         run: |
           $ErrorActionPreference = "Stop"
           if ($env:RUNNER_LABEL -ne "windows-2025" -or $env:KEEPALIVE_MINUTES -ne "0" -or $env:MIXED_PROOF -eq "true") {
@@ -183,13 +272,18 @@ jobs:
 
       - name: Validate installed startup inputs
         id: startup_input
-        if: ${{ inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic }}
+        if: ${{ inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.installed_repair_worker }}
         env:
           STARTUP_PACKAGE: ${{ inputs.installed_startup_package }}
           STARTUP_NODE_VERSION: ${{ inputs.startup_node_version }}
           TARGET_REF: ${{ inputs.target_ref }}
           RUN_WINDOWS_CI: ${{ inputs.run_windows_ci }}
           CPU_DIAGNOSTIC: ${{ inputs.installed_startup_cpu_diagnostic }}
+          REPAIR_WORKER: ${{ inputs.installed_repair_worker }}
+          RUNNER_LABEL: ${{ inputs.runner_label }}
+          KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          REPAIR_MIXED_PROOF: ${{ inputs.run_private_node_provisioning || inputs.windows_ci_replay != '' || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
@@ -201,6 +295,12 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $toolingSha -cne $env:TARGET_REF) { throw "Tooling checkout differs from target_ref." }
           $selection = $env:STARTUP_PACKAGE | ConvertFrom-Json
           $paired = $selection.PSObject.Properties.Name -contains "baseline" -or $selection.PSObject.Properties.Name -contains "candidate"
+          if ($env:REPAIR_WORKER -eq "true") {
+            if ($paired -or $env:CPU_DIAGNOSTIC -eq "true" -or $env:REPAIR_MIXED_PROOF -eq "true" -or $env:RUNNER_LABEL -ne "windows-2025" -or $env:KEEPALIVE_MINUTES -ne "0") {
+              throw "Repair worker proof requires one package, windows-2025, keepalive 0, and no other proof mode."
+            }
+            if ($env:WORKFLOW_SHA -cne $toolingSha) { throw "Repair worker proof requires the reviewed tooling and workflow revision to match." }
+          }
           if ($paired -and $env:CPU_DIAGNOSTIC -eq "true") { throw "CPU diagnostics require one package, not a comparison." }
           $packages = [ordered]@{ baseline = $selection }
           if ($paired) {
@@ -272,7 +372,7 @@ jobs:
 
       - name: Probe WSL2
         id: wsl2
-        if: ${{ !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}
+        if: ${{ !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' }}
         env:
           ENABLE_WSL2_FEATURES: ${{ inputs.enable_wsl2_features }}
           IMPORT_UBUNTU_WSL2: ${{ inputs.import_ubuntu_wsl2 }}
@@ -489,7 +589,7 @@ jobs:
           node scripts/run-vitest.mjs src/cli/update-cli/update-command-executor-auxiliary.test.ts -t 'preserves direct preflight release through a healthy installer child and active drain|never starts Node provisioning without released authorization input|refuses Node provisioning after|preserves native-gate environment precedence|preserves absent or empty native payload options'
 
       - name: Prove installed benchmark lifecycle
-        if: ${{ inputs.installed_startup_package != '' }}
+        if: ${{ inputs.installed_startup_package != '' && !inputs.installed_repair_worker }}
         run: |
           $ErrorActionPreference = "Stop"
           node scripts/run-vitest.mjs test/scripts/bench-gateway-installed.test.ts
@@ -549,7 +649,7 @@ jobs:
           $inputRecord | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $evidence "input.json")
 
       - name: Measure installed startup cohort
-        if: ${{ inputs.installed_startup_package != '' }}
+        if: ${{ inputs.installed_startup_package != '' && !inputs.installed_repair_worker }}
         env:
           CPU_DIAGNOSTIC: ${{ inputs.installed_startup_cpu_diagnostic }}
         run: |
@@ -559,6 +659,32 @@ jobs:
           node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts --installed-cohort .artifacts/windows-installed-startup/input.json --output .artifacts/windows-installed-startup/results.json @diagnosticArgs 2>&1 | Tee-Object -FilePath .artifacts/windows-installed-startup/cohort.log
           if ($LASTEXITCODE -ne 0) { throw "Installed startup cohort failed; retain every sample and cleanup result." }
 
+      - name: Install authenticated published repair controllers
+        if: ${{ inputs.installed_repair_worker }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $parents = node --import ./scripts/tsx.mjs scripts/windows-repair-worker-probe.mjs --parent-manifest | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Cannot read published controller identities." }
+          $root = Join-Path $env:RUNNER_TEMP "repair-published"
+          New-Item -ItemType Directory -Path $root | Out-Null
+          foreach ($parent in $parents) {
+            $tarball = Join-Path $root "openclaw-$($parent.version).tgz"
+            Invoke-WebRequest -Uri "https://registry.npmjs.org/openclaw/-/openclaw-$($parent.version).tgz" -OutFile $tarball -ConnectionTimeoutSeconds 15 -OperationTimeoutSeconds 120
+            $integrity = "sha512-" + [Convert]::ToBase64String([Security.Cryptography.SHA512]::HashData([IO.File]::ReadAllBytes($tarball)))
+            if ($integrity -cne $parent.integrity) { throw "Published controller tarball integrity differs." }
+            $prefix = Join-Path $root $parent.version
+            npm install --prefix $prefix --no-audit --no-fund --ignore-scripts=false $tarball
+            if ($LASTEXITCODE -ne 0) { throw "Published controller installation failed." }
+          }
+          $parents | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath .artifacts/windows-installed-startup/published-controllers.json
+
+      - name: Prove installed repair worker compatibility and cleanup
+        if: ${{ inputs.installed_repair_worker }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          node --import ./scripts/tsx.mjs scripts/windows-repair-worker-probe.mjs .artifacts/windows-installed-startup/input.json .artifacts/windows-installed-startup/repair-results.json 2>&1 | Tee-Object -FilePath .artifacts/windows-installed-startup/repair.log
+          if ($LASTEXITCODE -ne 0) { throw "Installed repair worker proof failed; retain failed cells and cleanup facts." }
+
       - name: Upload installed startup evidence
         if: ${{ always() && inputs.installed_startup_package != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -566,6 +692,7 @@ jobs:
           name: windows-installed-startup-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/windows-installed-startup/*.json
+            ${{ runner.temp }}/windows-repair-isolation.json
             .artifacts/windows-installed-startup/*.log
             .artifacts/windows-installed-startup/results.json.profiles/*.cpuprofile
             .artifacts/windows-installed-startup/results.json.profiles/*.json
@@ -721,7 +848,7 @@ jobs:
   # Native session qualification must not depend on headless CI or WSL results.
   native-schtasks:
     name: Native Scheduled Task proof
-    if: ${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning && inputs.windows_ci_replay == '' }}
+    if: ${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' }}
     runs-on: windows-2025
     timeout-minutes: 75
     steps:
@@ -731,81 +858,8 @@ jobs:
         env:
           NATIVE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
           EXPECTED_HEAD: ${{ inputs.target_ref }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $proofPath = Join-Path $env:RUNNER_TEMP "windows-schtasks-isolation.json"
-          $evidence = [ordered]@{ result = "unqualified"; runnerEnvironment = $env:NATIVE_RUNNER_ENVIRONMENT; image = $env:ImageOS }
-          try {
-            # Standard GitHub-hosted Windows jobs receive a fresh VM per job.
-            # ImageOS also names toolchain variants; it is evidence, not isolation authority.
-            if ($env:NATIVE_RUNNER_ENVIRONMENT -ne "github-hosted" -or $env:RUNNER_OS -ne "Windows") {
-              throw "Expected a newly allocated GitHub-hosted Windows runner."
-            }
-            if ($env:EXPECTED_HEAD -notmatch '^[0-9a-f]{40}$') {
-              throw "Native proof requires an exact 40-character target_ref."
-            }
-            # Actions artifact/cache credentials are infrastructure-only. The
-            # native probe separately bounds its environment before owner imports.
-            $credentialNames = @(
-              "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-              "GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN", "NODE_AUTH_TOKEN",
-              "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_WEB_IDENTITY_TOKEN_FILE",
-              "AZURE_CLIENT_SECRET", "AZURE_FEDERATED_TOKEN_FILE", "ARM_CLIENT_SECRET", "GOOGLE_APPLICATION_CREDENTIALS",
-              "SSH_AUTH_SOCK", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
-              "OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH",
-              "OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD", "OPENCLAW_SUPERVISOR_MODE"
-            ) | Where-Object { -not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($_)) }
-            $credentialNames = @($credentialNames)
-            $evidence.forwardedCredentialCount = $credentialNames.Count
-            if ($credentialNames.Count -ne 0) { throw "Forwarded credential environment is not permitted." }
-            $tailnetServices = @(Get-Service | Where-Object { $_.Name -match 'tailscale|zerotier' })
-            $tailnetAdapters = @(Get-NetAdapter -IncludeHidden | Where-Object { $_.InterfaceDescription -match 'tailscale|zerotier' })
-            $tailnetRoutes = @(Get-NetRoute | Where-Object { $_.DestinationPrefix -eq '100.64.0.0/10' })
-            $networkDisks = @(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=4")
-            $networkDrives = @(Get-PSDrive -PSProvider FileSystem | Where-Object { $_.DisplayRoot -like '\\*' })
-            $smbMappings = @(Get-SmbMapping)
-            $evidence.tailnetSurfaceCount = $tailnetServices.Count + $tailnetAdapters.Count + $tailnetRoutes.Count
-            $evidence.operatorMountCount = $networkDisks.Count + $networkDrives.Count + $smbMappings.Count
-            if ($evidence.tailnetSurfaceCount -ne 0 -or $evidence.operatorMountCount -ne 0) {
-              throw "Native proof requires no Tailnet attachment or operator network mounts."
-            }
-            # Do not use proxies, follow redirects, or read a successful token
-            # response. Unknown/temporary failures do not establish no identity.
-            $handler = [Net.Http.HttpClientHandler]::new()
-            $handler.UseProxy = $false
-            $handler.AllowAutoRedirect = $false
-            $client = [Net.Http.HttpClient]::new($handler)
-            $client.Timeout = [TimeSpan]::FromSeconds(5)
-            $deadline = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(5))
-            $client.DefaultRequestHeaders.Add("Metadata", "true")
-            try {
-              $uri = "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fmanagement.azure.com%2F"
-              $response = $client.GetAsync($uri, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $deadline.Token).GetAwaiter().GetResult()
-              try {
-                $evidence.managedIdentityStatus = [int]$response.StatusCode
-                if ([int]$response.StatusCode -ne 400) { throw "Managed identity absence is unproven." }
-                $body = $response.Content.ReadAsStringAsync($deadline.Token).GetAwaiter().GetResult() | ConvertFrom-Json
-                # Accept only this known negative; changed error wording blocks
-                # qualification instead of treating every 400 as no identity.
-                if ($body.access_token -or $body.error -ne "invalid_request" -or $body.error_description -cne "Identity not found") {
-                  throw "Managed identity absence is unproven."
-                }
-                $evidence.managedIdentity = "explicit-identity-not-found"
-              } finally {
-                $body = $null
-                $response.Dispose()
-              }
-            } catch {
-              # Never include endpoint bodies or exception data in logs/artifacts.
-              throw "IMDS did not establish identity absence; native product execution is blocked."
-            } finally {
-              $deadline.Dispose()
-              $client.Dispose()
-            }
-            $evidence.result = "qualified"
-          } finally {
-            $evidence | ConvertTo-Json | Set-Content -LiteralPath $proofPath
-          }
+          NATIVE_ISOLATION_PROOF_NAME: windows-schtasks-isolation.json
+        run: *windows_native_isolation
 
       - name: Preflight native Scheduled Task session
         if: ${{ inputs.run_windows_ci }}

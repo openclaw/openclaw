@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { Command } from "commander";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { registerSubCliByNameCore } from "../cli/program/register.subclis-core.js";
+import { registerSubCliByName } from "../cli/program/register.subclis.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   createPluginCliLoadSession,
@@ -605,7 +605,7 @@ describe("native plugin alias preparation", () => {
         registration === "nodes"
           ? ["node", "openclaw", "nodes", "late"]
           : ["node", "openclaw", "memory", "status"];
-      await registerSubCliByNameCore(program, name, argv);
+      await registerSubCliByName(program, name, argv);
       if (registration !== "nodes") {
         const names = program.commands.map((command) => command.name());
         expect(names.indexOf("late") < names.indexOf(name)).toBe(registration === "pairing-before");

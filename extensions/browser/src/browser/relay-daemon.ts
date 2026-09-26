@@ -1,7 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { getRuntimeConfig } from "../config/config.js";
-import { extractErrorCode } from "../infra/errors.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { readExtensionRelayToken } from "./extension-relay/relay-auth.js";
 import {

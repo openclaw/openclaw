@@ -1,14 +1,12 @@
 import { renderCaptureView } from "./ui-render-capture.js";
-import { renderEvidenceView } from "./ui-render-evidence.js";
 import {
   renderChatView,
   renderEventsView,
-  renderHeader,
   renderReportView,
   renderResultsView,
-  renderSidebar,
-  renderTabBar,
-} from "./ui-render-main.js";
+} from "./ui-render-content.js";
+import { renderEvidenceView } from "./ui-render-evidence.js";
+import { renderHeader, renderSidebar, renderTabBar } from "./ui-render-shell.js";
 import type { UiState } from "./ui-types.js";
 
 export * from "./ui-types.js";

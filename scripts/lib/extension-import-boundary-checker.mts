@@ -11,6 +11,7 @@ import {
   resolveRepoSpecifier,
   writeLine,
 } from "./guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
 import { collectTypeScriptFilesFromRoots, resolveSourceRoots } from "./ts-guard-utils.mts";
 
@@ -182,6 +183,7 @@ export function createExtensionImportBoundaryChecker<Entry = BoundaryViolation>(
   const maxSourceBytes = normalizeMaxSourceBytes(params.maxSourceBytes);
 
   const collectInventory = createCachedAsync(async () => {
+    using parser = createNativeTypeScriptParser({ cwd: repoRoot });
     const files = (await collectTypeScriptFilesFromRoots(scanRoots, params.sourceOptions))
       .filter((filePath) => !params.shouldSkipFile?.(normalizeRepoPath(repoRoot, filePath)))
       .toSorted((left, right) =>
@@ -199,15 +201,17 @@ export function createExtensionImportBoundaryChecker<Entry = BoundaryViolation>(
         ) {
           return [];
         }
-        const references = collectModuleReferencesFromSource(source, {
-          fileName: filePath,
-          acceptSpecifier(specifier: string) {
-            const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
-            return params.acceptSpecifier
-              ? params.acceptSpecifier(specifier, { filePath, relativeFile, resolvedPath })
-              : Boolean(resolvedPath?.startsWith(BUNDLED_PLUGIN_PATH_PREFIX));
+        const references = collectModuleReferencesFromSource(
+          parser.parseSourceFile(filePath, source),
+          {
+            acceptSpecifier(specifier: string) {
+              const resolvedPath = resolveRepoSpecifier(repoRoot, specifier, filePath);
+              return params.acceptSpecifier
+                ? params.acceptSpecifier(specifier, { filePath, relativeFile, resolvedPath })
+                : Boolean(resolvedPath?.startsWith(BUNDLED_PLUGIN_PATH_PREFIX));
+            },
           },
-        });
+        );
         return params.collectEntries
           ? params.collectEntries({ source, filePath, relativeFile, references })
           : scanImportBoundaryViolations(

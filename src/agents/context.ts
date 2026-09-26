@@ -248,13 +248,18 @@ export async function waitForContextWindowCacheLoad(options?: {
   }
 }
 
-/** Replace cached model context metadata for the active runtime configuration. */
-export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
+/** Restore configured context limits without acquiring a model catalog. */
+export function resetContextWindowCache(cfg: OpenClawConfig): void {
   beginContextWindowCacheRefresh();
   const caches = getContextWindowCaches();
   caches.configuredTokenCache.clear();
   caches.contextWindowCache.clear();
   primeConfiguredContextWindowsFromConfig(cfg);
+}
+
+/** Replace cached model context metadata for the active runtime configuration. */
+export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
+  resetContextWindowCache(cfg);
   await ensureContextWindowCacheLoaded();
 }
 

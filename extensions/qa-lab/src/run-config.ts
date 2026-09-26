@@ -1,7 +1,7 @@
-// Qa Lab helper module supports run config behavior.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { z } from "zod";
 import type {
   QaLabExecutionKind,
   QaLabResolvedRunPlan,
@@ -117,17 +117,19 @@ function normalizeScenarioIds(input: unknown, scenarios: QaSeedScenario[]): stri
   return selectedIds;
 }
 
-function normalizeQaChannelDriver(
+function normalizeQaSelectionEnum<T>(
   input: unknown,
-  fallback: QaLabRunSelection["channelDriver"],
-): QaLabRunSelection["channelDriver"] {
+  fallback: T,
+  schema: z.ZodType<T>,
+  label: string,
+): T {
   if (input === undefined || input === null || input === "") {
     return fallback;
   }
-  const parsed = qaScorecardChannelDriverSchema.safeParse(input);
+  const parsed = schema.safeParse(input);
   if (!parsed.success) {
     const details = typeof input === "string" ? `: ${input}` : "";
-    throw new Error(`unknown QA channel driver${details}`);
+    throw new Error(`unknown QA ${label}${details}`);
   }
   return parsed.data;
 }
@@ -162,21 +164,6 @@ function normalizeQaChannel(input: unknown): string | null {
   return input.trim().toLowerCase();
 }
 
-function normalizeQaEvidenceMode(
-  input: unknown,
-  fallback: QaLabRunSelection["evidenceMode"],
-): QaLabRunSelection["evidenceMode"] {
-  if (input === undefined || input === null || input === "") {
-    return fallback;
-  }
-  const parsed = qaScorecardEvidenceModeSchema.safeParse(input);
-  if (!parsed.success) {
-    const details = typeof input === "string" ? `: ${input}` : "";
-    throw new Error(`unknown QA evidence mode${details}`);
-  }
-  return parsed.data;
-}
-
 function normalizeQaRuntimePair(input: unknown): QaLabRunSelection["runtimePair"] {
   if (input === undefined || input === null) {
     return null;
@@ -195,18 +182,6 @@ function normalizeQaRuntimePair(input: unknown): QaLabRunSelection["runtimePair"
     throw new Error('QA runner runtimePair must be ["openclaw", "codex"]');
   }
   return ["openclaw", "codex"];
-}
-
-function normalizeQaRuntimePairLane(input: unknown): QaLabRunSelection["runtimePairLane"] {
-  if (input === undefined || input === null || input === "") {
-    return null;
-  }
-  const parsed = qaRuntimePairLaneSchema.safeParse(input);
-  if (!parsed.success) {
-    const details = typeof input === "string" ? `: ${input}` : "";
-    throw new Error(`unknown QA runtime-pair lane${details}`);
-  }
-  return parsed.data;
 }
 
 export function normalizeQaRunSelection(
@@ -235,13 +210,28 @@ export function normalizeQaRunSelection(
   return {
     profile,
     channel: normalizeQaChannel(payload.channel),
-    channelDriver: normalizeQaChannelDriver(payload.channelDriver, profileDefaults.channelDriver),
-    evidenceMode: normalizeQaEvidenceMode(payload.evidenceMode, profileDefaults.evidenceMode),
+    channelDriver: normalizeQaSelectionEnum(
+      payload.channelDriver,
+      profileDefaults.channelDriver,
+      qaScorecardChannelDriverSchema,
+      "channel driver",
+    ),
+    evidenceMode: normalizeQaSelectionEnum(
+      payload.evidenceMode,
+      profileDefaults.evidenceMode,
+      qaScorecardEvidenceModeSchema,
+      "evidence mode",
+    ),
     providerMode,
     ...models,
     fastMode: getQaProvider(providerMode).kind === "live" || payload.fastMode === true,
     runtimePair: normalizeQaRuntimePair(payload.runtimePair),
-    runtimePairLane: normalizeQaRuntimePairLane(payload.runtimePairLane),
+    runtimePairLane: normalizeQaSelectionEnum(
+      payload.runtimePairLane,
+      null,
+      qaRuntimePairLaneSchema,
+      "runtime-pair lane",
+    ),
     scenarioIds: normalizeScenarioIds(payload.scenarioIds, scenarios),
   };
 }

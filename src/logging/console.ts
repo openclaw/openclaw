@@ -2,6 +2,7 @@
 import util from "node:util";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
+import { exitAfterSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { isVerbose } from "../global-state.js";
 import { readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
@@ -69,10 +70,6 @@ export function getConsoleSettings(): ConsoleLoggerSettings {
   const settings = resolveConsoleSettings();
   loggingState.cachedConsoleSettings = settings;
   return loggingState.cachedConsoleSettings as ConsoleSettings;
-}
-
-export function getResolvedConsoleSettings(): ConsoleLoggerSettings {
-  return getConsoleSettings();
 }
 
 // Route all console output (including tslog console writes) to stderr.
@@ -268,8 +265,7 @@ export function enableConsoleCapture(): void {
           // stdout/stderr broken means the process is orphaned (e.g. the parent
           // service restarted and closed the journal pipe). Exit cleanly instead
           // of spinning in a tight loop where every log attempt re-triggers EPIPE.
-          const exitCode = process.exitCode;
-          process.exit(exitCode !== undefined && exitCode !== 0 && exitCode !== "0" ? exitCode : 0);
+          exitAfterSignalExitBarriers(process.exitCode ?? 0);
           return;
         }
         throw err;

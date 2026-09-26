@@ -1,8 +1,20 @@
 import type {
   appendTranscriptEventSnapshotSync,
   TranscriptEventAppendResult,
+  TranscriptMessageWriteSnapshot,
   TranscriptWriteSnapshot,
 } from "./session-accessor.sqlite-transcript-write.js";
+
+export function isTranscriptMessageAppendCurrentTail(
+  snapshot: TranscriptMessageWriteSnapshot<unknown>,
+): boolean {
+  return (
+    snapshot.result !== undefined &&
+    snapshot.visibleTail.generation !== null &&
+    snapshot.visibleTail.generation === snapshot.after.generation &&
+    snapshot.visibleTail.entryId === snapshot.result.messageId
+  );
+}
 
 export function requireTranscriptEventAppendSnapshot(
   result: ReturnType<typeof appendTranscriptEventSnapshotSync>,

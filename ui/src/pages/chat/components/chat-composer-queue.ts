@@ -9,7 +9,11 @@ import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
-import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatQueueItem,
+  ChatQueueDisplayItem,
+  HumanMention,
+} from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
@@ -17,9 +21,10 @@ import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
 type ChatQueueProps = {
   queue: ChatQueueItem[];
-  displayQueue?: ChatQueueItem[];
+  displayQueue?: ChatQueueDisplayItem[];
   offline?: boolean;
   canAbort?: boolean;
+  canRemoveServerQueued?: boolean;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
@@ -274,7 +279,7 @@ function setDropTarget(event: DragEvent, active: boolean): void {
 }
 
 function renderChatQueueItem(
-  item: ChatQueueItem,
+  item: ChatQueueDisplayItem,
   props: ChatQueueProps,
   reorder: ChatQueueReorder,
 ) {
@@ -282,8 +287,9 @@ function renderChatQueueItem(
   const hasAuthorAvatar = authorAvatar !== nothing;
   const failed =
     item.sendState === "failed" || item.sendState === "unconfirmed" || item.sendState === "held";
-  const reconnecting = !failed && (props.offline || item.sendState === "waiting-reconnect");
-  const stateLabel = sendStateLabel(item, props.offline === true);
+  const reconnecting =
+    !item.serverQueued && !failed && (props.offline || item.sendState === "waiting-reconnect");
+  const stateLabel = sendStateLabel(item, !item.serverQueued && props.offline === true);
   const steered = item.queueMode === "steer" && stateLabel === null;
   const busy = item.sendState === "executing-command";
   const editing = props.editingId === item.id;
@@ -578,7 +584,7 @@ function renderChatQueueItem(
                   <button
                     class="chat-queue__remove"
                     type="button"
-                    ?disabled=${editing}
+                    ?disabled=${editing || (item.serverQueued && !props.canRemoveServerQueued)}
                     aria-label=${t("chat.queue.removeQueuedMessage")}
                     @click=${(event: MouseEvent) => {
                       // Chromium retargets click 2 after row removal; detail still owns the gesture.

@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   capturedGatewayClients: [] as Array<{
     request: Mock<(method: string, params?: unknown) => Promise<unknown>>;
     stop: ReturnType<typeof vi.fn>;
+    stopAndWait: ReturnType<typeof vi.fn<() => Promise<void>>>;
     updateNodeManifest: ReturnType<typeof vi.fn>;
   }>,
   nodePluginTools: [] as Array<Record<string, unknown>>,
@@ -52,6 +53,7 @@ vi.mock("../gateway/client.js", async (importOriginal) => {
       const client = {
         request: vi.fn(async () => ({})),
         stop: vi.fn(),
+        stopAndWait: vi.fn(async () => {}),
         updateNodeManifest: vi.fn(),
       };
       mocks.capturedGatewayClientOptions.push(opts);
@@ -92,6 +94,7 @@ vi.mock("./config.js", () => ({
 
 vi.mock("./plugin-node-host.js", () => ({
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  notifyRegisteredNodeHostCommandDisconnect: vi.fn(async () => {}),
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     commands: [...mocks.nodeHostCommands],
     caps: [...mocks.nodeHostCaps],
@@ -117,8 +120,8 @@ vi.mock("./skills.js", () => ({
   scanNodeHostedSkills: vi.fn(() => mocks.nodeSkillDescriptors),
 }));
 
-vi.mock("./startup-state-migrations.js", () => ({
-  runStartupMigrations: vi.fn(async () => undefined),
+vi.mock("./startup-state-readiness.js", () => ({
+  ensureNodeHostStateReady: () => {},
 }));
 
 async function withReadyNodeHost(
@@ -196,11 +199,11 @@ describe("runNodeHost connection and optional publications", () => {
         });
         options?.onConnectError?.(rejection);
         options?.onConnectError?.(rejection);
-        expect(client.stop).not.toHaveBeenCalled();
+        expect(client.stopAndWait).not.toHaveBeenCalled();
         options?.onConnectError?.(rejection);
 
         await vi.waitFor(() => expect(process.exitCode).toBe(1));
-        expect(client.stop).toHaveBeenCalledOnce();
+        expect(client.stopAndWait).toHaveBeenCalledOnce();
         expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
         expect(stderr).toHaveBeenCalledWith(
           "node host gateway permanently rejected connection (proxy_attribution_required): Configure gateway.trustedProxies narrowly; exiting\n",
@@ -246,7 +249,7 @@ describe("runNodeHost connection and optional publications", () => {
         for (const transientError of transientErrors) {
           rejectTwice();
           options?.onConnectError?.(transientError);
-          expect(client.stop).not.toHaveBeenCalled();
+          expect(client.stopAndWait).not.toHaveBeenCalled();
         }
         rejectTwice();
         options?.onHelloOk?.({
@@ -264,7 +267,7 @@ describe("runNodeHost connection and optional publications", () => {
           policy: { maxPayload: 1, maxBufferedBytes: 1, tickIntervalMs: 1 },
         });
         rejectTwice();
-        expect(client.stop).not.toHaveBeenCalled();
+        expect(client.stopAndWait).not.toHaveBeenCalled();
         expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("permanently rejected"));
       } finally {
         stderr.mockRestore();

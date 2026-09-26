@@ -94,6 +94,12 @@ progress. When a run id is available, history is evaluated only within that run,
 so scheduled heartbeat cycles and fresh runs do not inherit stale loop counts
 from earlier runs.
 
+Successful `progress_card` calls are compared using the saved Markdown and plan,
+not their write revision or receipt wording. Saved revisions and delivered receipts
+are unchanged, so a requested refresh still receives a newer saved revision even
+when the card content is unchanged. Errors and results without the tool’s private
+semantic outcome keep full outcome comparison.
+
 Outcome comparisons also ignore fresh external-content wrapper nonces, including
 wrapped errors and JSON results. Delivered security markers remain unchanged;
 payload text, status, timestamps, and durations still distinguish network results.
@@ -154,6 +160,10 @@ spend and lockups while preserving normal tool access.
   appearing on every repeated call. The raw outcome is recorded before the note
   is added, so warning text does not count as progress.
 - Blocking follows once a pattern persists past the warning threshold.
+- Repeating `wait` with identical arguments and outcomes ten times blocks the
+  next wait. Changed outcomes reset the streak. This uses the same recovery
+  response and terminal handling described below; it does not cancel a tool
+  call that is still executing.
 - In the embedded agent loop, the first critical loop blocks the whole tool
   batch before any tool in that batch runs. The model then gets one more
   response with its normal tools.
@@ -182,3 +192,5 @@ spend and lockups while preserving normal tool access.
 </CardGroup>
 
 The semantic observer uses a cooperative 750 ms Decision budget, not a hard return deadline. Tool-result delivery and run close join started provider work before returning; a provider that ignores cancellation can therefore exceed this budget. Observer control state remains private to the run owner, not a plugin lifecycle contract.
+
+Automatic semantic observation and replanning additionally require explicit Decision assistance consent in Labs and an effective Decision model for the owning agent. A missing model, an empty agent override, or absent consent preserves the deterministic loop detector. Opt-out discards pending and previously retained semantic judgments before they can affect a later turn. The explicit `decision_evaluate` tool is independent of Labs.

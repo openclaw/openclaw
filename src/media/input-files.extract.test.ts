@@ -147,6 +147,24 @@ describe("extractFileContentFromSource", () => {
     expect(result.text).toBe(text);
   });
 
+  it("records when input text is clamped", async () => {
+    const result = await extractFileContentFromSource({
+      source: {
+        type: "base64",
+        data: Buffer.from("VISIBLE_PREFIX|INVISIBLE_TAIL").toString("base64"),
+        mediaType: "text/plain",
+        filename: "long.txt",
+      },
+      limits: resolveInputFileLimits({ maxChars: 14 }),
+    });
+
+    expect(result).toEqual({
+      filename: "long.txt",
+      text: "VISIBLE_PREFIX",
+      metadata: { textTruncated: true, imagesTruncated: false },
+    });
+  });
+
   it("keeps the declared MIME when the filename suggests plain text", async () => {
     const payload = JSON.stringify({ report: "q3", revenue: 12345 });
     const limits = resolveInputFileLimits({ allowedMimes: ["application/json"] });
@@ -169,6 +187,12 @@ describe("file text output limits", () => {
   const unicodeText = `\ufeff${"é".repeat(8190)}🙂\ufefftail`;
   const asciiPrefix = Buffer.alloc(16_383, "a");
   it.each([
+    { name: "UTF-8 BOM only", charset: "utf-8", buffer: Buffer.from("\ufeff") },
+    {
+      name: "ISO-2022-JP state only",
+      charset: "iso-2022-jp",
+      buffer: Buffer.from([0x1b, 0x28, 0x42]),
+    },
     { name: "UTF-8 Unicode and BOMs", charset: "utf-8", buffer: Buffer.from(unicodeText) },
     {
       name: "UTF-16LE Unicode and BOMs",
@@ -211,7 +235,7 @@ describe("file text output limits", () => {
     },
   ])("preserves full-decoding prefixes for $name", async ({ charset, buffer, fallback }) => {
     const decoded = new TextDecoder(fallback ?? charset).decode(buffer);
-    for (const maxChars of [0, 1, 8191, 8192, 16_384.9, Infinity]) {
+    for (const maxChars of [0, 1, 8191, 8192, 16_384.9, decoded.length, Infinity]) {
       const result = await extractFileContentFromBuffer({
         buffer,
         charset,
@@ -219,6 +243,9 @@ describe("file text output limits", () => {
         limits: resolveInputFileLimits({ maxChars }),
       });
       expect(result.text, `maxChars=${maxChars}`).toBe(truncateUtf16Safe(decoded, maxChars));
+      expect(Boolean(result.metadata?.textTruncated), `maxChars=${maxChars}`).toBe(
+        result.text !== decoded,
+      );
     }
   });
 });

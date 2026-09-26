@@ -106,9 +106,12 @@ vi.mock("./doctor-gateway-health.js", () => ({
     .mockResolvedValue({ checked: false, ready: false, skipped: false }),
 }));
 
-vi.mock("./doctor-memory-search.js", () => ({
+vi.mock("./doctor-memory-recall.js", () => ({
   maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
   noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-memory-search.js", () => ({
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
 }));
 

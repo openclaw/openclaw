@@ -7,8 +7,8 @@ import {
   detectGlobalInstallManagerForRoot,
   listActivePnpmIsolatedGlobalPackages,
   resolveGlobalInstallTarget,
-  resolvePnpmGlobalDirFromGlobalRoot,
 } from "./update-global.js";
+import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
 
 async function writeGlobalPackageJson(packageRoot: string, version: string): Promise<void> {
   await fs.writeFile(

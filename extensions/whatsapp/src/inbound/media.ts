@@ -6,18 +6,13 @@ import { extractContextInfo } from "./extract.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
 
-function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  const normalized = normalizeMessageContent(message);
-  return normalized;
-}
-
 export async function downloadInboundMedia(
   msg: proto.IWebMessageInfo,
   sock: Awaited<ReturnType<typeof createWaSocket>>,
   maxBytes = 50 * 1024 * 1024,
   normalizedMessage?: proto.IMessage,
 ): Promise<{ saved: SavedMedia; mimetype?: string; fileName?: string } | undefined> {
-  const message = normalizedMessage ?? unwrapMessage(msg.message as proto.IMessage | undefined);
+  const message = normalizedMessage ?? normalizeMessageContent(msg.message);
   if (!message) {
     return undefined;
   }
@@ -57,7 +52,7 @@ export async function downloadQuotedInboundMedia(
   sock: Awaited<ReturnType<typeof createWaSocket>>,
   maxBytes = 50 * 1024 * 1024,
 ): Promise<{ saved: SavedMedia; mimetype?: string; fileName?: string } | undefined> {
-  const message = unwrapMessage(msg.message as proto.IMessage | undefined);
+  const message = normalizeMessageContent(msg.message);
   const contextInfo = extractContextInfo(message);
   if (!contextInfo?.quotedMessage) {
     return undefined;

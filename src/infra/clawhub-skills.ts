@@ -5,15 +5,14 @@ import {
   createClawHubError,
   decodeClawHubResponseBody,
   fetchClawHubJson,
-  isClawHubTelemetryDisabled,
   parseClawHubJsonBody,
   readClawHubBytes,
   withClawHubResponse,
-  resolveClawHubAuthToken,
   resolveClawHubBaseUrl,
   resolveClawHubImageUrl,
-  type ClawHubFetch,
+  type ClawHubFetchOptions,
 } from "./clawhub-client.js";
+import { reportClawHubInstallTelemetry } from "./clawhub-telemetry.js";
 
 const SKILL_CARD_MAX_BYTES = 256 * 1024;
 // Full scanner evidence can exceed the metadata reader's 16 MiB cap.
@@ -196,14 +195,12 @@ function buildVersionOrTagSearch(params: {
   return ownerHandle ? { ownerHandle } : undefined;
 }
 
-export async function searchClawHubSkills(params: {
-  query: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-  limit?: number;
-}): Promise<ClawHubSkillSearchResult[]> {
+export async function searchClawHubSkills(
+  params: ClawHubFetchOptions & {
+    query: string;
+    limit?: number;
+  },
+): Promise<ClawHubSkillSearchResult[]> {
   const registry = resolveClawHubBaseUrl(params.baseUrl);
   const query = params.query.trim();
   const request = {
@@ -290,14 +287,12 @@ function toClawHubSkillSearchResult(
   }
 }
 
-export async function fetchClawHubSkillDetail(params: {
-  slug: string;
-  ownerHandle?: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubSkillDetail> {
+export async function fetchClawHubSkillDetail(
+  params: ClawHubFetchOptions & {
+    slug: string;
+    ownerHandle?: string;
+  },
+): Promise<ClawHubSkillDetail> {
   const detail = await fetchClawHubJson<ClawHubSkillDetail>({
     baseUrl: params.baseUrl,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}`,
@@ -317,16 +312,14 @@ export async function fetchClawHubSkillDetail(params: {
   };
 }
 
-export async function fetchClawHubSkillInstallResolution(params: {
-  slug: string;
-  ownerHandle?: string;
-  requestedReference?: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-  forceInstall?: boolean;
-}): Promise<ClawHubSkillInstallResolutionResponse> {
+export async function fetchClawHubSkillInstallResolution(
+  params: ClawHubFetchOptions & {
+    slug: string;
+    ownerHandle?: string;
+    requestedReference?: string;
+    forceInstall?: boolean;
+  },
+): Promise<ClawHubSkillInstallResolutionResponse> {
   return await withClawHubResponse(
     {
       baseUrl: params.baseUrl,
@@ -354,18 +347,16 @@ export async function fetchClawHubSkillInstallResolution(params: {
   );
 }
 
-export async function fetchClawHubSkillVerification(params: {
-  slug: string;
-  ownerHandle?: string;
-  requestedReference?: string;
-  version?: string;
-  tag?: string;
-  baseUrl?: string;
-  token?: string;
-  skipAuth?: boolean;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubSkillVerificationResponse> {
+export async function fetchClawHubSkillVerification(
+  params: ClawHubFetchOptions & {
+    slug: string;
+    ownerHandle?: string;
+    requestedReference?: string;
+    version?: string;
+    tag?: string;
+    skipAuth?: boolean;
+  },
+): Promise<ClawHubSkillVerificationResponse> {
   return await fetchClawHubJson<ClawHubSkillVerificationResponse>({
     baseUrl: params.baseUrl,
     path: `/api/v1/skills/${encodeURIComponent(params.slug)}/verify`,
@@ -381,14 +372,12 @@ export async function fetchClawHubSkillVerification(params: {
   });
 }
 
-export async function fetchClawHubSkillSecurityVerdicts(params: {
-  items: ClawHubSkillSecurityVerdictRequestItem[];
-  baseUrl?: string;
-  token?: string;
-  skipAuth?: boolean;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubSkillSecurityVerdictsResponse> {
+export async function fetchClawHubSkillSecurityVerdicts(
+  params: ClawHubFetchOptions & {
+    items: ClawHubSkillSecurityVerdictRequestItem[];
+    skipAuth?: boolean;
+  },
+): Promise<ClawHubSkillSecurityVerdictsResponse> {
   return await fetchClawHubJson<ClawHubSkillSecurityVerdictsResponse>({
     baseUrl: params.baseUrl,
     path: "/api/v1/skills/-/security-verdicts",
@@ -401,17 +390,15 @@ export async function fetchClawHubSkillSecurityVerdicts(params: {
   });
 }
 
-export async function fetchClawHubSkillCard(params: {
-  slug?: string;
-  ownerHandle?: string;
-  url?: string;
-  version?: string;
-  tag?: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<string> {
+export async function fetchClawHubSkillCard(
+  params: ClawHubFetchOptions & {
+    slug?: string;
+    ownerHandle?: string;
+    url?: string;
+    version?: string;
+    tag?: string;
+  },
+): Promise<string> {
   const cardUrl = normalizeOptionalString(params.url);
   const slug = normalizeOptionalString(params.slug);
   if (!cardUrl && !slug) {
@@ -449,47 +436,26 @@ export async function fetchClawHubSkillCard(params: {
   );
 }
 
-export async function reportClawHubSkillInstallTelemetry(params: {
-  baseUrl?: string;
-  token?: string;
-  slug: string;
-  ownerHandle?: string;
-  requestedReference?: string;
-  trustState?: ClawHubSkillsShTrustState;
-  version?: string | null;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<void> {
-  const token = normalizeOptionalString(params.token) ?? (await resolveClawHubAuthToken());
-  if (!token || isClawHubTelemetryDisabled()) {
-    return;
-  }
-  const slug = params.slug.trim();
-  if (!slug) {
-    return;
-  }
-
-  return await withClawHubResponse(
-    {
-      baseUrl: params.baseUrl,
-      path: "/api/cli/telemetry/install",
-      method: "POST",
-      token,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
-      json: {
-        event: "install",
-        slug,
-        ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-        ...(params.requestedReference ? { reference: params.requestedReference } : {}),
-        ...(params.trustState ? { trustState: params.trustState } : {}),
-        version: params.version ?? undefined,
-      },
-    },
-    async ({ response, url, hasToken }) => {
-      if (!response.ok) {
-        throw await createClawHubError(response, url, hasToken, params.timeoutMs);
-      }
-    },
-  );
+export async function reportClawHubSkillInstallTelemetry(
+  params: ClawHubFetchOptions & {
+    slug: string;
+    ownerHandle?: string;
+    requestedReference?: string;
+    trustState?: ClawHubSkillsShTrustState;
+    version?: string | null;
+  },
+): Promise<void> {
+  return await reportClawHubInstallTelemetry(params, () => {
+    const slug = params.slug.trim();
+    return slug
+      ? {
+          event: "install",
+          slug,
+          ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+          ...(params.requestedReference ? { reference: params.requestedReference } : {}),
+          ...(params.trustState ? { trustState: params.trustState } : {}),
+          version: params.version ?? undefined,
+        }
+      : undefined;
+  });
 }

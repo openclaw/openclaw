@@ -2,6 +2,20 @@ import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 type CurrentCaller = () => boolean;
 
+type SourceDependencies = Readonly<{
+  client: object;
+  context: object;
+  authPolicyGeneration?: string;
+  sharedGenerationOwner?: object;
+  sharedGeneration?: string;
+}>;
+
+type SourceIdentity = {
+  dependencies: Omit<SourceDependencies, "client">;
+  token: object;
+  references: number;
+};
+
 type RevocationState = {
   deviceId: string | undefined;
   role: string | undefined;
@@ -21,11 +35,44 @@ type CapturedRevocation = {
   isCurrent: CurrentCaller;
   isSourceCurrent: CurrentCaller;
   isRevocationCurrent: CurrentCaller;
+  sourceIdentity: object;
+  releaseSourceIdentity?: () => void;
   releaseClientRevocation?: () => void;
 };
 
 const owners = new WeakMap<object, RevocationOwner>();
 const captures = new WeakMap<() => unknown, CapturedRevocation>();
+const sourceIdentities = new WeakMap<object, Set<SourceIdentity>>();
+
+function retainSourceIdentity({ client, ...dependencies }: SourceDependencies) {
+  let identities = sourceIdentities.get(client);
+  if (!identities) {
+    identities = new Set();
+    sourceIdentities.set(client, identities);
+  }
+  let source = [...identities].find(
+    (entry) =>
+      entry.dependencies.context === dependencies.context &&
+      entry.dependencies.authPolicyGeneration === dependencies.authPolicyGeneration &&
+      entry.dependencies.sharedGenerationOwner === dependencies.sharedGenerationOwner &&
+      entry.dependencies.sharedGeneration === dependencies.sharedGeneration,
+  );
+  if (!source) {
+    source = { dependencies, token: Object.freeze({}), references: 0 };
+    identities.add(source);
+  }
+  const retained = source;
+  const bucket = identities;
+  retained.references += 1;
+  return {
+    token: retained.token,
+    release: () => {
+      if (--retained.references === 0) {
+        bucket.delete(retained);
+      }
+    },
+  };
+}
 
 function getOwner(context: object): RevocationOwner {
   let owner = owners.get(context);
@@ -48,6 +95,8 @@ function releaseHold(capture: CapturedRevocation): () => void {
     if (state.references !== 0) {
       return;
     }
+    capture.releaseSourceIdentity?.();
+    capture.releaseSourceIdentity = undefined;
     capture.releaseClientRevocation?.();
     capture.releaseClientRevocation = undefined;
     state.listeners?.clear();
@@ -79,6 +128,8 @@ export function captureGatewayDeviceRevocation(
   sourceAuthority?: {
     isCurrent: CurrentCaller;
     subscribe: (onRevoked: () => void) => () => void;
+    /** Canonical committed owners, independent of per-request callback allocation. */
+    dependencies?: SourceDependencies;
   },
 ): { isCurrent: CurrentCaller; release: () => void } {
   const owner = getOwner(context);
@@ -114,9 +165,15 @@ export function captureGatewayDeviceRevocation(
     isCurrent,
     isSourceCurrent,
     isRevocationCurrent,
+    sourceIdentity: Object.freeze({}),
   };
   captures.set(isCurrent, capture);
   capture.releaseClientRevocation = sourceAuthority?.subscribe(() => revoke(state));
+  if (sourceAuthority?.dependencies) {
+    const source = retainSourceIdentity(sourceAuthority.dependencies);
+    capture.sourceIdentity = source.token;
+    capture.releaseSourceIdentity = source.release;
+  }
   return { isCurrent, release: releaseHold(capture) };
 }
 
@@ -144,6 +201,13 @@ export function readGatewayDeviceSourceAuthority(
   guard: (() => unknown) | undefined,
 ): CurrentCaller | undefined {
   return guard ? captures.get(guard)?.isSourceCurrent : undefined;
+}
+
+/** Only a producer-proven dependency cohort can share queued-input custody. */
+export function readGatewayDeviceSourceIdentity(
+  guard: (() => unknown) | undefined,
+): object | undefined {
+  return guard ? captures.get(guard)?.sourceIdentity : undefined;
 }
 
 /** Notify retained work of access revocation, independently of transport or Gateway shutdown. */

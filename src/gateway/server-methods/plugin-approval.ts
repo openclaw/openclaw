@@ -29,6 +29,8 @@ import {
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { createApprovalRequestAuthority } from "./approval-request-authority.js";
+import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
 import {
   bindApprovalRequesterMetadata,
   bindApprovalReviewerDeviceIds,
@@ -38,7 +40,6 @@ import {
   registerPendingApprovalRecord,
   resolveApprovalDecisionParams,
 } from "./approval-shared.js";
-import { handlePendingPluginApprovalRequest } from "./plugin-approval-request-delivery.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -54,17 +55,18 @@ export function createPluginApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "plugin.approval.list": async ({ respond, client, context }) => {
-      respond(
-        true,
-        await listVisiblePendingApprovalRequests({
-          manager,
-          client,
-          approvalKind: "plugin",
-          ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
-        }),
-        undefined,
-      );
+    "plugin.approval.list": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { respond, client, context } = options;
+      const approvals = await listVisiblePendingApprovalRequests({
+        authority,
+        manager,
+        client,
+        approvalKind: "plugin",
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+      });
+      authority.assertCurrent();
+      respond(true, approvals, undefined);
     },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
       if (
@@ -239,7 +241,8 @@ export function createPluginApprovalHandlers(
         return;
       }
 
-      await handlePendingPluginApprovalRequest({
+      await handlePendingApprovalRequestWithDelivery({
+        approvalKind: "plugin",
         manager,
         record,
         respond,
@@ -252,8 +255,11 @@ export function createPluginApprovalHandlers(
       });
     },
 
-    "plugin.approval.waitDecision": async ({ params, respond, client, context }) => {
+    "plugin.approval.waitDecision": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       await handleApprovalWaitDecision({
+        authority,
         manager,
         inputId: (params as { id?: string }).id,
         client,
@@ -262,7 +268,9 @@ export function createPluginApprovalHandlers(
       });
     },
 
-    "plugin.approval.resolve": async ({ params, respond, client, context }) => {
+    "plugin.approval.resolve": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       const resolveParams = resolveApprovalDecisionParams({
         rawParams: params,
         validate: validatePluginApprovalResolveParams,
@@ -275,6 +283,7 @@ export function createPluginApprovalHandlers(
       const { inputId, decision, reviewer } = resolveParams;
       await handleApprovalResolve({
         approvalKind: "plugin",
+        authority,
         manager,
         inputId,
         decision,

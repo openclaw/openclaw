@@ -12,6 +12,7 @@ export type ProviderLoginOption = {
   groupLabel?: string;
   icon?: string;
   website?: string;
+  docsUrl?: string;
   kind: "oauth" | "device-code" | "secret";
   featured: boolean;
 };
@@ -64,12 +65,12 @@ export function listProviderLoginOptions(
     .filter(isEligible)
     .toSorted(
       (a, b) =>
-        Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
         compareProviderAuthChoiceGroups(
           { id: a.groupId ?? a.providerId, label: a.groupLabel ?? a.choiceLabel },
           { id: b.groupId ?? b.providerId, label: b.groupLabel ?? b.choiceLabel },
         ) ||
         (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0) ||
+        Number(b.onboardingFeatured === true) - Number(a.onboardingFeatured === true) ||
         a.choiceLabel.localeCompare(b.choiceLabel, "en") ||
         a.choiceId.localeCompare(b.choiceId),
     )
@@ -87,6 +88,7 @@ export function listProviderLoginOptions(
           groupLabel: choice.groupLabel,
           icon: choice.icon,
           website: choice.website,
+          docsUrl: choice.docsUrl,
           kind,
           featured: choice.onboardingFeatured === true,
         },

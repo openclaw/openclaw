@@ -47,6 +47,20 @@ export function executeSessionDeliveryCommand(
       // SAFETY: Only the session namespace reaches this payload transform.
       transform(entry as QueuedSessionDelivery),
     );
+  const finalize = (id: string, status: "completed" | "failed", transition: () => void) => {
+    try {
+      transition();
+    } catch (error) {
+      try {
+        if (readStatus(id) === status) {
+          return;
+        }
+      } catch {
+        // Preserve the transition failure when durable settlement cannot be established.
+      }
+      throw error;
+    }
+  };
 
   switch (command.type) {
     case "sessionDelivery.enqueue":
@@ -124,7 +138,7 @@ export function executeSessionDeliveryCommand(
     }
     case "sessionDelivery.markSettlement": {
       const id = command.input.row.id;
-      try {
+      return finalize(id, "completed", () => {
         if (
           upsertBoundDeliveryQueueEntryInDatabase(command.input, database) ||
           readStatus(id) === "completed"
@@ -132,32 +146,13 @@ export function executeSessionDeliveryCommand(
           return;
         }
         throw new Error(`Session delivery ${id} is no longer pending`);
-      } catch (error) {
-        try {
-          if (readStatus(id) === "completed") {
-            return;
-          }
-        } catch {
-          // Preserve the original failure when completion cannot be established.
-        }
-        throw error;
-      }
+      });
     }
     case "sessionDelivery.complete": {
       const { id } = command.input;
-      try {
+      return finalize(id, "completed", () => {
         completeDeliveryQueueEntryInDatabase(database, SESSION_DELIVERY_QUEUE_NAME, id);
-      } catch (error) {
-        try {
-          if (readStatus(id) === "completed") {
-            return;
-          }
-        } catch {
-          // Preserve the original failure when completion cannot be established.
-        }
-        throw error;
-      }
-      return;
+      });
     }
     case "sessionDelivery.fail": {
       const { id, error, releaseAttemptOwnership } = command.input;
@@ -196,7 +191,7 @@ export function executeSessionDeliveryCommand(
     }
     case "sessionDelivery.moveToFailed": {
       const { id } = command.input;
-      try {
+      return finalize(id, "failed", () => {
         const entry = readSessionDelivery(database, id);
         if (!entry) {
           throw deliveryQueueEntryNotFoundError(SESSION_DELIVERY_QUEUE_NAME, id);
@@ -208,16 +203,7 @@ export function executeSessionDeliveryCommand(
         if (result.status !== "terminalized") {
           throw deliveryQueueEntryNotFoundError(SESSION_DELIVERY_QUEUE_NAME, id);
         }
-      } catch (error) {
-        try {
-          if (readStatus(id) === "failed") {
-            return;
-          }
-        } catch {
-          // Preserve the original transition failure when durable state is unreadable.
-        }
-        throw error;
-      }
+      });
     }
   }
 }

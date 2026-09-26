@@ -456,9 +456,13 @@ describe("WizardSession", () => {
     expect(session.cancel()).toBe(false);
     expect(session.getStatus()).toBe("running");
     expect(session.signal.aborted).toBe(false);
+    expect(() => session.assertPersistentEffectCurrent()).not.toThrow();
 
     finish();
     expect((await session.next()).status).toBe("done");
+    expect(() => session.assertPersistentEffectCurrent()).toThrow(
+      "Setup session is no longer active",
+    );
   });
 
   test("expires an abandoned interactive session", async () => {

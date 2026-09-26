@@ -1,7 +1,10 @@
-import { SpanStatusCode } from "@opentelemetry/api";
+import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { redactSensitiveText } from "../api.js";
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import {
   addUpstreamRequestIdSpanEvent,
   assignGenAiModelCallAttrs,
@@ -9,7 +12,6 @@ import {
   assignModelCallSizeTimingAttrs,
   assignModelCallUsageAttrs,
   genAiOperationName,
-  modelCallSpanKind,
   modelCallSpanName,
   modelCallObservationUnit,
   positiveFiniteNumber,
@@ -32,6 +34,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     getTrackedInternalOrTrustedSpan,
     takeTrackedTrustedSpan,
     setSpanAttrs,
+    addRunAttrs,
     contentCapturePolicy,
     tracesEnabled,
   } = runtime;
@@ -76,6 +79,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
       "openclaw.provider": evt.provider,
       "openclaw.model": evt.model,
     };
+    addRunAttrs(spanAttrs, evt);
     assignGenAiModelCallAttrs(spanAttrs, evt);
     if (evt.api) {
       spanAttrs["openclaw.api"] = evt.api;
@@ -88,7 +92,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
       evt,
       metadata,
       spanWithDuration(modelCallSpanName(evt), spanAttrs, undefined, {
-        kind: modelCallSpanKind(),
+        kind: SpanKind.CLIENT,
         parentContext: activeTrustedParentContext(evt, metadata),
         startTimeMs: evt.ts,
       }),
@@ -129,6 +133,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
         ? { "openclaw.errorCategory": errorType, "error.type": errorType }
         : {}),
     };
+    addRunAttrs(spanAttrs, evt);
     if (evt.type === "model.call.error" && evt.failureKind) {
       spanAttrs["openclaw.failureKind"] = normalizeDiagnosticValue(evt.failureKind, "other");
     }
@@ -146,7 +151,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     const span =
       takeTrackedTrustedSpan(evt, metadata) ??
       spanWithDuration(modelCallSpanName(evt), spanAttrs, evt.durationMs, {
-        kind: modelCallSpanKind(),
+        kind: SpanKind.CLIENT,
         parentContext: activeTrustedParentContext(evt, metadata),
         endTimeMs: evt.ts,
       });

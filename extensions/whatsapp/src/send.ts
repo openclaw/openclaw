@@ -42,69 +42,11 @@ const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("ou
 
 type PreparedWhatsAppOutboundMedia = Awaited<ReturnType<typeof prepareWhatsAppOutboundMedia>>;
 
-function supportsForcedDocumentDelivery(kind: PreparedWhatsAppOutboundMedia["kind"]): boolean {
-  return kind === "image" || kind === "video";
-}
-
-type WhatsAppMediaSendState = {
-  mediaBuffer: Buffer;
-  mediaType: string;
-  text: string;
-  forceDocumentDelivery: boolean;
-  documentFileName?: string;
-  visibleTextAfterVoice?: string;
-};
-
-function buildWhatsAppMediaSendState(params: {
-  media: PreparedWhatsAppOutboundMedia;
-  caption?: string;
-  forceDocument?: boolean;
-}): WhatsAppMediaSendState {
-  const { media, caption } = params;
-  const forceDocumentDelivery =
-    Boolean(params.forceDocument && supportsForcedDocumentDelivery(media.kind)) ||
-    (media.kind === "document" &&
-      (media.mimetype.startsWith("image/") || media.mimetype.startsWith("video/")));
-  let text = caption ?? "";
-  let documentFileName = media.kind === "document" ? media.fileName : undefined;
-  let visibleTextAfterVoice: string | undefined;
-  if (media.kind === "audio" && caption) {
-    visibleTextAfterVoice = caption;
-    text = "";
-  }
-  if (forceDocumentDelivery) {
-    documentFileName ??= resolveWhatsAppDocumentFileName({
-      fileName: media.fileName,
-      mimetype: media.mimetype,
-    });
-  }
-  return {
-    mediaBuffer: media.buffer,
-    mediaType: media.mimetype,
-    text,
-    forceDocumentDelivery,
-    ...(documentFileName ? { documentFileName } : {}),
-    ...(visibleTextAfterVoice ? { visibleTextAfterVoice } : {}),
-  };
-}
-
-function resolveOutboundWhatsAppAccountId(params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
-}): string | undefined {
-  const explicitAccountId = params.accountId?.trim();
-  if (explicitAccountId) {
-    return explicitAccountId;
-  }
-  return resolveDefaultWhatsAppAccountId(params.cfg);
-}
-
 function requireOutboundActiveWebListener(params: { cfg: OpenClawConfig; accountId?: string }): {
   accountId: string;
   listener: ActiveWebListener;
 } {
-  const accountId = resolveOutboundWhatsAppAccountId(params);
-  const resolvedAccountId = accountId ?? resolveDefaultWhatsAppAccountId(params.cfg);
+  const resolvedAccountId = params.accountId?.trim() || resolveDefaultWhatsAppAccountId(params.cfg);
   const listener = getWhatsAppConnectionController(resolvedAccountId)?.getActiveListener() ?? null;
   if (!listener) {
     const cause = new Error(
@@ -115,14 +57,9 @@ function requireOutboundActiveWebListener(params: { cfg: OpenClawConfig; account
   return { accountId: resolvedAccountId, listener };
 }
 
-function resolveActualSentRemoteJid(result: unknown, fallbackJid: string): string {
-  if (!result || typeof result !== "object") {
-    return fallbackJid;
-  }
-  const rawKeys = (result as { keys?: unknown }).keys;
-  const keys: Array<{ remoteJid?: unknown }> = Array.isArray(rawKeys) ? rawKeys : [];
-  for (const key of keys) {
-    if (typeof key?.remoteJid === "string" && key.remoteJid.trim()) {
+function resolveActualSentRemoteJid(result: WhatsAppSendResult, fallbackJid: string): string {
+  for (const key of result.keys) {
+    if (key.remoteJid?.trim()) {
       return key.remoteJid.trim();
     }
   }
@@ -202,25 +139,24 @@ async function sendMessageWhatsAppInActivityScope(
   });
   const account = resolveWhatsAppAccount({
     cfg,
-    accountId: resolvedAccountId ?? options.accountId,
+    accountId: resolvedAccountId,
   });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "whatsapp",
-    accountId: resolvedAccountId ?? options.accountId,
+    accountId: resolvedAccountId,
   });
-  const accountIdForFormatting = resolvedAccountId ?? options.accountId;
   const requestedLimit = options.formatting?.textLimit ?? Infinity;
   const textLimit = Math.min(
     requestedLimit > 0 ? requestedLimit : Infinity,
-    resolveTextChunkLimit(cfg, "whatsapp", accountIdForFormatting, { fallbackLimit: 4_000 }),
+    resolveTextChunkLimit(cfg, "whatsapp", resolvedAccountId, { fallbackLimit: 4_000 }),
     4_096,
   );
   const textChunks = markdownToWhatsAppChunks(
     text,
     textLimit,
     tableMode,
-    options.formatting?.chunkMode ?? resolveChunkMode(cfg, "whatsapp", accountIdForFormatting),
+    options.formatting?.chunkMode ?? resolveChunkMode(cfg, "whatsapp", resolvedAccountId),
   );
   text = textChunks.shift() ?? text;
   if (!text && !hasMedia) {
@@ -266,17 +202,23 @@ async function sendMessageWhatsAppInActivityScope(
       );
     }
     if (media) {
-      const mediaSendState = buildWhatsAppMediaSendState({
-        media,
-        caption: text || undefined,
-        forceDocument: options.forceDocument,
-      });
-      mediaBuffer = mediaSendState.mediaBuffer;
-      mediaType = mediaSendState.mediaType;
-      documentFileName = mediaSendState.documentFileName;
-      visibleTextAfterVoice = mediaSendState.visibleTextAfterVoice;
-      forceDocumentDelivery = mediaSendState.forceDocumentDelivery;
-      text = mediaSendState.text;
+      mediaBuffer = media.buffer;
+      mediaType = media.mimetype;
+      forceDocumentDelivery =
+        Boolean(options.forceDocument && (media.kind === "image" || media.kind === "video")) ||
+        (media.kind === "document" &&
+          (media.mimetype.startsWith("image/") || media.mimetype.startsWith("video/")));
+      documentFileName = media.kind === "document" ? media.fileName : undefined;
+      if (media.kind === "audio" && text) {
+        visibleTextAfterVoice = text;
+        text = "";
+      }
+      if (forceDocumentDelivery) {
+        documentFileName ??= resolveWhatsAppDocumentFileName({
+          fileName: media.fileName,
+          mimetype: media.mimetype,
+        });
+      }
     }
     outboundLog.info(`Sending message -> ${redactedJid}${hasMedia ? " (media)" : ""}`);
     logger.info({ jid: redactedJid, hasMedia }, "sending message");

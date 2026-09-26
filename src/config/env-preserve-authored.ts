@@ -1,33 +1,21 @@
 import { isDeepStrictEqual } from "node:util";
 import { isPlainObject } from "../infra/plain-object.js";
-import { containsEnvVarReference } from "./env-substitution.js";
+import { containsEnvVarReference, scanEnvTemplateTokens } from "./env-substitution.js";
 
-const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
-
+/**
+ * Keyed by bare variable name, deliberately: `${VAR}` and `${VAR:-x}` are one identity
+ * here. These counts feed fail-closed guards against a write turning an authored
+ * `$${VAR}` literal into an active reference. Keying on the authored text instead would
+ * let `$${VAR}` to `${VAR:-x}` slip past the guard that already rejects `$${VAR}` to
+ * `${VAR}`.
+ */
 type AuthoredEnvRef = { kind: "escaped" | "unescaped"; name: string };
 
 function collectAuthoredEnvRefs(value: string): AuthoredEnvRef[] {
-  const refs: AuthoredEnvRef[] = [];
-  for (let index = 0; index < value.length; index += 1) {
-    if (value[index] !== "$") {
-      continue;
-    }
-    const isEscaped = value[index + 1] === "$" && value[index + 2] === "{";
-    const nameStart = index + (isEscaped ? 3 : 2);
-    if (!isEscaped && value[index + 1] !== "{") {
-      continue;
-    }
-    const nameEnd = value.indexOf("}", nameStart);
-    if (nameEnd === -1 || !ENV_VAR_NAME_PATTERN.test(value.slice(nameStart, nameEnd))) {
-      continue;
-    }
-    refs.push({
-      kind: isEscaped ? "escaped" : "unescaped",
-      name: value.slice(nameStart, nameEnd),
-    });
-    index = nameEnd;
-  }
-  return refs;
+  return scanEnvTemplateTokens(value).map((token) => ({
+    kind: token.kind === "escaped" ? ("escaped" as const) : ("unescaped" as const),
+    name: token.name,
+  }));
 }
 
 function hasEscapedEnvVarRef(value: string): boolean {

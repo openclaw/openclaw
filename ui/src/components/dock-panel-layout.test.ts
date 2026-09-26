@@ -5,7 +5,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
-import { createDockPanelLayout, type DockPanelSide } from "./dock-panel-layout.ts";
+import { createDockPanelLayout, type DockPanelPlacement } from "./dock-panel-layout.ts";
 
 function createControllerHost() {
   return {
@@ -17,7 +17,7 @@ function createControllerHost() {
   };
 }
 
-function createLayout(defaultDock: DockPanelSide) {
+function createLayout(defaultDock: Exclude<DockPanelPlacement, "main">) {
   return createDockPanelLayout({
     storageKey: `test.dock-panel.${defaultDock}`,
     minHeight: 140,

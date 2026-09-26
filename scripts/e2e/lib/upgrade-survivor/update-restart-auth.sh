@@ -542,9 +542,10 @@ run_update_restart_probe_gateway() {
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then
-    echo "gateway startup exceeded survivor budget: ${start_seconds}s > ${budget}s" >&2
-    openclaw_e2e_print_log "$log_file" >&2
-    return 1
+    if ! node scripts/lib/check-limits.mts scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh "Upgrade service startup budget" "gateway startup exceeded survivor budget: ${start_seconds}s > ${budget}s"; then
+      openclaw_e2e_print_log "$log_file" >&2
+      return 1
+    fi
   fi
 }
 

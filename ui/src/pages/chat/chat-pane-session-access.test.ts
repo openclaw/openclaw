@@ -53,7 +53,7 @@ describe("chat pane session access", () => {
     expect(pane.onPaneSessionChange).toHaveBeenCalledExactlyOnceWith("pane-child", parent.key);
   });
 
-  it("refuses ordinary session creation without operator.write", async () => {
+  it("refuses ordinary session creation for read-only operators", async () => {
     const sessions = {
       create: vi.fn(async () => "agent:main:new"),
     } as unknown as SessionCapability;
@@ -67,7 +67,7 @@ describe("chat pane session access", () => {
     await expect(pane.createSession()).resolves.toBe(false);
 
     expect(sessions.create).not.toHaveBeenCalled();
-    expect(state.lastError).toContain("operator.write");
+    expect(state.lastError).toContain("operator.sessions.write");
     expect(state.chatError).toBe(state.lastError);
   });
 

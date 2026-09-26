@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type { SessionCatalogPullRequestSummary } from "openclaw/plugin-sdk/session-catalog";
 import {
   asPositiveSafeInteger as pullRequestNumber,
@@ -9,8 +10,8 @@ import {
 import { readClaudeDesktopCustomGroups } from "./claude-desktop-groups.js";
 import {
   childDirectories,
+  createCatalogJsonReader,
   desktopSessionsDir,
-  readJsonFile,
   setBoundedCache,
 } from "./session-catalog-scan.js";
 import {
@@ -22,20 +23,16 @@ export const MAX_STRING_LENGTH = 4096;
 const MAX_SESSION_PULL_REQUESTS = 20;
 const CLAUDE_DESKTOP_SCAN_TTL_MS = 60_000;
 
-export type DesktopSessionMetadata = {
-  sessionId?: unknown;
-  cliSessionId?: unknown;
-  cwd?: unknown;
-  originCwd?: unknown;
-  createdAt?: unknown;
-  lastActivityAt?: unknown;
-  model?: unknown;
-  isArchived?: unknown;
-  title?: unknown;
-  customGroup?: unknown;
-  prNumber?: unknown;
-  prState?: unknown;
-  prs?: unknown;
+type DesktopSessionMetadata = {
+  sessionId?: string;
+  cliSessionId: string;
+  cwd?: string;
+  createdAt?: number;
+  lastActivityAt?: number;
+  isArchived: boolean;
+  title?: string;
+  customGroup?: string;
+  pullRequest?: SessionCatalogPullRequestSummary;
 };
 
 type DesktopPullRequestMetadata = {
@@ -56,8 +53,8 @@ function pullRequestState(value: unknown): SessionCatalogPullRequestSummary["sta
 
 // Desktop retains historical PRs in order and marks hidden ones as dismissed;
 // the top-level pair identifies the current PR whose state labels the row.
-export function desktopPullRequestSummary(
-  metadata: DesktopSessionMetadata,
+function desktopPullRequestSummary(
+  metadata: Record<string, unknown>,
 ): SessionCatalogPullRequestSummary | undefined {
   const visibleByNumber = new Map<number, SessionCatalogPullRequestSummary["state"] | undefined>();
   const dismissed = new Set<number>();
@@ -102,6 +99,39 @@ export function desktopPullRequestSummary(
     state,
   };
 }
+
+function compactString(value: unknown, maxLength: number): string | undefined {
+  const normalized = readBoundedString(value, maxLength);
+  // trim() can leave a short catalog value retaining a large whitespace-padded string.
+  return normalized === undefined
+    ? undefined
+    : Buffer.from(normalized, "utf16le").toString("utf16le");
+}
+
+const readDesktopJson = createCatalogJsonReader((raw): DesktopSessionMetadata | undefined => {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const cliSessionId = compactString(raw.cliSessionId, 256);
+  if (!cliSessionId) {
+    return undefined;
+  }
+  if (raw.isArchived === true) {
+    return { cliSessionId, isArchived: true };
+  }
+  return {
+    cliSessionId,
+    isArchived: false,
+    sessionId: compactString(raw.sessionId, 256),
+    title: compactString(raw.title, 500),
+    cwd:
+      compactString(raw.cwd, MAX_STRING_LENGTH) ?? compactString(raw.originCwd, MAX_STRING_LENGTH),
+    createdAt: parseDateFirstTimestampMs(raw.createdAt),
+    lastActivityAt: parseDateFirstTimestampMs(raw.lastActivityAt),
+    customGroup: compactString(raw.customGroup, 500),
+    pullRequest: desktopPullRequestSummary(raw),
+  };
+});
 
 export function parsePullRequestSummary(
   value: unknown,
@@ -153,24 +183,25 @@ async function readDesktopMetadata(
         if (!name.startsWith("local_") || !name.endsWith(".json")) {
           continue;
         }
-        const raw = await readJsonFile(path.join(workspaceDir, name));
-        if (!isRecord(raw)) {
+        const metadata = await readDesktopJson(path.join(workspaceDir, name));
+        if (!metadata) {
           continue;
         }
-        const metadata: DesktopSessionMetadata = raw;
-        const cliSessionId = readBoundedString(metadata.cliSessionId, 256);
-        if (!cliSessionId) {
-          continue;
-        }
-        if (metadata.isArchived === true) {
+        const { cliSessionId } = metadata;
+        if (metadata.isArchived) {
           archived.add(cliSessionId);
           active.delete(cliSessionId);
           continue;
         }
         if (!archived.has(cliSessionId)) {
-          const localSessionId = readBoundedString(metadata.sessionId, 256);
+          const localSessionId = metadata.sessionId;
           const customGroup = localSessionId ? customGroups.get(localSessionId) : undefined;
-          active.set(cliSessionId, customGroup ? { ...metadata, customGroup } : metadata);
+          active.set(
+            cliSessionId,
+            customGroup
+              ? { ...metadata, customGroup: readBoundedString(customGroup, 500) }
+              : metadata,
+          );
         }
       }
     }

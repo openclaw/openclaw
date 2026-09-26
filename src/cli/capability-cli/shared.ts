@@ -76,9 +76,7 @@ export function resolveTransport(opts: {
 }
 
 function hasOwnKeys(value: unknown): boolean {
-  return Boolean(
-    value && typeof value === "object" && Object.keys(value as Record<string, unknown>).length > 0,
-  );
+  return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
 }
 
 export function resolveSelectedProviderFromModelRef(
@@ -128,9 +126,9 @@ export function providerHasGenericConfig(params: {
   agentId?: string;
   envVars?: string[];
 }): boolean {
-  const modelsProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
-  const pluginEntries = (params.cfg.plugins?.entries ?? {}) as Record<string, { config?: unknown }>;
-  const ttsProviders = (params.cfg.tts?.providers ?? {}) as Record<string, unknown>;
+  const modelsProviders = params.cfg.models?.providers ?? {};
+  const pluginEntries = params.cfg.plugins?.entries ?? {};
+  const ttsProviders = params.cfg.tts?.providers ?? {};
   const envVars =
     params.envVars ??
     getProviderEnvVarsCore(params.providerId, {
@@ -208,11 +206,14 @@ export function parseOptionalPositiveInteger(raw: unknown, label: string): numbe
   return value;
 }
 
-export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
+export function parseOptionalTimeoutMs(
+  raw: string | number | undefined,
+  flagName = "--timeout-ms",
+): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
-  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error" });
+  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error", flagName });
 }
 
 export async function resolveLocalCapabilityRuntimeConfig(params: {

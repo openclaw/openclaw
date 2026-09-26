@@ -36,7 +36,7 @@ export function eventIdentity(event: TranscriptEvent): string {
   });
 }
 
-export function assertEventIdentitiesUnchanged(
+function assertEventIdentitiesUnchanged(
   before: readonly TranscriptEvent[],
   after: readonly TranscriptEvent[],
   owner: string,
@@ -51,7 +51,7 @@ export function assertEventIdentitiesUnchanged(
   }
 }
 
-export function parseArchiveContent(content: string, filePath: string): TranscriptEvent[] {
+function parseArchiveContent(content: string, filePath: string): TranscriptEvent[] {
   if (content === "") {
     return [];
   }

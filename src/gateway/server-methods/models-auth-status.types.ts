@@ -2,7 +2,7 @@ import type {
   AuthProfileHealthStatus,
   AuthProviderHealthStatus,
 } from "../../agents/auth-health.js";
-import type { AuthCredentialReasonCode } from "../../agents/auth-profiles/credential-state.js";
+import type { AuthCredentialReasonCode } from "../../agents/auth-profiles.js";
 import type {
   ProviderUsageBilling,
   UsageProviderId,

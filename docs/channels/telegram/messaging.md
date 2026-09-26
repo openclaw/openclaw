@@ -41,6 +41,18 @@ Changes to `replyToMode`, `streaming`, and `textChunkLimit` apply to the next
 assembled turn without reconnecting Telegram, including account overrides.
 Active turns keep their captured delivery settings.
 
+## Inbound text batching
+
+Telegram batches rapid text messages from the same sender into one agent turn by default. Ordinary text waits for a 300ms quiet window; a non-forwarded message of at least 4000 characters allows up to 1500ms for likely long-paste continuations.
+
+- Short and long text share one batch, so a short introduction, long paste, and short follow-up can arrive as one turn. Message IDs do not need to be consecutive.
+- Batches stay isolated by bot account, sender, chat, and topic. Reply metadata and source message IDs are preserved.
+- `messages.inbound.byChannel.telegram` overrides `messages.inbound.debounceMs`, which overrides the 300ms ordinary-text default. An explicit `0` disables ordinary burst batching but keeps automatic long-paste assembly.
+- Control commands bypass batching and dispatch immediately. Stop/abort commands cancel pending text for their target conversation.
+- Forwarded messages use a separate 80ms collection window, but share the sender's dispatch queue so they cannot overtake earlier text.
+
+Ordinary text batches are bounded to 12 messages and 50,000 characters. Their collection deadline is 7.5 seconds from the first message, or the configured quiet window if longer. Messages arriving after a batch flushes cannot join it. This heuristic does not guarantee that Telegram delivers every paste fragment together. See [Inbound debouncing](/concepts/messages#inbound-debouncing) for hot-reload behavior.
+
 ## Message behavior
 
 <AccordionGroup>
@@ -230,7 +242,7 @@ Active turns keep their captured delivery settings.
     - `channels.telegram.mediaMaxMb` (default 100) caps inbound and outbound media size.
     - When an inbound attachment cannot be downloaded and the message proceeds to the agent, its body includes a `[media unavailable: ...]` notice. Oversize notices include the effective size limit; partial albums include the failed and total attachment counts. This also applies to admitted channel posts, even when their separate chat warning is suppressed.
     - automatic group context uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables the automatic window, not retained history.
-    - reply/quote/forward supplemental context normalizes into one selected conversation context window when the gateway has observed the parent messages; the observed-message cache lives in OpenClaw SQLite plugin state, and `openclaw doctor --fix` imports legacy sidecars. Telegram only includes one shallow `reply_to_message` per update, so chains older than the cache are limited to that payload.
+    - reply/quote/forward supplemental context normalizes into one selected conversation context window when the gateway has observed the parent messages; the observed-message cache lives in OpenClaw SQLite plugin state. To import pre-June cache sidecars, [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions) and run its Doctor first. Telegram only includes one shallow `reply_to_message` per update, so chains older than the cache are limited to that payload.
     - Telegram allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
     - DM history: `channels.telegram.dmHistoryLimit`, `channels.telegram.dms["<user_id>"].historyLimit`. Automatic observed-DM context defaults to 10 messages and is capped at 200; `0` disables that extra context, and the JSON integer maximum selects the default.
     - These channel/account/DM fields also control embedded session transcript trimming in **user turns**, not observed messages. That separate limiter treats `0` as no trimming and keeps its existing eviction cushion. Doctor preserves valid saved limits, including the JSON integer maximum, so it does not silently change transcript context.

@@ -49,6 +49,7 @@ vi.mock("./update-command-identity-warning.js", () => ({
 
 const root = "/synthetic/install";
 const rows = new Map<string, ManagedHandoffLease>();
+const readers = new Set<Disposable>();
 function lease(key: string, owner: string, pid = process.pid): ManagedHandoffLease {
   return {
     key,
@@ -67,6 +68,15 @@ beforeEach(() => {
   boundaries.runtime.mockReset();
   const current = (candidate: ManagedHandoffLease) => rows.get(candidate.key) === candidate;
   boundaries.store.mockReturnValue({
+    retainReadConnection: () => {
+      const reader = {
+        [Symbol.dispose]() {
+          readers.delete(reader);
+        },
+      };
+      readers.add(reader);
+      return reader;
+    },
     read: (key: string) => {
       const found = rows.get(key);
       return found ? { kind: "current", lease: found } : { kind: "absent" };
@@ -234,8 +244,13 @@ it.each([
   },
 );
 afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
+  try {
+    expect(readers.size).toBe(0);
+  } finally {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    readers.clear();
+  }
 });
 
 it.each(["direct", "delegated"] as const)(

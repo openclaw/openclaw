@@ -6,6 +6,8 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { createBrowserToolSchema, resolveBrowserToolCapabilities } from "./browser-tool.schema.js";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
+import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
+import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 
 type SchemaRecord = Record<string, { maximum?: number; properties?: SchemaRecord }>;
 type SchemaProperty = {
@@ -164,6 +166,79 @@ describe("browser tool schema", () => {
     }
     expect(capabilities.actions).toContain("snapshot");
     expect(capabilities.actions).toContain("console");
+  });
+
+  it("advertises only semantic actions for a bound Lightpanda profile", () => {
+    const profile = expectDefined(
+      resolveProfile(
+        resolveBrowserConfig({
+          profiles: {
+            lightweight: {
+              engine: "lightpanda",
+              cdpUrl: "ws://127.0.0.1:9222/",
+              attachOnly: true,
+            },
+          },
+        }),
+        "lightweight",
+      ),
+      "Lightpanda profile",
+    );
+    const capabilities = resolveBrowserToolCapabilities({
+      tabBound: true,
+      profileCapabilities: getBrowserProfileCapabilities(profile),
+    });
+    const schema = createBrowserToolSchema(capabilities);
+    for (const action of [
+      "screenshot",
+      "pdf",
+      "download",
+      "waitfordownload",
+      "upload",
+      "dialog",
+      "emulate",
+      "requests",
+      "errors",
+      "console",
+    ]) {
+      expect(Value.Check(schema, { action }), action).toBe(false);
+    }
+    for (const kind of ["batch", "clickCoords", "drag", "resize", "hover", "scrollIntoView"]) {
+      expect(Value.Check(schema, { action: "act", request: { kind } }), kind).toBe(false);
+      expect(Value.Check(schema, { action: "act", kind }), kind).toBe(false);
+    }
+    expect(capabilities.actKinds).toEqual([
+      "click",
+      "type",
+      "press",
+      "select",
+      "fill",
+      "wait",
+      "evaluate",
+      "close",
+    ]);
+    for (const action of ["snapshot", "navigate", "text"]) {
+      expect(Value.Check(schema, { action }), action).toBe(true);
+    }
+    for (const field of [
+      "x",
+      "y",
+      "width",
+      "height",
+      "labels",
+      "paths",
+      "accept",
+      "device",
+      "selector",
+      "frame",
+    ]) {
+      expect(schema.properties, field).not.toHaveProperty(field);
+    }
+    expect(Value.Check(schema, { action: "snapshot", snapshotFormat: "aria" })).toBe(false);
+    expect(Value.Check(schema, { action: "snapshot", refs: "role" })).toBe(false);
+    expect(Value.Check(schema, { action: "snapshot", snapshotFormat: "ai", refs: "aria" })).toBe(
+      true,
+    );
   });
 
   it("exposes scrollIntoView on nested and flattened act params", () => {

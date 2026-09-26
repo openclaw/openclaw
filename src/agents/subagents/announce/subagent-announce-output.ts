@@ -42,13 +42,9 @@ import {
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
-function isFastTestMode() {
-  return isFastTestRuntimeEnv();
-}
 
 type SubagentOutputSnapshot = {
-  latestAssistantText?: string;
-  latestSilentText?: string;
+  latestText?: string;
   latestToolCallCount?: number;
   waitingForContinuation?: boolean;
 };
@@ -120,19 +116,17 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     ) {
       // A fresh input owns a new turn; never announce an older turn's reply
       // when the current run fails or completes without visible output.
-      snapshot.latestAssistantText = undefined;
-      snapshot.latestSilentText = undefined;
+      snapshot.latestText = undefined;
       snapshot.latestToolCallCount = undefined;
       snapshot.waitingForContinuation = false;
       previousAssistantCalledYield = false;
       continue;
     }
     if (role === "assistant") {
-      if (assistantCallsSessionsYield(message)) {
-        snapshot.latestAssistantText = undefined;
-        snapshot.latestSilentText = undefined;
-        snapshot.waitingForContinuation = true;
-        previousAssistantCalledYield = true;
+      previousAssistantCalledYield = assistantCallsSessionsYield(message);
+      snapshot.waitingForContinuation = previousAssistantCalledYield;
+      if (previousAssistantCalledYield) {
+        snapshot.latestText = undefined;
         continue;
       }
       const toolCallCount = countAssistantToolCalls(message);
@@ -140,35 +134,18 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
         // Any assistant tool call proves this was an intermediate turn. Do not
         // retain commentary from this message or an earlier assistant message
         // as the run's final result if execution ends before the next reply.
-        snapshot.latestAssistantText = undefined;
-        snapshot.latestSilentText = undefined;
+        snapshot.latestText = undefined;
         snapshot.latestToolCallCount = (snapshot.latestToolCallCount ?? 0) + toolCallCount;
-        snapshot.waitingForContinuation = false;
-        previousAssistantCalledYield = false;
         continue;
       }
       const text = extractStoredAssistantText(message)?.trim();
-      if (!text) {
-        snapshot.waitingForContinuation = false;
-        previousAssistantCalledYield = false;
-        continue;
+      if (text) {
+        snapshot.latestText = text;
       }
-      if (isAnnounceSkip(text) || isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
-        snapshot.latestSilentText = text;
-        snapshot.latestAssistantText = undefined;
-        snapshot.waitingForContinuation = false;
-        previousAssistantCalledYield = false;
-        continue;
-      }
-      snapshot.latestSilentText = undefined;
-      snapshot.latestAssistantText = text;
-      snapshot.waitingForContinuation = false;
-      previousAssistantCalledYield = false;
       continue;
     }
     if (isSessionsYieldToolResult(message, previousAssistantCalledYield)) {
-      snapshot.latestAssistantText = undefined;
-      snapshot.latestSilentText = undefined;
+      snapshot.latestText = undefined;
       snapshot.waitingForContinuation = true;
       previousAssistantCalledYield = false;
       continue;
@@ -185,11 +162,8 @@ function selectSubagentOutputText(
   if (snapshot.waitingForContinuation) {
     return undefined;
   }
-  if (snapshot.latestSilentText) {
-    return snapshot.latestSilentText;
-  }
-  if (snapshot.latestAssistantText) {
-    return snapshot.latestAssistantText;
+  if (snapshot.latestText) {
+    return snapshot.latestText;
   }
   // Tool activity is partial-progress evidence only for a timed-out run. It is
   // not authoritative completion output when producer terminal facts are absent.
@@ -210,12 +184,11 @@ export async function readSubagentOutput(
 ): Promise<string | undefined> {
   let messages: unknown[] | undefined;
   if (options?.sessionTarget) {
-    const transcriptMessages = await readSessionMessagesAsync(options.sessionTarget, {
+    messages = await readSessionMessagesAsync(options.sessionTarget, {
       mode: "recent",
       maxMessages: 100,
       maxBytes: 1024 * 1024,
     });
-    messages = transcriptMessages;
   }
   const history =
     messages === undefined
@@ -242,7 +215,7 @@ export async function readLatestSubagentOutputWithRetry(params: {
     sessionKey: params.sessionKey,
     maxWaitMs: params.maxWaitMs,
     outcome: params.outcome,
-    retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
+    retryIntervalMs: isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
     readSubagentOutput,
   });
 }
@@ -344,8 +317,8 @@ export async function captureSubagentCompletionReply(
   return await captureSubagentCompletionReplyUsing({
     sessionKey,
     waitForReply: options?.waitForReply,
-    maxWaitMs: isFastTestMode() ? 50 : 1_500,
-    retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
+    maxWaitMs: isFastTestRuntimeEnv() ? 50 : 1_500,
+    retryIntervalMs: isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
     readSubagentOutput: async (nextSessionKey) =>
       await readSubagentOutput(nextSessionKey, options?.outcome, {
         sessionTarget: options?.sessionTarget,
@@ -463,7 +436,7 @@ export async function buildCompactAnnounceStatsLine(params: {
     agentId,
   });
   let entry = readSubagentSessionEntry(storePath, params.sessionKey);
-  const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
+  const tokenWaitAttempts = isFastTestRuntimeEnv() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
     if (
       typeof entry?.inputTokens === "number" ||
@@ -472,7 +445,7 @@ export async function buildCompactAnnounceStatsLine(params: {
     ) {
       break;
     }
-    if (!isFastTestMode()) {
+    if (!isFastTestRuntimeEnv()) {
       await new Promise((resolve) => {
         setTimeout(resolve, 150);
       });

@@ -13,6 +13,7 @@ import { attachSessionChangeEventLifetime } from "./server-methods/session-chang
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
+import { startIncognitoSessionLifetime } from "./session-incognito-lifetime.js";
 
 type GatewayChatMetadataLifecycle = Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>;
 const SECRET_STORE_EXPIRY_INTERVAL_MS = 60_000;
@@ -94,6 +95,13 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
   reconcileGitHubPublications?: () => Promise<void>;
   publishSidecars: GatewaySidecarStopOwner["publish"];
 }): Promise<void> {
+  // Kernel preparation precedes HTTP/internal dispatch. Incognito has no restart inventory.
+  params.publishSidecars(
+    startIncognitoSessionLifetime({
+      context: params.gatewayRequestContext,
+      logWarning: params.logWarning,
+    }),
+  );
   await params.chatMetadataLifecycle.attachContext(
     params.gatewayRequestContext,
     params.publishSidecars,

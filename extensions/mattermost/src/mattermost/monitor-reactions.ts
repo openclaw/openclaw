@@ -43,15 +43,25 @@ export function createMattermostReactionHandler(monitor: MattermostMonitorContex
       );
       return;
     }
+    const reactedPost = await monitor.resources.resolvePostInfo(postId);
     const eventPlan = await buildMattermostEventPlan(monitor, {
       channelId,
       senderId: userId,
+      // A reaction payload only names the reacted post. Thread placement depends on that
+      // post's root, so reuse the same identity the message path passes. An unresolved
+      // post keeps the parent channel session instead of inventing a lane.
+      ...(reactedPost
+        ? {
+            postId: reactedPost.id,
+            threadRootId: normalizeOptionalString(reactedPost.root_id),
+          }
+        : {}),
       dropLabel: "reaction",
     });
     if (!eventPlan) {
       return;
     }
-    const { kind, route } = eventPlan;
+    const { kind, thread } = eventPlan;
     const reactionAccess = await resolveMattermostMonitorInboundAccess({
       account,
       cfg,
@@ -77,7 +87,7 @@ export function createMattermostReactionHandler(monitor: MattermostMonitorContex
 
     const eventText = `Mattermost reaction ${action}: :${emojiName}: by @${senderName} on post ${postId} in channel ${channelId}`;
     core.system.enqueueSystemEvent(eventText, {
-      sessionKey: route.sessionKey,
+      sessionKey: thread.sessionKey,
       contextKey: `mattermost:reaction:${postId}:${emojiName}:${userId}:${action}`,
     });
     monitor.logVerboseMessage(

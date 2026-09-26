@@ -1292,7 +1292,7 @@ describe("printDaemonStatus", () => {
     expect(errors).not.toContain("systemd stopped restarting the gateway");
   });
 
-  it("steers a failed RPC probe to credentials/config when the gateway process owns the port", () => {
+  it("does not rule out warm-up from port ownership without readiness proof", () => {
     printDaemonStatus(
       {
         service: {
@@ -1311,7 +1311,7 @@ describe("printDaemonStatus", () => {
         },
         rpc: {
           ok: false,
-          error: "gateway closed (1008 policy violation: invalid token)",
+          error: "gateway rejected websocket upgrade (HTTP 503)",
           url: "ws://127.0.0.1:18789",
         },
         health: {
@@ -1323,13 +1323,9 @@ describe("printDaemonStatus", () => {
       { json: false },
     );
 
-    expectMockLineContains(
-      runtime.log,
-      "Gateway process is running and owns the gateway port, so this is not a warm-up delay",
-    );
-    expectMockLineContains(runtime.log, "Check the probe credentials/config");
     const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
-    expect(logged).not.toContain("Warm-up: launch agents");
+    expect(logged).not.toMatch(/not a warm-up delay|restart the gateway/i);
+    expect(logged).toMatch(/readiness.*not.*confirmed|warm-up.*possible/i);
   });
 
   it.each(

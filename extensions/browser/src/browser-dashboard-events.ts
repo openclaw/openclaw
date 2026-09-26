@@ -75,6 +75,17 @@ export function bindBrowserDashboardEvents(
     if (!accepting || !isCurrentRuntime() || event.reason !== "board") {
       return;
     }
+    for (const dashboard of runtime.sessionDashboards?.values() ?? []) {
+      if (
+        dashboard.definition.sessionKey === event.sessionKey ||
+        (dashboard.definition.agentId === event.agentId &&
+          parseAgentSessionKey(dashboard.definition.sessionKey)?.rest === event.sessionKey)
+      ) {
+        // Fence retained frames synchronously; the next operation verifies the current definition.
+        dashboard.definitionChanged();
+        void dashboard.assertDefinitionCurrent().catch(() => {});
+      }
+    }
     pendingSessions.add(event.sessionKey);
     if (event.agentId) {
       pendingAgentSessions.add(JSON.stringify([normalizeAgentId(event.agentId), event.sessionKey]));
@@ -93,6 +104,9 @@ export function bindBrowserDashboardEvents(
       runtime.dashboardEvents = undefined;
     }
     await reconciliation;
+    await Promise.allSettled(
+      [...(runtime.sessionDashboards?.values() ?? [])].map((dashboard) => dashboard.close()),
+    );
     clearPending();
   };
 }

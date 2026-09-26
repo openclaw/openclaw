@@ -101,19 +101,9 @@ function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioP
 }
 
 function readProviderConfig(config: SpeechProviderConfig): FishAudioProviderConfig {
-  const defaults = normalizeProviderConfig({});
-  const raw = asOptionalRecord(config) ?? {};
-  return {
-    apiKey: trimToUndefined(raw.apiKey) ?? defaults.apiKey,
-    baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(raw.baseUrl) ?? defaults.baseUrl),
-    model: normalizeModel(raw.model ?? raw.modelId ?? defaults.model),
-    referenceId: resolveReferenceId(raw) ?? defaults.referenceId,
-    latency: normalizeLatency(raw.latency ?? defaults.latency),
-    speed: normalizeNumber(raw.speed, 0.5, 2) ?? defaults.speed,
-    temperature: normalizeNumber(raw.temperature, 0, 1) ?? defaults.temperature,
-    topP: normalizeNumber(raw.topP ?? raw.top_p, 0, 1) ?? defaults.topP,
-    normalize: asBoolean(raw.normalize) ?? defaults.normalize,
-  };
+  return normalizeProviderConfig({
+    "fish-audio": { ...config, apiKey: trimToUndefined(config.apiKey) },
+  });
 }
 
 function readOverrides(overrides: SpeechProviderOverrides | undefined): FishAudioOverrides {

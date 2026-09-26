@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   appendTranscriptEventSync,
@@ -401,8 +402,12 @@ it.each(
         }
       }
     } else {
+      expect(outcome.error).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
       expect(outcome.error).toMatchObject({
-        message: expect.stringContaining("Session changed while preparing its metadata"),
+        message:
+          write === "runtime config replacement" || write === "access revision change"
+            ? "Chat metadata access changed while preparing its metadata. Retry the request."
+            : "Session changed while preparing its metadata. Retry the request.",
       });
       expect(respond).not.toHaveBeenCalled();
     }

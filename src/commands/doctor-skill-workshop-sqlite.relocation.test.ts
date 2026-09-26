@@ -67,7 +67,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     });
     await fs.mkdir(legacySkillDir, { recursive: true });
     await fs.writeFile(legacySkillFile, skillContent, "utf8");
-    importLegacySkillProposal({
+    await importLegacySkillProposal({
       record,
       ownerAgentId: "main",
       store: { env: testState.env },

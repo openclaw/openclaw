@@ -11,33 +11,21 @@ export type NativeChatDrafts = {
 };
 
 function getWebview(): WebView2Bridge | undefined {
-  const webview = (window as unknown as { chrome?: { webview?: WebView2Bridge } }).chrome?.webview;
-  return webview;
+  return (window as Window & { chrome?: { webview?: WebView2Bridge } }).chrome?.webview;
 }
 
-// Keep WebView2 messaging distinct from the DOM Window.postMessage contract.
+// WebView2's one-argument host API is distinct from Window.postMessage.
 function sendToNative(message: unknown): void {
   getWebview()?.postMessage(message);
 }
 
 function readNativeDraft(raw: unknown): string | null {
-  if (!raw || typeof raw !== "object") {
+  if (!raw || typeof raw !== "object" || !("type" in raw) || raw.type !== "draft-text") {
     return null;
   }
-  const msg = raw as Record<string, unknown>;
-  if (typeof msg.type !== "string") {
-    return null;
-  }
-  if (msg.type === "draft-text") {
-    const text =
-      msg.payload && typeof msg.payload === "object"
-        ? (msg.payload as Record<string, unknown>).text
-        : undefined;
-    if (typeof text === "string") {
-      return text;
-    }
-  }
-  return null;
+  const payload = "payload" in raw ? raw.payload : null;
+  const text = payload && typeof payload === "object" && "text" in payload ? payload.text : null;
+  return typeof text === "string" ? text : null;
 }
 
 /**

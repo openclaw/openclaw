@@ -10,18 +10,8 @@ import { pruneMapToMaxSize } from "./map-size.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 const formatCommit = (value?: string | null) => {
-  if (!value) {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const match = trimmed.match(/[0-9a-fA-F]{7,40}/);
-  if (!match) {
-    return null;
-  }
-  return normalizeLowercaseStringOrEmpty(match[0].slice(0, 7));
+  const match = value?.match(/[0-9a-fA-F]{7,40}/);
+  return match ? normalizeLowercaseStringOrEmpty(match[0].slice(0, 7)) : null;
 };
 
 export function gitCommitPrefixesMatch(left: string, right: string): boolean {

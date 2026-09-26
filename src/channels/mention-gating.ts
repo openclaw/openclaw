@@ -62,102 +62,11 @@ export function allowedImplicitMentionKindsFromConfig(
   ];
 }
 
-function resolveMatchedImplicitMentionKinds(params: {
-  implicitMentionKinds?: readonly InboundImplicitMentionKind[];
-  allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
-}): InboundImplicitMentionKind[] {
-  const inputKinds = params.implicitMentionKinds ?? [];
-  if (inputKinds.length === 0) {
-    return [];
-  }
-  const allowedKinds = params.allowedImplicitMentionKinds
-    ? new Set(params.allowedImplicitMentionKinds)
-    : null;
-  const matched: InboundImplicitMentionKind[] = [];
-  for (const kind of inputKinds) {
-    if (allowedKinds && !allowedKinds.has(kind)) {
-      continue;
-    }
-    if (!matched.includes(kind)) {
-      matched.push(kind);
-    }
-  }
-  return matched;
-}
-
-function resolveMentionDecisionCore(params: {
-  requireMention: boolean;
-  canDetectMention: boolean;
-  wasMentioned: boolean;
-  implicitMentionKinds?: readonly InboundImplicitMentionKind[];
-  allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
-  shouldBypassMention: boolean;
-}): InboundMentionDecision {
-  const matchedImplicitMentionKinds = resolveMatchedImplicitMentionKinds({
-    implicitMentionKinds: params.implicitMentionKinds,
-    allowedImplicitMentionKinds: params.allowedImplicitMentionKinds,
-  });
-  const implicitMention = matchedImplicitMentionKinds.length > 0;
-  const effectiveWasMentioned =
-    params.wasMentioned || implicitMention || params.shouldBypassMention;
-  const shouldSkip = params.requireMention && params.canDetectMention && !effectiveWasMentioned;
-  return {
-    implicitMention,
-    matchedImplicitMentionKinds,
-    effectiveWasMentioned,
-    shouldBypassMention: params.shouldBypassMention,
-    shouldSkip,
-  };
-}
-
-function hasNestedMentionDecisionParams(
-  params: ResolveInboundMentionDecisionParams,
-): params is ResolveInboundMentionDecisionNestedParams {
-  return "facts" in params && "policy" in params;
-}
-
-function normalizeMentionDecisionParams(
-  params: ResolveInboundMentionDecisionParams,
-): ResolveInboundMentionDecisionNestedParams {
-  if (hasNestedMentionDecisionParams(params)) {
-    return params;
-  }
-  const {
-    canDetectMention,
-    wasMentioned,
-    hasAnyMention,
-    implicitMentionKinds,
-    isGroup,
-    requireMention,
-    implicitMentions,
-    allowedImplicitMentionKinds,
-    allowTextCommands,
-    hasControlCommand,
-    commandAuthorized,
-  } = params;
-  return {
-    facts: {
-      canDetectMention,
-      wasMentioned,
-      hasAnyMention,
-      implicitMentionKinds,
-    },
-    policy: {
-      isGroup,
-      requireMention,
-      implicitMentions,
-      allowedImplicitMentionKinds,
-      allowTextCommands,
-      hasControlCommand,
-      commandAuthorized,
-    },
-  };
-}
-
 export function resolveInboundMentionDecision(
   params: ResolveInboundMentionDecisionParams,
 ): InboundMentionDecision {
-  const { facts, policy } = normalizeMentionDecisionParams(params);
+  const { facts, policy } =
+    "facts" in params && "policy" in params ? params : { facts: params, policy: params };
   const allowedImplicitMentionKinds =
     policy.allowedImplicitMentionKinds ??
     (policy.implicitMentions
@@ -171,12 +80,16 @@ export function resolveInboundMentionDecision(
     policy.allowTextCommands &&
     policy.commandAuthorized &&
     policy.hasControlCommand;
-  return resolveMentionDecisionCore({
-    requireMention: policy.requireMention,
-    canDetectMention: facts.canDetectMention,
-    wasMentioned: facts.wasMentioned,
-    implicitMentionKinds: facts.implicitMentionKinds,
-    allowedImplicitMentionKinds,
+  const matchedImplicitMentionKinds = [...new Set(facts.implicitMentionKinds ?? [])].filter(
+    (kind) => !allowedImplicitMentionKinds || allowedImplicitMentionKinds.includes(kind),
+  );
+  const implicitMention = matchedImplicitMentionKinds.length > 0;
+  const effectiveWasMentioned = facts.wasMentioned || implicitMention || shouldBypassMention;
+  return {
+    implicitMention,
+    matchedImplicitMentionKinds,
+    effectiveWasMentioned,
     shouldBypassMention,
-  });
+    shouldSkip: policy.requireMention && facts.canDetectMention && !effectiveWasMentioned,
+  };
 }

@@ -21,12 +21,8 @@ import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 const SIGNAL_CHANNEL = "signal" as const;
 
-async function loadSignalChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
-
 export const signalSetupWizard = createSignalSetupWizardProxy(
-  async () => (await loadSignalChannelRuntime()).signalSetupWizard,
+  async () => (await import("./channel.runtime.js")).signalSetupWizard,
 );
 
 const signalConfigAdapterBase = createScopedChannelConfigAdapter<ResolvedSignalAccount>({

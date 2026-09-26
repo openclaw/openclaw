@@ -88,13 +88,6 @@ type PendingPlaybackMark = {
   settle: (error?: Error, ignoreLateAck?: boolean) => void;
 };
 
-type StreamSendResult = {
-  sent: boolean;
-  readyState?: number;
-  bufferedBeforeBytes: number;
-  bufferedAfterBytes: number;
-};
-
 type PendingConnection = {
   ip: string;
   timeout: ReturnType<typeof setTimeout>;
@@ -616,61 +609,25 @@ export class MediaStreamHandler {
   /**
    * Send a message to a stream's WebSocket if available.
    */
-  private sendToStream(streamSid: string, message: unknown): StreamSendResult {
-    const session = this.sessions.get(streamSid);
+  private sendToStream(streamSid: string, message: unknown): boolean {
+    const session = this.getOpenSession(streamSid);
     if (!session) {
-      return {
-        sent: false,
-        bufferedBeforeBytes: 0,
-        bufferedAfterBytes: 0,
-      };
+      return false;
     }
-
-    const readyState = session.ws.readyState;
-    const bufferedBeforeBytes = session.ws.bufferedAmount;
-    if (readyState !== WebSocket.OPEN) {
-      return {
-        sent: false,
-        readyState,
-        bufferedBeforeBytes,
-        bufferedAfterBytes: session.ws.bufferedAmount,
-      };
-    }
-    if (bufferedBeforeBytes > MAX_WS_BUFFERED_BYTES) {
+    if (session.ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
       session.ws.close(1013, "Backpressure: send buffer exceeded");
-      return {
-        sent: false,
-        readyState,
-        bufferedBeforeBytes,
-        bufferedAfterBytes: session.ws.bufferedAmount,
-      };
+      return false;
     }
 
     try {
       session.ws.send(JSON.stringify(message));
-      const bufferedAfterBytes = session.ws.bufferedAmount;
-      if (bufferedAfterBytes > MAX_WS_BUFFERED_BYTES) {
+      if (session.ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
         session.ws.close(1013, "Backpressure: send buffer exceeded");
-        return {
-          sent: false,
-          readyState,
-          bufferedBeforeBytes,
-          bufferedAfterBytes,
-        };
+        return false;
       }
-      return {
-        sent: true,
-        readyState,
-        bufferedBeforeBytes,
-        bufferedAfterBytes,
-      };
+      return true;
     } catch {
-      return {
-        sent: false,
-        readyState,
-        bufferedBeforeBytes,
-        bufferedAfterBytes: session.ws.bufferedAmount,
-      };
+      return false;
     }
   }
 
@@ -678,7 +635,7 @@ export class MediaStreamHandler {
    * Send audio to a specific stream (for TTS playback).
    * Audio should be mu-law encoded at 8kHz mono.
    */
-  sendAudio(streamSid: string, muLawAudio: Buffer): StreamSendResult {
+  sendAudio(streamSid: string, muLawAudio: Buffer): boolean {
     const session = this.getOpenSession(streamSid);
     if (session) {
       this.emitTalkEvent(session, {
@@ -697,7 +654,7 @@ export class MediaStreamHandler {
   /**
    * Send a mark event to track audio playback position.
    */
-  sendMark(streamSid: string, name: string): StreamSendResult {
+  sendMark(streamSid: string, name: string): boolean {
     return this.sendToStream(streamSid, {
       event: "mark",
       streamSid,
@@ -761,8 +718,7 @@ export class MediaStreamHandler {
       signal.addEventListener("abort", onAbort, { once: true });
     });
 
-    const result = this.sendMark(streamSid, name);
-    if (!result.sent) {
+    if (!this.sendMark(streamSid, name)) {
       pending.settle(new Error("Telephony stream playback failed: completion mark not delivered"));
     }
     return acknowledgement;
@@ -771,7 +727,7 @@ export class MediaStreamHandler {
   /**
    * Clear audio buffer (interrupt playback).
    */
-  clearAudio(streamSid: string): StreamSendResult {
+  clearAudio(streamSid: string): boolean {
     this.invalidatePlaybackMarks(streamSid);
     return this.sendToStream(streamSid, { event: "clear", streamSid });
   }

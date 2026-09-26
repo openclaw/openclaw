@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   replaceSessionEntrySync,
@@ -8,6 +9,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readStatusSessionStores } from "../../status/session-stores.js";
+import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import {
@@ -57,9 +59,7 @@ describe("health and status resident session summaries", () => {
         await backfill;
         await settleProjection(projection);
         const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
-        const reads = (["all", "get", "iterate"] as const).map((method) =>
-          vi.spyOn(StatementSync.prototype, method),
-        );
+        const reads = observeMainThreadReads();
         const agents = agentIds.map((id) => ({ id }));
         for (const limit of [-2.5, 0, 0.5, 5, 5.7, 10, Infinity, Number.NaN]) {
           const status = await readStatusSessionStores(cfg, agents, limit, projection);
@@ -114,9 +114,7 @@ describe("health and status resident session summaries", () => {
           );
         }
         expect(prepares).not.toHaveBeenCalled();
-        for (const read of reads) {
-          expect(read).not.toHaveBeenCalled();
-        }
+        reads.expectIdle();
       } finally {
         projection.dispose();
       }
@@ -134,9 +132,7 @@ describe("health and status resident session summaries", () => {
         { agentId: "main", sessionKey: mainKey },
         { sessionId: "main-primary", updatedAt: 10 },
       );
-      if (!committed) {
-        throw new Error("Expected the session write owner to return its committed row");
-      }
+      assert(committed, "Expected the session write owner to return its committed row");
       const initialUpdatedAt = committed.updatedAt;
       const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
       try {
@@ -151,9 +147,7 @@ describe("health and status resident session summaries", () => {
         ).toMatchObject({ sessionId: committed.sessionId, updatedAt: initialUpdatedAt });
 
         const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
-        const reads = (["all", "get", "iterate"] as const).map((method) =>
-          vi.spyOn(StatementSync.prototype, method),
-        );
+        const reads = observeMainThreadReads();
         const agents = [{ id: "main" }];
         const readStatus = () => readStatusSessionStores(cfg, agents, 10, projection);
         const readHealth = () =>
@@ -177,9 +171,7 @@ describe("health and status resident session summaries", () => {
         await readStatus();
         await readHealth();
         expect(prepares).not.toHaveBeenCalled();
-        for (const read of reads) {
-          expect(read).not.toHaveBeenCalled();
-        }
+        reads.expectIdle();
 
         const dirtyBackfill = observeSessionRowBackfill([mainKey]);
         replaceSessionEntrySync(
@@ -189,23 +181,16 @@ describe("health and status resident session summaries", () => {
         expect(projection.dirtyRowCount).toBeGreaterThan(0);
         const dirty = await readStatus();
         expect(dirty.byAgent[0]?.recent[0]?.entry.updatedAt).toBe(20);
-        expect(
-          prepares.mock.calls.length +
-            reads.reduce((total, read) => total + read.mock.calls.length, 0),
-        ).toBeGreaterThan(0);
+        expect(prepares.mock.calls.length + reads.count()).toBeGreaterThan(0);
         await dirtyBackfill;
         await settleProjection(projection);
 
         prepares.mockClear();
-        for (const read of reads) {
-          read.mockClear();
-        }
+        reads.clear();
         const clean = await readHealth();
         expect(clean[0]?.sessions.recent[0]?.updatedAt).toBe(20);
         expect(prepares).not.toHaveBeenCalled();
-        for (const read of reads) {
-          expect(read).not.toHaveBeenCalled();
-        }
+        reads.expectIdle();
 
         const workerKey = "agent:worker:primary";
         await upsertSessionEntryCore(

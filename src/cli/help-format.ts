@@ -1,5 +1,10 @@
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 // Small help-text formatter shared by command registrations.
 import { theme } from "../../packages/terminal-core/src/theme.js";
+
+export function formatDocsHelp(path: string): string {
+  return `\n${theme.muted("Docs:")} ${formatDocsLink(path, `docs.openclaw.ai${path}`)}\n`;
+}
 
 /** Command plus short description tuple used in help epilogues. */
 type HelpExample = readonly [command: string, description: string];

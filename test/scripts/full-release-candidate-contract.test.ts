@@ -4,10 +4,13 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFullReleaseCandidateRequest,
+  candidateRequestSha256,
+  canonicalFullReleaseCandidateRequestJson,
   fullReleaseCandidateArtifactName,
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
 } from "../../scripts/full-release-candidate-contract.mjs";
+import { resolveCandidateBinding } from "../../scripts/lib/full-release-candidate-reuse.mjs";
 import {
   canonicalTestJson,
   canonicalTestSha256,
@@ -87,22 +90,60 @@ describe("full release candidate contract", () => {
     expect(canonicalTestSha256(request)).toBe(CANONICAL_REQUEST_SHA256);
   });
 
-  it("canonicalizes equivalent baseline and scenario set ordering", () => {
+  it("canonicalizes historical baseline receipts and equivalent scenario set ordering", () => {
     const request = buildFullReleaseCandidateRequest(
       fullReleaseCandidateRequestInput({
-        upgradeSurvivorBaselines: "beta latest",
+        upgradeSurvivorBaselines: "beta latest 2026.4.23",
         upgradeSurvivorScenarios: "base feishu-channel",
       }),
     );
     const reordered = buildFullReleaseCandidateRequest(
       fullReleaseCandidateRequestInput({
-        upgradeSurvivorBaselines: "latest,beta",
+        upgradeSurvivorBaselines: "2026.4.23,latest,beta",
         upgradeSurvivorScenarios: "feishu-channel,base",
       }),
     );
 
     expect(request).toEqual(reordered);
+    expect(request.upgradeSurvivorBaselines).toEqual([
+      "openclaw@2026.4.23",
+      "openclaw@beta",
+      "openclaw@latest",
+    ]);
     expect(canonicalTestSha256(request)).toBe(canonicalTestSha256(reordered));
+  });
+
+  it("preserves retired scenario evidence while rejecting new preparation", () => {
+    const retainedManifest = fullReleaseCandidateManifestFixture();
+    const request = retainedManifest.request;
+    request.upgradeSurvivorScenarios = ["base", "msteams-polls"];
+    retainedManifest.requestSha256 = canonicalTestSha256(request);
+    expect(candidateRequestSha256(request)).toBe(
+      "e8e6a45882970d37d5884b8b1cc640a571d7278a21717b3591fdc970b5086b07",
+    );
+    expect(canonicalFullReleaseCandidateRequestJson(request)).toBe(canonicalTestJson(request));
+    const binding = fullReleaseCandidateBindingFixture();
+    binding.request = request;
+    binding.requestSha256 = retainedManifest.requestSha256;
+    binding.manifestSha256 = canonicalTestSha256(retainedManifest);
+    binding.evidenceArtifact.name = `full-release-candidate-v2-${binding.requestSha256}`;
+    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
+    expect(() => validateFullReleaseCandidateRequest(request)).toThrow(
+      "invalid published upgrade survivor scenario",
+    );
+    expect(() =>
+      buildFullReleaseCandidateRequest(
+        fullReleaseCandidateRequestInput({ upgradeSurvivorScenarios: "msteams-polls" }),
+      ),
+    ).toThrow("invalid published upgrade survivor scenario");
+    expect(runManifestContract(retainedManifest).stderr).toContain(
+      "invalid published upgrade survivor scenario",
+    );
+    for (const source of ["freshBinding", "reusedBinding"]) {
+      expect(() => resolveCandidateBinding({ [source]: binding, request, required: true })).toThrow(
+        "invalid published upgrade survivor scenario",
+      );
+    }
   });
 
   it.each([

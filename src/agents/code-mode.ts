@@ -176,7 +176,7 @@ function createCodeModeExecDescription(
     ? ` Use the shell tool \`${shellTool.callableName}\` for heavier computation.`
     : "";
   return (
-    `Run JavaScript in OpenClaw code mode. Guest work and inline tool waits share a ${timeoutMs} ms wall-clock budget per \`exec\`/\`wait\`; approvals pause it. Guest computation over this budget times out; pending tools may return \`waiting\` for \`wait\`.` +
+    `Run JavaScript in OpenClaw. Set \`title\` to a 3–7 word purpose. Guest work and inline tool waits share a ${timeoutMs} ms wall-clock budget per \`exec\`/\`wait\`; approvals pause it. Guest computation over this budget times out; pending tools may return \`waiting\` for \`wait\`.` +
     shellGuidance +
     ` Enabled tools are async global functions. Await dependent calls in order; independent calls may run with Promise.all. Declared output fields may feed later calls in the same program; avoid extra inspection calls. Emit output with \`text(value)\` or \`json(value)\`. Return the final value, otherwise \`null\`. Oversized final objects/arrays may return \`value.reference\`. \`-> ?\` means unknown output: do not feed it into guessed field-dependent logic in the same program. Return it raw or \`await results.save(value)\`; use a later \`exec\` for dependent composition. Save returns \`{id,bytes,count,shape,preview,previewTruncated}\`: emit that descriptor directly; full JSON stays stored. Load/delete this run via \`results.load(id)\`/\`results.delete(id)\`; contract: \`API.read("results.d.ts")\`. For omitted tools, use \`catalog.search(query)\`; results are callable: \`const [tool] = await catalog.search("..."); return await tool({...});\`. Use handle \`describe()\` for schemas. \`setTimeout\` and \`clearTimeout\` work. \`TextEncoder\`/\`TextDecoder\` convert local text and bytes. Console log/info/warn/error/debug emit bounded text. Nested calls enforce normal tool policy and approvals. Tool failures are catchable; inspect possible effects before retrying. Nested results are intact or throw resource errors. Cell reply inbox: ${Math.min(config.memoryLimitBytes, config.maxSnapshotBytes)} bytes; consume replies or paginate if full. Output/value/errors share ${maxOutputBytes} bytes across waits. Other truncation reports original JSON prefixes/omitted bytes; rerun with narrower args. Output is incremental; changed cumulative summaries replace earlier ones. Node.js modules and \`require\`/\`import\` are NOT available; use tools for external actions.` +
     apiGuidance +
@@ -201,9 +201,9 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     label: "exec",
     description: createCodeModeExecDescription(ctx, undefined, config),
     parameters: Type.Object({
-      title: executionTitleSchema(),
-      // `command` stays runtime-only for hook compatibility. Requiring the sole
-      // model-facing field prevents schema-valid empty calls from constrained models.
+      title: executionTitleSchema({ required: true }),
+      // `command` stays runtime-only for hook compatibility. Requiring `code`
+      // prevents schema-valid empty calls from constrained models.
       code: Type.String({
         description:
           "Required JavaScript; no TypeScript annotations, Python, shell, `require`, or `import`. Use `return value`; a trailing expression yields `null`.",

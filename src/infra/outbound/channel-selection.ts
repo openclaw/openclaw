@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Channel selection chooses a deliverable message channel from explicit input,
 // tool context fallback, or configured plugin accounts.
+import { resolveChannelAccount } from "../../channels/account-resolution.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -157,7 +158,7 @@ async function isPluginConfigured(
         }
       }
       operation = "resolveAccount";
-      account = plugin.config.resolveAccount(cfg, accountId);
+      account = await resolveChannelAccount({ plugin, cfg, accountId });
     } catch (error) {
       logChannelSelectionError({
         pluginId: plugin.id,
@@ -228,46 +229,15 @@ export async function resolveMessageChannelSelection(params: {
   source: MessageChannelSelectionSource;
 }> {
   const normalized = normalizeMessageChannel(params.channel);
-  if (normalized) {
-    const availableExplicit = resolveAvailableChannel({
-      cfg: params.cfg,
-      value: params.channel,
-      agentId: params.agentId,
-    });
-    if (!availableExplicit) {
-      const fallback = resolveAvailableChannel({
+  const explicit = normalized
+    ? resolveAvailableChannel({
         cfg: params.cfg,
-        value: params.fallbackChannel,
+        value: params.channel,
         agentId: params.agentId,
-      });
-      if (fallback) {
-        return {
-          channel: fallback.channel,
-          plugin: fallback.plugin,
-          configured: [],
-          source: "tool-context-fallback",
-        };
-      }
-      if (!isDeliverableMessageChannel(normalized) && !getRuntimeVisibleChannelPlugin(normalized)) {
-        throw new Error(formatUnknownChannelMessage({ channel: normalized }));
-      }
-      const repairHint = isConfiguredChannel(params.cfg, normalized)
-        ? resolveMissingOfficialExternalChannelPluginRepairHint({
-            config: params.cfg,
-            channelId: normalized,
-          })
-        : null;
-      if (repairHint?.channelId === normalized) {
-        throw new Error(`Channel is unavailable: ${normalized}. ${repairHint.repairHint}`);
-      }
-      throw new Error(`Channel is unavailable: ${normalized}`);
-    }
-    return {
-      channel: availableExplicit.channel,
-      plugin: availableExplicit.plugin,
-      configured: [],
-      source: "explicit",
-    };
+      })
+    : undefined;
+  if (explicit) {
+    return { ...explicit, configured: [], source: "explicit" };
   }
 
   const fallback = resolveAvailableChannel({
@@ -282,6 +252,22 @@ export async function resolveMessageChannelSelection(params: {
       configured: [],
       source: "tool-context-fallback",
     };
+  }
+
+  if (normalized) {
+    if (!isDeliverableMessageChannel(normalized) && !getRuntimeVisibleChannelPlugin(normalized)) {
+      throw new Error(formatUnknownChannelMessage({ channel: normalized }));
+    }
+    const repairHint = isConfiguredChannel(params.cfg, normalized)
+      ? resolveMissingOfficialExternalChannelPluginRepairHint({
+          config: params.cfg,
+          channelId: normalized,
+        })
+      : null;
+    if (repairHint?.channelId === normalized) {
+      throw new Error(`Channel is unavailable: ${normalized}. ${repairHint.repairHint}`);
+    }
+    throw new Error(`Channel is unavailable: ${normalized}`);
   }
 
   const configuredPlugins = await listConfiguredMessageChannelPlugins(

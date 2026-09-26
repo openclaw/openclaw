@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { z } from "zod";
 import { hasErrnoCode } from "../infra/errno.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 
 const fileState = z.strictObject({
@@ -17,20 +17,9 @@ const fileState = z.strictObject({
   mtimeMs: z.number().finite(),
   ctimeMs: z.number().finite(),
 });
-const GatewayServiceStagedFilesSchema = z.strictObject({
-  files: z
-    .array(
-      z.strictObject({
-        sourcePath: z.string().max(4096).refine(path.isAbsolute),
-        before: fileState.nullable(),
-        after: fileState,
-      }),
-    )
-    .min(1)
-    .max(16),
-});
-export type GatewayServiceStagedFiles = z.infer<typeof GatewayServiceStagedFilesSchema>;
-const definitionFile = GatewayServiceStagedFilesSchema.shape.files.element.extend({
+const definitionFile = z.strictObject({
+  sourcePath: z.string().max(4096).refine(path.isAbsolute),
+  before: fileState.nullable(),
   after: fileState.nullable(),
   prepared: fileState.nullable().optional(),
 });
@@ -101,7 +90,7 @@ export async function publishServiceFile(params: {
   await hooks?.fileWritten(params.filePath, params.contents);
 }
 
-/** Read one stable regular file; publication owners compare it to retained write facts. */
+/** Read one regular file; publication owners compare it to retained write facts. */
 export async function readServiceFileState(file: string): Promise<GatewayServiceFileState | null> {
   const before = await fs.lstat(file).catch((error: unknown) => {
     if (hasErrnoCode(error, "ENOENT")) {
@@ -118,24 +107,23 @@ export async function readServiceFileState(file: string): Promise<GatewayService
   const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const opened = await handle.stat();
-    const keys = ["dev", "ino", "size", "mtimeMs", "ctimeMs", "mode"] as const;
+    const keys = ["dev", "ino", "mode"] as const;
     if (!opened.isFile() || keys.some((key) => before[key] !== opened[key])) {
       throw new Error("Managed service artifact changed before inspection.");
     }
     const contents = await handle.readFile();
-    const after = await handle.stat();
     const current = await fs.lstat(file);
-    if (keys.some((key) => before[key] !== after[key] || after[key] !== current[key])) {
+    if (keys.some((key) => opened[key] !== current[key])) {
       throw new Error("Managed service artifact changed during inspection.");
     }
     return {
       sha256: createHash("sha256").update(contents).digest("hex"),
-      mode: after.mode & 0o7777,
-      dev: after.dev,
-      ino: after.ino,
-      size: after.size,
-      mtimeMs: after.mtimeMs,
-      ctimeMs: after.ctimeMs,
+      mode: opened.mode & 0o7777,
+      dev: opened.dev,
+      ino: opened.ino,
+      size: contents.byteLength,
+      mtimeMs: opened.mtimeMs,
+      ctimeMs: opened.ctimeMs,
     };
   } finally {
     await handle.close();

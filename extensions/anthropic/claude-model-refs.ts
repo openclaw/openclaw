@@ -2,7 +2,10 @@
  * Claude CLI model-ref normalization. It maps family aliases and retired model
  * ids to current Anthropic runtime refs while preserving auth-profile suffixes.
  */
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_MODEL_ID_ALIASES } from "./cli-constants.js";
 
 /** Normalized Claude CLI selection plus runtime refs used by setup migrations. */
@@ -12,7 +15,7 @@ type ClaudeCliAnthropicModelRefs = {
   rewriteRef?: string;
 };
 
-function splitTrailingModelAuthProfile(raw: string): { model: string; profile?: string } {
+export function splitTrailingModelAuthProfile(raw: string): { model: string; profile?: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
     return { model: "" };
@@ -133,7 +136,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     ]) ||
     /^claude-opus-4-20\d{6}/.test(normalized)
   ) {
-    return "claude-opus-5";
+    return "claude-opus-5-5";
   }
   if (
     normalized === "claude-sonnet-4" ||
@@ -150,7 +153,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     return "claude-sonnet-4-6";
   }
   if (normalized.startsWith("claude-3") && normalized.includes("opus")) {
-    return "claude-opus-5";
+    return "claude-opus-5-5";
   }
   if (
     normalized.startsWith("claude-3") &&
@@ -159,7 +162,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     return "claude-sonnet-4-6";
   }
   if (["opus-4.5", "opus-4.1", "opus-4", "opus-3"].includes(normalized)) {
-    return "claude-opus-5";
+    return "claude-opus-5-5";
   }
   if (
     [
@@ -222,4 +225,18 @@ export function resolveKnownAnthropicModelRef(raw?: string): string | null {
     return null;
   }
   return resolveClaudeCliAnthropicModelRefs(trimmed)?.rewriteRef ?? trimmed;
+}
+
+export function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown> {
+  const base = isRecord(entry) ? { ...entry } : {};
+  const currentRuntimeId = isRecord(base.agentRuntime) ? base.agentRuntime.id : undefined;
+  const currentRuntime = normalizeLowercaseStringOrEmpty(currentRuntimeId);
+  if (currentRuntime && currentRuntime !== "auto") {
+    return base;
+  }
+  base.agentRuntime = {
+    ...(isRecord(base.agentRuntime) ? base.agentRuntime : {}),
+    id: CLAUDE_CLI_BACKEND_ID,
+  };
+  return base;
 }

@@ -4,7 +4,7 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
-import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   assertGatewayAuthConfigured,
   authorizeHttpGatewayConnect,
@@ -572,7 +572,7 @@ describe("gateway auth", () => {
   });
 
   it("keeps managed Serve shared-secret auth independent of WhoIs availability", async () => {
-    const limiter = createAuthRateLimiter({
+    const limiter = createGatewayAuthRateLimiter({
       maxAttempts: 1,
       windowMs: 60_000,
       lockoutMs: 60_000,
@@ -613,7 +613,7 @@ describe("gateway auth", () => {
   });
 
   it("keeps managed Serve failures isolated to each validated source", async () => {
-    const limiter = createAuthRateLimiter({
+    const limiter = createGatewayAuthRateLimiter({
       maxAttempts: 1,
       windowMs: 60_000,
       lockoutMs: 60_000,
@@ -654,7 +654,7 @@ describe("gateway auth", () => {
   });
 
   it("verifies managed Serve identity before a same-source shared-secret lockout", async () => {
-    const limiter = createAuthRateLimiter({
+    const limiter = createGatewayAuthRateLimiter({
       maxAttempts: 1,
       windowMs: 60_000,
       lockoutMs: 60_000,
@@ -689,7 +689,7 @@ describe("gateway auth", () => {
   });
 
   it("keeps verified managed Serve usable after an unrelated proxy failure", async () => {
-    const limiter = createAuthRateLimiter({
+    const limiter = createGatewayAuthRateLimiter({
       maxAttempts: 1,
       windowMs: 60_000,
       lockoutMs: 60_000,
@@ -1057,7 +1057,7 @@ describe("gateway auth", () => {
   });
 
   it("keeps trusted-proxy client lockout and reset state isolated by source", async () => {
-    const limiter = createAuthRateLimiter({
+    const limiter = createGatewayAuthRateLimiter({
       maxAttempts: 1,
       windowMs: 60_000,
       lockoutMs: 60_000,
@@ -1094,7 +1094,7 @@ describe("gateway auth", () => {
   });
 
   it("keeps genuinely direct loopback requests exempt from lockout", async () => {
-    const limiter = createAuthRateLimiter({
+    const limiter = createGatewayAuthRateLimiter({
       maxAttempts: 1,
       windowMs: 60_000,
       lockoutMs: 60_000,

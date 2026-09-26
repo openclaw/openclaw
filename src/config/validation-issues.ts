@@ -254,7 +254,7 @@ function formatUnsupportedMutableSecretRefMessage(path: string): string {
   ].join(" ");
 }
 
-function collectUnsupportedMutableSecretRefIssues(raw: unknown): ConfigValidationIssue[] {
+export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigValidationIssue[] {
   const issues: ConfigValidationIssue[] = [];
   for (const candidate of unsupportedSecretRefSurfacePolicy.collectConfigCandidates(raw)) {
     if (isObjectSecretRefCandidate(candidate.value)) {
@@ -323,8 +323,4 @@ export function mergeUnsupportedMutableSecretRefIssues(
     return filteredIssue ? [filteredIssue] : [];
   });
   return [...policyIssues, ...filteredSchemaIssues];
-}
-
-export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigValidationIssue[] {
-  return collectUnsupportedMutableSecretRefIssues(raw);
 }

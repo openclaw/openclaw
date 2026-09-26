@@ -1090,7 +1090,7 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
-  it.each(["preparing_context", "memory_flushing"])(
+  it.each(["waiting_for_state", "preparing_context", "memory_flushing"])(
     "projects %s onto the active chat stream",
     (phase) => {
       const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();

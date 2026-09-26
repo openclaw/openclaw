@@ -1,10 +1,12 @@
 // Diffs tests cover store plugin behavior.
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
+import { gunzipSync, gzipSync } from "node:zlib";
 import type { PluginBlobStore, PluginBlobEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiffsHttpHandler } from "./http.js";
 import { DiffArtifactStore } from "./store.js";
 import {
@@ -13,6 +15,30 @@ import {
   expireDiffArtifactForTest,
 } from "./test-helpers.js";
 import type { DiffArtifactBlobMetadata } from "./types.js";
+
+type CompressionCallback = (error: Error | null, bytes: Buffer) => void;
+const compression = vi.hoisted(() => ({
+  gzip: vi.fn<(input: Uint8Array, callback: CompressionCallback) => void>(),
+  gunzip:
+    vi.fn<
+      (
+        input: Uint8Array,
+        options: { maxOutputLength: number },
+        callback: CompressionCallback,
+      ) => void
+    >(),
+}));
+
+// Keep stable functions before store import: promisify captures them once.
+// Outside an individual callback fixture these forward to native compression.
+vi.mock("node:zlib", async (importOriginal) => {
+  const native = await importOriginal<typeof import("node:zlib")>();
+  return {
+    ...native,
+    gzip: compression.gzip.mockImplementation(native.gzip),
+    gunzip: compression.gunzip.mockImplementation(native.gunzip),
+  };
+});
 
 beforeAll(async () => {
   await ensureCuratedViewerRuntimeForTests();
@@ -38,6 +64,154 @@ describe("DiffArtifactStore", () => {
   afterEach(async () => {
     vi.useRealTimers();
     await cleanupRootDir();
+  });
+
+  describe("compression contract", () => {
+    const maximum = 64 * 1024 * 1024;
+    const params = { title: "Compression", inputKind: "patch", fileCount: 1 } as const;
+
+    beforeEach(async () => {
+      const native = await vi.importActual<typeof import("node:zlib")>("node:zlib");
+      compression.gzip.mockReset().mockImplementation(native.gzip);
+      compression.gunzip.mockReset().mockImplementation(native.gunzip);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it.each(["empty", "multibyte", "limit"] as const)(
+      "round trips native compressed %s bytes through SQLite",
+      async (kind) => {
+        const html = kind === "limit" ? "x".repeat(maximum) : kind === "empty" ? "" : "é 🦀\0";
+        const expected = Buffer.from(html);
+        const artifact = await store.createArtifact({ ...params, html });
+        const entry = await blobStore.lookup(artifact.id);
+        assert.isDefined(entry);
+        expect(entry.metadata).toMatchObject({ decodedBytes: Buffer.byteLength(html) });
+        expect(Buffer.compare(gunzipSync(entry.bytes), expected)).toBe(0);
+        const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
+        assert.isNotNull(loaded);
+        expect(Buffer.compare(loaded.html, expected)).toBe(0);
+        expect(compression.gunzip).toHaveBeenCalledExactlyOnceWith(
+          entry.bytes,
+          { maxOutputLength: maximum },
+          expect.any(Function),
+        );
+      },
+    );
+
+    it("rejects oversized input before compression, token creation, registration or cleanup", async () => {
+      const random = vi.spyOn(crypto, "randomBytes");
+      const register = vi.spyOn(blobStore, "registerIfAbsent");
+      const cleanup = vi.spyOn(store, "scheduleCleanup");
+      await expect(
+        store.createArtifact({ ...params, html: "x".repeat(maximum + 1) }),
+      ).rejects.toThrow(`Diff viewer HTML exceeds ${maximum} bytes.`);
+      expect(compression.gzip).not.toHaveBeenCalled();
+      expect(random).not.toHaveBeenCalled();
+      expect(register).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+    });
+
+    it.each(["corrupt", "size-mismatch", "oversized-output"] as const)(
+      "rejects %s with valid authorized metadata",
+      async (kind) => {
+        const artifact = await store.createArtifact({ ...params, html: "viewer" });
+        const entry = await blobStore.lookup(artifact.id);
+        assert.isDefined(entry);
+        if (entry.metadata.kind !== "viewer") {
+          throw new Error("Expected viewer metadata");
+        }
+        const bytes =
+          kind === "corrupt"
+            ? Buffer.from("invalid gzip")
+            : kind === "oversized-output"
+              ? gzipSync(Buffer.alloc(maximum + 1, 120))
+              : entry.bytes;
+        const decodedBytes =
+          kind === "oversized-output" ? maximum : Buffer.byteLength("viewer") + 1;
+        await blobStore.register(artifact.id, bytes, { ...entry.metadata, decodedBytes });
+        await expect(
+          store.readAuthorizedViewer(artifact.id, artifact.token),
+        ).rejects.toBeInstanceOf(Error);
+        expect(compression.gunzip).toHaveBeenCalledExactlyOnceWith(
+          expect.any(Uint8Array),
+          { maxOutputLength: maximum },
+          expect.any(Function),
+        );
+        const call = compression.gunzip.mock.calls[0];
+        assert.isDefined(call);
+        expect(Buffer.compare(call[0], bytes)).toBe(0);
+      },
+    );
+
+    it("awaits compression before side effects and retains callback buffer identities", async () => {
+      const html = Buffer.from("callback result");
+      const compressed = gzipSync(html);
+      const started = Promise.withResolvers<CompressionCallback>();
+      compression.gzip.mockImplementationOnce((input, callback) => {
+        expect(input).toEqual(html);
+        started.resolve(callback);
+      });
+      const random = vi.spyOn(crypto, "randomBytes");
+      const register = vi.spyOn(blobStore, "registerIfAbsent");
+      const cleanup = vi.spyOn(store, "scheduleCleanup");
+      const pending = store.createArtifact({ ...params, html: html.toString() });
+      const complete = await started.promise;
+      expect(random).not.toHaveBeenCalled();
+      expect(register).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+      complete(null, compressed);
+      const artifact = await pending;
+      expect(register.mock.calls[0]?.[1]).toBe(compressed);
+      expect(register.mock.invocationCallOrder[0]).toBeLessThan(
+        cleanup.mock.invocationCallOrder[0]!,
+      );
+      const entry = await blobStore.lookup(artifact.id);
+      assert.isDefined(entry);
+      expect(Buffer.compare(entry.bytes, compressed)).toBe(0);
+      compression.gunzip.mockImplementationOnce((input, options, callback) => {
+        expect(Buffer.compare(input, compressed)).toBe(0);
+        expect(options).toEqual({ maxOutputLength: maximum });
+        callback(null, html);
+      });
+      expect((await store.readAuthorizedViewer(artifact.id, artifact.token))?.html).toBe(html);
+    });
+
+    it.each([
+      ["gzip", "callback"],
+      ["gzip", "throw"],
+      ["gunzip", "callback"],
+      ["gunzip", "throw"],
+    ] as const)("preserves %s %s error identity", async (operation, mode) => {
+      const artifact = await store.createArtifact({ ...params, html: "failure fixture" });
+      const failure = new Error(`${operation} fixture`);
+      const complete = (callback: CompressionCallback) => {
+        if (mode === "throw") {
+          throw failure;
+        }
+        callback(failure, Buffer.alloc(0));
+      };
+      if (operation === "gzip") {
+        compression.gzip.mockImplementationOnce((_input, callback) => complete(callback));
+      } else {
+        compression.gunzip.mockImplementationOnce((_input, _options, callback) =>
+          complete(callback),
+        );
+      }
+      const random = vi.spyOn(crypto, "randomBytes");
+      const register = vi.spyOn(blobStore, "registerIfAbsent");
+      const cleanup = vi.spyOn(store, "scheduleCleanup");
+      const pending =
+        operation === "gzip"
+          ? store.createArtifact({ ...params, html: "failure fixture" })
+          : store.readAuthorizedViewer(artifact.id, artifact.token);
+      await expect(pending).rejects.toBe(failure);
+      expect(random).not.toHaveBeenCalled();
+      expect(register).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+    });
   });
 
   async function mockDateBoundaryBlob() {

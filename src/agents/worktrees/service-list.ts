@@ -1,5 +1,5 @@
 import { worktreePathExists } from "./git.js";
-import { retireMissingRegistryWorktree } from "./registry.js";
+import { retireMissingRegistryWorktree } from "./registry-retirement.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 export async function reconcileListedWorktrees(
@@ -11,7 +11,7 @@ export async function reconcileListedWorktrees(
   for (const observed of records) {
     const record =
       observed.removedAt === undefined && !(await worktreePathExists(observed.path))
-        ? retireMissingRegistryWorktree(env, observed, now())
+        ? (await retireMissingRegistryWorktree(env, observed, now())).record
         : observed;
     if (record && (record.removedAt === undefined || record.snapshotRef)) {
       listed.push(record);

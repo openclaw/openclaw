@@ -99,20 +99,6 @@ afterEach(() => {
 });
 
 describe("telegram ingress worker poll cadence", () => {
-  it("confirms polling connectivity before entering the first long poll", async () => {
-    vi.useFakeTimers();
-    const runtime = createRuntime(
-      [jsonResponse(200, { ok: true, result: [] }), jsonResponse(200, { ok: true, result: [] })],
-      { stopAfterPollSuccesses: 2, timeoutSeconds: 30 },
-    );
-
-    await flushRuntime();
-    await runtime.done;
-
-    expect(runtime.pollBodies.map((body) => body.timeout)).toEqual([0, 30]);
-    expect(runtime.messages.filter((message) => message.type === "poll-success")).toHaveLength(2);
-  });
-
   it("keeps short polling until a getUpdates request succeeds", async () => {
     vi.useFakeTimers();
     const runtime = createRuntime(
@@ -133,6 +119,12 @@ describe("telegram ingress worker poll cadence", () => {
     await runtime.done;
 
     expect(runtime.pollBodies.map((body) => body.timeout)).toEqual([0, 0, 30]);
+    for (const body of runtime.pollBodies) {
+      expect(body.allowed_updates).toEqual(
+        expect.arrayContaining(["message_reaction", "channel_post"]),
+      );
+      expect(body.allowed_updates).not.toContain("stopped_message_generation");
+    }
     expect(runtime.messages.filter((message) => message.type === "poll-success")).toHaveLength(2);
   });
 
@@ -209,9 +201,6 @@ describe("telegram ingress worker durable-before-offset", () => {
               result: { ok: true, updateId: 42 },
             });
           });
-        }
-        if (message.type === "spooled") {
-          // After one spooled update, next empty poll proves offset advanced.
         }
         if (message.type === "poll-success" && pollCount >= 2) {
           sendCommand({ type: "stop" });

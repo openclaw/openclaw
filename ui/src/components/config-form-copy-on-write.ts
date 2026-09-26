@@ -41,34 +41,27 @@ function patchPathValue(
     return { ok: false, value: INVALID_PATH_PATCH };
   }
   const next = current ? { ...(current as Record<string, unknown>) } : {};
-  if (last) {
-    if (replacement === undefined) {
-      delete next[segment];
-    } else {
-      Object.defineProperty(next, segment, {
-        value: replacement,
-        enumerable: true,
-        configurable: true,
-        writable: true,
-      });
-    }
-    return { ok: true, value: next };
-  }
-  const child = patchPathValue(
-    Object.hasOwn(next, segment) ? next[segment] : undefined,
-    path,
-    index + 1,
-    replacement,
-  );
+  const child = last
+    ? { ok: true as const, value: replacement }
+    : patchPathValue(
+        Object.hasOwn(next, segment) ? next[segment] : undefined,
+        path,
+        index + 1,
+        replacement,
+      );
   if (!child.ok) {
     return child;
   }
-  Object.defineProperty(next, segment, {
-    value: child.value,
-    enumerable: true,
-    configurable: true,
-    writable: true,
-  });
+  if (last && child.value === undefined) {
+    delete next[segment];
+  } else {
+    Object.defineProperty(next, segment, {
+      value: child.value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
   return { ok: true, value: next };
 }
 

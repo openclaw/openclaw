@@ -1,5 +1,5 @@
 // Qa Lab tests cover suite runtime flow plugin behavior.
-import { parseModelRef, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
+import { parseModelRef } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -116,15 +116,7 @@ function createQaSuiteRuntimeFlowTestEnv(
     primaryModel: "openai/gpt-5.6-luna",
     alternateModel: "openai/gpt-5.6-luna-mini",
     mock: null,
-    cfg: {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-5": { alias: "opus" },
-          },
-        },
-      },
-    },
+    cfg: {},
   } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
 }
 
@@ -331,17 +323,16 @@ describe("qa suite runtime flow", () => {
     for (const [name, helper] of Object.entries(aliasedDependencies)) {
       expect((call.deps as Record<string, unknown>)[name]).toBe(helper);
     }
-    const canonicalOpus = resolveModelRefFromString({
-      cfg: env.cfg,
-      raw: "anthropic/opus",
-      defaultProvider: "anthropic",
-    })?.ref;
+    const canonicalOpus = { provider: "anthropic", model: "claude-opus-5-5" };
     const normalizeModelRef = call.deps.normalizeModelRef as (
       raw: string,
     ) => { provider: string; model: string } | null;
-    expect(canonicalOpus).toEqual({ provider: "anthropic", model: "claude-opus-5" });
     expect(normalizeModelRef("anthropic/opus")).toEqual(canonicalOpus);
     expect(normalizeModelRef("AnThRoPiC/OPUS")).toEqual(canonicalOpus);
+    expect(normalizeModelRef("anthropic/claude-opus-5")).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-5",
+    });
     expect(normalizeModelRef("OPENAI/gpt-5.6-luna")).toEqual({
       provider: "openai",
       model: "gpt-5.6-luna",
@@ -526,45 +517,55 @@ describe("qa suite runtime flow", () => {
   });
 
   it("does not turn the preparation fallback into a whole-flow deadline", async () => {
-    const prepareFlow = vi.fn(async () => undefined);
-    const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
-    const scenario = makeQaSuiteTestScenario("flow-without-explicit-deadline", { config: {} });
-    const liveTurnTimeoutMs = vi.fn(() => 5);
-    createQaScenarioRuntimeApi.mockImplementationOnce(
-      (params: { deps: { runScenario: typeof runQaSuiteScenarioSteps } }) => ({
-        runScenario: params.deps.runScenario,
-      }),
-    );
-    runScenarioFlow.mockImplementationOnce(async (params) => {
-      const api = params.api as { runScenario: typeof runQaSuiteScenarioSteps };
-      return await api.runScenario("No explicit deadline", [
-        {
-          name: "Longer than preparation fallback",
-          run: async () => {
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, 20);
-            });
+    vi.useFakeTimers();
+    try {
+      const prepareFlow = vi.fn(async () => undefined);
+      const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
+      const scenario = makeQaSuiteTestScenario("flow-without-explicit-deadline", { config: {} });
+      const liveTurnTimeoutMs = vi.fn(() => 5);
+      createQaScenarioRuntimeApi.mockImplementationOnce(
+        (params: { deps: { runScenario: typeof runQaSuiteScenarioSteps } }) => ({
+          runScenario: params.deps.runScenario,
+        }),
+      );
+      runScenarioFlow.mockImplementationOnce(async (params) => {
+        const api = params.api as { runScenario: typeof runQaSuiteScenarioSteps };
+        return await api.runScenario("No explicit deadline", [
+          {
+            name: "Longer than preparation fallback",
+            run: async () => {
+              await new Promise<void>((resolve) => {
+                // Exceed the 5ms fallback plus its 5s watchdog grace without wall-clock sleep.
+                setTimeout(resolve, 6_000);
+              });
+            },
           },
-        },
-      ]);
-    });
+        ]);
+      });
 
-    const result = await runQaSuiteScenarioDefinition({
-      env,
-      scenario,
-      runScenario: runQaSuiteScenarioSteps,
-      splitModelRef: (raw) => parseModelRef(raw, "openai"),
-      formatErrorMessage: (error) => String(error),
-      liveTurnTimeoutMs,
-      resolveQaLiveTurnTimeoutMs: liveTurnTimeoutMs,
-      constants: qaSuiteRuntimeFlowTestConstants,
-    });
+      const pending = runQaSuiteScenarioDefinition({
+        env,
+        scenario,
+        runScenario: runQaSuiteScenarioSteps,
+        splitModelRef: (raw) => parseModelRef(raw, "openai"),
+        formatErrorMessage: (error) => String(error),
+        liveTurnTimeoutMs,
+        resolveQaLiveTurnTimeoutMs: liveTurnTimeoutMs,
+        constants: qaSuiteRuntimeFlowTestConstants,
+      });
 
-    expect(result.status).toBe("pass");
-    expect(liveTurnTimeoutMs).toHaveBeenCalledOnce();
-    expect(prepareFlow).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeoutMs: 5 }),
-    );
+      await vi.advanceTimersByTimeAsync(6_000);
+      const result = await pending;
+      expect(vi.getTimerCount()).toBe(0);
+      expect(result.status).toBe("pass");
+      expect(liveTurnTimeoutMs).toHaveBeenCalledOnce();
+      expect(prepareFlow).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: expect.any(AbortSignal), timeoutMs: 5 }),
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it.each([0, 6_000])(

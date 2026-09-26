@@ -237,6 +237,7 @@ export function mutateSessionGroupCatalog(
         },
       );
       context.admission.assertCurrent();
+      assertCurrent?.();
       catalog.revision += 1;
       install(catalog, result.snapshot);
       return result;

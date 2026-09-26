@@ -257,6 +257,36 @@ describe("prepareSignalManagedNativeTransport", () => {
     ).toBe(8081);
   });
 
+  it("keeps runtime and setup reservations distinct for mixed transports", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            dormant: {
+              enabled: false,
+              transport: { kind: "managed-native", httpPort: 8080 },
+            },
+            external: {
+              transport: { kind: "external-native", url: "http://127.0.0.1:8081" },
+            },
+            socket: {
+              transport: {
+                kind: "managed-native",
+                socketPath: "/tmp/signal-reservation-test.sock",
+              },
+            },
+            work: { transport: { kind: "managed-native" } },
+          },
+        },
+      },
+    } as const;
+
+    expect(resolveSignalAccount({ cfg, accountId: "work" }).transport).toMatchObject({
+      httpPort: 8080,
+    });
+    expect(prepareSignalManagedNativeTransport({ cfg, accountId: "work" }).httpPort).toBe(8082);
+  });
+
   it("preserves a selected account's collision-free managed port and options", () => {
     const cfg = {
       channels: {

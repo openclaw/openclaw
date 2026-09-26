@@ -122,17 +122,8 @@ export async function buildEmbeddedRunBaseParams(params: {
   isReasoningTagProvider?: ReasoningTagProviderResolver;
 }) {
   const config = params.run.config;
-  const modelFallbackAvailability = resolveModelFallbackAvailability({
-    cfg: config,
-    agentId: params.run.agentId,
-    sessionKey: params.run.sessionKey,
-    hasSessionModelOverride: params.run.hasSessionModelOverride === true,
-    modelOverrideSource: params.run.modelOverrideSource,
-    hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
-    modelSelectionLocked: params.run.modelSelectionLocked,
-    subagentSpawnLineage: params.run.subagentSpawnLineage,
-  });
-  const modelFallbacksOverride = modelFallbackOverrideFromAvailability(modelFallbackAvailability);
+  const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
+    resolveModelFallbackOptions(params.run);
   const enforceFinalTag = resolveEnforceFinalTagWithResolver(
     params.run,
     params.provider,
@@ -140,7 +131,7 @@ export async function buildEmbeddedRunBaseParams(params: {
     params.isReasoningTagProvider,
   );
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
-  const runParams = {
+  return {
     providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
@@ -193,5 +184,4 @@ export async function buildEmbeddedRunBaseParams(params: {
     promptCacheKey: params.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   };
-  return runParams;
 }

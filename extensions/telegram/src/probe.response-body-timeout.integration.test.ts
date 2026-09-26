@@ -5,7 +5,7 @@ import type { AddressInfo, Socket } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { probeTelegram } from "./probe.js";
 
-type ResponseMode = "stall" | "trickle";
+type ResponseMode = "stall" | "trickle" | "webhook-stall";
 
 describe("probeTelegram response body deadlines over real sockets", () => {
   let server: Server;
@@ -13,6 +13,7 @@ describe("probeTelegram response body deadlines over real sockets", () => {
   let responseMode: ResponseMode = "stall";
   let requestCount = 0;
   let closedSocketCount = 0;
+  let stalledWebhookSocket: Socket | undefined;
   const liveSockets = new Set<Socket>();
   const activeIntervals = new Set<ReturnType<typeof setInterval>>();
 
@@ -31,9 +32,23 @@ describe("probeTelegram response body deadlines over real sockets", () => {
       vi.stubEnv(name, "");
     }
 
-    server = createServer((_req, res) => {
+    server = createServer((req, res) => {
       requestCount += 1;
       res.writeHead(200, { "content-type": "application/json" });
+      if (responseMode === "webhook-stall") {
+        if (req.url?.endsWith("/getMe")) {
+          res.end(
+            JSON.stringify({
+              ok: true,
+              result: { id: 123, is_bot: true, first_name: "Test", username: "bot" },
+            }),
+          );
+        } else {
+          stalledWebhookSocket = req.socket;
+          res.write('{"ok":true,"result":{"url":"https://example.test/hook"');
+        }
+        return;
+      }
       res.write('{"ok":true,"result":{"id":123');
       if (responseMode === "stall") {
         return;
@@ -101,5 +116,21 @@ describe("probeTelegram response body deadlines over real sockets", () => {
 
   it("enforces the overall deadline while body bytes keep arriving", async () => {
     await expectDeadlineFailure("trickle", /response body timed out/i);
+  });
+
+  it("keeps webhook diagnostics best-effort and closes their stalled socket", async () => {
+    responseMode = "webhook-stall";
+    stalledWebhookSocket = undefined;
+    const previousRequestCount = requestCount;
+
+    const result = await probeTelegram(`deadline-webhook-${++probeIndex}`, 200, { apiRoot });
+
+    expect(result.ok).toBe(true);
+    expect(result.bot).toMatchObject({ id: 123, username: "bot" });
+    expect(result.webhook).toBeUndefined();
+    expect(requestCount).toBe(previousRequestCount + 2);
+    await vi.waitFor(() => expect(stalledWebhookSocket?.destroyed).toBe(true), {
+      timeout: 1_000,
+    });
   });
 });

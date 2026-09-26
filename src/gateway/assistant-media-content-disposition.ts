@@ -1,4 +1,12 @@
+import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { kindFromMime } from "@openclaw/media-core/mime";
+
+export function resolveAssistantMediaFilename(
+  fallback: string,
+  filenameHint: string | null,
+): string {
+  return basenameFromAnyPath(filenameHint ?? "") || fallback;
+}
 
 export function buildAssistantMediaContentDisposition(filename: string, mime?: string): string {
   // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.

@@ -4,7 +4,7 @@ import type { PackagePostInstallVerifier } from "./package-update-verification-s
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { NativePackageStage } from "./update-native-package-stage.js";
 import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 /** The orchestrator owns schema safety and service verification before confirming or restoring. */
 export type PackageUpdateTransaction = {

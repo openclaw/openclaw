@@ -270,10 +270,11 @@ async function prepareSnapshot(
     prepared.pluginGeneration,
     catalog,
     {
+      initialAuth: { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
       isCurrent: () => true,
       withRefreshStatus: (value) => value,
       readFullModelCatalog: () => catalog.modelCatalog,
-      readPublishedModelCatalog: () => catalog.modelCatalog,
+      refreshExpiredModelCatalog: () => {},
       readPublishedModels: () => undefined,
       loadFullModelCatalog: async () => catalog.modelCatalog,
       loadNativeModelCatalog: async () => catalog.modelCatalog,

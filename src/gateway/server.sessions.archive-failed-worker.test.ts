@@ -8,6 +8,7 @@ import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
@@ -66,10 +67,14 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
     await execFileAsync("git", ["-C", worktree.path, "rev-parse", checkpoint])
   ).stdout;
   const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
-  const { placements, failed, environment, reclaim, context } = pendingWorkerCleanup(
-    sessionId,
-    key,
-  );
+  const {
+    placements,
+    failed,
+    environment,
+    reclaim,
+    context: initialContext,
+  } = pendingWorkerCleanup(sessionId, key);
+  let context = initialContext;
   const patch = (archived: boolean) =>
     directSessionReq(
       "sessions.patch",
@@ -77,7 +82,10 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
       { context },
     );
   expect(await patch(true)).toMatchObject({ ok: true });
+  await disposeSessionReadContexts();
   closeOpenClawAgentDatabasesForTest();
+  // Reopening uses a fresh projection binding while retaining the same worker services.
+  context = { ...context };
   expect(loadSessionEntry(scope)).toMatchObject({
     sessionId,
     archivedAt: expect.any(Number),

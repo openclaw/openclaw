@@ -1,10 +1,14 @@
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import {
+  shouldAutoDeliverTaskStateChange,
+  shouldAutoDeliverTaskTerminalUpdate,
+} from "./task-notification-policy.js";
 import { sameTaskRunScope } from "./task-registry-records.js";
 import {
   prepareTaskRecordUpdate,
   type TaskRecordTransitionReceipt,
 } from "./task-registry-transition.operation.js";
-import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import type { TaskDeliveryState, TaskDeliveryStatus, TaskRecord } from "./task-registry.types.js";
 
 export type TaskNotificationTarget = Readonly<
   Pick<TaskRecord, "taskId" | "runtime" | "ownerKey" | "scopeKind" | "runId" | "childSessionKey">
@@ -15,6 +19,15 @@ export type TaskStateNotificationAcknowledgement = {
   expectedTask: TaskNotificationTarget;
   eventAt: number;
 };
+
+export type TaskNotificationDeliveryOutcome =
+  | { kind: "terminal"; deliveryStatus: TaskDeliveryStatus }
+  | { kind: "missingStateOwner"; deliveryStatus: "parent_missing" | "not_applicable" };
+
+export type TaskNotificationDeliveryUpdate = {
+  taskId: string;
+  expectedTask: TaskNotificationTarget;
+} & TaskNotificationDeliveryOutcome;
 
 export function captureTaskNotificationTarget(task: TaskRecord): TaskNotificationTarget {
   // Lifecycle timestamps may normalize while transport waits; the task's run scope stays fixed.
@@ -103,6 +116,41 @@ export function acknowledgeTaskStateNotification(
     }
     const now = Date.now();
     const updated = prepareTaskRecordUpdate(current.task, { lastEventAt: now }, now);
+    assertCurrent();
+    if (updated.persisted) {
+      operations.upsertTask(updated.task, current.deliveryState);
+    }
+    const committed = { ...updated, deliver: false };
+    operations.deferCommit(() => {
+      receipt = committed;
+      operations.onCommitted(committed);
+    });
+  });
+  return receipt;
+}
+
+/** Reread the selected task's policy and metadata in the same transaction as its status write. */
+export function updateTaskNotificationDelivery(
+  input: TaskNotificationDeliveryUpdate,
+  operations: TaskNotificationOperations,
+): TaskRecordTransitionReceipt | null {
+  let receipt: TaskRecordTransitionReceipt | null = null;
+  writeTaskNotificationStage(operations, "task", (assertCurrent) => {
+    const current = operations.readCurrent();
+    if (
+      !matchesTaskNotificationTarget(current.task, input.expectedTask) ||
+      !(input.kind === "terminal"
+        ? shouldAutoDeliverTaskTerminalUpdate(current.task)
+        : shouldAutoDeliverTaskStateChange(current.task))
+    ) {
+      return;
+    }
+    const now = Date.now();
+    const updated = prepareTaskRecordUpdate(
+      current.task,
+      { deliveryStatus: input.deliveryStatus, lastEventAt: now },
+      now,
+    );
     assertCurrent();
     if (updated.persisted) {
       operations.upsertTask(updated.task, current.deliveryState);

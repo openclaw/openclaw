@@ -47,4 +47,7 @@ const QaChannelConfigSchema = buildMultiAccountChannelSchema(
   { accountSchema: QaChannelAccountConfigSchema.partial() },
 );
 
+export type QaChannelAccountConfig = z.input<typeof QaChannelAccountConfigSchema>;
+export type QaChannelConfig = z.input<typeof QaChannelConfigSchema>;
+
 export const qaChannelPluginConfigSchema = buildChannelConfigSchema(QaChannelConfigSchema);

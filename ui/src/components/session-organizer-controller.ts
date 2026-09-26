@@ -76,11 +76,27 @@ export class SessionOrganizerController {
     }
   }
 
+  private async runOperation(
+    run: (
+      operations: SessionOrganizerOperations,
+      scope: SidebarSessionMutationScope,
+    ) => Promise<unknown>,
+  ): Promise<void> {
+    const scope = this.host.sessionData.beginSessionMutation();
+    if (scope) {
+      const operations = await this.loadOperations(scope);
+      if (operations) {
+        await run(operations, scope);
+      }
+    }
+  }
+
   readonly patchSession = async (
     session: SidebarRecentSession,
     patch: SidebarSessionPatch,
-    scope: SidebarSessionMutationScope | null = this.host.sessionData.beginSessionMutation(),
+    options: { sessionScope?: boolean } = {},
   ): Promise<SidebarSessionMutationResult> => {
+    const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return "stale";
     }
@@ -88,7 +104,7 @@ export class SessionOrganizerController {
     if (!operations) {
       return this.host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
     }
-    return operations.patchSession(this.host, session, patch, scope);
+    return operations.patchSession(this.host, session, patch, scope, options);
   };
 
   async patchSessions(
@@ -107,21 +123,15 @@ export class SessionOrganizerController {
   }
 
   async archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    await operations?.archiveSessionWithUndo(this.host, session, scope);
+    await this.runOperation((operations, scope) =>
+      operations.archiveSessionWithUndo(this.host, session, scope),
+    );
   }
 
   async deleteSessionsBatch(rows: readonly SidebarRecentSession[]): Promise<void> {
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    await operations?.deleteSessionsBatch(this.host, rows, scope);
+    await this.runOperation((operations, scope) =>
+      operations.deleteSessionsBatch(this.host, rows, scope),
+    );
   }
 
   async runBatchSessionAction(
@@ -133,62 +143,44 @@ export class SessionOrganizerController {
       await this.createSessionGroup(rows);
       return;
     }
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    await operations?.runBatchSessionAction(this.host, action, rows, allUnread, scope);
+    await this.runOperation((operations, scope) =>
+      operations.runBatchSessionAction(this.host, action, rows, allUnread, scope),
+    );
   }
 
   async forkSession(session: SidebarRecentSession): Promise<void> {
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    await operations?.forkSession(this.host, session, scope);
+    await this.runOperation((operations, scope) =>
+      operations.forkSession(this.host, session, scope),
+    );
   }
 
   async stopCloudWorker(session: SidebarRecentSession): Promise<void> {
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    await operations?.stopCloudWorker(this.host, session, scope);
+    await this.runOperation((operations, scope) =>
+      operations.stopCloudWorker(this.host, session, scope),
+    );
   }
 
   async setSessionInvolvement(session: SidebarRecentSession, hidden: boolean): Promise<void> {
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    await operations?.setSessionInvolvement(this.host, session, hidden, scope);
+    await this.runOperation((operations, scope) =>
+      operations.setSessionInvolvement(this.host, session, hidden, scope),
+    );
   }
 
   async assignSessionOwner(
     session: SidebarRecentSession,
     owner: Pick<SessionOwnerOption, "type" | "id">,
   ): Promise<void> {
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    await operations?.assignSessionOwner(this.host, session, owner, scope);
+    await this.runOperation((operations, scope) =>
+      operations.assignSessionOwner(this.host, session, owner, scope),
+    );
   }
 
   async deleteSession(session: SidebarRecentSession): Promise<void> {
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
     // Sidebar is the surface the delete-confirm setting names, so it is the one
     // caller allowed to offer the opt-out.
-    await operations?.deleteSession(this.host, session, scope, { offerSkip: true });
+    await this.runOperation((operations, scope) =>
+      operations.deleteSession(this.host, session, scope, { offerSkip: true }),
+    );
   }
 
   startSidebarRouteDrag(event: DragEvent, route: PersistedSidebarRoute) {
@@ -287,7 +279,7 @@ export class SessionOrganizerController {
   }
 
   /** Insert `entry` into the freshest canonical order at the captured drop slot. */
-  private writeSidebarEntryAt(
+  writeSidebarEntryAt(
     entry: string,
     targetEntry: string | undefined,
     position: "before" | "after" | undefined,
@@ -326,7 +318,7 @@ export class SessionOrganizerController {
       // against the then-current order: a failed patch must not leave an
       // unpinned slot behind, and a stale snapshot must not undo zone edits
       // that raced the request.
-      void this.patchSession(session, { pinned: true }).then((result) => {
+      void this.patchSession(session, { pinned: true }, { sessionScope: true }).then((result) => {
         if (result === "completed") {
           this.writeSidebarEntryAt(entry, targetEntry, position);
         }
@@ -404,7 +396,7 @@ export class SessionOrganizerController {
     if (session?.pinned) {
       event.preventDefault();
       // patchSession prunes the persisted zone entry once the unpin lands.
-      void this.patchSession(session, { pinned: false });
+      void this.patchSession(session, { pinned: false }, { sessionScope: true });
     }
     this.finishSidebarEntryDrag();
   }
@@ -423,12 +415,9 @@ export class SessionOrganizerController {
   }
 
   async renameSession(session: SidebarRecentSession): Promise<void> {
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    await operations?.renameSession(this.host, session, scope);
+    await this.runOperation((operations, scope) =>
+      operations.renameSession(this.host, session, scope),
+    );
   }
 
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
@@ -584,22 +573,19 @@ export class SessionOrganizerController {
     this.saveCollapsedSessionSections(collapsed);
   }
 
-  private async reorderSidebarSection(
+  async reorderSidebarSection(
     sourceSectionId: string,
     targetSectionId: string,
     position: "before" | "after",
   ): Promise<void> {
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    await operations?.reorderSidebarSection(
-      this.host,
-      sourceSectionId,
-      targetSectionId,
-      position,
-      scope,
+    await this.runOperation((operations, scope) =>
+      operations.reorderSidebarSection(
+        this.host,
+        sourceSectionId,
+        targetSectionId,
+        position,
+        scope,
+      ),
     );
   }
 
@@ -608,12 +594,9 @@ export class SessionOrganizerController {
     category: string | null,
     patch: { pinned?: boolean } = {},
   ): Promise<void> {
-    const scope = this.host.sessionData.beginSessionMutation();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    await operations?.assignSessionCategory(this.host, session, category, scope, patch);
+    await this.runOperation((operations, scope) =>
+      operations.assignSessionCategory(this.host, session, category, scope, patch),
+    );
   }
 
   private sectionAcceptsSession(
@@ -712,7 +695,7 @@ export class SessionOrganizerController {
       void this.reorderSidebarSection(sourceSectionId, sectionId, position);
     } else if (session && sectionId === "pinned") {
       if (session.pinnable && !session.pinned) {
-        void this.patchSession(session, { pinned: true });
+        void this.patchSession(session, { pinned: true }, { sessionScope: true });
       }
     } else if (session) {
       const nextCategory = category ?? null;

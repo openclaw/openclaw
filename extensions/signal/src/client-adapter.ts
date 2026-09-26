@@ -25,10 +25,6 @@ export type SignalSseEvent = {
 
 export type SignalTransportKind = SignalTransportConfig["kind"];
 
-function usesContainer(kind: SignalTransportKind | undefined): boolean {
-  return kind === "container";
-}
-
 /**
  * Drop-in replacement for native signalRpcRequest.
  * Routes to native JSON-RPC or container REST based on config.
@@ -42,7 +38,7 @@ export async function signalRpcRequest<T = unknown>(
     maxAttachmentBytes?: number;
   },
 ): Promise<T> {
-  return usesContainer(opts.transportKind)
+  return opts.transportKind === "container"
     ? containerRpcRequest<T>(method, params, opts)
     : nativeRpcRequest<T>(method, params, opts);
 }
@@ -56,7 +52,7 @@ export async function signalCheck(
   options: { transportKind?: SignalTransportKind; account?: string } = {},
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   try {
-    return usesContainer(options.transportKind)
+    return options.transportKind === "container"
       ? await containerCheck(baseUrl, timeoutMs, options.account)
       : await nativeCheck(baseUrl, timeoutMs);
   } catch (error) {
@@ -79,24 +75,12 @@ export async function streamSignalEvents(params: {
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
   transportKind?: SignalTransportKind;
 }): Promise<void> {
-  if (usesContainer(params.transportKind)) {
+  if (params.transportKind === "container") {
     return streamContainerEvents({
-      baseUrl: params.baseUrl,
-      account: params.account,
-      abortSignal: params.abortSignal,
-      timeoutMs: params.timeoutMs,
+      ...params,
       onEvent: (event) => params.onEvent({ event: "receive", data: JSON.stringify(event) }),
-      onStreamOpen: params.onStreamOpen,
-      logger: params.logger,
     });
   }
 
-  return nativeStreamEvents({
-    baseUrl: params.baseUrl,
-    account: params.account,
-    abortSignal: params.abortSignal,
-    timeoutMs: params.timeoutMs,
-    onEvent: (event) => params.onEvent(event),
-    onStreamOpen: params.onStreamOpen,
-  });
+  return nativeStreamEvents(params);
 }

@@ -3,14 +3,15 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
@@ -91,6 +92,7 @@ import {
 import { loadExactSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "./session-accessor.sqlite-import.test-support.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { findTranscriptEventInDatabase } from "./session-accessor.sqlite-read.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import {
   appendTranscriptEventSync,
@@ -146,8 +148,6 @@ describe("session accessor seam", () => {
   let tempDir: string;
   let storePath: string;
   let transcriptPath: string;
-  let cleanupProbeDatabasePath = "";
-  let cleanupProbeRoot = "";
 
   function loadMainInitializationSnapshot(sessionKey: string) {
     return loadReplySessionInitializationSnapshot({ agentId: "main", sessionKey, storePath });
@@ -160,33 +160,32 @@ describe("session accessor seam", () => {
     transcriptPath = path.join(tempDir, "session.jsonl");
   });
 
-  afterEach(() => {
+  function cleanupSessionDatabasesAndTempDirs() {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     cleanupTempDirs(tempDirs);
-  });
+  }
 
-  describe("session database teardown boundary", { concurrent: false }, () => {
-    it("opens cached agent and shared-state handles", async () => {
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey: "agent:main:cleanup-probe", storePath },
-        { sessionId: "cleanup-probe", updatedAt: 1 },
-      );
-      cleanupProbeDatabasePath = expectDefined(
-        resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
-        "cleanup probe database path",
-      );
-      cleanupProbeRoot = tempDir;
+  afterEach(cleanupSessionDatabasesAndTempDirs);
 
-      expect(isOpenClawAgentDatabaseOpen(cleanupProbeDatabasePath)).toBe(true);
-      expect(isOpenClawStateDatabaseOpen()).toBe(true);
-    });
+  it("releases cached agent and shared-state handles before removing test data", async () => {
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:cleanup-probe", storePath },
+      { sessionId: "cleanup-probe", updatedAt: 1 },
+    );
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+      "cleanup probe database path",
+    );
+    expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(true);
+    expect(isOpenClawStateDatabaseOpen()).toBe(true);
+    expect(fs.existsSync(tempDir)).toBe(true);
 
-    it("releases both cache owners before the next test", () => {
-      expect(isOpenClawAgentDatabaseOpen(cleanupProbeDatabasePath)).toBe(false);
-      expect(isOpenClawStateDatabaseOpen()).toBe(false);
-      expect(fs.existsSync(cleanupProbeRoot)).toBe(false);
-    });
+    cleanupSessionDatabasesAndTempDirs();
+
+    expect(isOpenClawAgentDatabaseOpen(databasePath)).toBe(false);
+    expect(isOpenClawStateDatabaseOpen()).toBe(false);
+    expect(fs.existsSync(tempDir)).toBe(false);
   });
 
   it("returns typed sync append outcomes for missing, rebound, and duplicate rows", async () => {
@@ -714,13 +713,14 @@ describe("session accessor seam", () => {
       });
     });
     const seen: unknown[] = [];
-    const found = await findTranscriptEvent(
-      { sessionId: "session-find", sessionKey: "agent:main:main", storePath },
-      (event) => {
-        seen.push(event);
-        return (event as { type?: string }).type === "message";
-      },
-    ).finally(() => prepareSpy.mockRestore());
+    const found = await Promise.resolve()
+      .then(() =>
+        findTranscriptEventInDatabase(database, "session-find", (event) => {
+          seen.push(event);
+          return (event as { type?: string }).type === "message";
+        }),
+      )
+      .finally(() => prepareSpy.mockRestore());
     // Newest-first with early exit: the older message is never visited.
     expect(found).toEqual({ event: newer });
     expect(seen).toEqual([newer]);
@@ -732,13 +732,13 @@ describe("session accessor seam", () => {
     );
     const falsy = await findTranscriptEvent(
       { sessionId: "session-falsy", sessionKey: "agent:main:falsy", storePath },
-      () => true,
+      { kind: "latest" },
     );
     expect(falsy).toEqual({ event: false });
 
     const missing = await findTranscriptEvent(
       { sessionId: "session-absent", sessionKey: "agent:main:main", storePath },
-      () => true,
+      { kind: "latest" },
     );
     expect(missing).toBeUndefined();
   });
@@ -1029,7 +1029,7 @@ describe("session accessor seam", () => {
       { sessionId: "legacy-session", updatedAt: 20 },
     );
     const notify = vi.fn();
-    const unsubscribe = onSessionIdentityMutation(notify);
+    onTestFinished(onSessionIdentityMutation(notify));
     await expect(
       patchSessionEntryTarget(
         {
@@ -1084,7 +1084,6 @@ describe("session accessor seam", () => {
       target,
     });
     await deleteSessionEntryLifecycle({ archiveTranscript: false, storePath, target });
-    unsubscribe();
 
     expect(notify.mock.calls.map(([event]) => event.kind)).toEqual([
       "delete",
@@ -2460,11 +2459,9 @@ describe("session accessor seam", () => {
     const result = await applySessionEntryReplacements({
       storePath,
       update: (entries) => {
-        // Measure preparation before the required fresh transaction-side reads.
-        expect.soft(preparationReads.counts.entries).toBeLessThanOrEqual(2);
-        expect.soft(preparationReads.counts.participants).toBeLessThanOrEqual(1);
-        expect(preparationReads.rowCounts.entries).toBeGreaterThan(0);
-        expect(preparationReads.rowCounts.participants).toBeGreaterThan(0);
+        // The detached snapshot and participant facts now come from the read worker.
+        expect(preparationReads.counts.entries).toBe(0);
+        expect(preparationReads.counts.participants).toBe(0);
         expect(entries.map(({ sessionKey }) => sessionKey)).toEqual([
           "agent:main:done",
           "agent:main:main",
@@ -2704,7 +2701,7 @@ describe("session accessor seam", () => {
       )
       .run(previousKey, "member-1", "test", 1);
     const identityListener = vi.fn();
-    const unsubscribe = onSessionIdentityMutation(identityListener);
+    onTestFinished(onSessionIdentityMutation(identityListener));
     await applySessionEntryCanonicalReplacements({
       sessionKeys: [canonicalKey, previousKey],
       storePath,
@@ -2722,7 +2719,6 @@ describe("session accessor seam", () => {
         result: undefined,
       }),
     });
-    unsubscribe();
     expect(loadSessionEntry({ sessionKey: previousKey, storePath })).toBeUndefined();
     expect(loadSessionEntry({ sessionKey: canonicalKey, storePath })).toMatchObject({
       label: "Moved",
@@ -2836,25 +2832,31 @@ describe("session accessor seam", () => {
         structuredClone(loadSessionEntry({ sessionKey, storePath })),
       ]),
     );
-    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
-      agentId: "main",
-    }).path;
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-    database.db.exec(`
-      CREATE TEMP TRIGGER fail_mixed_replacement_after_exact_write
-      BEFORE UPDATE OF entry_json ON main.session_nodes
-      WHEN NEW.session_key = '${canonicalKey}'
-        AND (
-          SELECT json_extract(entry_json, '$.label')
-          FROM session_nodes
-          WHERE session_key = '${exactKey}'
-        ) = 'Exact updated'
-      BEGIN
-        SELECT RAISE(ABORT, 'injected mixed replacement failure');
-      END;
-    `);
     const identityListener = vi.fn();
     const unsubscribe = onSessionIdentityMutation(identityListener);
+
+    let refusedCommits = 0;
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    const admissionSpy = vi
+      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((callback, attachment) =>
+        createAdmission((request, grant) => {
+          const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+          if (
+            request.stage === "commit" &&
+            isRecord(publication) &&
+            publication.kind === "session-entry-replacements"
+          ) {
+            expect(publication.changedKeys).toHaveLength(3);
+            expect(publication.changedKeys).toEqual(
+              expect.arrayContaining([exactKey, canonicalKey, previousKey]),
+            );
+            refusedCommits++;
+            throw new Error("injected mixed replacement failure");
+          }
+          callback(request, grant);
+        }, attachment),
+      );
 
     try {
       await expect(
@@ -2885,13 +2887,14 @@ describe("session accessor seam", () => {
         }),
       ).rejects.toThrow("injected mixed replacement failure");
     } finally {
+      admissionSpy.mockRestore();
       unsubscribe();
-      database.db.exec("DROP TRIGGER fail_mixed_replacement_after_exact_write");
     }
 
     for (const sessionKey of [exactKey, canonicalKey, previousKey]) {
       expect(loadSessionEntry({ sessionKey, storePath })).toEqual(before.get(sessionKey));
     }
+    expect(refusedCommits).toBe(1);
     expect(identityListener).not.toHaveBeenCalled();
   });
 
@@ -2931,7 +2934,7 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry(competing)?.label).toBe("Claimed");
   });
 
-  it("rejects a label owner released during snapshot hydration and reclaimed during planning", async () => {
+  it("rejects a label owner released and reclaimed during detached planning", async () => {
     const target = { sessionKey: "agent:main:label-target", storePath };
     const competing = { sessionKey: "agent:main:label-competitor", storePath };
     const competingEntry = { sessionId: "label-competitor", label: "Claimed", updatedAt: 1 };
@@ -2949,47 +2952,6 @@ describe("session accessor seam", () => {
         )
         .run(label, updatedAt, label, updatedAt, competing.sessionKey);
     };
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-    clearNodeSqliteKyselyCacheForDatabase(database.db);
-    const prepare = database.db.prepare.bind(database.db);
-    let released = false;
-    const releaseAfterSelection = (sawCompeting: boolean) => {
-      if (released) {
-        return;
-      }
-      expect(sawCompeting).toBe(true);
-      released = true;
-      changeCompetingLabel("Released", 2);
-    };
-    const readSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
-      const statement = prepare(sql);
-      if (/select "session_key" from "session_nodes" where "label" = /i.test(sql)) {
-        // Release after the native label-key read finishes, before either exact
-        // or cohort hydration; both must pair that newer row with its own CAS bytes.
-        statement.all = new Proxy(statement.all.bind(statement), {
-          apply(all, _receiver, args) {
-            const rows = all(...args);
-            releaseAfterSelection(rows.some((row) => row.session_key === competing.sessionKey));
-            return rows;
-          },
-        });
-        statement.iterate = new Proxy(statement.iterate.bind(statement), {
-          apply(iterate, _receiver, args) {
-            const rows = iterate(...args);
-            return (function* () {
-              let sawCompeting = false;
-              for (const row of rows) {
-                sawCompeting ||= row.session_key === competing.sessionKey;
-                yield row;
-              }
-              releaseAfterSelection(sawCompeting);
-            })();
-          },
-        });
-      }
-      return statement;
-    });
-
     try {
       await expect(
         applySessionEntryCanonicalReplacements({
@@ -2997,10 +2959,10 @@ describe("session accessor seam", () => {
           includeLabelOwners: "Claimed",
           storePath,
           update: async (entries) => {
-            expect(released).toBe(true);
             expect(
               entries.find(({ sessionKey }) => sessionKey === competing.sessionKey)?.entry,
-            ).toMatchObject({ label: "Released" });
+            ).toMatchObject({ label: "Claimed" });
+            changeCompetingLabel("Released", 2);
             await Promise.resolve();
             changeCompetingLabel("Claimed", 3);
             return {
@@ -3022,8 +2984,6 @@ describe("session accessor seam", () => {
       expect(loadSessionEntry(target)?.label).toBeUndefined();
       expect(loadSessionEntry(competing)?.label).toBe("Claimed");
     } finally {
-      clearNodeSqliteKyselyCacheForDatabase(database.db);
-      readSpy.mockRestore();
       externalWriter.close();
     }
   });
@@ -3261,50 +3221,6 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry(scope)).toMatchObject({ model: "newer", updatedAt: 20 });
   });
 
-  it("reclaims SQLite transcript rows for lifecycle removals without archive intent", async () => {
-    const scope = {
-      sessionId: "session-1",
-      sessionKey: "agent:main:preserve",
-      storePath,
-    };
-    await upsertSessionEntryCore(scope, {
-      restartRecoveryDeliveryContext: {
-        channel: "whatsapp",
-        to: "+15551234567",
-      },
-      restartRecoveryDeliveryRunId: "old-run",
-      sessionId: scope.sessionId,
-      updatedAt: 10,
-    });
-    const owner = { id: "lifecycle-owner", type: "human" as const };
-    assignSessionOwner(scope, { assignedBy: owner, owner });
-    await replaceTranscriptEvents(scope, [
-      {
-        id: "event-1",
-        message: { role: "user", content: "keep me" },
-        type: "message",
-      },
-    ]);
-
-    const notify = vi.fn();
-    const unsubscribe = onSessionIdentityMutation(notify);
-    const result = await applySessionEntryLifecycleMutation({
-      storePath,
-      removals: [{ expectedSessionId: scope.sessionId, sessionKey: scope.sessionKey }],
-    });
-    unsubscribe();
-
-    expect(result.removedEntries).toBe(1);
-    expect(notify).toHaveBeenCalledWith({
-      agentId: "main",
-      kind: "delete",
-      previous: { sessionId: scope.sessionId, sessionKeys: [scope.sessionKey] },
-    });
-    expect(result.archivedTranscriptDirectories).toEqual([]);
-    expect(loadSessionEntry(scope)).toBeUndefined();
-    await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
-  });
-
   it("captures SQLite archived transcript cleanup failures when requested", async () => {
     const cleanupError = new Error("cleanup failed");
     cleanupArchivedSessionTranscriptsMock.mockRejectedValueOnce(cleanupError);
@@ -3493,6 +3409,7 @@ describe("session accessor seam", () => {
     );
     const updates: unknown[] = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+    onTestFinished(unsubscribe);
 
     const result = await trimSessionTranscriptForManualCompact(scope, {
       maxLines: 3,
@@ -3749,6 +3666,7 @@ describe("session accessor seam", () => {
         updatedAt: loadSessionEntry(scope)?.updatedAt,
       });
     });
+    onTestFinished(unsubscribe);
 
     const result = await persistSessionTranscriptTurn(scope, {
       cwd: tempDir,

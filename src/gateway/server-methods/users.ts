@@ -1,4 +1,4 @@
-// Gateway methods for durable user profile administration.
+import { isValidBase64 } from "@openclaw/media-core/base64";
 import {
   ErrorCodes,
   GatewayErrorDetailCodes,
@@ -33,6 +33,7 @@ import {
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
@@ -42,6 +43,7 @@ import { publishUserPreferencesChanged } from "./user-preference-events.js";
 import { usersAuthConnectHandlers } from "./users-auth-connect.js";
 import { usersChannelIdentityHandlers } from "./users-channel-identities.js";
 import { usersGitHubHandlers } from "./users-github.js";
+import { usersPersonalFileHandlers } from "./users-personal-file.js";
 import {
   prepareUserProfileAdministration,
   requireProfileMutationAccess,
@@ -61,18 +63,6 @@ function refreshConnectedProfile(
   return display;
 }
 
-function decodeBase64(value: string): Uint8Array | undefined {
-  const trimmed = value.trim();
-  if (
-    !trimmed ||
-    trimmed.length % 4 !== 0 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(trimmed)
-  ) {
-    return undefined;
-  }
-  return Buffer.from(trimmed, "base64");
-}
-
 function profileError(error: unknown) {
   if (error instanceof UserProfileNotFoundError || error instanceof UserProfileOwnerError) {
     return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
@@ -84,6 +74,7 @@ export const usersHandlers: GatewayRequestHandlers = {
   ...usersAuthConnectHandlers,
   ...usersChannelIdentityHandlers,
   ...usersGitHubHandlers,
+  ...usersPersonalFileHandlers,
   "users.list": async ({ params, respond }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
@@ -120,7 +111,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.prefs.get": async ({ client, params, respond }) => {
+  "users.prefs.get": async ({ client, params, respond, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateUsersPrefsGetParams, "users.prefs.get", respond)) {
       return;
     }
@@ -135,12 +126,16 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     try {
       const preferences = await getCanonicalUserPreferences(profileId, params.keys);
+      sessionMutationAuthorization?.assertCurrent();
       if (!preferences) {
         respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       respond(true, { status: "ok", entries: preferences.entries }, undefined);
     } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        throw error;
+      }
       respond(false, undefined, profileError(error));
     }
   },
@@ -284,8 +279,8 @@ export const usersHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUsersSetAvatarParams, "users.setAvatar", respond)) {
       return;
     }
-    const bytes = decodeBase64(params.avatarBase64);
-    if (!bytes) {
+    const avatarBase64 = params.avatarBase64.trim();
+    if (!isValidBase64(avatarBase64)) {
       respond(
         false,
         undefined,
@@ -293,6 +288,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const bytes = Buffer.from(avatarBase64, "base64");
     try {
       if (!requireProfileMutationAccess(client, params.profileId, respond)) {
         return;

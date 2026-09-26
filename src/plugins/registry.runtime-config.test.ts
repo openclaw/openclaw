@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -13,11 +15,15 @@ import {
 } from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import { revokePluginRecord } from "./registry-lifecycle.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRegistry } from "./registry.js";
 import { disposePluginRegistryInstances, withPluginRegistrationContext } from "./runtime.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import * as sdkAlias from "./sdk-alias.js";
@@ -45,6 +51,89 @@ describe("plugin registration runtime admission", () => {
     const owner = expectDefined(getPluginInstance(record), "registration instance");
     return { builder, record, api, owner, list };
   }
+
+  it("retains an inspected harness until terminal CLI cleanup without reopening ordinary calls", async () => {
+    const { builder, record, api, owner } = fixture();
+    const dispose = vi.fn(async () => {});
+    const physicalCleanup = vi.fn();
+    owner.lifecycle.onDispose(physicalCleanup);
+    api.registerAgentHarness({
+      id: "owned",
+      label: "Owned",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+      dispose,
+    });
+    builder.registry.plugins.push(record);
+    const inspection = new PluginRegistryInspectionResources(async () => {
+      await owner.dispose();
+    });
+    inspection.attach(builder.registry);
+    await withCliProcessScope(() =>
+      withCliCommandCleanup(false, async (cleanup) => {
+        const command = expectDefined(cleanup, "CLI cleanup owner");
+        try {
+          const [registered] = withPluginRuntimeRegistryScope(
+            builder.registry,
+            listRegisteredAgentHarnesses,
+          );
+          await inspection.release();
+          expect(physicalCleanup).not.toHaveBeenCalled();
+          expect(() => registered!.harness.dispose?.()).toThrow(/reloaded|disabled/);
+          for (const finish of command.harnesses.values()) {
+            await finish();
+          }
+          expect(dispose).toHaveBeenCalledOnce();
+        } finally {
+          await inspection.release();
+          await command.pluginResources?.release();
+        }
+      }),
+    );
+    expect(physicalCleanup).toHaveBeenCalledOnce();
+  });
+
+  it("does not close a shared harness client when an in-process peer retires", async () => {
+    const first = fixture();
+    const second = fixture();
+    let closed = false;
+    const harness = {
+      id: "shared",
+      label: "Shared",
+      supports: () => ({ supported: true as const }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+      loadModelCatalog: async () => {
+        if (closed) {
+          throw new Error("shared client is closed");
+        }
+        return { entries: [] };
+      },
+      dispose: async () => {
+        closed = true;
+      },
+    };
+    first.api.registerAgentHarness(harness);
+    second.api.registerAgentHarness(harness);
+    try {
+      await first.owner.dispose();
+      const peer = expectDefined(second.builder.registry.agentHarnesses[0], "live peer");
+      await expect(
+        peer.harness.loadModelCatalog?.({
+          config: {},
+          agentId: "main",
+          agentDir: "/fixture/agent",
+          workspaceDir: "/fixture/workspace",
+        }),
+      ).resolves.toEqual({ entries: [] });
+      expect(closed).toBe(false);
+    } finally {
+      await second.owner.dispose();
+    }
+  });
 
   it("allows the canonical synchronous registration call before publication", async () => {
     const { builder, record, api, owner, list } = fixture();

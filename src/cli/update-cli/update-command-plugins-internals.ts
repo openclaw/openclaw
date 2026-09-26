@@ -1,4 +1,5 @@
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import {
   normalizeUpdateFailureFacts,
   type UpdateFailureFact,
@@ -7,6 +8,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { PluginPayloadSmokeFailure } from "../../plugins/payload-verification.js";
 import type { PluginUpdateOutcome } from "../../plugins/update.js";
 import { formatCliCommand } from "../command-format.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 
 export type PostCorePluginUpdateResult = NonNullable<
   NonNullable<UpdateRunResult["postUpdate"]>["plugins"]
@@ -74,7 +76,7 @@ export function collectPostCorePluginFailureFacts(
 export type PluginUpdateAssessment =
   | { kind: "no-payload-repair" }
   | { kind: "optional-repair-needed"; failures: PluginPayloadSmokeFailure[] }
-  | { kind: "core-critical"; reason: "invalid-config" }
+  | { kind: "core-critical"; reason: ReturnType<typeof createUpdateConfigFailure>["reason"] }
   | {
       kind: "unsafe";
       reason:
@@ -210,23 +212,24 @@ export function appendPluginUpdateWarnings(
  * refuse to restart the gateway and surface this as a hard error so the
  * existing `status === "error"` => `exit 1` pre-restart gate fires.
  */
-export function buildInvalidConfigPostCoreUpdateResult(): {
+export function buildInvalidConfigPostCoreUpdateResult(snapshot: ConfigFileSnapshot): {
   message: string;
   guidance: string[];
-  result: PostCorePluginUpdateResult;
+  result: PostCorePluginUpdateResult & Pick<ReturnType<typeof createUpdateConfigFailure>, "reason">;
 } {
+  const failure = createUpdateConfigFailure(snapshot);
   const guidance = [
-    "Run `openclaw doctor` to inspect the config validation errors.",
-    "Once the config parses, rerun `openclaw update repair`.",
+    ...(failure.nextAction ? [failure.nextAction] : []),
+    "Once the config loads successfully, rerun `openclaw update repair`.",
   ];
-  const message =
-    "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.";
+  const message = `Plugin post-update convergence skipped; refusing to restart the gateway with an unverified plugin set.\n${failure.message}`;
   return {
     message,
     guidance,
     result: {
       status: "error",
-      reason: "invalid-config",
+      reason: failure.reason,
+      failureFacts: failure.failureFacts,
       changed: false,
       sync: {
         changed: false,
@@ -240,7 +243,7 @@ export function buildInvalidConfigPostCoreUpdateResult(): {
         outcomes: [],
       },
       integrityDrifts: [],
-      warnings: [{ reason: "invalid-config", message, guidance }],
+      warnings: [{ reason: failure.reason, message, guidance }],
     },
   };
 }

@@ -2,6 +2,7 @@ import { MessageChannel } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -37,7 +38,9 @@ export type SessionTranscriptReconcileOperation = {
   retainLeaseForCleanup(
     lease: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }>,
   ): void;
-  startTask: typeof startReconcileWorkerTask;
+  startTask(
+    input: SessionTranscriptReconcileWorkerInput,
+  ): ReturnType<typeof startReconcileWorkerTask>;
 };
 
 export function captureSessionTranscriptReconcileGeneration(): number {
@@ -105,7 +108,10 @@ export function runSessionTranscriptReconcileOperation<T>(
           if (input.mode !== "release") {
             controller.signal.throwIfAborted();
           }
-          return startReconcileWorkerTask(input);
+          return startReconcileWorkerTask(
+            input,
+            input.mode === "release" ? undefined : controller.signal,
+          );
         },
       }),
     );
@@ -118,7 +124,7 @@ export function runSessionTranscriptReconcileOperation<T>(
 async function releaseReconcileWorkerLease(
   input: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }>,
 ): Promise<void> {
-  const task = startReconcileWorkerTask(input);
+  const task = await startReconcileWorkerTask(input);
   try {
     const cleanup = await task.leaseRelease;
     if (cleanup.failure) {
@@ -166,19 +172,34 @@ export function getSessionTranscriptReconcileWorkerPoolSnapshot() {
   );
 }
 
-function startReconcileWorkerTask(input: SessionTranscriptReconcileWorkerInput) {
+async function startReconcileWorkerTask(
+  input: SessionTranscriptReconcileWorkerInput,
+  signal?: AbortSignal,
+) {
   const owner =
     input.mode === "memory"
       ? undefined
       : {
           actorId: `transcript:${input.mode}:${input.leaseId}`,
           context: captureOpenClawStateWorkerContext({
+            initializationAgentPaths: [input.path],
             env: {
               OPENCLAW_STATE_DIR: input.stateDir,
               ...(input.externallySupervised ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
             },
           }),
         };
+  const sourceIdentity =
+    input.mode === "disk" ? readDatabasePathIdentitySync(input.path).key : undefined;
+  if (owner && input.mode === "disk" && owner.context.admission.identity.key.startsWith("path:")) {
+    // Finish canonical first creation before publishing a task that could claim an agent lease.
+    const { runOpenClawStateWorkerOperation } =
+      await import("../../state/openclaw-state-worker-store.js");
+    await runOpenClawStateWorkerOperation(owner.context, async () => undefined, {
+      assertCurrent: () => signal?.throwIfAborted(),
+    });
+  }
+  signal?.throwIfAborted();
   const pool = (runtime.pool ??= new WorkerTaskPool<SessionTranscriptReconcileWorkerTask, void>({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReconcile),
     workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
@@ -213,17 +234,25 @@ function startReconcileWorkerTask(input: SessionTranscriptReconcileWorkerInput) 
       : 0) +
     (input.mode === "memory"
       ? input.sessionIds.reduce((bytes, id) => bytes + 2 * id.length, 0)
-      : 2 * (input.stateDir.length + input.leaseId.length) +
-        (input.mode === "disk" ? 2 * (input.path.length + input.agentId.length) : 0));
+      : 2 * (input.stateDir.length + input.leaseId.length + input.path.length) +
+        (input.mode === "disk" ? 2 * input.agentId.length : 0));
   let poolCompletion: Promise<void> | undefined;
   const execute = async (coordination?: SqliteMutationWorkerCoordination) => {
     poolCompletion = pool.run(
-      { input, port: port2, coordination },
+      {
+        input,
+        port: port2,
+        coordination,
+        sourceIdentity,
+      },
       {
         inputBytes,
         transferList: (task) => [
           task.port,
           ...(task.coordination?.stateLifecycle ? [task.coordination.stateLifecycle] : []),
+          ...(task.coordination?.reconciliation
+            ? [task.coordination.reconciliation.open, task.coordination.reconciliation.close]
+            : []),
         ],
         signal: controller.signal,
       },
@@ -238,12 +267,18 @@ function startReconcileWorkerTask(input: SessionTranscriptReconcileWorkerInput) 
   const completion = (
     !owner
       ? execute()
-      : withSqliteWorkerLifecycleCoordination(owner.context, owner.actorId, execute, async () => {
-          controller.abort();
-          await poolCompletion?.catch(() => {});
-          port2.close();
-          await closed;
-        })
+      : withSqliteWorkerLifecycleCoordination(
+          owner.context,
+          owner.actorId,
+          execute,
+          async () => {
+            controller.abort();
+            await poolCompletion?.catch(() => {});
+            port2.close();
+            await closed;
+          },
+          "reconciliation",
+        )
   ).finally(() => port2.close());
   const leaseRelease = Promise.allSettled([completion, closed]).then(([result]) => {
     if (result.status === "rejected") {

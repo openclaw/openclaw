@@ -20,15 +20,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  projectExistingAgentDatabaseTargets,
+  resolveTargetSqliteOptions,
+} from "../infra/session-sqlite-migration-readers.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import {
-  projectExistingAgentDatabaseTargets,
-  resolveTargetSqliteOptions,
-} from "./doctor-session-sqlite-readers.js";
 import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
 
 const NOTE_TITLE = "Session transcript headers";

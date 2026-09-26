@@ -1,4 +1,4 @@
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { Api, AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
@@ -118,4 +118,31 @@ export function createOrphanedToolOutputCompactionContext(
       { role: "user", content: "continue", timestamp: 3 },
     ],
   };
+}
+
+export function createModel<TApi extends Api = "openai-responses">(
+  overrides: Partial<Model<TApi>> = {},
+): Model<TApi> {
+  return {
+    id: "gpt-5.4",
+    name: "GPT-5.4",
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+    ...overrides,
+  } as Model<TApi>;
+}
+
+export function createContext(systemPrompt: string, overrides: Partial<Context> = {}): Context {
+  return {
+    systemPrompt,
+    messages: [{ role: "user", content: "hello", timestamp: 1 }],
+    tools: [],
+    ...overrides,
+  } as Context;
 }

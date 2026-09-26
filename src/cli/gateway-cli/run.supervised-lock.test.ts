@@ -1,6 +1,7 @@
 // Gateway supervised lock tests cover single-runner locking for supervised gateway starts.
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import { resolveGatewayRuntimeConfig } from "../../gateway/server-runtime-config.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator.js";
@@ -346,23 +347,18 @@ describe("supervised gateway lock recovery", () => {
       }
       const startedAt = Date.now();
       await expect(
-        testing.probeGatewayHealthz({
+        createConfiguredGatewayLocalProbe({}).requestHttp({
           host: "127.0.0.1",
           port: address.port,
+          pathname: "/healthz",
           timeoutMs: 50,
         }),
-      ).resolves.toBe(false);
+      ).resolves.toBeNull();
       expect(Date.now() - startedAt).toBeLessThan(500);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
     }
-  });
-
-  it("normalizes wildcard bind hosts for local health probes", () => {
-    expect(testing.normalizeGatewayHealthProbeHost("0.0.0.0")).toBe("127.0.0.1");
-    expect(testing.normalizeGatewayHealthProbeHost("::")).toBe("127.0.0.1");
-    expect(testing.normalizeGatewayHealthProbeHost("127.0.0.1")).toBe("127.0.0.1");
   });
 });

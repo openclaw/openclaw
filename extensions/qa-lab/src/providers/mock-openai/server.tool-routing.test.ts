@@ -3,6 +3,7 @@ import { convertAnthropicMessagesToResponsesInput } from "./mock-anthropic-wire.
 import type { AnthropicMessage } from "./mock-openai-contracts.js";
 import { unwrapScenarioCatalogOutput } from "./mock-openai-tool-routing.js";
 import {
+  QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
   createMockServerTestHarness,
   expectOpenAiNonStreamingResponsesJson,
   getJson,
@@ -33,6 +34,7 @@ const toolCall = {
     properties: { id: { type: "string" }, args: { type: "object" } },
   },
 };
+const sessionsSpawnTool = { type: "function", name: "sessions_spawn" } as const;
 // The failed QA request exposes shell exec and catalog controls, not Code Mode or spawn.
 const catalogTools = [
   shellExec,
@@ -60,6 +62,93 @@ function catalogResult(name: string, details: Record<string, unknown>) {
 }
 
 describe("mock scenario tool routing", () => {
+  it.each(
+    [
+      { group: false, action: "react" },
+      { group: true, action: "react" },
+      { group: false, action: "upload-file" },
+      { group: true, action: "upload-file" },
+    ].flatMap((scenario) => [
+      { ...scenario, surface: "catalog" },
+      { ...scenario, surface: "direct" },
+    ]),
+  )(
+    "completes WhatsApp $action (group=$group, $surface) with intentional silence",
+    async ({ group, action, surface }) => {
+      const server = await startMockServer();
+      const token = `WHATSAPP_QA_${group ? "GROUP_" : ""}AGENT_${action === "react" ? "REACT" : "UPLOAD"}_TEST`;
+      const prompt =
+        (group ? "openclawqa " : "") +
+        (action === "react"
+          ? `React to this WhatsApp${group ? " group" : ""} message with thumbs up for QA action check ${token}. Do not send any visible text reply after the reaction.`
+          : `Use the WhatsApp message tool upload-file action to send a PNG with caption ${token}. Do not send any visible text reply after the upload.`);
+      const input: unknown[] = [
+        { role: "developer", content: "Use message for channel actions through the tool catalog." },
+        makeUserInput(prompt),
+      ];
+      // Custom Responses endpoints carry guidance in input, not body.instructions.
+      const tools = surface === "catalog" ? catalogTools : [{ type: "function", name: "message" }];
+      const request = () => expectOpenAiNonStreamingResponsesJson(server, { tools, input });
+      const payload = await request();
+      const call = outputItem(payload);
+      expect(outputItems(payload)).toHaveLength(1);
+      const wireName = surface === "catalog" ? "tool_call" : "message";
+      expect(call).toMatchObject({ type: "function_call", name: wireName });
+      const args =
+        action === "react"
+          ? { action, emoji: "👍", final: true }
+          : { action, caption: token, contentType: "image/png" };
+      expect(outputToolArgs(payload)).toMatchObject(
+        surface === "catalog" ? { id: "message", args } : args,
+      );
+      expect(await getJson(server, "/debug/last-request")).toMatchObject({
+        plannedToolName: "message",
+        ...(surface === "catalog" ? { plannedWireToolName: wireName } : {}),
+      });
+      input.push(
+        call,
+        makeToolOutputWithCallId(
+          String(call.call_id),
+          surface === "catalog" ? catalogResult("message", { ok: true }) : '{"ok":true}',
+        ),
+      );
+      const completed = await request();
+      expect(outputItems(completed).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(completed)).toBe("NO_REPLY");
+
+      const continuation = await expectOpenAiNonStreamingResponsesJson(server, {
+        tools: [],
+        input: [...input, makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION)],
+      });
+      expect(outputItems(continuation).some((item) => item.type === "function_call")).toBe(false);
+      expect(outputText(continuation)).toBe("NO_REPLY");
+    },
+  );
+
+  it("plans runtime-fixture sessions_spawn happy and failure calls deterministically", async () => {
+    const server = await startMockServer();
+    const request = (prompt: string) =>
+      expectOpenAiNonStreamingResponsesJson(server, {
+        tools: [sessionsSpawnTool],
+        input: [makeUserInput(prompt)],
+      });
+
+    const happy = await request(
+      "QA routing marker: tool search qa check target=sessions_spawn. Call sessions_spawn directly exactly once and summarize its acceptance.",
+    );
+    expect(outputItem(happy)).toMatchObject({ type: "function_call", name: "sessions_spawn" });
+    expect(outputToolArgs(happy)).toMatchObject({
+      mode: "run",
+      expectsCompletionMessage: false,
+    });
+
+    const failure = await request(
+      'QA routing marker: tool search qa failure target=sessions_spawn. Call sessions_spawn directly exactly once with task="". Do not repair, omit, replace, or retry the empty task.',
+    );
+    expect(outputItem(failure)).toMatchObject({ type: "function_call", name: "sessions_spawn" });
+    expect(outputToolArgs(failure)).toEqual({ task: "" });
+  });
+
   it.each(["visible", "empty"])(
     "spawns the %s terminal worker through the declared catalog",
     async (kind) => {
@@ -289,7 +378,8 @@ describe("mock scenario tool routing", () => {
       expectOpenAiNonStreamingResponsesJson(server, {
         tools: catalogTools,
         input,
-        instructions: "Runtime: embedded | sessionId=qa-terminal-parent",
+        instructions: "Runtime: embedded | agent=qa | session=agent:qa:main",
+        client_metadata: { session_id: "qa-terminal-parent" },
       });
     const call = outputItem(await request());
     input.push(
@@ -304,6 +394,20 @@ describe("mock scenario tool routing", () => {
       ),
     );
     expect(outputText(await request())).toBe("Worker started.");
+    await server.terminalRequesters.settle({
+      call: async () => ({
+        sessions: [
+          {
+            key: "agent:qa:main",
+            agentId: "qa",
+            sessionId: "qa-terminal-parent",
+            hasActiveRun: false,
+            status: "done",
+            abortedLastRun: false,
+          },
+        ],
+      }),
+    });
     const child = await expectOpenAiNonStreamingResponsesJson(server, {
       instructions: "# Subagent Context\n- Your session: agent:qa:subagent:routed-child.",
       tools: catalogTools,

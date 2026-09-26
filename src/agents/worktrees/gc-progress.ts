@@ -1,7 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
-import { classifyWorktreeRemovalError } from "./removal-errors.js";
+import { classifyWorktreeRemovalError, WorktreeBranchMovedError } from "./removal-errors.js";
 import type { ManagedWorktreeGcResult } from "./types.js";
 
 const MAX_WORKTREE_GC_ISSUES = 64;
@@ -10,11 +10,14 @@ export class WorktreeGcProgress {
   readonly result: ManagedWorktreeGcResult = {
     removed: [],
     orphansDeleted: 0,
+    orphansRetired: 0,
+    retiredCheckoutPaths: [],
     snapshotsPruned: 0,
     outcome: "completed",
     issues: [],
     issueCount: 0,
     protectedCount: 0,
+    protectionReasons: {},
     limitsSatisfied: null,
   };
   private readonly attemptedIds = new Set<string>();
@@ -48,13 +51,16 @@ export class WorktreeGcProgress {
     if (outcome === "failed") {
       this.result.outcome = "partial";
     } else if (this.result.outcome === "completed") {
+      // Retired checkout files still need manual recovery.
       this.result.outcome = "deferred";
     }
   }
 
-  protect(stage: "idle" | "limits", id: string, reason: string): void {
+  protect(stage: "idle" | "limits", id: string, reason: string, detail = reason): void {
     this.result.protectedCount += 1;
-    this.record(stage, "deferred", reason, id);
+    const counts = this.result.protectionReasons;
+    counts[reason] = (counts[reason] ?? 0) + 1;
+    this.record(stage, "deferred", detail, id);
   }
 
   recordLimitState(satisfied: boolean, inventoryComplete = true): void {
@@ -66,6 +72,14 @@ export class WorktreeGcProgress {
     error: unknown,
     id?: string,
   ): void {
+    if (
+      error instanceof WorktreeBranchMovedError &&
+      id &&
+      (stage === "idle" || stage === "limits")
+    ) {
+      this.protect(stage, id, "branch-moved");
+      return;
+    }
     const reason = classifyWorktreeRemovalError(error);
     const outcome =
       reason === "busy" ||

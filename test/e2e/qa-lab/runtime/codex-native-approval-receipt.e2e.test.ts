@@ -203,6 +203,8 @@ describe("Codex native approval receipt", () => {
           OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
           OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_SKIP_PROVIDERS: undefined,
+          // Native task admission needs the configured owner published by full Gateway startup.
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
         config: {
           logging: { audit: { enabled: true, executionIdentity: true } },

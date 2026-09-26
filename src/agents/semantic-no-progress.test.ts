@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { DecisionRuntimeV1 } from "../decisions/types.js";
 import {
   getDiagnosticSessionState,
@@ -129,6 +130,68 @@ describe("semantic no-progress shadow observer", () => {
     expect(observer.snapshot().metrics.candidateFollowOnCalls).toBe(13);
   });
 
+  it("does not revive a retained classification after consent is withdrawn and restored", async () => {
+    let eligible = true;
+    const runtime = outcome("stalled");
+    const observer = createSemanticNoProgressObserver({
+      signal: new AbortController().signal,
+      assertActive: vi.fn(),
+      isEligible: () => eligible,
+      runtime,
+    });
+    await observer.observeOutcome({ ...trajectoryEntry(1), evidence });
+    expect(observer.snapshot().latestJudgment?.verdict).toBe("stalled");
+    eligible = false;
+    expect(observer.snapshot().latestJudgment).toBeUndefined();
+    eligible = true;
+    expect(observer.snapshot().latestJudgment).toBeUndefined();
+    await observer.observeOutcome({ ...trajectoryEntry(2), evidence });
+    expect(observer.snapshot().latestJudgment).toMatchObject({
+      verdict: "stalled",
+      trajectorySize: 1,
+    });
+    await observer.close();
+    expect(observer.snapshot().latestJudgment).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    "discards an in-flight classification after consent removal (restored=%s)",
+    async (restoreConsent) => {
+      const started = createDeferred();
+      const release = createDeferred();
+      let eligible = true;
+      const answer = outcome("stalled");
+      const runtime: TestDecisionRuntime = {
+        evaluate: vi.fn(async (batch, options) => {
+          started.resolve();
+          await release.promise;
+          return answer.evaluate(batch, options);
+        }),
+      };
+      const observer = createSemanticNoProgressObserver({
+        signal: new AbortController().signal,
+        assertActive: vi.fn(),
+        isEligible: () => eligible,
+        runtime,
+      });
+      const pending = observer.observeOutcome({ ...trajectoryEntry(0), evidence });
+      await started.promise;
+      eligible = false;
+      expect(observer.snapshot().latestJudgment).toBeUndefined();
+      if (restoreConsent) {
+        eligible = true;
+      }
+      release.resolve();
+      await pending;
+      if (!restoreConsent) {
+        await observer.observeOutcome({ ...trajectoryEntry(1), evidence });
+      }
+      expect(observer.snapshot().latestJudgment).toBeUndefined();
+      expect(runtime.evaluate).toHaveBeenCalledTimes(1);
+      await observer.close();
+    },
+  );
+
   it("allows one in-flight Decision and joins it on close", async () => {
     let resolveDecision: (() => void) | undefined;
     const runtime: TestDecisionRuntime = {
@@ -206,6 +269,58 @@ describe("semantic no-progress shadow observer", () => {
     controller.abort(new Error("caller stopped"));
     settle?.();
     await expect(pending).rejects.toThrow("caller stopped");
+    await observer.close();
+  });
+
+  it.each([
+    [
+      "a typed unavailable result",
+      vi.fn(async () => ({ status: "unavailable" as const, reason: "transport" as const })),
+    ],
+    [
+      "an unexpected provider exception",
+      vi.fn(async () => {
+        throw new Error("provider exploded");
+      }),
+    ],
+  ])("records %s as a non-authoritative uncertain judgment", async (_label, evaluate) => {
+    const observer = createSemanticNoProgressObserver({
+      signal: new AbortController().signal,
+      assertActive: vi.fn(),
+      runtime: { evaluate },
+    });
+
+    await observer.observeOutcome({ ...trajectoryEntry(1), evidence });
+
+    expect(observer.snapshot()).toMatchObject({
+      latestJudgment: { verdict: "uncertain", evidence },
+      metrics: {
+        unavailableDecisions: 1,
+        verdicts: { uncertain: 1 },
+      },
+    });
+    await observer.close();
+  });
+
+  it("propagates admitted-owner loss instead of converting it to uncertainty", async () => {
+    const ownerLost = new Error("admitted owner lost");
+    let assertions = 0;
+    const observer = createSemanticNoProgressObserver({
+      signal: new AbortController().signal,
+      assertActive: () => {
+        assertions += 1;
+        if (assertions >= 4) {
+          throw ownerLost;
+        }
+      },
+      runtime: outcome("stalled"),
+    });
+
+    await expect(observer.observeOutcome({ ...trajectoryEntry(1), evidence })).rejects.toBe(
+      ownerLost,
+    );
+    expect(observer.snapshot().latestJudgment).toBeUndefined();
+    expect(observer.snapshot().metrics.verdicts.uncertain).toBe(0);
     await observer.close();
   });
 

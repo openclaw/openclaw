@@ -68,7 +68,13 @@ import {
   resolveParallelsProviderAuth,
   runParallelsPrerequisiteEval,
 } from "../../scripts/e2e/parallels/provider-auth-prerequisite.mjs";
+import { assertDevChannelUpdate } from "../../scripts/e2e/parallels/smoke-common.ts";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath, spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
@@ -431,7 +437,7 @@ setInterval(() => {}, 1000);
 `;
 }
 
-function writeDrainDeadlinePreload(tempDir: string): string {
+function writeDrainDeadlinePreload(tempDir: string, timeoutMs = 100): string {
   const preload = join(tempDir, "deadline.cjs");
   writeFileSync(
     preload,
@@ -445,7 +451,7 @@ catch (error) { if (error.code !== 'EEXIST') throw error; }
 if (fs.readFileSync(owner, 'utf8') === String(process.pid)) {
   const schedule = globalThis.setTimeout;
   globalThis.setTimeout = (callback, ms, ...args) => {
-    if (ms !== 250) return schedule(callback, ms, ...args);
+    if (ms !== ${timeoutMs}) return schedule(callback, ms, ...args);
     globalThis.setTimeout = schedule;
     return schedule(() => {
       let released = false;
@@ -475,10 +481,10 @@ function createSignaledHostCommandFixture() {
   const runnerPath = join(tempDir, "runner.mjs");
   const readyPath = join(tempDir, "ready");
   const grandchildPidPath = join(tempDir, "grandchild.pid");
-  const hostCommandUrl = pathToFileURL(join(process.cwd(), TS_PATHS.hostCommand)).href;
+  const hostCommandUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.parallelsHostCommand);
   writeFileSync(
     runnerPath,
-    `import { run } from ${JSON.stringify(hostCommandUrl)};
+    `import { run } from ${JSON.stringify(hostCommandUrl.href)};
 run(process.execPath, ['-e', ${JSON.stringify(SIGNAL_PARENT_SCRIPT)}], {
   check: false,
   env: { ...process.env, OPENCLAW_TEST_GRANDCHILD_PID: ${JSON.stringify(grandchildPidPath)}, OPENCLAW_TEST_READY_FILE: ${JSON.stringify(readyPath)} },
@@ -489,11 +495,15 @@ run(process.execPath, ['-e', ${JSON.stringify(SIGNAL_PARENT_SCRIPT)}], {
   return {
     grandchildPidPath,
     readyPath,
-    runner: spawn(testNodeExecPath, ["--import", "tsx", runnerPath], {
-      cwd: process.cwd(),
-      detached: true,
-      stdio: "ignore",
-    }),
+    runner: spawn(
+      testNodeExecPath,
+      [...resolveRuntimeWorkerArgv(hostCommandUrl, testNodeExecPath).slice(0, -1), runnerPath],
+      {
+        cwd: process.cwd(),
+        detached: true,
+        stdio: "ignore",
+      },
+    ),
   };
 }
 
@@ -1306,9 +1316,13 @@ if (commandArgs[0] === "list") {
       const result = spawnSync(
         testNodeExecPath,
         [
-          "--import",
-          "tsx",
-          TS_PATHS.macos,
+          // Darwin exercises the source-relative Python transport beside the script.
+          ...(process.platform === "darwin"
+            ? ["--import", "tsx", TS_PATHS.macos]
+            : resolveRuntimeWorkerArgv(
+                resolveRuntimeWorkerUrl(scriptProcessEntrypoints.macosSmoke),
+                testNodeExecPath,
+              )),
           "--mode",
           "upgrade",
           "--latest-version",
@@ -2210,7 +2224,7 @@ if (commandArgs[0] === "list") {
           DEADLINE_FILE: deadlineFile,
           NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
         },
-        timeoutMs: 250,
+        timeoutMs: 100,
       });
 
       expect(result.status).toBe(124);
@@ -2240,6 +2254,8 @@ if (commandArgs[0] === "list") {
     async () => {
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-");
       const grandchildPidPath = join(tempDir, "grandchild.pid");
+      const deadlineFile = join(tempDir, "deadline");
+      const preload = writeDrainDeadlinePreload(tempDir, 200);
       let grandchildPid = 0;
 
       try {
@@ -2249,11 +2265,15 @@ if (commandArgs[0] === "list") {
             ...process.env,
             OPENCLAW_TEST_GRANDCHILD_PID: grandchildPidPath,
             OPENCLAW_TEST_READY_FILE: join(tempDir, "ready"),
+            READY_FILE: grandchildPidPath,
+            DEADLINE_FILE: deadlineFile,
+            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
           },
-          timeoutMs: 500,
+          timeoutMs: 200,
         });
 
         expect(result.status).toBe(124);
+        expect(readFileSync(deadlineFile, "utf8")).toBe("elapsed");
         grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
         expect(Number.isInteger(grandchildPid)).toBe(true);
         await waitFor(() => !isProcessAlive(grandchildPid));
@@ -2270,6 +2290,8 @@ if (commandArgs[0] === "list") {
     async () => {
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-pipes-");
       const grandchildPidPath = join(tempDir, "grandchild.pid");
+      const deadlineFile = join(tempDir, "deadline");
+      const preload = writeDrainDeadlinePreload(tempDir, 200);
       let grandchildPid = 0;
       // Outlive the assertion bound, but self-clean if PID setup fails.
       const grandchildScript = "setTimeout(() => process.exit(0), 3_000);";
@@ -2295,10 +2317,13 @@ if (commandArgs[0] === "list") {
           env: {
             ...process.env,
             GRANDCHILD_PID_PATH: grandchildPidPath,
+            READY_FILE: grandchildPidPath,
+            DEADLINE_FILE: deadlineFile,
+            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
           },
           quiet: true,
           // Let the command spawn its pipe holder before exercising timeout settlement.
-          timeoutMs: 500,
+          timeoutMs: 200,
         });
 
         const durationMs = Date.now() - startedAt;
@@ -2309,6 +2334,7 @@ if (commandArgs[0] === "list") {
         expect(Number.isInteger(grandchildPid)).toBe(true);
         expect(grandchildPid).toBeGreaterThan(1);
         expect(result.status).toBe(124);
+        expect(readFileSync(deadlineFile, "utf8")).toBe("elapsed");
         expect(durationMs).toBeLessThan(2_000);
       } finally {
         if (Number.isInteger(grandchildPid) && grandchildPid > 1 && isProcessAlive(grandchildPid)) {
@@ -2570,6 +2596,106 @@ if (commandArgs[0] === "list") {
     expect(transports).toContain("launch retry");
   });
 
+  it.each([
+    {
+      name: "unpinned main",
+      status: '"installKind": "git", "value": "dev", "branch": "main"',
+      target: undefined,
+      head: "",
+      reads: 0,
+    },
+    {
+      name: "empty target",
+      status: '"installKind": "git", "value": "dev", "branch": "main"',
+      target: "",
+      head: "",
+      reads: 0,
+    },
+    {
+      name: "pinned HEAD with banner and CRLF",
+      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+      target: "a".repeat(40),
+      head: `checkout banner\r\n${"a".repeat(40)}\r\n`,
+      reads: 1,
+    },
+    {
+      name: "missing install kind before all other checks",
+      status: "",
+      target: "a".repeat(40),
+      head: "",
+      reads: 0,
+      error: 'dev update status missing "installKind": "git"',
+    },
+    {
+      name: "missing dev channel before branch and checkout",
+      status: '"installKind": "git"',
+      target: "a".repeat(40),
+      head: "",
+      reads: 0,
+      error: 'dev update status missing "value": "dev"',
+    },
+    {
+      name: "missing pinned branch before checkout",
+      status: '"installKind": "git", "value": "dev"',
+      target: "a".repeat(40),
+      head: "",
+      reads: 0,
+      error: 'dev update status missing "branch": "HEAD"',
+    },
+    {
+      name: "wrong unpinned branch",
+      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+      target: undefined,
+      head: "",
+      reads: 0,
+      error: 'dev update status missing "branch": "main"',
+    },
+    {
+      name: "empty pinned checkout",
+      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+      target: "a".repeat(40),
+      head: "\r\n",
+      reads: 1,
+      error: `dev update checkout head <empty> did not match ${"a".repeat(40)}`,
+    },
+    {
+      name: "mismatching pinned checkout",
+      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+      target: "a".repeat(40),
+      head: "b".repeat(40),
+      reads: 1,
+      error: `dev update checkout head ${"b".repeat(40)} did not match ${"a".repeat(40)}`,
+    },
+  ])("validates dev updates: $name", ({ status, target, head, reads, error }) => {
+    const readCheckoutHead = vi.fn(() => head);
+    const verify = () => assertDevChannelUpdate(status, target, readCheckoutHead);
+    if (error) {
+      expect(verify).toThrow(new Error(error));
+    } else {
+      expect(verify).not.toThrow();
+    }
+    expect(readCheckoutHead).toHaveBeenCalledTimes(reads);
+  });
+
+  it("preserves a dev checkout reader failure by identity", () => {
+    const failure = new Error("checkout command failed");
+    const readCheckoutHead = vi.fn(() => {
+      throw failure;
+    });
+    let caught: unknown;
+    try {
+      assertDevChannelUpdate(
+        '"installKind": "git", "value": "dev", "branch": "HEAD"',
+        "a".repeat(40),
+        readCheckoutHead,
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(readCheckoutHead).toHaveBeenCalledOnce();
+  });
+
   it("preserves bundled plugin inventory during dev updates", () => {
     const devUpdateLines = [macos, windows].map((script) =>
       script.split("\n").find((line) => line.includes("update --channel dev")),
@@ -2588,9 +2714,10 @@ if (commandArgs[0] === "list") {
     for (const script of [macos, windows]) {
       expect(script).toContain('readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF")');
       expect(script).toContain("OPENCLAW_UPDATE_DEV_TARGET_REF");
-      expect(script).toContain('const expectedBranch = this.devTargetCommit ? "HEAD" : "main"');
-      expect(script).toContain("dev update checkout head");
+      expect(script).toContain("assertDevChannelUpdate(status, this.devTargetCommit, () =>");
     }
+    expect(smokeCommon).toContain('const expectedBranch = targetCommit ? "HEAD" : "main"');
+    expect(smokeCommon).toContain("dev update checkout head");
     expect(macos).toContain("OPENCLAW_UPDATE_DEV_TARGET_REF=${shellQuote(this.devTargetCommit)}");
     expect(windows).toContain(
       "OPENCLAW_UPDATE_DEV_TARGET_REF = ${psSingleQuote(this.devTargetCommit)}",

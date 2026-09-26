@@ -20,6 +20,7 @@ import {
   assertNoLegacyStateRuntimeRepair,
   isOpenClawStateSchemaFastPathEligible,
 } from "./openclaw-state-db-fast-path.js";
+import type { StateDatabaseInitialization } from "./openclaw-state-db-initialization.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   executeCanonicalStateSchema,
@@ -32,6 +33,7 @@ import {
   ensureAdditiveStateColumns,
   ensureFirstUseAdditiveStateColumnsForStrictMigration,
 } from "./openclaw-state-db-schema-additive.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
   assertCanonicalStateSchemaShape,
@@ -60,6 +62,7 @@ export function ensureOpenClawStateRuntimeSchema(
   db: DatabaseSync,
   pathname: string,
   env: NodeJS.ProcessEnv,
+  initialization: StateDatabaseInitialization,
   busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   initializeNativeOnly = false,
 ): string[] {
@@ -94,6 +97,9 @@ export function ensureOpenClawStateRuntimeSchema(
           return [];
         }
         const previousVersion = readStateSchemaMigrationVersion(db);
+        const includeAgentDeletionJournal =
+          tableExists(db, "agent_deletion_journal") ||
+          (initialization.kind === "fresh" && isUninitializedNativeStartupDatabase(db));
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           assertNoLegacyStateRuntimeRepair(db, pathname);
           const indexes = verifyAndRepairCanonicalSqliteIndexes(
@@ -136,14 +142,20 @@ export function ensureOpenClawStateRuntimeSchema(
         }
         migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
-        executeCanonicalStateSchema(db, { includeVersionLazyAdditiveTables: true });
+        executeCanonicalStateSchema(db, {
+          includeVersionLazyAdditiveTables: true,
+          includeAgentDeletionJournal,
+        });
         migrateLegacyCronRunLogsToTaskRuns(db);
         if (previousVersion < OPENCLAW_STATE_STRICT_SCHEMA_VERSION) {
           repairLegacyGatewayRestartHandoffsForStrictMigration(db);
           ensureFirstUseAdditiveStateColumnsForStrictMigration(db);
           const strict = migrateSqliteSchemaToStrictInTransaction(
             db,
-            getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: true }),
+            getOpenClawStateRuntimeSchema({
+              includeVersionLazyAdditiveTables: true,
+              includeAgentDeletionJournal,
+            }),
             { databaseLabel: pathname },
           );
           if (strict.migratedTables.length > 0) {

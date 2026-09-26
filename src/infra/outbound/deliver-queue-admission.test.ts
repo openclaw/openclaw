@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { stageAndEnqueueOutboundDelivery } from "./deliver-queue-admission.js";
-import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
+import {
+  restoreQueuedDeliveryCustody,
+  stageAndEnqueueOutboundDelivery,
+} from "./deliver-queue-admission.js";
+import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
 const mocks = vi.hoisted(() => ({
@@ -44,6 +47,44 @@ describe("stageAndEnqueueOutboundDelivery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadPendingDelivery.mockResolvedValue(null);
+  });
+
+  it("restores first custody including absence of a generation binding", () => {
+    const payloads = [{ text: "original result" }];
+    const entry = {
+      id: "shared-intent",
+      enqueuedAt: 1,
+      retryCount: 0,
+      attemptCount: 0,
+      channel: "matrix" as const,
+      to: "!original:example",
+      preparedBatch: createUnmodifiedPreparedOutboundBatch(payloads),
+    };
+    const generation = {
+      agentId: "main",
+      storePath: "/synthetic/agent.sqlite",
+      sessionKey: "agent:main:test",
+      sessionId: "original",
+      lifecycleRevision: null,
+    };
+    const params = {
+      cfg: {},
+      channel: "matrix" as const,
+      to: "!changed:example",
+      payloads: [{ text: "changed" }],
+      sessionGeneration: generation,
+    };
+    expect(restoreQueuedDeliveryCustody(params, entry)).toMatchObject({
+      to: entry.to,
+      payloads,
+      sessionGeneration: undefined,
+    });
+    expect(
+      restoreQueuedDeliveryCustody(
+        { ...params, sessionGeneration: undefined },
+        { ...entry, sessionGeneration: generation },
+      ),
+    ).toMatchObject({ to: entry.to, payloads, sessionGeneration: generation });
   });
 
   it("waits for the prepared checkpoint snapshot before enqueue", async () => {

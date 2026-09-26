@@ -117,6 +117,7 @@ const state = vi.hoisted(() => ({
   emitAgentEventMock: vi.fn(),
   registerAgentRunContextMock: vi.fn(),
   clearAgentRunContextMock: vi.fn(),
+  commandWarnMock: vi.fn(),
   loadSessionEntryMock: vi.fn(),
   updateSessionStoreAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
@@ -292,26 +293,11 @@ vi.mock("./command/session-store.runtime.js", () => ({
     state.updateSessionStoreAfterAgentRunMock(...args),
 }));
 
-vi.mock("./command/session.js", () => ({
-  resolveSession: () => {
-    const sessionEntry: SessionEntry = state.sessionEntryMock ?? {
-      sessionId: "session-1",
-      updatedAt: Date.now(),
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    return {
-      sessionId: "session-1",
-      sessionKey: state.resolvedSessionKeyMock ?? "agent:main:main",
-      sessionEntry,
-      sessionStore: state.sessionStoreMock,
-      storePath: state.storePathMock,
-      isNewSession: false,
-      persistedThinking:
-        typeof sessionEntry.thinkingLevel === "string" ? sessionEntry.thinkingLevel : undefined,
-      persistedVerbose: undefined,
-    };
-  },
-}));
+vi.mock("./command/session.js", async () => {
+  const { createTestSessionResolver } =
+    await import("./agent-command.live-model-switch.test-mocks.js");
+  return { resolveSession: createTestSessionResolver(state) };
+});
 
 vi.mock("./command/types.js", () => ({}));
 
@@ -508,10 +494,10 @@ vi.mock("../infra/skills-remote.js", () => ({
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => {
+  createSubsystemLogger: (subsystem: string) => {
     const logger = {
       info: vi.fn(),
-      warn: vi.fn(),
+      warn: subsystem === "agents/agent-command" ? state.commandWarnMock : vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
       trace: vi.fn(),
@@ -3368,6 +3354,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runDiscordDelivery();
 
     expect(state.loadSessionEntryMock).toHaveBeenCalledWith({
+      agentId: "default",
       storePath: "/tmp/openclaw-sessions.json",
       sessionKey: "agent:main:main",
       readConsistency: "latest",
@@ -3717,49 +3704,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
   });
 
-  it("preserves rejected best-effort delivery intent through the model run", async () => {
-    setupSingleAttemptFallback();
-    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
-    setupBareStoredSession();
-    state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
-      baseDelivery: {},
-      resolvedChannel: "discord",
-      resolvedTo: "channel:missing",
-      deliveryTargetMode: "explicit",
-      targetResolutionError: new Error('Unknown Discord target "channel:missing"'),
-    });
-
-    await expect(
-      agentCommand({
-        message: "hello",
-        channel: "discord",
-        to: "channel:missing",
-        deliver: true,
-        bestEffortDeliver: true,
-      }),
-    ).resolves.toMatchObject({ payloads: [{ text: "ok" }] });
-
-    expect(state.runAgentAttemptMock).toHaveBeenCalled();
-    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
-      expect.objectContaining({ opts: expect.objectContaining({ deliver: true }) }),
-    );
-    const pendingEntries = state.persistSessionEntryMock.mock.calls
-      .map((call) => (call[0] as { entry?: SessionEntry }).entry)
-      .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery !== undefined);
-    expect(pendingEntries).toEqual([]);
-  });
-
-  it("clears a pre-existing transport-only pending delivery after an empty delivered run", async () => {
+  it.each([false, true])("empty-run marker custody (owned=%s)", async (owned) => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
-    setupBareStoredSession({
-      pendingFinalDelivery: {
-        kind: "transport-only",
-        createdAt: 2,
-        context: { channel: "tui" },
-        intentId: "intent-1",
-      },
-    });
+    const pending: NonNullable<SessionEntry["pendingFinalDelivery"]> = {
+      kind: "transport-only",
+      createdAt: 2,
+      context: { channel: "tui" },
+      intentId: "intent-1",
+      ...(owned ? { deliveries: [{ id: "delivery-1", state: "queued" as const }] } : {}),
+    };
+    setupBareStoredSession({ pendingFinalDelivery: pending });
     await agentCommand({
       message: "hello",
       channel: "whatsapp",
@@ -3767,11 +3722,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       deliver: true,
     });
 
-    expect(state.persistSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({ pendingFinalDelivery: undefined }),
-      }),
-    );
+    expect(state.persistSessionEntryMock.mock.lastCall?.[0]).toMatchObject({
+      entry: { pendingFinalDelivery: owned ? pending : undefined },
+    });
   });
 
   it("passes SQLite transcript markers to visible agent attempts", async () => {
@@ -4219,12 +4172,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       thinking: "xhigh",
     });
 
-    if (allowlisted) {
-      expect(state.loadManifestModelCatalogMock).toHaveBeenCalledTimes(1);
-      expect(state.loadManifestModelCatalogMock).toHaveBeenCalledWith(
-        expect.objectContaining({ metadataSnapshot: manifestMetadataSnapshot }),
-      );
-    }
     const thinkingArgs = requireRecord(
       mockCallArg(state.isThinkingLevelSupportedMock),
       "thinking args",

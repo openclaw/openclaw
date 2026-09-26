@@ -1,35 +1,7 @@
-import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { normalizeMatrixApproverId } from "./approval-ids.js";
-import { resolveDefaultMatrixAccountId, resolveMatrixAccountConfig } from "./matrix/accounts.js";
+import { getMatrixApprovalApprovers } from "./exec-approvals.js";
 import type { CoreConfig } from "./types.js";
-
-function normalizeMatrixExecApproverId(value: string | number): string | undefined {
-  const normalized = normalizeMatrixApproverId(value);
-  return normalized === "*" ? undefined : normalized;
-}
-
-function getMatrixApprovalReactionApprovers(params: {
-  cfg: CoreConfig;
-  accountId?: string | null;
-  approvalKind: ChannelApprovalKind;
-}): string[] {
-  const account = resolveMatrixAccountConfig({
-    cfg: params.cfg,
-    accountId: params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
-  });
-  if (params.approvalKind === "plugin") {
-    return resolveApprovalApprovers({
-      allowFrom: account.dm?.allowFrom,
-      normalizeApprover: normalizeMatrixApproverId,
-    });
-  }
-  return resolveApprovalApprovers({
-    explicit: account.execApprovals?.approvers,
-    allowFrom: account.dm?.allowFrom,
-    normalizeApprover: normalizeMatrixExecApproverId,
-  });
-}
 
 export function isMatrixApprovalReactionAuthorizedSender(params: {
   cfg: CoreConfig;
@@ -43,5 +15,5 @@ export function isMatrixApprovalReactionAuthorizedSender(params: {
   if (!normalizedSenderId) {
     return false;
   }
-  return getMatrixApprovalReactionApprovers(params).includes(normalizedSenderId);
+  return getMatrixApprovalApprovers(params).includes(normalizedSenderId);
 }

@@ -30,6 +30,8 @@ export function createSqliteTerminalOpenLatch(options: {
   const failures = new Map<string, TerminalOpenFailure>();
 
   return {
+    /** Read the owner's recorded fact without running filesystem or database inspection. */
+    peek: (pathname: string): Error | undefined => failures.get(path.resolve(pathname))?.error,
     get: (pathname: string): Error | undefined => {
       const resolvedPath = path.resolve(pathname);
       const failure = failures.get(resolvedPath);

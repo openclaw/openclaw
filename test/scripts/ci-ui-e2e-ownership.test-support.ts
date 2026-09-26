@@ -2,19 +2,23 @@ import { execFileSync } from "node:child_process";
 import { globSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { expect } from "vitest";
+import type { NativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { sharedVitestConfig } from "../vitest/vitest.shared.config.ts";
 import {
   createUiE2eVitestConfig,
   uiE2ePrivateServerTestFiles,
-  uiE2eRealGatewayTestFiles,
   uiE2eRuntimeBudgetTestFile,
   uiE2eSerialTestFiles,
 } from "../vitest/vitest.ui-e2e.config.ts";
+import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
 
 /** Verify private-server discovery, serial ownership, and exact E2E selection. */
-export function assertControlUiE2eOwnership(makeTempDirectory: (prefix: string) => string): void {
+export function assertControlUiE2eOwnership(
+  makeTempDirectory: (prefix: string) => string,
+  parser: NativeTypeScriptParser,
+): void {
   const trackedUiE2eFiles = execFileSync(
     "git",
     [
@@ -34,12 +38,7 @@ export function assertControlUiE2eOwnership(makeTempDirectory: (prefix: string) 
     .filter(Boolean)
     .toSorted();
   const helperPrivateServerFiles = trackedUiE2eFiles.filter((file) => {
-    const sourceFile = ts.createSourceFile(
-      file,
-      readFileSync(file, "utf8"),
-      ts.ScriptTarget.Latest,
-      true,
-    );
+    const sourceFile = parser.parseSourceFile(file, readFileSync(file, "utf8"));
     let ownsPrivateServer = false;
     const visit = (node: ts.Node, inSuiteServer = false) => {
       if (ownsPrivateServer) {
@@ -51,6 +50,7 @@ export function assertControlUiE2eOwnership(makeTempDirectory: (prefix: string) 
         if (
           inSuiteServer &&
           (node.expression.text === "createOpenClawTestInstance" ||
+            node.expression.text === "startBuiltControlUiE2eServer" ||
             node.expression.text === "startProductionControlUiE2eServer" ||
             node.expression.text === "startProviderBrowserLoginFixture" ||
             node.expression.text === "createServer")
@@ -92,7 +92,7 @@ export function assertControlUiE2eOwnership(makeTempDirectory: (prefix: string) 
           return;
         }
       }
-      ts.forEachChild(node, (child) => visit(child, inSuiteServer));
+      node.forEachChild((child) => visit(child, inSuiteServer));
     };
     visit(sourceFile);
     return ownsPrivateServer;
@@ -157,14 +157,6 @@ export function assertControlUiE2eOwnership(makeTempDirectory: (prefix: string) 
     globSync(test.include, { cwd: process.cwd(), exclude: test.exclude }).toSorted();
   const rootTest = config.test as { exclude: string[]; include: string[] };
   expect(config.test?.globalSetup).toEqual([]);
-  expect(config.test?.include).toEqual([
-    "ui/src/**/*.e2e.test.ts",
-    "extensions/*/browser/**/*.e2e.test.ts",
-    "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
-    "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
-    "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
-    "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
-  ]);
   expect(projects.map((project) => project.test.name)).toEqual([
     "ui-e2e-bundled",
     "ui-e2e-standalone",

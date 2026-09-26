@@ -1,4 +1,8 @@
 import { performance } from "node:perf_hooks";
+import {
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
@@ -8,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
+import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./server-methods/session-model-selection-policy.js";
@@ -40,23 +45,6 @@ type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntries"> & 
   hasMore: boolean;
 };
 
-function resolveSessionsListLimit(
-  opts: SessionsListParams,
-  defaultLimit?: number,
-): number | undefined {
-  if (typeof opts.limit !== "number" || !Number.isFinite(opts.limit)) {
-    return defaultLimit;
-  }
-  return Math.max(1, Math.floor(opts.limit));
-}
-
-function resolveSessionsListOffset(opts: SessionsListParams): number {
-  if (typeof opts.offset !== "number" || !Number.isFinite(opts.offset)) {
-    return 0;
-  }
-  return Math.max(0, Math.floor(opts.offset));
-}
-
 function resolveSessionsListWindowLimit(limit: number | undefined, offset: number) {
   if (limit === undefined) {
     return undefined;
@@ -69,8 +57,8 @@ function* selectSessionEntries(
   params: SessionListFilterParams & { defaultLimit?: number },
 ): SynchronousWork<SessionEntrySelection> {
   const { ownerEntries, entries: filtered, ...facets } = yield* filterSessionEntries(params);
-  const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
-  const offset = resolveSessionsListOffset(params.opts);
+  const limit = resolveOptionalIntegerOption(params.opts.limit, { min: 1 }) ?? params.defaultLimit;
+  const offset = resolveNonNegativeIntegerOption(params.opts.offset, 0);
   const windowLimit = resolveSessionsListWindowLimit(limit, offset);
   const sortedWindow = yield* sortAndLimitSessionEntries(
     filtered,
@@ -111,18 +99,33 @@ function buildSessionsListResult(
   params: Pick<SessionListFilterParams, "cfg" | "opts" | "modelCatalog">,
   list: SessionEntrySelection & { now: number; storePath: string },
   sessions: GatewaySessionRow[],
+  policyConfig: OpenClawConfig,
+  client?: GatewayClient | null,
 ): SessionsListResult {
   const { cfg, opts, modelCatalog } = params;
   // The defaults projection uses the same agent identity as getSessionDefaults:
   // the requested agent when scoped, otherwise the legacy compatibility agent.
   // Legacy plain-array catalogs (direct list callers) pass through
   // unchanged; per-agent maps resolve by the same identity.
+  const defaultsAgentId = resolveSessionsListDefaultsAgentId(cfg, opts.agentId);
   const preparedDefaultsCatalog =
-    modelCatalog instanceof Map
-      ? modelCatalog.get(resolveSessionsListDefaultsAgentId(cfg, opts.agentId))
-      : undefined;
+    modelCatalog instanceof Map ? modelCatalog.get(defaultsAgentId) : undefined;
   const defaultsCatalog =
     modelCatalog instanceof Map ? preparedDefaultsCatalog?.entries : modelCatalog;
+  const metadataSnapshot = readPreparedGatewayModelCatalogMetadata(preparedDefaultsCatalog);
+  const defaults = getSessionDefaults(cfg, defaultsCatalog, {
+    ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    allowPluginNormalization: false,
+    providerPolicySource: preparedDefaultsCatalog?.pluginRegistry,
+    metadataSnapshot,
+  });
+  const policy =
+    client === undefined
+      ? undefined
+      : prepareOperatorModelPresentation({ cfg, policyConfig, client, metadataSnapshot })?.forAgent(
+          defaultsAgentId,
+          defaultsCatalog,
+        );
   return {
     ts: list.now,
     path: list.storePath,
@@ -141,12 +144,7 @@ function buildSessionsListResult(
           peopleSessionCount: list.peopleSessionCount,
         }
       : {}),
-    defaults: getSessionDefaults(cfg, defaultsCatalog, {
-      ...(opts.agentId ? { agentId: opts.agentId } : {}),
-      allowPluginNormalization: false,
-      providerPolicySource: preparedDefaultsCatalog?.pluginRegistry,
-      metadataSnapshot: readPreparedGatewayModelCatalogMetadata(preparedDefaultsCatalog),
-    }),
+    defaults: policy ? policy.defaults(defaults) : defaults,
     sessions,
   };
 }
@@ -485,6 +483,8 @@ export async function listProjectedSessions(params: {
           prepared,
           { ...selection, now, storePath: prepared.storePath },
           sessions,
+          context?.getCommittedRuntimeConfig?.() ?? cfg,
+          client,
         );
         if (client !== undefined) {
           result.defaults.modelSelectionTarget = resolveGatewayModelSelectionPolicy({

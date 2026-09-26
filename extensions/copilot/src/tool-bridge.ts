@@ -152,7 +152,7 @@ export async function createCopilotToolBridge(
 
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntime({
     abortSignal: attemptParams.abortSignal,
-    agentId: attemptParams.sandboxAgentId ?? input.agentId,
+    agentId: input.agentId,
     config: attemptParams.config,
     codeModeOverride: attemptParams.codeModeOverride,
     disableTools: attemptParams.disableTools,
@@ -174,7 +174,7 @@ export async function createCopilotToolBridge(
     runId: attemptParams.runId,
     runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
     sessionId: input.sessionId,
-    sessionKey: attemptParams.sandboxSessionKey ?? attemptParams.sessionKey,
+    sessionKey: attemptParams.sessionKey,
     scheduledToolPolicy: attemptParams.scheduledToolPolicy,
     sourceReplyDeliveryMode: attemptParams.sourceReplyDeliveryMode,
     toolsAllow: attemptParams.toolsAllow,

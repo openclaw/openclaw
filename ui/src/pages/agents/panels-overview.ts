@@ -6,6 +6,7 @@ import type {
   AgentsFilesListResult,
   AgentsListResult,
   ModelCatalogEntry,
+  ModelCatalogResult,
 } from "../../api/types.ts";
 import {
   renderDecisionModelPicker,
@@ -66,6 +67,8 @@ export function renderAgentOverview(params: {
   configSaving: boolean;
   configDirty: boolean;
   modelCatalog: ModelCatalogEntry[];
+  modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
+  modelCatalogRetired?: boolean;
   decisionModels: DecisionModelEntry[];
   modelCatalogStatus: PanelRefreshStatus;
   onConfigReload: () => void;
@@ -81,7 +84,7 @@ export function renderAgentOverview(params: {
 }) {
   const {
     agent,
-    configForm,
+    configForm: rawConfigForm,
     agentFilesList,
     configLoading,
     configSaving,
@@ -92,8 +95,18 @@ export function renderAgentOverview(params: {
     onModelFallbacksChange,
     onSelectPanel,
   } = params;
+  const catalogOwnsChoices = params.modelCatalogRetired || params.modelSelectionPolicy?.restricted;
+  const configForm = catalogOwnsChoices ? null : rawConfigForm;
+  const visibleAgent = catalogOwnsChoices
+    ? {
+        ...agent,
+        model: params.modelSelectionPolicy?.defaultModel
+          ? { primary: params.modelSelectionPolicy.defaultModel }
+          : undefined,
+      }
+    : agent;
   const context = buildAgentContext(
-    agent,
+    visibleAgent,
     configForm,
     agentFilesList,
     params.defaultId,
@@ -101,7 +114,7 @@ export function renderAgentOverview(params: {
   );
   const isDefault = context.isDefault;
   const config = resolveAgentConfig(configForm, agent.id);
-  const agentModel = agent.model;
+  const agentModel = visibleAgent.model;
   const defaultModel = resolveModelLabel(config.defaults?.model ?? agentModel);
   const entryPrimary = resolveModelPrimary(config.entry?.model);
   const defaultPrimary =
@@ -195,20 +208,32 @@ export function renderAgentOverview(params: {
               : nothing
           }
           <div class="agent-identity-editor__actions">
-            <label class="btn btn--sm">
+            <button
+              type="button"
+              class="btn btn--sm"
+              ?disabled=${identityBusy}
+              @click=${(event: Event) => {
+                const button = event.currentTarget;
+                const input =
+                  button instanceof HTMLButtonElement ? button.nextElementSibling : null;
+                if (input instanceof HTMLInputElement) {
+                  input.click();
+                }
+              }}
+            >
               ${
                 identityAvatarUrl
                   ? t("agents.identity.replaceImage")
                   : t("agents.identity.chooseImage")
               }
-              <input
-                type="file"
-                accept="image/*"
-                hidden
-                ?disabled=${identityBusy}
-                @change=${handleAvatarFileSelect}
-              />
-            </label>
+            </button>
+            <input
+              type="file"
+              accept="image/*"
+              hidden
+              ?disabled=${identityBusy}
+              @change=${handleAvatarFileSelect}
+            />
             <button
               type="button"
               class="btn btn--sm primary"
@@ -344,7 +369,7 @@ export function renderAgentOverview(params: {
               .getValueKey=${normalizeAgentModelRefForConfig}
               .placeholder=${t("agents.overview.addFallback")}
               .accessibleLabel=${t("agents.overview.fallbacks")}
-              .allowCustom=${true}
+              .allowCustom=${!catalogOwnsChoices}
               .disabled=${disabled}
               .onChange=${(next: string[]) => onModelFallbacksChange(agent.id, next)}
               .onOpen=${params.onModelCatalogOpen}

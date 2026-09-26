@@ -1,4 +1,3 @@
-// Control UI chat module owns editing a queued message in its queue row.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
@@ -10,11 +9,10 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   anyChatOutboxPaneMatches,
-  isDurableQueuedMessage,
   readQueuedMessageById,
-  removeQueuedMessageWithoutReleasing,
   type ChatQueueScopedSessionHost,
 } from "./chat-queue.ts";
 import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
@@ -149,7 +147,7 @@ export function beginQueuedMessageEdit(
     revision: 0,
     ...(item.replyToId ? { replyToId: item.replyToId } : {}),
     source: { ...item },
-    sourceWasDurable: isDurableQueuedMessage(host, id),
+    sourceWasDurable: chatOutboxOwner(host).durable(host, id) !== undefined,
   };
   return "started";
 }
@@ -209,7 +207,7 @@ export function retireEditedQueuedMessageSource(
     const source = readQueuedMessageById(host, edit.id);
     if (
       edit.sourceWasDurable ||
-      isDurableQueuedMessage(host, edit.id) ||
+      chatOutboxOwner(host).durable(host, edit.id) !== undefined ||
       !source ||
       !sameQueuedDeliveryVersion(source, edit.source)
     ) {
@@ -217,7 +215,7 @@ export function retireEditedQueuedMessageSource(
     }
   }
   host.chatQueuedEdit = null;
-  removeQueuedMessageWithoutReleasing(host, edit.id);
+  chatOutboxOwner(host).remove(host, edit.id);
   // Images the operator dropped during the edit lose their last owner here; the
   // ones the replacement still carries must survive, so release only the rest.
   // The payloads come from the token: a successful write already retired the row

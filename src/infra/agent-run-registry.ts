@@ -5,16 +5,22 @@ import { registerListener } from "../shared/listeners.js";
 import { recordAgentEventRouting } from "./agent-event-execution-context.js";
 import {
   AgentRunApprovalLeases,
+  isCurrentAgentRunApprovalAuthority,
   type AgentRunApprovalClosureReason,
 } from "./agent-run-approval-leases.js";
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 import {
   areAgentRunModelsEqual,
   buildAgentRunProjectionIndex,
+  mergeProjectedAgentRunStates,
   projectedAgentRunInputKey,
   projectedRunIdentity,
 } from "./agent-run-projection.js";
-import { getAgentRunRegistryState, bumpAgentRunIndexVersion } from "./agent-run-registry-state.js";
+import {
+  getAgentRunRegistryState,
+  bumpAgentRunIndexVersion,
+  getAgentRunContextOwnerStatus,
+} from "./agent-run-registry-state.js";
 import type {
   AgentRunContext,
   AgentRunContextOwnership,
@@ -26,10 +32,20 @@ import type {
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
 
 export type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
+export { getAgentRunContextOwnerStatus } from "./agent-run-registry-state.js";
 export type { ProjectedAgentRunIndex } from "./agent-run-registry.types.js";
 
+const delegatedAuthorityFailures = new WeakMap<AgentRunDelegatedAuthority, { cause: unknown }>();
+
+/** Diagnostic only: a retained failure never restores a released claim. */
+export function readAgentRunDelegatedAuthorityFailure(
+  authority: AgentRunDelegatedAuthority,
+): { cause: unknown } | undefined {
+  return delegatedAuthorityFailures.get(authority);
+}
+
 /** Reads the process-local version of the active-run projection inputs. */
-function readAgentRunIndexVersion(): number {
+export function readAgentRunIndexVersion(): number {
   return getAgentRunRegistryState().version;
 }
 
@@ -354,23 +370,6 @@ export function consumeCronNextCheckProposal(runId: string, jobId: string): numb
   return cronRun.nextCheckMs;
 }
 
-export function getAgentRunContextOwnerStatus(
-  runId: string,
-  claimId: string,
-  lifecycleGeneration: string,
-): "active" | "clear-requested" | undefined {
-  const state = getAgentRunRegistryState();
-  const owners = state.owners.get(runId);
-  if (
-    lifecycleGeneration !== state.lifecycleGeneration ||
-    owners?.lifecycleGeneration !== lifecycleGeneration ||
-    !owners.claimIds.has(claimId)
-  ) {
-    return undefined;
-  }
-  return owners.clearRequested ? "clear-requested" : "active";
-}
-
 /** Claims approval authority for the exact admitted operational execution. */
 export function claimAgentRunDelegatedAuthority(
   operationalRunInstance: Readonly<{ instanceId: string; runId: string }>,
@@ -466,21 +465,29 @@ export function getActiveAgentRunDelegatedAuthority(
       ) !== undefined
       ? authority
       : undefined;
-  } catch {
+  } catch (error) {
+    if (!delegatedAuthorityFailures.has(authority)) {
+      delegatedAuthorityFailures.set(authority, { cause: error });
+    }
     // A copied approval cannot outlive its source; retire the exact owner at detection.
     releaseAgentRunContext(operationalRunInstance.runId, authority.claimId);
     return undefined;
   }
 }
 
-export function validateAgentRunDelegatedAuthority(authority: AgentRunDelegatedAuthority): boolean {
+export function validateAgentRunDelegatedAuthority(
+  authority: AgentRunDelegatedAuthority,
+  ancestor?: AgentRunDelegatedAuthority,
+): boolean {
   const active = getActiveAgentRunDelegatedAuthority(authority.operationalRunInstance);
-  if (!active || active.lifecycleGeneration !== authority.lifecycleGeneration) {
-    return false;
-  }
-  const leases = getAgentRunContext(authority.operationalRunInstance.runId)?.approvalLeases;
-  return (
-    active.claimId === authority.claimId || leases?.isActive(active, authority.claimId) === true
+  return Boolean(
+    active &&
+    isCurrentAgentRunApprovalAuthority(
+      active,
+      getAgentRunContext(authority.operationalRunInstance.runId)?.approvalLeases,
+      authority,
+      ancestor,
+    ),
   );
 }
 
@@ -491,13 +498,13 @@ export function claimAgentRunApprovalAuthority(
 ): AgentRunDelegatedAuthority {
   const state = getAgentRunRegistryState();
   const context = state.contexts.get(parent.operationalRunInstance.runId);
-  if (context?.delegatedAuthority !== parent || !validateAgentRunDelegatedAuthority(parent)) {
+  if (!context?.delegatedAuthority || !validateAgentRunDelegatedAuthority(parent)) {
     throw new Error("agent run approval authority is no longer active");
   }
   const leases = (context.approvalLeases ??= new AgentRunApprovalLeases((authority, reason) =>
     notifyDelegatedAuthorityClosed(state, authority, reason),
   ));
-  return leases.claim(parent, inputSignals);
+  return leases.claim(context.delegatedAuthority, parent, inputSignals);
 }
 
 /** Compare-releases only the exact authority owned by one admitted execution. */
@@ -625,13 +632,7 @@ export function resolveProjectedAgentRunProgressState(params: {
       statuses.push(index.ownerlessSessionIds.get(params.sessionId));
     }
   }
-  return statuses.includes("running")
-    ? "running"
-    : statuses.includes("queued")
-      ? "queued"
-      : statuses.includes("capacity-wait")
-        ? "capacity-wait"
-        : undefined;
+  return statuses.reduce(mergeProjectedAgentRunStates, undefined);
 }
 
 /** Clears context state for a run that has ended or been discarded. */

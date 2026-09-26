@@ -257,6 +257,13 @@ describe("subagents tool", () => {
       listTasks: () => [selected],
       cancelTask,
     });
+    expect(tool.parameters).toMatchObject({
+      properties: {
+        timeoutSeconds: {
+          description: expect.stringMatching(/integer.*0–60.*default: 30.*0.*snapshot/),
+        },
+      },
+    });
     const result = await tool.execute("snapshot", {
       action: "wait",
       taskIds: [selected.taskId],

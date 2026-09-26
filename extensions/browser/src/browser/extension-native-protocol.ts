@@ -1,5 +1,5 @@
 import os from "node:os";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseStrictJsonObject } from "./extension-relay/strict-json.js";
 
 const BROWSER_NATIVE_REQUEST_MAX_BYTES = 4 * 1024;
 const BROWSER_NATIVE_RESPONSE_MAX_BYTES = 1024 * 1024;
@@ -35,101 +35,6 @@ function writeNativeUint32(buffer: Buffer, value: number, offset = 0): void {
   }
 }
 
-function rootJsonKeys(raw: string): string[] | null {
-  const keys: string[] = [];
-  let index = 0;
-  const skipWhitespace = () => {
-    while (/\s/u.test(raw[index] ?? "")) {
-      index += 1;
-    }
-  };
-  const readJsonString = (): string | null => {
-    if (raw[index] !== '"') {
-      return null;
-    }
-    const start = index++;
-    while (index < raw.length) {
-      const char = raw[index++];
-      if (char === "\\") {
-        index += 1;
-      } else if (char === '"') {
-        try {
-          return JSON.parse(raw.slice(start, index)) as string;
-        } catch {
-          return null;
-        }
-      }
-    }
-    return null;
-  };
-  const skipValue = (): boolean => {
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    while (index < raw.length) {
-      const char = raw[index];
-      if (inString) {
-        index += 1;
-        if (escaped) {
-          escaped = false;
-        } else if (char === "\\") {
-          escaped = true;
-        } else if (char === '"') {
-          inString = false;
-        }
-        continue;
-      }
-      if (char === '"') {
-        inString = true;
-        index += 1;
-        continue;
-      }
-      if (char === "{" || char === "[") {
-        depth += 1;
-      } else if (char === "}" || char === "]") {
-        if (depth === 0) {
-          return true;
-        }
-        depth -= 1;
-      } else if (char === "," && depth === 0) {
-        return true;
-      }
-      index += 1;
-    }
-    return true;
-  };
-
-  skipWhitespace();
-  if (raw[index++] !== "{") {
-    return null;
-  }
-  for (;;) {
-    skipWhitespace();
-    if (raw[index] === "}") {
-      return keys;
-    }
-    const key = readJsonString();
-    if (key === null) {
-      return null;
-    }
-    keys.push(key);
-    skipWhitespace();
-    if (raw[index++] !== ":") {
-      return null;
-    }
-    skipWhitespace();
-    if (!skipValue()) {
-      return null;
-    }
-    skipWhitespace();
-    if (raw[index] === ",") {
-      index += 1;
-      continue;
-    }
-    return raw[index] === "}" ? keys : null;
-  }
-}
-
 function isCanonicalNonce(value: unknown): value is string {
   if (typeof value !== "string" || !NONCE_PATTERN.test(value)) {
     return false;
@@ -140,20 +45,11 @@ function isCanonicalNonce(value: unknown): value is string {
 
 /** Strictly validate one decoded native bootstrap request. */
 function parseBrowserNativeRequest(raw: string): BrowserNativeBootstrapRequest | null {
-  const keys = rootJsonKeys(raw);
-  if (!keys || new Set(keys).size !== keys.length) {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  const record = asNullableRecord(parsed);
+  const record = parseStrictJsonObject(raw);
   if (record?.v !== 1 || !isCanonicalNonce(record.nonce)) {
     return null;
   }
+  const keys = Object.keys(record);
   const expected =
     record.op === "ensure_relay" ? ["v", "op", "nonce", "relayPort"] : ["v", "op", "nonce"];
   if (keys.length !== expected.length || !expected.every((key) => keys.includes(key))) {

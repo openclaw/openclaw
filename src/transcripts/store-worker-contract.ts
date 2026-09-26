@@ -1,4 +1,5 @@
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease-store.js";
 import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./provider-types.js";
 import type {
   queryTranscriptReadEntries,
@@ -10,6 +11,7 @@ import type {
   TranscriptReadPurpose,
 } from "./store-read.js";
 import type {
+  readTranscriptCanonicalSessionRow,
   readTranscriptExportOwnership,
   readTranscriptExportPathCollisions,
   readTranscriptExportPathOwners,
@@ -21,7 +23,10 @@ import type {
   readTranscriptSummarySnapshot,
   readTranscriptJsonlDigest,
 } from "./store-sqlite-read.js";
-import type { writeMeetingTranscriptSummaryInDatabase } from "./store-sqlite-write.js";
+import type {
+  writeMeetingTranscriptSessionInDatabase,
+  writeMeetingTranscriptSummaryInDatabase,
+} from "./store-sqlite-write.js";
 import type {
   appendMeetingTranscriptUtterance,
   readRecentStoppedTranscriptSession,
@@ -36,6 +41,29 @@ export type TranscriptAppendScheduler = (
 ) => Promise<void>;
 
 export type TranscriptWriteOperations = {
+  "transcripts.writeSession": {
+    input: Parameters<typeof writeMeetingTranscriptSessionInDatabase>[1] & { readOnly?: boolean };
+    output: { ok: true } | { ok: false; reason: "changed" | "conflict" };
+  };
+  "transcripts.markPendingExports": {
+    input: {
+      session: SessionIdentity;
+      fileNames: string[];
+      readOnly?: boolean;
+      lease?: OpenClawStateLeaseIdentity;
+    };
+    output: void;
+  };
+  "transcripts.recordExportManifest": {
+    input: {
+      session: SessionIdentity;
+      exportedHashes: Record<string, string>;
+      removedExports: string[];
+      readOnly?: boolean;
+      lease?: OpenClawStateLeaseIdentity;
+    };
+    output: void;
+  };
   "transcripts.append": {
     input: Omit<Parameters<typeof appendMeetingTranscriptUtterance>[0], "database"> & {
       readOnly?: boolean;
@@ -54,8 +82,15 @@ export type TranscriptWriteOperations = {
 };
 
 export type TranscriptWriteCommand = SqliteWorkerCommand<TranscriptWriteOperations>;
+export type TranscriptExportWriteKey =
+  | "transcripts.markPendingExports"
+  | "transcripts.recordExportManifest";
 
 export type TranscriptReadRequests = {
+  "transcripts.canonicalSessionRow": {
+    input: { selector: string };
+    output: ReturnType<typeof readTranscriptCanonicalSessionRow>;
+  };
   "transcripts.readEntries": {
     input: Parameters<typeof queryTranscriptReadEntries>[1];
     output: ReturnType<typeof queryTranscriptReadEntries>;

@@ -12,6 +12,7 @@ import {
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
+  pollProviderOperation,
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
@@ -74,11 +75,6 @@ type MinimaxFileRetrieveResponse = {
   base_resp?: MinimaxBaseResp;
 };
 
-type MinimaxResponseHandle = {
-  response: Response;
-  release: () => Promise<void>;
-};
-
 function resolveMinimaxRequestTimeoutMs(
   timeoutMs: ProviderOperationTimeoutMs | undefined,
 ): number | undefined {
@@ -97,7 +93,7 @@ async function fetchMinimaxResponse(params: {
   requestFailedMessage: string;
   policy: MinimaxRequestPolicy;
   retry?: TransientProviderRetryConfig;
-}): Promise<MinimaxResponseHandle> {
+}) {
   return await executeProviderOperationWithRetry({
     provider: "minimax",
     stage: params.stage,
@@ -188,68 +184,6 @@ function resolveResolution(params: {
       ? current
       : best;
   });
-}
-
-async function pollMinimaxVideo(params: {
-  taskId: string;
-  headers: Headers;
-  timeoutMs?: number;
-  baseUrl: string;
-  fetchFn: typeof fetch;
-  policy: MinimaxRequestPolicy;
-}): Promise<MinimaxQueryResponse> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs,
-    label: `MiniMax video generation task ${params.taskId}`,
-  });
-  const resolveTimeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-  });
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const url = new URL(`${params.baseUrl}/v1/query/video_generation`);
-    url.searchParams.set("task_id", params.taskId);
-    const { response, release } = await fetchMinimaxResponse({
-      stage: "poll",
-      url: url.toString(),
-      init: {
-        method: "GET",
-        headers: params.headers,
-      },
-      timeoutMs: resolveTimeoutMs,
-      fetchFn: params.fetchFn,
-      requestFailedMessage: "MiniMax video status request failed",
-      policy: params.policy,
-    });
-    let payload: MinimaxQueryResponse;
-    try {
-      payload = await readProviderJsonResponse<MinimaxQueryResponse>(
-        response,
-        "MiniMax video generation failed",
-        {
-          timeoutMs: resolveTimeoutMs,
-          onTimeout: ({ timeoutMs }) =>
-            new Error(`MiniMax video generation timed out after ${timeoutMs}ms`),
-        },
-      );
-    } finally {
-      await release();
-    }
-    assertMinimaxBaseResp(payload.base_resp, "MiniMax video generation failed");
-    switch (normalizeOptionalString(payload.status)) {
-      case "Success":
-        return payload;
-      case "Fail":
-        throw new Error(
-          normalizeOptionalString(payload.base_resp?.status_msg) ||
-            "MiniMax video generation failed",
-        );
-      default:
-        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
-        break;
-    }
-  }
-  throw new Error(`MiniMax video generation task ${params.taskId} did not finish in time`);
 }
 
 async function downloadVideoFromUrl(params: {
@@ -466,16 +400,63 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
         if (!taskId) {
           throw new Error("MiniMax video generation response missing task_id");
         }
-        const completed = await pollMinimaxVideo({
-          taskId,
-          headers,
+        const pollDeadline = createProviderOperationDeadline({
           timeoutMs: resolveProviderOperationTimeoutMs({
             deadline,
             defaultTimeoutMs: DEFAULT_OPERATION_TIMEOUT_MS,
           }),
-          baseUrl,
-          fetchFn,
-          policy: requestPolicy,
+          label: `MiniMax video generation task ${taskId}`,
+        });
+        const resolveTimeoutMs = createProviderOperationTimeoutResolver({
+          deadline: pollDeadline,
+          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        });
+        const completed = await pollProviderOperation<MinimaxQueryResponse>({
+          maxAttempts: MAX_POLL_ATTEMPTS,
+          timeoutMessage: `MiniMax video generation task ${taskId} did not finish in time`,
+          wait: () =>
+            waitProviderOperationPollInterval({
+              deadline: pollDeadline,
+              pollIntervalMs: POLL_INTERVAL_MS,
+            }),
+          read: async () => {
+            const url = new URL(`${baseUrl}/v1/query/video_generation`);
+            url.searchParams.set("task_id", taskId);
+            const { response: pollResponse, release: releasePoll } = await fetchMinimaxResponse({
+              stage: "poll",
+              url: url.toString(),
+              init: {
+                method: "GET",
+                headers,
+              },
+              timeoutMs: resolveTimeoutMs,
+              fetchFn,
+              requestFailedMessage: "MiniMax video status request failed",
+              policy: requestPolicy,
+            });
+            try {
+              return await readProviderJsonResponse<MinimaxQueryResponse>(
+                pollResponse,
+                "MiniMax video generation failed",
+                {
+                  timeoutMs: resolveTimeoutMs,
+                  onTimeout: ({ timeoutMs }) =>
+                    new Error(`MiniMax video generation timed out after ${timeoutMs}ms`),
+                },
+              );
+            } finally {
+              await releasePoll();
+            }
+          },
+          isComplete: (payload) => {
+            assertMinimaxBaseResp(payload.base_resp, "MiniMax video generation failed");
+            return normalizeOptionalString(payload.status) === "Success";
+          },
+          getFailureMessage: (payload) =>
+            normalizeOptionalString(payload.status) === "Fail"
+              ? normalizeOptionalString(payload.base_resp?.status_msg) ||
+                "MiniMax video generation failed"
+              : undefined,
         });
         const videoUrl = normalizeOptionalString(completed.video_url);
         const fileId = normalizeOptionalString(completed.file_id);

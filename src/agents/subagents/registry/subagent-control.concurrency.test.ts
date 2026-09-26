@@ -1,3 +1,6 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -19,7 +22,6 @@ import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-s
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunTerminated, registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
@@ -37,7 +39,7 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
     sessionKey,
     defaultSessionId: sessionId,
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: "selected-original",
     childSessionKey: sessionKey,
     requesterSessionKey: owner,
@@ -119,7 +121,7 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
       sessionKey,
       defaultSessionId: sessionId,
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
       requesterSessionKey: "agent:main:main",
@@ -237,7 +239,7 @@ it.each([
       sessionKey,
       defaultSessionId: sessionId,
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
       requesterSessionKey: "agent:main:main",
@@ -390,7 +392,7 @@ it.each(["bulk", "admin"] as const)(
         sessionKey: sessionKey(id),
         defaultSessionId: `${id}-session`,
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: id,
         childSessionKey: sessionKey(id),
         requesterSessionKey: id === "root" ? requester : owner,
@@ -530,7 +532,7 @@ it.each(["after interrupt", "before capacity release"] as const)(
         defaultSessionId: `${id}-session`,
       });
       if (id !== "g") {
-        register(id);
+        await register(id);
       }
     }
     const unrelatedStart = vi.fn(async () => {});
@@ -568,7 +570,10 @@ it.each(["after interrupt", "before capacity release"] as const)(
     });
     const registerG = () =>
       admissionD.run(async () => {
-        register("g", true);
+        const completion = register("g", true);
+        if (completion) {
+          await completion;
+        }
         enqueueSwarmRun({
           groupId: JSON.stringify(["main", key("d"), "shared-name"]),
           runId: "g",

@@ -1,14 +1,14 @@
-// Slack provider module implements model/runtime integration.
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   asOptionalRecord as asRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatSlackError } from "../errors.js";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
 import type { SlackIdentityHealth } from "./enterprise-install.js";
-import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
+import { waitForSlackSocketDisconnect } from "./reconnect-policy.js";
 import { installSlackSocketModeEnvelopeGuard } from "./socket-mode-envelope.js";
 
 type SlackAppConstructor = typeof import("@slack/bolt").App;
@@ -221,7 +221,7 @@ export function publishSlackBlockedStatus(
     return;
   }
   setStatus(
-    channelBlockedPatch(formatUnknownError(error), {
+    channelBlockedPatch(formatSlackError(error), {
       connected: false,
     }),
   );
@@ -235,7 +235,7 @@ export function publishSlackDisconnectedStatus(
     return;
   }
   const at = Date.now();
-  const message = error ? formatUnknownError(error) : undefined;
+  const message = error ? formatSlackError(error) : undefined;
   setStatus({
     connected: false,
     lifecycle: "recovering",
@@ -258,7 +258,7 @@ function isSlackSocketSelfInflictedLoggerWarning(args: readonly unknown[]) {
 
 function formatSlackSdkLogArgs(args: readonly unknown[]) {
   return args
-    .map((arg) => formatUnknownError(arg, ""))
+    .map((arg) => formatSlackError(arg, ""))
     .filter(Boolean)
     .join(" ");
 }
@@ -359,8 +359,7 @@ export function createSlackBoltApp(params: {
   let receiver:
     | InstanceType<SlackSocketModeReceiverConstructor>
     | InstanceType<SlackHttpReceiverConstructor>
-    | SlackReceiver
-    | undefined;
+    | SlackReceiver;
   if (params.slackMode === "socket") {
     const socketReceiver = new params.interop.SocketModeReceiver(socketModeReceiverOptions);
     const socketClient = socketReceiver.client;
@@ -388,7 +387,7 @@ export function createSlackBoltApp(params: {
   } else {
     receiver = createSlackRelayReceiver();
   }
-  const appReceiver = receiver && params.wrapReceiver ? params.wrapReceiver(receiver) : receiver;
+  const appReceiver = params.wrapReceiver ? params.wrapReceiver(receiver) : receiver;
   const app = new params.interop.App({
     token: params.token,
     clientOptions: params.clientOptions,
@@ -397,7 +396,7 @@ export function createSlackBoltApp(params: {
     // verification is enabled. Invalid tokens can reject before any listener
     // consumes that promise, tripping OpenClaw's fatal unhandled-rejection path.
     tokenVerificationEnabled: false,
-    ...(appReceiver ? { receiver: appReceiver } : {}),
+    receiver: appReceiver,
   });
   app.use(async (args) => {
     await params.onContextIdentity?.({
@@ -412,48 +411,30 @@ export function createSlackBoltApp(params: {
   return { app, receiver, socketModeLogger };
 }
 
-function createSlackSocketDisconnectWaiter(app: unknown, abortSignal?: AbortSignal) {
-  const waiterAbortController = new AbortController();
-  const relayAbort = () => waiterAbortController.abort();
-  let latest: SlackSocketDisconnect | undefined;
-  abortSignal?.addEventListener("abort", relayAbort, { once: true });
-  const promise = waitForSlackSocketDisconnect(app, waiterAbortController.signal).then((value) => {
-    latest = value;
-    return value;
-  });
-  return {
-    promise,
-    getLatest: () => latest,
-    cancel: () => {
-      waiterAbortController.abort();
-      abortSignal?.removeEventListener("abort", relayAbort);
-    },
-    complete: () => {
-      abortSignal?.removeEventListener("abort", relayAbort);
-    },
-  };
-}
-
 export async function startSlackSocketAndWaitForDisconnect(params: {
   app: { start: () => unknown };
   abortSignal?: AbortSignal;
   onStarted?: () => void | Promise<void>;
 }) {
-  const disconnectWaiter = createSlackSocketDisconnectWaiter(params.app, params.abortSignal);
+  const waiterAbortController = new AbortController();
+  const relayAbort = () => waiterAbortController.abort();
+  let disconnect: SlackSocketDisconnect | undefined;
+  params.abortSignal?.addEventListener("abort", relayAbort, { once: true });
+  const disconnected = waitForSlackSocketDisconnect(params.app, waiterAbortController.signal).then(
+    (value) => {
+      disconnect = value;
+      return value;
+    },
+  );
   try {
     await Promise.resolve(params.app.start());
     if (params.abortSignal?.aborted) {
-      disconnectWaiter.cancel();
       return null;
     }
     await params.onStarted?.();
-    const disconnect = await disconnectWaiter.promise;
-    disconnectWaiter.complete();
-    return disconnect;
+    return await disconnected;
   } catch (err) {
     await Promise.resolve();
-    const disconnect = disconnectWaiter.getLatest();
-    disconnectWaiter.cancel();
     if (isMissingSocketStartErrorDetail(err) && disconnect?.error !== undefined) {
       throw toErrorObject(disconnect.error, "Non-Error thrown");
     }
@@ -464,6 +445,9 @@ export async function startSlackSocketAndWaitForDisconnect(params: {
       });
     }
     throw err;
+  } finally {
+    waiterAbortController.abort();
+    params.abortSignal?.removeEventListener("abort", relayAbort);
   }
 }
 
@@ -491,6 +475,7 @@ function resolveSlackSocketShutdownClient(app: unknown): SlackSocketShutdownClie
 export async function gracefulStopSlackApp(app: { stop: () => unknown }) {
   const socketClient = resolveSlackSocketShutdownClient(app);
   if (socketClient) {
+    // Fence ping-timeout reconnects before Bolt begins asynchronous shutdown (#56508).
     socketClient.shuttingDown = true;
   }
   await Promise.resolve(app.stop()).catch(() => undefined);

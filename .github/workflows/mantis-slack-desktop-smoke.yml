@@ -225,6 +225,7 @@ jobs:
               fi
               runner_ip=""
               if [[ "$attempt" != "3" ]]; then
+                echo "::warning::Runner public IP lookup failed; retrying infrastructure discovery (${attempt}/3)." >&2
                 sleep "$attempt"
               fi
             done

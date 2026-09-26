@@ -20,7 +20,7 @@ import {
   readConfigHealthEntry,
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
-import type { NormalizedConfigIoDeps } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 function sameFingerprint(

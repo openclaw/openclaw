@@ -30,7 +30,6 @@ type NodePendingWorkItem = {
 type NodePendingWorkState = {
   revision: number;
   itemsById: Map<string, NodePendingWorkItem>;
-  pairingGeneration?: string;
 };
 
 type DrainOptions = {
@@ -71,7 +70,6 @@ function getOrCreateState(nodeId: string, pairingGeneration?: string): NodePendi
     state = {
       revision: 0,
       itemsById: new Map(),
-      ...(pairingGeneration ? { pairingGeneration } : {}),
     };
     states.set(pairingGeneration, state);
   }

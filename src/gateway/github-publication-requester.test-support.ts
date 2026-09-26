@@ -253,6 +253,7 @@ export function requireVisitorPublicationPolicy(f: { config: OpenClawConfig }): 
             ...roles.definitions.guest!,
             sandbox: "required",
             accessPolicyPlugin: "visitor-access",
+            modelPolicy: {},
           },
         },
       },

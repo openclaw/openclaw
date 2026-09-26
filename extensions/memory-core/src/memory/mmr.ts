@@ -1,14 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jaccardSimilarity, tokenize } from "./tokenize.js";
 
-/**
- * Maximal Marginal Relevance (MMR) re-ranking algorithm.
- *
- * MMR balances relevance with diversity by iteratively selecting results
- * that maximize: λ * relevance - (1-λ) * max_similarity_to_selected
- *
- * @see Carbonell & Goldstein, "The Use of MMR, Diversity-Based Reranking" (1998)
- */
+// Carbonell & Goldstein (1998): maximize λ * relevance - (1-λ) * similarity.
 
 type MMRItem = {
   score: number;
@@ -27,14 +20,6 @@ export const DEFAULT_MMR_CONFIG: MMRConfig = {
   lambda: 0.7,
 };
 
-/**
- * Compute MMR score for a candidate item.
- * MMR = λ * relevance - (1-λ) * max_similarity_to_selected
- */
-function computeMMRScore(relevance: number, maxSimilarity: number, lambda: number): number {
-  return lambda * relevance - (1 - lambda) * maxSimilarity;
-}
-
 type PreparedMMRItem<T extends MMRItem> = {
   item: T;
   score: number;
@@ -44,19 +29,13 @@ type PreparedMMRItem<T extends MMRItem> = {
   maxSimilarity: number;
 };
 
-/**
- * Re-rank items using Maximal Marginal Relevance (MMR).
- *
- * The algorithm iteratively selects items that balance relevance with diversity:
- * 1. Start with the highest-scoring item
- * 2. For each remaining slot, select the item that maximizes the MMR score
- * 3. MMR score = λ * relevance - (1-λ) * max_similarity_to_already_selected
- *
- * @param items - Items to re-rank, must have score and snippet
- * @param config - MMR configuration (lambda, enabled)
- * @returns Re-ranked items in MMR order
- */
-function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
+export function applyMMRToHybridResults<T extends MMRItem & { path: string; startLine: number }>(
+  items: T[],
+  config: Partial<MMRConfig> = {},
+): T[] {
+  if (items.length === 0) {
+    return items;
+  }
   const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
   if (!enabled || items.length <= 1) {
     return [...items];
@@ -89,7 +68,8 @@ function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {
     let bestItem: PreparedMMRItem<T> | null = null;
     let bestMMRScore = -Infinity;
     for (const candidate of remaining) {
-      const mmrScore = computeMMRScore(candidate.relevance, candidate.maxSimilarity, clampedLambda);
+      const mmrScore =
+        clampedLambda * candidate.relevance - (1 - clampedLambda) * candidate.maxSimilarity;
       if (
         mmrScore > bestMMRScore ||
         (mmrScore === bestMMRScore && candidate.score > (bestItem?.score ?? -Infinity))
@@ -116,16 +96,4 @@ function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {
     }
   }
   return selected;
-}
-
-/**
- * Apply MMR re-ranking to hybrid search results.
- */
-export function applyMMRToHybridResults<
-  T extends { score: number; snippet: string; path: string; startLine: number },
->(results: T[], config: Partial<MMRConfig> = {}): T[] {
-  if (results.length === 0) {
-    return results;
-  }
-  return mmrRerank(results, config);
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createUpdateFailureFact } from "./update-failure-facts.js";
 import { preparePublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
@@ -20,6 +21,120 @@ function prepareDiagnosticReport(reason: string) {
 }
 
 describe("update report diagnostic command boundary", () => {
+  it.each(["installed", "candidate"])(
+    "retains sanitized rejected fields from %s admission",
+    async (owner) => {
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "invalid-config-report",
+          result: {
+            mode: "npm",
+            status: "error",
+            reason: "invalid-config",
+            durationMs: 0,
+            steps: [
+              {
+                name: "invalid-config",
+                command: "",
+                cwd: "",
+                durationMs: 0,
+                exitCode: 1,
+                failureFacts: [
+                  {
+                    check: owner === "candidate" ? "candidate-admission" : "invalid-config",
+                    code: "invalid-config",
+                    ...(owner === "candidate"
+                      ? {
+                          message:
+                            "Update refused: configuration is invalid.\n- gateway.port: Invalid configuration field\n- models.providers.private-tenant.apiKey: Invalid configuration field\nprivate rejected value",
+                        }
+                      : { affectedKey: "gateway.port", message: "Invalid configuration field" }),
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        context,
+      );
+      expect(report.body).toContain("gateway.*");
+      expect(report.body).toContain("Invalid configuration field");
+      expect(report.body).not.toContain("[redacted-diagnostic]");
+      expect(report.body).not.toContain("private-tenant");
+      expect(report.body).not.toContain("private rejected value");
+      if (owner === "candidate") {
+        expect(report.body).toContain("models.providers.*");
+      }
+    },
+  );
+
+  it("preserves classified destination ownership and recovery without exposing usernames", async () => {
+    const redaction = { env: { HOME: "/Users/Fixture Owner" }, stateDir: "/report-test-state" };
+    const fact = createUpdateFailureFact(
+      {
+        check: "package-install",
+        code: "global-install-foreign-destination",
+        message: "Private arbitrary diagnostic text /Users/Fixture Owner/private",
+        destination: {
+          ownership: "foreign",
+          cause: "package-mismatch",
+          destinationKind: "npm-global",
+          prefix: "/home/Other Owner/.npm-global",
+          packageRoot: "/home/Other Owner/.npm-global/lib/node_modules/openclaw",
+          runningRoot: "/Users/Fixture Owner/.npm-global/lib/node_modules/openclaw",
+          runningPrefix: "/Users/Fixture Owner/.npm-global",
+          launcher: "/home/Other Owner/.npm-global/bin/openclaw",
+          launcherTarget: "/home/Other Owner/openclaw.mjs\nprivate-second-line",
+        },
+      },
+      redaction.env,
+    );
+    const step = {
+      name: "package-install",
+      command: "",
+      cwd: "",
+      durationMs: 0,
+      exitCode: 1,
+      failureFacts: [fact],
+    };
+    for (const recorded of [false, true]) {
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "destination-refusal",
+          result: {
+            mode: "npm",
+            status: "error",
+            reason: "global-install-foreign-destination",
+            durationMs: 0,
+            steps: recorded ? [] : [step],
+          },
+          ...(recorded
+            ? {
+                recordedRun: {
+                  runId: "destination-refusal",
+                  steps: updateRunStepsFromResultStep(step),
+                },
+              }
+            : {}),
+        },
+        redaction,
+      );
+      expect(report.body).toContain("ownership foreign; cause package-mismatch; kind npm-global");
+      expect(report.body).toContain("~/.npm-global/lib/node_modules/openclaw");
+      expect(report.body).toContain("/home/[redacted-user]/.npm-global");
+      expect(report.body).toContain("Next step:");
+      expect(report.body).toContain(
+        "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
+      );
+      expect(report.body).not.toContain("[redacted-diagnostic]");
+      for (const privateText of ["Fixture Owner", "Other Owner", "private-second-line"]) {
+        expect(report.body).not.toContain(privateText);
+        expect(JSON.stringify(fact)).not.toContain(privateText);
+      }
+      expect(report.body).not.toContain("Private arbitrary diagnostic");
+    }
+  });
+
   it.each([
     "Package rollback launcher backup changed",
     "Package rollback verification timed out",

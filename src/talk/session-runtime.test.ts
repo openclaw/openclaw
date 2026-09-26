@@ -211,6 +211,12 @@ describe("realtime voice bridge session runtime", () => {
     expect(handleDelegationInput).toHaveBeenCalledExactlyOnceWith("status", expect.any(Function));
     expectBridgeRequest(request).onTranscript?.("user", "status", true);
     expect(onTranscript).toHaveBeenCalledExactlyOnceWith("user", "status", true);
+    expectBridgeRequest(request).onTranscript?.("user", "corrected", false, {
+      textMode: "snapshot",
+    });
+    expect(onTranscript).toHaveBeenLastCalledWith("user", "corrected", false, {
+      textMode: "snapshot",
+    });
     expect(expectBridgeRequest(request).agentId).toBe("voice-agent");
     expect(expectBridgeRequest(request).audioFormat).toEqual(
       REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,

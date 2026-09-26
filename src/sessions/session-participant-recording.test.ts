@@ -8,7 +8,10 @@ import {
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { recordSessionParticipantBestEffort } from "./session-participant-recording.js";
+import {
+  recordSessionParticipantBestEffort,
+  waitForSessionParticipantRecording,
+} from "./session-participant-recording.js";
 
 const { recordParticipant } = vi.hoisted(() => ({
   recordParticipant: vi.fn<() => Promise<"inserted">>(),
@@ -33,7 +36,7 @@ const target = {
 };
 
 it.each(["resolve", "reject"] as const)(
-  "retains accepted participant work after its caller returns until persistence %ss",
+  "joins participant persistence without retaining its caller root when it %ss",
   async (outcome) => {
     const persistence = createDeferredCore<"inserted">();
     const started = createDeferredCore();
@@ -61,14 +64,20 @@ it.each(["resolve", "reject"] as const)(
         });
       });
       root.release();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
       await started.promise;
+      let joined = false;
+      const joinedRecording = waitForSessionParticipantRecording(target).then(() => {
+        joined = true;
+      });
       let drained = false;
       const drainage = work.drain().then(() => {
         drained = true;
       });
       await Promise.resolve();
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(drained).toBe(false);
+      expect(joined).toBe(false);
       const failure = new Error("Participant persistence failed");
       if (outcome === "reject") {
         persistence.reject(failure);
@@ -76,6 +85,8 @@ it.each(["resolve", "reject"] as const)(
         persistence.resolve("inserted");
       }
       await drainage;
+      await joinedRecording;
+      expect(joined).toBe(true);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(reported).toEqual(outcome === "reject" ? [failure] : []);
       expect(failures.size).toBe(0);

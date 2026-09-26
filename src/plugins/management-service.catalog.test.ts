@@ -104,6 +104,7 @@ describe("managed plugin catalog", () => {
         version: "2.0.0",
         featured: true,
         order: 40,
+        clawhubPackage: "@openclaw/diffs",
         install: { source: "clawhub", packageName: "@openclaw/diffs" },
       }),
     ]);
@@ -121,6 +122,7 @@ describe("managed plugin catalog", () => {
         installed: false,
         featured: true,
         order: 40,
+        clawhubPackage: "@openclaw/diffs",
         install: { source: "official", pluginId: "diffs" },
       }),
     ]);

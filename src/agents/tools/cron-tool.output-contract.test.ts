@@ -1,8 +1,8 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
-import ts from "typescript";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { typeCheckSources } from "../../../test/helpers/typescript.js";
 import { clearCronJobActive, markCronJobActive } from "../../cron/active-jobs.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
@@ -305,11 +305,10 @@ async function consume() {
 }
 `;
     const fileName = "/automations-consumer.ts";
-    const source = ts.createSourceFile(
-      fileName,
+    const source =
       file.content +
-        composition +
-        `
+      composition +
+      `
 async function checkContracts(action: "list" | "runs", input: Parameters<typeof automations>[0]) {
   const listed = await automations({ action: "list" });
   // @ts-expect-error Invented invoice fields are not part of an automation.
@@ -334,20 +333,8 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
   // @ts-expect-error Broad inputs retain all possible outputs.
   dynamic.entries.map(entry => entry.summary);
 }
-`,
-      ts.ScriptTarget.ESNext,
-      true,
-    );
-    const options = { noEmit: true, strict: true, types: [], target: ts.ScriptTarget.ESNext };
-    const host = ts.createCompilerHost(options);
-    const original = host.getSourceFile.bind(host);
-    host.getSourceFile = (name, ...args) => (name === fileName ? source : original(name, ...args));
-    const program = ts.createProgram([fileName], options, host);
-    expect(
-      ts
-        .getPreEmitDiagnostics(program)
-        .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
-    ).toEqual([]);
+`;
+    expect(typeCheckSources({ [fileName]: source })).toEqual([]);
     const composed = await waitUntilCompleted({
       details: resultDetails(
         await expectDefined(h.tools[0], "Code Mode exec").execute("compose-automations", {

@@ -96,7 +96,7 @@ afterEach(() => {
 });
 
 describe("node worker workspace retention", () => {
-  it("claims only the exact canonical placement workspace identity", () => {
+  it("preserves legacy synchronous plugin acquisition for the exact canonical placement workspace identity", () => {
     const root = fs.realpathSync.native(tempDirs.make("node-worker-workspace-managed-identity-"));
     const workspace = new NodeWorkerWorkspaceRuntime({ root });
     const input = testWorkerLaunchInput("/unused", "managed-identity");
@@ -140,7 +140,7 @@ describe("node worker workspace retention", () => {
     const input = testWorkerLaunchInput("/unused", "managed-retention");
     const ownerEpoch = input.descriptor.admission.ownerEpoch;
     const workspaceDir = seedGeneration(root, input, ownerEpoch);
-    const claim = workspace.acquireManagedWorkspace({
+    const claim = await workspace.acquireManagedWorkspaceAsync({
       workspaceDir,
       environmentId: input.descriptor.admission.environmentId,
       sessionId: input.descriptor.admission.sessionId,
@@ -198,7 +198,7 @@ describe("node worker workspace retention", () => {
       await removalStarted;
       controller.abort(new Error("retention cancelled"));
       expect(fs.existsSync(workspaceDir)).toBe(true);
-      expect(() => workspace.acquireManagedWorkspace(request)).toThrow(
+      await expect(workspace.acquireManagedWorkspaceAsync(request)).rejects.toThrow(
         "workspace is being removed",
       );
     } finally {

@@ -17,7 +17,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
-  DEFAULT_LIVE_RETRIES,
   DEFAULT_RESOURCE_LIMITS,
   resolveDockerE2ePlan,
 } from "../../scripts/lib/docker-e2e-plan.mts";
@@ -41,10 +40,12 @@ import {
   validateDockerCandidateEnvironment,
   writeRunSummary,
 } from "../../scripts/test-docker-all.mts";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { waitForChildClose } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { copyDockerSchedulerHarness } from "./docker-all-harness.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const { createPrepublishPluginRegistryArtifact } = vi.hoisted(() => ({
   createPrepublishPluginRegistryArtifact: vi.fn(),
@@ -393,7 +394,6 @@ describe("scripts/test-docker-all scheduler", () => {
       allowFrozenTargetScenarioOmissions: true,
       includeOpenWebUI: false,
       liveMode: "all",
-      liveRetries: DEFAULT_LIVE_RETRIES,
       orderLanes: <T>(lanes: T[]) => lanes,
       planReleaseAll: false,
       profile: "all",
@@ -1491,7 +1491,7 @@ const startedAt = realNow();
 Date.now = () => startedAt + (realNow() - startedAt) * 100;
 
 const { runShellCommand } = await import(${JSON.stringify(
-        new URL("../../scripts/test-docker-all.mts", import.meta.url).href,
+        resolveRuntimeWorkerUrl(toolingMtsEntrypoints.dockerAll).href,
       )});
 
 await runShellCommand({

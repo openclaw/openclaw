@@ -12,9 +12,9 @@ import {
 describe("sandbox config merges", () => {
   it("resolves sandbox scope deterministically", () => {
     expect(resolveSandboxScope({})).toBe("agent");
-    expect(resolveSandboxScope({ perSession: true })).toBe("session");
-    expect(resolveSandboxScope({ perSession: false })).toBe("shared");
-    expect(resolveSandboxScope({ perSession: true, scope: "agent" })).toBe("agent");
+    expect(resolveSandboxScope({ scope: "session" })).toBe("session");
+    expect(resolveSandboxScope({ scope: "shared" })).toBe("shared");
+    expect(resolveSandboxScope({ scope: "agent" })).toBe("agent");
   });
 
   it("merges sandbox docker env and ulimits (agent wins)", () => {

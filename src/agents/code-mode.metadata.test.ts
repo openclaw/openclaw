@@ -83,26 +83,33 @@ describe("Code Mode direct metadata provenance", () => {
   });
 
   it.each([
-    "throw new Error(client_metadata.description);",
-    "text(client_metadata.description); while (true) {}",
-  ])("protects direct metadata on guest failure: %s", async (code) => {
-    const { catalogRef, config, tools } = createCodeModeHarness();
-    const client = pluginTool("client_metadata", hostile);
-    applyCodeModeCatalog({ tools, config, catalogRef });
-    addClientToolsToCodeModeCatalog({ tools: [client], config, catalogRef });
-    const result = await expectDefined(tools[0], "exec").execute("metadata-error", {
-      code,
-    });
-    expect(resultDetails(result)).toMatchObject({ status: "failed" });
-    expect(JSON.stringify(resultDetails(result))).toContain(hostile);
-    const text = result.content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n");
-    expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
-    expect(text).toContain("[REMOVED_SPECIAL_TOKEN]");
-    expect(text).not.toContain("<|endoftext|>");
-  });
+    ["throw new Error(client_metadata.description);", undefined, "internal_error"],
+    ["text(client_metadata.description); while (true) {}", 2000, "timeout"],
+  ] as const)(
+    "protects direct metadata on guest failure: %s",
+    async (code, timeoutMs, failureCode) => {
+      const { catalogRef, config, tools } = createCodeModeHarness({ codeMode: { timeoutMs } });
+      const client = pluginTool("client_metadata", hostile);
+      applyCodeModeCatalog({ tools, config, catalogRef });
+      addClientToolsToCodeModeCatalog({ tools: [client], config, catalogRef });
+      const result = await expectDefined(tools[0], "exec").execute("metadata-error", {
+        code,
+      });
+      expect(resultDetails(result)).toMatchObject({
+        status: "failed",
+        code: failureCode,
+        failurePhase: "guest",
+      });
+      expect(JSON.stringify(resultDetails(result))).toContain(hostile);
+      const text = result.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n");
+      expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+      expect(text).toContain("[REMOVED_SPECIAL_TOKEN]");
+      expect(text).not.toContain("<|endoftext|>");
+    },
+  );
 
   it("leaves a native declaration trusted when unused external metadata is present", async () => {
     const { catalogRef, config, tools } = createCodeModeHarness();

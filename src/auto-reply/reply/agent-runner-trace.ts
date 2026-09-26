@@ -293,33 +293,6 @@ function formatToolSummaryTraceBlock(
   ]);
 }
 
-function formatCompletionTraceBlock(
-  completion: TraceCompletionView | undefined,
-): string | undefined {
-  if (!completion) {
-    return undefined;
-  }
-  return formatKeyValueTraceBlock("Completion", [
-    ["finishReason", completion.finishReason],
-    ["stopReason", completion.stopReason],
-    ["refusal", completion.refusal],
-  ]);
-}
-
-function formatContextManagementTraceBlock(
-  contextManagement: TraceContextManagementView | undefined,
-): string | undefined {
-  if (!contextManagement) {
-    return undefined;
-  }
-  return formatKeyValueTraceBlock("Context Management", [
-    ["sessionCompactions", contextManagement.sessionCompactions],
-    ["lastTurnCompactions", contextManagement.lastTurnCompactions],
-    ["preflightCompactionApplied", contextManagement.preflightCompactionApplied],
-    ["postCompactionContextInjected", contextManagement.postCompactionContextInjected],
-  ]);
-}
-
 export async function accumulateSessionUsageFromTranscript(params: {
   agentId?: string;
   sessionId?: string;
@@ -418,18 +391,9 @@ function formatSummaryPromptValue(params: {
   return `${formatTokenCount(used)}/${formatTokenCount(limit)}`;
 }
 
-function formatRawTraceSummaryLine(params: {
-  executionTrace?: TraceExecutionView;
-  completion?: TraceCompletionView;
-  contextLimit?: number;
-  promptTokens?: number;
-  usage?: TraceUsageView;
-  toolSummary?: TraceToolSummaryView;
-  contextManagement?: TraceContextManagementView;
-  requestShaping?: {
-    thinking?: string;
-  };
-}): string | undefined {
+function formatRawTraceSummaryLine(
+  params: Parameters<typeof buildInlineRawTracePayload>[0],
+): string | undefined {
   const thinking = normalizeOptionalString(params.requestShaping?.thinking);
   const fields = [
     params.executionTrace?.winnerModel
@@ -530,8 +494,17 @@ export function buildInlineRawTracePayload(params: {
     ]),
     formatPromptSegmentsTraceBlock(params.promptSegments, params.rawUserText),
     formatToolSummaryTraceBlock(params.toolSummary),
-    formatCompletionTraceBlock(params.completion),
-    formatContextManagementTraceBlock(params.contextManagement),
+    formatKeyValueTraceBlock("Completion", [
+      ["finishReason", params.completion?.finishReason],
+      ["stopReason", params.completion?.stopReason],
+      ["refusal", params.completion?.refusal],
+    ]),
+    formatKeyValueTraceBlock("Context Management", [
+      ["sessionCompactions", params.contextManagement?.sessionCompactions],
+      ["lastTurnCompactions", params.contextManagement?.lastTurnCompactions],
+      ["preflightCompactionApplied", params.contextManagement?.preflightCompactionApplied],
+      ["postCompactionContextInjected", params.contextManagement?.postCompactionContextInjected],
+    ]),
   ].filter((value): value is string => Boolean(value));
   return {
     text: [
@@ -539,14 +512,8 @@ export function buildInlineRawTracePayload(params: {
       formatRawTraceBlock("Model Input (User Role)", params.rawUserText),
       formatRawTraceBlock("Model Output (Assistant Role)", params.rawAssistantText),
       formatRawTraceSummaryLine({
-        executionTrace: params.executionTrace,
-        completion: params.completion,
-        contextLimit: params.contextLimit,
+        ...params,
         promptTokens: resolvedPromptTokens,
-        usage: params.usage,
-        toolSummary: params.toolSummary,
-        contextManagement: params.contextManagement,
-        requestShaping: params.requestShaping,
       }),
     ].join("\n\n\n"),
   };

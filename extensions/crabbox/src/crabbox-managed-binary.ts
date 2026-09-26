@@ -9,7 +9,8 @@ import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 export const CRABBOX_MIN_VERSION = "0.56.0";
 const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
-const VERSION_TIMEOUT_MS = 5_000;
+// Gateway startup contention can delay an otherwise healthy executable probe.
+const VERSION_TIMEOUT_MS = 30_000;
 const DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TOTAL_TIMEOUT_MS = 10 * 60_000;
 

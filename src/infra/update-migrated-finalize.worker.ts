@@ -26,6 +26,10 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import {
+  adoptCandidateManagedServiceStop,
+  stopSupervisedPredecessorGateway,
+} from "./update-candidate-predecessor-stop.js";
+import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   recordUpdateDoctorConfigWriteRefusal,
   writeUpdatePostInstallDoctorResult,
@@ -248,6 +252,12 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
       }
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
+      await stopSupervisedPredecessorGateway(input, {
+        root: input.root,
+        assertCurrent,
+        warn: (message) => process.stderr.write(`${message}\n`),
+      });
+      assertCurrent();
       await runDoctorHealthFlow(
         {
           ...defaultRuntime,
@@ -316,7 +326,26 @@ async function finalizeInput(
     executorFence?.assertCurrent();
     recordUpdateRunStep(run.runId, step, { env: run.env });
   }
-  const stopped = input.params.preManagedServiceStop;
+  const { stopped, restartRequired } = await adoptCandidateManagedServiceStop({
+    transferred: input.params.preManagedServiceStop,
+    shouldRestart: input.params.shouldRestart,
+    mode: input.params.result.mode,
+    windowsTaskAutoStartSuspended: input.windowsTaskAutoStartSuspended,
+    runId: run.runId,
+    ledger: { env: run.env },
+    root: input.params.result.root ?? input.params.root,
+    timeoutMs: input.params.updateStepTimeoutMs,
+    assertCurrent: () => {
+      executorFence.assertCurrent();
+      if (run.requesterAuthority?.isCurrent() === false) {
+        throw new UpdateRequesterRevokedError();
+      }
+    },
+    onStep: (step) => input.params.result.steps.push(step),
+  });
+  if (restartRequired) {
+    input.params.shouldRestart = true;
+  }
   if (input.windowsTaskAutoStartSuspended && !stopped?.serviceEnv) {
     throw new Error("Transferred Windows task suspension is missing its stopped service owner.");
   }

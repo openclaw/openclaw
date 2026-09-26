@@ -1032,6 +1032,7 @@ describe("ensureSessionDiffBaseline", () => {
     hoisted.loadSessionEntryReadOnly.mockReturnValue(entry);
 
     const result = await ensureSessionDiffBaseline({
+      agentId: "main",
       cwd: "/unused",
       entry,
       isNewSession: false,

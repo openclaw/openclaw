@@ -27,7 +27,6 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
-  TALK_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
   isOperatorScope,
@@ -40,7 +39,6 @@ export {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
-  TALK_SCOPE,
   WRITE_SCOPE,
   type OperatorScope,
 };
@@ -236,11 +234,13 @@ export function projectOperatorScopesForMethod(params: {
   requestedScopes: readonly string[];
   allowedScopes: readonly string[];
   requiredScope?: OperatorScope;
+  sessionScope?: SessionOperatorScope;
 }): string[] {
   const requiredScopes = params.requiredScope
     ? [params.requiredScope]
     : resolveLeastPrivilegeOperatorScopesForMethod(params.method, params.requestParams);
-  const sessionScope = resolveSessionMethodScope(params.method, params.requestParams);
+  const sessionScope =
+    params.sessionScope ?? resolveSessionMethodScope(params.method, params.requestParams);
   return params.requestedScopes.flatMap((requestedScope) => {
     if (
       roleScopesAllow({

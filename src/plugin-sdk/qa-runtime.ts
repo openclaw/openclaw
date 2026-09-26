@@ -63,12 +63,14 @@ export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
     auth,
     { closeOpenClawAgentDatabasesAsync },
     state,
+    { openClawStateDatabaseCache },
     paths,
     { closeIdleSqliteCoordinators },
   ] = await Promise.all([
     import("../agents/auth-profiles/sqlite.js"),
     import("../state/openclaw-agent-db.js"),
     import("../state/openclaw-state-db.js"),
+    import("../state/openclaw-state-db-cache.js"),
     import("../state/openclaw-state-db.paths.js"),
     import("../infra/sqlite-coordinator.js"),
   ]);
@@ -76,9 +78,14 @@ export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
   // until every scoped handle closes, or exit-time release can recreate the root.
   auth.closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
   await closeOpenClawAgentDatabasesAsync(tempRoot);
-  await state.closeOpenClawStateDatabaseByPathAsync(
-    paths.resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(tempRoot, "state") }),
-  );
+  const statePath = paths.resolveOpenClawStateSqlitePath({
+    OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+  });
+  // Packaged auth can hand this tree to a different UID before Gateway startup.
+  // Close only admitted parent state, never discover a child-private database.
+  if (openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(statePath)) {
+    await state.closeOpenClawStateDatabaseByPathAsync(statePath);
+  }
   closeIdleSqliteCoordinators(tempRoot);
 }
 

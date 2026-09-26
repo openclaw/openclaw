@@ -107,6 +107,7 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "trajectoryRecorder"
   | "semanticNoProgressObserver"
   | "semanticStallReplanState"
+  | "inputAttachmentMedia"
 >;
 /**
  * @deprecated Use AgentHarnessAttemptParamsV2. The optional capability keeps
@@ -282,14 +283,26 @@ export type AgentHarnessSideQuestionResult = {
   /** Aggregate billed usage for the side question, including native tool-loop calls. */
   usage?: import("../usage.js").NormalizedUsage;
 };
-export type AgentHarnessCompactParams =
+type LegacyAgentHarnessCompactParams =
   import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
+/** Select version 2 for required host authority; the default preserves registered legacy callbacks. */
+export type AgentHarnessCompactParams<Version extends 1 | 2 = 1> = Version extends 2
+  ? LegacyAgentHarnessCompactParams & {
+      hostCapabilities: Readonly<
+        Pick<AgentHarnessHostCapabilities, "kind" | "version" | "assertActive"> &
+          Required<Pick<AgentHarnessHostCapabilities, "retainSourceAuthority">>
+      >;
+    }
+  : LegacyAgentHarnessCompactParams;
+/** Current compaction implementation contract; registered legacy callbacks remain source-compatible. */
+export type AgentHarnessCompactParamsV2 = AgentHarnessCompactParams<2>;
 export type AgentHarnessCompactResult =
   import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
 export type AgentHarnessNativeCompactionRequest = "after_context_engine" | "required_preflight";
-export type AgentHarnessNativeCompactionParams = AgentHarnessCompactParams & {
-  nativeCompactionRequest: AgentHarnessNativeCompactionRequest;
-};
+export type AgentHarnessNativeCompactionParams<Version extends 1 | 2 = 1> =
+  AgentHarnessCompactParams<Version> & {
+    nativeCompactionRequest: AgentHarnessNativeCompactionRequest;
+  };
 export type AgentHarnessNativeCompaction = (
   params: AgentHarnessNativeCompactionParams,
 ) => Promise<AgentHarnessCompactResult | undefined>;
@@ -400,6 +413,8 @@ type AgentHarnessRunCapability<
   executionEnvironment?: "host-only";
   /** Certifies exact runAttempt enforcement; direct-policy-restricted channel side questions fail in core. */
   conversationToolPolicySupport?: "exact";
+  /** Certifies binding the actual native model through the host before every inference dispatch. */
+  nativeModelPolicySupport?: "exact";
   /**
    * Canonical OpenClaw tool names whose exact denies the harness can also enforce
    * against native equivalents. Every other deny remains fail-closed.
@@ -575,11 +590,18 @@ export type AgentHarnessModelCatalogParams = {
   configuredModelRefs?: readonly ModelRef[];
 };
 
+export type AgentHarnessModelCatalogResult =
+  | readonly import("../model-catalog.types.js").ModelCatalogEntry[]
+  | {
+      entries: readonly import("../model-catalog.types.js").ModelCatalogEntry[];
+      outcomes?: readonly import("../../plugins/provider-catalog-outcome.js").ProviderCatalogOutcome[];
+    };
+
 type AgentHarnessModelCatalogCapability = {
   /** Lists account-scoped models owned by this native runtime. */
   loadModelCatalog?(
     params: AgentHarnessModelCatalogParams,
-  ): Promise<readonly import("../model-catalog.types.js").ModelCatalogEntry[]>;
+  ): Promise<AgentHarnessModelCatalogResult>;
   /**
    * Reads current, secret-free native account evidence for this exact catalog scope/model.
    * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is

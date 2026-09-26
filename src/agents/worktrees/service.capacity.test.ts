@@ -95,20 +95,81 @@ describe("ManagedWorktreeService capacity", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.each([
-    { total: 20, available: 3 },
-    { total: 100, available: 9 },
-    { total: 1024, available: 15 },
-  ])("refuses creation below the reserve on a $total GiB volume", async ({ total, available }) => {
-    totalBytes = total * GiB;
-    availableBytes = available * GiB;
-    await expect(
-      service.create({ repoRoot: repo, name: "no-space", baseRef: "HEAD" }),
-    ).rejects.toThrow(/disk space/i);
-    expect(await service.listRegistryRecords()).toEqual([]);
-    expect(await git(repo, "branch", "--list", "openclaw/no-space")).toBe("");
-    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("no-space");
-  });
+  it.each([20, 100, 1024])(
+    "uses the same operational reserve on a %s GiB volume",
+    async (total) => {
+      totalBytes = total * GiB;
+      availableBytes = 3 * GiB;
+      const params = { repoRoot: repo, name: "fixed-reserve", baseRef: "HEAD" };
+      await expect(service.create(params)).rejects.toThrow(/disk space/i);
+      expect(await service.listRegistryRecords()).toEqual([]);
+      expect(await git(repo, "branch", "--list", "openclaw/fixed-reserve")).toBe("");
+      expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("fixed-reserve");
+
+      availableBytes = 5 * GiB;
+      const created = await service.create(params);
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+      expect(await git(created.path, "status", "--porcelain")).toBe("");
+      expect(await service.listRegistryRecords()).toEqual([created]);
+    },
+  );
+
+  it.each(["source", "destination"] as const)(
+    "refuses allocation when the separate %s volume lacks its reserve",
+    async (limited) => {
+      const dataRoot = path.join(root, "data");
+      await fs.mkdir(dataRoot);
+      service = new ManagedWorktreeService({
+        env,
+        getConfig: () => ({ worktreeAcceleration: false, worktreeRoot: dataRoot }),
+      });
+      const isData = (value: unknown) => String(value).startsWith(dataRoot);
+      const stat = fsSync.statSync;
+      vi.spyOn(fsSync, "statSync").mockImplementation((...args) => {
+        const result = stat(...args);
+        if (result) {
+          result.dev = isData(args[0]) ? 2 : 1;
+        }
+        return result;
+      });
+      const stats = fsSync.statfsSync(root);
+      let recovered = false;
+      vi.mocked(fsSync.statfsSync).mockImplementation((target) => {
+        const low = isData(target) === (limited === "destination");
+        const available = (recovered ? (isData(target) ? 100 : 13) : low ? 3 : 100) * GiB;
+        return {
+          type: stats.type,
+          bsize: stats.bsize,
+          blocks: stats.blocks,
+          bfree: available / 4096,
+          bavail: available / 4096,
+          files: stats.files,
+          frsize: stats.frsize,
+          ffree: stats.ffree,
+        };
+      });
+
+      await expect(
+        service.create({ repoRoot: repo, name: "split-volumes", baseRef: "HEAD" }),
+      ).rejects.toThrow(/disk space/i);
+      expect(await service.listRegistryRecords()).toEqual([]);
+      expect(await git(repo, "branch", "--list", "openclaw/split-volumes")).toBe("");
+      expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("split-volumes");
+
+      recovered = true;
+      const requestedHead = await git(repo, "rev-parse", "HEAD");
+      const created = await service.create({
+        repoRoot: repo,
+        name: "split-volumes",
+        baseRef: requestedHead,
+      });
+      expect(created.path.startsWith(dataRoot + path.sep)).toBe(true);
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(requestedHead);
+      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+      expect(await git(created.path, "status", "--porcelain")).toBe("");
+      expect(await service.listRegistryRecords()).toEqual([created]);
+    },
+  );
 
   it("budgets ignored files selected for provisioning before allocating", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "fixture.bin\n");
@@ -116,7 +177,7 @@ describe("ManagedWorktreeService capacity", () => {
     await fs.writeFile(path.join(repo, "fixture.bin"), Buffer.alloc(10 * 1024 ** 2));
     await git(repo, "add", ".gitignore", ".worktreeinclude");
     await git(repo, "commit", "-m", "provision ignored fixture");
-    availableBytes = 16 * GiB + 8 * 1024 ** 2;
+    availableBytes = 4 * GiB + 8 * 1024 ** 2;
     await expect(
       service.create({ repoRoot: repo, name: "provision-space", baseRef: "HEAD" }),
     ).rejects.toThrow(/disk space/i);
@@ -132,7 +193,7 @@ describe("ManagedWorktreeService capacity", () => {
     await git(repo, "commit", "-m", "larger moving source");
     const advancedCommit = await git(repo, "rev-parse", "HEAD");
     await git(repo, "update-ref", "refs/remotes/origin/moving", originalCommit);
-    availableBytes = 16 * GiB + 8 * 1024 ** 2;
+    availableBytes = 4 * GiB + 8 * 1024 ** 2;
 
     const branch = "openclaw/moving-base";
     let destination: string | undefined;
@@ -286,7 +347,7 @@ describe("ManagedWorktreeService capacity", () => {
     await fs.writeFile(script, '#!/bin/sh\nprintf ran > "$OPENCLAW_SOURCE_TREE_PATH/setup-ran"\n', {
       mode: 0o755,
     });
-    availableBytes = 18 * GiB;
+    availableBytes = 6 * GiB;
     await expect(
       service.create({ repoRoot: repo, name: "setup-budget", baseRef: "HEAD" }),
     ).rejects.toThrow(/disk space/i);
@@ -339,7 +400,7 @@ describe("ManagedWorktreeService capacity", () => {
       ) {
         // The first checkout still passes its postchecks, but a second checkout
         // cannot fit its estimate. Without the shared lease both materializations can start.
-        availableBytes = 16 * GiB;
+        availableBytes = 4 * GiB;
         pressureInjected = true;
       }
       return result;

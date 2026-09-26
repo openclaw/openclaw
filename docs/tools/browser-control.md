@@ -28,11 +28,9 @@ agent tools, but nothing listens on the loopback control port.
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
 - Permissions: `POST /permissions/grant`
-- Debugging: `GET /console`, `POST /pdf`
-- Debugging: `GET /errors`, `GET /requests`, `GET /dialogs`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
+- Debugging: `GET /console`, `GET /errors`, `GET /requests`, `GET /dialogs`, `POST /pdf`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
 - Network: `POST /response/body`
-- State: `GET /cookies`, `POST /cookies/set`, `POST /cookies/clear`
-- State: `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
+- State: `GET /cookies`, `POST /cookies/set`, `POST /cookies/clear`, `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
 - Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
 
 `POST /tabs/action` is the batched form the CLI uses internally for

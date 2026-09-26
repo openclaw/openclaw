@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { probeApnsHttp2ReachabilityViaProxy } from "../../push-apns-http2.js";
 import { fetchWithRuntimeDispatcher } from "../runtime-fetch.js";
@@ -111,11 +112,6 @@ type RunProxyValidationOptions = ResolveProxyValidationConfigOptions & {
   apnsCheck?: ProxyValidationApnsCheck;
 };
 
-function normalizeProxyUrl(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function validateProxyUrl(value: string | undefined): string[] {
   if (!value) {
     return ["proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL"];
@@ -130,56 +126,25 @@ function validateProxyUrl(value: string | undefined): string[] {
 function resolveProxyValidationConfig(
   options: ResolveProxyValidationConfigOptions,
 ): ProxyValidationResolvedConfig {
-  const overrideUrl = normalizeProxyUrl(options.proxyUrlOverride);
-  if (overrideUrl) {
+  const overrideUrl = normalizeOptionalString(options.proxyUrlOverride);
+  const configUrl = normalizeOptionalString(options.config?.proxyUrl);
+  const proxyUrl =
+    overrideUrl ?? configUrl ?? normalizeOptionalString(options.env?.OPENCLAW_PROXY_URL);
+  if (proxyUrl) {
+    const enabled = Boolean(overrideUrl) || options.config?.enabled !== false;
     const proxyCaFile = resolveManagedProxyCaFileForUrl({
-      proxyUrl: overrideUrl,
+      proxyUrl,
+      config: overrideUrl ? undefined : options.config,
       caFileOverride: options.proxyCaFileOverride,
     });
     return {
-      enabled: true,
-      proxyUrl: overrideUrl,
+      enabled,
+      proxyUrl,
       ...(proxyCaFile ? { proxyCaFile } : {}),
-      source: "override",
-      errors: validateProxyUrl(overrideUrl),
-    };
-  }
-
-  const configUrl = normalizeProxyUrl(options.config?.proxyUrl);
-  if (configUrl) {
-    const proxyCaFile = resolveManagedProxyCaFileForUrl({
-      proxyUrl: configUrl,
-      config: options.config,
-      caFileOverride: options.proxyCaFileOverride,
-    });
-    return {
-      enabled: options.config?.enabled !== false,
-      proxyUrl: configUrl,
-      ...(proxyCaFile ? { proxyCaFile } : {}),
-      source: "config",
-      errors:
-        options.config?.enabled === false
-          ? ["proxy validation is disabled by proxy.enabled=false"]
-          : validateProxyUrl(configUrl),
-    };
-  }
-
-  const envUrl = normalizeProxyUrl(options.env?.OPENCLAW_PROXY_URL);
-  if (envUrl) {
-    const proxyCaFile = resolveManagedProxyCaFileForUrl({
-      proxyUrl: envUrl,
-      config: options.config,
-      caFileOverride: options.proxyCaFileOverride,
-    });
-    return {
-      enabled: options.config?.enabled !== false,
-      proxyUrl: envUrl,
-      ...(proxyCaFile ? { proxyCaFile } : {}),
-      source: "env",
-      errors:
-        options.config?.enabled === false
-          ? ["proxy validation is disabled by proxy.enabled=false"]
-          : validateProxyUrl(envUrl),
+      source: overrideUrl ? "override" : configUrl ? "config" : "env",
+      errors: enabled
+        ? validateProxyUrl(proxyUrl)
+        : ["proxy validation is disabled by proxy.enabled=false"],
     };
   }
 

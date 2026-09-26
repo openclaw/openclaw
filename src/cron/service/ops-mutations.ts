@@ -382,8 +382,7 @@ export async function removeStaleJobFamily(
 ): Promise<number> {
   return await locked(state, async () => {
     await ensureLoadedForOperation(state);
-    opts?.commitGuard?.();
-    return removeStaleCronJobFamilyRows(state.deps.storePath, family);
+    return await removeStaleCronJobFamilyRows(state.deps.storePath, family, opts);
   });
 }
 

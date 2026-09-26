@@ -51,7 +51,10 @@ function prepareReclamationWorkerTransferList(plan: SqliteSessionReclamationPlan
 export async function runPreparedSqliteSessionReclamation(
   params: {
     diagnostics?: SqliteSessionReclamationDiagnostics;
-    onWorkerResult?: (result: SqliteSessionReclamationResult) => void;
+    onWorkerResult?: (
+      result: SqliteSessionReclamationResult,
+      databaseIdentity: string | symbol,
+    ) => void;
     plan: SqliteSessionReclamationPlan;
   },
   owner: {
@@ -60,6 +63,7 @@ export async function runPreparedSqliteSessionReclamation(
     worker: SqliteReclamationWorker;
     assertRequestCurrent: () => void;
     commitGate: SharedArrayBuffer;
+    signal: AbortSignal;
   },
 ): Promise<SqliteSessionReclamationResult> {
   const { database, claim, worker, assertRequestCurrent, commitGate } = owner;
@@ -77,7 +81,7 @@ export async function runPreparedSqliteSessionReclamation(
       () => {
         assertCommitAllowed();
         // A blocked writer may authorize before the Worker's queued request.
-        publishCommitted = prepareReclamationPublication(plan);
+        publishCommitted = prepareReclamationPublication(plan, claim.identity);
       },
       (authorize) =>
         worker.run({
@@ -100,11 +104,11 @@ export async function runPreparedSqliteSessionReclamation(
                 const completed = await run(refusal);
                 if (completed) {
                   // Publish captured identities after transaction settlement, before releasing the writer.
-                  params.onWorkerResult?.(completed);
+                  params.onWorkerResult?.(completed, claim.identity);
                   withSqlitePostCommitPublications(database.db, () => {
                     const publishRemoval =
                       plan.kind === "maintenance-finalize"
-                        ? prepareReclamationPublication(plan, completed)
+                        ? prepareReclamationPublication(plan, claim.identity, completed)
                         : publishCommitted;
                     if (publishRemoval) {
                       deferSqlitePostCommitPublication(database.db, publishRemoval);
@@ -145,7 +149,15 @@ export async function runPreparedSqliteSessionReclamation(
               "session.reclamation.worker-commit",
               { ...params.diagnostics, reclamationAdmission },
               "worker",
-            ),
+              owner.signal,
+            ).catch((error: unknown) => {
+              // Queue cancellation must retain the domain owner's more specific
+              // claim/authority refusal, just like an admitted callback does.
+              if (owner.signal.aborted) {
+                assertCommitAllowed();
+              }
+              throw error;
+            }),
           transferList: prepareReclamationWorkerTransferList(plan),
         }),
     );
@@ -157,6 +169,8 @@ export async function runPreparedSqliteSessionReclamation(
         runAuthorized,
         "session.maintenance.finalize",
         params.diagnostics,
+        "foreground",
+        owner.signal,
       )
     : await runAuthorized();
 }

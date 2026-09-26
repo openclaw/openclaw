@@ -19,7 +19,7 @@ vi.mock("../agent-scope.js", () => ({
   hasSessionAutoModelFallbackProvenance: () => false,
   resolveAutoFallbackPrimaryProbe: () => undefined,
   resolveAgentConfig: () => undefined,
-  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveNativeModelPrimary: () => undefined,
 }));
 vi.mock("../../auto-reply/thinking.js", () => ({
   formatThinkingLevels: () => "",

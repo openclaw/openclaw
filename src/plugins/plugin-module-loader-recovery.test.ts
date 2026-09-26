@@ -6,6 +6,7 @@ import { resetPluginCache } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
+import { getSharedPluginCodeReloadWarning } from "./plugin-shared-module-loader.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const instances: PluginInstance[] = [];
@@ -154,8 +155,10 @@ it.each(["cjs", "mjs"])(
     });
     const oldCallback = (previous.loadModule(entry) as BundledModule).register();
     expect(oldCallback.read()).toBe(1);
+    expect(getSharedPluginCodeReloadWarning(previous)).toBeUndefined();
     const recovery = previous.captureModuleLoaderRecovery();
     await previous.dispose();
+    fs.rmSync(root, { recursive: true });
 
     const restored = new PluginInstance(previous.pluginId);
     instances.push(restored);
@@ -163,6 +166,7 @@ it.each(["cjs", "mjs"])(
     recovery.dispose();
     const restoredCallback = (restored.loadModule(entry) as BundledModule).register();
     expect(restoredCallback.read()).toBe(2);
+    expect(getSharedPluginCodeReloadWarning(restored)).toBeUndefined();
     expect(() => oldCallback.read()).toThrow(/reloaded or disabled/);
     expect(restoredCallback.read()).toBe(2);
 

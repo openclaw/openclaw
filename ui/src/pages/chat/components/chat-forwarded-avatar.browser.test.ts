@@ -65,6 +65,12 @@ it.each(
     const reference = normalGroup.querySelector(".chat-group-messages")!.getBoundingClientRect();
     const expectedGutter = width === 1440 ? 46 : 0;
     expect(reference.x - normalGroup.getBoundingClientRect().x).toBeCloseTo(expectedGutter, 1);
+    if (width === 1440) {
+      expect(normalGroup.querySelector(".chat-avatar")!.getBoundingClientRect().top).toBeCloseTo(
+        reference.top,
+        1,
+      );
+    }
     for (const group of groups.slice(1)) {
       const content = group.querySelector(".chat-group-messages")!.getBoundingClientRect();
       expect(content.x).toBeCloseTo(reference.x, 1);
@@ -73,6 +79,9 @@ it.each(
       const hasAvatar = agentId === "research";
       const gutterAvatar = group.querySelector(":scope > .chat-avatar, :scope > .chat-avatar-slot");
       expect(Boolean(gutterAvatar)).toBe(hasAvatar);
+      if (width === 1440 && gutterAvatar) {
+        expect(gutterAvatar.getBoundingClientRect().top).toBeCloseTo(content.top, 1);
+      }
       const attribution = group.querySelector(".chat-reply-attribution")!;
       const inlineAvatar = attribution.querySelector(".chat-reply-attribution__agent-avatar");
       expect(Boolean(inlineAvatar)).toBe(hasAvatar);

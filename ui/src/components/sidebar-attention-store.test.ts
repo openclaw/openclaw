@@ -4,26 +4,16 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
-import type {
-  CronCompactJob,
-  CronJobsListResult,
-  CronStatus,
-  ModelAuthStatusResult,
-} from "../api/types.ts";
+import type { CronStatus, ModelAuthStatusResult } from "../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
-import type { ApplicationContext } from "../app/context.ts";
 import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
-import {
-  createSidebarAttentionStore,
-  type SidebarAttentionStore,
-} from "../app/sidebar-attention-store.ts";
+import type { SidebarAttentionStore } from "../app/sidebar-attention-store.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   admitStoredChatComposerQueueItem,
   removeStoredChatComposerQueueItem,
 } from "../pages/chat/composer-persistence.ts";
-import { hiddenScopeUpgradeCapability } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
@@ -31,38 +21,12 @@ import {
   loadDismissals,
   resolveSidebarAttentionKey,
 } from "./sidebar-attention-dismissals.ts";
+import {
+  createStore,
+  cronPage,
+  type CompactCronPage,
+} from "./sidebar-attention-store.test-support.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
-
-type CompactCronPage = CronJobsListResult<CronCompactJob>;
-
-function cronPage(id?: string): CompactCronPage {
-  const jobs = id
-    ? [
-        {
-          id,
-          name: id,
-          enabled: true,
-          updatedAtMs: 0,
-          scheduleKind: "every" as const,
-          nextRunAt: null,
-          nextRunAtMs: null,
-          lastRunAt: null,
-          lastRunAtMs: null,
-          lastRunError: null,
-          lastRunStatus: "error" as const,
-        },
-      ]
-    : [];
-  return {
-    jobs,
-    snapshotRevision: id ?? "empty",
-    total: jobs.length,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
-  };
-}
 
 describe("sidebar attention source publication", () => {
   let store: SidebarAttentionStore | undefined;
@@ -70,33 +34,76 @@ describe("sidebar attention source publication", () => {
   afterEach(() => {
     store?.dispose();
     store = undefined;
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
-  function createStore(
-    gateway: ApplicationContext["gateway"],
-    connectionBootstrap?: ApplicationContext["connectionBootstrap"],
-  ) {
-    const agentSelection = {
-      state: { selectedId: "main", scopeId: null },
-      subscribe: () => () => undefined,
-    } as unknown as ApplicationContext["agentSelection"];
-    return createSidebarAttentionStore({
-      gateway,
-      agentSelection,
-      agents: {
-        state: { agentsList: null },
-        subscribe: () => () => undefined,
-      } as unknown as ApplicationContext["agents"],
-      overlays: {
-        snapshot: { approvalQueue: [] },
-        subscribe: () => () => undefined,
-      } as unknown as ApplicationContext["overlays"],
-      scopeUpgrade: hiddenScopeUpgradeCapability,
-      connectionBootstrap,
-    });
-  }
+  it.each([null, "cron.list", "cron.status"])(
+    "keeps cron inventory after recovering %s, visibility, and idle time",
+    async (failedMethod) => {
+      vi.useFakeTimers();
+      let visibility: DocumentVisibilityState = "visible";
+      vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+      let failuresRemaining = failedMethod ? 2 : 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === failedMethod && failuresRemaining > 0) {
+          failuresRemaining -= 1;
+          throw new Error("temporarily unavailable");
+        }
+        return method === "cron.list"
+          ? cronPage("incident")
+          : method === "cron.status"
+            ? { enabled: true, triggersEnabled: true, jobs: 1 }
+            : { ts: Date.now(), providers: [] };
+      });
+      const harness = createGatewayHarness(mockClient(request));
+      store = createStore(harness.gateway);
+      store.activate(SidebarAttentionStoreController);
+      await vi.advanceTimersByTimeAsync(0);
+      const cronCalls = () => request.mock.calls.filter(([name]) => name === "cron.list").length;
+      if (failedMethod) {
+        await vi.advanceTimersByTimeAsync(59_999);
+        expect(cronCalls()).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(cronCalls()).toBe(2);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(cronCalls()).toBe(3);
+      }
+      const initialCronCalls = failedMethod ? 3 : 1;
+      expect(store.entries).toMatchObject([{ label: "incident" }]);
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      visibility = "hidden";
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(60_001);
+      visibility = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+      for (const method of ["cron.list", "cron.status", "models.authStatus"]) {
+        expect(
+          request.mock.calls.filter(([name]) => name === method),
+          method,
+        ).toHaveLength(method === "models.authStatus" ? 1 : initialCronCalls);
+      }
+      harness.emitEvent("config.changed", {});
+      await vi.advanceTimersByTimeAsync(0);
+      for (const method of ["cron.list", "cron.status"]) {
+        expect(
+          request.mock.calls.filter(([name]) => name === method),
+          method,
+        ).toHaveLength(initialCronCalls + 1);
+      }
+      harness.update({ phase: "reconnecting" });
+      harness.update({ phase: "connected" });
+      await vi.advanceTimersByTimeAsync(0);
+      for (const method of ["cron.list", "cron.status"]) {
+        expect(
+          request.mock.calls.filter(([name]) => name === method),
+          method,
+        ).toHaveLength(initialCronCalls + 2);
+      }
+    },
+  );
 
   it.each([false, true])(
     "keeps snoozes with their authenticated account across switches and reloads (reconnect: %s)",
@@ -702,6 +709,14 @@ describe("sidebar attention source publication", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     expect(authCalls).toBe(1);
     invalidateModelAuthStatusRequests(harness.gateway.snapshot.client!);
+    harness.emitEvent("chat.metadata.changed", {
+      agentId: "main",
+      usageUpdatedAt: now,
+      modelCatalogChanged: false,
+      authChanged: false,
+    });
+    await Promise.resolve();
+    expect(authCalls).toBe(1);
     harness.emitEvent("chat.metadata.changed", {});
     await waitForFast(() => expect(store?.entries).toMatchObject([{ label: `cron-${now}` }]));
     expect(authCalls).toBe(2);

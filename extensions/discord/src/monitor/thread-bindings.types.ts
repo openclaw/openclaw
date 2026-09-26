@@ -25,6 +25,7 @@ export type PersistedThreadBindingRecord = ThreadBindingRecord;
 
 export type ThreadBindingManager = {
   accountId: string;
+  isStopping: () => boolean;
   getIdleTimeoutMs: () => number;
   getMaxAgeMs: () => number;
   getByThreadId: (threadId: string) => ThreadBindingRecord | undefined;
@@ -32,6 +33,12 @@ export type ThreadBindingManager = {
   listBySessionKey: (targetSessionKey: string) => ThreadBindingRecord[];
   listBindings: () => ThreadBindingRecord[];
   touchThread: (params: {
+    threadId: string;
+    at?: number;
+    persist?: boolean;
+  }) => Promise<ThreadBindingRecord | null>;
+  /** @deprecated Generic SDK synchronous touch compatibility. */
+  touchThreadSync: (params: {
     threadId: string;
     at?: number;
     persist?: boolean;
@@ -54,18 +61,24 @@ export type ThreadBindingManager = {
   }) => Promise<ThreadBindingRecord | null>;
   unbindThread: (params: {
     threadId: string;
+    expected?: ThreadBindingRecord;
+    persist?: boolean;
     reason?: string;
     sendFarewell?: boolean;
     farewellText?: string;
-  }) => ThreadBindingRecord | null;
+  }) => Promise<ThreadBindingRecord | null>;
   unbindBySessionKey: (params: {
     targetSessionKey: string;
     targetKind?: ThreadBindingTargetKind;
     reason?: string;
     sendFarewell?: boolean;
     farewellText?: string;
-  }) => ThreadBindingRecord[];
-  stop: () => void;
+  }) => Promise<ThreadBindingRecord[]>;
+  notifyUnbound: (
+    record: ThreadBindingRecord,
+    params: { reason?: string; sendFarewell?: boolean; farewellText?: string },
+  ) => void;
+  stop: () => Promise<void>;
 };
 
 export const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 120_000;

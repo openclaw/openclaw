@@ -91,11 +91,13 @@ suite.define(() => {
         await panel.waitFor({ state: "hidden" });
         expect(await drawer.getAttribute("aria-hidden")).toBeNull();
         await page.locator(".sidebar-issues-button:visible").click();
+        await panel.locator('[data-mention-id="mobile-mention"] summary').click();
         await panel.locator('[data-mention-id="mobile-mention"] a').click();
         await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
         await expectClosed();
         // An Inbox link to the already-open session must close the drawer too.
         await openInbox();
+        await panel.locator('[data-mention-id="mobile-mention"] summary').click();
         await panel.locator('[data-mention-id="mobile-mention"] a').click();
         await expectClosed();
         expect(await gateway.getRequests("mentions.dismiss")).toHaveLength(0);

@@ -882,7 +882,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
       expect(runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
         "ultra",
-        "high",
+        "ultra",
       ]);
       expect(followupRun.run.thinkLevel).toBe(override === "ultra" ? "off" : "ultra");
     },

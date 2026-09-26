@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   enqueueTelegramMenuSync,
@@ -69,24 +70,11 @@ function countTelegramCommandText(value: string): number {
 }
 
 function truncateTelegramCommandText(value: string, maxLength: number): string {
-  if (maxLength <= 0) {
-    return "";
+  const prefix = truncateCodePoints(value, maxLength);
+  if (prefix === value || maxLength <= 0) {
+    return prefix;
   }
-
-  const suffix = maxLength > 1 ? "…" : "";
-  const prefixLimit = maxLength - countTelegramCommandText(suffix);
-  let count = 0;
-  let prefixEnd = 0;
-  for (const char of value) {
-    count += 1;
-    if (count <= prefixLimit) {
-      prefixEnd += char.length;
-    }
-    if (count > maxLength) {
-      return `${value.slice(0, prefixEnd)}${suffix}`;
-    }
-  }
-  return value;
+  return maxLength > 1 ? `${truncateCodePoints(prefix, maxLength - 1)}…` : prefix;
 }
 
 function fitTelegramCommandsWithinTextBudget(
@@ -149,27 +137,14 @@ function readErrorTextField(value: unknown, key: "description" | "message"): str
 }
 
 function isBotCommandsTooMuchError(err: unknown): boolean {
-  if (!err) {
-    return false;
-  }
   const pattern = /\bBOT_COMMANDS_TOO_MUCH\b/i;
   if (typeof err === "string") {
     return pattern.test(err);
   }
-  if (err instanceof Error) {
-    if (pattern.test(err.message)) {
-      return true;
-    }
-  }
-  const description = readErrorTextField(err, "description");
-  if (description && pattern.test(description)) {
-    return true;
-  }
-  const message = readErrorTextField(err, "message");
-  if (message && pattern.test(message)) {
-    return true;
-  }
-  return false;
+  return (["description", "message"] as const).some((key) => {
+    const text = readErrorTextField(err, key);
+    return text !== undefined && pattern.test(text);
+  });
 }
 
 function formatTelegramCommandRetrySuccessLog(params: {
@@ -438,15 +413,6 @@ function buildEffectiveTelegramCommandLocalizations(
   return [...effective.entries()].toSorted(([a], [b]) => a.localeCompare(b));
 }
 
-function readLocalizedDescription(
-  localizations: Array<[LanguageCode, string]>,
-  languageCode: LanguageCode,
-): string | undefined {
-  return localizations.find(
-    ([effectiveLanguageCode]) => effectiveLanguageCode === languageCode,
-  )?.[1];
-}
-
 function toTelegramBotCommands(commands: TelegramMenuCommand[]): Array<{
   command: string;
   description: string;
@@ -465,7 +431,9 @@ function buildLocalizedCommandVariants(commands: TelegramMenuCommand[]): {
   const unsupportedLanguageCodes = new Set<string>();
   const commandsWithLocalizations = commands.map((command) => ({
     command,
-    localizations: buildEffectiveTelegramCommandLocalizations(command.descriptionLocalizations),
+    localizations: new Map(
+      buildEffectiveTelegramCommandLocalizations(command.descriptionLocalizations),
+    ),
   }));
   for (const { command, localizations } of commandsWithLocalizations) {
     for (const [languageCode] of localizations) {
@@ -485,7 +453,7 @@ function buildLocalizedCommandVariants(commands: TelegramMenuCommand[]): {
   const variants = [...locales].toSorted().map((languageCode) => {
     const localizedCommands = commandsWithLocalizations.map(({ command, localizations }) =>
       Object.assign({}, command, {
-        description: readLocalizedDescription(localizations, languageCode) ?? command.description,
+        description: localizations.get(languageCode) ?? command.description,
       }),
     );
     return {

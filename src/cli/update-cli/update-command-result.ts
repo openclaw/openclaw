@@ -37,7 +37,8 @@ import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isVerifiedUpdateRollback, type UpdateRecoveryStep } from "../../shared/update-outcome.js";
@@ -113,9 +114,11 @@ export function collectServiceInspectionFailureFacts(
         createUpdateFailureFact({
           check: "managed-service",
           code: verdict.inspectionReason ?? "service-inspection-unavailable",
-          message: verdict.inspectionReason
-            ? formatServiceInspectionReason(verdict.inspectionReason)
-            : verdict.message,
+          message:
+            verdict.inspectionReason &&
+            verdict.inspectionReason !== "windows-task-inspection-failed"
+              ? formatServiceInspectionReason(verdict.inspectionReason)
+              : verdict.message,
         }),
       ]
     : undefined;
@@ -505,6 +508,7 @@ export type UpdateAdmissionReportParams = {
   installKind: "git" | "package" | "unknown";
   reason: string;
   message?: string;
+  nextAction?: string;
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
 };

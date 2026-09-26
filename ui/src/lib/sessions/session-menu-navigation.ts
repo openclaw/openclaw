@@ -48,6 +48,7 @@ export function canCopySessionMarkdown(snapshot: ApplicationGatewaySnapshot | un
   return readSessionMethodAccess(snapshot, {
     method: "chat.history",
     requiredScope: "operator.read",
+    sessionScope: true,
   }).allowed;
 }
 
@@ -60,6 +61,7 @@ async function copySessionMarkdown<TRouteId extends string>(
   const access = readSessionMethodAccess(gateway.snapshot, {
     method: "chat.history",
     requiredScope: "operator.read",
+    sessionScope: true,
   });
   if (!access.allowed || !client) {
     throw new Error(access.allowed ? t("sessionsView.actionRequiresConnection") : access.reason);

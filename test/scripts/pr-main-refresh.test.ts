@@ -473,18 +473,33 @@ ${readFileSync(gitShim, "utf8")}
     f.configure({ moveAfterFirstFetch: true, moveAtGate: true });
     const result = f.run("prepare-run", "bash", f.worktree);
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(
-      f
-        .events()
-        .filter((e) => e.kind === "fetched")
-        .map((e) => e.sha),
-    ).toEqual([f.main, f.movedMain, f.gateMain]);
-    const decisions = f
-      .events()
+    const events = f.events();
+    expect(events.filter((e) => e.kind === "fetched").map((e) => e.sha)).toEqual([
+      f.main,
+      f.movedMain,
+      f.gateMain,
+    ]);
+    const gateCheckpoint = events.findIndex((e) => e.kind === "fetched" && e.sha === f.movedMain);
+    const hostedGate = events.findIndex((e) => e.kind === "hosted-gate");
+    expect(hostedGate).toBeGreaterThan(gateCheckpoint);
+    const gateDecisions = events
+      .slice(gateCheckpoint + 1, hostedGate)
       .filter((e) => e.kind === "git-decision")
-      .map((e) => e.args?.join(" "));
-    expect(decisions).toContain(`diff --name-only ${f.movedMain}...HEAD`);
-    expect(decisions).toContain(`merge-base ${f.head} ${f.gateMain}`);
+      .map((e) => e.args);
+    const gateBase = f.git(f.worktree, "merge-base", f.movedMain, f.head);
+    expect(gateBase).toBe(f.main);
+    expect(gateDecisions).toContainEqual(["merge-base", f.movedMain, f.head]);
+    expect(gateDecisions).toContainEqual(["diff", "--name-only", gateBase, f.head]);
+    const publicationCheckpoint = events.findIndex(
+      (e) => e.kind === "fetched" && e.sha === f.gateMain,
+    );
+    expect(publicationCheckpoint).toBeGreaterThan(hostedGate);
+    expect(
+      events
+        .slice(publicationCheckpoint + 1)
+        .filter((e) => e.kind === "git-decision")
+        .map((e) => e.args),
+    ).toContainEqual(["merge-base", f.head, f.gateMain]);
     expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.head);
   });
 
@@ -739,9 +754,12 @@ ${readFileSync(gitShim, "utf8")}
       f.git(f.canonical, "update-ref", "-d", "refs/remotes/origin/main");
       f.configure({ failFetchAt: fetchNumber });
       const failed = f.run("review-checkout-main");
-      expect(failed.status).not.toBe(0);
-      expect(existsSync(f.worktree)).toBe(fetchNumber === 2);
+      const diagnostic = `stdout:\n${failed.stdout.slice(-4000)}\nstderr:\n${failed.stderr.slice(-4000)}`;
+      expect(failed.status, diagnostic).not.toBe(0);
+      expect(failed.stderr, diagnostic).toContain("fatal: injected main fetch failure");
+      expect(existsSync(f.worktree), diagnostic).toBe(fetchNumber === 2);
       if (fetchNumber === 2) {
+        f.assertPrivateHandoffVerified();
         expect(f.git(f.worktree, "symbolic-ref", "HEAD")).toBe("refs/heads/temp/pr-42");
         expect(f.git(f.canonical, "rev-parse", "refs/heads/temp/pr-42")).toBe(f.main);
         expect(f.git(f.worktree, "write-tree")).toBe(
@@ -755,10 +773,36 @@ ${readFileSync(gitShim, "utf8")}
       f.configure({ failFetchAt: 0 });
       const result = f.run("review-checkout-main");
       expect(result.status, result.stdout + result.stderr).toBe(0);
+      f.assertPrivateHandoffVerified();
       expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.main);
       expect(f.git(f.canonical, "rev-parse", "HEAD")).toBe(f.main);
     },
   );
+
+  it("rejects a later uninjected provisioner despite an earlier valid receipt", () => {
+    const f = fixture();
+    f.git(f.canonical, "worktree", "remove", "--force", f.worktree);
+    const first = f.run("review-checkout-main");
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    f.assertPrivateHandoffVerified();
+
+    f.git(f.canonical, "worktree", "remove", "--force", f.worktree);
+    const nodeOptions = f.env.NODE_OPTIONS;
+    delete f.env.NODE_OPTIONS;
+    try {
+      const second = f.run("review-checkout-main");
+      expect(second.status, second.stdout + second.stderr).not.toBe(0);
+      expect(second.stderr).toContain("Missing private handoff preload");
+      expect(existsSync(f.worktree)).toBe(false);
+      expect(() => f.assertPrivateHandoffVerified()).toThrow(
+        "not every launched provisioner received its private store",
+      );
+    } finally {
+      f.env.NODE_OPTIONS = nodeOptions;
+    }
+    const owner = f.git(f.canonical, "rev-parse", "refs/openclaw/pr-operation-locks/42");
+    recoverFixtureLock(f, owner);
+  });
 
   it("invalidates the previous snapshot when the same operation provisions a new worktree", () => {
     const f = fixture();

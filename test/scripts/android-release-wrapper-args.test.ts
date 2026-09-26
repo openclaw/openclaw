@@ -84,7 +84,7 @@ describe("Android release shell wrapper arguments", () => {
         bundle,
         "#!/usr/bin/env bash\n" +
           '[[ "$BUNDLE_GEMFILE" == "$OPENCLAW_FASTLANE_EXPECTED_GEMFILE" ]] || exit 91\n' +
-          '[[ "${1:-}" == "_2.6.9_" ]] || exit 92\n' +
+          '[[ "${1:-}" == "_4.0.21_" ]] || exit 92\n' +
           '[[ "${2:-}" != "check" ]] || exit "$OPENCLAW_BUNDLE_CHECK_EXIT"\n' +
           '[[ "${2:-}" == "exec" && "${3:-}" == "fastlane" ]] || exit 93\n' +
           '[[ -z "$OPENCLAW_EXPECTED_PROVENANCE" || "${_OPENCLAW_ANDROID_FASTLANE_EXECUTION_PROVENANCE:-}" == "$OPENCLAW_EXPECTED_PROVENANCE" ]] || exit 95\n' +
@@ -172,7 +172,7 @@ describe("Android release shell wrapper arguments", () => {
     const { result, trace } = runSharedFastlane({ bundleExit: 37 });
 
     expect(result.status).toBe(37);
-    expect(trace).toContain("bundle:_2.6.9_ exec fastlane android release_preflight");
+    expect(trace).toContain("bundle:_4.0.21_ exec fastlane android release_preflight");
     expect(trace).not.toContain("direct:");
   });
 
@@ -185,7 +185,7 @@ describe("Android release shell wrapper arguments", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(trace).toContain("bundle:_2.6.9_ exec fastlane android release_preflight");
+    expect(trace).toContain("bundle:_4.0.21_ exec fastlane android release_preflight");
     expect(trace).not.toContain("direct:");
   });
 
@@ -247,7 +247,7 @@ describe("Android release shell wrapper arguments", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(trace).toBe("bundle:_2.6.9_ exec fastlane android release_preflight\n");
+    expect(trace).toBe("bundle:_4.0.21_ exec fastlane android release_preflight\n");
   });
 
   it("falls back to rbenv when the bundle and direct Fastlane are unavailable", () => {
@@ -284,7 +284,7 @@ describe("Android release shell wrapper arguments", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Android Fastlane bundle is not installed");
-    expect(result.stderr).toContain("gem install bundler -v 2.6.9");
+    expect(result.stderr).toContain("gem install bundler -v 4.0.21");
     expect(trace).toBe("");
   });
 
@@ -297,7 +297,7 @@ describe("Android release shell wrapper arguments", () => {
 
     expect(result.status).toBe(127);
     expect(result.stderr).toContain("bundle not found for the Android Fastlane bundle");
-    expect(result.stderr).toContain("gem install bundler -v 2.6.9");
+    expect(result.stderr).toContain("gem install bundler -v 4.0.21");
     expect(trace).toBe("");
   });
 });

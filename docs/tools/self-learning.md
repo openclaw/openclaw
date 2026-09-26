@@ -56,8 +56,8 @@ Experience review starts only when all of these conditions hold:
 - the foreground turn completed or was interrupted, but did not end in a
   provider or prompt error.
 - the current turn used at least 10 model iterations.
-- the run was an eligible foreground conversation, not cron, heartbeat, memory,
-  overflow, hook, subagent, or review work.
+- the run was an eligible foreground conversation, not Incognito, cron,
+  heartbeat, memory, overflow, hook, subagent, or review work.
 - the runtime reported the resolved provider, model, and actual availability of
   `skill_workshop`.
 - the system has been quiet for 30 seconds.

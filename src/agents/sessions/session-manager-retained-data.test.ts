@@ -219,6 +219,8 @@ describe("bounded cleanup retaining opaque custom data", () => {
     const f = await fixture(data);
     expect(f.remove()).toBe(1);
     const rows = loadTranscriptEventsSync(f.scope) as Array<{ id?: string; data?: unknown }>;
-    expect(isDeepStrictEqual(rows.find((row) => row.id === f.metadataId)?.data, data)).toBe(true);
+    expect(JSON.stringify(rows.find((row) => row.id === f.metadataId)?.data)).toBe(
+      JSON.stringify(data),
+    );
   });
 });

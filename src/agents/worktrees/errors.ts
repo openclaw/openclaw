@@ -1,6 +1,9 @@
 export class WorktreeRepositoryError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  readonly reason?: "unborn";
+
+  constructor(message: string, options?: ErrorOptions & { reason?: "unborn" }) {
     super(message, options);
     this.name = "WorktreeRepositoryError";
+    this.reason = options?.reason;
   }
 }

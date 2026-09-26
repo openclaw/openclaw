@@ -1,7 +1,5 @@
-import { html, nothing } from "lit";
 import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { ChatPaneSessionMenu } from "./chat-pane-session-menu.ts";
@@ -184,24 +182,5 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
           ? this.commitSidebarLayout(closeSlot(state.sidebarLayout, "discussion"))
           : this.openSessionDiscussionSlot(),
     };
-  }
-
-  protected renderSessionDiscussionAction(action = this.resolveSessionDiscussionAction()) {
-    if (!action) {
-      return nothing;
-    }
-    return html`
-      <openclaw-tooltip .content=${action.label}>
-        <button
-          class="btn btn--ghost btn--icon chat-icon-btn chat-session-discussion-toggle"
-          type="button"
-          aria-label=${action.label}
-          aria-pressed=${String(action.active)}
-          @click=${action.onToggle}
-        >
-          ${icons.messageSquare}
-        </button>
-      </openclaw-tooltip>
-    `;
   }
 }

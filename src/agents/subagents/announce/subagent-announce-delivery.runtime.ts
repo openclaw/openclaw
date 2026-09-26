@@ -36,7 +36,7 @@ export { createBoundDeliveryRouter } from "../../../infra/outbound/bound-deliver
 export { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 
-export { formatEmbeddedAgentQueueFailureSummary, isEmbeddedAgentRunActive };
+export { formatEmbeddedAgentQueueFailureSummary };
 
 type RequesterSessionEntryResult = {
   cfg: ReturnType<typeof getRuntimeConfig>;

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-page.test/"} */
 
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,7 +52,7 @@ type RenderedPane = HTMLElement & {
   sessionKey: string;
   presented: boolean;
   active: boolean;
-  paneTitle: string;
+  presentationTitle: string | undefined;
   narrow: boolean;
   mergedChrome: boolean;
   onOpenSplitView?: () => void;
@@ -697,6 +698,12 @@ describe("chat page split layout host", () => {
   it("declares split panes, session switches, pane closes, and page disposal", async () => {
     const page = new ChatPage();
     const { request } = setViewerPresenceContext(page);
+    const expectPresence = (sessionKeys: string[]) =>
+      expect(request).toHaveBeenLastCalledWith(
+        SESSION_VIEWERS_SET_METHOD,
+        { sessionKeys },
+        { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, signal: expect.any(AbortSignal) },
+      );
     page.data = { sessionKey: "main" };
     document.body.append(page);
     setLayout(page, {
@@ -717,9 +724,7 @@ describe("chat page split layout host", () => {
     });
     await page.updateComplete;
     await Promise.resolve();
-    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: ["agent:main:main", "agent:main:other"],
-    });
+    expectPresence(["agent:main:main", "agent:main:other"]);
 
     const otherPane = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
       (pane) => pane.paneId === "p2",
@@ -727,30 +732,24 @@ describe("chat page split layout host", () => {
     otherPane?.onClosePane?.("p2");
     await page.updateComplete;
     await Promise.resolve();
-    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: ["agent:main:main"],
-    });
+    expectPresence(["agent:main:main"]);
 
     page.data = { sessionKey: "agent:main:replacement" };
     await page.updateComplete;
     await Promise.resolve();
-    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: ["agent:main:replacement"],
-    });
+    expectPresence(["agent:main:replacement"]);
 
     page.requestUpdate();
     page.remove();
     await page.updateComplete;
-    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, { sessionKeys: [] });
+    expectPresence([]);
 
     document.body.append(page);
     await Promise.resolve();
-    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, {
-      sessionKeys: ["agent:main:replacement"],
-    });
+    expectPresence(["agent:main:replacement"]);
     page.remove();
     await Promise.resolve();
-    expect(request).toHaveBeenLastCalledWith(SESSION_VIEWERS_SET_METHOD, { sessionKeys: [] });
+    expectPresence([]);
   });
 
   it("keeps split panes mounted but presents only the active pane on narrow viewports", async () => {

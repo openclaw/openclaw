@@ -186,17 +186,8 @@ async function runVideoGenerate(params: {
             });
             return { path: filePath, mimeType: video.mimeType, size };
           }
-          // Provider-supplied video URLs are untrusted external sources, and the
-          // in-memory fallback (no --output) must not buffer an unbounded body:
-          // generated videos routinely exceed tens of MiB and a hostile/buggy
-          // provider could exhaust process memory. Cap the read (fail-closed:
-          // overflow cancels the stream and throws rather than silently
-          // truncating) using the same shared bounded reader the rest of the
-          // media stack relies on. The --output branch above already streams
-          // straight to disk, so only this buffered path needs the guard. The
-          // overflow error reports only the provider label and byte cap (never
-          // the raw URL, which may be signed/tokenized) to match the sibling
-          // generated-media downloaders.
+          // Bound the in-memory download; --output streams to disk. Keep signed
+          // provider URLs out of overflow errors.
           const videoMaxBytes = resolveGeneratedMediaMaxBytes(cfg, "video");
           videoBuffer = await readResponseWithLimit(response, videoMaxBytes, {
             onOverflow: ({ maxBytes }) =>
@@ -212,17 +203,15 @@ async function runVideoGenerate(params: {
         }
       }
 
-      return {
-        ...(await writeOutputAsset({
-          buffer: videoBuffer!,
-          mimeType: video.mimeType,
-          originalFilename: video.fileName,
-          outputPath: params.output,
-          outputIndex: index,
-          outputCount: result.videos.length,
-          subdir: "generated",
-        })),
-      };
+      return await writeOutputAsset({
+        buffer: videoBuffer!,
+        mimeType: video.mimeType,
+        originalFilename: video.fileName,
+        outputPath: params.output,
+        outputIndex: index,
+        outputCount: result.videos.length,
+        subdir: "generated",
+      });
     }),
   );
   return {

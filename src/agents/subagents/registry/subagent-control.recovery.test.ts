@@ -1,3 +1,9 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  persistSubagentRunsToDiskOrThrow,
+  useSubagentControlFixture,
+} from "./subagent-control.test-support.js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
@@ -7,28 +13,20 @@ import * as taskControlRuntime from "../../../tasks/task-registry-control.runtim
 import { cancelTaskById, findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import {
   markSubagentRunTerminated,
   registerSubagentRun,
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { testing } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
 
 it("does not promote a provisional task when replacement wins before admin admission", async () => {
-  testing.setDepsForTest({
-    ...subagentRegistryDeps,
-    cleanupBrowserSessionsForLifecycleEnd: async () => {},
-    runSubagentAnnounceFlow: async () => "delivered",
-  });
+  fixture.announce.mockResolvedValue("delivered");
   const nextWait = createDeferred<AgentWaitResult>();
-  vi.spyOn(subagentRegistryDeps, "callGateway").mockImplementation(async (request) => {
+  fixture.gateway.mockImplementation(async (request) => {
     expect(request.method).toBe("agent.wait");
     return (request.params as { runId: string }).runId === "admission-b1"
       ? await nextWait.promise
@@ -41,7 +39,7 @@ it("does not promote a provisional task when replacement wins before admin admis
     sessionKey,
     defaultSessionId: "publication-admission-session",
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: "admission-b0",
     childSessionKey: sessionKey,
     requesterSessionKey: "agent:main:main",
@@ -103,10 +101,11 @@ it("does not promote a provisional task when replacement wins before admin admis
       terminalReply: { disposition: "visible", text: "follow-up completed" },
     });
     await completed.promise;
-    expect.soft(getTaskById(task.taskId)?.status).toBe("succeeded");
   } finally {
     followup.release();
     await pending;
     admin.mockRestore();
   }
+  await fixture.settle();
+  expect(getTaskById(task.taskId)?.status).toBe("succeeded");
 });

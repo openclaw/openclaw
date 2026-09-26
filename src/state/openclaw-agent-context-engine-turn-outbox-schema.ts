@@ -7,6 +7,14 @@ export const CONTEXT_ENGINE_TURN_OUTBOX_TABLE = "context_engine_turn_outbox";
 
 const ENSURED_DATABASES = new WeakSet<DatabaseSync>();
 
+/**
+ * Records that a caller-owned transaction which ran the lazy DDL committed, so
+ * later commands on this connection skip it.
+ */
+export function recordContextEngineTurnOutboxSchemaCommitted(db: DatabaseSync): void {
+  ENSURED_DATABASES.add(db);
+}
+
 /** Lazily installs the additive context-engine turn outbox on first use. */
 export function ensureContextEngineTurnOutboxSchema(db: DatabaseSync): void {
   if (ENSURED_DATABASES.has(db)) {

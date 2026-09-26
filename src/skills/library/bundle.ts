@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Type, type Static } from "typebox";
@@ -10,6 +9,7 @@ import {
   type SkillLibraryFile,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { hasErrnoCode, isErrno } from "../../infra/errno.js";
 import { ensureAbsoluteDirectory, root, walkDirectory } from "../../infra/fs-safe.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
@@ -41,7 +41,6 @@ type PreparedSkillBundle = {
 };
 export type PreparedSkillLibraryBundle = PreparedSkillBundle & { description: string };
 const portableCompare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
-const sha256 = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 const manifestSchema = Type.Array(
   Type.Object(
     {
@@ -82,7 +81,7 @@ export async function readSkillLibraryManifestTree(
       symlinks: "reject",
       maxBytes: file.sizeBytes,
     });
-    if (buffer.length !== file.sizeBytes || sha256(buffer) !== file.sha256) {
+    if (buffer.length !== file.sizeBytes || sha256Hex(buffer) !== file.sha256) {
       throw new SkillLibraryError(
         "INVALID_BUNDLE",
         `Published skill file failed integrity verification: ${file.path}`,
@@ -174,7 +173,7 @@ export function prepareSkillBundle(files: readonly SkillLibraryFile[]): Prepared
       return {
         path: file.path,
         bytes,
-        sha256: sha256(bytes),
+        sha256: sha256Hex(bytes),
         sizeBytes: bytes.length,
         executable: file.executable === true,
       };
@@ -197,7 +196,7 @@ export function prepareSkillBundle(files: readonly SkillLibraryFile[]): Prepared
   // Preserve the managed revision encoding: only exact artifact bytes and metadata enter the hash.
   const manifest = prepared.map(({ bytes: _bytes, ...file }) => file);
   return {
-    revision: sha256(JSON.stringify(["openclaw.skill-library.tree.v1", manifest])),
+    revision: sha256Hex(JSON.stringify(["openclaw.skill-library.tree.v1", manifest])),
     files: prepared,
   };
 }

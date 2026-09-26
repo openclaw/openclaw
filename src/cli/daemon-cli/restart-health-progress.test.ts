@@ -149,28 +149,40 @@ describe("restart startup progress", () => {
       stopped: true,
       listenerPid: 9000,
       outcome: "stale-pids",
+      failureReason: /stale Gateway processes/,
     },
     {
       name: "running service with an unrelated listener",
       listenerPid: 9000,
       foreign: true,
       outcome: "timeout",
+      failureReason: /timed out/,
     },
     {
       name: "owned listener running the wrong version",
       listenerPid: 8000,
       expectedVersion: "candidate-version",
       outcome: "version-mismatch",
+      failureReason: /version did not match/,
     },
     {
       name: "owned listener running the wrong build",
       listenerPid: 8000,
       expectedBuildId: "candidate-build",
       outcome: "build-id-mismatch",
+      failureReason: /build did not match/,
     },
   ])(
     "does not let HTTP startup hide $name",
-    async ({ stopped, listenerPid, foreign, expectedVersion, expectedBuildId, outcome }) => {
+    async ({
+      stopped,
+      listenerPid,
+      foreign,
+      expectedVersion,
+      expectedBuildId,
+      outcome,
+      failureReason,
+    }) => {
       inspectPortUsage.mockResolvedValue({
         port: 18789,
         status: "busy",
@@ -203,6 +215,10 @@ describe("restart startup progress", () => {
         expectedBuildId,
       });
       expect(result).toMatchObject({ healthy: false, waitOutcome: outcome });
+      expect(
+        formatGatewayRestartFailure({ health: result, port: 18789, defaultTimeoutSeconds: 60 })
+          .failMessage,
+      ).toMatch(failureReason);
       if (stopped) {
         expect(result.staleGatewayPids).toEqual([9000]);
       }
@@ -504,6 +520,9 @@ describe("restart startup progress", () => {
         expect(message.failMessage).toBe(
           `Gateway restart timed out after ${elapsedMs / 1000}s waiting for health checks.`,
         );
+      } else if (expected === "generation-changed") {
+        expect(message.failMessage).toMatch(/process generation changed/);
+        expect(message.failMessage).not.toContain("timed out");
       }
     },
   );

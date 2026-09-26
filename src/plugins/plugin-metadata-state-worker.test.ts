@@ -16,6 +16,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as bundledDiscovery from "./bundled-discovery-state.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
@@ -91,32 +92,20 @@ function familyHashes(databasePath: string) {
   });
 }
 
-function observeParentSqlite() {
-  const native = requireNodeSqlite();
-  return [
-    vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-    vi.spyOn(native.DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(native.StatementSync.prototype, method),
-    ),
-  ];
-}
-
 it("returns a persisted index row without main-thread SQL", async () => {
   const env = environment();
   const message = "persisted fixture diagnostic";
   await seed(env, index(message));
-  const counters = observeParentSqlite();
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
   try {
     await withPluginCache(createPluginCache(), async () => {
       const loaded = await readPersistedInstalledPluginIndex({ env });
       expect(loaded?.diagnostics).toEqual([{ level: "warn", message }]);
     });
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
   } finally {
-    for (const counter of counters) {
-      counter.mockRestore();
-    }
+    sql.restore();
   }
 });
 
@@ -191,7 +180,8 @@ it("prepares cold metadata once and preserves the merged workspace inventory wit
       return activate;
     });
   const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
-  const counters = observeParentSqlite();
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
   try {
     await withPluginCache(createPluginCache(), async () => {
       const first = await resolveConfigWidePluginMetadataSnapshotAsync({
@@ -214,11 +204,9 @@ it("prepares cold metadata once and preserves the merged workspace inventory wit
         "installed-index",
       ]);
     });
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
   } finally {
-    for (const counter of counters) {
-      counter.mockRestore();
-    }
+    sql.restore();
     reads.mockRestore();
     mode.mockRestore();
   }
@@ -301,7 +289,8 @@ it("returns persisted bundled recovery locations through its existing async cons
     },
   ];
   await seed(env, stored);
-  const counters = observeParentSqlite();
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
   try {
     await using cache = createPluginCache();
     const recovered = await withPluginCache(cache, () =>
@@ -310,11 +299,9 @@ it("returns persisted bundled recovery locations through its existing async cons
     expect(recovered).toHaveLength(1);
     expect(recovered[0]?.pluginId).toBe("fixture");
     expect(recovered[0]?.loadPaths).toContain(rootDir);
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
   } finally {
-    for (const counter of counters) {
-      counter.mockRestore();
-    }
+    sql.restore();
   }
 });
 
@@ -327,18 +314,17 @@ it("reads the installed ledger inside the existing install lifecycle lease witho
   await seed(env, stored);
   await withPluginLifecycleLease({ env }, async (lease) => {
     lease.assertOwned();
-    const counters = observeParentSqlite();
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
     try {
       const options = { env, filePath: lease.databasePath };
       expect(await loadInstalledPluginIndexInstallRecords(options)).toEqual(stored.installRecords);
       expect((await readPersistedInstalledPluginIndex(options))?.installRecords).toEqual(
         stored.installRecords,
       );
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      sql.expectIdle();
     } finally {
-      for (const counter of counters) {
-        counter.mockRestore();
-      }
+      sql.restore();
     }
     lease.assertOwned();
   });

@@ -1,12 +1,16 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import {
   captureRuntimeWorkerSource,
   withRuntimeWorkerGeneration,
 } from "./runtime-worker-generation.js";
+import {
+  useSqliteWorkerStoreFixture,
+  appendWorkerRow as append,
+  readWorkerRows as read,
+} from "./sqlite-worker-fixture.test-support.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 import { getTrackedWorkerCpuSources } from "./worker-cpu.js";
@@ -16,39 +20,9 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: () => 32,
 }));
 
-const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    try {
-      await Promise.all([...stores].map((store) => store.close()));
-    } finally {
-      stores.clear();
-      cleanup();
-    }
-  }),
+const { stores, tempDirs, databasePath, open } = useSqliteWorkerStoreFixture(
+  "openclaw-sqlite-worker-generation-",
 );
-
-function databasePath(): string {
-  return path.join(tempDirs.make("openclaw-sqlite-worker-generation-"), "store.sqlite");
-}
-
-async function open(file: string) {
-  const store = await openSqliteWorkerStore<FixtureOperations>({
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-    databasePath: file,
-    input: undefined,
-  });
-  stores.add(store);
-  return store;
-}
-
-function append(store: SqliteWorkerStore<FixtureOperations>, value: string) {
-  return store.execute({ type: "append", input: { value } });
-}
-
-function read(store: SqliteWorkerStore<FixtureOperations>) {
-  return store.execute({ type: "read", input: undefined });
-}
 
 const nodeIt = process.versions.bun ? it.skip : it;
 

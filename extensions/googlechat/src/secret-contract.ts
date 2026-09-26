@@ -47,10 +47,6 @@ export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntr
   ],
 });
 
-function resolveSecretInputRef(params: { value: unknown; defaults?: SecretDefaults }) {
-  return coerceSecretRef(params.value, params.defaults);
-}
-
 function collectGoogleChatAccountAssignment(params: {
   target: GoogleChatAccountLike;
   path: string;
@@ -59,10 +55,7 @@ function collectGoogleChatAccountAssignment(params: {
   ownerAccountIds: string[];
   inactiveReason?: string;
 }): void {
-  const ref = resolveSecretInputRef({
-    value: params.target.serviceAccount,
-    defaults: params.defaults,
-  });
+  const ref = coerceSecretRef(params.target.serviceAccount, params.defaults);
   if (!ref) {
     return;
   }

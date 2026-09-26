@@ -483,14 +483,16 @@ describe("normalizePlainTextToolCallStreamEvents protected ranges", () => {
     let precedingPrefixSlices = 0;
     // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted string receiver.
     const originalSlice = String.prototype.slice;
-    const sliceSpy = vi
-      .spyOn(String.prototype, "slice")
-      .mockImplementation(function (this: string, start, end) {
-        if (start === 0 && end === precedingBlock.length && this.length >= end) {
-          precedingPrefixSlices += 1;
-        }
-        return originalSlice.call(this, start, end);
-      });
+    const sliceSpy = vi.spyOn(String.prototype, "slice").mockImplementation(function (
+      this: string,
+      start,
+      end,
+    ) {
+      if (start === 0 && end === precedingBlock.length && this.length >= end) {
+        precedingPrefixSlices += 1;
+      }
+      return originalSlice.call(this, start, end);
+    });
     let normalized: Record<string, unknown>[];
     try {
       normalized = await collectNormalizedEvents(events, {

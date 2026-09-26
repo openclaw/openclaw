@@ -18,17 +18,8 @@ type CommandSurfaceParams = {
   };
 };
 
-type ChannelAccountParams = {
+type ChannelAccountParams = CommandSurfaceParams & {
   cfg: OpenClawConfig;
-  ctx: {
-    OriginatingChannel?: string;
-    Surface?: string;
-    Provider?: string;
-    AccountId?: string;
-  };
-  command: {
-    channel?: string;
-  };
 };
 
 /** Resolves the command surface channel from inbound context and command state. */

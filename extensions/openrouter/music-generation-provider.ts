@@ -42,14 +42,6 @@ type OpenRouterAudioStreamAccumulator = {
   maxBytes: number;
 };
 
-function resolveOpenRouterMusicModel(model: string | undefined): string {
-  return normalizeOptionalString(model) ?? DEFAULT_OPENROUTER_MUSIC_MODEL;
-}
-
-function outputFormatToMimeType(format: "mp3" | "wav" | undefined): string {
-  return format === "mp3" ? "audio/mpeg" : "audio/wav";
-}
-
 function imageToContentPart(image: MusicGenerationSourceImage): {
   type: "image_url";
   image_url: { url: string };
@@ -93,7 +85,7 @@ function buildOpenRouterMessageContent(
   if (images.length === 0) {
     return prompt;
   }
-  return [{ type: "text", text: prompt }, ...images.map((image) => imageToContentPart(image))];
+  return [{ type: "text", text: prompt }, ...images.map(imageToContentPart)];
 }
 
 function readDeltaAudio(part: unknown): { data?: string; transcript?: string } | undefined {
@@ -151,11 +143,7 @@ function appendDecodedOpenRouterMusicAudio(
     throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
   }
   const buffer = Buffer.from(canonicalAudio, "base64");
-  const nextBytes = result.audioBytes + buffer.byteLength;
-  if (nextBytes > result.maxBytes) {
-    throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
-  }
-  result.audioBytes = nextBytes;
+  result.audioBytes += buffer.byteLength;
   result.audioBuffers.push(buffer);
 }
 
@@ -373,7 +361,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
           capability: "audio",
           jsonContentType: true,
         });
-      const model = resolveOpenRouterMusicModel(req.model);
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_OPENROUTER_MUSIC_MODEL;
       const format = req.format ?? "wav";
       const requestedTimeoutMs = resolvePositiveTimerTimeoutMs(req.timeoutMs, DEFAULT_TIMEOUT_MS);
       const streamDeadline = createProviderOperationDeadline({
@@ -411,7 +399,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
           tracks: [
             {
               buffer: streamResult.audioBuffer,
-              mimeType: outputFormatToMimeType(format),
+              mimeType: format === "mp3" ? "audio/mpeg" : "audio/wav",
               fileName: `track-1.${format}`,
             },
           ],

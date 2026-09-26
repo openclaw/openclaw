@@ -13,6 +13,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessions/types.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { ensureSessionDiffBaseline } from "../sessions/session-diff-baseline.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -51,17 +52,24 @@ afterEach(() => {
 
 async function resetFromCaller(key: string, current: () => boolean) {
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  return await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig }, () =>
-    withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:reset-requester",
-        operationalRunInstance: { instanceId: "reset-instance", runId: "reset-run" },
-        receiptAuthority: current,
-      },
-      () => callAgentToolGatewayRequest({ method: "sessions.reset", params: { key } }),
-    ),
-  );
+  const resources = new LegacyPluginSdkResourceHost();
+  try {
+    return await resources.run(() =>
+      withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig }, () =>
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:reset-requester",
+            operationalRunInstance: { instanceId: "reset-instance", runId: "reset-run" },
+            receiptAuthority: current,
+          },
+          () => callAgentToolGatewayRequest({ method: "sessions.reset", params: { key } }),
+        ),
+      ),
+    );
+  } finally {
+    await resources.close();
+  }
 }
 
 test.each(["normal", "incognito", "replacement"])(
@@ -245,6 +253,7 @@ test("sessions.reset fences an old same-id baseline completion with a fresh capt
   captureMocks.capture.mockReturnValueOnce(capture.promise);
   const oldEntry = loadSessionEntry({ sessionKey, storePath }) as InternalSessionEntry;
   const oldCompletion = ensureSessionDiffBaseline({
+    agentId: "main",
     cwd: "/workspace",
     entry: oldEntry,
     isNewSession: false,

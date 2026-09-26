@@ -4,18 +4,23 @@ import { describe, expect, it, vi } from "vitest";
 import { renderTelegramMiniAppPage, TELEGRAM_MINIAPP_EXPIRED_MESSAGE } from "./page.js";
 
 describe("telegram miniapp page bootstrap", () => {
-  it("executes the generated page and expires a hung auth request", async () => {
+  it("keeps a hostile nonce inert while executing the page and expiring a hung auth request", async () => {
     let scheduledTimeout: { callback: () => void; delayMs: number; id: number } | undefined;
     const clearTimeoutSpy = vi.fn();
     const ready = vi.fn();
     const fetchMock = vi.fn();
     const location = { hash: "#launchTicket=launch-ticket", replace: vi.fn() };
+    const scriptNonce = `&<>"' data-nonce-injected="true"></script><img id="nonce-injection">`;
 
     const rendered = new DOMParser().parseFromString(
-      renderTelegramMiniAppPage({ accountId: "ops", scriptNonce: "test-nonce" }),
+      renderTelegramMiniAppPage({ accountId: "ops", scriptNonce }),
       "text/html",
     );
-    const bootstrap = rendered.querySelector("script:not([src])")?.textContent;
+    const script = rendered.querySelector("script:not([src])");
+    expect(script?.getAttribute("nonce")).toBe(scriptNonce);
+    expect(script?.getAttributeNames()).toEqual(["nonce"]);
+    expect(rendered.querySelector("[data-nonce-injected], #nonce-injection")).toBeNull();
+    const bootstrap = script?.textContent;
     if (!bootstrap) {
       throw new Error("generated Mini App page is missing its bootstrap script");
     }

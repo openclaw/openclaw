@@ -78,6 +78,7 @@ import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
   withOpenClawStateDatabaseReadSnapshot,
+  withSynchronousArtifactPreservingStateSnapshot,
 } from "./openclaw-state-db-readonly.js";
 import {
   getExistingOpenClawStateSchemaPath,
@@ -154,6 +155,8 @@ async function probeRetiredAdmission(source: string) {
     getter: () => getActiveOpenClawStateDatabaseReadSnapshot(options),
     native: () => withExistingOpenClawStateDatabaseReadOnly(() => "read", options),
     currentRows: () => withExistingOpenClawStateDatabaseCurrentReadOnly(() => "read", options),
+    currentSnapshot: () =>
+      withSynchronousArtifactPreservingStateSnapshot(() => "read", { current: options }),
     nestedSnapshot: () => withOpenClawStateDatabaseReadSnapshot(async () => "nested", options),
     nestedDisposable: () => withDisposableOpenClawStateReads(source, async () => "nested"),
     worker: () => executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
@@ -176,6 +179,7 @@ const rejectedAdmissions = {
   getter: true,
   native: true,
   currentRows: true,
+  currentSnapshot: true,
   nestedSnapshot: true,
   nestedDisposable: true,
   worker: true,

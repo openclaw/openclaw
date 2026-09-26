@@ -22,6 +22,7 @@ import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
+import { getProgressCardToolOutcome } from "./tools/progress-card-tool-outcome.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
@@ -318,6 +319,12 @@ function hashToolOutcome(
   if (isLoopVetoResult(details)) {
     return { outcomeKind: "tool-loop-veto" };
   }
+  if (toolName === "progress_card" && result.isError !== true) {
+    const outcome = getProgressCardToolOutcome(result);
+    if (outcome !== undefined) {
+      return { resultHash: digestToolOutcome(outcome) };
+    }
+  }
   if (toolName === "exec") {
     const execHash = hashExecToolOutcome(details, text);
     if (execHash) {
@@ -571,7 +578,10 @@ export function detectToolCallLoop(
     };
   }
 
-  if (knownPollTool && noProgressStreak >= CRITICAL_THRESHOLD) {
+  // A wait only resumes existing work; ten unchanged outcomes already prove a stuck poll.
+  const pollCriticalThreshold =
+    toolName === "wait" ? TOOL_LOOP_WARNING_THRESHOLD : CRITICAL_THRESHOLD;
+  if (knownPollTool && noProgressStreak >= pollCriticalThreshold) {
     if (emitLogs) {
       log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
     }

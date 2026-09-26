@@ -1,5 +1,5 @@
 /** Real handler and registry proof for session-wide descendant cancellation ownership. */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
@@ -7,7 +7,6 @@ import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
@@ -35,17 +34,18 @@ vi.mock("../session-utils.js", async () => ({
   }),
 }));
 
+vi.mock("../../agents/subagents/registry/subagent-registry-state.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/subagents/registry/subagent-registry-state.js")
+  >()),
+  persistSubagentRunsToDisk: () => {},
+  persistSubagentRunsToDiskOrThrow: () => {},
+}));
+
 describe("descendant cascade ownership", () => {
-  beforeEach(() => {
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {},
-    });
-  });
   afterEach(async () => {
     await settleSubagentRegistryPersistenceWork();
     resetSubagentRegistryForTests({ persist: false });
-    subagentRegistryTesting.setDepsForTest();
     swarmSchedulerTesting.reset();
     vi.restoreAllMocks();
   });
@@ -53,7 +53,7 @@ describe("descendant cascade ownership", () => {
   it("does not stop descendants after the original caller is revoked during parent cancellation", async () => {
     const sessionKey = "agent:main:main";
     const childKey = "agent:main:subagent:retained-stop";
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "retained-stop-child",
       childSessionKey: childKey,
       requesterSessionKey: sessionKey,
@@ -244,7 +244,7 @@ describe("descendant cascade ownership", () => {
         startedAt: 2,
       });
     } else {
-      registerChild();
+      await registerChild();
     }
     const start = vi.fn(async () => {});
     enqueueSwarmRun({
@@ -308,7 +308,7 @@ describe("descendant cascade ownership", () => {
           expect(
             getSubagentRunByChildSessionKey("agent:main:subagent:orchestrator")?.execution.endedAt,
           ).toBeUndefined();
-          registerChild();
+          await registerChild();
         }
         if (canCascade) {
           expect(

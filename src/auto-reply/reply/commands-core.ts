@@ -14,10 +14,6 @@ const commandHandlersRuntimeLoader = createLazyImportLoader(
   () => import("./commands-handlers.runtime.js"),
 );
 
-function loadCommandHandlersRuntime() {
-  return commandHandlersRuntimeLoader.load();
-}
-
 let HANDLERS: CommandHandler[] | null = null;
 
 function normalizeCommandHandlerResult(result: CommandHandlerResult): CommandHandlerResult {
@@ -71,7 +67,7 @@ export async function handleCommands(params: CommandDispatchParams): Promise<Com
     ...(await resolveModelLevels()),
   };
   if (HANDLERS === null) {
-    HANDLERS = (await loadCommandHandlersRuntime()).loadCommandHandlers();
+    HANDLERS = (await commandHandlersRuntimeLoader.load()).loadCommandHandlers();
   }
   const allowTextCommands = shouldHandleTextCommands({
     cfg: params.cfg,

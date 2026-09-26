@@ -1,6 +1,7 @@
 // Gateway service lifecycle runners, including unmanaged-process fallbacks and restart health checks.
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import {
   assertGatewayServiceUpdateCurrent,
   assertGatewayServiceFallbackAllowed,
@@ -30,6 +31,7 @@ import {
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -69,14 +71,12 @@ import { verifyGatewayStartReadiness } from "./start-health.js";
 import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
-const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
-const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 const WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS = 180_000;
 
 function postRestartHealthAttempts(): number {
   return process.platform === "win32"
-    ? Math.ceil(WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS / POST_RESTART_HEALTH_DELAY_MS)
-    : POST_RESTART_HEALTH_ATTEMPTS;
+    ? Math.ceil(WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS)
+    : DEFAULT_RESTART_HEALTH_ATTEMPTS;
 }
 
 async function handleSystemScopeSystemdGateway(
@@ -127,7 +127,11 @@ async function stopGatewayWithoutServiceManager(
   if (managed) {
     return managed;
   }
-  const listenerPids = resolveVerifiedGatewayListenerPids(port);
+  const env = mergeGatewayServiceEnv(
+    serviceContext?.env ?? process.env,
+    serviceContext?.command ?? null,
+  );
+  const listenerPids = resolveVerifiedGatewayListenerPids(port, env);
   // Listener discovery needs lsof, which minimal containers omit. The gateway
   // lock already names the verified owner of this port, so signal it instead of
   // reporting the gateway as not running while it keeps serving.
@@ -145,7 +149,7 @@ async function stopGatewayWithoutServiceManager(
     return null;
   }
   for (const pid of pids) {
-    signalVerifiedGatewayPidSync(pid, "SIGTERM");
+    signalVerifiedGatewayPidSync(pid, "SIGTERM", { env, port });
     appendGatewayLifecycleAudit({
       action: "stop",
       source: "cli",
@@ -162,11 +166,12 @@ async function stopGatewayWithoutServiceManager(
 function resolveRestartListenerHealthWait(restartIntent: GatewayRestartIntent | undefined) {
   const drainTimeoutMs = resolveGatewayRestartDrainTimeoutMs(restartIntent);
   const attempts =
-    postRestartHealthAttempts() + Math.ceil((drainTimeoutMs ?? 0) / POST_RESTART_HEALTH_DELAY_MS);
+    postRestartHealthAttempts() +
+    Math.ceil((drainTimeoutMs ?? 0) / DEFAULT_RESTART_HEALTH_DELAY_MS);
   return {
     attempts,
     waitIndefinitelyForPreviousOwner: drainTimeoutMs === undefined,
-    timeoutSeconds: Math.round((attempts * POST_RESTART_HEALTH_DELAY_MS) / 1000),
+    timeoutSeconds: Math.round((attempts * DEFAULT_RESTART_HEALTH_DELAY_MS) / 1000),
   };
 }
 
@@ -231,7 +236,7 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
   const health = await waitForGatewayHealthyListener({
     port: lockIdentity.port,
     attempts: healthWait.attempts,
-    delayMs: POST_RESTART_HEALTH_DELAY_MS,
+    delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
     previousLockIdentity: signaled.previousLockIdentity,
     waitIndefinitelyForPreviousOwner: healthWait.waitIndefinitelyForPreviousOwner,
   });
@@ -323,7 +328,12 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     stopWhenNotLoaded: process.platform === "darwin" && Boolean(opts.disable),
     onNotLoaded: async ({ stdout }) => {
       if (process.platform === "linux") {
-        const runtime = await service.readRuntime(process.env).catch(() => null);
+        const runtime = await service.readRuntime(process.env).catch((error: unknown) => {
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          return null;
+        });
         if (runtime?.status === "running") {
           // systemd can run a disabled unit with Restart=always. Stop it through
           // systemctl so a process-level SIGTERM cannot trigger a respawn.
@@ -340,7 +350,14 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
       // for discovery the way restart already does; otherwise a valid port
       // override makes the running gateway look like it is already stopped.
       const lock = await readActiveGatewayLockIdentity().catch(() => undefined);
-      const ctx = lock ? null : await resolveGatewayLifecycleContext(service).catch(() => null);
+      const ctx = lock
+        ? null
+        : await resolveGatewayLifecycleContext(service).catch((error: unknown) => {
+            if (hasCommandProcessCleanupError(error)) {
+              throw error;
+            }
+            return null;
+          });
       const port = lock?.port ?? ctx?.port ?? (await resolveGatewayConfigPorts()).fallback;
       return await stopGatewayWithoutServiceManager(port, lock?.pid, ctx ?? undefined);
     },
@@ -377,6 +394,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     service,
     preserveDefinition,
   ).catch(async (error: unknown) => {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     if (preserveDefinition) {
       throw error;
     }
@@ -391,7 +411,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let unmanagedPort =
     (await readActiveGatewayLockPort().catch(() => undefined)) ?? managedRestartPort;
   const restartHealthAttempts = postRestartHealthAttempts();
-  const restartWaitMs = restartHealthAttempts * POST_RESTART_HEALTH_DELAY_MS;
+  const restartWaitMs = restartHealthAttempts * DEFAULT_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
   let unmanagedRestartWait: ReturnType<typeof resolveRestartListenerHealthWait> | undefined;
 
@@ -424,7 +444,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
             port: owner.port,
             env: process.env,
             attempts: restartHealthAttempts,
-            delayMs: POST_RESTART_HEALTH_DELAY_MS,
+            delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
           });
           if (!ready.healthy) {
             throw new Error(
@@ -500,6 +520,18 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
     postRestartCheck: async ({ warnings, fail, stdout, warn, activationAccepted: accepted }) => {
       let activationAccepted = accepted;
+      const reportHealthFailure = (statusLines: string[], diagnostics: string[]) => {
+        if (jsonOutput) {
+          warnings.push(...statusLines, ...diagnostics);
+          return;
+        }
+        for (const line of statusLines) {
+          defaultRuntime.log(theme.warn(line));
+        }
+        for (const line of diagnostics) {
+          defaultRuntime.log(theme.muted(line));
+        }
+      };
       if (restartedWithoutServiceManager) {
         // Unmanaged restarts have no service-manager state to watch; prove
         // listener health and replacement of the previous lock owner.
@@ -507,7 +539,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           port: unmanagedPort,
           env: process.env,
           attempts: unmanagedRestartWait?.attempts ?? restartHealthAttempts,
-          delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
           ...(unmanagedPreviousLockIdentity
             ? {
                 previousLockIdentity: unmanagedPreviousLockIdentity,
@@ -523,15 +555,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         const diagnostics = renderGatewayPortHealthDiagnostics(health);
         const waitSeconds = unmanagedRestartWait?.timeoutSeconds ?? restartWaitSeconds;
         const timeoutLine = `Timed out after ${waitSeconds}s waiting for gateway port ${unmanagedPort} to become healthy.`;
-        if (!jsonOutput) {
-          defaultRuntime.log(theme.warn(timeoutLine));
-          for (const line of diagnostics) {
-            defaultRuntime.log(theme.muted(line));
-          }
-        } else {
-          warnings.push(timeoutLine);
-          warnings.push(...diagnostics);
-        }
+        reportHealthFailure([timeoutLine], diagnostics);
 
         fail(
           `Gateway restart timed out after ${waitSeconds}s waiting for health checks.`,
@@ -546,7 +570,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           service,
           port: managedRestartPort,
           attempts: restartHealthAttempts,
-          delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
           env: managedRestartContext.env,
           ...(managedRestartContext.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1"
             ? { requirePluginHealth: false }
@@ -602,21 +626,10 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         health.portUsage.status === "free"
           ? `Gateway process is running but port ${managedRestartPort} is still free (startup hang/crash loop or very slow VM startup).`
           : null;
-      if (!jsonOutput) {
-        defaultRuntime.log(theme.warn(failure.statusLine));
-        if (runningNoPortLine) {
-          defaultRuntime.log(theme.warn(runningNoPortLine));
-        }
-        for (const line of diagnostics) {
-          defaultRuntime.log(theme.muted(line));
-        }
-      } else {
-        warnings.push(failure.statusLine);
-        if (runningNoPortLine) {
-          warnings.push(runningNoPortLine);
-        }
-        warnings.push(...diagnostics);
-      }
+      reportHealthFailure(
+        [failure.statusLine, ...(runningNoPortLine ? [runningNoPortLine] : [])],
+        diagnostics,
+      );
 
       fail(
         failure.failMessage,

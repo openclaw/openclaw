@@ -30,14 +30,19 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
-- `tools.effective` (`operator.read`) fetches the runtime-effective tool
-  inventory for a session.
+- `tools.effective` (`operator.read`) fetches a prospective tool preview for a
+  session.
   - `sessionKey` is required.
   - The gateway derives trusted runtime context from the session server-side
     instead of accepting caller-supplied auth or delivery context.
-  - The response is a session-scoped server-derived projection of the active
-    inventory, including core, plugin, channel, and already-discovered MCP
-    server tools.
+  - The response is a session-scoped server-derived projection from saved
+    settings, including core, plugin, channel, and already-discovered MCP
+    server tools. It is not the exact tool inventory of an active run: run
+    authority, credentials, discovery, and final run policy can change which
+    tools are offered. Absence from this preview does not establish that a tool
+    is disabled, and inclusion does not guarantee execution access.
+  - The projection can use cached inventory while refreshing it. Unsaved UI
+    edits are not inputs, and saved or runtime changes may not appear immediately.
   - `tools.effective` is read-only for MCP: it may project a warm session MCP
     catalog through the final tool policy, but does not create MCP runtimes,
     connect transports, or issue `tools/list`. If no matching warm catalog

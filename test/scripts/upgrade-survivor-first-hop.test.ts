@@ -108,12 +108,89 @@ async function publishSuccess(summary: unknown) {
   writeFileSync(join(artifacts, "summary.json"), JSON.stringify(summary));
   const { publishDiagnostics } = await import(observer);
   return {
+    artifacts,
     published,
     publish: () => publishDiagnostics(artifacts, published, (text: string) => text, "passed"),
   };
 }
 
 describe("upgrade survivor rollback publication", () => {
+  it("retains producer results and distinguishes canonical rollback from omitted raw transcripts", async () => {
+    const summary = rollbackSuccessSummary();
+    const omission = {
+      relative: "agents/main/sessions/upgrade-restored-index-history.jsonl",
+      kind: "transcript",
+      sha256: "b".repeat(64),
+      archiveMember:
+        "backup/payload/state/agents/main/sessions/upgrade-restored-index-history.jsonl",
+      sessionId: "PRIVATE_SESSION_ID",
+      canonicalEventCount: 2,
+      reason: "published-2026.9.4-volatile-transcript",
+    };
+    const created = { verified: true, skippedVolatileCount: 3, skipped: [] };
+    const restored = { ok: true, archiveRoot: "backup" };
+    Object.assign(summary.backupRollback, {
+      backupCreate: created,
+      rawTranscriptRestoration: "unsupported-by-published-backup",
+      omittedRawTranscripts: [omission],
+    });
+    summary.backupRollback.before.files.push({
+      kind: omission.kind,
+      relative: omission.relative,
+      sha256: omission.sha256,
+      raw: "PRIVATE_JSON",
+    });
+    const { artifacts, publish, published } = await publishSuccess(summary);
+    const rawProof = {
+      status: "passed",
+      runtime: {
+        version: "2026.9.4",
+        manifestSha256: "a".repeat(64),
+        entrySha256: "a".repeat(64),
+      },
+      rawTranscriptRestoration: "unsupported-by-published-backup",
+      omittedRawTranscripts: [{ ...omission, sessionId: "upgrade-restored-index-history" }],
+    };
+    writeFileSync(join(artifacts, "backup-rollback.json"), JSON.stringify(rawProof));
+    writeFileSync(join(artifacts, "backup-rollback-create.json"), JSON.stringify(created));
+    writeFileSync(join(artifacts, "backup-rollback-restore.json"), JSON.stringify(restored));
+    publish();
+    const text = readFileSync(join(published, "summary.json"), "utf8");
+    expect(text).not.toMatch(/PRIVATE_|\/private\/host/);
+    const receipt = JSON.parse(text);
+    expect(receipt.backupRollback).toMatchObject({
+      skippedVolatileCount: 3,
+      rawTranscriptRestoration: "unsupported-by-published-backup",
+      omittedRawTranscripts: [
+        {
+          relative: omission.relative,
+          kind: "transcript",
+          sha256: omission.sha256,
+          archiveMember: omission.archiveMember,
+          canonicalEventCount: 2,
+          reason: omission.reason,
+        },
+      ],
+    });
+    expect(JSON.parse(receipt.logs["backup-rollback-create.json"])).toEqual(created);
+    expect(JSON.parse(receipt.logs["backup-rollback-restore.json"])).toEqual(restored);
+    expect(JSON.parse(receipt.logs["backup-rollback.json"])).toEqual(rawProof);
+  });
+
+  it("retains restored-index result evidence through host publication", async () => {
+    const { artifacts, publish, published } = await publishSuccess(rollbackSuccessSummary());
+    writeFileSync(
+      join(artifacts, "restored-index-post-update.json"),
+      JSON.stringify({ status: "passed", current: { label: "Renamed session", pinnedAt: 1234 } }),
+    );
+    publish();
+    const receipt = JSON.parse(readFileSync(join(published, "summary.json"), "utf8"));
+    expect(JSON.parse(receipt.logs["restored-index-post-update.json"])).toEqual({
+      status: "passed",
+      current: { label: "Renamed session", pinnedAt: 1234 },
+    });
+  });
+
   it("publishes the validated rollback schema, session counts and hashes without private state", async () => {
     const { publish, published } = await publishSuccess(rollbackSuccessSummary());
     publish();
@@ -213,6 +290,9 @@ describe("upgrade survivor rollback publication", () => {
     "unsafe-table-name",
     "oversized-collection",
     "no-history",
+    "unbound-omission",
+    "unsupported-restoration-claim",
+    "invalid-volatile-count",
   ])("refuses %s rollback evidence without writing a successful receipt", async (kind) => {
     const summary = rollbackSuccessSummary();
     const proof = summary.backupRollback;
@@ -245,6 +325,28 @@ describe("upgrade survivor rollback publication", () => {
     }
     if (kind === "no-history") {
       proof.before.databases[1]!.tables![1]!.rows = 0;
+    }
+    if (kind === "unbound-omission") {
+      Object.assign(proof, {
+        backupCreate: { skippedVolatileCount: 1 },
+        rawTranscriptRestoration: "unsupported-by-published-backup",
+        omittedRawTranscripts: [
+          {
+            kind: "transcript",
+            relative: "agents/main/sessions/unrecorded.jsonl",
+            archiveMember: "backup/payload/unrecorded.jsonl",
+            sha256: "b".repeat(64),
+            canonicalEventCount: 2,
+            reason: "published-2026.9.4-volatile-transcript",
+          },
+        ],
+      });
+    }
+    if (kind === "unsupported-restoration-claim") {
+      Object.assign(proof, { rawTranscriptRestoration: "unsupported-by-published-backup" });
+    }
+    if (kind === "invalid-volatile-count") {
+      Object.assign(proof, { backupCreate: { skippedVolatileCount: -1 } });
     }
     const { publish, published } = await publishSuccess(summary);
     expect(publish).toThrow();
@@ -295,6 +397,35 @@ function seedSessionMigration(root: string, issueCount = 1) {
 }
 
 describe("upgrade survivor first-hop process evidence", () => {
+  it("retains CLI receipt and transport witnesses in the opt-in report recovery proof", async () => {
+    const { artifacts, publish, published } = await publishSuccess({
+      status: "passed",
+      baseline: { spec: "openclaw@2026.9.6", version: "2026.9.6" },
+      candidate: { kind: "tarball", version: "2026.9.5" },
+      scenario: "update-report-recovery",
+      installedVersion: "2026.9.5",
+      candidateInstallMode: "updater",
+      updateRestartMode: "manual",
+      updateOutcome: "success",
+      phases: [],
+    });
+    const witnesses = {
+      "update-report-recovery.json": JSON.stringify({ postCounts: [2, 1] }),
+      "update-report-baseline.json": JSON.stringify({ version: "2026.9.6" }),
+      "update-report-retry-status.log": JSON.stringify({ runId: "retry-run" }),
+      "update-report-pending-status.log": JSON.stringify({ runId: "pending-run" }),
+      "update-report-retry.gh.jsonl": JSON.stringify({ kind: "create", status: 422 }),
+      "update-report-pending.gh.jsonl": JSON.stringify({ kind: "lookup", matches: [] }),
+    };
+    for (const [name, contents] of Object.entries(witnesses)) {
+      writeFileSync(join(artifacts, name), contents);
+    }
+    publish();
+    expect(JSON.parse(readFileSync(join(published, "summary.json"), "utf8")).logs).toMatchObject(
+      witnesses,
+    );
+  });
+
   it.each([0, 1])("retains first-hop identities and Doctor IPC on exit %i", async (code) => {
     const root = realpathSync(tempDirs.make("survivor-first-hop-"));
     const artifacts = join(root, "artifacts");

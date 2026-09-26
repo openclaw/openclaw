@@ -7,8 +7,9 @@ import { isAuthorizedBrowserRequest } from "./http-auth.js";
 
 type Auth = { token?: string; password?: string };
 const fixture = vi.hoisted(() => ({ configuredAuth: {} as Auth }));
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>();
   return { ...actual, getRuntimeConfig: () => ({}) };
 });
 vi.mock("./control-auth.js", () => ({

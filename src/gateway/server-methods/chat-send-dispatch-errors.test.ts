@@ -15,9 +15,11 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator-errors.js";
 import * as sessionRunError from "../../sessions/session-run-error.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
+import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { createChatRunState } from "../server-chat-state.js";
 import * as sessionLifecycleState from "../session-lifecycle-state.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
@@ -84,6 +86,8 @@ describe("handleChatSendSetupError", () => {
 describe("createChatSendDispatchErrorLifecycle", () => {
   it.each([
     { settlement: "fallback", missingProfile: false, policyFailure: false, sessionChanged: false },
+    { settlement: "fallback", stateContention: true },
+    { settlement: "restart-safe", stateContention: true },
     {
       settlement: "restart-safe",
       missingProfile: false,
@@ -113,7 +117,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     },
   ])(
     "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile, policy refusal: $policyFailure, session changed: $sessionChanged)",
-    async ({ settlement, missingProfile, policyFailure, sessionChanged }) => {
+    async ({ settlement, missingProfile, policyFailure, sessionChanged, stateContention }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const target = {
           agentId: "main",
@@ -214,21 +218,23 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           userTurnRecorder: { hasPersisted: () => userPersisted, isBlocked: () => false },
         });
 
-        const failure = sessionChanged
-          ? new DispatchSessionRefreshRequiredError(
-              new Error(`Session "${target.sessionKey}" changed while starting work. Retry.`),
-            )
-          : missingProfile
-            ? createSelectedAuthProfileUnavailableError({
-                profileId: "openai:removed",
-                provider: "openai",
-                modelId: "fixture-model",
-              })
-            : policyFailure
-              ? new AgentHarnessPreflightError("private-policy-diagnostic", {
-                  userMessage: policyMessage,
+        const failure = stateContention
+          ? new StateDatabaseCoordinatorContentionError("state-lifecycle")
+          : sessionChanged
+            ? new DispatchSessionRefreshRequiredError(
+                new Error(`Session "${target.sessionKey}" changed while starting work. Retry.`),
+              )
+            : missingProfile
+              ? createSelectedAuthProfileUnavailableError({
+                  profileId: "openai:removed",
+                  provider: "openai",
+                  modelId: "fixture-model",
                 })
-              : new Error("Cloud worker unavailable");
+              : policyFailure
+                ? new AgentHarnessPreflightError("private-policy-diagnostic", {
+                    userMessage: policyMessage,
+                  })
+                : new Error("Cloud worker unavailable");
         await lifecycle.handleError(failure);
         expect(previewGroup?.signal.aborted).toBe(false);
         await lifecycle.finalize();
@@ -255,6 +261,32 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             details: { runId },
           },
         ]);
+        if (stateContention) {
+          const summary =
+            "The turn was interrupted while the server was busy. Check its status before trying again.";
+          const terminal = broadcast.mock.calls.at(-1)?.[1];
+          expect(terminal).toMatchObject({ errorKind: "state_contention" });
+          expect(terminal.errorMessage).toMatch(new RegExp(`^${summary.replaceAll(".", "\\.")}`));
+          expect(loadSessionEntry(target)?.lastRunError).toBe(summary);
+          expect(messages[1]).toMatchObject({
+            content: summary,
+            details: { errorKind: "state_contention" },
+          });
+          const notice = messages[1];
+          if (!isRecord(notice)) {
+            throw new Error("Expected a recorded failure notice");
+          }
+          const restored = projectChatDisplayMessages([{ role: "custom", ...notice }]);
+          expect(restored[0]).toMatchObject({
+            content: summary,
+            details: {
+              errorKind: "state_contention",
+              diagnostic: terminal.errorMessage.split("\n\n")[1],
+            },
+          });
+          expect(restored[0]).not.toHaveProperty("details.error");
+          expect(restored[0]).not.toHaveProperty("details.runId");
+        }
         if (missingProfile) {
           const recovery = renderFailoverCodeUserCopy("selected_auth_profile_unavailable")!;
           const storedError = loadSessionEntry(target)?.lastRunError;

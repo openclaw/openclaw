@@ -85,7 +85,11 @@ bundled xAI model provider reuses it as a fallback too.
 `openclaw status --usage`, `/status`, and the Control UI usage cards show
 SuperGrok quota when the xAI provider is signed in with OAuth. OpenClaw fetches
 the Grok billing window for that subscription and reports its reset time through
-the normal provider-usage surface. API-key-only xAI setups are intentionally not
+the normal provider-usage surface. When xAI omits an included-usage percent on an
+otherwise valid weekly or monthly billing period, OpenClaw reports that included
+usage was omitted instead of inventing a percentage or showing generic
+"No usage data". Pay-as-you-go on-demand counters are not treated as SuperGrok
+subscription quota. API-key-only xAI setups are intentionally not
 shown as SuperGrok usage because xAI Console API credits and SuperGrok
 subscription quota are separate billing buckets.
 
@@ -182,6 +186,14 @@ Supported non-curated aliases retain their reasoning, input, and token-limit
 metadata without joining the published inventory. Their pricing remains unknown,
 recorded as zero until the manifest includes them. Zero is an unavailable estimate, not a claim that
 the provider charges nothing.
+
+Thinking levels follow xAI's
+[documented release rule](https://docs.x.ai/developers/model-capabilities/text/reasoning)
+rather than a fixed model list. Grok 4.5 and later accept `low`, `medium`, and
+`high`; Grok 4.6 and later add `xhigh`. The default is `high`, and reasoning cannot
+be turned off. A newer release id such as `grok-4.8`, its `-latest` alias, or a
+dated snapshot gets these levels and image input before the manifest lists it.
+Variant ids such as `-fast` keep reasoning effort off.
 
 ## Feature coverage
 

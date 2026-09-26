@@ -54,7 +54,7 @@ export const readBestEffortConfig = vi.fn(async () => ({}));
 export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
   (_opts: unknown) => Promise<{ auth: { token?: string; password?: string } }>
 >(async () => ({ auth: {} }));
-const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
+export const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
 
 export function createStartupMigrationActivityProbe(isActive: () => boolean) {
   return vi.fn<

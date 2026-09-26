@@ -23,6 +23,7 @@ import {
   markGatewayRestartDraining,
   onGatewaySuspendAdmissionChange,
   retainGatewayRootWorkAdmissionContinuation,
+  retainGatewayRootWorkAdmissionContinuationScope,
   resetGatewayWorkAdmission,
   rollbackGatewayRestartSignalFence,
   runWithGatewayDetachedWorkAdmission,
@@ -523,6 +524,27 @@ it("does not extend the creating root's lifetime when a continuation only borrow
     "gateway root work continuation is no longer active",
   );
   borrowed?.release();
+});
+
+it("synchronously transfers accepted events during drain without reopening admission", async () => {
+  const root = tryBeginGatewayRootWorkAdmission();
+  const scope = await root?.run(async () => retainGatewayRootWorkAdmissionContinuationScope());
+  root?.release();
+  markGatewayRestartDraining();
+  const settle = createDeferredCore();
+  let drain: Promise<void> | undefined;
+  runOutsideGatewayRootWorkAdmission(() =>
+    scope?.runSync(() => {
+      drain = runWithGatewayDetachedWorkContinuation(() => settle.promise, "accepted-event");
+    }),
+  );
+  scope?.release();
+  expect(getActiveGatewayRootWorkCount()).toBe(1);
+  expect(() => scope?.runSync(() => {})).toThrow("continuation is no longer active");
+  expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+  settle.resolve();
+  await drain;
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
 });
 
 it("keeps borrowed-root completion alive when its owner and original request settle", async () => {

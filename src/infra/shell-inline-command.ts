@@ -150,10 +150,6 @@ function consumesSeparateValue(token: string): boolean {
   return POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES.has(token);
 }
 
-function isPosixInteractiveModeOption(token: string): boolean {
-  return token === "--interactive" || isPosixShortOption(token, "i");
-}
-
 function isPosixShortOption(token: string, option: string): boolean {
   if (token.length < 2 || token[0] !== "-" || token[1] === "-") {
     return false;
@@ -332,28 +328,7 @@ export function hasPosixInteractiveStartupBeforeInlineCommand(
   argv: readonly string[],
   flags: ReadonlySet<string>,
 ): boolean {
-  let sawInteractiveMode = false;
-  for (let i = 1; i < argv.length;) {
-    const token = argv[i]?.trim();
-    if (!token) {
-      i += 1;
-      continue;
-    }
-    if (token === "--") {
-      return false;
-    }
-    if (isPosixInteractiveModeOption(token)) {
-      sawInteractiveMode = true;
-    }
-    if (flags.has(token) || isCombinedCommandFlag(token)) {
-      return sawInteractiveMode;
-    }
-    if (!token.startsWith("-") && !token.startsWith("+")) {
-      return false;
-    }
-    i += advancePosixInlineOptionScan(token);
-  }
-  return false;
+  return hasPosixStartupModeBeforeInlineCommand(argv, flags, "--interactive", "i");
 }
 
 /** Detect POSIX login startup before an inline command flag. */
@@ -361,7 +336,16 @@ export function hasPosixLoginStartupBeforeInlineCommand(
   argv: readonly string[],
   flags: ReadonlySet<string>,
 ): boolean {
-  let sawLoginMode = false;
+  return hasPosixStartupModeBeforeInlineCommand(argv, flags, "--login", "l");
+}
+
+function hasPosixStartupModeBeforeInlineCommand(
+  argv: readonly string[],
+  flags: ReadonlySet<string>,
+  longOption: string,
+  shortOption: string,
+): boolean {
+  let sawStartupMode = false;
   for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
@@ -371,11 +355,11 @@ export function hasPosixLoginStartupBeforeInlineCommand(
     if (token === "--") {
       return false;
     }
-    if (token === "--login" || isPosixShortOption(token, "l")) {
-      sawLoginMode = true;
+    if (token === longOption || isPosixShortOption(token, shortOption)) {
+      sawStartupMode = true;
     }
     if (flags.has(token) || isCombinedCommandFlag(token)) {
-      return sawLoginMode;
+      return sawStartupMode;
     }
     if (!token.startsWith("-") && !token.startsWith("+")) {
       return false;

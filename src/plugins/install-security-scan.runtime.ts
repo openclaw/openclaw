@@ -1,10 +1,11 @@
 // Runtime bridge for plugin install security scanning.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../security/install-policy.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
+import type { PluginHookBeforeInstallPlugin, PluginHookBeforeInstallSkill } from "./hook-types.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type {
   InstallSecurityScanResult,
@@ -304,14 +306,6 @@ function isSamePathOrInside(parentPath: string, candidatePath: string): boolean 
   return parentPath === candidatePath || isPathInside(parentPath, candidatePath);
 }
 
-function getErrnoCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return undefined;
-  }
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "string" ? code : undefined;
-}
-
 function isInstallScannableDependencyName(name: string): boolean {
   if (name.startsWith("@")) {
     const parts = name.split("/");
@@ -353,7 +347,7 @@ async function resolveInstalledPackageScanRoot(params: {
   try {
     stats = await fs.stat(packageDir);
   } catch (error) {
-    if (getErrnoCode(error) === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
@@ -484,67 +478,39 @@ async function validatePackageDependencyBoundaries(params: {
   const rootDir = params.rootDir;
   const rootRealPath = await fs.realpath(rootDir).catch(() => rootDir);
   const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
-  const queue: Array<{ depth: number; dir: string }> = [{ depth: 0, dir: rootDir }];
-  const visitedDirectories = new Set<string>();
-  let queueIndex = 0;
-
-  while (queueIndex < queue.length) {
-    const current = queue[queueIndex];
-    queueIndex += 1;
-    if (!current) {
-      continue;
-    }
-
-    if (current.depth > limits.maxDepth) {
-      throw new Error(
-        `dependency boundary scan exceeded max depth (${limits.maxDepth}) at ${current.dir}`,
-      );
-    }
-
-    const currentDir = current.dir;
-    const currentRealPath = await fs.realpath(currentDir).catch(() => currentDir);
-    if (visitedDirectories.has(currentRealPath)) {
-      continue;
-    }
-    visitedDirectories.add(currentRealPath);
-    if (visitedDirectories.size > limits.maxDirectories) {
-      throw new Error(
-        `dependency boundary scan exceeded max directories (${limits.maxDirectories}) under ${rootDir}`,
-      );
-    }
-
-    let entries: Array<{
-      name: string;
-      isDirectory(): boolean;
-      isSymbolicLink(): boolean;
-    }>;
-    try {
-      entries = await fs.readdir(currentDir, { encoding: "utf8", withFileTypes: true });
-    } catch (error) {
-      throw new Error(`dependency boundary scan could not read ${currentDir}: ${String(error)}`, {
-        cause: error,
-      });
-    }
-
-    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-      const nextPath = path.join(currentDir, entry.name);
-      const relativeNextPath = path.relative(rootDir, nextPath) || entry.name;
-      if (entry.isSymbolicLink()) {
-        if (pathContainsNodeModulesSegment(relativeNextPath)) {
-          await inspectNodeModulesSymlinkTarget({
+  let directories = 1;
+  const { failedDirs } = await walkDirectory(rootDir, {
+    symlinks: "include",
+    include: (entry) =>
+      entry.kind === "symlink" && pathContainsNodeModulesSegment(entry.relativePath)
+        ? inspectNodeModulesSymlinkTarget({
             allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
             rootRealPath,
-            symlinkPath: nextPath,
-            symlinkRelativePath: relativeNextPath,
+            symlinkPath: entry.path,
+            symlinkRelativePath: entry.relativePath,
             trustedHostOpenClawRootRealPath,
-          });
-        }
-        continue;
+          }).then(() => false)
+        : false,
+    descend: (entry) => {
+      if (entry.depth > limits.maxDepth) {
+        throw new Error(
+          `dependency boundary scan exceeded max depth (${limits.maxDepth}) at ${entry.path}`,
+        );
       }
-      if (entry.isDirectory()) {
-        queue.push({ depth: current.depth + 1, dir: nextPath });
+      if (++directories > limits.maxDirectories) {
+        throw new Error(
+          `dependency boundary scan exceeded max directories (${limits.maxDirectories}) under ${rootDir}`,
+        );
       }
-    }
+      return true;
+    },
+  });
+  if (failedDirs.length > 0) {
+    const failure = failedDirs[0]!;
+    throw new Error(
+      `dependency boundary scan could not read ${failure.path}: ${String(failure.error)}`,
+      { cause: failure.error },
+    );
   }
 }
 
@@ -560,18 +526,8 @@ async function runBeforeInstallHook(params: {
   requestKind: InstallPolicyRequestKind;
   requestMode: "install" | "update";
   requestedSpecifier?: string;
-  skill?: {
-    installId: string;
-    installSpec?: SkillInstallSpecMetadata;
-  };
-  plugin?: {
-    contentType: "bundle" | "package" | "file";
-    pluginId: string;
-    packageName?: string;
-    manifestId?: string;
-    version?: string;
-    extensions?: string[];
-  };
+  skill?: PluginHookBeforeInstallSkill;
+  plugin?: PluginHookBeforeInstallPlugin;
 }): Promise<InstallSecurityScanResult | undefined> {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_install")) {
@@ -697,33 +653,17 @@ function shouldBypassOpenClawInstallFriction(params: {
   );
 }
 
-async function runOperatorInstallPolicy(params: {
-  config?: OpenClawConfig;
-  logger: InstallScanLogger;
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  origin: InstallPolicyOrigin;
-  source?: InstallPolicySource;
-  sourcePath: string;
-  sourcePathKind: "file" | "directory";
-  targetName: string;
-  targetType: "skill" | "plugin";
-  requestKind: InstallPolicyRequestKind;
-  requestMode: "install" | "update";
-  requestedSpecifier?: string;
-  skill?: {
-    installId: string;
-    installSpec?: SkillInstallSpecMetadata;
-  };
-  plugin?: {
-    contentType: "bundle" | "package" | "file" | "dependency-tree";
-    pluginId: string;
-    packageName?: string;
-    manifestId?: string;
-    version?: string;
-    extensions?: string[];
-  };
-  trustedSourceLinkedOfficialInstall?: boolean;
-}): Promise<InstallSecurityScanResult | undefined> {
+async function runOperatorInstallPolicy(
+  params: Omit<Parameters<typeof runBeforeInstallHook>[0], "installLabel" | "origin" | "plugin"> & {
+    config?: OpenClawConfig;
+    onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+    origin: InstallPolicyOrigin;
+    plugin?: Omit<PluginHookBeforeInstallPlugin, "contentType"> & {
+      contentType: PluginHookBeforeInstallPlugin["contentType"] | "dependency-tree";
+    };
+    trustedSourceLinkedOfficialInstall?: boolean;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
   const request = {
     targetName: params.targetName,
     targetType: params.targetType,

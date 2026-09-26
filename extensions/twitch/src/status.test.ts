@@ -11,6 +11,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { twitchSetupWizard } from "./setup-surface.js";
 import { collectTwitchStatusIssues } from "./status.js";
 import type { ChannelAccountSnapshot } from "./types.js";
 
@@ -161,27 +162,30 @@ describe("status", () => {
       ]);
     });
 
-    it("should detect empty allowFrom array (simplified config)", () => {
+    it("accepts disabled group access written by setup", () => {
       const snapshots: ChannelAccountSnapshot[] = [createSnapshot()];
-      const mockCfg = createSimpleTwitchConfig({
-        username: "testbot",
-        accessToken: "test123",
-        clientId: "test-id",
-        allowFrom: [], // empty array
+      const groupAccess = twitchSetupWizard.groupAccess;
+      if (!groupAccess) {
+        throw new Error("expected Twitch group access setup");
+      }
+      const cfg = groupAccess.setPolicy({
+        cfg: {
+          channels: {
+            twitch: {
+              enabled: true,
+              username: "testbot",
+              accessToken: "test123",
+              clientId: "test-id",
+            },
+          },
+        },
+        accountId: "default",
+        policy: "disabled",
       });
 
-      const issues = collectTwitchStatusIssues(snapshots, () => mockCfg as never);
+      const issues = collectTwitchStatusIssues(snapshots, () => cfg);
 
-      expectIssues(issues, [
-        {
-          channel: "twitch",
-          accountId: "default",
-          kind: "config",
-          message: "allowFrom is configured but empty",
-          fix: "Either add user IDs to allowFrom, remove the allowFrom field, or use allowedRoles instead.",
-        },
-        neverConnectedIssue(),
-      ]);
+      expect(issues, JSON.stringify(issues)).toEqual([neverConnectedIssue()]);
     });
 
     it("should detect allowedRoles 'all' with allowFrom conflict (simplified config)", () => {

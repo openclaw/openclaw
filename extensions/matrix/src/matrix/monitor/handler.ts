@@ -4,8 +4,14 @@ import {
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createReplyPrefixOptions,
+  createTypingCallbacks,
+  logTypingFailure,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -15,6 +21,7 @@ import { isPollEventType } from "../poll-types.js";
 import type { LocationMessageEventContent } from "../sdk.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
 import { resolveMatrixMonitorLiveUserAllowlist } from "./config.js";
+import { createMatrixEventContextResolver } from "./event-context.js";
 import { resolveMatrixInboundContext } from "./handler-context.js";
 import { createMatrixDraftController } from "./handler-draft-controller.js";
 import {
@@ -29,15 +36,7 @@ import { loadMatrixSendModule } from "./handler-runtime.js";
 import { createMatrixHandlerState } from "./handler-state.js";
 import type { MatrixHandlerRuntimeConfig, MatrixMonitorHandlerParams } from "./handler-types.js";
 import type { MatrixLocationPayload } from "./location.js";
-import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { createRoomHistoryTracker, type ReservedHistorySlot } from "./room-history.js";
-import {
-  createReplyPrefixOptions,
-  createTypingCallbacks,
-  getAgentScopedMediaLocalRoots,
-  logTypingFailure,
-} from "./runtime-api.js";
-import { createMatrixThreadContextResolver } from "./thread-context.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType } from "./types.js";
 
@@ -94,12 +93,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     groupAllowFromResolvedEntries,
     resolveLiveUserAllowlist,
   });
-  const resolveThreadContext = createMatrixThreadContextResolver({
+  const resolveThreadContext = createMatrixEventContextResolver({
+    kind: "thread",
     client,
     getMemberDisplayName,
     logVerboseMessage,
   });
-  const resolveReplyContext = createMatrixReplyContextResolver({
+  const resolveReplyContext = createMatrixEventContextResolver({
+    kind: "reply",
     client,
     getMemberDisplayName,
     logVerboseMessage,
@@ -107,10 +108,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   const roomHistoryTracker = createRoomHistoryTracker();
   const roomIngressQueue = new KeyedAsyncQueue();
   const sharedDmContextNoticeRooms = new Set<string>();
-
-  const runRoomIngress = async <T>(roomId: string, task: () => Promise<T>): Promise<T> => {
-    return await roomIngressQueue.enqueue(roomId, task);
-  };
 
   return async (roomId: string, event: MatrixRawEvent) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
@@ -222,7 +219,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       };
       const ingressResult =
         historyLimit > 0
-          ? await runRoomIngress(roomId, async () => {
+          ? await roomIngressQueue.enqueue(roomId, async () => {
               const prefix = await readIngressPrefix();
               if (!prefix) {
                 return undefined;

@@ -2,11 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
-import { isRepoRootRelativeRef } from "./cli-paths.js";
 import { qaCoverageIdSchema } from "./coverage-id.js";
 import { qaEvidenceAssertionSchema } from "./evidence-assertion.js";
 import { parseQaYamlWithContext } from "./qa-yaml.js";
-import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
+import { isRepoRootRelativeRef, resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 import { qaScenarioModuleFlow } from "./scenario-module-flow.js";
 
 export const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO

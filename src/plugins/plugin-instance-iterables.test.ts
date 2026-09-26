@@ -102,6 +102,35 @@ describe("plugin async iterable protocol", () => {
     },
   );
 
+  it("fences retained and pending plain results when their consumer releases its token", async () => {
+    const instance = owner();
+    const consumer = instance.retainConsumer();
+    const later = createDeferredCore<IteratorResult<string>>();
+    let calls = 0;
+    const stream = consumer.wrap({
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => (++calls === 1 ? { done: false, value: "first" } : later.promise),
+        };
+      },
+    });
+    const iterator = stream[Symbol.asyncIterator]();
+    const retained = await iterator.next();
+    const pending = Promise.resolve(iterator.next());
+    const rejected = expect(pending).rejects.toThrow("stream is closed");
+    try {
+      consumer.release();
+      expect(instance.run(() => "still live")).toBe("still live");
+      expect(() => retained.value).toThrow("stream is closed");
+      later.resolve({ done: false, value: "late" });
+      await rejected;
+    } finally {
+      consumer.release();
+      later.resolve({ done: true, value: "cleanup" });
+      await pending.catch(() => {});
+    }
+  });
+
   it.each(["missing", "done-false"] as const)(
     "releases an early-break admission when return is %s",
     async (kind) => {

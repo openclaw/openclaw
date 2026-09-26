@@ -729,3 +729,21 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 });
+
+it("only offers personal instructions search on a multi-user Gateway", () => {
+  const search = (multipleProfiles: boolean) =>
+    findSettingsSearchBlocks({
+      query: "personal instructions",
+      schema: null,
+      value: null,
+      uiHints: {},
+      identityAvailable: true,
+      multipleProfiles,
+    });
+  expect(
+    search(false).some((block) => block.hash === "#settings-profile-personal-instructions"),
+  ).toBe(false);
+  expect(
+    search(true).some((block) => block.hash === "#settings-profile-personal-instructions"),
+  ).toBe(true);
+});

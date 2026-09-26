@@ -4,6 +4,7 @@
  */
 import fsPromises from "node:fs/promises";
 import { toUSVString } from "node:util";
+import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import {
   asNullableRecord,
   normalizeStringEntries,
@@ -51,7 +52,6 @@ import {
 } from "../control-service.js";
 import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 import { withTimeout } from "../sdk-node-runtime.js";
-import { detectMime } from "../sdk-setup-tools.js";
 
 type BrowserProxyParams = {
   method?: string;
@@ -125,16 +125,16 @@ function countBrowserProxyEncodedPayloadBytes(serialized: string): number {
   return bytes;
 }
 
-function normalizeProfileAllowlist(raw?: string[]): string[] {
-  return Array.isArray(raw) ? normalizeStringEntries(raw) : [];
-}
-
 function resolveBrowserProxyConfig(cfg = loadBrowserConfigForRuntimeRefresh()) {
   const proxy = cfg.nodeHost?.browserProxy;
   if (proxy?.enabled === false) {
     throw new Error("UNAVAILABLE: node browser proxy disabled");
   }
-  return { allowProfiles: normalizeProfileAllowlist(proxy?.allowProfiles) };
+  return {
+    allowProfiles: Array.isArray(proxy?.allowProfiles)
+      ? normalizeStringEntries(proxy.allowProfiles)
+      : [],
+  };
 }
 
 let browserControlReady: Promise<void> | null = null;
@@ -218,14 +218,6 @@ async function readBrowserProxyFiles(filePaths: string[]): Promise<BrowserProxyF
     }
   }
   return files;
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
-function decodeParams<T>(raw?: string | null): T {
-  if (!raw) {
-    throw new Error("INVALID_REQUEST: paramsJSON required");
-  }
-  return JSON.parse(raw) as T;
 }
 
 function isBrowserProxyTimeoutError(err: unknown): boolean {
@@ -327,7 +319,10 @@ export async function runBrowserProxyCommand(
 ): Promise<string> {
   invocationSignal?.throwIfAborted();
   void ensureBrowserProxyUploadCleanup();
-  const params = decodeParams<BrowserProxyParams>(paramsJSON);
+  if (!paramsJSON) {
+    throw new Error("INVALID_REQUEST: paramsJSON required");
+  }
+  const params = JSON.parse(paramsJSON) as BrowserProxyParams;
   if (command === BROWSER_PROXY_COMMAND && params.upload !== undefined) {
     throw new Error("INVALID_REQUEST: browser.proxy does not accept upload envelopes");
   }
@@ -399,6 +394,13 @@ export async function runBrowserProxyCommand(
 
   const timeoutMs = resolveBrowserProxyTimeoutMs(params.timeoutMs);
   const deadlineAt = Date.now() + timeoutMs;
+  const timeoutDetails = {
+    method,
+    path,
+    profile: requestedProfile || resolved.defaultProfile || undefined,
+    timeoutMs,
+    wsBacked: isWsBackedBrowserProxyPath(path),
+  };
   const query: Record<string, unknown> = {};
   const rawQuery = params.query ?? {};
   for (const [key, value] of Object.entries(rawQuery)) {
@@ -458,17 +460,9 @@ export async function runBrowserProxyCommand(
     if (!isBrowserProxyTimeoutError(err)) {
       throw err;
     }
-    throw new Error(
-      formatBrowserProxyTimeoutMessage({
-        method,
-        path,
-        profile: requestedProfile || resolved.defaultProfile || undefined,
-        timeoutMs,
-        wsBacked: isWsBackedBrowserProxyPath(path),
-        status: null,
-      }),
-      { cause: err },
-    );
+    throw new Error(formatBrowserProxyTimeoutMessage({ ...timeoutDetails, status: null }), {
+      cause: err,
+    });
   }
   body = stagedUpload.body;
   try {
@@ -480,16 +474,7 @@ export async function runBrowserProxyCommand(
   const remainingTimeoutMs = deadlineAt - Date.now();
   if (remainingTimeoutMs <= 0) {
     await discardStagedBrowserProxyUpload(stagedUpload);
-    throw new Error(
-      formatBrowserProxyTimeoutMessage({
-        method,
-        path,
-        profile: requestedProfile || resolved.defaultProfile || undefined,
-        timeoutMs,
-        wsBacked: isWsBackedBrowserProxyPath(path),
-        status: null,
-      }),
-    );
+    throw new Error(formatBrowserProxyTimeoutMessage({ ...timeoutDetails, status: null }));
   }
   let response;
   try {
@@ -519,11 +504,8 @@ export async function runBrowserProxyCommand(
     });
     throw new Error(
       formatBrowserProxyTimeoutMessage({
-        method,
-        path,
+        ...timeoutDetails,
         profile: path === "/profiles" ? undefined : profileForStatus || undefined,
-        timeoutMs,
-        wsBacked: isWsBackedBrowserProxyPath(path),
         status,
       }),
       { cause: err },
@@ -560,9 +542,11 @@ export async function runBrowserProxyCommand(
   const paths = collectBrowserProxyPaths(result);
   const files = paths.length > 0 ? await readBrowserProxyFiles(paths) : undefined;
 
-  const payload: BrowserProxyEnvelope = files
-    ? { result, files, ...(includeRoute ? { route } : {}) }
-    : { result, ...(includeRoute ? { route } : {}) };
+  const payload: BrowserProxyEnvelope = {
+    result,
+    ...(files ? { files } : {}),
+    ...(includeRoute ? { route } : {}),
+  };
   const serialized = JSON.stringify(payload);
   // Node results carry this JSON as a string inside a second JSON frame.
   if (countBrowserProxyEncodedPayloadBytes(serialized) > BROWSER_PROXY_MAX_ENCODED_PAYLOAD_BYTES) {

@@ -22,6 +22,7 @@ import {
 } from "./attempt-client-cleanup.js";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
 import { verifyStartupArtifact } from "./attempt-runtime-artifact.js";
+import type { StartCodexAttemptThreadResult } from "./attempt-startup-result.js";
 import { CodexAppServerStartupError, withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
@@ -52,12 +53,8 @@ import {
   buildCodexPluginThreadConfigInputFingerprint,
   mergeCodexThreadConfigs,
 } from "./plugin-thread-config.js";
-import type {
-  CodexDynamicToolSpec,
-  CodexSandboxPolicy,
-  CodexTurnEnvironmentParams,
-  JsonObject,
-} from "./protocol.js";
+import type { CodexDynamicToolSpec, JsonObject } from "./protocol.js";
+import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -76,51 +73,20 @@ import {
   type CodexAppServerClientOptions,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
-import { CodexThreadClientReplacementError } from "./thread-lifecycle-errors.js";
+import {
+  CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED,
+  CodexThreadClientReplacementError,
+} from "./thread-lifecycle-errors.js";
 import {
   startOrResumeThread,
-  type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
-import {
-  getCodexAppServerTurnRouter,
-  type CodexAppServerTurnRouter,
-  type CodexThreadRouteReservation,
-} from "./turn-router.js";
+import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from "./turn-router.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 const CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS = 3;
-const CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED =
-  "CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED";
-
-/** True when a pre-write context restart must replay on the newly selected owner. */
-export function isCodexContextRestartSelectionChangedError(
-  error: unknown,
-): error is Error & { code: typeof CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED } {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED
-  );
-}
 
 type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
-
-/** Resources and bindings returned after a Codex attempt thread starts. */
-type StartCodexAttemptThreadResult = {
-  client: CodexAppServerClient;
-  turnRouter: CodexAppServerTurnRouter;
-  turnRoute: CodexThreadRouteReservation;
-  thread: CodexAppServerThreadLifecycleBinding;
-  pluginAppServer: CodexAppServerRuntimeOptions;
-  sandboxEnvironment: CodexSandboxExecEnvironment | undefined;
-  environmentSelection: CodexTurnEnvironmentParams[] | undefined;
-  executionCwd: string;
-  sandboxPolicy: CodexSandboxPolicy | undefined;
-  runtimeArtifact?: AgentHarnessRuntimeArtifactBinding;
-  releaseSharedClientLease: () => void;
-  restartContextEngineCodexThread: () => Promise<CodexAppServerThreadLifecycleBinding>;
-};
 
 /**
  * Starts or resumes the Codex app-server thread and returns the resources the
@@ -146,6 +112,7 @@ export async function startCodexAttemptThread(params: {
   agentDir: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
   shellEnvironment?: Readonly<Record<string, string>>;
+  shellPathPrepend?: readonly string[];
   disableLoginShell?: boolean;
   buildAttemptParams: () => EmbeddedRunAttemptParams;
   runtimeModelId?: string;
@@ -156,11 +123,13 @@ export async function startCodexAttemptThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
+  skillsInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
   nativeHookRelayRequired?: boolean;
+  nativeModelAdmission?: Parameters<typeof startOrResumeThread>[0]["nativeModelAdmission"];
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   /** Static configured MCP is present on the dynamic surface, so native MCP stays absent. */
   configuredMcpDynamicSurface?: boolean;
@@ -212,6 +181,7 @@ export async function startCodexAttemptThread(params: {
         const pluginStartupPolicy = resolveCodexPluginThreadConfigStartupPolicy({
           pluginConfig: params.pluginConfig,
           nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
+          hostedAppsSupported: !isCodexResponsesOAuth(params.startupPreparedAuth),
           scheduledRuntimeAuthority: params.buildAttemptParams().scheduledRuntimeAuthority,
         });
         const {
@@ -302,6 +272,7 @@ export async function startCodexAttemptThread(params: {
             }
             const runtimeArtifact = await verifyStartupArtifact({
               client: activeStartupClient,
+              startOptions: params.appServer.start,
               request: params.runtimeArtifactRequest,
               signal: startupAbandonController.signal,
             });
@@ -310,12 +281,16 @@ export async function startCodexAttemptThread(params: {
               agentDir: params.agentDir,
               authProfileId: startupRuntimeAuthProfileId,
               authMode:
-                params.startupPreparedAuth?.kind === "api-key" ? "prepared-api-key" : "profile",
+                params.startupPreparedAuth?.kind === "api-key" ||
+                isCodexResponsesOAuth(params.startupPreparedAuth)
+                  ? "prepared-api-key"
+                  : "profile",
               authProfileStore: startupRuntimeAuthProfileStore ?? attemptParams.authProfileStore,
               config: params.config,
             });
             const turnRouter = getCodexAppServerTurnRouter(activeStartupClient);
             let computerUseTools: string[] = [];
+            let computerUseConfig = params.computerUseConfig;
             try {
               const computerUseStatus = await ensureCodexComputerUse({
                 client: activeStartupClient,
@@ -326,6 +301,11 @@ export async function startCodexAttemptThread(params: {
                 signal: startupAbandonController.signal,
               });
               computerUseTools = computerUseStatus.tools;
+              computerUseConfig = {
+                ...computerUseConfig,
+                pluginName: computerUseStatus.pluginName,
+                mcpServerName: computerUseStatus.mcpServerName,
+              };
             } catch (error) {
               if (
                 startupAbandonController.signal.aborted ||
@@ -485,14 +465,17 @@ export async function startCodexAttemptThread(params: {
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
+                skillsInstructions: params.skillsInstructions,
                 agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
                 config: threadConfig,
                 shellEnvironment: params.shellEnvironment,
+                shellPathPrepend: params.shellPathPrepend,
                 disableLoginShell: params.disableLoginShell,
                 finalConfigPatch: params.finalConfigPatch,
                 buildFinalConfigPatch: params.buildFinalConfigPatch,
                 nativeHookRelayGeneration: params.nativeHookRelayGeneration,
                 nativeHookRelayRequired: params.nativeHookRelayRequired,
+                nativeModelAdmission: params.nativeModelAdmission,
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
@@ -555,7 +538,7 @@ export async function startCodexAttemptThread(params: {
               startupSandboxEnvironmentAcquired = false;
               startCodexComputerUseHealthMonitor({
                 client: activeStartupClient,
-                config: params.computerUseConfig,
+                config: computerUseConfig,
                 tools: computerUseTools,
               });
               startupAttemptSucceeded = true;
@@ -571,7 +554,12 @@ export async function startCodexAttemptThread(params: {
                 ...(runtimeArtifact ? { runtimeArtifact } : {}),
                 restartContextEngineCodexThread: async () => {
                   try {
-                    return await startOrResumeThread(buildThreadLifecycleParams(params.signal));
+                    // Overflow retries reuse the prepared input, so the old thread's
+                    // bootstrap receipt cannot describe the fresh thread.
+                    return await startOrResumeThread({
+                      ...buildThreadLifecycleParams(params.signal),
+                      contextEngineProjection: undefined,
+                    });
                   } catch (error) {
                     if (!isCodexAppServerStartSelectionChangedError(error)) {
                       throw error;

@@ -39,11 +39,7 @@ export function readSqlToken(sql: string, start: number): SqlToken | null {
   if (!char) {
     return null;
   }
-  if (char === '"' || char === "`") {
-    const end = skipSqlQuoted(sql, index, char);
-    return { end, keyword: null, raw: sql.slice(index, end) };
-  }
-  if (char === "[") {
+  if (char === '"' || char === "`" || char === "[") {
     const end = skipSqlQuoted(sql, index, char);
     return { end, keyword: null, raw: sql.slice(index, end) };
   }

@@ -221,7 +221,9 @@ iMessage recovers messages missed while the gateway was down: on startup it repl
 
 There is no supported BlueBubbles runtime to switch back to. If iMessage verification fails, set `channels.imessage.enabled: false`, verify the channel has stopped with `openclaw channels status`, fix the `imsg` blocker, and retry the cutover. If automatic config reload is off, follow [manual application](/gateway/configuration/hot-reload).
 
-The reply cache lives in SQLite plugin state. `openclaw doctor --fix` imports and archives the old `imessage/reply-cache.jsonl` sidecar when present.
+The reply cache lives in SQLite plugin state. To import the pre-June
+`imessage/reply-cache.jsonl` sidecar, [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+and run its Doctor first. Current releases leave the old file untouched.
 
 ## Related
 

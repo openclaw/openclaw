@@ -24,6 +24,12 @@ openclaw gateway uninstall
 It still validates core configuration and refuses configuration written by a newer
 OpenClaw binary. Start and restart continue to validate plugin configuration.
 
+If `gateway start` reaches its readiness deadline while the managed Gateway is
+still starting, it reports `still-starting` and exits with code `2`. The service
+keeps running; check `openclaw gateway status --deep` again before restarting it.
+A crashed service or a foreign listener still produces a failure. Port ownership
+alone does not prove readiness or rule out warm-up.
+
 ### Recover an unreadable native service definition
 
 If installation or a managed update reports `SERVICE_DEFINITION_UNKNOWN`, first

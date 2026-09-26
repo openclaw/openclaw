@@ -113,14 +113,14 @@ describe("Workboard registration cleanup", () => {
     await withStateDirEnv("workboard-registration-failure-", async () => {
       const store = WorkboardStore.openSqlite(workerModuleUrl);
       const opened = vi.spyOn(WorkboardStore, "openSqlite").mockReturnValueOnce(store);
-      const failure = new Error("synthetic Gateway runtime unavailable");
+      const failure = new Error("synthetic worktree runtime unavailable");
       try {
         const captured = capturePluginRegistration({
           ...plugin,
           register(api) {
             const runtime = new Proxy(api.runtime, {
               get(target, property) {
-                if (property === "gateway") {
+                if (property === "worktrees") {
                   throw failure;
                 }
                 return Reflect.get(target, property, target);

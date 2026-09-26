@@ -12,18 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
-
-function collectMigrationSkill(value: string, previous: string[] | undefined): string[] {
-  return [...(previous ?? []), value];
-}
-
-function collectMigrationPlugin(value: string, previous: string[] | undefined): string[] {
-  return [...(previous ?? []), value];
-}
-
-function collectMigrationItem(value: string, previous: string[] | undefined): string[] {
-  return [...(previous ?? []), value];
-}
+import { collectOption } from "./helpers.js";
 
 function readMigrationOption<T>(command: Command, name: string, value: T): T {
   return inheritOptionFromParent<T>(command, name) ?? value;
@@ -33,7 +22,7 @@ function addMigrationSkillOption(command: Command): Command {
   return command.option(
     "--skill <name>",
     "Select one skill to migrate by name or item id; repeat for multiple skills",
-    collectMigrationSkill,
+    collectOption,
   );
 }
 
@@ -41,7 +30,7 @@ function addMigrationPluginOption(command: Command): Command {
   return command.option(
     "--plugin <name>",
     "Select one Codex plugin to migrate by name or item id; repeat for multiple plugins",
-    collectMigrationPlugin,
+    collectOption,
   );
 }
 
@@ -57,7 +46,7 @@ function addMigrationItemOption(command: Command): Command {
   return command.option(
     "--item <id>",
     "Select one exact migration item id; repeat for multiple items",
-    collectMigrationItem,
+    collectOption,
   );
 }
 
@@ -83,10 +72,6 @@ function addMigrationOptions(command: Command): Command {
   );
 }
 
-function readVerifyPluginApps(value: unknown): boolean {
-  return value === true;
-}
-
 function readSharedMigrationOptions(opts: Record<string, unknown>, command: Command) {
   const agent = readMigrationOption(command, "agent", opts.agent);
   return {
@@ -107,9 +92,8 @@ function readSharedMigrationOptions(opts: Record<string, unknown>, command: Comm
       readMigrationOption(command, "plugin", opts.plugin),
     ),
     itemIds: normalizeOptionalTrimmedStringList(readMigrationOption(command, "item", opts.item)),
-    verifyPluginApps: readVerifyPluginApps(
-      readMigrationOption(command, "verifyPluginApps", opts.verifyPluginApps),
-    ),
+    verifyPluginApps:
+      readMigrationOption(command, "verifyPluginApps", opts.verifyPluginApps) === true,
     json: Boolean(readMigrationOption(command, "json", opts.json)),
   };
 }
@@ -139,17 +123,17 @@ export function registerMigrateCommand(program: Command) {
       .option(
         "--skill <name>",
         "Select one skill to migrate by name or item id; repeat for multiple skills",
-        collectMigrationSkill,
+        collectOption,
       )
       .option(
         "--plugin <name>",
         "Select one Codex plugin to migrate by name or item id; repeat for multiple plugins",
-        collectMigrationPlugin,
+        collectOption,
       )
       .option(
         "--item <id>",
         "Select one exact migration item id; repeat for multiple items",
-        collectMigrationItem,
+        collectOption,
       )
       .option("--backup-output <path>", "Pre-migration backup archive path or directory")
       .option("--no-backup", "Skip the pre-migration OpenClaw backup")
@@ -185,7 +169,7 @@ export function registerMigrateCommand(program: Command) {
           skills: normalizeOptionalTrimmedStringList(opts.skill),
           plugins: normalizeOptionalTrimmedStringList(opts.plugin),
           itemIds: normalizeOptionalTrimmedStringList(opts.item),
-          verifyPluginApps: readVerifyPluginApps(opts.verifyPluginApps),
+          verifyPluginApps: opts.verifyPluginApps === true,
           dryRun: Boolean(opts.dryRun),
           yes: Boolean(opts.yes),
           backupOutput: opts.backupOutput as string | undefined,

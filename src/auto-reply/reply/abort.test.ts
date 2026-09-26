@@ -1,4 +1,7 @@
 // Tests abort request handling, cutoff persistence, and active run cleanup.
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { registryPersistence } from "./abort-subagent-registry.test-support.js";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -8,7 +11,6 @@ import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -235,8 +237,8 @@ describe("abort detection", () => {
   }
 
   function bindAcpSessionForTest(targetSessionKey: string) {
-    vi.spyOn(getSessionBindingService(), "resolveByConversation").mockImplementation(
-      (conversation) => ({
+    vi.spyOn(getSessionBindingService(), "resolveByConversationAsync").mockImplementation(
+      async (conversation) => ({
         bindingId: "test-acp-binding",
         targetKind: "session",
         targetSessionKey,
@@ -248,14 +250,7 @@ describe("abort detection", () => {
   }
 
   beforeEach(() => {
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDisk: () => {},
-      persistSubagentRunsToDiskOrThrow: () => {},
-      restoreSubagentRunsFromDisk: () => 0,
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
-      ensureContextEnginesInitialized: () => {},
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-    });
+    registryPersistence.persistSubagentRunsToDiskOrThrow.mockReset();
     commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
   });
 
@@ -276,7 +271,6 @@ describe("abort detection", () => {
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReset().mockReturnValue(undefined);
     await settleSubagentRegistryPersistenceWork();
     resetSubagentRegistryForTests({ persist: false });
-    subagentRegistryTesting.setDepsForTest();
   });
 
   it("isAbortTrigger matches standalone abort trigger phrases", () => {
@@ -814,7 +808,7 @@ describe("abort detection", () => {
       const signaledBeforeAcpWait = native.abortSignal.aborted;
       if (!signaledBeforeAcpWait) {
         // This is still-live parent work, not a post-closure registration claim.
-        registerSubagentRun({
+        await registerSubagentRun({
           runId: "during-acp-wait",
           childSessionKey: "agent:main:subagent:during-acp-wait",
           requesterSessionKey: sessionKey,
@@ -1286,8 +1280,8 @@ describe("abort detection", () => {
       addSubagentFixture(fixture);
     }
     let failedTombstone = false;
-    subagentRegistryTesting.setDepsForTest({
-      persistSubagentRunsToDiskOrThrow: (runs, changedRunIds) => {
+    registryPersistence.persistSubagentRunsToDiskOrThrow.mockImplementation(
+      (runs, changedRunIds) => {
         const first = runs.get("run-persistence-failure-first");
         if (
           !failedTombstone &&
@@ -1299,7 +1293,7 @@ describe("abort detection", () => {
           throw new Error("sqlite busy");
         }
       },
-    });
+    );
 
     await expect(
       stopSubagentsForRequester({

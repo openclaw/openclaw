@@ -20,31 +20,24 @@ export function publishPreparedRuntimeAuthProfileStoreSnapshot(
   } = {},
 ): void {
   const { predecessor, candidates } = options;
-  if (!runtimeAuthProfileSnapshotSharesOwner(existing.owner, owner)) {
-    // Resolved secrets and external profiles belong to their producer, not just a matching ref.
-    setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-      refreshed,
-      owner.databasePath,
-      agentDir,
-      owner,
-      candidates,
-    );
-    return;
+  let rebuilt = refreshed;
+  // Resolved secrets and external profiles belong to their producer, not just a matching ref.
+  if (runtimeAuthProfileSnapshotSharesOwner(existing.owner, owner)) {
+    const currentMaterialized = preserveResolvedSecretBackedCredentials({
+      next: refreshed,
+      existing: existing.store,
+    });
+    const materialized = predecessor
+      ? preserveResolvedSecretBackedCredentials({
+          next: currentMaterialized,
+          existing: predecessor,
+        })
+      : currentMaterialized;
+    rebuilt = mergeRuntimeExternalProfileReferences({
+      next: materialized,
+      existing: existing.store,
+    });
   }
-  const currentMaterialized = preserveResolvedSecretBackedCredentials({
-    next: refreshed,
-    existing: existing.store,
-  });
-  const materialized = predecessor
-    ? preserveResolvedSecretBackedCredentials({
-        next: currentMaterialized,
-        existing: predecessor,
-      })
-    : currentMaterialized;
-  const rebuilt = mergeRuntimeExternalProfileReferences({
-    next: materialized,
-    existing: existing.store,
-  });
   setRuntimeAuthProfileStoreSnapshotAtDatabasePath(
     rebuilt,
     owner.databasePath,

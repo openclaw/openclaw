@@ -17,7 +17,7 @@ const { renderQrTerminalMock } = vi.hoisted(() => ({
   renderQrTerminalMock: vi.fn(async () => "terminal-qr"),
 }));
 
-vi.mock("./qr-terminal.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   renderQrTerminal: renderQrTerminalMock,
 }));
 

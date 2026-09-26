@@ -20,8 +20,7 @@ async function shouldIncludeGatewayProbeDetails(params: {
 }): Promise<boolean> {
   if (
     readPreparedGatewayIngressAttribution(params.req)?.kind === "direct-local" ||
-    (!readPreparedGatewayIngressAttribution(params.req) &&
-      isLocalDirectRequest(params.req, params.trustedProxies, params.allowRealIpFallback))
+    (!readPreparedGatewayIngressAttribution(params.req) && isLocalDirectRequest(params.req))
   ) {
     return true;
   }

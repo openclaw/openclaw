@@ -657,11 +657,12 @@ export async function runPreparedEmbeddedLoop(
       return providerReview.finish(terminalResolution.result);
     }
   } finally {
-    await semanticNoProgressObserver?.close();
+    const semanticObserverClosed = semanticNoProgressObserver?.close();
     // Successful registration already cleared the marker; every earlier exit
     // must restore terminal suppression before asynchronous settlement begins.
     contextRecoveryState.restoreTimeoutRecoveryAbandonment();
     permissionChanges.close();
+    await semanticObserverClosed;
     await settleEmbeddedRun({
       runInput: admittedRunInput,
       runtime: preparedRuntime,

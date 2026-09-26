@@ -13,10 +13,12 @@ import {
   resolveLocalVitestScheduling,
 } from "../../scripts/lib/vitest-local-scheduling.mts";
 import type { LocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
+import { resolveTestBunSourceArgs } from "../../src/test-utils/bun-process.ts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./vitest.bundled-plugin-paths.ts";
+import { sharedVitestExcludePatterns } from "./vitest.pattern-file.ts";
 import {
   createVitestProjectCachePlugin,
   loadVitestPerformanceConfig,
@@ -175,6 +177,11 @@ export const sharedVitestConfig = {
         // package resolution relative to the importer and its installed version.
         find: /^undici$/u,
         replacement: "undici/index.js",
+      },
+      {
+        // Keep the installed WebSocket package and its mocks on one module identity in Bun.
+        find: /^ws$/u,
+        replacement: path.join(repoRoot, "node_modules", "ws", "wrapper.mjs"),
       },
       {
         find: "discord-api-types/v10",
@@ -508,7 +515,12 @@ export const sharedVitestConfig = {
     isolate: false,
     pool: workerConfig.pool,
     // Native imports keep the invocation owner's isolated source-cache policy.
-    execArgv: process.versions.bun ? [] : ["--import", resolveTsxImport(repoRoot)],
+    execArgv: [
+      ...(process.versions.bun
+        ? resolveTestBunSourceArgs(repoRoot)
+        : ["--import", resolveTsxImport(repoRoot)]),
+      `--import=${new URL("./vitest.jsdom-preload.mts", import.meta.url).href}`,
+    ],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,
@@ -547,18 +559,7 @@ export const sharedVitestConfig = {
       "ui/src/pages/chat/tool-stream.node.test.ts",
     ],
     setupFiles: [resolveRepoRootPath("test/setup.ts")],
-    exclude: [
-      "dist/**",
-      "test/fixtures/**",
-      "apps/macos/**",
-      "apps/macos/.build/**",
-      "**/node_modules/**",
-      "**/vendor/**",
-      "dist/OpenClaw.app/**",
-      "**/._*",
-      "**/*.live.test.ts",
-      "**/*.e2e.test.ts",
-    ],
+    exclude: [...sharedVitestExcludePatterns],
     coverage: {
       provider: "v8" as const,
       reporter: ["text", "lcov"],

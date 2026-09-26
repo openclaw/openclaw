@@ -380,7 +380,7 @@ function summarizeRateLimitSnapshot(
   const label = formatLimitLabel(snapshot);
   const windows = LIMIT_WINDOW_KEYS.flatMap((key) => {
     const window = snapshot[key];
-    return window ? [formatRateLimitWindow(key, window, nowMs)] : [];
+    return window ? [`${key} ${formatRateLimitWindowDetails(window, nowMs)}`] : [];
   });
   const reachedType = snapshot.rateLimitReachedType;
   const suffix = reachedType ? ` (${formatReachedType(reachedType)})` : "";
@@ -446,10 +446,6 @@ function snapshotHasDisplayableData(snapshot: RateLimitSnapshot): boolean {
   );
 }
 
-function formatRateLimitWindow(key: LimitWindowKey, window: RateLimitReset, nowMs: number): string {
-  return `${key} ${formatRateLimitWindowDetails(window, nowMs)}`;
-}
-
 function formatRateLimitWindowDetails(window: RateLimitReset, nowMs: number): string {
   const remainingPercent =
     window.usedPercent === undefined
@@ -476,7 +472,7 @@ function formatLimitLabel(snapshot: RateLimitSnapshot): string {
   if (!label || label === CODEX_LIMIT_ID) {
     return "Codex";
   }
-  return label.replace(/[_-]+/gu, " ").replace(/\s+/gu, " ").trim();
+  return formatReachedType(label);
 }
 
 function formatReachedType(value: string): string {
@@ -575,18 +571,8 @@ function selectSnapshotBlockingReset(
   snapshot: RateLimitSnapshot,
   nowMs: number,
 ): RateLimitReset | undefined {
-  const futureWindows = readWindowEntries(snapshot)
-    .map((entry) => entry.window)
-    .filter((window) => window.resetsAtMs > nowMs);
-  const exhaustedWindows = futureWindows.filter(
-    (window) => window.usedPercent !== undefined && window.usedPercent >= 100,
-  );
-  const candidates = exhaustedWindows.length > 0 ? exhaustedWindows : futureWindows;
-  const resetSort =
-    exhaustedWindows.length > 0
-      ? (left: RateLimitReset, right: RateLimitReset) => right.resetsAtMs - left.resetsAtMs
-      : (left: RateLimitReset, right: RateLimitReset) => left.resetsAtMs - right.resetsAtMs;
-  return candidates.toSorted(resetSort)[0];
+  const window = selectBlockingWindowEntry(readWindowEntries(snapshot), nowMs)?.window;
+  return window && window.resetsAtMs > nowMs ? window : undefined;
 }
 
 function selectBlockingWindowEntry(
@@ -662,16 +648,11 @@ function formatUsageWindowLabel(
   entry: RateLimitWindowEntry,
   entries: RateLimitWindowEntry[],
 ): string {
+  const period = formatBlockingLimitPeriod(entry, entries);
+  if (period) {
+    return period;
+  }
   const minutes = entry.window.windowDurationMins;
-  if (minutes === WEEKLY_WINDOW_MINUTES || hasWeeklySecondaryResetCadence(entry, entries)) {
-    return "weekly";
-  }
-  if (minutes === DAY_WINDOW_MINUTES) {
-    return "daily";
-  }
-  if (minutes !== undefined && minutes > 0 && minutes < DAY_WINDOW_MINUTES) {
-    return "short-term";
-  }
   if (minutes !== undefined && minutes > 0 && minutes % DAY_WINDOW_MINUTES === 0) {
     const days = minutes / DAY_WINDOW_MINUTES;
     return `${days}-day`;

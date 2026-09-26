@@ -918,7 +918,7 @@ describe("plugin authoring commands", () => {
       },
       devDependencies: {
         openclaw: "latest",
-        typescript: "^5.9.0",
+        typescript: "7.0.2",
         vitest: "^3.2.0",
       },
       scripts: {
@@ -982,7 +982,7 @@ describe("plugin authoring commands", () => {
       devDependencies: {
         clawhub: "latest",
         openclaw: "latest",
-        typescript: "^5.9.0",
+        typescript: "7.0.2",
         vitest: "^3.2.0",
       },
       openclaw: {

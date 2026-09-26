@@ -79,6 +79,35 @@
   padding: 2px 8px;
 }
 
+.personal-instructions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.personal-instructions__editor {
+  width: 100%;
+  max-width: none;
+  /* The seven-row default stays fixed as content grows; only the native handle resizes it. */
+  resize: vertical;
+  overflow-y: auto;
+  font-family: var(--mono);
+  line-height: 1.5;
+}
+
+.personal-instructions__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.personal-instructions__error {
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
 /* Personal connected accounts and sign-in steps. */
 
 .model-accounts__id {

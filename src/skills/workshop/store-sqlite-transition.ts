@@ -1,91 +1,86 @@
+import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import {
   appendSkillProposalEvent,
-  readStoredSkillProposalEvent,
+  readStoredSkillProposalEventInDatabase,
   type NewSkillProposalEvent,
 } from "./store-sqlite-event.js";
 import {
   parseSkillProposalRow,
-  readStoredProposal,
+  readStoredProposalInDatabase,
   updateProposal,
 } from "./store-sqlite-record.js";
-import {
-  databaseOptions,
-  ensureSkillWorkshopSchema,
-  type SkillWorkshopDatabase,
-  type SkillWorkshopStoreOptions,
-} from "./store-sqlite-schema.js";
+import type { SkillWorkshopDatabase } from "./store-sqlite-schema.js";
 import type { SkillProposalEvent, SkillProposalRecord } from "./types.js";
 
 export type PendingSkillProposalTransitionCommit =
   | { state: "committed"; event: SkillProposalEvent }
   | { state: "conflict"; current?: SkillProposalRecord };
 
-export function commitPendingSkillProposalTransition(params: {
+export type CommitPendingSkillProposalTransitionInput = {
   expected: SkillProposalRecord;
   record: SkillProposalRecord;
   event: NewSkillProposalEvent;
-  store?: SkillWorkshopStoreOptions;
-  operationLabel: string;
   invalidateRollback?: boolean;
-}): PendingSkillProposalTransitionCommit {
-  ensureSkillWorkshopSchema(params.store);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
-      const current = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("skill_workshop_proposals")
-          .selectAll()
-          .where("proposal_id", "=", params.expected.id),
-      );
-      const currentRecord = current ? parseSkillProposalRow(current) : null;
-      if (
-        !current ||
-        !currentRecord ||
-        currentRecord.status !== "pending" ||
-        current.record_json !== JSON.stringify(params.expected)
-      ) {
-        return {
-          state: "conflict" as const,
-          ...(currentRecord ? { current: currentRecord } : {}),
-        };
-      }
-      if (params.invalidateRollback) {
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .deleteFrom("skill_workshop_proposal_rollbacks")
-            .where("proposal_id", "=", params.expected.id),
-        );
-      }
-      updateProposal(db, current, params.record);
-      return {
-        state: "committed" as const,
-        event: appendSkillProposalEvent(db, params.event),
-      };
-    },
-    databaseOptions(params.store),
-    { operationLabel: params.operationLabel },
-  );
-}
+};
 
-export function readCommittedSkillProposalTransition(params: {
+export type ReadCommittedSkillProposalTransitionInput = {
   record: SkillProposalRecord;
   event: NewSkillProposalEvent;
-  store?: SkillWorkshopStoreOptions;
-}): Extract<PendingSkillProposalTransitionCommit, { state: "committed" }> | null {
-  const stored = readStoredProposal(params.record.id, params.store);
+};
+
+export function commitPendingSkillProposalTransitionInDatabase(
+  db: DatabaseSync,
+  params: CommitPendingSkillProposalTransitionInput,
+): PendingSkillProposalTransitionCommit {
+  const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
+  const current = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("skill_workshop_proposals")
+      .selectAll()
+      .where("proposal_id", "=", params.expected.id),
+  );
+  const currentRecord = current ? parseSkillProposalRow(current) : null;
+  if (
+    !current ||
+    !currentRecord ||
+    currentRecord.status !== "pending" ||
+    current.record_json !== JSON.stringify(params.expected)
+  ) {
+    return {
+      state: "conflict" as const,
+      ...(currentRecord ? { current: currentRecord } : {}),
+    };
+  }
+  if (params.invalidateRollback) {
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom("skill_workshop_proposal_rollbacks")
+        .where("proposal_id", "=", params.expected.id),
+    );
+  }
+  updateProposal(db, current, params.record);
+  return {
+    state: "committed" as const,
+    event: appendSkillProposalEvent(db, params.event),
+  };
+}
+
+export function readCommittedSkillProposalTransitionInDatabase(
+  db: DatabaseSync,
+  params: ReadCommittedSkillProposalTransitionInput,
+): Extract<PendingSkillProposalTransitionCommit, { state: "committed" }> | null {
+  const stored = readStoredProposalInDatabase(db, params.record.id);
   if (!stored || stored.row.record_json !== JSON.stringify(params.record)) {
     return null;
   }
-  const event = readStoredSkillProposalEvent(params.event.eventId, params.store);
+  const event = readStoredSkillProposalEventInDatabase(db, params.event.eventId);
   if (
     !event ||
     event.proposalId !== params.event.proposalId ||

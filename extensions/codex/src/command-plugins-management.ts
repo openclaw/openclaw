@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   renderMessagePresentationFallbackText,
@@ -130,7 +131,7 @@ export async function handleCodexPluginsSubcommand(
       return formatCodexAvailablePlugins(discovered.plugins, discovered.warnings, query, page);
     } catch (error) {
       return {
-        text: `Could not list Codex plugins: ${formatCodexDisplayText(errorMessage(error))}`,
+        text: `Could not list Codex plugins: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
       };
     }
   }
@@ -398,7 +399,7 @@ async function installCodexPlugin(
     }
   } catch (error) {
     return {
-      text: `Could not verify the requested Codex plugin: ${formatCodexDisplayText(errorMessage(error))}`,
+      text: `Could not verify the requested Codex plugin: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
     };
   }
 
@@ -435,7 +436,7 @@ async function installCodexPlugin(
     }
   } catch (error) {
     return {
-      text: `Could not verify existing Codex plugin authorization: ${formatCodexDisplayText(errorMessage(error))}`,
+      text: `Could not verify existing Codex plugin authorization: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
     };
   }
 
@@ -459,7 +460,7 @@ async function installCodexPlugin(
       result = await runtime.install(requestParams);
     } catch (error) {
       return {
-        text: `Could not install ${formatCodexDisplayText(requestedId)}: ${formatCodexDisplayText(errorMessage(error))}`,
+        text: `Could not install ${formatCodexDisplayText(requestedId)}: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
       };
     }
   }
@@ -499,7 +500,7 @@ async function installCodexPlugin(
     );
   } catch (error) {
     return {
-      text: `${formatCodexDisplayText(requestedId)} was installed in Codex but could not be authorized in OpenClaw and will not be exposed: ${formatCodexDisplayText(errorMessage(error))}`,
+      text: `${formatCodexDisplayText(requestedId)} was installed in Codex but could not be authorized in OpenClaw and will not be exposed: ${formatCodexDisplayText(coerceErrorMessage(error))}`,
     };
   }
 
@@ -511,7 +512,7 @@ async function installCodexPlugin(
         .map((diagnostic) => ` ${formatCodexDisplayText(diagnostic.message)}`)
         .join("");
     } catch (error) {
-      refreshWarning = ` Runtime refresh requires a new conversation: ${formatCodexDisplayText(errorMessage(error))}`;
+      refreshWarning = ` Runtime refresh requires a new conversation: ${formatCodexDisplayText(coerceErrorMessage(error))}`;
     }
   }
 
@@ -595,10 +596,6 @@ async function installCodexPlugin(
   return {
     text: `${formatCodexDisplayText(requestedId)} ${status}. OpenClaw app access is configured.${refreshWarning} ${POLICY_REFRESH_HINT}`,
   };
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function formatPluginList(

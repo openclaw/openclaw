@@ -23,7 +23,7 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { RespondFn } from "./server-methods/types.js";
 import { makeGatewayClient } from "./server-request-context.test-support.js";
-import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import * as projectionWork from "./session-projection-work.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
@@ -36,6 +36,54 @@ import type { WorkerSessionPlacementProjection } from "./worker-environments/pla
 afterEach(() => {
   vi.restoreAllMocks();
   subagentRuns.clear();
+});
+
+it("settles a registry revision after persisting an already absent run", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+    async () => {
+      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      setRuntimeConfigSnapshot(cfg);
+      clearSubagentRunsReadCacheForTest();
+      const target = { agentId: "main", sessionKey: "agent:main:registry-revision" };
+      replaceSessionEntrySync(target, { sessionId: "registry-revision", updatedAt: 1 });
+      const createDrain = projectionWork.createSessionProjectionDrain;
+      let remainingRefreshes: number | undefined;
+      vi.spyOn(projectionWork, "createSessionProjectionDrain").mockImplementation((owner) =>
+        createDrain({
+          ...owner,
+          refresh: () => {
+            // A regressed microtask loop would starve Vitest's own timeout.
+            if (remainingRefreshes !== undefined && remainingRefreshes-- === 0) {
+              throw new Error("Session projection did not settle the registry revision");
+            }
+            return owner.refresh();
+          },
+        }),
+      );
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const releaseForeground = projectionWork.retainSessionListForegroundWork();
+      try {
+        await projection.ensureMaterialized();
+        expect(projection.needsMaterialization).toBe(false);
+
+        persistSubagentRunsToDiskOrThrow(subagentRuns, ["already-absent-run"]);
+
+        expect(projection.dirtyRowCount).toBe(0);
+        remainingRefreshes = 10;
+        await projection.ensureMaterialized();
+        expect(projection.needsMaterialization).toBe(false);
+        expect(
+          projection.snapshot({ agentId: target.agentId, key: target.sessionKey }).row,
+        ).toMatchObject({
+          sessionId: "registry-revision",
+        });
+      } finally {
+        projection.dispose();
+        releaseForeground();
+      }
+    },
+  );
 });
 
 it.each(["existing", "new"] as const)(
@@ -67,7 +115,7 @@ it.each(["existing", "new"] as const)(
           delivery: { status: "not_required" },
         });
         saveSubagentRegistryToSqlite(new Map([[previous.runId, previous]]));
-        const releaseForeground = retainSessionListForegroundWork();
+        const releaseForeground = projectionWork.retainSessionListForegroundWork();
         const context = createDirectChatContext({
           getRuntimeConfig: () => cfg,
           loadGatewayModelCatalog: async () => [],

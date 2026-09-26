@@ -19,6 +19,34 @@ const WEB_PROVIDER_SECRET_CONFIGS = [
 
 type WebProviderSecretConfig = (typeof WEB_PROVIDER_SECRET_CONFIGS)[number];
 
+function createOpenClawConfigSecretTargetEntry(
+  pathPattern: string,
+  options: Partial<
+    Pick<
+      SecretTargetRegistryEntry,
+      | "pathPatternSegments"
+      | "targetType"
+      | "targetTypeAliases"
+      | "includeInConfigure"
+      | "providerIdPathSegmentIndex"
+      | "trackProviderShadowing"
+    >
+  > = {},
+): SecretTargetRegistryEntry {
+  return {
+    id: pathPattern,
+    targetType: pathPattern,
+    configFile: "openclaw.json",
+    pathPattern,
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+    ...options,
+  };
+}
+
 function createPluginOpenClawConfigSecretTargetEntry(
   pluginId: string,
   configPath: string,
@@ -26,18 +54,7 @@ function createPluginOpenClawConfigSecretTargetEntry(
   const pluginConfigPath = ["plugins", "entries", pluginId, "config"];
   const pathPatternSegments = [...pluginConfigPath, ...parseDotPath(configPath)];
   const pathPattern = `${formatConcreteConfigPath(pluginConfigPath)}.${configPath}`;
-  return {
-    id: pathPattern,
-    targetType: pathPattern,
-    configFile: "openclaw.json",
-    pathPattern,
-    pathPatternSegments,
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  };
+  return createOpenClawConfigSecretTargetEntry(pathPattern, { pathPatternSegments });
 }
 
 function hasSensitiveConfigHint(
@@ -138,98 +155,22 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
     authProfileType: "token",
   },
-  {
-    id: "memory.search.remote.apiKey",
-    targetType: "memory.search.remote.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "memory.search.remote.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "agents.entries.*.memory.search.remote.apiKey",
-    targetType: "agents.entries.*.memory.search.remote.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "agents.entries.*.memory.search.remote.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "cron.webhookToken",
-    targetType: "cron.webhookToken",
-    configFile: "openclaw.json",
-    pathPattern: "cron.webhookToken",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "gateway.auth.token",
-    targetType: "gateway.auth.token",
-    configFile: "openclaw.json",
-    pathPattern: "gateway.auth.token",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "gateway.auth.password",
-    targetType: "gateway.auth.password",
-    configFile: "openclaw.json",
-    pathPattern: "gateway.auth.password",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "gateway.remote.password",
-    targetType: "gateway.remote.password",
-    configFile: "openclaw.json",
-    pathPattern: "gateway.remote.password",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "gateway.remote.token",
-    targetType: "gateway.remote.token",
-    configFile: "openclaw.json",
-    pathPattern: "gateway.remote.token",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
+  ...[
+    "memory.search.remote.apiKey",
+    "agents.entries.*.memory.search.remote.apiKey",
+    "cron.webhookToken",
+    "gateway.auth.token",
+    "gateway.auth.password",
+    "gateway.remote.password",
+    "gateway.remote.token",
+  ].map((pathPattern) => createOpenClawConfigSecretTargetEntry(pathPattern)),
   ...["tts", "agents.entries.*.tts"].flatMap((prefix) =>
     ["providers.*", "personas.*.providers.*"].map((providerPath): SecretTargetRegistryEntry => {
       const path = `${prefix}.${providerPath}.apiKey`;
-      return {
-        id: path,
-        targetType: path,
-        configFile: "openclaw.json",
-        pathPattern: path,
-        secretShape: SECRET_INPUT_SHAPE,
-        expectedResolvedValue: "string",
-        includeInPlan: true,
+      return createOpenClawConfigSecretTargetEntry(path, {
         includeInConfigure: prefix === "tts",
-        includeInAudit: true,
         providerIdPathSegmentIndex: path.split(".").length - 2,
-      };
+      });
     }),
   ),
   ...[
@@ -242,63 +183,26 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     ),
   ].map((suffix): SecretTargetRegistryEntry => {
     const pathPattern = `models.providers.*.${suffix}`;
-    const entry: SecretTargetRegistryEntry = {
-      id: pathPattern,
+    return createOpenClawConfigSecretTargetEntry(pathPattern, {
       targetType: pathPattern
         .split(".")
         .filter((segment) => segment !== "*")
         .join("."),
       targetTypeAliases: [pathPattern],
-      configFile: "openclaw.json",
-      pathPattern,
-      secretShape: SECRET_INPUT_SHAPE,
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
       providerIdPathSegmentIndex: 2,
-    };
-    if (suffix === "apiKey") {
-      entry.trackProviderShadowing = true;
-    }
-    return entry;
+      ...(suffix === "apiKey" ? { trackProviderShadowing: true } : {}),
+    });
   }),
-  {
-    id: "skills.entries.*.apiKey",
+  createOpenClawConfigSecretTargetEntry("skills.entries.*.apiKey", {
     targetType: "skills.entries.apiKey",
     targetTypeAliases: ["skills.entries.*.apiKey"],
-    configFile: "openclaw.json",
-    pathPattern: "skills.entries.*.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "talk.providers.*.apiKey",
-    targetType: "talk.providers.*.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "talk.providers.*.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
+  }),
+  createOpenClawConfigSecretTargetEntry("talk.providers.*.apiKey", {
     providerIdPathSegmentIndex: 2,
-  },
-  {
-    id: "talk.realtime.providers.*.apiKey",
-    targetType: "talk.realtime.providers.*.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "talk.realtime.providers.*.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
+  }),
+  createOpenClawConfigSecretTargetEntry("talk.realtime.providers.*.apiKey", {
     providerIdPathSegmentIndex: 3,
-  },
+  }),
 ];
 
 let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;

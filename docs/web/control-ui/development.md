@@ -113,16 +113,38 @@ between settlement and transport.
 
 ## Chat render scheduling
 
-Streaming deltas and session-roster notifications must not trigger a render for
-each event. The chat stream owns its frame queue; the shell and chat-page session
-subscriptions coalesce their presentation updates through `SubscriptionsController`.
-Their state synchronization stays immediate, while the Lit commit runs inside the
-scheduled frame so child property bindings do not escape into a later microtask.
-Disconnecting or replacing a subscription retires its queued frame. Hidden
-documents retain immediate invalidation because animation frames may be suspended.
+Streaming deltas and session-roster notifications must not trigger unrelated
+renders. The shell processes session deletion and document-title updates directly,
+without rendering for roster publications. The chat stream owns its frame queue;
+chat-page session subscriptions coalesce presentation updates through
+`SubscriptionsController`. State synchronization stays immediate, while the Lit
+commit runs inside the scheduled frame so child property bindings do not escape
+into a later microtask. Disconnecting or replacing a subscription retires its
+queued frame. Hidden documents retain immediate invalidation because animation
+frames may be suspended.
 
 The `chat-stream-runtime-budgets.e2e.test.ts` suite protects streaming with
 structural update counts; chat-page unit tests cover intervening roster publications.
+
+Shell callbacks retain their identity across renders so a background session update
+does not redraw navigation twice. The outbox subscription still invalidates draft
+and attention badges when their underlying facts change. Session-link decoration
+preserves unchanged attributes instead of rewriting them on each roster update.
+
+Transcript enhancement inspects inserted or changed Markdown blocks; settled code
+blocks and tables do not need another scan when neighboring prose streams. Resize
+observers own geometry changes. The command palette likewise retains its measured
+input layout while navigating results, and remeasures edits, width changes, and
+reconnected fields. Status clocks pause in hidden tabs and render only when their
+displayed value or properties change.
+
+Composer edits publish transcript resize notifications only when the viewport
+height or corrected scroll offset changes. Draft growth, shrinkage, and end
+anchoring still synchronize immediately. The position rail observes column width
+and conversation-region height instead of measuring the gutter on every streamed
+render; virtualizer and sidebar geometry changes retain their explicit sync path.
+Rail labels are shared across mounted markers, so offscreen history does not add
+translation work on each stream update.
 
 ## Talk live smoke test
 

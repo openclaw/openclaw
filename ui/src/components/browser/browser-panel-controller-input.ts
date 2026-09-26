@@ -399,14 +399,12 @@ export class BrowserPanelInputController {
       this.host.reportError(error);
       return;
     }
-    if (result === "unhandled") {
+    if (result !== "accepted") {
       this.host.setState("noticeText", null);
-      this.host.setState("errorText", t("browser.noChatTarget"));
-      return;
-    }
-    if (result === "rejected") {
-      this.host.setState("noticeText", null);
-      this.host.setState("errorText", t("browser.annotationLimitReached"));
+      this.host.setState(
+        "errorText",
+        t(result === "unhandled" ? "browser.noChatTarget" : "browser.annotationLimitReached"),
+      );
       return;
     }
     this.host.setState("errorText", null);

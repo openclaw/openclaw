@@ -131,7 +131,7 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
       expect(result.payload).not.toHaveProperty("indexing");
       expect(result.payload).not.toHaveProperty("truncated");
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 });
@@ -230,7 +230,7 @@ test("scope authorizes and applies membership before the hit limit, and empty sc
         }),
       ).toMatchObject({ sessions: [], totalCount: 0 });
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 });
@@ -279,7 +279,7 @@ test("scope search preserves physical shared-store ownership, agent filters, and
         payload: { results: [{ sessionKey: key }], sessions: [{ key }] },
       });
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 });
@@ -352,7 +352,7 @@ test("scope reports only authorized cold transcripts without restoring them", as
         }),
       ).toMatchObject({ hits: [], archivedTranscriptsExcluded: 2 });
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 });
@@ -396,7 +396,7 @@ test("scope rechecks sharing after readiness and reports FTS failure instead of 
         error: { code: "UNAVAILABLE", message: "FTS query failed" },
       });
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 });
@@ -443,7 +443,40 @@ test("search discards hits and page metadata when sharing is revoked during its 
         }
       }
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
+    }
+  });
+});
+
+test("search materializes archived hits and rechecks visibility after exact preparation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    try {
+      const viewer = ensureProfileForEmail("archived-search@example.test").id;
+      const key = await seed("main", "archived-hit", "foreign", "needle", { archivedAt: 1 });
+      const context = requestContext({ agents: { list: [{ id: "main", default: true }] } });
+      const client = identifiedClient(viewer);
+      const params = { query: "needle", scope: { archived: "all" } };
+      expect(await search(context, client, params)).toMatchObject({
+        ok: true,
+        payload: { results: [{ sessionKey: key }], sessions: [{ key }] },
+      });
+      const projection = expectDefined(getSessionRowProjection(context), "search projection");
+      const prepare = projection.withPreparedExactRows.bind(projection);
+      vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
+        async (queries, consume, options) => {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: key },
+            { visibility: "draft" },
+          );
+          return prepare(queries, consume, options);
+        },
+      );
+      expect(await search(context, client, params)).toMatchObject({
+        ok: true,
+        payload: { results: [], sessions: [] },
+      });
+    } finally {
+      await disposeSessionReadContexts();
     }
   });
 });

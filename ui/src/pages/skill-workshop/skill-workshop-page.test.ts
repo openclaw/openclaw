@@ -1,4 +1,3 @@
-import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -13,9 +12,8 @@ import {
   proposal as createActionProposal,
   REVISION_HASH,
 } from "../../test-helpers/skill-workshop-proposal-fixture.ts";
-import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
-import type { SkillWorkshopRouteData } from "./proposals.ts";
-import { page as skillWorkshopRoute } from "./route.ts";
+import { createSkillWorkshopState } from "./proposals.ts";
+import type { SkillWorkshopState } from "./proposals.ts";
 import "./skill-workshop-page.ts";
 import {
   createContext,
@@ -46,11 +44,11 @@ function callsFor(request: ReturnType<typeof vi.fn>, method: string) {
   return request.mock.calls.filter(([calledMethod]) => calledMethod === method);
 }
 
-function mountLoadedPage(data: SkillWorkshopRouteData, context: ApplicationContext) {
+function mountLoadedPage(data: SkillWorkshopState, context: ApplicationContext) {
   const page = document.createElement(
     "openclaw-skill-workshop-page",
   ) as SkillWorkshopPageTestElement;
-  page.data = data;
+  page.state = { ...data, skillWorkshopMode: "suggestions" };
   page.context = context;
   document.body.append(page);
   return page;
@@ -125,7 +123,7 @@ describe("SkillWorkshopPage lifecycle", () => {
       const page = document.createElement(
         "openclaw-skill-workshop-page",
       ) as SkillWorkshopPageTestElement;
-      page.data = skillWorkshopRouteData(loaded);
+      page.state = { ...loaded, skillWorkshopMode: "suggestions" };
       page.context = createContext(request, {
         methods: [
           `skills.proposals.${action}`,
@@ -197,7 +195,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(loaded);
+    page.state = { ...loaded, skillWorkshopMode: "suggestions" };
     page.context = createContext(request, {
       methods: ["skills.proposals.evaluate", "skills.proposals.inspect"],
     });
@@ -259,7 +257,7 @@ describe("SkillWorkshopPage lifecycle", () => {
         }),
       ];
       loaded.skillWorkshopSelectedKey = "proposal-scope";
-      const page = mountLoadedPage(skillWorkshopRouteData(loaded), context);
+      const page = mountLoadedPage(loaded, context);
       await settleLitElement(page);
       const selector = action === "apply" ? ".sw-btn--primary" : ".sw-btn--danger";
       const button = page.querySelector<HTMLButtonElement>(`.sw-action-bar ${selector}`);
@@ -375,6 +373,7 @@ describe("SkillWorkshopPage lifecycle", () => {
       body: "## Workflow\n- test",
     });
     const loadedState = createSkillWorkshopState();
+    loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
     loadedState.skillWorkshopProposals = [proposal];
     loadedState.skillWorkshopSelectedKey = proposal.key;
@@ -383,7 +382,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(loadedState);
+    page.state = { ...loadedState, skillWorkshopMode: "suggestions" };
     page.context = createContext(vi.fn(async () => emptyWorkshopManifest()));
     document.body.append(page);
     await page.updateComplete;
@@ -431,7 +430,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(loadedState);
+    page.state = { ...loadedState, skillWorkshopMode: "suggestions" };
     page.context = createContext(vi.fn(async () => emptyWorkshopManifest()));
     document.body.append(page);
     await page.updateComplete;
@@ -465,7 +464,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(loadedState);
+    page.state = { ...loadedState, skillWorkshopMode: "suggestions" };
     page.context = createContext(firstRequest);
     document.body.append(page);
     await page.updateComplete;
@@ -482,88 +481,6 @@ describe("SkillWorkshopPage lifecycle", () => {
         agentId: "research",
       }),
     );
-  });
-
-  it("reloads proposals on route activation and removes Apply after reconciliation", async () => {
-    let activation = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "skills.proposals.list") {
-        activation += 1;
-        return {
-          schema: "openclaw.skill-workshop.proposals-manifest.v1",
-          installedSkills: [],
-          updatedAt: "2026-08-12T00:00:00.000Z",
-          proposals: [
-            {
-              id: "proposal-route-refresh",
-              kind: "create",
-              status: activation === 1 ? "pending" : "stale",
-              title: "Route Refresh",
-              description: "Refresh stale proposal state on route activation.",
-              skillName: "Route Refresh",
-              skillKey: "route-refresh",
-              createdAt: "2026-08-12T00:00:00.000Z",
-              updatedAt: "2026-08-12T00:00:00.000Z",
-              scanState: "clean",
-            },
-          ],
-        };
-      }
-      if (method === "skills.proposals.inspect") {
-        const status = activation === 1 ? "pending" : "stale";
-        return {
-          record: {
-            id: "proposal-route-refresh",
-            kind: "create",
-            status,
-            title: "Route Refresh",
-            description: "Refresh stale proposal state on route activation.",
-            createdAt: "2026-08-12T00:00:00.000Z",
-            updatedAt: "2026-08-12T00:00:00.000Z",
-            proposedVersion: "v1",
-            draftHash: "a".repeat(64),
-            target: {
-              skillName: "Route Refresh",
-              skillKey: "route-refresh",
-            },
-          },
-          revisionHash: "b".repeat(64),
-          content: "# Route Refresh\n",
-          supportFiles: [],
-        };
-      }
-      return {};
-    });
-    const context = createContext(request, {
-      methods: [...PAGE_LOAD_METHODS, "skills.proposals.inspect"],
-    });
-    const options = {
-      signal: new AbortController().signal,
-      shouldRun: () => true,
-      revalidating: false,
-      location: { pathname: "/skill-workshop", search: "", hash: "" },
-      deps: "",
-      cause: "navigation",
-    } satisfies RouteLoaderOptions;
-    if (!skillWorkshopRoute.loader) {
-      throw new Error("skill workshop route has no loader");
-    }
-
-    const first = (await skillWorkshopRoute.loader(context, options)) as SkillWorkshopRouteData;
-    const second = (await skillWorkshopRoute.loader(context, options)) as SkillWorkshopRouteData;
-    expect(callsFor(request, "skills.proposals.list")).toHaveLength(2);
-    expect(first.skillWorkshopProposals[0]?.status).toBe("pending");
-    expect(second.skillWorkshopProposals[0]?.status).toBe("stale");
-
-    const secondPage = document.createElement(
-      "openclaw-skill-workshop-page",
-    ) as SkillWorkshopPageTestElement;
-    secondPage.data = second;
-    secondPage.context = context;
-    document.body.append(secondPage);
-    await secondPage.updateComplete;
-
-    expect(secondPage.querySelector(".sw-action-bar .sw-btn--primary")).toBeNull();
   });
 
   it("does not issue duplicate list requests while a load is in flight", async () => {
@@ -681,7 +598,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     });
     loadedState.skillWorkshopProposals = [proposal];
     loadedState.skillWorkshopSelectedKey = proposal.key;
-    const page = mountLoadedPage(skillWorkshopRouteData(loadedState), oldContext);
+    const page = mountLoadedPage(loadedState, oldContext);
     await page.updateComplete;
     page.requestUpdate();
     await page.updateComplete;
@@ -763,7 +680,7 @@ describe("SkillWorkshopPage lifecycle", () => {
       loadedState.skillWorkshopSelectedKey = proposal.key;
       loadedState.skillWorkshopRevisionKey = proposal.key;
       loadedState.skillWorkshopRevisionDraft = "revise it";
-      const page = mountLoadedPage(skillWorkshopRouteData(loadedState), context);
+      const page = mountLoadedPage(loadedState, context);
       await settleLitElement(page);
 
       const button = page.querySelector<HTMLButtonElement>(
@@ -827,7 +744,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     });
     loadedState.skillWorkshopProposals = [proposal];
     loadedState.skillWorkshopSelectedKey = proposal.key;
-    const page = mountLoadedPage(skillWorkshopRouteData(loadedState), context);
+    const page = mountLoadedPage(loadedState, context);
     await page.updateComplete;
 
     const revision = page.handleRevisionRequest("revise it", proposal, "research", "a".repeat(64));
@@ -882,7 +799,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     });
     loadedState.skillWorkshopProposals = [proposal];
     loadedState.skillWorkshopSelectedKey = proposal.key;
-    const page = mountLoadedPage(skillWorkshopRouteData(loadedState), context);
+    const page = mountLoadedPage(loadedState, context);
     await page.updateComplete;
 
     await expect(
@@ -907,7 +824,7 @@ describe("SkillWorkshopPage self-learning toggle", () => {
     const page = document.createElement(
       "openclaw-skill-workshop-page",
     ) as SkillWorkshopPageTestElement;
-    page.data = skillWorkshopRouteData(loadedState);
+    page.state = { ...loadedState, skillWorkshopMode: "suggestions" };
     page.context = createContext(
       vi.fn(async () => emptyWorkshopManifest()),
       {

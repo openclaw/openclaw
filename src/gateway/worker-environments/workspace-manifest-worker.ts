@@ -58,6 +58,7 @@ function computationInputBytes(command: WorkspaceManifestComputationCommand): nu
     case "workspace.manifest.serialize":
     case "workspace.reconcile.preflight":
     case "workspace.manifest.overlay":
+    case "workspace.manifest.tree-input":
       return bytes + command.input.payload.byteLength;
     case "workspace.manifest.staged":
       return bytes + (command.input.root.length + command.input.ref.length) * 2;
@@ -94,6 +95,7 @@ function transferableManifestInput(command: GitWorkerCommand): ArrayBuffer[] {
     case "workspace.manifest.serialize":
     case "workspace.reconcile.preflight":
     case "workspace.manifest.overlay":
+    case "workspace.manifest.tree-input":
       return [command.input.payload.buffer];
     default:
       return [];
@@ -143,20 +145,28 @@ function captureHashes(includeMemo = true) {
   };
 }
 
-export async function captureWorkspaceManifest(params: WorkspaceCaptureArguments) {
+type WorkspaceCaptureCommand = "workspace.manifest.capture" | "workspace.manifest.snapshot";
+
+function captureWorkspace<Type extends WorkspaceCaptureCommand>(
+  type: Type,
+  params: WorkspaceCaptureArguments,
+): Promise<WorkspaceManifestComputationOperations[Type]["output"]["value"]>;
+async function captureWorkspace(type: WorkspaceCaptureCommand, params: WorkspaceCaptureArguments) {
   const { root, baseCommit, preserveDirectories, includePaths, signal } = params;
   const input = { root, baseCommit, preserveDirectories, includePaths };
   if (hasGitWorkerContext()) {
     const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
-    const { manifest, manifestRef } = await readActualWorkspaceManifestImpl({ ...input, signal });
-    return { manifest, manifestRef };
+    const snapshot = await readActualWorkspaceManifestImpl({ ...input, signal });
+    return type === "workspace.manifest.snapshot"
+      ? snapshot
+      : { manifest: snapshot.manifest, manifestRef: snapshot.manifestRef };
   }
   signal?.throwIfAborted();
   const hashes = captureHashes();
   return hashes.accept(
     await compute(
       {
-        type: "workspace.manifest.capture",
+        type,
         input: encodeManifestValue({
           root,
           baseCommit,
@@ -171,31 +181,12 @@ export async function captureWorkspaceManifest(params: WorkspaceCaptureArguments
   );
 }
 
+export async function captureWorkspaceManifest(params: WorkspaceCaptureArguments) {
+  return await captureWorkspace("workspace.manifest.capture", params);
+}
+
 export async function captureWorkspaceSnapshot(params: WorkspaceCaptureArguments) {
-  const { root, baseCommit, preserveDirectories, includePaths, signal } = params;
-  const input = { root, baseCommit, preserveDirectories, includePaths };
-  if (hasGitWorkerContext()) {
-    const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
-    return await readActualWorkspaceManifestImpl({ ...input, signal });
-  }
-  signal?.throwIfAborted();
-  const hashes = captureHashes();
-  return hashes.accept(
-    await compute(
-      {
-        type: "workspace.manifest.snapshot",
-        input: encodeManifestValue({
-          root,
-          baseCommit,
-          includePaths: includePaths === undefined ? undefined : [...includePaths],
-          preserveDirectories:
-            preserveDirectories === undefined ? undefined : [...preserveDirectories],
-          hashes: hashes.hashes,
-        }),
-      },
-      signal,
-    ),
-  );
+  return await captureWorkspace("workspace.manifest.snapshot", params);
 }
 
 export async function preflightWorkspaceApply(
@@ -397,4 +388,13 @@ export async function prepareWorkspaceStageInput(
     },
     signal,
   );
+}
+
+export async function prepareWorkspaceTreeInput(
+  input: WorkspaceManifestValueInputs["workspace.manifest.tree-input"],
+): Promise<null> {
+  return await compute({
+    type: "workspace.manifest.tree-input",
+    input: encodeManifestValue(input),
+  });
 }

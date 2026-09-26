@@ -2,24 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatSmsProbeLines, probeSmsAccount } from "./status.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSmsAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-    ...overrides,
-  };
+  return createSmsTestAccount({ accountId: "default", ...overrides });
 }
 
 function createFetch(responses: Array<unknown>): typeof fetch {

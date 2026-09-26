@@ -24,7 +24,6 @@ export const SIDEBAR_NAV_ROUTES = [
   "dashboards",
   "usage",
   "cron",
-  "tasks",
   "sessions",
   "systems",
   "activity",
@@ -313,6 +312,8 @@ export function visibleSettingsNavigationGroups(
 // Subpages with a visible owner keep that owner selected so users retain
 // location context while completing the nested flow.
 const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
+  // Legacy General redirects remain Settings-owned during router transitions.
+  "config",
   "ai-agents",
   "model-setup",
   "lobsterdex",
@@ -351,7 +352,6 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   systems: navigationPresentation("monitor", "systems"),
   usage: navigationPresentation("coins", "usage"),
   cron: navigationPresentation("calendarClock", "cron"),
-  tasks: navigationPresentation("listChecks", "tasks"),
   skills: navigationPresentation("bookOpenText", "skills"),
   "skill-settings": navigationPresentation("bookOpenText", "skills"),
   plugins: navigationPresentation("plug", "plugins"),

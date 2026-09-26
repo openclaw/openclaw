@@ -1,9 +1,9 @@
 // CLI for showing and applying exec policy presets across config and approvals.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { AgentSelectionRequiredError, listAgentIds } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeExecApprovalDisplayText } from "../infra/exec-approval-text-sanitize.js";
@@ -32,6 +32,15 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  buildExecPolicyToolAccess,
+  formatExecPolicyCommandApprovals,
+  renderExecPolicyToolAccess,
+  type ExecPolicyToolAccess,
+  type ExecPolicyShowOptions,
+} from "./exec-policy-diagnostics.js";
+import { addGatewayClientOptions, resolveGatewayRpcOptionsWithLocalPort } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
 
 type ExecPolicyPresetName = "yolo" | "cautious" | "deny-all";
 
@@ -64,6 +73,8 @@ const EXEC_POLICY_PRESETS: Record<ExecPolicyPresetName, Required<ExecPolicyResol
 };
 
 type ExecPolicyShowPayload = {
+  toolAccess?: ExecPolicyToolAccess;
+  toolAccessSelectionRequired?: { agentIds: string[]; hint: string };
   configPath: string;
   approvalsPath: string;
   approvalsExists: boolean;
@@ -268,11 +279,14 @@ function buildNextExecPolicyConfig(
   return draft;
 }
 
-async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload> {
+async function buildLocalExecPolicyShowPayload(
+  options?: ExecPolicyShowOptions,
+): Promise<ExecPolicyShowPayload> {
   const configSnapshot = await readConfigFileSnapshot();
   const approvalsSnapshot = readExecApprovalsSnapshot();
+  const config = configSnapshot.config ?? {};
   const scopes = collectExecPolicyScopeSnapshots({
-    cfg: configSnapshot.config ?? {},
+    cfg: config,
     approvals: approvalsSnapshot.file,
     hostPath: approvalsSnapshot.path,
   }).map(buildExecPolicyShowScope);
@@ -282,7 +296,7 @@ async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload>
   const baseNote = hasNodeRuntimeScope
     ? "Scopes requesting host=node are node-managed at runtime. Local approvals are shown only for local/gateway scopes."
     : "Effective exec policy is the host approvals policy intersected with requested tools.exec policy.";
-  return {
+  const payload: ExecPolicyShowPayload = {
     configPath: configSnapshot.path,
     approvalsPath: approvalsSnapshot.path,
     approvalsExists: approvalsSnapshot.exists,
@@ -291,6 +305,26 @@ async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload>
       scopes,
     },
   };
+  if (!options) {
+    return payload;
+  }
+  const hasExplicitTarget = options.agent !== undefined || options.session !== undefined;
+  if (!hasExplicitTarget && listAgentIds(config).length === 0) {
+    payload.toolAccessSelectionRequired = {
+      agentIds: [],
+      hint: "Configure an agent with openclaw agents add to inspect terminal tool access.",
+    };
+    return payload;
+  }
+  try {
+    payload.toolAccess = await buildExecPolicyToolAccess(config, options);
+  } catch (error) {
+    if (hasExplicitTarget || !(error instanceof AgentSelectionRequiredError)) {
+      throw error;
+    }
+    payload.toolAccessSelectionRequired = { agentIds: error.agentIds, hint: error.hint };
+  }
+  return payload;
 }
 
 function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot): ExecPolicyShowScope {
@@ -434,26 +468,77 @@ export function registerExecPolicyCli(program: Command) {
   const execPolicy = program
     .command("exec-policy")
     .description("Show or synchronize requested exec policy with host approvals")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/approvals"));
 
-  execPolicy
-    .command("show")
-    .description("Show the local config policy, host approvals, and effective merge")
-    .option("--json", "Output as JSON", false)
-    .action(async (opts: { json?: boolean }) => {
-      await runExecPolicyAction(async () => {
-        const payload = await buildLocalExecPolicyShowPayload();
-        if (opts.json) {
-          defaultRuntime.writeJson(payload, 0);
-          return;
+  addGatewayClientOptions(
+    execPolicy
+      .command("show")
+      .description("Explain terminal tool access and command approvals (offline unless --session)")
+      .option("--agent <id>", "Agent whose terminal tools to inspect (automatic for one agent)")
+      .option("--session <key>", "Fetch an existing session's tool preview from saved settings")
+      .option("--verbose", "Include policy sources and all command approval scopes", false)
+      .option("--json", "Output as JSON", false),
+  ).action(async (opts: ExecPolicyShowOptions, command: Command) => {
+    await runExecPolicyAction(async () => {
+      const payload = await buildLocalExecPolicyShowPayload(
+        resolveGatewayRpcOptionsWithLocalPort(opts, command),
+      );
+      if (opts.json) {
+        defaultRuntime.writeJson(payload, 0);
+        return;
+      }
+      if (payload.toolAccess) {
+        const scope =
+          payload.effectivePolicy.scopes.find(
+            (candidate) => candidate.scopeLabel === `agent:${payload.toolAccess?.agentId}`,
+          ) ??
+          payload.effectivePolicy.scopes.find(
+            (candidate) => candidate.agentId === payload.toolAccess?.agentId,
+          ) ??
+          payload.effectivePolicy.scopes[0];
+        renderExecPolicyToolAccess({
+          access: payload.toolAccess,
+          approvals: scope,
+          approvalsExists: payload.approvalsExists,
+          verbose: opts.verbose,
+        });
+      } else if (payload.toolAccessSelectionRequired) {
+        const { agentIds, hint } = payload.toolAccessSelectionRequired;
+        const title = `TERMINAL ACCESS — ${agentIds.length ? "SELECT AGENT" : "NO AGENT CONFIGURED"}`;
+        defaultRuntime.log(isRich() ? theme.heading(title) : title);
+        if (agentIds.length > 0) {
+          defaultRuntime.log(
+            `Configured agents: ${agentIds.map(sanitizeExecPolicyTableCell).join(", ")}`,
+          );
         }
+        defaultRuntime.log("");
+        const approvalsTitle = "── COMMAND APPROVALS (LOCAL) ──────────────────";
+        defaultRuntime.log(isRich() ? theme.heading(approvalsTitle) : approvalsTitle);
+        defaultRuntime.log("");
+        defaultRuntime.log(
+          formatExecPolicyCommandApprovals({
+            scopes: payload.effectivePolicy.scopes,
+            approvalsExists: payload.approvalsExists,
+            showScopeLabels: true,
+          }).join("\n"),
+        );
+        defaultRuntime.log("");
+        const nextStep = "── NEXT STEP ─────────────────────────────────";
+        defaultRuntime.log(isRich() ? theme.heading(nextStep) : nextStep);
+        defaultRuntime.log("");
+        defaultRuntime.log(sanitizeExecPolicyTableCell(hint));
+        if (!opts.verbose) {
+          defaultRuntime.log(
+            "Use --verbose for policy sources and detailed command approval scopes.",
+          );
+        }
+      }
+      if (opts.verbose) {
+        defaultRuntime.log("");
         renderExecPolicyShow(payload);
-      });
+      }
     });
+  });
 
   execPolicy
     .command("preset <name>")

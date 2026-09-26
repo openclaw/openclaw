@@ -506,7 +506,7 @@ export function registerDiscordProcessTestLifecycle() {
     ({ discordInboundEventDelivery } = await import("../inbound-event-delivery.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
     runtimeEnvMocks.logVerbose.mockReset();
     runtimeEnvMocks.sleepWithAbort.mockReset().mockResolvedValue(undefined);
@@ -533,10 +533,10 @@ export function registerDiscordProcessTestLifecycle() {
     readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
     resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
     getGlobalHookRunner.mockReturnValue(null);
-    resetThreadBindingsForTests();
+    await resetThreadBindingsForTests();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
   });
 }

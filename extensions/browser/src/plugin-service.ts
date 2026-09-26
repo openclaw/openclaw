@@ -1,12 +1,12 @@
+import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  startLazyPluginServiceModule,
+  type LazyPluginServiceHandle,
+} from "openclaw/plugin-sdk/plugin-runtime";
 /**
  * Browser plugin service factory that lazily starts the control server.
  */
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
-import {
-  startLazyPluginServiceModule,
-  type LazyPluginServiceHandle,
-  type OpenClawPluginService,
-} from "./sdk-node-runtime.js";
 
 type BrowserControlHandle = LazyPluginServiceHandle | null;
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";

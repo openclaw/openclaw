@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
@@ -21,6 +21,7 @@ import {
 import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   isGatewaySubordinateWorkAdmissionClosed,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -31,7 +32,19 @@ import {
   getActiveSessionWorkAdmissionCount,
 } from "../sessions/session-lifecycle-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-write-admission.test-support.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
+import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import { createMainChatSessionStoreFixture } from "./server.chat-session-store.test-support.js";
+import {
+  collectHistoryTextValues,
+  createGatewayHistoryText,
+  createGatewayHistoryMessageToolCall,
+  createGatewayHistoryMessageToolResult,
+  createGatewayHistoryDeliveryMirror,
+  hasGatewayHistoryMessageToolMirror,
+} from "./session-history-fixtures.test-support.js";
 import * as sessionLifecycleState from "./session-lifecycle-state.js";
 import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
@@ -45,49 +58,10 @@ import {
   rpcReq,
   testState,
   trackConnectChallengeNonce,
-  withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
-
-function createGatewayHistoryText(role: "user" | "assistant", text: unknown, timestamp: number) {
-  return { role, content: [{ type: "text", text }], timestamp };
-}
-
-function createGatewayHistoryMessageToolCall(
-  id: string,
-  args: Record<string, unknown>,
-  timestamp: number,
-) {
-  return {
-    role: "assistant",
-    content: [{ type: "toolCall", id, name: "message", arguments: args }],
-    timestamp,
-  };
-}
-
-function createGatewayHistoryMessageToolResult(id: string, content: unknown, timestamp: number) {
-  return { role: "toolResult", toolName: "message", toolCallId: id, content, timestamp };
-}
-
-function createGatewayHistoryDeliveryMirror(text: unknown, timestamp: number) {
-  return {
-    role: "assistant",
-    provider: "openclaw",
-    model: "delivery-mirror",
-    content: [{ type: "text", text }],
-    timestamp,
-  };
-}
-
-function hasGatewayHistoryMessageToolMirror(message: unknown) {
-  return Boolean(
-    message &&
-    typeof message === "object" &&
-    (message as { openclawMessageToolMirror?: unknown }).openclawMessageToolMirror,
-  );
-}
 
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
@@ -108,9 +82,24 @@ installConnectedControlUiServerSuite((started) => {
 });
 
 describe("gateway server chat", () => {
-  beforeEach(() => {
+  let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
+  beforeEach(async () => {
     dispatchInboundMessageMock.mockReset();
+    requestExecution = await observeGatewayRunExecution();
   });
+  afterEach(async () => {
+    try {
+      await settleGatewayFixture();
+    } finally {
+      await requestExecution.restore();
+    }
+  });
+  const settleGatewayFixture = async () => {
+    await requestExecution.waitForCompletion();
+    await drainOpenClawAgentWriteQueuesForTest();
+    await flushPendingSessionsChangedEvents();
+    expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
+  };
 
   const loadChatHistoryWithMessages = async (
     messages: Array<Record<string, unknown>>,
@@ -143,45 +132,10 @@ describe("gateway server chat", () => {
     );
   };
 
-  const withMainSessionStore = async <T>(
-    run: (dir: string) => Promise<T>,
-    options?: { archivedAt?: number; sessionId?: string },
-  ): Promise<T> => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    try {
-      const sessionId = options?.sessionId ?? "sess-main";
-      testState.sessionStorePath = path.join(dir, "sessions.json");
-      await writeSessionStore({
-        entries: {
-          main: {
-            sessionId,
-            sessionFile: path.join(dir, `${sessionId}.jsonl`),
-            updatedAt: Date.now(),
-            ...(options?.archivedAt !== undefined ? { archivedAt: options.archivedAt } : {}),
-          },
-        },
-      });
-      return await run(dir);
-    } finally {
-      // Dispatch can outlive its RPC; keep its store selected until retained work settles.
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      testState.sessionStorePath = undefined;
-      await removeTempDir(dir);
-    }
-  };
-
-  const collectHistoryTextValues = (historyMessages: unknown[]) =>
-    historyMessages
-      .map((message) => {
-        if (message && typeof message === "object") {
-          const entry = message as { text?: unknown };
-          if (typeof entry.text === "string") {
-            return entry.text;
-          }
-        }
-        return extractFirstTextBlock(message);
-      })
-      .filter((value): value is string => typeof value === "string");
+  const mainSessionStore = createMainChatSessionStoreFixture(settleGatewayFixture);
+  beforeAll(mainSessionStore.prepare);
+  afterAll(mainSessionStore.dispose);
+  const withMainSessionStore = mainSessionStore.run;
 
   const expectRecordFields = (value: unknown, expected: Record<string, unknown>) => {
     if (!value || typeof value !== "object") {
@@ -388,9 +342,8 @@ describe("gateway server chat", () => {
         expect(subordinateAdmissionClosed).toBe(false);
       });
       await finalPromise;
-      await waitForFast(() => {
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-      });
+      await requestExecution.waitForCompletion("idem-chat-detached-root");
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
     });
   });
 
@@ -642,7 +595,8 @@ describe("gateway server chat", () => {
     return res;
   };
   const waitForAgentRunDrained = async (runId: string) => {
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await requestExecution.waitForCompletion(runId);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
     await waitForAgentRunOk(runId, 0);
   };
   const abortChatRun = async (runId: string) => {
@@ -722,7 +676,7 @@ describe("gateway server chat", () => {
         expect(collectHistoryTextValues(users)).toEqual([message]);
       } finally {
         // A failed ACK assertion must not retire storage before detached work finishes.
-        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await settleGatewayFixture();
         testState.sessionStorePath = undefined;
         await removeTempDir(dir);
       }
@@ -803,7 +757,9 @@ describe("gateway server chat", () => {
       });
       expect(res.ok).toBe(false);
       await waitForFast(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await requestExecution.waitForCompletion("idem-chat-interrupt-throw-old");
+      await requestExecution.waitForCompletion("idem-chat-interrupt-throw-new");
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
 
       const reset = await rpcReq(ws, "sessions.reset", { key: "main", reason: "new" });
       expect(reset.ok).toBe(true);
@@ -836,7 +792,8 @@ describe("gateway server chat", () => {
 
         expect(res.ok).toBe(false);
         await waitForFast(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
-        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await requestExecution.waitForCompletion("idem-chat-interrupt-non-reply-throw");
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
 
         const reset = await rpcReq(ws, "sessions.reset", { key: "main", reason: "new" });
         expect(reset.ok).toBe(true);
@@ -936,8 +893,8 @@ describe("gateway server chat", () => {
       ).toBeTypeOf("string");
       await waitForAgentRunDrained("idem-sessions-send-orion");
     } finally {
+      await settleGatewayFixture();
       testState.agentsConfig = undefined;
-      testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
   });
@@ -1011,9 +968,10 @@ describe("gateway server chat", () => {
       } else {
         expect(abortRes.payload?.abortedRunId).toBeNull();
       }
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await requestExecution.waitForCompletion("idem-sessions-abort-1");
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
-      testState.sessionStorePath = undefined;
+      await settleGatewayFixture();
       await removeTempDir(dir);
     }
   });
@@ -1047,9 +1005,10 @@ describe("gateway server chat", () => {
       if (abortRes.payload?.status === "aborted") {
         expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-runid-1");
       }
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await requestExecution.waitForCompletion("idem-sessions-abort-runid-1");
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
-      testState.sessionStorePath = undefined;
+      await settleGatewayFixture();
       await removeTempDir(dir);
     }
   });
@@ -1202,8 +1161,10 @@ describe("gateway server chat", () => {
       expect(agentAllowedRes.ok).toBe(true);
       expect(agentAllowedRes.payload?.status).toBe("accepted");
       expect(agentAllowedRes.payload?.runId).toBe("idem-2");
-      await waitForFast(() => expect(agentCommandMock).toHaveBeenCalled());
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await requestExecution.waitForCompletion("idem-2");
+      expect(agentCommandMock).toHaveBeenCalled();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      await drainOpenClawAgentWriteQueuesForTest();
 
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
@@ -1299,6 +1260,7 @@ describe("gateway server chat", () => {
       expect(defaultMsgs.length).toBe(200);
       expect(extractFirstTextBlock(defaultMsgs[0])).toBe("m1");
     } finally {
+      await settleGatewayFixture();
       Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
@@ -2220,55 +2182,53 @@ describe("gateway server chat", () => {
       expect(historyRes.payload?.thinkingLevel).toBe("minimal");
       expect(historyRes.payload?.sessionInfo?.thinkingLevel).toBeUndefined();
     } finally {
+      await settleGatewayFixture();
       Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
-      testState.sessionStorePath = undefined;
       await removeTempDir(dir);
     }
   });
 
   test("chat.send does not persist verboseLevel for operator.write callers", async () => {
-    await withGatewayServer(async ({ port: portValue }) => {
-      await withMainSessionStore(async () => {
-        let scopedWs: WebSocket | undefined;
+    await withMainSessionStore(async () => {
+      let scopedWs: WebSocket | undefined;
 
-        try {
-          scopedWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
-          trackConnectChallengeNonce(scopedWs);
-          await new Promise<void>((resolve) => {
-            scopedWs?.once("open", resolve);
-          });
-          await connectOk(scopedWs, {
-            scopes: ["operator.write"],
-          });
+      try {
+        scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+        trackConnectChallengeNonce(scopedWs);
+        await new Promise<void>((resolve) => {
+          scopedWs?.once("open", resolve);
+        });
+        await connectOk(scopedWs, {
+          scopes: ["operator.write"],
+        });
 
-          const sendRes = await rpcReq(scopedWs, "chat.send", {
-            sessionKey: "main",
-            message: "/verbose full",
-            idempotencyKey: "idem-write-scope-verbose-no-persist",
-          });
-          expect(sendRes.ok).toBe(true);
+        const sendRes = await rpcReq(scopedWs, "chat.send", {
+          sessionKey: "main",
+          message: "/verbose full",
+          idempotencyKey: "idem-write-scope-verbose-no-persist",
+        });
+        expect(sendRes.ok).toBe(true);
 
-          const waitRes = await rpcReq(scopedWs, "agent.wait", {
-            runId: "idem-write-scope-verbose-no-persist",
-            timeoutMs: 1_000,
-          });
-          expect(waitRes.ok).toBe(true);
-          expect(waitRes.payload?.status).toBe("ok");
+        const waitRes = await rpcReq(scopedWs, "agent.wait", {
+          runId: "idem-write-scope-verbose-no-persist",
+          timeoutMs: 1_000,
+        });
+        expect(waitRes.ok).toBe(true);
+        expect(waitRes.payload?.status).toBe("ok");
 
-          const sessionStorePath = testState.sessionStorePath;
-          if (!sessionStorePath) {
-            throw new Error("session store path was not initialized");
-          }
-          expect(
-            loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath })
-              ?.verboseLevel,
-          ).toBeUndefined();
-        } finally {
-          scopedWs?.close();
+        const sessionStorePath = testState.sessionStorePath;
+        if (!sessionStorePath) {
+          throw new Error("session store path was not initialized");
         }
-      });
+        expect(
+          loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath })
+            ?.verboseLevel,
+        ).toBeUndefined();
+      } finally {
+        scopedWs?.close();
+      }
     });
   });
 
@@ -2282,12 +2242,7 @@ describe("gateway server chat", () => {
       });
       expect(sendRes.ok).toBe(true);
 
-      const waitRes = await rpcReq(ws, "agent.wait", {
-        runId: "idem-chat-thinking-no-persist",
-        timeoutMs: 1_000,
-      });
-      expect(waitRes.ok).toBe(true);
-      expect(waitRes.payload?.status).toBe("ok");
+      await waitForAgentRunDrained("idem-chat-thinking-no-persist");
 
       const sessionStorePath = testState.sessionStorePath;
       if (!sessionStorePath) {
@@ -2406,11 +2361,11 @@ describe("gateway server chat", () => {
     },
   );
 
-  test("agent.wait resolves chat.send runs that finish without lifecycle events", async () => {
+  test("agent.wait reads completed chat.send runs without lifecycle events", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-1";
       await sendChatAndExpectStarted(runId);
-      await waitForAgentRunOk(runId);
+      await waitForAgentRunDrained(runId);
     });
   });
 
@@ -2423,6 +2378,7 @@ describe("gateway server chat", () => {
       return undefined;
     });
 
+    const runId = "idem-wait-chat-vs-agent";
     try {
       testState.sessionStorePath = path.join(dir, "sessions.json");
       await writeSessionStore({
@@ -2434,9 +2390,8 @@ describe("gateway server chat", () => {
         },
       });
 
-      const runId = "idem-wait-chat-vs-agent";
       await sendChatAndExpectStarted(runId);
-      await waitForAgentRunOk(runId);
+      await waitForAgentRunDrained(runId);
 
       const agentRes = await rpcReq(ws, "agent", {
         sessionKey: "main",
@@ -2453,10 +2408,10 @@ describe("gateway server chat", () => {
       expectAgentWaitTimeout(waitWhileAgentInFlight);
 
       resolveAgentRun?.();
-      await waitForAgentRunOk(runId);
+      await waitForAgentRunDrained(runId);
     } finally {
       resolveAgentRun?.();
-      testState.sessionStorePath = undefined;
+      await settleGatewayFixture();
       await removeTempDir(dir);
     }
   });
@@ -2476,20 +2431,23 @@ describe("gateway server chat", () => {
         await releaseDispatch.promise;
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
       });
-      const fixture = withMainSessionStore(async (dir) => {
-        fixtureDir = dir;
-        storePath = path.join(dir, "sessions.json");
-        try {
-          await sendChatAndExpectStarted(runId, "hold fixture dispatch open");
-          await dispatchStarted.promise;
-          if (outcome === "throw") {
-            throw callbackError;
+      const fixture = withMainSessionStore(
+        async (dir) => {
+          fixtureDir = dir;
+          storePath = path.join(dir, "sessions.json");
+          try {
+            await sendChatAndExpectStarted(runId, "hold fixture dispatch open");
+            await dispatchStarted.promise;
+            if (outcome === "throw") {
+              throw callbackError;
+            }
+            return "fixture result";
+          } finally {
+            callbackFinished.resolve();
           }
-          return "fixture result";
-        } finally {
-          callbackFinished.resolve();
-        }
-      });
+        },
+        { freshStore: true },
+      );
       const completion = Promise.allSettled([fixture]);
       try {
         await callbackFinished.promise;
@@ -2503,7 +2461,7 @@ describe("gateway server chat", () => {
       } finally {
         releaseDispatch.resolve();
         await completion;
-        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await settleGatewayFixture();
       }
       expect(await completion).toEqual([
         outcome === "throw"
@@ -2532,6 +2490,7 @@ describe("gateway server chat", () => {
       });
       expect(seedWaitRes.ok).toBe(true);
       expect(seedWaitRes.payload?.status).toBe("ok");
+      await requestExecution.waitForCompletion(runId);
 
       const releaseBlockedReply = mockBlockedChatReply();
 
@@ -2784,6 +2743,7 @@ describe("gateway server chat", () => {
         expect(res.payload?.endedAt).toBe(456);
       }
     } finally {
+      await settleGatewayFixture();
       webchatWs.close();
       await removeTempDir(dir);
       testState.sessionStorePath = undefined;

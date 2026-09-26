@@ -164,11 +164,6 @@
   overflow: visible;
 }
 
-.markdown-table :where(th, td) {
-  overflow-wrap: normal;
-  word-break: normal;
-}
-
 .markdown-table__viewport {
   max-width: 100%;
   overflow-x: auto;
@@ -205,7 +200,7 @@
   display: flex;
   justify-content: flex-end;
   gap: 4px;
-  margin-block: 4px 8px;
+  margin-bottom: 4px;
 }
 
 .markdown-table__actions button,
@@ -219,6 +214,15 @@
   color: var(--text);
   cursor: var(--cursor-action);
   place-items: center;
+}
+
+.markdown-table__actions .markdown-table__expand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  font: inherit;
+  font-size: 12px;
 }
 
 .markdown-table__actions button:hover,
@@ -252,7 +256,7 @@
 .markdown-table-dialog {
   width: 100%;
   max-height: calc(100dvh - 64px);
-  padding: 20px 28px;
+  padding: 0 28px 20px;
   border: 0;
   border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--bg) 96%, transparent);
@@ -325,8 +329,11 @@
   font-weight: 500;
 }
 
+/* Auto layout gives prose more space than short values, then wraps it. */
 :is(.markdown-table, .markdown-table-dialog.chat-text) :where(table) {
   display: table;
+  width: 100%;
+  table-layout: auto;
   margin: 0;
   border: 0;
   border-collapse: collapse;
@@ -335,9 +342,15 @@
   overflow: visible;
 }
 
-.chat-thread .chat-bubble .chat-text :where(table) {
+/* Many-column comparisons keep useful column widths instead of wrapping a
+   notes column into a word per line. Short numeric columns still fit naturally. */
+:is(.markdown-table, .markdown-table-dialog.chat-text) table:has(tr > :nth-child(5)) {
   width: max-content;
   min-width: 100%;
+
+  :where(th, td) {
+    max-width: 24rem;
+  }
 }
 
 :is(.markdown-table, .markdown-table-dialog.chat-text) :where(table, thead, tbody, tr, th, td) {
@@ -348,9 +361,11 @@
   padding-block: 12px;
   border-right: 0;
   border-bottom-color: color-mix(in srgb, var(--border) 42%, transparent);
-  overflow-wrap: break-word;
+  min-width: 0;
+  overflow-wrap: anywhere;
   white-space: normal;
   word-break: normal;
+  vertical-align: top;
 }
 
 :is(.markdown-table, .markdown-table-dialog.chat-text) :where(th:first-child, td:first-child) {
@@ -360,7 +375,6 @@
 :is(.markdown-table, .markdown-table-dialog.chat-text) :where(th) {
   border-bottom-color: var(--border-strong);
   background: transparent;
-  white-space: nowrap;
 }
 
 :is(.markdown-table, .markdown-table-dialog.chat-text) :where(tbody tr) {
@@ -370,6 +384,95 @@
 :is(.markdown-table, .markdown-table-dialog.chat-text)
   :where(tbody tr:nth-child(even), tbody tr:hover) {
   background: transparent;
+}
+
+.markdown-table-dialog.chat-text :where(thead) {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  box-shadow: 0 1px var(--border-strong);
+}
+
+/* The transcript, not the window, owns spare width (including split panes).
+   Only top-level assistant tables borrow it; prose and nested tables stay put. */
+@container chat-transcript (min-width: 900px) {
+  .chat-virtual-row {
+    --chat-table-outset: max(
+      0px,
+      min(
+        12rem,
+        calc(
+          (100cqw - var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-gutter) -
+              2 * var(--chat-thread-side-inset)) /
+            2
+        )
+      )
+    );
+  }
+
+  .chat-virtual-row:has(.chat-group.assistant .chat-bubble > .chat-text > .markdown-table) {
+    /* Match the maximum outset: overflow-clip-margin does not support calc(). */
+    overflow-clip-margin: 12rem;
+  }
+
+  .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
+    width: calc(100% + 2 * var(--chat-table-outset, 0px));
+    max-width: none;
+    margin-inline: calc(-1 * var(--chat-table-outset, 0px));
+  }
+
+  /* Keep the existing phone-landscape layout, including its touch controls. */
+  @media not all and (max-width: 932px) and (max-height: 500px) {
+    .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
+      width: max-content;
+      min-width: 100%;
+      max-width: calc(100% + 2 * var(--chat-table-outset, 0px));
+      margin-inline: 0;
+      margin-bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+
+      &:dir(rtl) {
+        left: auto;
+        right: 50%;
+        transform: translateX(50%);
+      }
+
+      /* Intrinsic content chooses the width; the pane cap then lets cells wrap. */
+      table {
+        width: 100%;
+        min-width: 100%;
+      }
+
+      :where(th, td) {
+        max-width: 24rem;
+        overflow-wrap: break-word;
+      }
+
+      .markdown-table__actions {
+        margin-bottom: 0;
+      }
+
+      .markdown-table__actions button {
+        width: 32px;
+        height: 32px;
+        padding: 8px;
+      }
+
+      .markdown-table__expand > span {
+        display: none;
+      }
+    }
+  }
+
+  @supports not (overflow-clip-margin: 12rem) {
+    .chat-virtual-row:has(.chat-group.assistant .chat-bubble > .chat-text > .markdown-table) {
+      /* WebKit supports content-visibility without an adjustable paint clip.
+         Keep mounted wide-table rows visible; transcript virtualization remains. */
+      content-visibility: visible;
+    }
+  }
 }
 
 :is(.chat-text, .chat-thinking) {

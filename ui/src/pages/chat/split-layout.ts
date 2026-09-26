@@ -25,13 +25,9 @@ export function singlePaneLayout(
 
 const MIN_PAIR_SHARE = 0.15;
 
-export function splitWeight(weights: number[], index: number, context: string): number {
-  return expectDefined(weights[index], context);
-}
-
 export function splitRatio(weights: number[], index: number, context: string): number {
-  const before = splitWeight(weights, index, `${context} before divider`);
-  const after = splitWeight(weights, index + 1, `${context} after divider`);
+  const before = expectDefined(weights[index], `${context} before divider`);
+  const after = expectDefined(weights[index + 1], `${context} after divider`);
   return before / (before + after);
 }
 

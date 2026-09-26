@@ -17,12 +17,8 @@ import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
-import type {
-  CommandRunner,
-  RunStepOptions,
-  UpdateRunnerOptions,
-  UpdateStepResult,
-} from "./update-runner-types.js";
+import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const UNVERIFIED_GIT_CORRUPTION =
   /(?:in the commit graph file but not in the object database|probably due to repo corruption)/iu;
@@ -145,16 +141,16 @@ export async function withGitTargetInspectionRoot<T>(
     const shallow = normalizeGitPathForFilesystem(
       (await command(params.root, ["rev-parse", "--git-path", "shallow"])).trim(),
     );
-    const refs = await command(params.root, [
-      "for-each-ref",
-      "--format=update %(refname) %(objectname)",
-    ]);
+    const refs = await command(params.root, ["for-each-ref", "--format=%(objectname) %(refname)"]);
     // Git transports shallow clones instead of sharing their object store, which
     // cannot serve absent promised objects. Snapshot refs and the shallow boundary
     // privately, then let the original remotes hydrate only this inspection repo.
     await command(params.root, ["init", "--bare", "--template=", inspectionRoot], false, {
       ...(params.work ?? { timeoutMs: params.timeoutMs }),
-      env: { GIT_DEFAULT_HASH: head.length === 64 ? "sha256" : "sha1" },
+      env: {
+        GIT_DEFAULT_HASH: head.length === 64 ? "sha256" : "sha1",
+        GIT_DEFAULT_REF_FORMAT: "files",
+      },
     });
     await fs.writeFile(
       path.join(inspectionRoot, "objects", "info", "alternates"),
@@ -167,10 +163,47 @@ export async function withGitTargetInspectionRoot<T>(
           throw error;
         }
       });
-    await command(inspectionRoot, ["update-ref", "--stdin"], false, {
-      timeoutMs: params.timeoutMs,
-      input: refs,
-    });
+    const objectIds = new Set<string>();
+    const branchObjects = new Set<string>();
+    for (const ref of refs.trim().split("\n").filter(Boolean)) {
+      const separator = ref.indexOf(" ");
+      const oid = ref.slice(0, separator);
+      objectIds.add(oid);
+      if (ref.slice(separator + 1).startsWith("refs/heads/")) {
+        branchObjects.add(oid);
+      }
+    }
+    if (objectIds.size > 0) {
+      const ids = [...objectIds];
+      // ^{object} retains update-ref's native object parsing, including malformed
+      // commits. Probe privately so promised objects cannot hydrate the source.
+      const checked = await command(
+        inspectionRoot,
+        ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        false,
+        {
+          timeoutMs: params.timeoutMs,
+          input: ids.map((oid) => `${oid}^{object}\n`).join(""),
+        },
+      );
+      const checkedObjects = checked.trimEnd().split("\n");
+      if (
+        checkedObjects.length !== ids.length ||
+        ids.some(
+          (oid, index) =>
+            !["commit", "tree", "blob", "tag"].some(
+              (type) =>
+                checkedObjects[index] === `${oid} ${type}` &&
+                (!branchObjects.has(oid) || type === "commit"),
+            ),
+        )
+      ) {
+        throw new Error("Git target inspection references an invalid object");
+      }
+    }
+    // One packed snapshot avoids a loose file and lock for every installed ref.
+    // Omit peeled/sorted headers: Git owns tag peeling and reference ordering.
+    await fs.writeFile(path.join(inspectionRoot, "packed-refs"), refs);
     await command(
       inspectionRoot,
       headRef ? ["symbolic-ref", "HEAD", headRef] : ["update-ref", "--no-deref", "HEAD", head],
@@ -331,15 +364,17 @@ export async function readBranchName(
   return branch || null;
 }
 
-async function listGitTags(
+async function resolveChannelTag(
   runCommand: CommandRunner,
   root: string,
   timeoutMs: number,
-): Promise<string[]> {
+  channel: Exclude<UpdateChannel, "dev">,
+): Promise<string | null> {
   const result = await runCommand(["git", "-C", root, "tag", "--list", "v*", "--sort=-v:refname"], {
     timeoutMs,
   }).catch(() => null);
-  return result?.code === 0 ? normalizeStringEntries(result.stdout.split("\n")) : [];
+  const tags = result?.code === 0 ? normalizeStringEntries(result.stdout.split("\n")) : [];
+  return selectChannelTag(tags, channel);
 }
 
 /**
@@ -500,16 +535,6 @@ export async function fetchGitUpdateTarget(params: {
     ),
   );
   return result(tags.exitCode === 0 && !isFailedUpdateStep(tags));
-}
-
-async function resolveChannelTag(
-  runCommand: CommandRunner,
-  root: string,
-  timeoutMs: number,
-  channel: Exclude<UpdateChannel, "dev">,
-): Promise<string | null> {
-  const tags = await listGitTags(runCommand, root, timeoutMs);
-  return selectChannelTag(tags, channel);
 }
 
 export function selectChannelTag(

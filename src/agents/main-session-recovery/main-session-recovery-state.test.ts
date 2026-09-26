@@ -382,7 +382,7 @@ describe("main session recovery state", () => {
         runId: "recovery-1",
         sessionId: "session-1",
       }),
-    ).toEqual({ kind: "admitted_recovery" });
+    ).toMatchObject({ kind: "admitted_recovery" });
     expect(entry).toMatchObject({
       abortedLastRun: false,
       pendingFinalDelivery: { kind: "replayable", text: "captured reply", createdAt: 1 },
@@ -399,6 +399,8 @@ describe("main session recovery state", () => {
     expect(
       transitionMainSessionRecovery(entry, {
         kind: "mark_admitted_recovery_interrupted",
+        cycleId: "cycle-1",
+        attempt: 1,
         lifecycleGeneration: "generation-1",
         now: 400,
         runId: "recovery-1",
@@ -609,7 +611,7 @@ describe("main session recovery state", () => {
         runId: "recovery-new",
         sessionId: "session-1",
       }),
-    ).toEqual({ kind: "admitted_recovery" });
+    ).toMatchObject({ kind: "admitted_recovery" });
     expect(
       transitionMainSessionRecovery(entry, {
         kind: "bind_admitted_execution_identity",

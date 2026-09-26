@@ -95,11 +95,7 @@ export async function restoreCredsFromBackupIfNeeded(
   try {
     const credsPath = resolveWebCredsPath(authDir);
     const backupPath = resolveWebCredsBackupPath(authDir);
-    try {
-      await assertWebCredsPathRegularFileOrMissing(credsPath);
-    } catch {
-      return false;
-    }
+    await assertWebCredsPathRegularFileOrMissing(credsPath);
     const raw = readCredsJsonRaw(credsPath);
     if (raw && isValidJson(raw)) {
       return false;
@@ -136,25 +132,7 @@ export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()
   const resolvedAuthDir = resolveUserPath(authDir);
   const credsPath = resolveWebCredsPath(resolvedAuthDir);
   const raw = await readWebCredsJsonRaw(credsPath);
-  if (!raw) {
-    return false;
-  }
-  try {
-    JSON.parse(raw);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function resolveWebAuthState(params: {
-  linked: boolean;
-  barrierResult: CredsQueueWaitResult;
-}): WhatsAppWebAuthState {
-  if (params.barrierResult === "timed_out") {
-    return "unstable";
-  }
-  return params.linked ? "linked" : "not-linked";
+  return raw !== null && isValidJson(raw);
 }
 
 async function readWebAuthStateCore(
@@ -167,7 +145,7 @@ async function readWebAuthStateCore(
   return {
     authDir: resolvedAuthDir,
     linked,
-    state: resolveWebAuthState({ linked, barrierResult }),
+    state: barrierResult === "timed_out" ? "unstable" : linked ? "linked" : "not-linked",
   };
 }
 

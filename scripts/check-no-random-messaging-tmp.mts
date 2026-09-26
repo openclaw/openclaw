@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Blocks host-random tmpdir usage in messaging/channel runtime sources.
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { runCallsiteGuard } from "./lib/callsite-guard.mts";
 import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mts";
 import {
@@ -58,10 +58,13 @@ function collectOsTmpdirImports(sourceFile: ts.SourceFile) {
 /**
  * Finds `os.tmpdir()` or imported `tmpdir()` call lines in source.
  */
-export function findMessagingTmpdirCallLines(content: string, fileName = "source.ts"): number[] {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+export function findMessagingTmpdirCallLines(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+): number[] {
   const { osNamespaceOrDefault, namedTmpdir } = collectOsTmpdirImports(sourceFile);
-  return collectCallExpressionLines(ts, sourceFile, (node) => {
+  return collectCallExpressionLines(sourceFile, (node) => {
     const callee = unwrapExpression(node.expression);
     if (
       ts.isPropertyAccessExpression(callee) &&

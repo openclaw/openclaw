@@ -59,7 +59,7 @@ suite.define(() => {
           await expect
             .poll(() => picker.locator('[role="option"][data-value="fixture/old"]').count())
             .toBe(1);
-          await page.keyboard.press("Control+K");
+          await page.keyboard.press("ControlOrMeta+K");
           const palette = page.locator(".cmd-palette");
           await page.locator(".cmd-palette__input").fill("needle");
           await palette.getByText("Needle old", { exact: true }).waitFor();
@@ -105,7 +105,7 @@ suite.define(() => {
           await page.screenshot({
             path: path.join(suite.artifactDir, `internal-catalog-automations-${hasRows}.png`),
           });
-          await page.keyboard.press("Control+K");
+          await page.keyboard.press("ControlOrMeta+K");
           await page.locator(".cmd-palette__input").fill("needle");
           await palette
             .locator(".cmd-palette__search")

@@ -329,9 +329,10 @@ describe("native declaration preparation", () => {
           `#!/usr/bin/env node
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
-const result = spawnSync(${JSON.stringify(f.native)}, process.argv.slice(2), { stdio: "inherit" });
+const args = process.argv.slice(2);
+const result = spawnSync(${JSON.stringify(f.native)}, args, { stdio: "inherit" });
 if (result.status !== 0) process.exit(result.status ?? 1);
-if (fs.existsSync(${JSON.stringify(trigger)})) fs.appendFileSync(${JSON.stringify(source)}, "\\n");
+if (args.includes("--emitDeclarationOnly") && fs.existsSync(${JSON.stringify(trigger)})) fs.appendFileSync(${JSON.stringify(source)}, "\\n");
 `,
         );
         fs.chmodSync(launcher, 0o755);

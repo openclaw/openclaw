@@ -5,6 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  filterStringEntries,
+  sortUniqueStrings,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
@@ -100,17 +105,10 @@ function readJitiBooleanEnv(name: string, defaultValue: boolean): boolean {
   }
 }
 
-function shouldUseJitiFsCache(): boolean {
-  return readJitiBooleanEnv("JITI_FS_CACHE", readJitiBooleanEnv("JITI_CACHE", true));
-}
-
 function resolvePluginLoaderJitiNativeModules(): string[] {
   try {
     const configured: unknown = JSON.parse(process.env.JITI_NATIVE_MODULES ?? "[]");
-    const nativeModules = Array.isArray(configured)
-      ? configured.filter((entry): entry is string => typeof entry === "string")
-      : [];
-    return [...new Set([...nativeModules, "openclaw"])];
+    return uniqueStrings([...filterStringEntries(configured), "openclaw"]);
   } catch {
     return ["openclaw"];
   }
@@ -175,12 +173,6 @@ function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolveParams = {
   );
 }
 
-function resolvePluginLoaderJitiFsCacheOption(
-  params: LoaderModuleResolveParams = {},
-): false | string {
-  return shouldUseJitiFsCache() ? resolvePluginLoaderJitiFsCacheDir(params) : false;
-}
-
 function isSafePluginSdkSubpathSegment(subpath: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath);
 }
@@ -227,10 +219,7 @@ function readPluginSdkSubpathsFromPackageRoot(packageRoot: string): string[] | n
     return facts.exportedSubpaths;
   }
   const pkg = readPluginSdkPackageJson(packageRoot);
-  if (!pkg) {
-    return (facts.exportedSubpaths = null);
-  }
-  if (!hasTrustedOpenClawRootIndicator({ packageRoot, packageJson: pkg })) {
+  if (!pkg || !hasTrustedOpenClawRootIndicator({ packageRoot, packageJson: pkg })) {
     return (facts.exportedSubpaths = null);
   }
   const subpaths = listPluginSdkSubpathsFromPackageJson(pkg);
@@ -291,50 +280,17 @@ export function resolveLoaderPackageRoot(
   });
 }
 
-function createPluginRuntimeModuleCandidateMap(packageRoot: string) {
-  return {
-    src: path.join(packageRoot, "src", "plugins", "runtime", "index.ts"),
-    dist: path.join(packageRoot, "dist", "plugins", "runtime", "index.js"),
-  } as const;
-}
-
-function appendPluginRuntimeModuleCandidates(
-  candidates: string[],
+function listPluginRuntimeModuleCandidates(
   packageRoot: string,
   orderedKinds: readonly PluginSdkAliasCandidateKind[],
-): void {
-  const candidateMap = createPluginRuntimeModuleCandidateMap(packageRoot);
-  for (const kind of orderedKinds) {
-    candidates.push(candidateMap[kind]);
-  }
-}
-
-function appendSiblingPluginRuntimeModuleCandidates(
-  candidates: string[],
-  runtimeDir: string,
-  orderedKinds: readonly PluginSdkAliasCandidateKind[],
-): void {
-  const candidateMap = {
-    src: path.join(runtimeDir, "index.ts"),
-    dist: path.join(runtimeDir, "index.js"),
-  } as const;
-  for (const kind of orderedKinds) {
-    candidates.push(candidateMap[kind]);
-  }
+): string[] {
+  return orderedKinds.map((kind) =>
+    path.join(packageRoot, kind, "plugins", "runtime", kind === "src" ? "index.ts" : "index.js"),
+  );
 }
 
 function dedupeResolvedPaths(paths: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const deduped: string[] = [];
-  for (const candidate of paths) {
-    const resolved = path.resolve(candidate);
-    if (seen.has(resolved)) {
-      continue;
-    }
-    seen.add(resolved);
-    deduped.push(resolved);
-  }
-  return deduped;
+  return uniqueStrings(paths.map((candidate) => path.resolve(candidate)));
 }
 
 function listAncestorPluginRuntimeModuleCandidates(params: {
@@ -350,7 +306,7 @@ function listAncestorPluginRuntimeModuleCandidates(params: {
     let cursor = path.resolve(start);
     const maxDepth = params.maxDepth ?? 12;
     for (let i = 0; i < maxDepth; i += 1) {
-      appendPluginRuntimeModuleCandidates(candidates, cursor, params.orderedKinds);
+      candidates.push(...listPluginRuntimeModuleCandidates(cursor, params.orderedKinds));
       const parent = path.dirname(cursor);
       if (parent === cursor) {
         break;
@@ -522,14 +478,13 @@ function resolvePackageExportImportPath(value: unknown): string | null {
   if (typeof value === "string") {
     return value;
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const record = value as Record<string, unknown>;
-  return typeof record.import === "string"
-    ? record.import
-    : typeof record.default === "string"
-      ? record.default
+  return typeof value.import === "string"
+    ? value.import
+    : typeof value.default === "string"
+      ? value.default
       : null;
 }
 
@@ -584,21 +539,11 @@ export function listWorkspacePackageExportAliasEntries(params: {
   if (cached) {
     return cached;
   }
-  const packageJsonPath = path.join(
-    params.packageRoot,
-    "packages",
-    params.packageDir,
-    "package.json",
+  const packageJson = readPluginSdkPackageJson(
+    path.join(params.packageRoot, "packages", params.packageDir),
   );
-  const packageJson = readPluginSdkPackageJson(path.dirname(packageJsonPath));
-  const exports = packageJson?.exports;
-  if (!exports || typeof exports !== "object" || Array.isArray(exports)) {
-    const entries = listRootPackagedWorkspacePackageAliasEntries(params);
-    cache.set(key, entries);
-    return entries;
-  }
   const entries: WorkspacePackageAliasEntry[] = [];
-  for (const [exportKey, value] of Object.entries(exports)) {
+  for (const [exportKey, value] of Object.entries(packageJson?.exports ?? {})) {
     const subpath = normalizePackageExportSubpath(exportKey);
     const importPath = resolvePackageExportImportPath(value);
     if (subpath === null || !importPath?.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
@@ -668,35 +613,18 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
   const parsed = readSdkJsonFile(
     path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
   );
-  return (facts.privateSubpaths = [
-    ...new Set([
-      CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
-      NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH,
-      CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
-      ...(Array.isArray(parsed)
-        ? parsed.filter(
-            (subpath): subpath is string =>
-              typeof subpath === "string" && isSafePluginSdkSubpathSegment(subpath),
-          )
-        : []),
-    ]),
-  ]);
+  return (facts.privateSubpaths = uniqueStrings([
+    CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+    NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH,
+    CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
+    ...filterStringEntries(parsed).filter(isSafePluginSdkSubpathSegment),
+  ]));
 }
 
 function readBundledPluginPackageName(packageJsonPath: string): string | null {
   const parsed = readPluginSdkPackageJson(path.dirname(packageJsonPath));
   const name = typeof parsed?.name === "string" ? parsed.name.trim() : "";
   return name.startsWith("@openclaw/") ? name : null;
-}
-
-function isBundledPluginPublicSurfaceSourceBasename(params: {
-  basename: string;
-  includePrivateQa: boolean;
-}): boolean {
-  if (params.basename === "test-api") {
-    return params.includePrivateQa;
-  }
-  return BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN.test(params.basename);
 }
 
 function listBundledPluginPublicSurfaceSourceBasenames(params: {
@@ -715,10 +643,8 @@ function listBundledPluginPublicSurfaceSourceBasenames(params: {
           return [];
         }
         const basename = fileName.slice(0, -ext.length);
-        return isBundledPluginPublicSurfaceSourceBasename({
-          basename,
-          includePrivateQa: params.includePrivateQa,
-        })
+        return (basename !== "test-api" || params.includePrivateQa) &&
+          BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN.test(basename)
           ? [basename]
           : [];
       })
@@ -735,26 +661,14 @@ function resolveBundledPluginPublicSurfaceAliasTarget(params: {
   orderedKinds: PluginSdkAliasCandidateKind[];
 }): string | null {
   for (const kind of params.orderedKinds) {
-    if (kind === "dist") {
-      const candidate = path.join(
-        params.packageRoot,
-        "dist",
-        "extensions",
-        params.dirName,
-        `${params.basename}.js`,
-      );
-      if (pluginCacheExistsSync(candidate)) {
-        return candidate;
-      }
-      continue;
-    }
-    for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
-      const candidate = path.join(
-        params.packageRoot,
-        "extensions",
-        params.dirName,
-        `${params.basename}${ext}`,
-      );
+    const root = path.join(
+      params.packageRoot,
+      ...(kind === "dist" ? ["dist"] : []),
+      "extensions",
+      params.dirName,
+    );
+    for (const ext of kind === "dist" ? [".js"] : PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+      const candidate = path.join(root, `${params.basename}${ext}`);
       if (pluginCacheExistsSync(candidate)) {
         return candidate;
       }
@@ -880,10 +794,6 @@ function resolveWorkspacePackageAliasMap(
   return aliasMap;
 }
 
-function shouldIncludePrivateLocalOnlyPluginSdkSubpaths() {
-  return process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
-}
-
 function isBundledPluginModulePath(params: {
   packageRoot: string;
   modulePath: string;
@@ -967,12 +877,6 @@ function isTrustedPrivatePluginSdkOwnerPath(params: {
     : false;
 }
 
-function findPrivatePluginSdkSubpathOwners(
-  subpath: string,
-): readonly PrivatePluginSdkSubpathOwner[] {
-  return PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.filter((owner) => owner.subpaths.includes(subpath));
-}
-
 function listTrustedPrivatePluginSdkOwnerKeys(params: {
   packageRoot: string;
   modulePath: string;
@@ -982,21 +886,6 @@ function listTrustedPrivatePluginSdkOwnerKeys(params: {
   ).map((owner) => owner.bundledPluginId);
 }
 
-function resolvePrivatePluginSdkOwnerPackageRoot(params: {
-  modulePath: string;
-  argv1?: string;
-  moduleUrl?: string;
-  aliasPackageRoot: string;
-}): string {
-  return (
-    resolveLoaderPackageRoot({
-      modulePath: params.modulePath,
-      argv1: params.argv1,
-      moduleUrl: params.moduleUrl,
-    }) ?? params.aliasPackageRoot
-  );
-}
-
 function shouldIncludePrivateLocalOnlyPluginSdkSubpath(
   context: PluginLoaderAliasContext,
   subpath: string,
@@ -1004,7 +893,9 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(
   if (PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS.has(subpath)) {
     return context.includePrivateQa;
   }
-  const owners = findPrivatePluginSdkSubpathOwners(subpath);
+  const owners = PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS.filter((owner) =>
+    owner.subpaths.includes(subpath),
+  );
   if (owners.length === 0) {
     // Demoted public helpers remain available to bundled plugins; sensitive
     // helpers retain their explicitly captured owner grants.
@@ -1046,14 +937,12 @@ function listPluginSdkExportedSubpaths(context: PluginLoaderAliasContext): strin
   if (cached) {
     return cached;
   }
-  const subpaths = [
-    ...new Set([
-      ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
-      ...readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter((subpath) =>
-        shouldIncludePrivateLocalOnlyPluginSdkSubpath(context, subpath),
-      ),
-    ]),
-  ].toSorted();
+  const subpaths = sortUniqueStrings([
+    ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
+    ...readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter((subpath) =>
+      shouldIncludePrivateLocalOnlyPluginSdkSubpath(context, subpath),
+    ),
+  ]);
   cachedPluginSdkExportedSubpaths.set(cacheKey, subpaths);
   return subpaths;
 }
@@ -1131,7 +1020,11 @@ export function preparePluginLoaderAliases(
   const captured = { ...params, modulePath, devSourceRoot: resolveDevSourceRootParam(params) };
   const packageRoot = resolveLoaderPluginSdkPackageRoot(captured);
   const ownerPackageRoot = packageRoot
-    ? resolvePrivatePluginSdkOwnerPackageRoot({ ...captured, aliasPackageRoot: packageRoot })
+    ? (resolveLoaderPackageRoot({
+        modulePath,
+        argv1: captured.argv1,
+        moduleUrl: captured.moduleUrl,
+      }) ?? packageRoot)
     : null;
   const context: PluginLoaderAliasContext = {
     packageRoot,
@@ -1140,7 +1033,7 @@ export function preparePluginLoaderAliases(
       isProduction: process.env.NODE_ENV === "production",
       pluginSdkResolution: params.pluginSdkResolution,
     }),
-    includePrivateQa: shouldIncludePrivateLocalOnlyPluginSdkSubpaths(),
+    includePrivateQa: process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1",
     trustedPrivateOwners: ownerPackageRoot
       ? listTrustedPrivatePluginSdkOwnerKeys({ packageRoot: ownerPackageRoot, modulePath })
       : [],
@@ -1284,19 +1177,18 @@ function resolvePluginRuntimeModuleCandidates(
     packageRoot =
       resolveDevSourceRootParam(params) ?? resolveLoaderPackageRoot({ ...params, modulePath });
     if (packageRoot) {
-      appendPluginRuntimeModuleCandidates(candidates, packageRoot, orderedKinds);
+      candidates.push(...listPluginRuntimeModuleCandidates(packageRoot, orderedKinds));
     } else {
       const argv1 = params.argv1 ?? process.argv[1];
+      const runtimeDir = path.join(path.dirname(modulePath), "runtime");
       candidates.push(
         ...listAncestorPluginRuntimeModuleCandidates({
           starts: listArgvRuntimeFallbackStartDirs(argv1),
           orderedKinds,
         }),
-      );
-      appendSiblingPluginRuntimeModuleCandidates(
-        candidates,
-        path.join(path.dirname(modulePath), "runtime"),
-        orderedKinds,
+        ...orderedKinds.map((kind) =>
+          path.join(runtimeDir, kind === "src" ? "index.ts" : "index.js"),
+        ),
       );
     }
     const dedupedCandidates = dedupeResolvedPaths(candidates);
@@ -1333,9 +1225,15 @@ export function buildPluginLoaderJitiOptions(
 ) {
   const hasAliases = Object.keys(aliasMap).length > 0;
   const jitiAliasMap = hasAliases ? normalizePluginLoaderAliasMapForJiti(aliasMap) : aliasMap;
+  const fsCache: false | string = readJitiBooleanEnv(
+    "JITI_FS_CACHE",
+    readJitiBooleanEnv("JITI_CACHE", true),
+  )
+    ? resolvePluginLoaderJitiFsCacheDir(params)
+    : false;
   return {
     interopDefault: true,
-    fsCache: resolvePluginLoaderJitiFsCacheOption(params),
+    fsCache,
     // Prefer Node's native sync ESM loader for built dist/*.js modules so
     // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
     tryNative: true,

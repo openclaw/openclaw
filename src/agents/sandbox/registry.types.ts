@@ -13,7 +13,7 @@ export type SandboxRegistryEntry = {
   configHash?: string;
   /** Original provider workspace, retained so pending cleanup can replay the same request. */
   workspaceDir?: string;
-  /** Present only for backends that reserve their generation before provisioning. */
+  /** Provisioning and removal state for backends that retain unfinished allocations. */
   runtimeState?: "pending" | "ready" | "removing" | "removing-pending";
 };
 

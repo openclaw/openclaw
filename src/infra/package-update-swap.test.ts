@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -29,6 +30,9 @@ describe("retained package backup retirement", () => {
       });
       expect(result).toMatchObject({ status: "failed", activePackageRoot: packageRoot });
       expect(result.step.stderrTail).toBe("mutation admission refused");
+      expect(result.step.failureFacts).toMatchObject([
+        { check: "package-swap", code: "Error", message: "mutation admission refused" },
+      ]);
       const backup = (await fs.readdir(globalRoot)).find((entry) =>
         entry.startsWith(".openclaw.shim-backup-"),
       );
@@ -241,30 +245,50 @@ describe("launcher backup capture", () => {
         const originals = await Promise.all(
           [packageRoot, launcher, secondLauncher].map(async (entry) => (await fs.lstat(entry)).ino),
         );
-        const copyFile = fs.copyFile.bind(fs);
-        const rm = fs.rm.bind(fs);
+        const prototype = Object.getPrototypeOf(await fsSafeRoot(base)) as Root;
+        // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+        const copyIn = prototype.copyIn;
+        // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+        const removeEntry = prototype.remove;
         const rename = fs.rename.bind(fs);
-        const remove = vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+        let copyRefusals = 0;
+        let cleanupRefusals = 0;
+        let retirementRefusals = 0;
+        const remove = vi.spyOn(prototype, "remove").mockImplementation(async function (
+          this: Root,
+          relativePath,
+          options,
+        ) {
+          const target = path.resolve(this.rootReal, relativePath);
+          // Let each copy finish cleaning its private staging directory first.
           if (
             cleanupDenied &&
-            path.basename(String(args[0])).startsWith(".openclaw.shim-backup-")
+            path.basename(target) === path.basename(launcher) &&
+            path.basename(path.dirname(target)).startsWith(".openclaw.shim-backup-")
           ) {
+            cleanupRefusals += 1;
             throw Object.assign(new Error("backup cleanup denied"), { code: "EACCES" });
           }
-          return rm(...args);
+          return removeEntry.call(this, relativePath, options);
         });
         const move = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
           if (
             cleanupDenied &&
             path.basename(String(args[0])).startsWith(".openclaw.shim-backup-")
           ) {
+            retirementRefusals += 1;
             throw Object.assign(new Error("backup retirement denied"), { code: "EACCES" });
           }
           return rename(...args);
         });
         let firstBackup: string | undefined;
-        const copy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
-          if (String(args[0]) === secondLauncher) {
+        const copy = vi.spyOn(prototype, "copyIn").mockImplementation(async function (
+          this: Root,
+          destination,
+          source,
+          options,
+        ) {
+          if (source === secondLauncher) {
             const backupDir = (await fs.readdir(globalRoot)).find((entry) =>
               entry.startsWith(".openclaw.shim-backup-"),
             );
@@ -272,9 +296,10 @@ describe("launcher backup capture", () => {
               throw new Error("missing partial launcher backup");
             }
             firstBackup = await fs.readFile(path.join(globalRoot, backupDir, "openclaw"), "utf8");
+            copyRefusals += 1;
             throw new Error("second launcher backup refused");
           }
-          return copyFile(...args);
+          await copyIn.call(this, destination, source, options);
         });
         const beforeActivate = vi.fn();
         const onLiveMutation = vi.fn();
@@ -292,6 +317,9 @@ describe("launcher backup capture", () => {
           remove.mockRestore();
           move.mockRestore();
         }
+        expect(copyRefusals).toBe(1);
+        expect(cleanupRefusals).toBe(cleanupDenied ? 1 : 0);
+        expect(retirementRefusals).toBe(cleanupDenied ? 1 : 0);
         expect(firstBackup).toBe("old launcher\n");
         expect(result).toMatchObject({
           status: "failed",

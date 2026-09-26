@@ -2,10 +2,12 @@
  * Browser CLI file upload, dialog, and download commands.
  */
 import type { Command } from "commander";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveExistingUploadPaths } from "../../browser/paths.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
@@ -14,18 +16,8 @@ import {
   withBrowserActionTimeoutSlack,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
-import { danger, defaultRuntime, shortenHomePath } from "../core-api.js";
-import { resolveBrowserActionContext } from "./shared.js";
 
 const DEFAULT_BROWSER_HOOK_TIMEOUT_MS = 120000;
-
-async function normalizeUploadPaths(paths: string[]): Promise<string[]> {
-  const result = await resolveExistingUploadPaths({ requestedPaths: paths });
-  if (!result.ok) {
-    throw new Error(result.error);
-  }
-  return result.paths;
-}
 
 /** Registers Browser file chooser, dialog, and download commands. */
 export function registerBrowserFilesAndDownloadsCommands(
@@ -43,11 +35,10 @@ export function registerBrowserFilesAndDownloadsCommands(
     opts: { timeoutMs?: unknown; targetId?: unknown },
     request: { path: string; body: Record<string, unknown> },
   ) => {
-    const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+    const parent = parentOpts(cmd);
     const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
     await runBrowserCliRequest<{ download: { path: string } }>({
       parent,
-      profile,
       path: request.path,
       body: {
         ...request.body,
@@ -78,15 +69,17 @@ export function registerBrowserFilesAndDownloadsCommands(
     )
     .action(async (paths: string[], opts, cmd) => {
       try {
-        const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-        const normalizedPaths = await normalizeUploadPaths(paths);
+        const parent = parentOpts(cmd);
+        const resolved = await resolveExistingUploadPaths({ requestedPaths: paths });
+        if (!resolved.ok) {
+          throw new Error(resolved.error);
+        }
         const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
         await runBrowserCliRequest({
           parent,
-          profile,
           path: "/hooks/file-chooser",
           body: {
-            paths: normalizedPaths,
+            paths: resolved.paths,
             ref: normalizeOptionalString(opts.ref),
             inputRef: normalizeOptionalString(opts.inputRef),
             element: normalizeOptionalString(opts.element),
@@ -163,7 +156,7 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      const parent = parentOpts(cmd);
       if (opts.accept && opts.dismiss) {
         defaultRuntime.error(danger("Specify only one of --accept or --dismiss"));
         defaultRuntime.exit(1);
@@ -178,7 +171,6 @@ export function registerBrowserFilesAndDownloadsCommands(
       const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
       await runBrowserCliRequest({
         parent,
-        profile,
         path: "/hooks/dialog",
         body: {
           accept,

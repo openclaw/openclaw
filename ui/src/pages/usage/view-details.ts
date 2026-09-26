@@ -1,32 +1,25 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html, svg, nothing } from "lit";
+import { html, nothing } from "lit";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
-import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
-import { formatDurationCompact } from "../../lib/format-duration.ts";
-import { createMsFormatter, formatMs, formatTimeMs } from "../../lib/format.ts";
+import { createMsFormatter } from "../../lib/format.ts";
 import { parseToolSummary } from "./helpers.ts";
-import { charsToTokens, formatIsoDate, formatUsageCost, formatUsageTokens } from "./metrics.ts";
+import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.ts";
 import type {
   SessionLogEntry,
   SessionLogRole,
   TimeSeriesPoint,
   UsageContextDetail,
+  UsageProps,
   UsageSessionEntry,
 } from "./types.ts";
 import { USAGE_TOKEN_CATEGORIES } from "./view-chart.ts";
-import { renderInsightList } from "./view-overview.ts";
-
-const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)
-const CHART_MAX_BAR_WIDTH = 8; // Max bar width in SVG viewBox units
-const CHART_SELECTION_OPACITY = 0.06; // Opacity of range selection overlay
-const HANDLE_WIDTH = 5; // Width of drag handle in SVG units
-const HANDLE_HEIGHT = 12; // Height of drag handle
-const HANDLE_GRIP_OFFSET = 0.7; // Offset of grip lines inside handle
+import { renderSessionSummary } from "./view-session-summary.ts";
+import { renderTimeSeriesCompact } from "./view-timeseries.ts";
 
 function pct(part: number, total: number): number {
   return total > 0 ? (part / total) * 100 : 0;
@@ -37,14 +30,6 @@ function normalizeLogTimestamp(ts: number): number {
   return ts < 1e12 ? ts * 1000 : ts;
 }
 
-function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 1): number {
-  const year = Number(date.slice(0, 4));
-  const month = Number(date.slice(5, 7)) - 1;
-  const day = Number(date.slice(8, 10)) + dayOffset;
-  // Build the target date directly; advancing a normalized skipped midnight can retain 01:00.
-  return timeZone === "utc" ? Date.UTC(year, month, day) : new Date(year, month, day).getTime();
-}
-
 function isLogInRange(log: SessionLogEntry, rangeStart: number, rangeEnd: number): boolean {
   // Keep undated entries visible; interval totals count dated entries separately.
   if (!(log.timestamp > 0)) {
@@ -52,132 +37,6 @@ function isLogInRange(log: SessionLogEntry, rangeStart: number, rangeEnd: number
   }
   const ts = normalizeLogTimestamp(log.timestamp);
   return ts >= Math.min(rangeStart, rangeEnd) && ts <= Math.max(rangeStart, rangeEnd);
-}
-
-function renderSessionSummary(
-  session: UsageSessionEntry,
-  filteredUsage?: UsageSessionEntry["usage"],
-  filteredLogs?: SessionLogEntry[] | null,
-) {
-  const usage = filteredUsage || session.usage;
-  if (!usage) {
-    return html` <div class="usage-empty-block">${t("usage.details.noUsageData")}</div> `;
-  }
-
-  const formatTs = (ts?: number): string => (ts ? formatMs(ts) : t("usage.common.emptyValue"));
-  const hasInterval = filteredLogs !== undefined;
-  const datedLogs = filteredLogs?.filter((log) => log.timestamp > 0);
-  const messageCounts = !hasInterval
-    ? usage.messageCounts
-    : datedLogs?.length
-      ? datedLogs.reduce(
-          (counts, { role }) => {
-            if (role === "user" || role === "assistant") {
-              counts[role] += 1;
-              counts.total += 1;
-            }
-            return counts;
-          },
-          { total: 0, user: 0, assistant: 0 },
-        )
-      : undefined;
-
-  const badges = [
-    session.channel && `channel:${session.channel}`,
-    session.agentId && `agent:${session.agentId}`,
-    (session.modelProvider || session.providerOverride) &&
-      `provider:${session.modelProvider ?? session.providerOverride}`,
-    session.model && `model:${session.model}`,
-  ].filter(Boolean);
-
-  // Always use the full tool list for stable layout; update counts when filtering
-  const baseTools = usage.toolUsage?.tools.slice(0, 6) ?? [];
-  let toolCounts: Map<string, number> | undefined;
-  if (datedLogs?.length) {
-    toolCounts = new Map();
-    // Result rows carry tool names for filtering, but only assistant rows record calls.
-    for (const log of datedLogs.filter(({ role }) => role === "assistant")) {
-      for (const [name, count] of parseToolSummary(log.content).tools) {
-        toolCounts.set(name, (toolCounts.get(name) ?? 0) + count);
-      }
-    }
-  }
-  const toolItems = baseTools.map((tool) => ({
-    label: tool.name,
-    value: `${toolCounts ? (toolCounts.get(tool.name) ?? 0) : hasInterval ? t("usage.common.emptyValue") : tool.count}`,
-    sub: t("usage.overview.calls"),
-  }));
-  const toolCallCount = toolCounts
-    ? [...toolCounts.values()].reduce((sum, count) => sum + count, 0)
-    : hasInterval
-      ? t("usage.common.emptyValue")
-      : (usage.toolUsage?.totalCalls ?? 0);
-  const uniqueToolCount = toolCounts
-    ? toolCounts.size
-    : hasInterval
-      ? t("usage.common.emptyValue")
-      : (usage.toolUsage?.uniqueTools ?? 0);
-  const modelItems =
-    usage.modelUsage?.slice(0, 6).map((entry) => ({
-      label: entry.model ?? t("usage.common.unknown"),
-      value: formatUsageCost(entry.totals.totalCost),
-      sub: formatUsageTokens(entry.totals.totalTokens),
-    })) ?? [];
-  const cards = [
-    {
-      labelKey: "usage.overview.messages",
-      value: messageCounts?.total ?? (hasInterval ? t("usage.common.emptyValue") : 0),
-      meta: html`${
-        hasInterval && !messageCounts
-          ? t("usage.common.emptyValue")
-          : html`${messageCounts?.user ?? 0}
-            ${normalizeLowercaseStringOrEmpty(t("usage.overview.user"))} ·
-            ${messageCounts?.assistant ?? 0}
-            ${normalizeLowercaseStringOrEmpty(t("usage.overview.assistant"))}`
-      }${hasInterval ? html`<br />${t("usage.details.loadedIntervalMessages")}` : nothing}`,
-    },
-    {
-      labelKey: "usage.overview.toolCalls",
-      value: toolCallCount,
-      meta: html`${uniqueToolCount} ${t("usage.overview.toolsUsed")}`,
-    },
-    {
-      labelKey: "usage.overview.errors",
-      value: hasInterval ? t("usage.common.emptyValue") : (usage.messageCounts?.errors ?? 0),
-      meta: html`${hasInterval ? t("usage.common.emptyValue") : (usage.messageCounts?.toolResults ?? 0)}
-      ${t("usage.overview.toolResults")}`,
-    },
-    {
-      labelKey: "usage.details.duration",
-      value: formatDurationCompact(usage.durationMs) ?? t("usage.common.emptyValue"),
-      meta: html`${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}`,
-    },
-  ];
-
-  return html`
-    ${
-      badges.length > 0
-        ? html`<div class="usage-badges">
-            ${badges.map((b) => html`<span class="settings-row__value">${b}</span>`)}
-          </div>`
-        : nothing
-    }
-    <div class="session-summary-grid">
-      ${cards.map(
-        ({ labelKey, value, meta }) => html`
-          <div class="stat session-summary-card">
-            <div class="session-summary-title">${t(labelKey)}</div>
-            <div class="stat-value session-summary-value">${value}</div>
-            <div class="session-summary-meta">${meta}</div>
-          </div>
-        `,
-      )}
-    </div>
-    <div class="usage-insights-grid usage-insights-grid--tight">
-      ${renderInsightList(t("usage.overview.topTools"), toolItems, t("usage.overview.noToolCalls"))}
-      ${renderInsightList(t("usage.details.modelMix"), modelItems, t("usage.overview.noModelData"))}
-    </div>
-  `;
 }
 
 /** Aggregate usage stats from time series points within a timestamp range. */
@@ -220,51 +79,31 @@ function computeFilteredUsage(
   };
 }
 
-function renderSessionDetailPanel(
+export function renderSessionDetailPanel(
   session: UsageSessionEntry,
-  timeSeries: { points: TimeSeriesPoint[] } | null,
-  timeSeriesLoading: boolean,
-  timeSeriesStatus: PanelRefreshStatus,
-  timeSeriesMode: "cumulative" | "per-turn",
-  onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void,
-  timeSeriesBreakdownMode: "total" | "by-type",
-  onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void,
-  timeSeriesCursorStart: number | null,
-  timeSeriesCursorEnd: number | null,
-  onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void,
-  startDate: string,
-  endDate: string,
-  selectedDays: string[],
-  timeZone: "local" | "utc",
-  sessionLogs: SessionLogEntry[] | null,
-  sessionLogsLoading: boolean,
-  sessionLogsStatus: PanelRefreshStatus,
-  sessionLogsExpanded: boolean,
-  onToggleSessionLogsExpanded: () => void,
-  logFilters: {
-    roles: SessionLogRole[];
-    tools: string[];
-    hasTools: boolean;
-    query: string;
-  },
-  onLogFilterRolesChange: (next: SessionLogRole[]) => void,
-  onLogFilterToolsChange: (next: string[]) => void,
-  onLogFilterHasToolsChange: (next: boolean) => void,
-  onLogFilterQueryChange: (next: string) => void,
-  onLogFilterClear: () => void,
-  context: UsageContextDetail,
+  detail: UsageProps["detail"],
+  callbacks: UsageProps["callbacks"]["details"],
+  range: Pick<UsageProps["filters"], "startDate" | "endDate" | "selectedDays" | "timeZone">,
   contextExpanded: boolean,
-  onToggleContextExpanded: () => void,
   onClose: () => void,
 ) {
   const label = session.label || session.key;
   const displayLabel = label.length > 50 ? truncateUtf16Safe(label, 50) + "…" : label;
   const usage = session.usage;
+  const { timeSeriesCursorStart, timeSeriesCursorEnd } = detail;
 
   const hasRange = timeSeriesCursorStart !== null && timeSeriesCursorEnd !== null;
   const filteredUsage =
-    timeSeriesCursorStart !== null && timeSeriesCursorEnd !== null && timeSeries?.points && usage
-      ? computeFilteredUsage(usage, timeSeries.points, timeSeriesCursorStart, timeSeriesCursorEnd)
+    timeSeriesCursorStart !== null &&
+    timeSeriesCursorEnd !== null &&
+    detail.timeSeries?.points &&
+    usage
+      ? computeFilteredUsage(
+          usage,
+          detail.timeSeries.points,
+          timeSeriesCursorStart,
+          timeSeriesCursorEnd,
+        )
       : undefined;
   const headerStats = filteredUsage
     ? { totalTokens: filteredUsage.totalTokens, totalCost: filteredUsage.totalCost }
@@ -328,8 +167,8 @@ function renderSessionDetailPanel(
           session,
           filteredUsage,
           hasRange
-            ? sessionLogsStatus.hasLoaded && sessionLogs
-              ? sessionLogs.filter((log) =>
+            ? detail.sessionLogsStatus.hasLoaded && detail.sessionLogs
+              ? detail.sessionLogs.filter((log) =>
                   isLogInRange(log, timeSeriesCursorStart, timeSeriesCursorEnd),
                 )
               : null
@@ -337,451 +176,41 @@ function renderSessionDetailPanel(
         )}
         <div class="session-detail-row">
           ${renderTimeSeriesCompact(
-            timeSeries,
-            timeSeriesLoading,
-            timeSeriesStatus,
-            timeSeriesMode,
-            onTimeSeriesModeChange,
-            timeSeriesBreakdownMode,
-            onTimeSeriesBreakdownChange,
-            startDate,
-            endDate,
-            selectedDays,
-            timeZone,
+            detail.timeSeries,
+            detail.timeSeriesLoading,
+            detail.timeSeriesStatus,
+            detail.timeSeriesMode,
+            callbacks.onTimeSeriesModeChange,
+            detail.timeSeriesBreakdownMode,
+            callbacks.onTimeSeriesBreakdownChange,
+            range.startDate,
+            range.endDate,
+            range.selectedDays,
+            range.timeZone,
             timeSeriesCursorStart,
             timeSeriesCursorEnd,
-            onTimeSeriesCursorRangeChange,
+            callbacks.onTimeSeriesCursorRangeChange,
           )}
         </div>
         <div class="session-detail-bottom">
           ${renderSessionLogsCompact(
-            sessionLogs,
-            sessionLogsLoading,
-            sessionLogsStatus,
-            sessionLogsExpanded,
-            onToggleSessionLogsExpanded,
-            logFilters,
-            onLogFilterRolesChange,
-            onLogFilterToolsChange,
-            onLogFilterHasToolsChange,
-            onLogFilterQueryChange,
-            onLogFilterClear,
+            detail.sessionLogs,
+            detail.sessionLogsLoading,
+            detail.sessionLogsStatus,
+            detail.sessionLogsExpanded,
+            callbacks.onToggleSessionLogsExpanded,
+            detail.logFilters,
+            callbacks.onLogFilterRolesChange,
+            callbacks.onLogFilterToolsChange,
+            callbacks.onLogFilterHasToolsChange,
+            callbacks.onLogFilterQueryChange,
+            callbacks.onLogFilterClear,
             hasRange ? timeSeriesCursorStart : null,
             hasRange ? timeSeriesCursorEnd : null,
           )}
-          ${renderContextPanel(context, usage, contextExpanded, onToggleContextExpanded)}
+          ${renderContextPanel(detail.context, usage, contextExpanded, callbacks.onToggleContextExpanded)}
         </div>
       </div>
-    </div>
-  `;
-}
-
-function renderTimeSeriesCompact(
-  timeSeries: { points: TimeSeriesPoint[] } | null,
-  loading: boolean,
-  status: PanelRefreshStatus,
-  mode: "cumulative" | "per-turn",
-  onModeChange: (mode: "cumulative" | "per-turn") => void,
-  breakdownMode: "total" | "by-type",
-  onBreakdownChange: (mode: "total" | "by-type") => void,
-  startDate?: string,
-  endDate?: string,
-  selectedDays?: string[],
-  timeZone: "local" | "utc" = "local",
-  cursorStart?: number | null,
-  cursorEnd?: number | null,
-  onCursorRangeChange?: (start: number | null, end: number | null) => void,
-) {
-  if ((loading || status.awaitingGateway) && !status.hasLoaded) {
-    return html`
-      <div class="session-timeseries-compact">
-        <div class="usage-empty-block">${t("usage.loading.badge")}</div>
-      </div>
-    `;
-  }
-  const refreshStatus = renderUsageRefreshStatus(status, "usage.details.usageOverTime", "timeline");
-  if (status.error && !status.hasLoaded) {
-    return html`
-      <div class="session-timeseries-compact">
-        <div class="card-title usage-section-title">${t("usage.details.usageOverTime")}</div>
-        ${refreshStatus}
-      </div>
-    `;
-  }
-  if (!timeSeries || timeSeries.points.length < 2) {
-    return html`
-      <div class="session-timeseries-compact">
-        ${refreshStatus}
-        <div class="usage-empty-block">${t("usage.details.noTimeline")}</div>
-      </div>
-    `;
-  }
-
-  let points = timeSeries.points;
-  if (startDate || endDate || (selectedDays && selectedDays.length > 0)) {
-    const startTs = startDate ? dateBoundaryMs(startDate, timeZone, 0) : 0;
-    const endTs = endDate ? dateBoundaryMs(endDate, timeZone, 1) : Infinity;
-    const selectedDaySet = selectedDays?.length ? new Set(selectedDays) : undefined;
-    points = timeSeries.points.filter((p) => {
-      if (p.timestamp < startTs || p.timestamp >= endTs) {
-        return false;
-      }
-      if (selectedDaySet) {
-        return selectedDaySet.has(formatIsoDate(new Date(p.timestamp), timeZone));
-      }
-      return true;
-    });
-  }
-  if (points.length < 2) {
-    return html`
-      <div class="session-timeseries-compact">
-        ${refreshStatus}
-        <div class="usage-empty-block">${t("usage.details.noDataInRange")}</div>
-      </div>
-    `;
-  }
-  let cumTokens = 0,
-    cumCost = 0;
-  points = points.map((p) => {
-    cumTokens += p.totalTokens;
-    cumCost += p.cost;
-    return { ...p, cumulativeTokens: cumTokens, cumulativeCost: cumCost };
-  });
-
-  const hasSelection = cursorStart != null && cursorEnd != null;
-  const rangeStartTs = hasSelection ? Math.min(cursorStart, cursorEnd) : 0;
-  const rangeEndTs = hasSelection ? Math.max(cursorStart, cursorEnd) : Infinity;
-
-  // Find start/end indices for dimming
-  let rangeStartIdx = 0;
-  let rangeEndIdx = points.length;
-  if (hasSelection) {
-    rangeStartIdx = points.findIndex((p) => p.timestamp >= rangeStartTs);
-    if (rangeStartIdx === -1) {
-      rangeStartIdx = points.length;
-    }
-    const endIdx = points.findIndex((p) => p.timestamp > rangeEndTs);
-    rangeEndIdx = endIdx === -1 ? points.length : endIdx;
-  }
-
-  const filteredPoints = hasSelection ? points.slice(rangeStartIdx, rangeEndIdx) : points;
-  const filteredTokens = { output: 0, input: 0, cacheRead: 0, cacheWrite: 0 };
-  for (const p of filteredPoints) {
-    for (const { key } of USAGE_TOKEN_CATEGORIES) {
-      filteredTokens[key] += p[key];
-    }
-  }
-
-  const width = 400,
-    height = 100;
-  const padding = { top: 8, right: 4, bottom: 14, left: 30 };
-  const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
-  const isCumulative = mode === "cumulative";
-  const breakdownByType = mode === "per-turn" && breakdownMode === "by-type";
-  const timeZoneOptions: Intl.DateTimeFormatOptions = timeZone === "utc" ? { timeZone: "UTC" } : {};
-  const formatTooltipTimestamp = createMsFormatter(
-    { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
-    "",
-  );
-
-  const totalTypeTokens = Object.values(filteredTokens).reduce(
-    (total, tokens) => total + tokens,
-    0,
-  );
-  const barTotals = points.map((p) =>
-    isCumulative
-      ? p.cumulativeTokens
-      : breakdownByType
-        ? p.input + p.output + p.cacheRead + p.cacheWrite
-        : p.totalTokens,
-  );
-  const maxValue = Math.max(...barTotals, 1);
-  // Ensure bars + gaps fit exactly within chartWidth
-  const slotWidth = chartWidth / points.length; // space per bar including gap
-  const barWidth = Math.min(CHART_MAX_BAR_WIDTH, Math.max(1, slotWidth * CHART_BAR_WIDTH_RATIO));
-  const barGap = slotWidth - barWidth;
-
-  const leftHandleX = padding.left + rangeStartIdx * (barWidth + barGap);
-  const rightHandleX =
-    rangeEndIdx >= points.length
-      ? padding.left + (points.length - 1) * (barWidth + barGap) + barWidth // right edge of last bar
-      : padding.left + (rangeEndIdx - 1) * (barWidth + barGap) + barWidth; // right edge of last selected bar
-
-  return html`
-    <div class="session-timeseries-compact">
-      <div class="timeseries-header-row">
-        <div class="card-title usage-section-title">${t("usage.details.usageOverTime")}</div>
-        <div class="timeseries-controls">
-          ${
-            hasSelection
-              ? html`
-                  <div class="settings-segmented settings-segmented--accent small">
-                    <button
-                      class="btn btn--sm settings-segmented__btn settings-segmented__btn--active"
-                      @click=${() => onCursorRangeChange?.(null, null)}
-                    >
-                      ${t("usage.details.reset")}
-                    </button>
-                  </div>
-                `
-              : nothing
-          }
-          ${renderSettingsSegmented({
-            mode: "buttons",
-            variant: "accent",
-            ariaPressed: false,
-            className: "small",
-            value: mode,
-            onChange: onModeChange,
-            onReselect: onModeChange,
-            options: [
-              { value: "per-turn", label: t("usage.details.perTurn") },
-              { value: "cumulative", label: t("usage.details.cumulative") },
-            ],
-          })}
-          ${
-            !isCumulative
-              ? renderSettingsSegmented({
-                  mode: "buttons",
-                  variant: "accent",
-                  ariaPressed: false,
-                  className: "small",
-                  value: breakdownMode,
-                  onChange: onBreakdownChange,
-                  onReselect: onBreakdownChange,
-                  options: [
-                    { value: "total", label: t("usage.daily.total") },
-                    { value: "by-type", label: t("usage.daily.byType") },
-                  ],
-                })
-              : nothing
-          }
-        </div>
-      </div>
-      ${refreshStatus}
-      <div class="timeseries-chart-wrapper">
-        <svg viewBox="0 0 ${width} ${height + 18}" class="timeseries-svg">
-          ${[
-            { x1: padding.left, y1: padding.top, x2: padding.left, y2: padding.top + chartHeight },
-            {
-              x1: padding.left,
-              y1: padding.top + chartHeight,
-              x2: width - padding.right,
-              y2: padding.top + chartHeight,
-            },
-          ].map(
-            ({ x1, y1, x2, y2 }) =>
-              svg`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--border)" />`,
-          )}
-          ${[
-            { y: padding.top + 5, text: formatUsageTokens(maxValue) },
-            { y: padding.top + chartHeight, text: "0" },
-          ].map(
-            ({ y, text }) =>
-              svg`<text x="${padding.left - 4}" y="${y}" text-anchor="end" class="ts-axis-label">${text}</text>`,
-          )}
-          <!-- X axis labels (first and last) -->
-          ${svg`
-            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(expectDefined(points[0], "time series first point").timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
-            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(expectDefined(points.at(-1), "time series last point").timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
-          `}
-          <!-- Bars -->
-          ${points.map((p, i) => {
-            const val = expectDefined(barTotals[i], "time series bar total");
-            const x = padding.left + i * (barWidth + barGap);
-            const bh = (val / maxValue) * chartHeight;
-            const y = padding.top + chartHeight - bh;
-            const tooltipLines = [
-              formatTooltipTimestamp(p.timestamp),
-              `${formatUsageTokens(val)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}`,
-            ];
-            if (breakdownByType) {
-              tooltipLines.push(
-                ...USAGE_TOKEN_CATEGORIES.map(
-                  ({ key, short }) => `${short} ${formatUsageTokens(p[key])}`,
-                ),
-              );
-            }
-            const tooltip = tooltipLines.join(" · ");
-            const isOutside = hasSelection && (i < rangeStartIdx || i >= rangeEndIdx);
-
-            if (!breakdownByType) {
-              return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${bh}" class="ts-bar${isOutside ? " dimmed" : ""}" rx="1" data-tooltip=${tooltip} aria-label=${tooltip}></rect>`;
-            }
-            let yC = padding.top + chartHeight;
-            const dim = isOutside ? " dimmed" : "";
-            return svg`
-              ${USAGE_TOKEN_CATEGORIES.map(({ key, className }) => {
-                const value = p[key];
-                if (value <= 0 || val <= 0) {
-                  return nothing;
-                }
-                const sh = bh * (value / val);
-                yC -= sh;
-                return svg`<rect x="${x}" y="${yC}" width="${barWidth}" height="${sh}" class="ts-bar ${className}${dim}" rx="1" data-tooltip=${tooltip} aria-label=${tooltip}></rect>`;
-              })}
-            `;
-          })}
-          <!-- Selection highlight overlay (always visible between handles) -->
-          ${svg`
-            <rect 
-              x="${leftHandleX}" 
-              y="${padding.top}" 
-              width="${Math.max(1, rightHandleX - leftHandleX)}" 
-              height="${chartHeight}" 
-              fill="var(--accent)" 
-              opacity="${CHART_SELECTION_OPACITY}" 
-              pointer-events="none"
-            />
-          `}
-          ${[leftHandleX, rightHandleX].map(
-            (handleX) => svg`
-              <line x1="${handleX}" y1="${padding.top}" x2="${handleX}" y2="${padding.top + chartHeight}" stroke="var(--accent)" stroke-width="0.8" opacity="0.7" />
-              <rect x="${handleX - HANDLE_WIDTH / 2}" y="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 2}" width="${HANDLE_WIDTH}" height="${HANDLE_HEIGHT}" rx="1.5" fill="var(--accent)" class="cursor-handle" />
-              ${[-HANDLE_GRIP_OFFSET, HANDLE_GRIP_OFFSET].map(
-                (offset) =>
-                  svg`<line x1="${handleX + offset}" y1="${padding.top + chartHeight / 2 - HANDLE_HEIGHT / 5}" x2="${handleX + offset}" y2="${padding.top + chartHeight / 2 + HANDLE_HEIGHT / 5}" stroke="var(--bg)" stroke-width="0.4" pointer-events="none" />`,
-              )}
-            `,
-          )}
-        </svg>
-        <!-- Handle drag zones (only on handles, not full chart) -->
-        ${(() => {
-          const makeDragHandler = (side: "left" | "right") => (e: MouseEvent) => {
-            if (!onCursorRangeChange) {
-              return;
-            }
-            e.preventDefault();
-            e.stopPropagation();
-            const wrapper = (e.currentTarget as HTMLElement).closest(".timeseries-chart-wrapper");
-            const svgEl = wrapper?.querySelector("svg");
-            if (!svgEl) {
-              return;
-            }
-            // Capture rect once at mousedown to avoid re-render offset shifts
-            const rect = svgEl.getBoundingClientRect();
-            const svgWidth = rect.width;
-            const chartLeftPx = (padding.left / width) * svgWidth;
-            const chartRightPx = ((width - padding.right) / width) * svgWidth;
-            const chartW = chartRightPx - chartLeftPx;
-
-            const posToIdx = (clientX: number) => {
-              const x = Math.max(0, Math.min(1, (clientX - rect.left - chartLeftPx) / chartW));
-              return Math.min(Math.floor(x * points.length), points.length - 1);
-            };
-
-            // Compute click offset: where on the handle the user grabbed
-            const handleSvgX = side === "left" ? leftHandleX : rightHandleX;
-            const handleClientX = rect.left + (handleSvgX / width) * svgWidth;
-            const grabOffset = e.clientX - handleClientX;
-
-            document.body.style.cursor = "col-resize";
-
-            const handleMove = (me: MouseEvent) => {
-              const adjustedX = me.clientX - grabOffset;
-              const idx = posToIdx(adjustedX);
-              const pt = points[idx];
-              if (!pt) {
-                return;
-              }
-              const left = side === "left";
-              const boundary = left
-                ? (cursorEnd ??
-                  expectDefined(points.at(-1), "time series right cursor point").timestamp)
-                : (cursorStart ??
-                  expectDefined(points[0], "time series left cursor point").timestamp);
-              // Clamp the dragged handle against its fixed sibling to preserve range ordering.
-              onCursorRangeChange(
-                left ? Math.min(pt.timestamp, boundary) : boundary,
-                left ? boundary : Math.max(pt.timestamp, boundary),
-              );
-            };
-
-            const handleUp = () => {
-              document.body.style.cursor = "";
-              document.removeEventListener("mousemove", handleMove);
-              document.removeEventListener("mouseup", handleUp);
-            };
-
-            document.addEventListener("mousemove", handleMove);
-            document.addEventListener("mouseup", handleUp);
-          };
-
-          return html`
-            ${(["left", "right"] as const).map((side) => {
-              const x = side === "left" ? leftHandleX : rightHandleX;
-              return html`<div
-                class="chart-handle-zone chart-handle-${side}"
-                style="left: ${((x / width) * 100).toFixed(1)}%;"
-                @mousedown=${makeDragHandler(side)}
-              ></div>`;
-            })}
-          `;
-        })()}
-      </div>
-      <div class="timeseries-summary">
-        ${
-          hasSelection
-            ? html`
-                <span class="timeseries-summary__range">
-                  ${t("usage.details.turnRange", {
-                    start: String(rangeStartIdx + 1),
-                    end: String(rangeEndIdx),
-                    total: String(points.length),
-                  })}
-                </span>
-                ·
-                ${formatTimeMs(
-                  rangeStartTs,
-                  { hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
-                  "",
-                )}–${formatTimeMs(
-                  rangeEndTs,
-                  { hour: "2-digit", minute: "2-digit", ...timeZoneOptions },
-                  "",
-                )}
-                · ${formatUsageTokens(totalTypeTokens)} ·
-                ${formatUsageCost(filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
-              `
-            : html`${points.length} ${t("usage.overview.messagesAbbrev")} ·
-              ${formatUsageTokens(cumTokens)} · ${formatUsageCost(cumCost)}`
-        }
-      </div>
-      ${
-        breakdownByType
-          ? html`
-              <div class="timeseries-breakdown">
-                <div class="card-title usage-section-title">
-                  ${t("usage.breakdown.tokensByType")}
-                </div>
-                <div class="cost-breakdown-bar cost-breakdown-bar--compact">
-                  ${USAGE_TOKEN_CATEGORIES.map(
-                    ({ key, className }) => html`
-                      <div
-                        class="cost-segment ${className}"
-                        style="width: ${pct(filteredTokens[key], totalTypeTokens).toFixed(1)}%"
-                      ></div>
-                    `,
-                  )}
-                </div>
-                <div class="cost-breakdown-legend">
-                  ${USAGE_TOKEN_CATEGORIES.map(
-                    ({ key, className, labelKey, hintKey }) => html`
-                      <div class="legend-item" title=${t(hintKey)}>
-                        <span class="legend-dot ${className}"></span>${t(labelKey)}
-                        ${formatUsageTokens(filteredTokens[key])}
-                      </div>
-                    `,
-                  )}
-                </div>
-                <div class="cost-breakdown-total">
-                  ${t("usage.breakdown.total")}: ${formatUsageTokens(totalTypeTokens)}
-                </div>
-              </div>
-            `
-          : nothing
-      }
     </div>
   `;
 }
@@ -1163,6 +592,3 @@ function renderSessionLogsCompact(
     </div>
   `;
 }
-
-export { renderSessionDetailPanel };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

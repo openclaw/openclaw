@@ -14,7 +14,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
-  readClosedTranscriptTurn,
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -23,6 +22,7 @@ import {
   resolveSqliteTranscriptScope,
   runExclusiveSqliteSessionWrite,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.js";
 import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessions/session-transcript-index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -419,7 +419,7 @@ describe("host-owned current admission annotation", () => {
           before.slice(0, -1),
         );
         expect(
-          readClosedTranscriptTurn({
+          readClosedTranscriptTurnInDatabase(db, {
             boundary: { admission: original, terminal: refreshed },
             maxEvents: 20,
             maxBytes: 10000,

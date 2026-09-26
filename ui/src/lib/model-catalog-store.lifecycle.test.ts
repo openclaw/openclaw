@@ -248,6 +248,9 @@ it.each(["abort", "connection clear", "pushed snapshot"] as const)(
       expect(settled).toBe(true);
       if (boundary === "pushed snapshot") {
         expect(await first).toEqual(fresh);
+      } else if (boundary === "connection clear") {
+        expect(await first).toHaveProperty("name", "AbortError");
+        expect(peekModelCatalog(fixture.client, scope)).toBeUndefined();
       } else {
         expect(await first).toBeInstanceOf(Error);
         expect(peekModelCatalog(fixture.client, scope)).toBeUndefined();
@@ -470,11 +473,12 @@ it("retires queued work on connection clear without dispatching it after the old
   invalidateModelCatalogCache(fixture.client);
   const queued = loadModelCatalog(fixture.client, scope);
   const rejected = expect(queued).rejects.toHaveProperty("name", "AbortError");
+  const activeRejected = expect(first).rejects.toHaveProperty("name", "AbortError");
   try {
     clearModelCatalogCache(fixture.client);
     await rejected;
     fixture.respond(0, stale);
-    await first;
+    await activeRejected;
     expect(fixture.sent).toHaveLength(1);
     expect(peekModelCatalog(fixture.client, scope)).toBeUndefined();
   } finally {

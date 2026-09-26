@@ -44,7 +44,14 @@ it.each(
         return null;
       });
 
-    await updateCommand({ tag: "2026.9.4", yes: true, json: true, restart: false, timeout });
+    await updateCommand({
+      admission: "installed",
+      tag: "2026.9.4",
+      yes: true,
+      json: true,
+      restart: false,
+      timeout,
+    });
 
     const stepTimeoutMs =
       timeout === undefined ? (trigger === "campaign" ? 45 : 30) * 60_000 : 3_600_000;

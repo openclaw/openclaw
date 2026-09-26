@@ -34,7 +34,7 @@ export function registerSubagentResultRefreshCases(params: {
           return { status: "pending" };
         },
       });
-      mod.registerSubagentRun({
+      await mod.registerSubagentRun({
         runId: "run-refresh-admission-old",
         childSessionKey,
         task: "capture replacement completion",

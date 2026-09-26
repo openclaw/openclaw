@@ -402,10 +402,3 @@ export class DiscordAudioTransport extends EventEmitter<{
     this.emit("stopped");
   }
 }
-
-export function createDiscordAudioTransport(
-  options: DiscordAudioWorkerOptions,
-  adapterCreator: DiscordGatewayAdapterCreator,
-): DiscordAudioTransport {
-  return new DiscordAudioTransport(options, adapterCreator);
-}

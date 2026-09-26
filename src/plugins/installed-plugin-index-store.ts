@@ -141,6 +141,11 @@ export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex 
   if (!installRecords) {
     return null;
   }
+  for (const diagnostic of parsed.diagnostics) {
+    if (diagnostic.level === "warn" && diagnostic.code === "explicit-config-plugin-selection") {
+      diagnostic.level = "info";
+    }
+  }
   return {
     version: parsed.version,
     ...(parsed.warning ? { warning: parsed.warning } : {}),

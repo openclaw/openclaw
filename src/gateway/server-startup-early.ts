@@ -130,6 +130,10 @@ export async function startGatewayEarlyRuntime(params: {
         const { closeSkillsWatchers, registerSkillsChangeListener } = await skillsRuntimePromise;
         const { refreshRemoteBinsForConnectedNodes } = await remoteSkillsRuntimePromise;
         const unregister = registerSkillsChangeListener((event) => {
+          if (event.reason === "watch-available") {
+            // Coverage recovery has no new content revision to probe or broadcast.
+            return;
+          }
           if (event.reason === "remote-node") {
             // The snapshot invalidation runs after remote descriptors/bins change;
             // clients can now refetch authoritative skills.status without racing the probe.

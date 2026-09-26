@@ -9,7 +9,8 @@ import {
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
+import type { PrepareGatewaySessionLifecycle } from "./session-create-service.types.js";
 import { writeSessionStore } from "./test-helpers.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
@@ -30,11 +31,11 @@ vi.mock("../agents/model-runtime-choice.js", () => ({
   ),
 }));
 
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   closeOpenClawStateDatabaseForTest();
 });
 
-// Register after the reset so stacked teardown drains fixture stores first.
 const { createSelectedGlobalSessionStore } = setupGatewaySessionsHandlerTestHarness();
 
 const mainModel = { id: "main-only", name: "Main Model", provider: "main-provider" };

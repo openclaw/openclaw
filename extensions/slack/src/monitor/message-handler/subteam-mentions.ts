@@ -17,7 +17,7 @@ type CacheEntry = {
 const subteamMemberCache = new WeakMap<WebClient, Map<string, CacheEntry>>();
 
 export function normalizeSlackId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toUpperCase() : undefined;
+  return normalizeOptionalString(value)?.toUpperCase();
 }
 
 function extractSlackSubteamMentionIds(text?: string | null): string[] {
@@ -72,7 +72,7 @@ async function readSlackSubteamUsers(params: {
       return new Set();
     }
     const users = new Set(
-      (response.users ?? []).map((userId) => normalizeSlackId(userId)).filter(Boolean) as string[],
+      (response.users ?? []).map(normalizeSlackId).filter((userId) => userId !== undefined),
     );
     const expiresAt = resolveExpiresAtMsFromDurationMs(SUBTEAM_MEMBER_CACHE_TTL_MS, {
       nowMs: params.now,

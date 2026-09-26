@@ -42,6 +42,8 @@ import {
   revokeCronStandingGrant,
 } from "../operator-approval-standing-grants.js";
 import { resolveGrantExpiryDaysConfig } from "../standing-grant-expiry-config.js";
+import { createApprovalRequestAuthority } from "./approval-request-authority.js";
+import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
 import {
   handleApprovalWaitDecision,
   bindApprovalRequesterMetadata,
@@ -53,7 +55,6 @@ import {
   respondPendingApprovalLookupError,
   resolvePendingApprovalRecord,
 } from "./approval-shared.js";
-import { handlePendingExecApprovalRequest } from "./exec-approval-request-delivery.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -100,18 +101,22 @@ export function createExecApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: ExecApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "exec.approval.get": async ({ params, respond, client, context }) => {
+    "exec.approval.get": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       if (!assertValidParams(params, validateExecApprovalGetParams, "exec.approval.get", respond)) {
         return;
       }
       const p = params as { id: string };
       const resolved = await resolvePendingApprovalRecord({
+        authority,
         manager,
         inputId: p.id,
         client,
         ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         exposeAmbiguousPrefixError: true,
       });
+      authority.assertCurrent();
       if (!resolved.ok) {
         respondPendingApprovalLookupError({ respond, response: resolved.response });
         return;
@@ -134,17 +139,18 @@ export function createExecApprovalHandlers(
         undefined,
       );
     },
-    "exec.approval.list": async ({ respond, client, context }) => {
-      respond(
-        true,
-        await listVisiblePendingApprovalRequests({
-          manager,
-          client,
-          approvalKind: "exec",
-          ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
-        }),
-        undefined,
-      );
+    "exec.approval.list": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { respond, client, context } = options;
+      const approvals = await listVisiblePendingApprovalRequests({
+        authority,
+        manager,
+        client,
+        approvalKind: "exec",
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+      });
+      authority.assertCurrent();
+      respond(true, approvals, undefined);
     },
     "exec.approval.request": async ({ params, respond, context, client }) => {
       if (
@@ -440,7 +446,8 @@ export function createExecApprovalHandlers(
       if (!registration) {
         return;
       }
-      await handlePendingExecApprovalRequest({
+      await handlePendingApprovalRequestWithDelivery({
+        approvalKind: "exec",
         manager,
         record,
         respond,
@@ -457,8 +464,11 @@ export function createExecApprovalHandlers(
         getIosPushDelivery: () => opts?.iosPushDelivery,
       });
     },
-    "exec.approval.waitDecision": async ({ params, respond, client, context }) => {
+    "exec.approval.waitDecision": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       await handleApprovalWaitDecision({
+        authority,
         manager,
         inputId: (params as { id?: string }).id,
         client,
@@ -525,7 +535,9 @@ export function createExecApprovalHandlers(
       const result = revokeCronStandingGrant({ grantId: p.grantId, revokedBy });
       respond(true, { outcome: result.outcome }, undefined);
     },
-    "exec.approval.resolve": async ({ params, respond, client, context }) => {
+    "exec.approval.resolve": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client, context } = options;
       const resolveParams = resolveApprovalDecisionParams({
         rawParams: params,
         validate: validateExecApprovalResolveParams,
@@ -548,6 +560,7 @@ export function createExecApprovalHandlers(
       let autoReviewResolution = false;
       await handleApprovalResolve({
         approvalKind: "exec",
+        authority,
         manager,
         inputId,
         decision,
@@ -590,13 +603,13 @@ export function createExecApprovalHandlers(
           decision: decisionLocal,
           resolvedBy,
           resolver,
-          assertCurrent,
+          guard,
         }) => {
           if (autoReviewResolution) {
-            return manager.resolveAutoReview(approvalId, resolvedBy, assertCurrent);
+            return manager.resolveAutoReview(approvalId, resolvedBy, undefined, guard);
           }
           const grantOptions = {
-            assertCurrent,
+            guard,
             ...(grantExpiresAtMs !== undefined ? { grantExpiresAtMs } : {}),
           };
           return resolver

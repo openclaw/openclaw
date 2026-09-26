@@ -28,7 +28,7 @@ import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type { Agent, AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
-import type { CreateAgentSessionOptions } from "../../sessions/index.js";
+import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -354,7 +354,7 @@ vi.mock("../../sessions/index.js", () => {
     ModelRegistry,
     SessionManager: {
       inMemory: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
-      open: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
+      openAsync: async (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
     },
   };
 });
@@ -669,16 +669,10 @@ vi.mock("../../provider-stream.js", () => ({
   registerProviderStreamForModel: vi.fn(),
 }));
 
-vi.mock("../../sandbox/runtime-status.js", () => ({
-  resolveSandboxRuntimeStatus: () => ({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    mainSessionKey: "agent:main:main",
-    mode: "off",
-    sandboxed: false,
-    toolPolicy: { allow: [], deny: [], sources: { allow: { key: "" }, deny: { key: "" } } },
-  }),
-}));
+vi.mock(
+  "../../sandbox/runtime-status.js",
+  () => import("./attempt-spawn-workspace.sandbox-mock.test-support.js"),
+);
 
 vi.mock("../../tool-fs-policy.js", () => ({
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>
@@ -855,6 +849,7 @@ type MutableSession = {
   messages: unknown[];
   isCompacting: boolean;
   isStreaming: boolean;
+  subscribe: AgentSession["subscribe"];
   agent: {
     convertToLlm?: (messages: AgentMessage[]) => AgentMessage[] | Promise<AgentMessage[]>;
     prompt?: (...args: unknown[]) => Promise<unknown>;
@@ -1081,14 +1076,12 @@ export function createDefaultEmbeddedSession(params?: {
     messages: [...(params?.initialMessages ?? [])],
     isCompacting: false,
     isStreaming: false,
+    subscribe: () => () => {},
     agent: {
       prompt: async (prompt, options) => {
         pendingPrompt = {
           prompt: String(prompt),
-          options: options as {
-            images?: unknown[];
-            preflightResult?: (submitted: boolean) => void;
-          },
+          options: options as Parameters<MutableSession["prompt"]>[1],
         };
         await session.agent.streamFn?.(
           testModel,

@@ -538,6 +538,12 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
 
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
     const config: OpenClawConfig = {};
+    const signature = JSON.stringify({
+      id: "A".repeat(416),
+      type: "reasoning",
+      summary: [],
+      encrypted_content: "Q".repeat(32) + "/LTAI" + "B".repeat(20) + "/" + "C".repeat(6),
+    });
 
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
@@ -545,9 +551,12 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
       config,
       message: {
         role: "assistant",
-        content: [{ type: "text", text: `Here is your key: ${fakeApiKey}` }],
+        content: [
+          { type: "text", text: `Here is your key: ${fakeApiKey}` },
+          { type: "thinking", thinking: "", thinkingSignature: signature },
+        ],
         api: "openai-responses",
-        provider: "openclaw",
+        provider: "github-copilot",
         model: "test-model",
         usage: {
           input: 0,
@@ -567,7 +576,11 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
       return;
     }
 
-    const raw = JSON.stringify(await readStoredMessages({ sessionId, sessionKey, storePath }));
+    const stored = await readStoredMessages({ sessionId, sessionKey, storePath });
+    expect(stored).toMatchObject([
+      { content: [{ type: "text" }, { thinkingSignature: signature }] },
+    ]);
+    const raw = JSON.stringify(stored);
     expect(raw).not.toContain(fakeApiKey);
   });
 

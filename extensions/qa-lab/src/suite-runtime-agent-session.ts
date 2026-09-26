@@ -18,7 +18,7 @@ import {
   createDirectReplyTranscriptSentinelScanner,
   extractGatewayMessageText,
 } from "./gateway-log-sentinel.js";
-import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
+import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import type {
   QaRawSessionStoreEntry,
   QaSkillStatusEntry,
@@ -52,6 +52,7 @@ const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] a
 const MAX_COMPACTION_SUMMARIES = 16;
 const MAX_SUCCESSFUL_TOOL_CALL_EVENTS = 64;
 const SESSION_RESET_RECALL_CUTOFF = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
+const NESTED_TOOL_ACTIVITY_CUSTOM_TYPE = "openclaw.nested-tool.v1";
 
 type QaSessionTranscriptSummary = {
   assistantMirrors?: Array<{ identity: string; text: string }>;
@@ -93,6 +94,20 @@ function isSessionStoreFtsSettleRace(error: unknown) {
 
 function readSessionTranscriptEventMessage(event: unknown) {
   return isRecord(event) && isRecord(event.message) ? event.message : undefined;
+}
+
+/** Code Mode runs the target inside exec; its nested activity row is the transcript evidence naming the target tool. */
+function readNestedToolActivityResult(message: Record<string, unknown>) {
+  if (message.role !== "custom" || message.customType !== NESTED_TOOL_ACTIVITY_CUSTOM_TYPE) {
+    return undefined;
+  }
+  const details = isRecord(message.details) ? message.details : undefined;
+  const toolCallId = readNonEmptyString(details?.toolCallId);
+  const toolName = readNonEmptyString(details?.toolName);
+  if (!toolCallId || !toolName || typeof details?.isError !== "boolean") {
+    return undefined;
+  }
+  return { toolCallId, toolName, isError: details.isError, timestamp: details.timestamp };
 }
 
 function readAssistantToolCalls(message: Record<string, unknown>): Array<{
@@ -179,10 +194,17 @@ function summarizeSessionTranscriptEvents(
       userMessageCount += 1;
       continue;
     }
-    if (message.role === "toolResult") {
-      const toolCallId = readNonEmptyString(message.toolCallId);
-      const toolName = readNonEmptyString(message.toolName);
+    const nestedToolResult = readNestedToolActivityResult(message);
+    if (message.role === "toolResult" || nestedToolResult) {
+      const toolCallId = nestedToolResult?.toolCallId ?? readNonEmptyString(message.toolCallId);
+      const toolName = nestedToolResult?.toolName ?? readNonEmptyString(message.toolName);
+      const isError = nestedToolResult ? nestedToolResult.isError : message.isError;
+      const timestamp = nestedToolResult ? nestedToolResult.timestamp : message.timestamp;
       const details = isRecord(message.details) ? message.details : undefined;
+      if (nestedToolResult && toolCallId && toolName) {
+        assistantToolCallCounts[toolName] = (assistantToolCallCounts[toolName] ?? 0) + 1;
+        assistantToolNamesByCallId.set(toolCallId, toolName);
+      }
       if (toolName && details?.sourceReplyRoute === "current-source") {
         const receipt = isRecord(details.receipt) ? details.receipt : undefined;
         const threadId = readNonEmptyString(receipt?.threadId);
@@ -203,20 +225,20 @@ function summarizeSessionTranscriptEvents(
       if (
         toolCallId &&
         toolName &&
-        message.isError === false &&
+        isError === false &&
         assistantToolNamesByCallId.get(toolCallId) === toolName &&
         !successfulToolCallIds.has(toolCallId)
       ) {
         successfulToolCallIds.add(toolCallId);
         successfulToolCallCounts[toolName] = (successfulToolCallCounts[toolName] ?? 0) + 1;
-        if (typeof message.timestamp === "number" && Number.isFinite(message.timestamp)) {
+        if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
           // Keep owner-authenticated result chronology bounded for long-lived QA sessions.
           if (successfulToolCallEvents.length === MAX_SUCCESSFUL_TOOL_CALL_EVENTS) {
             successfulToolCallEvents.shift();
           }
           successfulToolCallEvents.push({
             name: toolName,
-            timestamp: message.timestamp,
+            timestamp,
             toolCallId,
           });
         }
@@ -336,7 +358,7 @@ async function createSession(env: QaGatewayCallEnv, label: string, key?: string)
       ...(key ? { key } : {}),
     },
     {
-      timeoutMs: liveTurnTimeoutMs(env, 60_000),
+      timeoutMs: resolveQaLiveTurnTimeoutMs(env, 60_000),
     },
   )) as { key?: string };
   const sessionKey = created.key?.trim();
@@ -353,7 +375,7 @@ async function readEffectiveTools(env: QaGatewayCallEnv, sessionKey: string) {
       sessionKey,
     },
     {
-      timeoutMs: liveTurnTimeoutMs(env, 90_000),
+      timeoutMs: resolveQaLiveTurnTimeoutMs(env, 90_000),
     },
   )) as { groups?: Array<{ tools?: Array<{ id?: string }> }> };
   const ids = new Set<string>();
@@ -374,7 +396,7 @@ async function readSkillStatus(env: QaGatewayCallEnv, agentId = "qa") {
       agentId,
     },
     {
-      timeoutMs: liveTurnTimeoutMs(env, 45_000),
+      timeoutMs: resolveQaLiveTurnTimeoutMs(env, 45_000),
     },
   )) as { skills?: QaSkillStatusEntry[] };
   return payload.skills ?? [];

@@ -11,6 +11,37 @@ const manifest = JSON.parse(
   fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf-8"),
 ) as { configSchema: JsonSchemaObject };
 
+describe("active-memory runtime config normalization", () => {
+  it("normalizes circuit breaker config with defaults", () => {
+    const config = normalizePluginConfig({});
+    expect(config.circuitBreakerMaxTimeouts).toBe(3);
+    expect(config.circuitBreakerCooldownMs).toBe(60_000);
+  });
+
+  it("normalizes explicit fast-mode overrides and ignores invalid values", () => {
+    expect(normalizePluginConfig({}).fastMode).toBeUndefined();
+    expect(normalizePluginConfig({ fastMode: true }).fastMode).toBe(true);
+    expect(normalizePluginConfig({ fastMode: false }).fastMode).toBe(false);
+    expect(normalizePluginConfig({ fastMode: "auto" }).fastMode).toBe("auto");
+    expect(normalizePluginConfig({ fastMode: "on" }).fastMode).toBeUndefined();
+  });
+
+  it("normalizes setup grace config with a zero default and bounded opt-in", () => {
+    expect(normalizePluginConfig({}).setupGraceTimeoutMs).toBe(0);
+    expect(normalizePluginConfig({ setupGraceTimeoutMs: 30_001 }).setupGraceTimeoutMs).toBe(30_000);
+    expect(normalizePluginConfig({ setupGraceTimeoutMs: -1 }).setupGraceTimeoutMs).toBe(0);
+  });
+
+  it("clamps circuit breaker config within valid ranges", () => {
+    const config = normalizePluginConfig({
+      circuitBreakerMaxTimeouts: 0,
+      circuitBreakerCooldownMs: 1000,
+    });
+    expect(config.circuitBreakerMaxTimeouts).toBe(1);
+    expect(config.circuitBreakerCooldownMs).toBe(5000);
+  });
+});
+
 describe("active-memory manifest config schema", () => {
   it.each([
     [{}, true, 45_000, true],

@@ -10,6 +10,8 @@ import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js"
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { connectRfbAttachment, type DesktopRfbAttachment } from "./attachment.js";
+import { mintDesktopAudioObserver } from "./audio-bridge.js";
+import type { DesktopAudioSource } from "./managed-linux-audio.js";
 import type { DesktopObserveRequester } from "./observe-requester.js";
 import {
   preauthenticateRfb,
@@ -49,9 +51,13 @@ type DesktopObserverTokenEntry = {
   preauth?: RfbPreauthDescriptor;
   requester?: DesktopObserveRequester;
   onAbandon?: () => Promise<void>;
+  audio?: ReturnType<typeof mintDesktopAudioObserver>;
 };
 
-const observerTokens = createOneTimeTicketStore<DesktopObserverTokenEntry>({ ttlMs: TOKEN_TTL_MS });
+const observerTokens = createOneTimeTicketStore<DesktopObserverTokenEntry>({
+  ttlMs: TOKEN_TTL_MS,
+  onExpire: (entry) => entry.audio?.close(),
+});
 const desktopObserverWss = new NpmWebSocketServer({
   noServer: true,
   maxPayload: MAX_PAYLOAD_BYTES,
@@ -66,13 +72,23 @@ export function mintDesktopObserverToken(params: {
   requester?: DesktopObserveRequester;
   onAbandon?: () => Promise<void>;
   nowMs?: number;
-}): { token: string; expiresAtMs: number } {
-  const { nowMs, ...payload } = params;
-  return observerTokens.mint(payload, {
-    nowMs,
-    revokeSignal:
-      params.requester?.isCurrent() === false ? AbortSignal.abort() : params.requester?.signal,
-  });
+  audio?: DesktopAudioSource;
+}) {
+  const { nowMs, audio: source, ...payload } = params;
+  // Audio is gated on the screen authentication result, not possession of its token.
+  const audio =
+    source && params.preauth
+      ? mintDesktopAudioObserver({ source, requester: params.requester })
+      : undefined;
+  const minted = observerTokens.mint(
+    { ...payload, ...(audio ? { audio } : {}) },
+    {
+      nowMs,
+      revokeSignal:
+        params.requester?.isCurrent() === false ? AbortSignal.abort() : params.requester?.signal,
+    },
+  );
+  return { ...minted, ...(audio ? { audio: audio.descriptor } : {}) };
 }
 
 function consumeDesktopObserverToken(
@@ -110,6 +126,7 @@ export async function releaseDesktopObserverToken(
   if (!entry) {
     return false;
   }
+  entry.audio?.close();
   await entry.onAbandon?.();
   return true;
 }
@@ -201,6 +218,7 @@ export function handleDesktopObserveUpgrade(
   const token = resource.searchParams.get("token") ?? "";
   const entry = consumeDesktopObserverToken(token);
   if (!entry || entry.requester?.isCurrent() === false) {
+    entry?.audio?.close();
     rejectWebSocketUpgrade(socket, { status: 401 });
     return true;
   }
@@ -210,6 +228,7 @@ export function handleDesktopObserveUpgrade(
         ? deps.registry.claimStream(entry.sourceKey, entry.attachment)
         : undefined;
     if (entry.attachment.kind === "stream" && !claimedStream) {
+      entry.audio?.close();
       ws.close(1013, "desktop stream unavailable");
       return;
     }
@@ -222,6 +241,7 @@ export function handleDesktopObserveUpgrade(
       close: (code, reason) => closeBoth(code, reason, "owner-close"),
     });
     if (!observer) {
+      entry.audio?.close();
       claimedStream?.destroy();
       ws.close(1013, "desktop observer limit");
       return;
@@ -229,6 +249,7 @@ export function handleDesktopObserveUpgrade(
     const desktopSocket =
       entry.attachment.kind === "stream" ? claimedStream : connectRfbAttachment(entry.attachment);
     if (!desktopSocket) {
+      entry.audio?.close();
       observer.release();
       ws.close(1013, "desktop stream unavailable");
       return;
@@ -246,6 +267,7 @@ export function handleDesktopObserveUpgrade(
       }
       // Keep the first cleanup decision when its destroyed stream emits a later close.
       closeCause = { trigger, code };
+      entry.audio?.close();
       entry.requester?.signal?.removeEventListener("abort", onRequesterGone);
       stopKeepalive();
       clearInterval(resumeTimer);
@@ -262,6 +284,9 @@ export function handleDesktopObserveUpgrade(
     const onRequesterGone = () => closeBoth(4006, "authority_revoked", "authority-revoked");
 
     const startSplice = (browserRemainder: Buffer = Buffer.alloc(0), preauthenticated = false) => {
+      if (preauthenticated) {
+        entry.audio?.activate();
+      }
       const clientMessageFilter = entry.control
         ? undefined
         : createRfbClientMessageFilter({

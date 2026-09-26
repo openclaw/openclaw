@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import {
+  getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
+} from "./attachment-payload-store.ts";
 import { ChatSessionCompanionThreads } from "./chat-session-companion.ts";
 
 const unavailable = async () => {
@@ -10,6 +14,57 @@ const questions = (threads: ChatSessionCompanionThreads) =>
   threads.view("one").turns.map((turn) => turn.question);
 
 describe("Side chat turn history", () => {
+  it.each(["retry", "hydrate"])(
+    "retains a failed image until %s succeeds without taking a newer draft",
+    async (settle) => {
+      const threads = new ChatSessionCompanionThreads();
+      const image = (id: string) =>
+        registerChatAttachmentPayload({
+          attachment: { id, mimeType: "image/png", fileName: id },
+          dataUrl: "data:image/png;base64,aW1hZ2U=",
+          file: new File(["image"], id, { type: "image/png" }),
+        });
+      const original = image("original.png");
+      const next = image("next.png");
+      try {
+        threads.setAttachments("one", [original]);
+        await threads.submit("one", "Explain this image", unavailable);
+        const failed = threads.view("one").turns[0]!;
+        expect(failed).toMatchObject({ status: "failed", attachments: [original] });
+        expect(threads.view("one").attachments).toEqual([]);
+        threads.setDraft("one", "My next question");
+        threads.setAttachments("one", [next]);
+        expect(threads.view("two").attachments).toEqual([]);
+        if (settle === "retry") {
+          const ask = vi.fn(answered("Recovered", 1));
+          await threads.submit("one", failed, ask);
+          expect(ask).toHaveBeenCalledWith("one", "Explain this image", [original]);
+        } else {
+          await threads.hydrate("one", async () => ({
+            exchanges: [{ question: "Explain this image", answer: "Recovered", ts: 1 }],
+          }));
+        }
+        expect(threads.view("one")).toMatchObject({
+          draft: "My next question",
+          attachments: [next],
+        });
+        expect(getChatAttachmentDataUrl(original)).toBeNull();
+        expect(getChatAttachmentDataUrl(next)).not.toBeNull();
+        const reads = threads.view("one").attachmentReads!;
+        const signal = reads.readSignal;
+        reads.updatePending(signal, 1);
+        const blocked = vi.fn(answered("Must not send unread input", 2));
+        await threads.submit("one", "My next question", blocked);
+        expect(blocked).not.toHaveBeenCalled();
+        threads.retire("one");
+        expect(signal.aborted).toBe(true);
+        expect(getChatAttachmentDataUrl(next)).toBeNull();
+      } finally {
+        threads.retire();
+      }
+    },
+  );
+
   it("retains failed questions in order while a different follow-up is pending and answered", async () => {
     const threads = new ChatSessionCompanionThreads();
     await threads.submit("one", "Earlier question", answered("Ready", 1));
@@ -43,7 +98,7 @@ describe("Side chat turn history", () => {
     const response = createDeferred<{ answer: string; ts: number }>();
     const ask = vi.fn(() => response.promise);
     const pending = threads.submit("one", selected, ask);
-    expect(ask).toHaveBeenCalledWith("one", "Same question");
+    expect(ask).toHaveBeenCalledWith("one", "Same question", undefined);
     expect(questions(threads)).toEqual(["Same question", "Different question", "Same question"]);
     expect(threads.view("one").turns.map((turn) => turn.status)).toEqual([
       "pending",
@@ -137,6 +192,75 @@ describe("Side chat turn history", () => {
     expect(threads.view("one").turns).toEqual([]);
   });
 
+  it.each(["pending", "answered"])(
+    "retains a newer %s retry when an earlier Clear completes",
+    async (settlement) => {
+      const threads = new ChatSessionCompanionThreads();
+      await threads.submit("one", "Retry this question", unavailable);
+      const failed = threads.view("one").turns[0]!;
+      const clear = createDeferred<{ ok: true }>();
+      const resetting = threads.reset("one", () => clear.promise);
+      const response = createDeferred<{ answer: string; ts: number }>();
+      const retrying = threads.submit("one", failed, () => response.promise);
+      if (settlement === "answered") {
+        response.resolve({ answer: "Retried answer", ts: 2 });
+        await retrying;
+      }
+      clear.resolve({ ok: true });
+      await resetting;
+      expect(threads.view("one").turns).toMatchObject([
+        { question: "Retry this question", status: settlement },
+      ]);
+      response.resolve({ answer: "Retried answer", ts: 2 });
+      await retrying;
+      await threads.hydrate("one", async () => ({
+        exchanges: [{ question: "Retry this question", answer: "Retried answer", ts: 2 }],
+      }));
+      expect(threads.view("one").turns).toMatchObject([
+        { question: "Retry this question", answer: "Retried answer", status: "answered" },
+      ]);
+    },
+  );
+
+  it("releases history waiting on an ask retired by a pending Clear", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    const response = createDeferred<{ answer: string; ts: number }>();
+    const pending = threads.submit("one", "Retired question", () => response.promise);
+    const clear = createDeferred<{ ok: true }>();
+    const resetting = threads.reset("one", () => clear.promise);
+    const load = vi.fn(async () => ({ exchanges: [] }));
+    const hydration = threads.hydrate("one", load);
+    expect(load).not.toHaveBeenCalled();
+    clear.resolve({ ok: true });
+    await resetting;
+    await hydration;
+    expect(load).toHaveBeenCalledOnce();
+    expect(threads.view("one")).toMatchObject({ turns: [], loading: false });
+    response.resolve({ answer: "Late retired answer", ts: 1 });
+    await pending;
+    expect(threads.view("one").turns).toEqual([]);
+  });
+
+  it("waits for every overlapping clear before loading new history", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.submit("one", "Earlier question", answered("Ready", 1));
+    const first = createDeferred<{ ok: true }>();
+    const second = createDeferred<{ ok: true }>();
+    const clearingFirst = threads.reset("one", () => first.promise);
+    const clearingSecond = threads.reset("one", () => second.promise);
+    second.resolve({ ok: true });
+    await clearingSecond;
+    const load = vi.fn(async () => ({ exchanges: [] }));
+    const hydration = threads.hydrate("one", load);
+    expect(load).not.toHaveBeenCalled();
+    expect(threads.view("one").loading).toBe(true);
+    first.resolve({ ok: true });
+    await clearingFirst;
+    await hydration;
+    expect(load).toHaveBeenCalledOnce();
+    expect(threads.view("one")).toMatchObject({ turns: [], loading: false });
+  });
+
   it("does not reuse a separately answered question after an older retry and pruning", async () => {
     const threads = new ChatSessionCompanionThreads();
     await threads.submit("one", "A", unavailable);
@@ -152,6 +276,7 @@ describe("Side chat turn history", () => {
     }
     const response = createDeferred<{ answer: string; ts: number }>();
     const pending = threads.submit("one", retry, () => response.promise);
+    const retried = threads.view("one").turns[0]!;
     const load = async () => ({
       exchanges: [...exchanges, { question: "Remote", answer: "New remote answer", ts: 24 }],
     });
@@ -161,7 +286,7 @@ describe("Side chat turn history", () => {
     await pending;
     await hydration;
     await threads.hydrate("one", load);
-    expect(retry.status).toBe("failed");
+    expect(retried.status).toBe("failed");
     expect(questions(threads).filter((question) => question === "A")).toHaveLength(1);
   });
 
@@ -181,6 +306,7 @@ describe("Side chat turn history", () => {
         await threads.submit("one", exchange.question, answered(exchange.answer, exchange.ts));
       }
       await threads.submit("one", retry, answered("Recovered A", 23));
+      const recovered = threads.view("one").turns[0]!;
       exchanges.push({ question: "A", answer: "Recovered A", ts: 23 });
       const load = async () => ({ exchanges });
       if (pruneBy === "append") {
@@ -201,7 +327,7 @@ describe("Side chat turn history", () => {
       }
       const before = threads.view("one").turns.map((turn) => Object.assign({}, turn));
       expect(before[0]).toMatchObject({ question: "A", status: "failed" });
-      expect(threads.view("one").turns).not.toContain(retry);
+      expect(threads.view("one").turns).not.toContain(recovered);
       await threads.hydrate("one", load);
       expect(threads.view("one").turns).toEqual(before);
       await threads.hydrate("one", load);

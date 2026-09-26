@@ -1,4 +1,5 @@
 import { nothing, render } from "lit";
+import { onTestFinished } from "vitest";
 import type { ModelProviderCard } from "./data.ts";
 import { renderModelProviders } from "./view.ts";
 
@@ -46,7 +47,6 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     catalogDiscovering: false,
     catalogDiscoveryError: null,
     configBusy: false,
-    quickAddSupported: true,
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
     canViewProfiles: true,
     canMutate: true,
@@ -74,7 +74,6 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     onRequestLogout: () => undefined,
     onProfileOrderChange: () => undefined,
     onAddProviderToggle: () => undefined,
-    onAddProviderIdChange: () => undefined,
     onAddProviderKeyChange: () => undefined,
     onAddProvider: () => undefined,
     onPrimaryChange: () => undefined,
@@ -94,9 +93,14 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
   };
 }
 
-export function mount(viewProps: ModelProvidersViewProps): HTMLDivElement {
-  const container = document.createElement("div");
-  document.body.append(container);
+export function mount(
+  viewProps: ModelProvidersViewProps,
+  container = document.body.appendChild(document.createElement("div")),
+): HTMLDivElement {
+  onTestFinished(() => {
+    render(nothing, container);
+    container.remove();
+  });
   render(renderModelProviders(viewProps), container);
   return container;
 }

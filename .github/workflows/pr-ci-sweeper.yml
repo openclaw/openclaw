@@ -1,8 +1,8 @@
 name: PR CI Sweeper
 
-# Repairs dropped pull_request CI via close/reopen and non-destructively revives
-# cancelled GitHub Actions checks attached to auto-merge PR heads. The app token
-# authorizes reruns; GITHUB_TOKEN close/reopen events would not trigger CI.
+# Repairs missing or startup-failed pull_request CI via bounded close/reopen.
+# Cancelled or executed workflows are never rerun automatically. The app token
+# lets reopen events trigger CI; GITHUB_TOKEN-authored events would not.
 
 on:
   schedule:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Log intended repairs without closing/reopening or rerunning workflows.
+        description: Log intended infrastructure repairs without closing or reopening pull requests.
         required: false
         default: false
         type: boolean

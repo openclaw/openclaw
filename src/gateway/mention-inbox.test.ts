@@ -1,8 +1,10 @@
+import { statSync } from "node:fs";
 import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateMentionsListResult } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -527,8 +529,10 @@ describe("temporary human mention Inbox", () => {
       setUserProfileRole(f.bob.id, "reader");
       invalidateOperatorRolePolicy(f.bob.id);
       await f.setSession({ sessionId: "replacement-session" });
+      const file = statSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }), { bigint: true });
       emitSessionIdentityMutation({
         agentId: "main",
+        databaseIdentity: `${file.dev}:${file.ino}`,
         kind: "replace",
         previous: { sessionId: SESSION_ID, sessionKeys: [SESSION_KEY] },
         current: { sessionId: "replacement-session", sessionKeys: [SESSION_KEY] },

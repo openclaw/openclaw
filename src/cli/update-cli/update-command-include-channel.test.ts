@@ -203,7 +203,7 @@ it("migrates a nested internal sandbox fragment under the original executor", as
     const parent = state.statePath("agent-parent.json");
     const fragment = state.statePath("agent.json");
     const parentRaw = '{"$include":"./agent.json"}\n';
-    const fragmentRaw = '{"sandbox":{"perSession":true}}\n';
+    const fragmentRaw = '{"sandbox":{"browser":{"enableNoVnc":true}}}\n';
     await fs.writeFile(parent, parentRaw);
     await fs.writeFile(fragment, fragmentRaw);
     const rootRaw = await fs.readFile(state.configPath, "utf8");
@@ -213,12 +213,12 @@ it("migrates a nested internal sandbox fragment under the original executor", as
       const io = createConfigIO({ observe: false, pluginValidation: "skip" });
       const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
       const next = structuredClone(snapshot.sourceConfig);
-      const sandbox = next.agents?.entries?.main?.sandbox;
-      if (!sandbox) {
-        throw new Error("missing authored legacy sandbox");
+      const browser = next.agents?.entries?.main?.sandbox?.browser;
+      if (!browser) {
+        throw new Error("missing authored legacy sandbox browser");
       }
-      sandbox.scope = "session";
-      Reflect.deleteProperty(sandbox, "perSession");
+      browser.noVncEnabled = true;
+      Reflect.deleteProperty(browser, "enableNoVnc");
       await replaceConfigFile({
         snapshot,
         nextConfig: next,
@@ -227,13 +227,13 @@ it("migrates a nested internal sandbox fragment under the original executor", as
           assertCurrent: fence.assertCurrent,
           skipPluginValidation: true,
           inputBase: "source",
-          unsetPaths: [["agents", "entries", "main", "sandbox", "perSession"]],
+          unsetPaths: [["agents", "entries", "main", "sandbox", "browser", "enableNoVnc"]],
         },
       });
       fence.assertCurrent();
     });
     expect(JSON.parse(await fs.readFile(fragment, "utf8"))).toEqual({
-      sandbox: { scope: "session" },
+      sandbox: { browser: { noVncEnabled: true } },
     });
     expect(await fs.readFile(`${fragment}.bak`, "utf8")).toBe(fragmentRaw);
     expect(await fs.readFile(parent, "utf8")).toBe(parentRaw);

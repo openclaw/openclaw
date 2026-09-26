@@ -1,21 +1,21 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { buildActiveNodeContextText } from "../../infra/active-node-context.js";
 import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import {
   getInstallationTarget,
-  installationTargetEnv,
   withInstallationTarget,
 } from "../../infra/installation-target-context.js";
 import { registerMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import {
+  getGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
@@ -35,7 +35,6 @@ import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
-import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import {
   attachInternalToolExecutionPreparer,
@@ -57,8 +56,9 @@ import {
   getCoreTtsToolResultMediaUrls,
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
-import { bindHarnessContextMedia } from "./context-media.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import { prepareAgentHarnessEnvironment } from "./host-environment.js";
+import { bindHarnessMedia } from "./host-media.js";
 import {
   registerAgentHarnessBeforeToolCallRetention,
   registerAgentHarnessScheduledToolProjectionCapability,
@@ -66,10 +66,10 @@ import {
   resolveAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "./host-private-capabilities.js";
-import { retainHarnessSource } from "./host-source-authority.js";
+import { bindHarnessModelExecution, retainHarnessSource } from "./host-source-authority.js";
+import { bindHarnessTrajectory } from "./host-trajectory.js";
 import { formatHarnessApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
-import { bindHarnessReplyMedia } from "./reply-media.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
   Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "runId">;
@@ -90,11 +90,8 @@ function normalizeNativeOperationCwd(value: unknown, attemptCwd: string | undefi
   if (Buffer.byteLength(normalized, "utf8") > MAX_NATIVE_OPERATION_CWD_BYTES) {
     throw new Error(`native operation cwd must not exceed ${MAX_NATIVE_OPERATION_CWD_BYTES} bytes`);
   }
-  for (let index = 0; index < normalized.length; index += 1) {
-    const code = normalized.charCodeAt(index);
-    if (code < 32 || code === 127) {
-      throw new Error("native operation cwd must not contain control characters");
-    }
+  if (containsAsciiControlCharacter(normalized)) {
+    throw new Error("native operation cwd must not contain control characters");
   }
   return path.resolve(attemptCwd ?? process.cwd(), normalized);
 }
@@ -181,21 +178,30 @@ export function createAgentHarnessHostCapabilities(params: {
   attempt: AgentHarnessHostAttempt;
   pluginId: string;
   requiredNodeCommands?: readonly string[];
+  nativeModelPolicySupport?: "exact";
 }): {
   capabilities: AgentHarnessHostCapabilities;
   close: () => void;
+  setInputAttachmentReadAllowed: (allowed: boolean) => void;
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
+  // Capture authority by value before any plugin handoff can mutate the attempt.
+  const runtimePluginToolGrant = attempt.runtimePluginToolGrant
+    ? Object.freeze({
+        pluginId: attempt.runtimePluginToolGrant.pluginId,
+        toolNames: Object.freeze([...attempt.runtimePluginToolGrant.toolNames]),
+      })
+    : undefined;
   const githubPublicationAvailable = attempt.githubPublicationAvailable;
   const workSignal = getAsyncWorkSignal();
   const attemptSignal = attempt.abortSignal;
   const installationTarget = getInstallationTarget();
-  const localProcessEnv = installationTargetEnv(installationTarget);
   const { sessionKey, onAgentEvent } = attempt;
   // Capture the selected harness declaration before plugin code can mutate it.
   // Full must not cover other commands merely because the same plugin owns them.
   const requiredNodeCommands = new Set(params.requiredNodeCommands);
+  const nativeModelPolicySupported = params.nativeModelPolicySupport === "exact";
   const operationalRunInstance = attempt.admittedRunContext.operationalRunInstance;
   const delegatedAuthority = getAdmittedRunDelegatedAuthority(attempt.admittedRunContext);
   if (!delegatedAuthority) {
@@ -232,13 +238,16 @@ export function createAgentHarnessHostCapabilities(params: {
     );
     return new Error(message);
   };
+  // Only a Gateway captured at admission participates in host liveness.
+  // A supplied resolver that currently returns no context is a retired binding;
+  // only a genuinely absent resolver is exempt from the Gateway liveness fence.
+  const boundGatewayContext = getGatewayContextResolver(attempt.admittedRunContext);
   function assertActive() {
     if (
       !active ||
       attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
       getAdmittedRunDelegatedAuthority(attempt.admittedRunContext) !== delegatedAuthority ||
-      (callerIdentity?.gatewayContextResolver !== undefined &&
-        callerIdentity.gatewayContextResolver() === undefined)
+      (boundGatewayContext && callerIdentity?.gatewayContextResolver?.() === undefined)
     ) {
       throw inactiveError("agent harness host capability is no longer active");
     }
@@ -275,8 +284,7 @@ export function createAgentHarnessHostCapabilities(params: {
   };
   const config = attempt.config ? cloneSnapshot(attempt.config) : undefined;
   const hostSandboxEnabled = attempt.sandbox?.enabled === true;
-  const prepareContextMedia = bindHarnessContextMedia({ attempt, config, assertActive });
-  const prepareReplyMedia = bindHarnessReplyMedia({
+  const media = bindHarnessMedia({
     attempt,
     config,
     assertActive,
@@ -324,10 +332,12 @@ export function createAgentHarnessHostCapabilities(params: {
         })
       : undefined;
   const skillsSnapshot = attempt.skillsSnapshot ? cloneSnapshot(attempt.skillsSnapshot) : undefined;
-  const preparedRunEnvironment = prepareGitHubToolEnvironment({
-    config: config ?? {},
-    sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
-    agentId: attempt.agentId ?? "main",
+  const preparedRunEnvironment = prepareAgentHarnessEnvironment({
+    config,
+    agentId: attempt.agentId,
+    sessionKey: attempt.sessionKey,
+    sandboxAgentId: attempt.sandboxAgentId,
+    installationTarget,
   });
   const skillUsagePaths = attempt.sandbox?.skillUsagePaths
     ? cloneSnapshot(attempt.sandbox.skillUsagePaths)
@@ -418,8 +428,7 @@ export function createAgentHarnessHostCapabilities(params: {
       if (
         attempt.abortSignal?.aborted ||
         attempt.admittedRunContext.operationalRunInstance !== operationalRunInstance ||
-        (callerIdentity?.gatewayContextResolver !== undefined &&
-          callerIdentity.gatewayContextResolver() === undefined)
+        (boundGatewayContext && callerIdentity?.gatewayContextResolver?.() === undefined)
       ) {
         throw inactiveError("agent harness retained host policy is no longer active");
       }
@@ -465,11 +474,17 @@ export function createAgentHarnessHostCapabilities(params: {
   };
   const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) =>
     bindTools(tools, options, () => {});
+  const bindModelExecution: AgentHarnessHostCapabilities["bindModelExecution"] =
+    nativeModelPolicySupported
+      ? (model) => bindHarnessModelExecution(attempt.admittedRunContext, model, assertActive)
+      : undefined;
   const capabilities: AgentHarnessHostCapabilities = Object.freeze({
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
-    retainSourceAuthority: () => retainHarnessSource(attempt.admittedRunContext, assertActive),
+    ...(bindModelExecution ? { bindModelExecution } : {}),
+    retainSourceAuthority: () =>
+      retainHarnessSource(attempt.admittedRunContext, assertActive, nativeModelPolicySupported),
     reportOutputTokens: (outputTokens) => {
       assertActive();
       const data = emitAgentRunOutputTokens({
@@ -487,31 +502,15 @@ export function createAgentHarnessHostCapabilities(params: {
       }
     },
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
-    ...(prepareContextMedia ? { prepareContextMedia } : {}),
-    ...(prepareReplyMedia ? { prepareReplyMedia } : {}),
+    ...media.capabilities,
     ...(trajectoryRecorder
       ? {
-          trajectory: Object.freeze({
-            recordEvent: (type: string, data?: Record<string, unknown>) => {
-              assertActive();
-              trajectoryRecorder.recordEvent(type, data);
-            },
-            flush: async () => {
-              assertActive();
-              await trajectoryRecorder.flush();
-              assertActive();
-            },
-          }),
+          trajectory: bindHarnessTrajectory(trajectoryRecorder, assertActive),
         }
       : {}),
     preparedEnvironment: () => {
       assertActive();
-      return Object.freeze({
-        credentialScrubEnv: Object.freeze({ ...preparedRunEnvironment.credentialScrubEnv }),
-        localIdentityEnv: Object.freeze({ ...preparedRunEnvironment.localIdentityEnv }),
-        managedLocalIdentity: preparedRunEnvironment.managedLocalIdentity,
-        ...(localProcessEnv ? { localProcessEnv } : {}),
-      });
+      return preparedRunEnvironment;
     },
     activeComputerContext: () => {
       assertActive();
@@ -534,6 +533,7 @@ export function createAgentHarnessHostCapabilities(params: {
                 ...projectToolOutcomeHooks(attempt),
                 // Availability belongs to this prepared host, not mutable plugin inputs.
                 githubPublicationAvailable,
+                runtimePluginToolGrant,
                 skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
                 skillUsagePaths: options?.skillUsagePaths ?? skillUsagePaths,
                 operationalRunInstance,
@@ -699,6 +699,7 @@ export function createAgentHarnessHostCapabilities(params: {
   });
   return {
     capabilities,
+    setInputAttachmentReadAllowed: media.setInputAttachmentReadAllowed,
     runWithScope: (run) => {
       const nodeAuthorities = createSessionNodeAuthorities(
         attempt,

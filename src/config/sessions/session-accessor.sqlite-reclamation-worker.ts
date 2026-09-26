@@ -19,7 +19,10 @@ import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/opencl
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
 import { cleanupRetiredAgentDatabaseLease } from "../../state/openclaw-agent-execution-cleanup.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
-import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
+import {
+  publishOpenClawStateDatabaseWorkerAdmission,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
@@ -89,7 +92,7 @@ type MutationRunParams<Result> = {
   validationOwner?: SqliteMutationWorkerValidationOwner;
   diagnostics?: SqliteSessionReclamationDiagnostics;
   commitGate: SharedArrayBuffer;
-  onCommitRequest: () => unknown[];
+  onCommitRequest: () => void;
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
 };
 type WorkerCleanup = { cleanupWarnings: string[]; settled: boolean };
@@ -110,12 +113,6 @@ const retained = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionReclamationWorkers"),
   () => new Map<string, SqliteReclamationWorker>(),
 );
-
-channel("openclaw.memory.critical").subscribe(() => {
-  for (const worker of retained.values()) {
-    worker.retireIfIdle();
-  }
-});
 
 /** The global archive FIFO bounds ordinary reclamation's whole-buffer heaps. */
 export function withSqliteReclamationWorker<T>(
@@ -234,6 +231,7 @@ export class SqliteReclamationWorker {
   private readonly beforeExit = () => {
     void this.close().catch((error: unknown) => log.error(String(error)));
   };
+  private readonly onMemoryPressure = () => this.retireIfIdle();
 
   constructor(
     private readonly options: DatabaseOptions,
@@ -264,7 +262,8 @@ export class SqliteReclamationWorker {
       this.unregisterAgent();
       throw error;
     }
-    process.on("beforeExit", this.beforeExit);
+    // Failed exit cleanup retains custody for explicit retries without restarting the event loop.
+    process.once("beforeExit", this.beforeExit);
   }
 
   matches(options: DatabaseOptions, claim: OpenClawAgentDatabaseClaim): boolean {
@@ -407,15 +406,7 @@ export class SqliteReclamationWorker {
           onExit: (code) => {
             exitCode = code;
           },
-          onCommitRequest: () => {
-            const errors = params.onCommitRequest();
-            if (errors.length) {
-              log.warn("SQLite session reclamation recovered commit settlement errors", {
-                errors: errors.map(String),
-                path: this.options.path,
-              });
-            }
-          },
+          onCommitRequest: params.onCommitRequest,
           withWriteAdmission: params.withWriteAdmission,
           validationOwner: params.validationOwner,
           dispatch: () =>
@@ -470,17 +461,29 @@ export class SqliteReclamationWorker {
         this.healthyCloseAcknowledged = this.closeRequested && message.settled;
         this.closed.resolve();
       } else if (message.type === "lease") {
-        if (
-          message.receipt.agentId !== this.options.agentId ||
-          message.receipt.path !== this.options.path ||
-          message.receipt.ownerPid !== process.pid ||
-          message.receipt.sharedStateIdentity !== this.stateContext.admission.identity.key ||
-          (this.lease && !isDeepStrictEqual(this.lease, message.receipt))
-        ) {
-          this.failure = new Error("SQLite reclamation Worker changed its lease receipt");
-          this.requestTermination(transport);
-        } else {
+        try {
+          // First creation binds the captured path admission; replacement still revokes it.
+          publishOpenClawStateDatabaseWorkerAdmission(this.stateContext.admission);
+        } catch (error) {
+          this.failure ??= toStringifiedError(error);
+        }
+        try {
+          // Revoked read authority cannot discard an already acquired exact cleanup receipt.
+          if (
+            message.receipt.agentId !== this.options.agentId ||
+            message.receipt.path !== this.options.path ||
+            message.receipt.ownerPid !== process.pid ||
+            message.receipt.sharedStateIdentity !== this.stateContext.admission.identity.key ||
+            (this.lease && !isDeepStrictEqual(this.lease, message.receipt))
+          ) {
+            throw new Error("SQLite reclamation Worker changed its lease receipt");
+          }
           this.lease = message.receipt;
+        } catch (error) {
+          this.failure ??= toStringifiedError(error);
+        }
+        if (this.failure) {
+          this.requestTermination(transport);
         }
       }
     });
@@ -518,6 +521,10 @@ export class SqliteReclamationWorker {
         resolve();
       });
     });
+    // Only ordinary retained Workers use pressure retirement; validation scopes own their close.
+    if (this.onRetired) {
+      channel("openclaw.memory.critical").subscribe(this.onMemoryPressure);
+    }
     return transport;
   }
 
@@ -662,6 +669,7 @@ export class SqliteReclamationWorker {
         });
       }
       this.retired = true;
+      channel("openclaw.memory.critical").unsubscribe(this.onMemoryPressure);
       this.unregisterAgent();
       this.unregisterState();
       process.off("beforeExit", this.beforeExit);

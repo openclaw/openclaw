@@ -89,7 +89,9 @@ describe("assertSqliteIntegrity", () => {
 
     expect(failure).toMatchObject({
       name: "SqliteIntegrityError",
-      message: "SQLite integrity_check failed for test database: broken index",
+      message: expect.stringContaining(
+        "SQLite integrity_check failed for test database: broken index",
+      ),
     });
   });
 

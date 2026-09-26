@@ -420,6 +420,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               workdirRoots: sandbox.backend?.workdirRoots,
               readOnlyWorkspaceSkillMounts,
               env: sandbox.backend?.env ?? sandbox.docker.env,
+              prepareProcessCleanup: sandbox.backend?.prepareProcessCleanup?.bind(sandbox.backend),
               buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
               finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),
             }

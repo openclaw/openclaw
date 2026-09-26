@@ -1,3 +1,4 @@
+import { createDeferredCore } from "../../../src/shared/deferred.js";
 import type { RouteId } from "../app-routes.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../pages/chat/chat-history-events.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -25,10 +26,7 @@ function waitForChatRouteReady(document: Document) {
   if (document.querySelector(".agent-chat__composer-combobox")) {
     return { cancel: () => undefined, ready: Promise.resolve() };
   }
-  let resolve!: () => void;
-  const ready = new Promise<void>((next) => {
-    resolve = next;
-  });
+  const { promise: ready, resolve } = createDeferredCore();
   const handleReady = () => resolve();
   document.addEventListener(CHAT_ROUTE_READY_EVENT, handleReady, { once: true });
   return {
@@ -45,10 +43,7 @@ async function navigateAndAnimate(options: RouteTransitionOptions) {
   const chatReady = waitForChatRouteReady(document);
   let canceled = false;
   let animation: Animation | undefined;
-  let resolveCanceled!: () => void;
-  const cancellation = new Promise<void>((resolve) => {
-    resolveCanceled = resolve;
-  });
+  const { promise: cancellation, resolve: resolveCanceled } = createDeferredCore();
   const cancel = () => {
     if (canceled) {
       return;

@@ -551,6 +551,7 @@ describe("recovery cancellation through the public run owner", () => {
       const beforeFinalization = sessionAccessor.loadSessionEntry(sessionTarget);
 
       await updateSessionStoreAfterAgentRun({
+        agentId: sessionTarget.agentId,
         cfg: {},
         agentDir: path.dirname(sessionTarget.storePath),
         sessionId,
