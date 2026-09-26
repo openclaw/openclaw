@@ -60,9 +60,15 @@ that default.
 
 ## Decision assistance
 
-**Foundation only:** this Labs entry saves intent but connects no automatic
-Decision consumers. Turning it on does not start inference, enable consumer
-modes, select a provider, provision credentials, or download models.
+This Labs entry permits automatic Decision assistance for separately enabled
+consumer modes and agents with an effective Decision model. Turning it on does
+not enable consumer modes, select a provider, provision credentials, or download
+models. Compaction shadow observation additionally requires
+`agents.defaults.compaction.semanticCuration.mode: "shadow"`; it sends bounded
+conversation evidence to the selected provider while preserving summarizer
+input and accepted summaries. Hosted requests may incur charges and add latency.
+Its cancellation budget is cooperative: a provider ignoring cancellation can
+delay compaction until its started requests settle.
 
 The switch and manually authored config use the same global Boolean:
 
@@ -82,7 +88,7 @@ unrelated experimental options do not. Objects such as
 removes its override and restores off, preserving model selections and sibling
 settings. There is no browser-local preference.
 
-Saved opt-in is not per-agent eligibility. Future automatic consumers also need
+Saved opt-in is not per-agent eligibility. Automatic consumers also need
 an effective [Decision model](/concepts/decision-models) for their owning agent.
 An unset agent model inherits `agents.defaults.decisionModel`; an explicit empty
 `agents.entries.<id>.decisionModel` disables eligibility for that agent. A model
@@ -124,7 +130,7 @@ awaited results. This helper is not an authority token or a cancellation owner.
 
 Any future consumer must document its evidence transfer, costs, latency, and
 failure behavior. Hosted evaluations send selected evidence to the configured
-provider and can incur charges; this foundation sends no evidence and makes no
+provider and can incur charges; Labs alone sends no evidence and makes no
 performance or quality claims.
 
 ## Local model lean mode

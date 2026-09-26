@@ -152,6 +152,12 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
   "agents.defaults.compaction.qualityGuard.maxRetries":
     "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
+  "agents.defaults.compaction.semanticCuration":
+    "Optional typed-judgment semantic observation for safeguard compaction. Use shadow mode to measure a conservative relevance-selected view without changing summarizer input.",
+  "agents.defaults.compaction.semanticCuration.mode":
+    'Semantic curation observation mode: "off" disables judgment calls and "shadow" measures a projected curated input while preserving existing compaction behavior.',
+  "agents.defaults.compaction.semanticCuration.timeoutMs":
+    "Per-judgment semantic compaction deadline in milliseconds, capped at 5000. Keep this small so observation does not dominate compaction latency.",
   "agents.defaults.compaction.midTurnPrecheck":
     "Optional embedded OpenClaw tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
   "agents.defaults.compaction.midTurnPrecheck.enabled":
