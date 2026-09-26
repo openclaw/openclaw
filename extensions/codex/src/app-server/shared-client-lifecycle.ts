@@ -53,6 +53,16 @@ export const createCodexAppServerStartupLifetime = (): CodexAppServerStartupLife
   pending: new Set(),
 });
 
+export function ownCodexStartup<T>(
+  lifetime: CodexAppServerStartupLifetime,
+  operation: Promise<T>,
+): Promise<T> {
+  lifetime.pending.add(operation);
+  const release = () => lifetime.pending.delete(operation);
+  void operation.then(release, release);
+  return operation;
+}
+
 // Share same-build module copies without adopting an older in-process plugin's clients.
 export const getSharedCodexAppServerClientState = defineCodexBuildState(
   "openclaw.codexAppServerClientState",
