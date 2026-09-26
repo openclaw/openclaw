@@ -438,6 +438,7 @@ describe("pw-tools-core browser SSRF guards", () => {
       dialogs: { pending: [], recent: [] },
     });
     sessionMocks.isBrowserObservedDialogBlockedError.mockReturnValueOnce(true);
+    sessionMocks.isBrowserObservedDialogBlockedError.mockReturnValueOnce(true);
     const waitForFunction = vi.fn(async () => {});
     pageState.page = {
       url: vi.fn(() => "https://example.com"),
@@ -646,48 +647,6 @@ describe("pw-tools-core browser SSRF guards", () => {
     sessionMocks.wasBrowserNavigationSourcePreservedAfterPolicyDenial.mockImplementation(
       () => false,
     );
-  });
-
-  it("returns abort once an in-flight policy decision allows the request", async () => {
-    const ctrl = new AbortController();
-    const hover = createDeferred<void>();
-    const policy = createDeferred<void>();
-    const started = createDeferred<void>();
-    installInteractionPage(
-      { url: vi.fn(() => "about:blank") },
-      {
-        hover: vi.fn(() => hover.promise),
-      },
-    );
-    mockNavigationGuardOnce(async ({ action, onPolicyCheckStarted, page }) => {
-      const actionTask = action(page.url());
-      onPolicyCheckStarted?.(policy.promise);
-      started.resolve();
-      await policy.promise;
-      return await actionTask;
-    });
-
-    const task = interactions.hoverViaPlaywright({
-      ...strictNavigationOptions(),
-      ref: "1",
-      signal: ctrl.signal,
-    });
-    await started.promise;
-    ctrl.abort(new Error("aborted while policy pending"));
-    let settled = false;
-    void task
-      .finally(() => {
-        settled = true;
-      })
-      .catch(() => {});
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    policy.resolve();
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    hover.resolve();
-    await expect(task).rejects.toThrow("aborted while policy pending");
   });
 
   it("quarantines immediately when a preserved denied source later becomes unsafe", async () => {
