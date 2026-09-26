@@ -1,6 +1,10 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaMockProviderDispatchRequest, ResponsesInputItem } from "./mock-openai-contracts.js";
-import { extractAllRequestTexts, parseToolOutputJson } from "./mock-openai-input.js";
+import {
+  extractAllRequestTexts,
+  isResponsesToolCallOutput,
+  parseToolOutputJson,
+} from "./mock-openai-input.js";
 import { unwrapScenarioCatalogOutput } from "./mock-openai-tool-routing.js";
 
 export function resolveAcceptedChildSessionKey(input: ResponsesInputItem[]) {
@@ -45,6 +49,7 @@ export function createQaSessionIdentityResolver() {
       );
       const standalone =
         (!Array.isArray(request.body.tools) || request.body.tools.length === 0) &&
+        !input.some(isResponsesToolCallOutput) &&
         [
           "You are a JSON-only function.",
           "You are keeping a dream diary.",

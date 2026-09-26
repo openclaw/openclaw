@@ -179,6 +179,32 @@ describe("QA transport session identity", () => {
     expect(await response.text()).toContain("Missing QA session identity");
   });
 
+  it.each([
+    { type: "function_call_output", output: "tool result", beforeUser: false },
+    { type: "custom_tool_call_output", output: "", beforeUser: false },
+    { type: "function_call_output", output: "earlier result", beforeUser: true },
+  ])(
+    "requires affinity for utility requests carrying $type (earlier=$beforeUser)",
+    async ({ type, output, beforeUser }) => {
+      const server = await startMockServer();
+      await observeSession(server, "observed-agent-session");
+      const user = makeUserInput("Reply exactly: {}");
+      const result = { type, call_id: "utility-continuation", output };
+      const body = {
+        instructions: "You are a JSON-only function. Return only a valid JSON value.",
+        tools: [],
+        input: beforeUser ? [result, user] : [user, result],
+      };
+      const missing = await postJson(server, "/v1/responses", body);
+      expect(missing.status).toBe(500);
+      expect(await missing.text()).toContain("Missing QA session identity");
+      const admitted = await postJson(server, "/v1/responses", body, {
+        session_id: "observed-agent-session",
+      });
+      expect(admitted.status).toBe(200);
+    },
+  );
+
   it("settles the full requester observed behind a truncated affinity value", async () => {
     const sessionId = `internal-session-effects-${"run-".repeat(20)}parent`;
     const childSessionKey = "agent:qa:subagent:identity-child";
