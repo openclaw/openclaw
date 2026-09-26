@@ -81,6 +81,8 @@ describe("skill_workshop tool", () => {
     }
 
     expect(schema).toContain("patch = targeted");
+    expect(schema).toContain("this does not authorize foreground repair");
+    expect(schema).toContain("separate usage receipt for the skill from this run");
     expect(schema).toContain("read = existing live skill");
     expect(schema).toContain("create = stage a pending proposal");
     expect(schema).toContain("update = stage a full-body rewrite");
@@ -274,6 +276,15 @@ describe("skill_workshop tool", () => {
 
     expect(disabled.description).toContain("Foreground repair is disabled.");
     expect(enabled.description).toContain("stays pending for review");
+    expect(enabled.description).toContain(
+      "read and prepare_patch only inspect a skill or authorize an exact patch span",
+    );
+    expect(enabled.description).toContain(
+      "do not count as using the skill and do not authorize foreground repair",
+    );
+    expect(enabled.description).toContain(
+      "do not repeat read or prepare_patch to manufacture repair authority",
+    );
     expect(enabled.description).not.toContain("Experience capture");
   });
 
