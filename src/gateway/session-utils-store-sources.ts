@@ -278,8 +278,6 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(params: {
     path: params.registryPath,
     includeIncompatibleSchemaVersions: true,
   });
-  let registry = await registryRead.read();
-  const original = registry.result;
   const assertSourceCurrent = () => {
     if (
       params.currentSource.agentId !== currentSource.agentId ||
@@ -289,6 +287,15 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(params: {
       throw storeChanged();
     }
   };
+  let registry = await registryRead.read().catch((error: unknown) => {
+    if (!(error instanceof AgentDatabaseRegistryChangedError)) {
+      throw error;
+    }
+    // Only initial discovery repeats; retain the original source and state admission.
+    assertSourceCurrent();
+    return registryRead.read();
+  });
+  const original = registry.result;
   const assertCurrent = () => {
     assertSourceCurrent();
     try {

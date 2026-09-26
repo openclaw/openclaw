@@ -3,8 +3,12 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
+import {
+  AgentDatabaseRegistryChangedError,
+  invalidateRegisteredAgentDatabasesMemo,
+} from "../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -279,6 +283,70 @@ it("captures fixed, missing, and retired routing without main-thread SQL", async
     });
   });
 });
+
+it.each(["registry refresh", "repeated refresh", "retarget"] as const)(
+  "bounds source discovery recovery across %s before the registry reply",
+  async (change) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const alias = state.path("source-alias");
+      const replacement = state.path("replacement-source");
+      fs.mkdirSync(replacement);
+      fs.copyFileSync(database.path, path.join(replacement, path.basename(database.path)));
+      const linkType = process.platform === "win32" ? "junction" : "dir";
+      fs.symlinkSync(path.dirname(database.path), alias, linkType);
+      const currentSource = {
+        agentId: database.agentId,
+        path: path.join(alias, path.basename(database.path)),
+      };
+      const registryPath = openOpenClawStateDatabase().path;
+      invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
+      const read = stateRead.executeExistingOpenClawStateRead;
+      let reads = 0;
+      const observation = vi
+        .spyOn(stateRead, "executeExistingOpenClawStateRead")
+        .mockImplementation(async (...args) => {
+          const reply = await read(...args);
+          if (args[1].type === "agentDatabaseRegistry.read") {
+            reads++;
+            if (reads === 1 || change === "repeated refresh") {
+              invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
+            }
+            if (change === "retarget") {
+              fs.unlinkSync(alias);
+              fs.symlinkSync(replacement, alias, linkType);
+            }
+          }
+          return reply;
+        });
+      try {
+        const pending = prepareGatewaySessionStoreReadSourcesAsync({
+          cfg: { agents: { entries: { main: {} } } },
+          currentSource,
+          env: state.env,
+          registryPath,
+        });
+        if (change === "registry refresh") {
+          const prepared = await pending;
+          expect(
+            prepared.request &&
+              resolveGatewaySessionStoreReadSources(prepared.request).sources.main,
+          ).toEqual([currentSource]);
+          expect(prepared.assertCurrent).not.toThrow();
+          expect(reads).toBe(2);
+        } else if (change === "repeated refresh") {
+          await expect(pending).rejects.toBeInstanceOf(AgentDatabaseRegistryChangedError);
+          expect(reads).toBe(2);
+        } else {
+          await expect(pending).rejects.toThrow("Session store changed");
+          expect(reads).toBe(1);
+        }
+      } finally {
+        observation.mockRestore();
+      }
+    });
+  },
+);
 
 it.each([false, true])(
   "keeps failed auxiliary discovery isolated (recovers after yield: %s)",
