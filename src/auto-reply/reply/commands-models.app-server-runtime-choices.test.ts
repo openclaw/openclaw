@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
-import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -57,13 +57,15 @@ beforeEach(() => {
           plugins: [{ id: "github-copilot", providers: ["github-copilot"] }, { id: "copilot" }],
         }),
       };
-      setPreparedModelRuntimeAuthStore(owner, {
-        version: 1,
-        profiles: {
-          "github-copilot:fixture": {
-            type: "token",
-            provider: "github-copilot",
-            token: "fixture-token",
+      bindPreparedModelRuntimeAuth(owner, {
+        store: {
+          version: 1,
+          profiles: {
+            "github-copilot:fixture": {
+              type: "token",
+              provider: "github-copilot",
+              token: "fixture-token",
+            },
           },
         },
       });
