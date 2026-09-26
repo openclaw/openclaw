@@ -3,11 +3,11 @@ import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/tr
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import type {
   FollowupReply,
   FollowupCompletionOwner,
-} from "../../tasks/task-followup-completion.types.js";
-import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
+} from "../subagents/completion/session-followup-completion.types.js";
 import {
   runWithGatewayToolContinuationContext,
   type AgentToolGatewayRequestCaller,

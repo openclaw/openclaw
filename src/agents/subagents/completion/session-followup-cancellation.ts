@@ -1,6 +1,6 @@
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
-import { getRuntimeConfig } from "../config/config.js";
-import type { FollowupRequest } from "./task-followup-completion.types.js";
+import { getRuntimeConfig } from "../../../config/config.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import type { FollowupRequest } from "./session-followup-completion.types.js";
 
 /** Stop only this accepted cohort; the unrelated original task in the same session is not a root. */
 export async function cancelFollowupCohort(params: {
@@ -9,7 +9,7 @@ export async function cancelFollowupCohort(params: {
   assertCurrent(this: void): void;
 }): Promise<void> {
   const { killAllControlledSubagentRuns, resolveSubagentController } =
-    await import("../agents/subagents/registry/subagent-control.js");
+    await import("../registry/subagent-control.js");
   params.assertCurrent();
   const cfg = getRuntimeConfig();
   const controller = resolveSubagentController({

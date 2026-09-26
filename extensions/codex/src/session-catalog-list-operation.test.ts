@@ -222,7 +222,7 @@ describe("Codex catalog list operation", () => {
       await vi.waitFor(() => expect(secondStarted).toBe(true));
       expect(advancing.state.settled).toBe(false);
       discovery.resolve({ nodes: [] });
-      await nextTurn();
+      await vi.dynamicImportSettled();
       second.resolve(page(["managed"], "third"));
       await expect(advancing.done).resolves.toEqual({
         status: "fulfilled",

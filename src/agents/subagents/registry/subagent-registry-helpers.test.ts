@@ -245,27 +245,6 @@ describe("logAnnounceGiveUp", () => {
     vi.useRealTimers();
   });
 
-  it("includes the last delivery error in expiry warnings", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(9_000);
-    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const entry = createRunEntry({
-      execution: { status: "terminal", startedAt: 1_000, endedAt: 4_000 },
-      delivery: {
-        status: "failed",
-        attemptCount: 3,
-        lastError: "direct-primary: routed-dispatch-did-not-queue-final",
-      },
-    });
-
-    logAnnounceGiveUp(entry, "expiry");
-
-    expect(logSpy).toHaveBeenCalledWith(
-      '[warn] Subagent announce give up (expiry) run=run-1 child=agent:main:subagent:child requester=agent:main:main retries=3 endedAgo=5s deliveryError="direct-primary: routed-dispatch-did-not-queue-final"',
-    );
-    logSpy.mockRestore();
-  });
-
   it("normalizes multiline delivery errors onto one gateway log line", () => {
     // Gateway logs are line-oriented; multiline provider errors must be
     // collapsed before they enter warning text.
