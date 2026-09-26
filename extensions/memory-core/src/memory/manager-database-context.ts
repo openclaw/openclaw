@@ -41,15 +41,11 @@ import {
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
-type PublicationWorker = Pick<
-  OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>,
-  "run" | "close"
->;
 
 export class MemoryIndexDatabase {
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
   private nativeWriterActive = false;
-  private publicationWorker?: Promise<PublicationWorker>;
+  private publicationWorker?: Promise<OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>>;
   private shadow?: {
     path: string;
     identity: MemoryShadowConnection["fileIdentity"];
@@ -231,7 +227,9 @@ export class MemoryIndexDatabase {
     };
   }
 
-  private getPublicationWorker(): Promise<PublicationWorker> {
+  private getPublicationWorker(): Promise<
+    OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>
+  > {
     this.publicationWorker ??= (async () => {
       const filename = this.shadow?.path ?? this.writeOptions?.path;
       if (!filename || this.readOnly || this.closed) {

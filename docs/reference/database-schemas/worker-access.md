@@ -60,6 +60,10 @@ survives cleanup failure while the failed native owner retires. Use `run` when
 dependent commands share a binding or host publication must stay inside the
 same FIFO interval.
 
+The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
+contract for existing adapters. The factory's inferred return type additionally
+provides the typed single-command `execute` method.
+
 ## Carry facts, publish after commit
 
 Placement turn claims and releases execute through the shared-state writer,

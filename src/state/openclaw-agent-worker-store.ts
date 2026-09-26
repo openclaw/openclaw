@@ -46,11 +46,6 @@ function reportCompletedPublicationCleanupFailure(error: unknown): void {
 }
 
 export type OpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations> = {
-  execute<Key extends keyof Operations>(
-    command: { type: Key; input: Operations[Key]["input"] },
-    assertCurrent: () => void,
-    options?: { signal?: AbortSignal },
-  ): Promise<Operations[Key]["output"]>;
   run<T>(
     operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => Promise<T>,
     assertCurrent: () => void,
@@ -63,7 +58,15 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
   inputOptions: OpenClawAgentDatabaseOptions,
   publicationSource: DatabaseSync | { execution: OpenClawAgentDatabaseExecution },
   worker: { moduleUrl: URL; input: unknown },
-): Promise<OpenClawAgentSqliteWorkerStore<Operations>> {
+): Promise<
+  OpenClawAgentSqliteWorkerStore<Operations> & {
+    execute<Key extends keyof Operations>(
+      command: { type: Key; input: Operations[Key]["input"] },
+      assertCurrent: () => void,
+      options?: { signal?: AbortSignal },
+    ): Promise<Operations[Key]["output"]>;
+  }
+> {
   const env = cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const options = {
