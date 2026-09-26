@@ -23,6 +23,7 @@ import { resolveIMessageConversationRoute } from "./conversation-route.js";
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
   agents: {
+    ownership: "explicit",
     list: [{ id: "main" }, { id: "codex" }],
   },
   bindings: [{ agentId: "main", match: { channel: "imessage", accountId: "default" } }],
@@ -131,26 +132,15 @@ describe("resolveIMessageConversationRoute", () => {
 
   it("lets runtime iMessage conversation bindings override default routing", async () => {
     const touch = vi.fn();
+    const binding = createBinding({
+      targetSessionKey: "agent:codex:acp:bound-1",
+      metadata: { boundBy: "user-1" },
+    });
     registerSessionBindingAdapter({
       channel: "imessage",
       accountId: "default",
       listBySession: () => [],
-      resolveByConversation: (ref) =>
-        ref.conversationId === "+15555550123"
-          ? {
-              bindingId: "default:+15555550123",
-              targetSessionKey: "agent:codex:acp:bound-1",
-              targetKind: "session",
-              conversation: {
-                channel: "imessage",
-                accountId: "default",
-                conversationId: "+15555550123",
-              },
-              status: "active",
-              boundAt: Date.now(),
-              metadata: { boundBy: "user-1" },
-            }
-          : null,
+      resolveByConversation: (ref) => (ref.conversationId === "+15555550123" ? binding : null),
       touch,
     });
 
@@ -301,7 +291,9 @@ describe("resolveIMessageConversationRoute", () => {
       groupScope: "main",
       lastRoutePolicy: "main",
     });
-    expect(inspect).toHaveBeenCalledExactlyOnceWith(binding.conversation);
+    expect(inspect).toHaveBeenCalledTimes(2);
+    expect(inspect).toHaveBeenNthCalledWith(1, binding.conversation);
+    expect(inspect).toHaveBeenNthCalledWith(2, binding.conversation);
   });
 
   it("waits for activity persistence without replacing the captured route", async () => {

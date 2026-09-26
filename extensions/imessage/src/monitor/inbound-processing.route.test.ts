@@ -49,6 +49,7 @@ describe("buildIMessageInboundContext direct reply route", () => {
           ...(bound
             ? {
                 agents: {
+                  ownership: "explicit",
                   list: [{ id: "first" }, { id: "second" }],
                   defaults: { workspace: state.workspaceDir },
                 },

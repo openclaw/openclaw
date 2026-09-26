@@ -10,7 +10,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { IMessageRpcClient, type createIMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
@@ -72,7 +72,19 @@ it("keeps a watched reaction on the runtime-bound global owner's queue", async (
     listBySession: () => [binding],
     resolveByConversation: () => binding,
   });
-  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const queued = Promise.withResolvers<void>();
+  const queuedMessage = "reaction system event queued session=global";
+  // Keep failure cleanup observable even if startup fails before waitForClose.
+  void queued.promise.catch(() => {});
+  const runtime = {
+    log: vi.fn((...args: unknown[]) => {
+      if (args.some((value) => typeof value === "string" && value.includes(queuedMessage))) {
+        queued.resolve();
+      }
+    }),
+    error: vi.fn((...args: unknown[]) => queued.reject(new Error(args.map(String).join(" ")))),
+    exit: vi.fn(),
+  };
   createClient.mockImplementation(async (options) => {
     const client = new IMessageRpcClient(options);
     vi.spyOn(client, "request").mockResolvedValue({ subscription: 1 });
@@ -95,16 +107,19 @@ it("keeps a watched reaction on the runtime-bound global owner's queue", async (
           },
         },
       });
-      await vi.waitFor(() =>
-        expect(runtime.log).toHaveBeenCalledWith(
-          expect.stringContaining("reaction system event queued session=global"),
-        ),
-      );
+      await queued.promise;
     });
     return client;
   });
 
-  await monitorIMessageProvider({ config: cfg, runtime });
+  const monitor = monitorIMessageProvider({ config: cfg, runtime });
+  onTestFinished(async () => {
+    queued.reject(new Error("Reaction monitor test finished before queue completion"));
+    await monitor.catch(() => {});
+  });
+  await monitor;
+
+  expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(queuedMessage));
 
   expect(peekSystemEventEntries("agent:research:global")).toEqual([
     expect.objectContaining({ text: `iMessage reaction added: 👍 by ${sender} on msg bot-reply` }),
