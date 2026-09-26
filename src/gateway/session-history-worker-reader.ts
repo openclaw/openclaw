@@ -4,14 +4,21 @@ import type {
 } from "../config/sessions/session-history-types.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
+import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-sources.js";
 
 /** Dispatch only inside the history worker's admitted database lifetime. */
 export async function readSessionHistoryRequest(
   request: SessionHistoryWorkerRequest,
   readTarget: PreparedSessionHistoryReadTarget,
 ): Promise<SessionHistoryWorkerResult> {
+  const { sourceDiscovery, ...target } = readTarget;
   const options = {
-    readers: createReadonlySessionHistoryReader(readTarget),
+    readers: createReadonlySessionHistoryReader(
+      target,
+      sourceDiscovery
+        ? () => resolveGatewaySessionStoreReadSources(sourceDiscovery).sources
+        : undefined,
+    ),
     readOnly: true,
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
