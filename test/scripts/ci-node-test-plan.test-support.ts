@@ -92,7 +92,9 @@ export function expectRuntimeReleaseInventory({
   );
   expect(beforeFiles.filter((file) => !afterFiles.includes(file)).toSorted()).toEqual(
     RELEASE_ONLY_RUNTIME_TEST_FILES.filter(
-      (file) => compactMode === "pull-request" || !file.startsWith("test/scripts/"),
+      (file) =>
+        !file.startsWith("extensions/") &&
+        (compactMode === "pull-request" || !file.startsWith("test/scripts/")),
     ).toSorted(),
   );
   expect(afterFiles.filter((file) => !beforeFiles.includes(file))).toEqual([]);

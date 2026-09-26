@@ -24,6 +24,8 @@ export function isCiProofTestFile(file: string): boolean {
 // Runtime integration and released-state matrices retain their canonical Vitest
 // owners, but automatic CI runs them only when the test itself changes.
 export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
+  "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
+  "extensions/signal/src/client-container.handshake.loopback.test.ts",
   "src/agents/agent-bundle-mcp-retention.test.ts",
   "src/agents/harness/acp-native-execution.process.test.ts",
   "src/agents/mcp-stdio-client.cleanup.real.test.ts",

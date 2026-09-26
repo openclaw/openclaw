@@ -156,7 +156,10 @@ it.each([
   );
   const root = changedPath.split("/").slice(0, 2).join("/");
   const expectedFiles = listExecutableExtensionFiles([root]).filter(
-    (file) => resolveExtensionTestConfig(file) === config && !isCiProofTestFile(file),
+    (file) =>
+      resolveExtensionTestConfig(file) === config &&
+      !isCiProofTestFile(file) &&
+      !isReleaseOnlyRuntimeTestFile(file),
   );
   expect(partitions.length).toBeGreaterThan(0);
   expect(partitions.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
@@ -2902,6 +2905,20 @@ describe("CI changed Node test plan", () => {
     const groups = fallbackGroups(shards ?? []).filter((group) => group.configs.includes(config));
     expect(groups.length).toBeGreaterThan(1);
     expect(groups.every((group) => group.configs.length === 1)).toBe(true);
+    if (config === "test/vitest/vitest.extension-qa.config.ts") {
+      const expected = listExecutableExtensionFiles(["extensions"]).filter(
+        (file) =>
+          resolveExtensionTestConfig(file) === config &&
+          !isCiProofTestFile(file) &&
+          !isReleaseOnlyRuntimeTestFile(file),
+      );
+      expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+        expected.toSorted(),
+      );
+      expect(groups.every((group) => (group.includePatterns?.length ?? 0) <= 90)).toBe(true);
+      expect(groups.every((group) => !group.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON)).toBe(true);
+      return;
+    }
     expect(groups.every((group) => !group.includePatterns)).toBe(true);
     // Every native partition must survive packing exactly once, with no argument changes.
     expect(sortArgs(groups.map((group) => group.env))).toEqual(
@@ -3128,7 +3145,8 @@ describe("CI changed Node test plan", () => {
         .filter(
           (file) =>
             resolveExtensionTestConfig(file) === "test/vitest/vitest.extension-qa.config.ts" &&
-            !isCiProofTestFile(file),
+            !isCiProofTestFile(file) &&
+            !isReleaseOnlyRuntimeTestFile(file),
         )
         .toSorted(),
     );
@@ -3136,7 +3154,15 @@ describe("CI changed Node test plan", () => {
     const lifecycleJob = shards.find((job) =>
       fallbackGroups([job]).some((group) => group.includePatterns?.includes(lifecycle)),
     );
-    expect(lifecycleJob).toMatchObject({ pretestBuildMode: "private-qa", planConcurrency: 1 });
+    expect(lifecycleJob).toBeUndefined();
+    const direct = createChangedExtensionFallbackShards([lifecycle]);
+    expect(direct).toContainEqual(
+      expect.objectContaining({
+        pretestBuildMode: "private-qa",
+        planConcurrency: 1,
+        includePatterns: expect.arrayContaining([lifecycle]),
+      }),
+    );
     const workerGroups = groups.filter((group) =>
       group.configs.includes("test/vitest/vitest.extension-database-workers.config.ts"),
     );
@@ -3155,7 +3181,9 @@ describe("CI changed Node test plan", () => {
 
   it("routes lifecycle edits to the prepared QA config without losing boundary coverage", () => {
     const target = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
-    const shards = createChangedNodeTestShards([target]);
+    const shards = createChangedNodeTestShards([target], {
+      includeReleaseOnlyRuntimeTests: false,
+    });
     expect(shards).not.toBeNull();
     const qaShards = shards?.filter((shard) => shard.pretestBuildMode === "private-qa") ?? [];
     expect(qaShards).toHaveLength(1);
@@ -3168,6 +3196,32 @@ describe("CI changed Node test plan", () => {
     }
     expect(shards?.filter((shard) => !qaShards.includes(shard))).toEqual([
       expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
+    ]);
+  });
+
+  it("defers the Signal transport tour while retaining its fast owner and direct edits", () => {
+    const tour = "extensions/signal/src/client-container.handshake.loopback.test.ts";
+    const sibling = "extensions/signal/src/client-container.test.ts";
+    const fallback = createChangedExtensionFallbackShards([
+      "extensions/signal/src/client-container.ts",
+    ]);
+    const files = fallbackGroups(fallback).flatMap((group) => group.includePatterns ?? []);
+    expect(files).toContain(sibling);
+    expect(files).not.toContain(tour);
+    const direct = createChangedExtensionFallbackShards([tour]);
+    expect(fallbackGroups(direct).flatMap((group) => group.includePatterns ?? [])).toContain(tour);
+    expect(
+      selectedFiles(
+        createChangedNodeTestShards([tour], {
+          includeReleaseOnlyRuntimeTests: false,
+        }),
+      ),
+    ).toContain(tour);
+    expect(buildVitestRunPlans([tour])).toEqual([
+      expect.objectContaining({
+        config: "test/vitest/vitest.extension-signal.config.ts",
+        includePatterns: [tour],
+      }),
     ]);
   });
 

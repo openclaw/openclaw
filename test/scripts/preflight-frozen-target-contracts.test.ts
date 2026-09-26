@@ -10,12 +10,12 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { expandUpdateFirstHopCompatLanes } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const repo = resolve(".");
@@ -108,17 +108,7 @@ function fixture(
   const selected = commit(selectedRoot, layout === "nested-tooling" ? [".release-harness"] : []);
   const tooling = commit(toolingRoot, layout === "nested-selected" ? ["selected"] : []);
   if (parser) {
-    const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
-    const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
-    const installedNative = createRequire(installedParser).resolve(`${nativeName}/package.json`);
-    cpSync(dirname(installedParser), join(toolingRoot, "node_modules/typescript"), {
-      recursive: true,
-      dereference: true,
-    });
-    cpSync(dirname(installedNative), join(toolingRoot, "node_modules", nativeName), {
-      recursive: true,
-      dereference: true,
-    });
+    materializeNativeCompiler(toolingRoot);
   }
   const log = join(root, "forbidden-commands");
   const bin = join(root, "bin");
@@ -522,11 +512,11 @@ describe("frozen admission upgrade Docker aliases", () => {
       const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
       rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
     }
-    const lanes = expandUpdateFirstHopCompatLanes([lane]);
-    const result = f.run({ docker: { lanes } });
+    const selectedLanes = expandUpdateFirstHopCompatLanes([lane]);
+    const result = f.run({ docker: { lanes: selectedLanes } });
     expect(result.status, result.stderr).toBe(0);
     const record = JSON.parse(result.stdout);
-    expect(record.docker).toEqual({ lanes, omitted: [], status: "ADMITTED" });
+    expect(record.docker).toEqual({ lanes: selectedLanes, omitted: [], status: "ADMITTED" });
     expect(record.selection.consumers).toEqual(lane === "plugins-offline" ? ["plugins"] : []);
     expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
       record.selection.consumers,

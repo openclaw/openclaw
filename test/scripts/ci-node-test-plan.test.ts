@@ -118,6 +118,8 @@ describe("Control UI release-only inventories", () => {
   const automationManagement =
     "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
   const releaseOnlyRealGateway = new Set([
+    "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
+    "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
     "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
     "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
     automationManagement,
@@ -175,7 +177,11 @@ describe("Control UI release-only inventories", () => {
       "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
       "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
     ]) {
-      expect(shards[0]?.groups[0]?.includePatterns).toContain(file);
+      if (expectedFiles.includes(file)) {
+        expect(shards[0]?.groups[0]?.includePatterns).toContain(file);
+      } else {
+        expect(shards[0]?.groups[0]?.includePatterns).not.toContain(file);
+      }
     }
     expect(shards[1]?.groups[0]?.includePatterns).toContain(
       "ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts",
