@@ -108,6 +108,10 @@ The runtime must render the typed approval actions and then render the final
 application result. An allowed request can finish as applied or not applied;
 do not treat the recorded approval alone as proof that the change completed.
 
+Native reaction bindings must preserve the explicit approval kind from delivery
+through decision resolution, including after loading persisted plugin state.
+iMessage native poll and reaction indexes follow the same rule after a restart.
+
 Other approval helpers:
 
 - Use `settleApprovalReaction` from

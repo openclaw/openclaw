@@ -211,7 +211,9 @@ export async function registerSignalApprovalReactionTarget(params: {
   }).map((binding) => binding.decision);
   if (
     !params.routeAllowed ||
-    (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
+    (params.approvalKind !== "exec" &&
+      params.approvalKind !== "plugin" &&
+      params.approvalKind !== "system-agent") ||
     !key ||
     !approvalId ||
     allowedDecisions.length === 0
