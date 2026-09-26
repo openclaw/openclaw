@@ -5,7 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { expect } from "vitest";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { execSchtasks } from "./schtasks-exec.js";
-import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { probeScheduledTaskState } from "./schtasks-state-probe.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const WAIT_INTERVAL_MS = 200;
@@ -44,11 +44,14 @@ type TaskDefinitionSnapshot = { exists: false; taskXml: null } | { exists: true;
 export async function readTaskDefinitionSnapshot(
   taskName: string,
 ): Promise<TaskDefinitionSnapshot> {
-  const exists = probeScheduledTaskExists(taskName);
-  if (exists === null) {
-    throw new Error(`Could not determine whether Scheduled Task ${taskName} exists`);
+  const probe = probeScheduledTaskState(taskName);
+  if (probe.status === "unknown") {
+    const detail = sanitizeDiagnosticText(probe.detail, [[os.userInfo().homedir, "<user-home>"]]);
+    throw new Error(`Could not determine whether Scheduled Task ${taskName} exists: ${detail}`, {
+      cause: probe.diagnostic,
+    });
   }
-  if (!exists) {
+  if (probe.status === "missing") {
     return { exists: false, taskXml: null };
   }
   const taskXml = await readTaskXml(taskName);

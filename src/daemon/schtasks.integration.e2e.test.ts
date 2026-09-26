@@ -538,8 +538,8 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
       await fs.mkdir(stateDir);
       await fs.writeFile(path.join(stateDir, "openclaw.json"), "{}\n");
       pendingProof = await withEnvAsync(env, async () => {
-        const defaultTaskBefore = await readTaskDefinitionSnapshot("OpenClaw Gateway");
         if (releasedBindingPath) {
+          const defaultTaskBefore = await readTaskDefinitionSnapshot("OpenClaw Gateway");
           const released = await proveReleasedScheduledTask({
             bindingPath: releasedBindingPath,
             env,
@@ -578,6 +578,7 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
           lifetime,
           signal,
         });
+        const defaultTaskBefore = await readTaskDefinitionSnapshot("OpenClaw Gateway");
         const service = resolveGatewayService();
         const readRuntime = () => service.readRuntime(env);
 
