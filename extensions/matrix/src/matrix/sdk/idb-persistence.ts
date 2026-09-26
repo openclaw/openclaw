@@ -280,6 +280,7 @@ export async function persistIdbToDisk(params?: {
   snapshotPath?: string;
   databasePrefix?: string;
   strict?: boolean;
+  requireCryptoAccount?: boolean;
   abortSignal?: AbortSignal;
   stateRuntime?: MatrixSnapshotStateRuntime;
 }): Promise<void> {
@@ -306,6 +307,18 @@ export async function persistIdbToDisk(params?: {
         }
         throwIfLegacySnapshotNeedsDoctor(snapshotPath, storedSnapshotJson);
         const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
+        if (
+          params?.requireCryptoAccount &&
+          !snapshot.some((database) =>
+            database.stores.some(
+              (store) =>
+                store.name === "core" &&
+                store.records.some((record) => record.key === "account" && record.value != null),
+            ),
+          )
+        ) {
+          throw new Error("Matrix key upload has no durable crypto account");
+        }
         if (params?.abortSignal?.aborted || snapshot.length === 0) {
           return 0;
         }
@@ -338,6 +351,42 @@ export async function persistIdbToDisk(params?: {
       throw err;
     }
   }
+}
+
+export async function persistCryptoBeforeKeyUpload(params: {
+  resource: RequestInfo | URL;
+  init?: RequestInit;
+  encryptionEnabled: boolean;
+  snapshotPath?: string;
+  databasePrefix?: string;
+  stateRuntime?: MatrixSnapshotStateRuntime;
+}): Promise<void> {
+  const { resource, init } = params;
+  const method = init?.method ?? (resource instanceof Request ? resource.method : "GET");
+  const url = resource instanceof Request ? resource.url : String(resource);
+  if (
+    !params.encryptionEnabled ||
+    method.toUpperCase() !== "POST" ||
+    !/\/_matrix\/client\/(?:v3|r0|unstable)\/keys\/upload$/.test(new URL(url).pathname)
+  ) {
+    return;
+  }
+  if (!params.databasePrefix) {
+    throw new Error("Matrix key upload requires an account-scoped crypto database");
+  }
+  const signal = init?.signal ?? (resource instanceof Request ? resource.signal : undefined);
+  signal?.throwIfAborted();
+  // The server must never publish keys whose private account state can be
+  // lost before the periodic snapshot. A failed durable write denies I/O.
+  await persistIdbToDisk({
+    snapshotPath: params.snapshotPath,
+    databasePrefix: params.databasePrefix,
+    strict: true,
+    requireCryptoAccount: true,
+    abortSignal: signal ?? undefined,
+    stateRuntime: params.stateRuntime,
+  });
+  signal?.throwIfAborted();
 }
 
 export function readLegacyMatrixIdbSnapshotStateUnlocked(

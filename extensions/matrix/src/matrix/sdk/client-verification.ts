@@ -1,6 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { loadMatrixCryptoRuntime } from "./client-base.js";
 import { MatrixClientCore } from "./client-core.js";
 import {
   MATRIX_STATUS_DIAGNOSTIC_TIMEOUT_MS,
@@ -13,6 +12,7 @@ import {
   type MatrixOwnDeviceVerificationStatus,
   type MatrixRoomKeyBackupStatus,
 } from "./client-support.js";
+import { loadMatrixCryptoRuntime } from "./crypto-runtime-loader.js";
 import { LogService } from "./logger.js";
 import { isRepairableSecretStorageAccessError } from "./recovery-key-store.js";
 import type { MatrixCryptoBootstrapApi, MatrixDeviceVerificationStatusLike } from "./types.js";
