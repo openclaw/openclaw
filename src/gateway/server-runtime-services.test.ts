@@ -18,6 +18,7 @@ import {
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { registerGatewayCronStartupTests } from "./server-runtime-services.cron.test-support.js";
 import {
   createLog,
@@ -57,6 +58,7 @@ describe("server-runtime-services", () => {
 
   it("starts channel health without activating scheduled services", () => {
     startGatewayChannelHealthMonitor({
+      scheduler: createTestGatewayScheduler(),
       channelManager: {
         getRuntimeSnapshot: vi.fn(),
         isHealthMonitorEnabled: vi.fn(),
@@ -75,6 +77,7 @@ describe("server-runtime-services", () => {
     "keeps channel health recovery disabled when %s suppresses startup",
     (envKey) => {
       const monitor = startGatewayChannelHealthMonitor({
+        scheduler: createTestGatewayScheduler(),
         channelManager: {} as never,
         env: { [envKey]: "1" },
       });

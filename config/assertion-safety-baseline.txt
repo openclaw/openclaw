@@ -3380,7 +3380,6 @@ ui/src/components/login-gate.ts	2
 ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/markdown-parser.ts	4
-ui/src/components/markdown-streaming.ts	1
 ui/src/components/mcp-app-theme.ts	1
 ui/src/components/mcp-app-view.ts	8
 ui/src/components/mcp-server-form.ts	1

@@ -903,6 +903,7 @@
     "native.android.8363c18ba7fdf0fd": "速率限制",
     "native.android.837744e8aa3c8155": "已连接",
     "native.android.83e4fdeca6722756": "检查并管理已安装技能的状态。",
+    "native.android.83e7a975bb7a5ea0": "收起链接预览",
     "native.android.83e80579dc21643d": "与你的智能体语音交流",
     "native.android.841570a28a49db67": "更改 Cron 需要 operator.admin 权限。 设置码按设计不会授予此权限。 请使用 Gateway 的共享令牌或密码重新连接以请求管理员权限。 如果此设备仍缺少该权限, 请从已有的管理员客户端批准待处理的权限范围升级请求。",
     "native.android.84244f73da2b8e3b": "OpenClaw",
