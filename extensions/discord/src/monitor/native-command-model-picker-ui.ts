@@ -290,8 +290,6 @@ export async function replyWithDiscordModelPickerProviders(params: {
           model: parsedCurrentRef.model,
         })
       : { page: 1 };
-  const initialPage = initialResolved.page;
-  const initialModelBucket = initialResolved.bucket;
   const initialProviderLocation = findProviderBucketLocation(data, initialProvider);
 
   const rendered = renderDiscordModelPickerModelsView({
@@ -299,10 +297,10 @@ export async function replyWithDiscordModelPickerProviders(params: {
     userId: params.userId,
     data,
     provider: initialProvider,
-    page: initialPage,
+    page: initialResolved.page,
     providerPage: initialProviderLocation?.page ?? 1,
     providerBucket: initialProviderLocation?.bucket,
-    modelBucket: initialModelBucket,
+    modelBucket: initialResolved.bucket,
     currentModel,
     currentRuntime,
     quickModels,
@@ -313,11 +311,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
   };
 
   await params.safeInteractionCall("model picker reply", async () => {
-    if (params.preferFollowUp) {
-      await params.interaction.followUp(payload);
-      return;
-    }
-    await params.interaction.reply(payload);
+    await params.interaction[params.preferFollowUp ? "followUp" : "reply"](payload);
   });
 }
 

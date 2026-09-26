@@ -32,19 +32,6 @@ extension OpenClawWatchMessageJournal {
             arguments: [runID, entry.commandId])
     }
 
-    static func terminalReceipt(
-        _ command: OpenClawWatchChatDeliveryCommand,
-        outcome: OpenClawWatchChatDeliveryOutcome,
-        runID: String?,
-        nowMs: Int64) -> OpenClawWatchChatDeliveryReceipt
-    {
-        OpenClawWatchChatDeliveryReceipt(
-            context: command.context,
-            commandId: command.commandId,
-            state: .terminal(OpenClawWatchChatDeliveryTerminal(
-                receiptId: UUID().uuidString, outcome: outcome, runId: runID, completedAtMs: nowMs)))
-    }
-
     static func storeTerminal(
         _ db: Database,
         entry: OpenClawWatchMessageEntry,
@@ -52,7 +39,11 @@ extension OpenClawWatchMessageJournal {
         nowMs: Int64) throws
     {
         guard let command = entry.command else { throw DatabaseError(message: "The Watch command is missing.") }
-        let receipt = self.terminalReceipt(command, outcome: outcome, runID: entry.acceptedRunID, nowMs: nowMs)
+        let receipt = OpenClawWatchChatDeliveryReceipt(
+            context: command.context,
+            commandId: command.commandId,
+            state: .terminal(OpenClawWatchChatDeliveryTerminal(
+                receiptId: UUID().uuidString, outcome: outcome, runId: entry.acceptedRunID, completedAtMs: nowMs)))
         try OpenClawWatchChatDeliveryCodec.validateReceipt(receipt)
         try db.execute(
             sql: """
@@ -117,16 +108,14 @@ extension OpenClawWatchMessageJournal {
             arguments: [context.gatewayStableID]),
             let generation: String = row["watch_route_generation"],
             generation.utf8.elementsEqual(context.routeGeneration.utf8)
-        else { throw self.staleRoute() }
+        else {
+            throw OpenClawWatchChatDeliveryError(
+                code: OpenClawWatchChatDeliveryCodec.staleRouteCode,
+                message: String(localized: """
+                This Watch message belongs to a retired Gateway route. Open OpenClaw on iPhone.
+                """))
+        }
         return row
-    }
-
-    static func staleRoute() -> OpenClawWatchChatDeliveryError {
-        OpenClawWatchChatDeliveryError(
-            code: OpenClawWatchChatDeliveryCodec.staleRouteCode,
-            message: String(localized: """
-            This Watch message belongs to a retired Gateway route. Open OpenClaw on iPhone.
-            """))
     }
 
     static func deleteExpired(_ db: Database, nowMs: Int64) throws -> Int {

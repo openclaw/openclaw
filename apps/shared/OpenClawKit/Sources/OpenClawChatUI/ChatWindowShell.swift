@@ -407,7 +407,7 @@ public struct OpenClawChatWindowShell: View {
             Divider()
 
             Button {
-                self.copyToPasteboard(self.viewModel.sessionKey)
+                ChatPasteboard.copy(self.viewModel.sessionKey)
             } label: {
                 chatWindowActionLabel("Copy Session Key", systemImage: "doc.on.doc")
             }
@@ -462,11 +462,6 @@ public struct OpenClawChatWindowShell: View {
         }
         .menuIndicator(.hidden)
         .help("Thread actions")
-    }
-
-    private func copyToPasteboard(_ string: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(string, forType: .string)
     }
 
     private func exportTranscript() {

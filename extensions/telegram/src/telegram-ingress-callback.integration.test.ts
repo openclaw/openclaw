@@ -162,16 +162,15 @@ it.each(["none", "middleware", "handler"] as const)(
         },
       });
       const answerRequests = vi.spyOn(bot.api, "answerCallbackQuery");
-      const spoolDir = path.join(stateDir, "telegram", "ingress-spool-default");
       monitor = createTelegramTransportIngressMonitor({
-        spoolDir,
+        stateDir,
         bot,
         accountId: "default",
         botInfo: telegramBotInfoForTest,
         pollIntervalMs: 10,
         onError: (error) => runtimeErrors.push(error),
       });
-      const queue = openTelegramIngressQueue(spoolDir);
+      const queue = openTelegramIngressQueue({ stateDir });
       const actor = { id: 111, is_bot: false, first_name: "Ada" };
       monitor.start();
       await monitor.admit({

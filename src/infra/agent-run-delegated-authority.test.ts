@@ -269,13 +269,9 @@ test.each(["replacement", "restart"])(
   },
 );
 
-test.each(
-  [false, true].flatMap((revoked) =>
-    ["omitted", "replaced"].map((binding) => ({ revoked, binding })),
-  ),
-)(
-  "refuses a $binding source binding for the same instance (revoked=$revoked)",
-  ({ revoked, binding }) => {
+test.each(["omitted", "replaced"])(
+  "refuses a %s source binding for the same instance after revocation",
+  (binding) => {
     const instance = { instanceId: "bound-instance", runId: "bound-run" };
     let current = true;
     const assertSourceCurrent = () => {
@@ -287,7 +283,7 @@ test.each(
     const replacement = vi.fn();
     try {
       expect(claimAgentRunDelegatedAuthority(instance, assertSourceCurrent)).toBe(authority);
-      current = !revoked;
+      current = false;
       expect(() =>
         claimAgentRunDelegatedAuthority(instance, binding === "replaced" ? replacement : undefined),
       ).toThrow("already bound");

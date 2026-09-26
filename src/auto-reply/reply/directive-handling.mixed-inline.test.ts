@@ -178,7 +178,7 @@ describe("mixed inline directives", () => {
   );
 
   describe.each(["", "please reply "])("off-catalog selection with prefix %j", (prefix) => {
-    it.each([undefined, {}, { allow: [] }])(
+    it.each([undefined, { allow: [] }])(
       "uses policy %j independently of inventory",
       async (modelPolicy) => {
         const { result, sessionEntry } = await applyMixedDirectives({

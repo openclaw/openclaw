@@ -3,8 +3,9 @@ import {
   resolveNonNegativeIntegerOption,
   resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
+import pMap from "p-map";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
+import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
@@ -12,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
+import { resolveAssistantIdentity } from "./assistant-identity.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
@@ -298,6 +300,31 @@ export function filterAndSortSessionEntries(params: SessionListFilterParams): Se
   ).entries;
 }
 
+/** Acquire mutable workspace names before entering synchronous visibility and selection. */
+export async function prepareSessionSearchIdentityNames(
+  projection: SessionRowProjection,
+  opts: SessionsListParams,
+) {
+  const prepared = prepareSessionRowSelection(projection, opts);
+  const scope = projection.state.scope(opts);
+  const agentIds = new Set(scope.agentId ? [scope.agentId] : listAgentIds(prepared.cfg));
+  for (const [key] of prepared.entries) {
+    const agentId = prepared.getTarget(key)?.agentId;
+    if (agentId) {
+      agentIds.add(agentId);
+    }
+  }
+  const identities = await pMap(
+    [...agentIds],
+    (agentId) => resolveAssistantIdentity({ cfg: prepared.cfg, agentId }),
+    { concurrency: 4 },
+  );
+  return {
+    cfg: prepared.cfg,
+    names: new Map(identities.map(({ agentId, name }) => [agentId, name])),
+  };
+}
+
 // One filter set per resident owner; never retain viewer decisions or time-dependent predicates.
 const sessionListCandidates = new WeakMap<
   SessionEntryPair[],
@@ -312,8 +339,12 @@ export function prepareProjectedSessionList(params: {
   context?: GatewayRequestContext;
   client?: GatewayClient | null;
   now: number;
+  searchIdentities?: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>>;
 }) {
   const { projection, opts, key: exactKey, context, client, now } = params;
+  if (params.searchIdentities && params.searchIdentities.cfg !== projection.state.cfg) {
+    throw new Error("Session identity configuration changed while reading; retry the request");
+  }
   const presentation = prepareProjectedSessionPresentation(
     projection,
     client,
@@ -352,6 +383,7 @@ export function prepareProjectedSessionList(params: {
   }
   const filters: SessionListFilterParams = {
     ...prepared,
+    identityNames: params.searchIdentities?.names,
     ...(candidates ? { entries: candidates, candidatesPrepared: true } : {}),
     involvingActorId: opts.involvingMe ? identity : undefined,
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
@@ -391,10 +423,17 @@ export async function listProjectedSessions(params: {
   diagnostics?.mark("materialize");
   const waitStarted = performance.now();
   let yieldCount = 0;
+  let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
   do {
     yieldCount++;
     await projection.ensureMaterialized();
-  } while (projection.needsMaterialization);
+    if (opts.search?.trim()) {
+      searchIdentities = await prepareSessionSearchIdentityNames(projection, opts);
+    }
+  } while (
+    projection.needsMaterialization ||
+    (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
+  );
   let prepareSyncMs = 0;
   const selectPage = () => {
     const started = performance.now();
@@ -409,6 +448,7 @@ export async function listProjectedSessions(params: {
         context,
         client,
         now,
+        searchIdentities,
       });
       diagnostics?.mark("filterSetup");
       const selection = withAgentRosterFactsBatch(prepared.cfg, () =>

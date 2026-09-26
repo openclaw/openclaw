@@ -1730,6 +1730,15 @@ type OllamaStreamEvent =
     ? Event
     : never;
 
+function expectTextAppends(events: OllamaStreamEvent[], text: string) {
+  const deltas = events.filter((event) => event.type === "text_delta");
+  expect(deltas.map((event) => event.delta).join("")).toBe(text);
+  for (const delta of deltas) {
+    expect(delta.contentIndex).toBe(0);
+    expect(delta).not.toHaveProperty("partial");
+  }
+}
+
 async function collectMockedOllamaEvents(
   lines: string[],
   params: Parameters<typeof createOllamaTestStream>[0] = {
@@ -2014,14 +2023,9 @@ describe("createOllamaStreamFn streaming events", () => {
     ]);
 
     const types = events.map((e) => e.type);
-    expect(types).toEqual(["start", "text_start", "text_delta", "text_delta", "text_end", "done"]);
+    expect(types.join(",")).toMatch(/^start,text_start,(text_delta,)+text_end,done$/);
 
-    // text_delta events carry incremental deltas
-    const deltas = events.filter((e) => e.type === "text_delta");
-    expect(deltas[0]?.contentIndex).toBe(0);
-    expect(deltas[0]?.delta).toBe("Hello");
-    expect(deltas[1]?.contentIndex).toBe(0);
-    expect(deltas[1]?.delta).toBe(" world");
+    expectTextAppends(events, "Hello world");
 
     // text_end carries the full accumulated content
     const textEnd = events.find((e) => e.type === "text_end");
@@ -2033,10 +2037,6 @@ describe("createOllamaStreamFn streaming events", () => {
     expect(startEvent?.partial.content).toStrictEqual([]);
     const textStartEvent = events.find((e) => e.type === "text_start");
     expect(textStartEvent?.partial.content).toStrictEqual([]);
-
-    // text_delta events stay lightweight; text_end/done carry the full snapshot.
-    expect(deltas[0]).not.toHaveProperty("partial");
-    expect(deltas[1]).not.toHaveProperty("partial");
 
     // done event contains the final message
     const doneEvent = events.at(-1);
@@ -2584,10 +2584,8 @@ describe("createOllamaStreamFn streaming events", () => {
         model: { id: "kimi-k2.6:cloud", provider: "ollama" },
       },
     );
-    const deltas = events.filter((event) => event.type === "text_delta");
-    expect(deltas.map((event) => event.delta)).toEqual([longPrefix, " ️ OK."]);
-
     const rawText = `${longPrefix} ️ OK.`;
+    expectTextAppends(events, rawText);
     const textEnd = events.find((event) => event.type === "text_end");
     expect(textEnd?.content).toBe(rawText);
     const doneEvent = events.find((event) => event.type === "done");
@@ -2659,16 +2657,11 @@ describe("createOllamaStreamFn streaming events", () => {
       },
     );
     const types = events.map((e) => e.type);
-    expect(types).toEqual(["start", "text_start", "text_delta", "text_delta", "text_end", "done"]);
+    expect(types.join(",")).toMatch(/^start,text_start,(text_delta,)+text_end,done$/);
 
     const textStart = events.find((e) => e.type === "text_start");
     expect(textStart?.partial.content).toEqual([]);
-    const deltas = events.filter((e) => e.type === "text_delta");
-    expect(deltas).toHaveLength(2);
-    expect(deltas[0]?.delta).toBe("Final answer");
-    expect(deltas[1]?.delta).toBe(" only.");
-    expect(deltas[0]).not.toHaveProperty("partial");
-    expect(deltas[1]).not.toHaveProperty("partial");
+    expectTextAppends(events, "Final answer only.");
 
     const textEnd = events.find((e) => e.type === "text_end");
     expect(textEnd?.content).toBe("Final answer only.");

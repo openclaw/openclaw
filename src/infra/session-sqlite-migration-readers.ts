@@ -125,7 +125,7 @@ export function readLegacyPrimaryTranscriptIdentity(
       !parseParentLinkedOpaqueEntry(raw)
     ) {
       if (registered) {
-        return undefined;
+        continue;
       }
       throw new Error("Unrecognized primary transcript record");
     }

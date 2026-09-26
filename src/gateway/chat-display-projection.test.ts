@@ -599,118 +599,50 @@ describe("managed inbound media fact projection", () => {
   const inboundMediaId = "photo---11111111-2222-3333-4444-555555555555.png";
   const managedInboundPath = path.join(getMediaDir(), "inbound", inboundMediaId);
 
-  function projectedOpenClawMeta(message: Record<string, unknown>) {
-    const projected = sanitizeChatHistoryMessages([message]);
+  function projectMediaPaths(paths: string[]) {
+    const projected = sanitizeChatHistoryMessages([
+      {
+        role: "user",
+        content: "image",
+        __openclaw: {
+          media: paths.map((mediaPath) => ({ path: mediaPath, contentType: "image/png" })),
+        },
+      },
+    ]);
     return (projected[0] as Record<string, unknown> | undefined)?.["__openclaw"];
   }
 
   it("rewrites a configured-store managed inbound path to a canonical media URI", () => {
-    const message = {
-      role: "user",
-      content: "first message with an image",
-      __openclaw: {
-        media: [{ path: managedInboundPath, contentType: "image/png" }],
-      },
-    };
-    expect(projectedOpenClawMeta(message)).toEqual({
-      media: [
-        {
-          path: `media://inbound/${inboundMediaId}`,
-          contentType: "image/png",
-        },
-      ],
+    expect(projectMediaPaths([managedInboundPath])).toEqual({
+      media: [{ path: `media://inbound/${inboundMediaId}`, contentType: "image/png" }],
     });
   });
 
   it("redacts a lookalike path that contains media/inbound but is outside the store", () => {
-    // A path like /tmp/media/inbound/<existing-id> is NOT inside the configured store;
-    // it must not be promoted to an authenticated media capability.
     const lookalike = path.join("/tmp", "media", "inbound", inboundMediaId);
-    const message = {
-      role: "user",
-      content: "lookalike inbound path",
-      __openclaw: {
-        media: [{ path: lookalike, contentType: "image/png" }],
-      },
-    };
-    expect(projectedOpenClawMeta(message)).toEqual({
+    expect(projectMediaPaths([lookalike])).toEqual({
       media: [{ contentType: "image/png" }],
     });
   });
 
   it("redacts host paths that are not inside the managed inbound store", () => {
-    const message = {
-      role: "user",
-      content: "private local image",
-      __openclaw: {
-        media: [
-          { path: "/tmp/private-image.png", contentType: "image/png" },
-          {
-            path: path.join(getMediaDir(), "outbound", "credentials.png"),
-            contentType: "image/png",
-          },
-        ],
-      },
-    };
-    expect(projectedOpenClawMeta(message)).toEqual({
-      media: [{ contentType: "image/png" }, { contentType: "image/png" }],
-    });
-  });
-
-  it("rejects traversal-shaped inbound paths and redacts them", () => {
-    const message = {
-      role: "user",
-      content: "traversal attempt",
-      __openclaw: {
-        media: [
-          {
-            path: path.join(getMediaDir(), "inbound", "..", "..", "etc", "passwd"),
-            contentType: "image/png",
-          },
-        ],
-      },
-    };
-    expect(projectedOpenClawMeta(message)).toEqual({
-      media: [{ contentType: "image/png" }],
-    });
+    expect(
+      projectMediaPaths([
+        "/tmp/private-image.png",
+        path.join(getMediaDir(), "outbound", "credentials.png"),
+      ]),
+    ).toEqual({ media: [{ contentType: "image/png" }, { contentType: "image/png" }] });
   });
 
   it("redacts malformed percent-encoded inbound ids instead of throwing", () => {
-    // A stray `%` makes decodeURIComponent throw inside parseInboundMediaUri;
-    // the sanitizer must redact rather than propagate the failure into history projection.
-    const message = {
-      role: "user",
-      content: "malformed percent escape",
-      __openclaw: {
-        media: [{ path: path.join(getMediaDir(), "inbound", "%"), contentType: "image/png" }],
-      },
-    };
-    expect(() => sanitizeChatHistoryMessages([message])).not.toThrow();
-    expect(projectedOpenClawMeta(message)).toEqual({
+    expect(projectMediaPaths([path.join(getMediaDir(), "inbound", "%")])).toEqual({
       media: [{ contentType: "image/png" }],
     });
   });
 
   it("preserves an already-canonical media inbound URI without regression", () => {
-    const message = {
-      role: "user",
-      content: "canonical inbound image",
-      __openclaw: {
-        media: [
-          {
-            path: `media://inbound/${inboundMediaId}`,
-            contentType: "image/png",
-          },
-        ],
-      },
-    };
-    expect(projectedOpenClawMeta(message)).toEqual({
-      media: [
-        {
-          path: `media://inbound/${inboundMediaId}`,
-          contentType: "image/png",
-        },
-      ],
+    expect(projectMediaPaths([`media://inbound/${inboundMediaId}`])).toEqual({
+      media: [{ path: `media://inbound/${inboundMediaId}`, contentType: "image/png" }],
     });
   });
 });

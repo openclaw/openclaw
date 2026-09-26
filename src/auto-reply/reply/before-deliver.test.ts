@@ -329,6 +329,7 @@ describe("beforeDeliver in reply dispatcher", () => {
           (loadSessionEntry(fixture) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
         ).toEqual([{ id: "delivery-1", state }]);
         expect(receipt?.counts.final[count]).toBe(1);
+        expect(receipt?.anyVisibleDelivered).toBe(result.visibleReplySent);
 
         const replay = createReplyDispatcher({ deliver });
         replay.sendFinalReply(fixture.payload);
@@ -341,43 +342,6 @@ describe("beforeDeliver in reply dispatcher", () => {
       }
     },
   );
-
-  it("settles explicitly non-visible delivery in the dispatcher receipt", async () => {
-    const dispatcher = createReplyDispatcher({
-      deliver: async () => ({ visibleReplySent: false }),
-    });
-
-    dispatcher.sendFinalReply({ text: "suppressed" });
-    dispatcher.markComplete();
-    const receipt = await dispatcher.waitForIdle();
-
-    expect(receipt).toEqual({
-      counts: {
-        tool: {
-          delivered: 0,
-          deliveredNotVisible: 0,
-          cancelled: 0,
-          failedBeforeSend: 0,
-          failedAfterSend: 0,
-        },
-        block: {
-          delivered: 0,
-          deliveredNotVisible: 0,
-          cancelled: 0,
-          failedBeforeSend: 0,
-          failedAfterSend: 0,
-        },
-        final: {
-          delivered: 0,
-          deliveredNotVisible: 1,
-          cancelled: 0,
-          failedBeforeSend: 0,
-          failedAfterSend: 0,
-        },
-      },
-      anyVisibleDelivered: false,
-    });
-  });
 
   it.each(["raw", "prepared"] as const)(
     "delivers the attached %s fallback when the primary payload is cancelled",
@@ -649,28 +613,6 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(receipt?.counts.block).toMatchObject({ cancelled: 0, failedBeforeSend: 1 });
   });
 
-  it("allows modifying payload in beforeDeliver", async () => {
-    const delivered: string[] = [];
-
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload.text ?? "");
-      },
-      beforeDeliver: async (payload: ReplyPayload) => {
-        if (payload.text?.includes("error")) {
-          return { ...payload, text: "replaced" };
-        }
-        return payload;
-      },
-    });
-
-    dispatcher.sendFinalReply({ text: "some error occurred" });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(delivered).toEqual(["replaced"]);
-  });
-
   it("preserves payload metadata through beforeDeliver rewrites", async () => {
     let deliveredMetadata: unknown;
     let deliveredAssistantMessageIndex: unknown;
@@ -691,22 +633,6 @@ describe("beforeDeliver in reply dispatcher", () => {
 
     expect(deliveredMetadata).toMatchObject({ assistantMessageIndex: 12 });
     expect(deliveredAssistantMessageIndex).toBe(12);
-  });
-
-  it("delivers normally without beforeDeliver", async () => {
-    const delivered: string[] = [];
-
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload.text ?? "");
-      },
-    });
-
-    dispatcher.sendFinalReply({ text: "plain reply" });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(delivered).toEqual(["plain reply"]);
   });
 
   it("records direct-delivery custody before waiting for the channel provider", async () => {

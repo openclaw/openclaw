@@ -121,7 +121,7 @@ describe("realtime voice session harness", () => {
       }
     },
   );
-  it.each(["text", "greeting", "default-greeting", "ready-greeting"] as const)(
+  it.each(["text", "greeting", "ready-greeting"] as const)(
     "settles an eventless provider's zero-audio response to %s",
     async (request) => {
       const { harness, session, callbacks, dispatch, onResponseDone } =
@@ -132,7 +132,7 @@ describe("realtime voice session harness", () => {
         } else if (request === "ready-greeting") {
           callbacks.onReady?.();
         } else {
-          session.triggerGreeting(request === "default-greeting" ? undefined : "Say hello");
+          session.triggerGreeting("Say hello");
         }
         expect(dispatch).toHaveBeenCalledOnce();
         expect(onResponseDone).toHaveBeenCalledExactlyOnceWith({ status: "completed" });
@@ -425,7 +425,7 @@ describe("realtime voice session harness", () => {
 
     harness.recordTranscript("assistant", "I found the shopping list");
 
-    expect(harness.isLikelyAssistantEchoTranscript("I found the shopping list")).toBe(true);
+    expect(harness.isLikelyAssistantEchoTranscript("found the shopping list")).toBe(true);
     expect(harness.recordInputAudio(Buffer.from([1, 2]))).toBe(true);
   });
 

@@ -3,8 +3,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
+import { createTranscriptEventReader } from "../infra/session-sqlite-migration-readers.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
@@ -329,51 +333,76 @@ describe("runDoctorSessionSqlite", () => {
     expect(fs.existsSync(store.transcriptPath)).toBe(false);
   });
 
-  it("reports malformed transcripts while importing the session entry", async () => {
-    const store = createLegacyStore({
-      agentDirName: "token=supersecret",
-      transcriptLines: ['{"type":"session","sessionId":"session-1"}', "{bad"],
-    });
+  it.each([false, true])(
+    "reports malformed transcripts while importing the session entry (existing prefix: %s)",
+    async (existingPrefix) => {
+      const store = createLegacyStore({
+        agentDirName: "token=supersecret",
+        transcriptLines: ['{"type":"session","sessionId":"session-1"}', "{bad"],
+      });
+      const original = fs.readFileSync(store.transcriptPath);
+      if (existingPrefix) {
+        await importSqliteSessionRows({
+          agentId: "token-supersecret",
+          env: store.env,
+          sessionKey: "agent:main:main",
+          storePath: store.storePath,
+          entry: { sessionId: "session-1", updatedAt: 2000 },
+          readTranscriptEvents: createTranscriptEventReader(
+            store.transcriptPath,
+            "session-1",
+            true,
+          ),
+        });
+      }
 
-    const report = await importLegacyStore(store);
-    const inspect = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "inspect",
-      store: store.storePath,
-    });
+      const report = await importLegacyStore(store);
+      const inspect = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "inspect",
+        store: store.storePath,
+      });
 
-    expect(report.totals.issues).toBe(1);
-    expect(report.totals).toMatchObject({
-      archivedTranscriptFiles: 2,
-      archivedUnreferencedJsonlFiles: 1,
-      importedEntries: 1,
-      importedTranscriptEvents: 1,
-      sqliteEntries: 1,
-      unreferencedJsonlFiles: 0,
-    });
-    expect(report.targets[0]?.issues[0]?.code).toBe("transcript_malformed");
-    expect(fs.existsSync(store.transcriptPath)).toBe(false);
-    expect(fs.existsSync(store.unreferencedJsonlPath)).toBe(false);
-    expect(inspect.totals.sqliteEntries).toBe(1);
-    expect(
-      loadTranscriptEventsSync({
-        agentId: "token-supersecret",
-        sessionId: "session-1",
-        sessionKey: "agent:main:main",
-        storePath: store.storePath,
-      }),
-    ).toHaveLength(1);
-    const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
-    expect(manifest.targets[0]?.completedMoves.some((move) => move.kind === "transcript")).toBe(
-      true,
-    );
-    expect(
-      manifest.targets[0]?.completedMoves.some((move) => move.kind === "unreferenced-jsonl"),
-    ).toBe(true);
-    expect(manifest.failedAt).toBeUndefined();
-    expect(manifest.failureReports).toBeUndefined();
-    expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
-  });
+      expect(report.totals.issues).toBe(1);
+      expect(report.totals).toMatchObject({
+        archivedTranscriptFiles: 2,
+        archivedUnreferencedJsonlFiles: 1,
+        importedEntries: 1,
+        importedTranscriptEvents: existingPrefix ? 0 : 1,
+        sqliteEntries: 1,
+        unreferencedJsonlFiles: 0,
+      });
+      expect(report.targets[0]?.issues[0]?.code).toBe("transcript_malformed");
+      expect(report.targets[0]?.issues.every(isSessionSqliteMigrationWarning)).toBe(true);
+      expect(fs.existsSync(store.transcriptPath)).toBe(false);
+      expect(fs.existsSync(store.unreferencedJsonlPath)).toBe(false);
+      expect(inspect.totals.sqliteEntries).toBe(1);
+      expect(
+        loadTranscriptEventsSync({
+          agentId: "token-supersecret",
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          storePath: store.storePath,
+        }),
+      ).toHaveLength(1);
+      const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+      const transcriptMove = expectDefined(
+        manifest.targets[0]?.completedMoves.find((move) => move.kind === "transcript"),
+        "protected malformed transcript archive",
+      );
+      expect(transcriptMove.artifact?.classification).toBe("protected");
+      expect(fs.readFileSync(transcriptMove.archivePath)).toEqual(original);
+      expect(
+        manifest.targets[0]?.completedMoves.some((move) => move.kind === "unreferenced-jsonl"),
+      ).toBe(true);
+      expect(manifest.failedAt).toBeUndefined();
+      expect(manifest.failureReports).toBeUndefined();
+      expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
+      expect(() =>
+        assertSessionStoreMigrationComplete({ cfg: {}, env: store.env, operation: "doctor" }),
+      ).not.toThrow();
+    },
+  );
 
   it("reports malformed selected legacy transcripts during validation", async () => {
     const store = createLegacyStore({ transcriptLines: ['{"type":"session"}', "{bad"] });

@@ -19,7 +19,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
-  forkSessionFromParentWithDecision,
+  prepareSessionForkFromParent,
   MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
 } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
@@ -108,7 +108,7 @@ import {
 } from "./session-lifecycle-preparation.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { invalidSessionRequest } from "./session-request-error.js";
+import { invalidSessionRequest, sessionCreationFailure } from "./session-request-error.js";
 import { isSessionVisibilityAllowed, resolveSessionVisibility } from "./session-sharing.js";
 import {
   loadGatewaySessionEntryReadOnly,
@@ -1074,7 +1074,7 @@ export async function createGatewaySession(
         // The storage owner selects one source for both size admission and copying,
         // so an active tail cannot make a smaller stable prefix fail the cap.
         const forkFromParent = async (assertSourceCurrent?: () => void) =>
-          await forkSessionFromParentWithDecision({
+          await prepareSessionForkFromParent({
             parentEntry: currentParentSessionEntry,
             agentId: parentSessionTarget.agentId,
             ...(commitGuard || assertSourceCurrent
@@ -1107,7 +1107,7 @@ export async function createGatewaySession(
             `parent session is too large to fork (${forkResult.decision.parentTokens}/${forkResult.decision.maxTokens} tokens)`,
           );
         }
-        if (forkResult.status !== "created") {
+        if (forkResult.status !== "prepared") {
           return {
             ok: false,
             error: errorShape(ErrorCodes.UNAVAILABLE, "failed to fork parent session transcript"),
@@ -1115,6 +1115,7 @@ export async function createGatewaySession(
         }
         return {
           ...initialized,
+          transcriptEvents: forkResult.events,
           entry: buildForkedGatewaySessionEntry(
             entry,
             forkResult.transcript,
@@ -1168,18 +1169,14 @@ export async function createGatewaySession(
         },
         ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
       },
-    );
+    ).catch((error: unknown) => {
+      if (error instanceof Error && error.name === "SessionLabelConflictError") {
+        return { ...invalidSessionRequest(error.message), phase: "entry" as const };
+      }
+      throw error;
+    });
     if (!created.ok) {
-      return {
-        ok: false,
-        error:
-          created.phase === "transcript"
-            ? errorShape(
-                ErrorCodes.UNAVAILABLE,
-                `failed to create session transcript: ${created.error}`,
-              )
-            : created.error,
-      };
+      return sessionCreationFailure(created);
     }
     onPhase?.("effects");
     createdContext = {

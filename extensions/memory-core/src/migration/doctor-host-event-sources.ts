@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
+import { normalizeMemoryCoreWorkspaceKey } from "../dreaming-state.js";
 // Doctor enumeration cold-loads this closure; memory-host-events pulls the
 // event-store/kysely graph, so the path resolver loads lazily in async bodies.
 import { resolveConfiguredWorkspaces } from "./doctor-workspaces.js";
@@ -29,15 +30,10 @@ export type ReadyLegacyMemoryHostEventSource = Extract<
   { kind: "ready" }
 >;
 
-function normalizeMemoryHostWorkspaceKey(workspaceDir: string): string {
-  const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
 export function memoryHostWorkspacePrefix(workspaceDir: string): string {
   return crypto
     .createHash("sha256")
-    .update(normalizeMemoryHostWorkspaceKey(workspaceDir))
+    .update(normalizeMemoryCoreWorkspaceKey(workspaceDir))
     .digest("hex")
     .slice(0, 24);
 }

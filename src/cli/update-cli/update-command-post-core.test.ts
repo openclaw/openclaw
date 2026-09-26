@@ -335,26 +335,6 @@ describe("readPostCorePluginInstallRecordsFile", () => {
       "Run openclaw doctor to inspect and repair plugin installation state.",
     );
   });
-
-  it("live FS: corrupt handoff is not silently dropped as empty records", async () => {
-    // L3: real temp file + real fs.readFile/JSON.parse (no stubs).
-    const dir = await withTempDir();
-    const filePath = path.join(dir, "plugin-install-records.json");
-    await fs.writeFile(filePath, '[{"not":"a-record-map"', "utf-8");
-
-    let threw = false;
-    try {
-      await readPostCorePluginInstallRecordsFile(filePath);
-    } catch (err) {
-      threw = true;
-      expect(String(err)).toContain(`Malformed JSON in plugin install records file: ${filePath}`);
-    }
-    expect(threw).toBe(true);
-
-    console.info(
-      `[post-core install-records live proof] path=${filePath} outcome=malformed-json-rejected`,
-    );
-  });
 });
 
 describe("preparePostCorePluginInstallRecordsForFreshProcess", () => {

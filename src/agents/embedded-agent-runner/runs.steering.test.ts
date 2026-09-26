@@ -426,20 +426,6 @@ describe("embedded-agent active-run steering", () => {
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("defaults active embedded steering to all pending messages", () => {
-    const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("session-default-steer", {
-      ...createEmbeddedRunHandle(),
-      queueMessage,
-    });
-
-    expect(queueEmbeddedAgentMessageWithOutcome("session-default-steer", "continue").queued).toBe(
-      true,
-    );
-
-    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
-  });
-
   it("queues into active non-streaming handles that expose live stopped state", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(

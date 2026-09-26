@@ -516,7 +516,7 @@ describe("session mutation authorization store caches", () => {
     });
   });
 
-  it("materializes and discovers each store once when one request resolves multiple targets", async () => {
+  it("uses resident metadata when one request resolves multiple targets", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       for (const [sessionKey, sessionId] of [
         ["agent:main:cache-one", "session-cache-one"],
@@ -554,8 +554,8 @@ describe("session mutation authorization store caches", () => {
         }).error,
       ).toBeNull();
 
-      expect([...materializations.values()]).toEqual([1]);
-      expect(discoverySpy.mock.calls.filter((call) => call[1] === "main")).toHaveLength(1);
+      expect([...materializations.values()]).toEqual([]);
+      expect(discoverySpy.mock.calls.filter((call) => call[1] === "main")).toHaveLength(0);
     });
   });
 });

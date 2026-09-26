@@ -1,4 +1,3 @@
-// Msteams tests cover pending uploads fs plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -33,6 +32,23 @@ function makeEnv(stateDir: string): NodeJS.ProcessEnv {
   return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 }
 
+function storeUpload(
+  env: NodeJS.ProcessEnv,
+  upload: Pick<Parameters<typeof storePendingUploadFs>[0], "id"> &
+    Partial<Parameters<typeof storePendingUploadFs>[0]>,
+  options: { ttlMs?: number } = {},
+) {
+  return storePendingUploadFs(
+    {
+      buffer: Buffer.from("payload"),
+      filename: "f.txt",
+      conversationId: "19:conv@thread.v2",
+      ...upload,
+    },
+    { env, ...options },
+  );
+}
+
 async function requirePendingUpload(id: string, env: NodeJS.ProcessEnv) {
   const upload = await getPendingUploadFs(id, { env });
   if (!upload) {
@@ -57,9 +73,14 @@ async function cleanupTempDirs(): Promise<void> {
 }
 
 describe("msteams pending uploads (fs-backed)", () => {
-  beforeEach(() => {
+  let stateDir: string;
+  let env: NodeJS.ProcessEnv;
+
+  beforeEach(async () => {
     resetPluginStateStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);
+    stateDir = await makeTempStateDir();
+    env = makeEnv(stateDir);
   });
 
   afterEach(async () => {
@@ -67,58 +88,23 @@ describe("msteams pending uploads (fs-backed)", () => {
     vi.useRealTimers();
   });
 
-  it("stores and retrieves a pending upload by id", async () => {
-    const stateDir = await makeTempStateDir();
-    const env = makeEnv(stateDir);
-
-    await storePendingUploadFs(
-      {
-        id: "upload-1",
-        buffer: Buffer.from("hello world"),
-        filename: "greeting.txt",
-        contentType: "text/plain",
-        conversationId: "19:conv@thread.v2",
-      },
-      { env },
-    );
-
-    const loaded = await requirePendingUpload("upload-1", env);
-    expect(loaded.id).toBe("upload-1");
-    expect(loaded.filename).toBe("greeting.txt");
-    expect(loaded.contentType).toBe("text/plain");
-    expect(loaded.conversationId).toBe("19:conv@thread.v2");
-    expect(loaded.buffer.toString("utf8")).toBe("hello world");
-  });
-
   it("returns undefined for missing and undefined ids", async () => {
-    const stateDir = await makeTempStateDir();
-    const env = makeEnv(stateDir);
-
     expect(await getPendingUploadFs(undefined, { env })).toBeUndefined();
     expect(await getPendingUploadFs("does-not-exist", { env })).toBeUndefined();
   });
 
   it("persists so another reader finds the entry (simulates cross-process)", async () => {
-    const stateDir = await makeTempStateDir();
-    const env = makeEnv(stateDir);
-
-    // First "process": writer
-    await storePendingUploadFs(
-      {
-        id: "upload-x",
-        buffer: Buffer.from("top secret"),
-        filename: "secret.bin",
-        conversationId: "19:conv@thread.v2",
-      },
-      { env },
-    );
+    await storeUpload(env, {
+      id: "upload-x",
+      buffer: Buffer.from("top secret"),
+      filename: "secret.bin",
+    });
 
     // Confirm SQLite-backed plugin state was created instead of a new JSON store.
     const storePath = path.join(stateDir, "msteams-pending-uploads.json");
     await expect(fs.promises.access(storePath)).rejects.toThrow();
     await fs.promises.access(path.join(stateDir, "state", "openclaw.sqlite"));
 
-    // Second "process": reader using the same state dir
     const reader = await getPendingUploadFs("upload-x", { env });
     expect(reader?.buffer.toString("utf8")).toBe("top secret");
     expect(reader?.filename).toBe("secret.bin");
@@ -140,19 +126,9 @@ describe("msteams pending uploads (fs-backed)", () => {
         },
       });
     }
-    const stateDir = await makeTempStateDir();
-    const env = makeEnv(stateDir);
     const payload = Buffer.alloc(6 * 1024 * 1024, 7);
 
-    await storePendingUploadFs(
-      {
-        id: "upload-large",
-        buffer: payload,
-        filename: "large.bin",
-        conversationId: "19:conv@thread.v2",
-      },
-      { env },
-    );
+    await storeUpload(env, { id: "upload-large", buffer: payload, filename: "large.bin" });
 
     const reader = await getPendingUploadFs("upload-large", { env });
     expect(reader?.buffer.equals(payload)).toBe(true);
@@ -184,18 +160,7 @@ describe("msteams pending uploads (fs-backed)", () => {
   });
 
   it("removes persisted entries", async () => {
-    const stateDir = await makeTempStateDir();
-    const env = makeEnv(stateDir);
-
-    await storePendingUploadFs(
-      {
-        id: "upload-rm",
-        buffer: Buffer.from("x"),
-        filename: "rm.bin",
-        conversationId: "19:conv@thread.v2",
-      },
-      { env },
-    );
+    await storeUpload(env, { id: "upload-rm", buffer: Buffer.from("x"), filename: "rm.bin" });
     const loaded = await requirePendingUpload("upload-rm", env);
     expect(loaded.id).toBe("upload-rm");
     expect(loaded.filename).toBe("rm.bin");
@@ -210,45 +175,21 @@ describe("msteams pending uploads (fs-backed)", () => {
   });
 
   it("remove is a no-op for unknown ids", async () => {
-    const stateDir = await makeTempStateDir();
-    const env = makeEnv(stateDir);
-
     await expect(removePendingUploadFs("never-existed", { env })).resolves.toBeUndefined();
     await expect(removePendingUploadFs(undefined, { env })).resolves.toBeUndefined();
   });
 
   it("expires entries past their ttl on read", async () => {
-    const stateDir = await makeTempStateDir();
-    const env = makeEnv(stateDir);
     const now = new Date("2026-05-08T00:00:00.000Z");
     vi.useFakeTimers({ now });
 
-    await storePendingUploadFs(
-      {
-        id: "upload-old",
-        buffer: Buffer.from("stale"),
-        filename: "stale.txt",
-        conversationId: "19:conv@thread.v2",
-      },
-      { env, ttlMs: 1 },
-    );
+    await storeUpload(env, { id: "upload-old" }, { ttlMs: 1 });
     vi.setSystemTime(now.getTime() + 2);
     expect(await getPendingUploadFs("upload-old", { env, ttlMs: 1 })).toBeUndefined();
   });
 
   it("updates consent card activity id on an existing entry", async () => {
-    const stateDir = await makeTempStateDir();
-    const env = makeEnv(stateDir);
-
-    await storePendingUploadFs(
-      {
-        id: "upload-a",
-        buffer: Buffer.from("payload"),
-        filename: "f.txt",
-        conversationId: "19:conv@thread.v2",
-      },
-      { env },
-    );
+    await storeUpload(env, { id: "upload-a" });
 
     await setPendingUploadActivityIdFs("upload-a", "activity-xyz", { env });
     const loaded = await getPendingUploadFs("upload-a", { env });
@@ -256,8 +197,6 @@ describe("msteams pending uploads (fs-backed)", () => {
   });
 
   it("ignores legacy pending-upload JSON cache files at runtime", async () => {
-    const stateDir = await makeTempStateDir();
-    const env = makeEnv(stateDir);
     const storePath = path.join(stateDir, "msteams-pending-uploads.json");
     await fs.promises.writeFile(
       storePath,

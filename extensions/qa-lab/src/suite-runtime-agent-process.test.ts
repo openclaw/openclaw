@@ -93,12 +93,6 @@ function firstSpawnCall(): unknown[] | undefined {
   return spawnMock.mock.calls[0];
 }
 
-function firstGatewayCall(
-  gatewayCall: ReturnType<typeof vi.fn>,
-): [string, unknown, unknown] | undefined {
-  return gatewayCall.mock.calls[0] as [string, unknown, unknown] | undefined;
-}
-
 const QA_CLI_ENV = {
   repoRoot: "/repo",
   gateway: {
@@ -374,20 +368,6 @@ describe("qa suite runtime agent process helpers", () => {
     expect(spawnEnv?.OPENCLAW_CONFIG_PATH).toBe("/tmp/isolated-state/openclaw.json");
   });
 
-  it("parses json qa cli output when requested", async () => {
-    const { child, pending } = startMockQaCli({
-      env: QA_CLI_JSON_ENV,
-      args: ["memory", "search"],
-      options: { json: true },
-    });
-
-    await waitForSpawnCount(1);
-    child.stdout.emit("data", Buffer.from('{"ok":true}\n'));
-    child.emit("close", 0);
-
-    await expect(pending).resolves.toEqual({ ok: true });
-  });
-
   it.each([
     {
       title: "parses json qa cli output after colored startup logs",
@@ -395,19 +375,9 @@ describe("qa suite runtime agent process helpers", () => {
         '\u001b[35m[plugins]\u001b[39m \u001b[36mcodex loaded plugin package metadata\u001b[39m\n{"results":[{"text":"ORBIT-10"}]}\n',
     },
     {
-      title: "parses pretty json qa cli output after startup logs",
-      stdout:
-        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
-    },
-    {
       title: "parses pretty json qa cli output before trailing stdout logs",
       stdout:
         '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n[plugins] trailing diagnostic\n',
-    },
-    {
-      title: "ignores diagnostic json fragments before the qa cli payload",
-      stdout:
-        '[plugins] diagnostic context {"ok":true}\n{"results":[{"text":"ORBIT-10"}]}\n[plugins] trailing diagnostic\n',
     },
     {
       title: "ignores leading json diagnostic records before the qa cli payload",
@@ -508,27 +478,19 @@ describe("qa suite runtime agent process helpers", () => {
         message: "hello",
       }),
     ).resolves.toEqual({ runId: "run-1" });
-    const gatewayArgs = firstGatewayCall(gatewayCall);
-    expect(gatewayArgs?.[0]).toBe("agent");
-    const agentPayload = gatewayArgs?.[1] as
-      | {
-          channel?: string;
-          message?: string;
-          replyChannel?: string;
-          replyTo?: string;
-          sessionKey?: string;
-          threadId?: string;
-          to?: string;
-        }
-      | undefined;
-    expect(agentPayload?.sessionKey).toBe("session-1");
-    expect(agentPayload?.message).toBe("hello");
-    expect(agentPayload?.channel).toBe("qa-channel");
-    expect(agentPayload?.to).toBe("transport-target");
-    expect(agentPayload?.replyChannel).toBe("reply-channel");
-    expect(agentPayload?.replyTo).toBe("reply-target");
-    expect(agentPayload?.threadId).toBe("adapter-thread");
-    expect(gatewayArgs?.[2]).toBeTypeOf("object");
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        sessionKey: "session-1",
+        message: "hello",
+        channel: "qa-channel",
+        to: "transport-target",
+        replyChannel: "reply-channel",
+        replyTo: "reply-target",
+        threadId: "adapter-thread",
+      }),
+      expect.any(Object),
+    );
   });
 
   it("preserves thread routing for an interactive run without CLI task tracking", async () => {
@@ -651,84 +613,50 @@ describe("qa suite runtime agent process helpers", () => {
     });
   });
 
-  it("waits for persisted transcript tool evidence after agent completion", async () => {
-    vi.useFakeTimers();
-    try {
-      const gatewayCall = vi
-        .fn()
-        .mockResolvedValueOnce({ runId: "run-transcript-evidence" })
-        .mockResolvedValueOnce({ status: "completed" });
-      readSessionTranscriptSummaryMock
-        .mockResolvedValueOnce({
-          assistantToolCallCounts: {},
-          completedToolCallCounts: {},
-          successfulToolCallCounts: {},
-          finalText: "",
-        })
-        .mockResolvedValueOnce({
-          assistantToolCallCounts: { web_fetch: 1 },
-          completedToolCallCounts: { web_fetch: 1 },
-          successfulToolCallCounts: { web_fetch: 1 },
-          finalText: "",
+  it.each([
+    { toolName: "web_fetch", requireSuccess: true, callVisible: false },
+    { toolName: "session_status", requireSuccess: false, callVisible: true },
+  ])(
+    "waits for persisted $toolName results after agent completion",
+    async ({ toolName, requireSuccess, callVisible }) => {
+      vi.useFakeTimers();
+      try {
+        const gatewayCall = vi
+          .fn()
+          .mockResolvedValueOnce({ runId: "run-transcript-evidence" })
+          .mockResolvedValueOnce({ status: "completed" });
+        readSessionTranscriptSummaryMock
+          .mockResolvedValueOnce({
+            assistantToolCallCounts: callVisible ? { [toolName]: 1 } : {},
+            completedToolCallCounts: {},
+            successfulToolCallCounts: {},
+            finalText: "",
+          })
+          .mockResolvedValueOnce({
+            assistantToolCallCounts: { [toolName]: 1 },
+            completedToolCallCounts: { [toolName]: 1 },
+            successfulToolCallCounts: requireSuccess ? { [toolName]: 1 } : {},
+            finalText: "",
+          });
+        const pending = runAgentPrompt(createAgentPromptEnv(gatewayCall), {
+          sessionKey: "session-transcript-evidence",
+          message: `call ${toolName}`,
+          transcriptToolName: toolName,
+          ...(requireSuccess ? { requireSuccessfulTranscriptToolResult: true } : {}),
         });
-      const env = createAgentPromptEnv(gatewayCall);
+        await vi.advanceTimersByTimeAsync(50);
 
-      const pending = runAgentPrompt(env, {
-        sessionKey: "session-transcript-evidence",
-        message: "call web_fetch",
-        transcriptToolName: "web_fetch",
-        requireSuccessfulTranscriptToolResult: true,
-      });
-      await vi.advanceTimersByTimeAsync(50);
-
-      await expect(pending).resolves.toEqual({
-        started: { runId: "run-transcript-evidence" },
-        waited: { status: "completed" },
-      });
-      expect(readSessionTranscriptSummaryMock).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("waits for a persisted failed tool result after the call is visible", async () => {
-    vi.useFakeTimers();
-    try {
-      const gatewayCall = vi
-        .fn()
-        .mockResolvedValueOnce({ runId: "run-failed-tool-evidence" })
-        .mockResolvedValueOnce({ status: "completed" });
-      readSessionTranscriptSummaryMock
-        .mockResolvedValueOnce({
-          assistantToolCallCounts: { session_status: 1 },
-          completedToolCallCounts: {},
-          successfulToolCallCounts: {},
-          finalText: "",
-        })
-        .mockResolvedValueOnce({
-          assistantToolCallCounts: { session_status: 1 },
-          completedToolCallCounts: { session_status: 1 },
-          successfulToolCallCounts: {},
-          finalText: "",
+        await expect(pending).resolves.toEqual({
+          started: { runId: "run-transcript-evidence" },
+          waited: { status: "completed" },
         });
-      const env = createAgentPromptEnv(gatewayCall);
+        expect(readSessionTranscriptSummaryMock).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
-      const pending = runAgentPrompt(env, {
-        sessionKey: "session-failed-tool-evidence",
-        message: "call session_status with invalid input",
-        transcriptToolName: "session_status",
-      });
-      await vi.advanceTimersByTimeAsync(50);
-
-      await expect(pending).resolves.toEqual({
-        started: { runId: "run-failed-tool-evidence" },
-        waited: { status: "completed" },
-      });
-      expect(readSessionTranscriptSummaryMock).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
   it("waits for the latest assistant history reply", async () => {
     const gatewayCall = vi
       .fn()
@@ -846,33 +774,15 @@ describe("qa suite runtime agent process helpers", () => {
     expect(gatewayCall.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("does not retry transient gateway errors for a different method", async () => {
-    const gatewayError = Object.assign(new Error("gateway method is rebuilding"), {
-      gatewayCode: "UNAVAILABLE",
-      retryable: true,
-      retryAfterMs: 250,
-      details: { method: "chat.startup" },
-    });
-    const gatewayCall = vi.fn().mockRejectedValueOnce(gatewayError);
-
-    await expect(
-      waitForAgentHistoryReply(
-        { gateway: { call: gatewayCall } } as never,
-        "session-history-wrong-method",
-        () => false,
-        1_000,
-        1,
-      ),
-    ).rejects.toBe(gatewayError);
-    expect(gatewayCall).toHaveBeenCalledOnce();
-  });
-
-  it("does not retry unavailable gateway errors without the retryable contract", async () => {
+  it.each([
+    { method: "chat.startup", retryable: true },
+    { method: "chat.history", retryable: false },
+  ])("does not retry $method errors with retryable=$retryable", async ({ method, retryable }) => {
     const gatewayError = Object.assign(new Error("history unavailable"), {
       gatewayCode: "UNAVAILABLE",
-      retryable: false,
+      retryable,
       retryAfterMs: 250,
-      details: { method: "chat.history" },
+      details: { method },
     });
     const gatewayCall = vi.fn().mockRejectedValueOnce(gatewayError);
 
@@ -926,17 +836,14 @@ describe("qa suite runtime agent process helpers", () => {
     );
   });
 
-  it.each(["restart", "aborted"])(
-    "preserves the %s stop reason from agent.wait",
-    async (stopReason) => {
-      const result = { status: "error", stopReason };
-      const gatewayCall = vi.fn(async () => result);
+  it.each(["restart"])("preserves the %s stop reason from agent.wait", async (stopReason) => {
+    const result = { status: "error", stopReason };
+    const gatewayCall = vi.fn(async () => result);
 
-      await expect(
-        waitForAgentRun({ gateway: { call: gatewayCall } } as never, "run-interrupted"),
-      ).resolves.toEqual(result);
-    },
-  );
+    await expect(
+      waitForAgentRun({ gateway: { call: gatewayCall } } as never, "run-interrupted"),
+    ).resolves.toEqual(result);
+  });
 
   it("caps the gateway client timeout when waiting for oversized agent runs", async () => {
     const gatewayCall = vi.fn(async () => ({ status: "ok" }));

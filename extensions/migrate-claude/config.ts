@@ -1,7 +1,4 @@
-// Migrate Claude helper module supports config behavior.
 import {
-  applyMigrationConfigPatchItem,
-  applyMigrationManualItem,
   createMigrationConfigPatchItem,
   createMigrationManualItem,
   hasMigrationConfigPatchConflict,
@@ -182,15 +179,4 @@ export async function buildConfigItems(params: {
   }
 
   return items;
-}
-
-export async function applyConfigItem(
-  ctx: MigrationProviderContext,
-  item: MigrationItem,
-): Promise<MigrationItem> {
-  return applyMigrationConfigPatchItem(ctx, item);
-}
-
-export function applyManualItem(item: MigrationItem): MigrationItem {
-  return applyMigrationManualItem(item);
 }

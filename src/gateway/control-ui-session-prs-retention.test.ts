@@ -2,6 +2,7 @@ import { getEventListeners } from "node:events";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runGitWorkerOperation } from "../infra/git-worker.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import {
   createSessionPullRequestsFixture,
@@ -48,6 +49,7 @@ describe("watched session PR retention", () => {
       { rateLimited: boolean; pullRequests: unknown[]; repository: unknown }
     >();
     const subscriptions = createControlUiSessionPullRequestSubscriptions({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       prepareRead: fixture.prepareRead,
       broadcastToConnIds: (_event, payload) => {
         if (!isRecord(payload) || !isRecord(payload.sessions)) {
@@ -142,6 +144,7 @@ describe("watched session PR retention", () => {
       throw new Error("Unexpected local Git operation");
     });
     const subscriptions = createControlUiSessionPullRequestSubscriptions({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       prepareRead: fixture.prepareRead,
       broadcastToConnIds: vi.fn(),
       load: (params, cacheSignal) => {

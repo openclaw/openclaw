@@ -256,128 +256,79 @@ describe("Playwright download capture cancellation", () => {
     }
   });
 
-  it("finishes atomic publication when cancellation arrives after its commit boundary", async () => {
-    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-publish-"));
-    const outputPath = path.join(outputRoot, "published.bin");
-    const renameStarted = createDeferred<void>();
-    const releaseRename = createDeferred<void>();
-    const renameFinished = createDeferred<void>();
-    const originalRename = fs.rename.bind(fs);
-    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-      if (String(destination).endsWith(`${path.sep}published.bin`)) {
-        renameStarted.resolve();
-        await releaseRename.promise;
-      }
-      try {
-        await originalRename(source, destination);
-      } finally {
-        renameFinished.resolve();
-      }
-    });
-    const page = new EventEmitter();
-    const state = { downloadWaiterDepth: 0 };
-    const controller = new AbortController();
-    const reason = new Error("download aborted during publication");
-    const cancel = vi.fn(async () => {});
-    const capture = createDownloadCaptureForPage(page, state, 1_000, {
-      mode: "explicit",
-      outputPath,
-      outputRoot,
-      signal: controller.signal,
-    });
-    const outcome = capture.promise.then(
-      (result) => result,
-      (error: unknown) => error,
-    );
-
-    try {
-      page.emit("download", {
-        url: () => "https://example.com/published.bin",
-        suggestedFilename: () => "published.bin",
-        saveAs: async (tempPath: string) => {
-          await fs.writeFile(tempPath, "completed download", "utf8");
+  it.each(["caller cancellation", "download deadline"] as const)(
+    "finishes atomic publication when %s arrives after its commit boundary",
+    async (interruption) => {
+      const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-publish-"));
+      const outputPath = path.join(outputRoot, "published.bin");
+      const renameStarted = createDeferred<void>();
+      const releaseRename = createDeferred<void>();
+      const renameFinished = createDeferred<void>();
+      const originalRename = fs.rename.bind(fs);
+      const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+        if (String(destination).endsWith(`${path.sep}published.bin`)) {
+          renameStarted.resolve();
+          await releaseRename.promise;
+        }
+        try {
+          await originalRename(source, destination);
+        } finally {
+          renameFinished.resolve();
+        }
+      });
+      vi.useFakeTimers();
+      const page = new EventEmitter();
+      const state = { downloadWaiterDepth: 0 };
+      const controller = new AbortController();
+      const cancel = vi.fn(async () => {});
+      const capture = createDownloadCaptureForPage(
+        page,
+        state,
+        interruption === "caller cancellation" ? 1_000 : 25,
+        {
+          mode: "explicit",
+          outputPath,
+          outputRoot,
+          signal: controller.signal,
         },
-        cancel,
-      });
-      await renameStarted.promise;
-      controller.abort(reason);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      );
+      const outcome = capture.promise.then(
+        (result) => result,
+        (error: unknown) => error,
+      );
 
-      expect(await Promise.race([outcome, Promise.resolve("pending")])).toBe("pending");
-      expect(cancel).not.toHaveBeenCalled();
-      releaseRename.resolve();
-
-      await expect(capture.promise).resolves.toMatchObject({ path: outputPath });
-      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("completed download");
-      expect(state.downloadWaiterDepth).toBe(0);
-    } finally {
-      releaseRename.resolve();
-      await renameFinished.promise;
-      await outcome;
-      rename.mockRestore();
-      await fs.rm(outputRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("finishes atomic publication after its download deadline retires", async () => {
-    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-deadline-"));
-    const outputPath = path.join(outputRoot, "published.bin");
-    vi.useFakeTimers();
-    const renameStarted = createDeferred<void>();
-    const releaseRename = createDeferred<void>();
-    const renameFinished = createDeferred<void>();
-    const originalRename = fs.rename.bind(fs);
-    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-      if (String(destination).endsWith(`${path.sep}published.bin`)) {
-        renameStarted.resolve();
-        await releaseRename.promise;
-      }
       try {
-        await originalRename(source, destination);
+        page.emit("download", {
+          url: () => "https://example.com/published.bin",
+          suggestedFilename: () => "published.bin",
+          saveAs: async (tempPath: string) => {
+            await fs.writeFile(tempPath, "completed download", "utf8");
+          },
+          cancel,
+        });
+        await renameStarted.promise;
+        if (interruption === "caller cancellation") {
+          controller.abort(new Error("download aborted during publication"));
+          await vi.advanceTimersByTimeAsync(0);
+        } else {
+          await vi.advanceTimersByTimeAsync(25);
+        }
+
+        expect(await Promise.race([outcome, Promise.resolve("pending")])).toBe("pending");
+        expect(cancel).not.toHaveBeenCalled();
+        releaseRename.resolve();
+
+        await expect(capture.promise).resolves.toMatchObject({ path: outputPath });
+        await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("completed download");
+        expect(state.downloadWaiterDepth).toBe(0);
       } finally {
-        renameFinished.resolve();
+        releaseRename.resolve();
+        await renameFinished.promise;
+        await outcome;
+        rename.mockRestore();
+        vi.useRealTimers();
+        await fs.rm(outputRoot, { recursive: true, force: true });
       }
-    });
-    const page = new EventEmitter();
-    const state = { downloadWaiterDepth: 0 };
-    const cancel = vi.fn(async () => {});
-    const capture = createDownloadCaptureForPage(page, state, 25, {
-      mode: "explicit",
-      outputPath,
-      outputRoot,
-    });
-    const outcome = capture.promise.then(
-      (result) => result,
-      (error: unknown) => error,
-    );
-
-    try {
-      page.emit("download", {
-        url: () => "https://example.com/published.bin",
-        suggestedFilename: () => "published.bin",
-        saveAs: async (tempPath: string) => {
-          await fs.writeFile(tempPath, "completed download", "utf8");
-        },
-        cancel,
-      });
-      await renameStarted.promise;
-      await vi.advanceTimersByTimeAsync(25);
-
-      expect(await Promise.race([outcome, Promise.resolve("pending")])).toBe("pending");
-      expect(cancel).not.toHaveBeenCalled();
-      releaseRename.resolve();
-
-      await expect(capture.promise).resolves.toMatchObject({ path: outputPath });
-      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("completed download");
-    } finally {
-      releaseRename.resolve();
-      await renameFinished.promise;
-      await outcome;
-      rename.mockRestore();
-      vi.useRealTimers();
-      await fs.rm(outputRoot, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 });

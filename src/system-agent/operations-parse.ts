@@ -47,6 +47,7 @@ export type SystemAgentCommandDeps = {
     cliOptions: ConfigSetOptions;
     beforePersistentApply?: () => void;
   }) => Promise<void>;
+  runConfigUnset?: typeof import("../cli/config-cli.js").runConfigUnset;
   runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
@@ -83,6 +84,7 @@ const ARG_WORD = String.raw`(?:"[^"]+"|'[^']+'|\S+)`;
 // fixed order (workspace before model) so filler words never become values.
 const CONFIG_SET_PREFIX_RE = /^(?:config\s+set|set\s+config)\s+/i;
 const CONFIG_SET_REF_PREFIX_RE = /^(?:config\s+set-ref|set\s+secretref|set\s+secret\s+ref)\s+/i;
+const CONFIG_UNSET_PREFIX_RE = /^config\s+unset(?=\s|$)/i;
 const CONFIG_GET_PREFIX_RE = /^config\s+get(?=\s|$)/i;
 const CONFIG_SCHEMA_PREFIX_RE = /^config\s+schema(?=\s|$)/i;
 const CONFIG_SET_REF_ARGS_RE = new RegExp(
@@ -338,6 +340,13 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       value: configSet.value,
     };
   }
+  const configUnset = parseConfigReadPath(trimmed, CONFIG_UNSET_PREFIX_RE, { allowEmpty: false });
+  if (configUnset?.valid && configUnset.path) {
+    return { kind: "config-unset", path: configUnset.path };
+  }
+  if (configUnset && !configUnset.valid) {
+    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
+  }
   const configGet = parseConfigReadPath(trimmed, CONFIG_GET_PREFIX_RE, { allowEmpty: false });
   if (configGet?.valid && configGet.path) {
     return { kind: "config-get", path: configGet.path };
@@ -516,6 +525,7 @@ export function isPersistentSystemAgentOperation(operation: SystemAgentOperation
   return (
     operation.kind === "set-default-model" ||
     operation.kind === "config-set" ||
+    operation.kind === "config-unset" ||
     operation.kind === "config-set-ref" ||
     operation.kind === "setup" ||
     operation.kind === "plugin-install" ||
@@ -537,6 +547,8 @@ export function describeSystemAgentPersistentOperation(operation: SystemAgentOpe
       return operation.agentId
         ? `set agent ${operation.agentId}'s model to ${operation.model}`
         : `set agents.defaults.model.primary to ${operation.model}`;
+    case "config-unset":
+      return `remove config ${redactSystemAgentConfigPath(operation.path)}`;
     case "config-set":
       return `set config ${redactSystemAgentConfigPath(operation.path)} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
     case "config-set-ref":

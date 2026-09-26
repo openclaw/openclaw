@@ -39,6 +39,7 @@ import {
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 
 const mocks = vi.hoisted(() => ({
   portableStateDir: "",
@@ -592,6 +593,7 @@ it.each([
     setTestEnvValue("NODE_ENV", "production");
     const warn = vi.fn();
     await startGatewaySidecars({
+      scheduler: createTestGatewayScheduler(),
       cfg: { commands: { ownerAllowFrom: ["matrix:!operator:example"] } },
       defaultWorkspaceDir: stateDir,
       deps: {},
@@ -752,6 +754,7 @@ it.each([
     setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "");
     setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "");
     await startGatewaySidecars({
+      scheduler: createTestGatewayScheduler(),
       cfg,
       defaultWorkspaceDir: originalRoot,
       deps: {},

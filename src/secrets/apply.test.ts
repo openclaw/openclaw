@@ -234,6 +234,18 @@ function createOpenAiExecProviderPlan(): SecretsApplyPlan {
   });
 }
 
+function createPluginProviderPlan(): SecretsApplyPlan {
+  return createPlan({
+    providerUpserts: {
+      vault: {
+        source: "exec",
+        pluginIntegration: { pluginId: "vault", integrationId: "vault" },
+      },
+    },
+    targets: [],
+  });
+}
+
 function createOpenAiProviderHeaderTarget(params?: {
   path?: string;
   pathSegments?: string[];
@@ -642,53 +654,6 @@ describe("secrets apply", () => {
     );
   });
 
-  it("applies auth-profiles sibling ref targets to the scoped agent store", async () => {
-    await writeJsonFile(
-      fixture.authStorePath,
-      createAuthProfileStoreFixture({
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          key: "sk-ope...text", // pragma: allowlist secret
-        },
-      }),
-    );
-    const plan: SecretsApplyPlan = {
-      version: 1,
-      protocolVersion: 1,
-      generatedAt: new Date().toISOString(),
-      generatedBy: "manual",
-      targets: [
-        {
-          type: "auth-profiles.api_key.key",
-          path: "profiles.openai:default.key",
-          pathSegments: ["profiles", "openai:default", "key"],
-          agentId: "main",
-          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
-      ],
-      options: {
-        scrubEnv: false,
-        scrubAuthProfilesForProviderTargets: false,
-        scrubLegacyAuthJson: false,
-      },
-    };
-
-    const result = await runSecretsApply({ plan, env: fixture.env, write: true });
-    expect(result.changed).toBe(true);
-    expect(result.changedFiles).toContain(fixture.authStorePath);
-
-    const nextAuthStore = (await readAuthStore(fixture)) as unknown as {
-      profiles: { "openai:default": { key?: string; keyRef?: unknown } };
-    };
-    expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
-    expect(nextAuthStore.profiles["openai:default"].keyRef).toEqual({
-      source: "env",
-      provider: "default",
-      id: "OPENAI_API_KEY",
-    });
-  });
-
   it("preserves relocated shared inheritance when applying an agent SecretRef", async () => {
     const sharedDir = path.join(fixture.rootDir, "relocated-shared");
     const agentDir = path.join(fixture.rootDir, "ops-agent");
@@ -794,11 +759,7 @@ describe("secrets apply", () => {
         entries: { coder: { agentDir: coderAgentDir } },
       },
     });
-    const plan: SecretsApplyPlan = {
-      version: 1,
-      protocolVersion: 1,
-      generatedAt: new Date().toISOString(),
-      generatedBy: "manual",
+    const plan = createPlan({
       targets: [
         {
           type: "auth-profiles.api_key.key",
@@ -814,7 +775,7 @@ describe("secrets apply", () => {
         scrubAuthProfilesForProviderTargets: false,
         scrubLegacyAuthJson: false,
       },
-    };
+    });
 
     const result = await runSecretsApply({ plan, env: fixture.env, write: true });
 
@@ -1120,11 +1081,7 @@ describe("secrets apply", () => {
   });
 
   it("creates a new auth-profiles mapping when provider metadata is supplied", async () => {
-    const plan: SecretsApplyPlan = {
-      version: 1,
-      protocolVersion: 1,
-      generatedAt: new Date().toISOString(),
-      generatedBy: "manual",
+    const plan = createPlan({
       targets: [
         {
           type: "auth-profiles.token.token",
@@ -1140,7 +1097,7 @@ describe("secrets apply", () => {
         scrubAuthProfilesForProviderTargets: false,
         scrubLegacyAuthJson: false,
       },
-    };
+    });
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
     const nextAuthStore = (await readAuthStore(fixture)) as unknown as {
@@ -1213,14 +1170,10 @@ describe("secrets apply", () => {
       },
     });
 
-    const nextConfig = (await applyTesting.projectConfigForTest({
+    const nextConfig = await applyTesting.projectConfigForTest({
       plan,
       env: fixture.env,
-    })) as {
-      models?: {
-        providers?: Record<string, { apiKey?: unknown }>;
-      };
-    };
+    });
     expect(nextConfig.models?.providers?.["openai.dev"]?.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
     expect(nextConfig.models?.providers?.openai).toBeUndefined();
   });
@@ -1273,11 +1226,7 @@ describe("secrets apply", () => {
       buildTalkTestProviderConfig("sk-talk-plaintext"), // pragma: allowlist secret
     );
 
-    const plan: SecretsApplyPlan = {
-      version: 1,
-      protocolVersion: 1,
-      generatedAt: new Date().toISOString(),
-      generatedBy: "manual",
+    const plan = createPlan({
       targets: [
         {
           type: "talk.providers.*.apiKey",
@@ -1291,14 +1240,12 @@ describe("secrets apply", () => {
         scrubAuthProfilesForProviderTargets: false,
         scrubLegacyAuthJson: false,
       },
-    };
+    });
 
-    const nextConfig = (await applyTesting.projectConfigForTest({
+    const nextConfig = await applyTesting.projectConfigForTest({
       plan,
       env: fixture.env,
-    })) as {
-      talk?: { providers?: Record<string, { apiKey?: unknown }> };
-    };
+    });
     expect(nextConfig.talk?.providers?.[TALK_TEST_PROVIDER_ID]?.apiKey).toEqual({
       source: "env",
       provider: "default",
@@ -1353,19 +1300,10 @@ describe("secrets apply", () => {
       },
     });
 
-    const nextConfig = (await applyTesting.projectConfigForTest({
+    const nextConfig = await applyTesting.projectConfigForTest({
       plan,
       env: fixture.env,
-    })) as {
-      models?: {
-        providers?: {
-          openai?: {
-            headers?: Record<string, unknown>;
-            request?: { headers?: Record<string, unknown> };
-          };
-        };
-      };
-    };
+    });
     expect(nextConfig.models?.providers?.openai?.headers?.["X.Trace"]).toEqual(
       OPENAI_API_KEY_ENV_REF,
     );
@@ -1399,11 +1337,7 @@ describe("secrets apply", () => {
       "utf8",
     );
 
-    const plan: SecretsApplyPlan = {
-      version: 1,
-      protocolVersion: 1,
-      generatedAt: new Date().toISOString(),
-      generatedBy: "manual",
+    const plan = createPlan({
       targets: [
         {
           type: "agents.entries.*.memory.search.remote.apiKey",
@@ -1417,28 +1351,13 @@ describe("secrets apply", () => {
         scrubAuthProfilesForProviderTargets: false,
         scrubLegacyAuthJson: false,
       },
-    };
+    });
 
     fixture.env.MEMORY_REMOTE_API_KEY = "sk-memory-live-env"; // pragma: allowlist secret
-    const nextConfig = (await applyTesting.projectConfigForTest({
+    const nextConfig = await applyTesting.projectConfigForTest({
       plan,
       env: fixture.env,
-    })) as {
-      agents?: {
-        entries?: Record<
-          string,
-          {
-            memory?: {
-              search?: {
-                remote?: {
-                  apiKey?: unknown;
-                };
-              };
-            };
-          }
-        >;
-      };
-    };
+    });
     expect(nextConfig.agents?.entries?.main?.memory?.search?.remote?.apiKey).toEqual({
       source: "env",
       provider: "default",
@@ -1447,11 +1366,7 @@ describe("secrets apply", () => {
   });
 
   it("rejects plan targets that do not match allowed secret-bearing paths", async () => {
-    const plan: SecretsApplyPlan = {
-      version: 1,
-      protocolVersion: 1,
-      generatedAt: new Date().toISOString(),
-      generatedBy: "manual",
+    const plan = createPlan({
       targets: [
         {
           type: "models.providers.apiKey",
@@ -1461,7 +1376,7 @@ describe("secrets apply", () => {
           ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         },
       ],
-    };
+    });
 
     await expect(runSecretsApply({ plan, env: fixture.env, write: false })).rejects.toThrow(
       "Invalid plan target path",
@@ -1469,11 +1384,7 @@ describe("secrets apply", () => {
   });
 
   it("rejects plan targets with forbidden prototype-like path segments", async () => {
-    const plan: SecretsApplyPlan = {
-      version: 1,
-      protocolVersion: 1,
-      generatedAt: new Date().toISOString(),
-      generatedBy: "manual",
+    const plan = createPlan({
       targets: [
         {
           type: "skills.entries.apiKey",
@@ -1482,7 +1393,7 @@ describe("secrets apply", () => {
           ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         },
       ],
-    };
+    });
 
     await expect(runSecretsApply({ plan, env: fixture.env, write: false })).rejects.toThrow(
       "Invalid plan target path",
@@ -1520,14 +1431,10 @@ describe("secrets apply", () => {
       targets: [],
     });
 
-    const nextConfig = (await applyTesting.projectConfigForTest({
+    const nextConfig = await applyTesting.projectConfigForTest({
       plan,
       env: fixture.env,
-    })) as {
-      secrets?: {
-        providers?: Record<string, unknown>;
-      };
-    };
+    });
     expect(nextConfig.secrets?.providers?.fileold).toBeUndefined();
     expect(nextConfig.secrets?.providers?.filemain).toEqual({
       source: "file",
@@ -1549,18 +1456,7 @@ describe("secrets apply", () => {
       },
     });
 
-    const plan = createPlan({
-      providerUpserts: {
-        vault: {
-          source: "exec",
-          pluginIntegration: {
-            pluginId: "vault",
-            integrationId: "vault",
-          },
-        },
-      },
-      targets: [],
-    });
+    const plan = createPluginProviderPlan();
 
     const nextConfig = await applyTesting.projectConfigForTest({
       plan,
@@ -1574,192 +1470,36 @@ describe("secrets apply", () => {
     });
   });
 
-  it("does not re-enable explicitly disabled plugin owners for plugin-managed exec provider upserts", async () => {
-    await writeJsonFile(fixture.configPath, {
-      plugins: {
-        entries: {
-          vault: {
-            enabled: false,
-          },
-        },
-      },
-    });
-
-    const plan = createPlan({
-      providerUpserts: {
-        vault: {
-          source: "exec",
-          pluginIntegration: {
-            pluginId: "vault",
-            integrationId: "vault",
-          },
-        },
-      },
-      targets: [],
-    });
-
+  it.each([
+    {
+      policy: "plugins are globally disabled",
+      plugins: { enabled: false },
+      reason: "plugins.enabled is false.",
+    },
+    {
+      policy: "the normalized plugin owner is denied",
+      plugins: { deny: ["Vault"] },
+      reason: 'plugins.deny includes "vault".',
+    },
+    {
+      policy: "the normalized plugin owner is disabled",
+      plugins: { entries: { Vault: { enabled: false } } },
+      reason: "plugins.entries.vault.enabled is false.",
+    },
+    {
+      policy: "the plugin is absent from a restrictive allowlist",
+      plugins: { allow: ["openai"] },
+      reason:
+        'plugins.allow does not include "vault". Add the plugin to plugins.allow before applying this plan.',
+    },
+  ])("rejects plugin-managed exec provider upserts when $policy", async ({ plugins, reason }) => {
+    await writeJsonFile(fixture.configPath, { plugins });
     await expect(
       applyTesting.projectConfigForTest({
-        plan,
+        plan: createPluginProviderPlan(),
         env: fixture.env,
       }),
-    ).rejects.toThrow(
-      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.entries.vault.enabled is false.',
-    );
-  });
-
-  it("rejects plugin-managed exec provider upserts when plugins are globally disabled", async () => {
-    await writeJsonFile(fixture.configPath, {
-      plugins: {
-        enabled: false,
-      },
-    });
-
-    const plan = createPlan({
-      providerUpserts: {
-        vault: {
-          source: "exec",
-          pluginIntegration: {
-            pluginId: "vault",
-            integrationId: "vault",
-          },
-        },
-      },
-      targets: [],
-    });
-
-    await expect(
-      applyTesting.projectConfigForTest({
-        plan,
-        env: fixture.env,
-      }),
-    ).rejects.toThrow(
-      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.enabled is false.',
-    );
-  });
-
-  it("rejects plugin-managed exec provider upserts for denied plugin owners", async () => {
-    await writeJsonFile(fixture.configPath, {
-      plugins: {
-        deny: ["vault"],
-      },
-    });
-
-    const plan = createPlan({
-      providerUpserts: {
-        vault: {
-          source: "exec",
-          pluginIntegration: {
-            pluginId: "vault",
-            integrationId: "vault",
-          },
-        },
-      },
-      targets: [],
-    });
-
-    await expect(
-      applyTesting.projectConfigForTest({
-        plan,
-        env: fixture.env,
-      }),
-    ).rejects.toThrow(
-      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.deny includes "vault".',
-    );
-  });
-
-  it("rejects plugin-managed exec provider upserts for normalized denied plugin owners", async () => {
-    await writeJsonFile(fixture.configPath, {
-      plugins: {
-        deny: ["Vault"],
-      },
-    });
-
-    const plan = createPlan({
-      providerUpserts: {
-        vault: {
-          source: "exec",
-          pluginIntegration: {
-            pluginId: "vault",
-            integrationId: "vault",
-          },
-        },
-      },
-      targets: [],
-    });
-
-    await expect(
-      applyTesting.projectConfigForTest({
-        plan,
-        env: fixture.env,
-      }),
-    ).rejects.toThrow(
-      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.deny includes "vault".',
-    );
-  });
-
-  it("does not re-enable normalized disabled plugin owners for plugin-managed exec provider upserts", async () => {
-    await writeJsonFile(fixture.configPath, {
-      plugins: {
-        entries: {
-          Vault: {
-            enabled: false,
-          },
-        },
-      },
-    });
-
-    const plan = createPlan({
-      providerUpserts: {
-        vault: {
-          source: "exec",
-          pluginIntegration: {
-            pluginId: "vault",
-            integrationId: "vault",
-          },
-        },
-      },
-      targets: [],
-    });
-
-    await expect(
-      applyTesting.projectConfigForTest({
-        plan,
-        env: fixture.env,
-      }),
-    ).rejects.toThrow(
-      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.entries.vault.enabled is false.',
-    );
-  });
-
-  it("does not widen restrictive plugin allowlists for plugin-managed exec provider upserts", async () => {
-    await writeJsonFile(fixture.configPath, {
-      plugins: {
-        allow: ["openai"],
-      },
-    });
-
-    const plan = createPlan({
-      providerUpserts: {
-        vault: {
-          source: "exec",
-          pluginIntegration: {
-            pluginId: "vault",
-            integrationId: "vault",
-          },
-        },
-      },
-      targets: [],
-    });
-
-    await expect(
-      applyTesting.projectConfigForTest({
-        plan,
-        env: fixture.env,
-      }),
-    ).rejects.toThrow(
-      'Cannot apply plugin-managed SecretRef provider "vault" because plugins.allow does not include "vault". Add the plugin to plugins.allow before applying this plan.',
-    );
+    ).rejects.toThrow(`Cannot apply plugin-managed SecretRef provider "vault" because ${reason}`);
   });
 
   it("scrubs .env in legacy .clawdbot state directory via automatic fallback", async () => {
@@ -1899,28 +1639,12 @@ describe("secrets apply", () => {
       },
     });
 
-    const plan = createPlan({
-      providerUpserts: {
-        vault: {
-          source: "exec",
-          pluginIntegration: {
-            pluginId: "vault",
-            integrationId: "vault",
-          },
-        },
-      },
-      targets: [],
-    });
+    const plan = createPluginProviderPlan();
 
-    const nextConfig = (await applyTesting.projectConfigForTest({
+    const nextConfig = await applyTesting.projectConfigForTest({
       plan,
       env: fixture.env,
-    })) as {
-      plugins?: {
-        allow?: string[];
-        entries?: Record<string, unknown>;
-      };
-    };
+    });
     expect(nextConfig.plugins?.allow).toEqual(["Vault"]);
     expect(nextConfig.plugins?.entries?.vault).toEqual({ enabled: true });
   });

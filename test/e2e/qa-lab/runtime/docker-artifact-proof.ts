@@ -93,7 +93,7 @@ function assertIdentity(identity: ArtifactIdentity, lane: DockerArtifactProofLan
   }
 }
 
-export function formatDockerArtifactIdentityDetails(identity: ArtifactIdentity) {
+function formatDockerArtifactIdentityDetails(identity: ArtifactIdentity) {
   const containers = identity.containers
     .map((container) => `${container.role}=${container.id.slice(0, 12)}`)
     .join(", ");
