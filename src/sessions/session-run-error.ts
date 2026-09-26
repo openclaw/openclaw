@@ -25,11 +25,21 @@ export async function recordGatewaySessionRunFailure(params: {
   runId: string;
   error: unknown;
   errorKind?: "state_contention";
+  status?: "failed" | "timeout";
+  timeoutPartialText?: string;
   assertCommitAllowed?: () => void;
   settleStartupSession?: () => undefined;
 }): Promise<void> {
   const { runId } = params;
   const error = truncateUtf16Safe(sanitizeSessionRunError(params.error), 512) || "unknown error";
+  // One existing custom report keeps the partial and its outcome inseparable.
+  // Older readers already replay this format; partial text remains quoted data,
+  // rather than an injected assistant message that they would filter out.
+  const timeoutContent =
+    "This turn timed out and may have performed work before it stopped." +
+    (params.timeoutPartialText?.trim()
+      ? `\n\nUnfinished assistant output (recorded text, not a completion claim):\n${JSON.stringify(params.timeoutPartialText)}`
+      : "");
   const append = params.settleStartupSession
     ? appendSessionTranscriptReportNative
     : appendSessionTranscriptReport;
@@ -40,7 +50,8 @@ export async function recordGatewaySessionRunFailure(params: {
       append(params.target, {
         kind: "custom",
         customTypes: [RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE],
-        suppressWhenAssistantRun: runId,
+        // Partial output does not establish a completed turn. Keep its timeout outcome visible.
+        suppressWhenAssistantRun: params.status === "timeout" ? undefined : runId,
         selectReport: (latest) => {
           params.assertCommitAllowed?.();
           params.settleStartupSession?.();
@@ -51,9 +62,11 @@ export async function recordGatewaySessionRunFailure(params: {
           return {
             customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
             content:
-              params.errorKind === "state_contention"
-                ? STATE_CONTENTION_SUMMARY
-                : `This turn ended before a reply: ${error}`,
+              params.status === "timeout"
+                ? timeoutContent
+                : params.errorKind === "state_contention"
+                  ? STATE_CONTENTION_SUMMARY
+                  : `This turn ended before a reply: ${error}`,
             display: true,
             details: { runId, error, ...(params.errorKind ? { errorKind: params.errorKind } : {}) },
           };

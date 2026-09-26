@@ -81,6 +81,7 @@ export function createSessionLifecyclePersistenceOwner() {
     const persist = () =>
       persistGatewaySessionLifecycleEvent({
         sessionKey: params.sessionKey,
+        timeoutPartialText: params.timeoutPartialText,
         ...(params.agentId ? { agentId: params.agentId } : {}),
         event: {
           ...params.event,

@@ -580,6 +580,11 @@ export function abortChatRunById(
   const run = ops.chatRunState.runs.get(runId);
   const liveTextGroup = run?.liveTextGroup?.signal;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
+  if (stopReason === "timeout" && active.controlUiVisible !== false && partialText) {
+    // Abort clears the buffer. Keep the text on its run owner so the
+    // terminal writer can commit it together with the timeout outcome.
+    active.timeoutPartialText = partialText;
+  }
   const canvasBlocks =
     run?.bufferIsCurrent?.() !== false &&
     (partialText || !(run?.rawBuffer ?? run?.buffer ?? "").trim())

@@ -52,6 +52,7 @@ import {
   respondChatSendAdmissionError,
   respondChatSendRetry,
   respondChatSessionRoutingChanged,
+  waitForChatSessionTimeoutPersistence,
   type ChatSendPreAdmissionParams,
 } from "./chat-send-pre-admission.js";
 import { bindChatSendPreparedSession } from "./chat-send-session-binding.js";
@@ -368,6 +369,7 @@ export async function admitChatSend(
   };
 
   try {
+    await waitForChatSessionTimeoutPersistence({ context, session });
     gatewayWorkAdmission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [sessionKey, backingSessionId],
@@ -399,6 +401,9 @@ export async function admitChatSend(
         }
       },
     });
+    // A preceding run can time out while admission waits for the session writer.
+    // Wait outside that writer so its terminal transcript write can complete.
+    await waitForChatSessionTimeoutPersistence({ context, session });
     params.assertCurrent?.();
   } catch (err) {
     clearPendingChatSendReservation();
