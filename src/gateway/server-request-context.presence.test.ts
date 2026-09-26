@@ -12,6 +12,7 @@ import {
   resolveUserProfileId,
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionSuggestionHandlers } from "./server-methods/sessions-suggestions.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
@@ -340,6 +341,7 @@ describe("createGatewayRequestContext presence", () => {
       );
       const params = makeContextParams({ clients: new GatewayClientRegistry(tabs) });
       const context = createGatewayRequestContext(params);
+      await initializeSessionReadContext(context);
       const events = () =>
         vi.mocked(params.runtime.broadcast).mock.calls.filter(([event]) => event === "presence");
       const rows = () =>
