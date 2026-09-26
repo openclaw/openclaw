@@ -66,6 +66,11 @@ Any model on the gateway is addressable as `kilocode/<upstream-id>` (for example
 `kilocode/anthropic/claude-sonnet-4`, `kilocode/openai/gpt-5.5`). Run `/models kilocode` or
 `openclaw models list --provider kilocode` to see the full discovered list.
 
+Discovered models use Kilo Gateway's advertised tool support. When a model's
+`supported_parameters` list omits `tools`, OpenClaw sends requests without tool
+definitions or tool choice. Models without that metadata keep the default tool
+behavior.
+
 ## Config example
 
 ```json5
