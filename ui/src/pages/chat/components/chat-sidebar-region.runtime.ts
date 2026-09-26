@@ -350,7 +350,9 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         }));
       }
       const type = panelType(this.panelDefinitions, panel.slot);
-      const tab = panel.slot === "conversation" ? (this.conversationTab ?? type) : type;
+      // Agent transitions clear identity before loading the next name.
+      const tab =
+        panel.slot === "conversation" && this.conversationTab?.label ? this.conversationTab : type;
       return [
         {
           id: panel.id,
