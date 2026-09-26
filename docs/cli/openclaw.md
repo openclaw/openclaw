@@ -407,6 +407,7 @@ Security contract for remote rescue:
 - Rescue is limited to owner DMs.
 - Plugin search and list are read-only. Plugin install is always local-only (blocked in rescue, even when otherwise enabled) because it downloads executable code. Plugin uninstall is refused in both local OpenClaw and rescue; run `openclaw plugins uninstall <id>` from a terminal.
 - Remote rescue cannot open the local TUI or switch into an interactive agent session; use local `openclaw` for agent handoff.
+- `config unset` is unavailable in remote rescue because that path cannot revalidate owner policy at the final write. Ask your regular agent to remove the setting through the setup helper, or run `openclaw config unset <path>` locally.
 - Persistent writes still require approval, even in rescue mode.
 - Pending approvals are one-use. Any newer rescue command for the same account, channel, and sender revokes the older plan; failed execution also consumes approval, so resend the command to retry.
 - Every applied rescue operation is audited. Message-channel rescue records channel, account, sender, and source-address metadata; config-mutating operations also record config hashes before and after.

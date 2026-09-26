@@ -140,11 +140,6 @@ function parsePendingOperation(value: unknown): SystemAgentOperation | null {
         return null;
       }
       break;
-    case "config-unset":
-      if (!hasExactKeys(operation, ["kind", "path"]) || !isNonEmptyString(operation.path)) {
-        return null;
-      }
-      break;
     case "config-set":
       if (
         !hasExactKeys(operation, ["kind", "path", "value"]) ||
@@ -248,6 +243,12 @@ function formatUnsupportedRemoteOperation(operation: SystemAgentOperation): stri
     return [
       "OpenClaw rescue cannot host the interactive channel setup from a message channel.",
       "Run `openclaw setup` locally and say `connect " + operation.channel + "` instead.",
+    ].join(" ");
+  }
+  if (operation.kind === "config-unset") {
+    return [
+      "OpenClaw rescue cannot remove configuration settings.",
+      "Ask your regular agent to remove the setting, or run `openclaw config unset <path>` locally.",
     ].join(" ");
   }
   if (operation.kind === "doctor-fix") {
