@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   getSessionCompactionPersistence,
   withSessionCompactionPersistence,
@@ -25,7 +26,7 @@ it("closes a compaction invocation before its deferred descendants run", async (
 it("retains an asynchronous compaction owner through settlement and closes retained descendants", async () => {
   const manager = {};
   const persist = { prepare: vi.fn(), assertActive: vi.fn(), onCommitted: vi.fn() };
-  const releaseDescendant = Promise.withResolvers<void>();
+  const releaseDescendant = createDeferredCore();
   let descendant: Promise<CompactionAppendPersistence | undefined> | undefined;
   await expect(
     withSessionCompactionPersistenceAsync(manager, persist, async () => {

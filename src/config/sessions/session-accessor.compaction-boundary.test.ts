@@ -54,41 +54,46 @@ describe("persistCompactionBoundaryWithSessionEntrySync", () => {
       const keptId = manager.appendMessage({ role: "user", content: "keep", timestamp: 1 });
       const before = loadTranscriptEventsSync(scope);
 
+      let reads: ReturnType<typeof trackSqliteStatementExecutions> | undefined;
       let entryRows = 0;
-      const entryId = withSessionCompactionPersistence(
-        manager,
-        (prepared) => {
-          const database = openOpenClawAgentDatabase(
-            toDatabaseOptions(resolveSqliteTranscriptScope(scope)),
-          );
-          const reads = trackSqliteStatementExecutions(database.db, ["entry"], (sql) =>
-            sql.startsWith('select * from "session_nodes" where "session_key" = ?')
-              ? "entry"
-              : null,
-          );
-          try {
-            return persistCompactionBoundaryWithSessionEntrySync(
-              {
-                ...scope,
-                expectedLifecycleRevision: expected.lifecycleRevision,
-                expectedWriterRunId: expected.activeWriterRunId,
-              },
-              {
-                prepared,
+      let entryId: string;
+      try {
+        entryId = withSessionCompactionPersistence(
+          manager,
+          {
+            prepare: () => {
+              const database = openOpenClawAgentDatabase(
+                toDatabaseOptions(resolveSqliteTranscriptScope(scope)),
+              );
+              reads = trackSqliteStatementExecutions(database.db, ["entry"], (sql) =>
+                sql.startsWith('select * from "session_nodes" where "session_key" = ?')
+                  ? "entry"
+                  : null,
+              );
+              return {
+                scope: {
+                  ...scope,
+                  expectedLifecycleRevision: expected.lifecycleRevision,
+                  expectedWriterRunId: expected.activeWriterRunId,
+                },
                 transcriptByteCompactionLatch: {
                   activeBytes: 2048,
                   sessionId: scope.sessionId,
                   maxBytes: 1024,
                 },
-              },
-            );
-          } finally {
-            entryRows = reads.rowCounts.entry;
-            reads.restore();
-          }
-        },
-        () => manager.appendCompaction("summary", keptId, 100),
-      );
+              };
+            },
+            assertActive: () => {},
+            onCommitted: () => {
+              entryRows = reads?.rowCounts.entry ?? 0;
+              reads?.restore();
+            },
+          },
+          () => manager.appendCompaction("summary", keptId, 100),
+        );
+      } finally {
+        reads?.restore();
+      }
 
       expect(loadTranscriptEventsSync(scope)).toEqual([
         ...before,
