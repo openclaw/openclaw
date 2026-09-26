@@ -10,6 +10,11 @@ import {
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
 import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+  type SpawnResult,
+} from "../process/exec-result.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import { readWindowsStartupFallbackRuntimeForUpdate } from "./schtasks-runtime.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
@@ -46,6 +51,9 @@ const sleepMock = vi.hoisted(() =>
 );
 const childUnref = vi.hoisted(() => vi.fn());
 const spawn = vi.hoisted(() => vi.fn());
+const launchCommand = vi.hoisted(() =>
+  vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(),
+);
 type SpawnSyncResult = {
   pid: number;
   output: (string | null)[];
@@ -90,6 +98,19 @@ vi.mock("../utils.js", async () => {
   return {
     ...actual,
     sleep: (ms: number) => sleepMock(ms),
+  };
+});
+
+vi.mock("../process/exec.js", async () => {
+  const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+  return {
+    ...actual,
+    runCommandWithTimeout: (...args: Parameters<typeof actual.runCommandWithTimeout>) => {
+      const options = args[1];
+      return typeof options !== "number" && options.env?.OPENCLAW_STARTUP_CMD
+        ? launchCommand(...args)
+        : actual.runCommandWithTimeout(...args);
+    },
   };
 });
 
@@ -410,6 +431,16 @@ beforeEach(() => {
   });
   spawn.mockReset();
   spawn.mockImplementation(() => createSpawnChild());
+  launchCommand.mockReset();
+  launchCommand.mockResolvedValue({
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+    cleanup: "normal",
+  });
   spawnSync.mockReset();
   spawnSync.mockImplementation((command, args) =>
     isProcessSnapshotQuery(command, args)
@@ -444,15 +475,19 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("rejects asynchronous cmd fallback spawn failures without detaching", async () => {
+  it("propagates a failed PowerShell control launch without retrying", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       const scriptPath = resolveTaskScriptPath(env);
       await fs.mkdir(path.dirname(scriptPath), { recursive: true });
       await fs.writeFile(scriptPath, "@echo off\r\nrem no parsed command\r\n", "utf8");
-      const error = Object.assign(new Error("spawn cmd ENOENT"), { code: "ENOENT" });
-      spawn.mockImplementationOnce(() => createSpawnChild(error));
+      const error = Object.assign(new Error("spawn PowerShell ENOENT"), { code: "ENOENT" });
+      launchCommand.mockRejectedValueOnce(error);
 
-      await expect(launchFallbackTaskScript(env)).rejects.toThrow("spawn cmd ENOENT");
+      await expect(launchFallbackTaskScript(env)).rejects.toMatchObject({
+        message: expect.stringContaining("start was not confirmed"),
+        cause: error,
+      });
+      expect(launchCommand).toHaveBeenCalledOnce();
       expect(childUnref).not.toHaveBeenCalled();
     });
   });
@@ -461,6 +496,7 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       await expect(launchFallbackTaskScript(env)).rejects.toThrow(/ENOENT|no such file/i);
       expect(spawn).not.toHaveBeenCalled();
+      expect(launchCommand).not.toHaveBeenCalled();
     });
   });
 
@@ -476,6 +512,7 @@ describe("Windows startup fallback", () => {
         "open fallback script EACCES",
       );
       expect(spawn).not.toHaveBeenCalled();
+      expect(launchCommand).not.toHaveBeenCalled();
       expect(childUnref).not.toHaveBeenCalled();
     });
   });
@@ -499,6 +536,7 @@ describe("Windows startup fallback", () => {
         }),
       );
       expect(spawn).not.toHaveBeenCalled();
+      expect(launchCommand).not.toHaveBeenCalled();
       expect(childUnref).not.toHaveBeenCalled();
     });
   });
@@ -543,7 +581,7 @@ describe("Windows startup fallback", () => {
     });
   });
 
-  it("detaches the cmd fallback only after it starts", async () => {
+  it("confirms CMD creation only after clean bounded PowerShell settlement", async () => {
     vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
     await withWindowsEnv("openclaw-win-startup-", async ({ env, tmpDir }) => {
       env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state & %USERPROFILE% !");
@@ -552,29 +590,98 @@ describe("Windows startup fallback", () => {
       await fs.writeFile(scriptPath, "@echo off\r\nrem no parsed command\r\n", "utf8");
 
       await expect(launchFallbackTaskScript(env)).resolves.toBeUndefined();
-      const [command, args, options] = spawn.mock.calls.at(-1) as [
-        string,
-        string[],
-        {
-          detached: boolean;
-          env: NodeJS.ProcessEnv;
-          stdio: string;
-          windowsHide: boolean;
-          windowsVerbatimArguments: boolean;
-        },
-      ];
-      expect(command).toBe(getWindowsCmdExePath());
-      expect(args).toEqual(["/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""']);
-      expect(options.env.OPENCLAW_TASK_SCRIPT).toBe(scriptPath);
-      expect(options.env.BOUNDARY_PARENT_ONLY).toBe("synthetic");
+      const call = launchCommand.mock.calls.at(-1);
+      expect(call).toBeDefined();
+      if (!call || typeof call[1] === "number") {
+        throw new Error("Expected the bounded launcher command and its environment options");
+      }
+      const [argv, options] = call;
+      expect(argv[0]).toBe(getWindowsPowerShellExePath());
+      expect(argv.slice(1, 4)).toEqual(["-NoProfile", "-NonInteractive", "-EncodedCommand"]);
+      expect(argv).toHaveLength(5);
+      expect(options.baseEnv).toBe(process.env);
+      expect(options.baseEnv?.BOUNDARY_PARENT_ONLY).toBe("synthetic");
+      expect(options.env).toEqual({
+        OPENCLAW_TASK_SCRIPT: scriptPath,
+        OPENCLAW_STARTUP_CMD: getWindowsCmdExePath(),
+      });
+      expect(options.timeoutMs).toBe(15_000);
+      expect(options.killProcessTree).toBe(true);
+      expect(options.requireProcessTreeExtinction).not.toBe(true);
       expect(spawnSync).toHaveBeenCalledOnce();
       expect(spawnSync.mock.calls[0]?.[2]?.env).toMatchObject({ OPENCLAW_TASK_SCRIPT: scriptPath });
       expect(spawnSync.mock.calls[0]?.[2]?.env).not.toHaveProperty("BOUNDARY_PARENT_ONLY");
-      expect(options.detached).toBe(true);
-      expect(options.stdio).toBe("ignore");
-      expect(options.windowsHide).toBe(true);
-      expect(options.windowsVerbatimArguments).toBe(true);
-      expect(childUnref).toHaveBeenCalledOnce();
+      expect(spawn).not.toHaveBeenCalled();
+      expect(childUnref).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    { name: "nonzero", code: 1, termination: "exit", signal: null, cleanup: "normal" },
+    { name: "timeout", code: 124, termination: "timeout", signal: null, cleanup: "forced" },
+    { name: "canceled", code: 0, termination: "signal", signal: "SIGTERM", cleanup: "forced" },
+    { name: "uncertain", code: 0, termination: "exit", signal: null, cleanup: "uncertain" },
+  ] as const)("leaves a $name control result unconfirmed without retrying", async (outcome) => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const scriptPath = resolveTaskScriptPath(env);
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(scriptPath, "@echo off\r\n", "utf8");
+      const result: SpawnResult = {
+        stdout: "",
+        stderr: "",
+        killed: outcome.termination !== "exit",
+        code: outcome.code,
+        signal: outcome.signal,
+        termination: outcome.termination,
+        cleanup: outcome.cleanup,
+      };
+      launchCommand.mockResolvedValueOnce(result);
+
+      const failure = await launchFallbackTaskScript(env, null).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toContain("start was not confirmed");
+      expect(String(failure)).toContain("status --deep");
+      expect(hasCommandProcessCleanupError(failure)).toBe(outcome.cleanup === "uncertain");
+      expect(launchCommand).toHaveBeenCalledOnce();
+      expect(childUnref).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    new CommandProcessCleanupError(),
+    Object.assign(new Error("Interrupted command cleanup"), { cleanup: "uncertain" }),
+  ])("retains cleanup classification and cause from a command-owner rejection", async (failure) => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const scriptPath = resolveTaskScriptPath(env);
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(scriptPath, "@echo off\r\n", "utf8");
+      launchCommand.mockRejectedValueOnce(failure);
+      const rejected = await launchFallbackTaskScript(env, null).catch((error: unknown) => error);
+      expect(hasCommandProcessCleanupError(rejected)).toBe(true);
+      expect(rejected).toMatchObject({ cause: { cause: failure } });
+      expect(String(rejected)).toContain("status --deep");
+      expect(launchCommand).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("reports an unconfirmed start when authority is revoked after acknowledgement", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const scriptPath = resolveTaskScriptPath(env);
+      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+      await fs.writeFile(scriptPath, "@echo off\r\n", "utf8");
+      const revoked = new Error("Fixture service authority was revoked");
+      const assertCurrent = vi
+        .fn()
+        .mockImplementationOnce(() => {})
+        .mockImplementationOnce(() => {
+          throw revoked;
+        });
+
+      await expect(launchFallbackTaskScript(env, null, assertCurrent)).rejects.toMatchObject({
+        message: expect.stringContaining("status --deep"),
+        cause: revoked,
+      });
+      expect(launchCommand).toHaveBeenCalledOnce();
     });
   });
 

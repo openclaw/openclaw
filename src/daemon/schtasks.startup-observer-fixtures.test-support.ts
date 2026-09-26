@@ -75,7 +75,13 @@ const save = (value) => {
 const nativeSpawn = cp.spawn;
 let detachedRecord;
 cp.spawn = (command, args, options) => {
-  if (options?.detached !== true) return nativeSpawn(command, args, options);
+  const isControl = spec.mode === "batch" &&
+    String(command).toLowerCase() === String(spec.powershellPath).toLowerCase() &&
+    Array.isArray(args) && args.length === 4 &&
+    args[0] === "-NoProfile" && args[1] === "-NonInteractive" && args[2] === "-EncodedCommand" &&
+    typeof args[3] === "string" && options?.env?.OPENCLAW_TASK_SCRIPT === spec.scriptPath &&
+    options.env.OPENCLAW_STARTUP_CMD === spec.cmdPath;
+  if (options?.detached !== true && !isControl) return nativeSpawn(command, args, options);
   let effectiveArgs = args;
   if (spec.preOpenCodePage !== undefined) {
     if (spec.mode !== "batch" || !/^[0-9]+$/.test(spec.preOpenCodePage) ||
@@ -88,12 +94,15 @@ cp.spawn = (command, args, options) => {
   }
   const record = {
     command, args, effectiveArgs, preOpenCodePage: spec.preOpenCodePage,
-    cwd: options.cwd ?? process.cwd(), detached: options.detached,
+    cwd: options.cwd ?? process.cwd(), detached: options.detached === true,
+    transport: isControl ? "powershell-control" : "detached-payload",
     windowsHide: options.windowsHide, windowsVerbatimArguments: options.windowsVerbatimArguments ?? false,
     originalStdio: options.stdio, variant: spec.variant,
     effectiveStdio: spec.variant === "file-backed-diagnostic" ? ["ignore", "file", "file"] : options.stdio,
-    scriptPath: options.env?.OPENCLAW_TASK_SCRIPT ?? null, spawnObserved: false, exitObserved: false,
-    exitCode: null, exitSignal: null,
+    scriptPath: options.env?.OPENCLAW_TASK_SCRIPT ?? null,
+    targetCommand: options.env?.OPENCLAW_STARTUP_CMD ?? null,
+    spawnObserved: false, exitObserved: false,
+    exitCode: null, exitSignal: null, closeObserved: false, closeCode: null, closeSignal: null,
   };
   detachedRecord = record;
   save(record);
@@ -106,6 +115,9 @@ cp.spawn = (command, args, options) => {
     child.once("error", (error) => { record.errorCode = error.code ?? null; save(record); });
     child.once("exit", (code, signal) => {
       Object.assign(record, { exitObserved: true, exitCode: code, exitSignal: signal }); save(record);
+    });
+    child.once("close", (code, signal) => {
+      Object.assign(record, { closeObserved: true, closeCode: code, closeSignal: signal }); save(record);
     });
     return child;
   } finally {

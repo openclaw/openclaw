@@ -9,7 +9,12 @@ import {
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
 import { readWindowsPortUsageSync } from "../infra/windows-port-pids.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+  type SpawnResult,
+} from "../process/exec-result.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { spawnWithFallback } from "../process/spawn-utils.js";
 import { sleep } from "../utils.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
@@ -237,19 +242,71 @@ export async function launchFallbackTaskScript(
   if (scriptProbe.status !== 0) {
     throw Object.assign(new Error("Windows login item script is not readable"), { code: "EACCES" });
   }
-  const { child } = await spawnWithFallback({
-    assertCurrent,
-    // Node's verbatim /s shell contract preserves inner quotes; percent expansion is nonrecursive.
-    argv: [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'],
-    options: {
-      detached: true,
-      env: { ...process.env, OPENCLAW_TASK_SCRIPT: scriptPath },
-      stdio: "ignore",
-      windowsHide: true,
-      windowsVerbatimArguments: true,
-    },
-  });
-  child.unref();
+  // Give CMD a hidden console for its declared batch code page. PowerShell
+  // acknowledges creation without waiting for the payload.
+  const launcher = [
+    "$ErrorActionPreference='Stop'",
+    `$child=Start-Process -FilePath $env:OPENCLAW_STARTUP_CMD -ArgumentList '/d /s /v:off /c ""%OPENCLAW_TASK_SCRIPT%""' -WindowStyle Hidden -PassThru`,
+    "if ($null -eq $child -or $child.Id -le 1) { throw 'CMD process was not created' }",
+    "$child.Dispose()",
+    "exit 0",
+  ].join("; ");
+  assertCurrent?.();
+  let result: SpawnResult | undefined;
+  try {
+    result = await runCommandWithTimeout(
+      [
+        getWindowsPowerShellExePath(),
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(launcher, "utf16le").toString("base64"),
+      ],
+      {
+        baseEnv: process.env,
+        env: {
+          OPENCLAW_TASK_SCRIPT: scriptPath,
+          OPENCLAW_STARTUP_CMD: getWindowsCmdExePath(),
+        },
+        timeoutMs: SCHEDULED_TASK_FALLBACK_TIMEOUT_MS,
+        killProcessTree: true,
+      },
+    );
+    assertCurrent?.();
+    if (
+      result.termination !== "exit" ||
+      result.code !== 0 ||
+      result.signal !== null ||
+      result.cleanup !== "normal"
+    ) {
+      throw new Error("PowerShell command did not confirm CMD creation", {
+        cause: {
+          termination: result.termination,
+          code: result.code,
+          signal: result.signal,
+          cleanup: result.cleanup,
+        },
+      });
+    }
+  } catch (cause) {
+    const unconfirmed = new Error(
+      "Windows login item start was not confirmed. Run `openclaw gateway status --deep` to reconcile its state before retrying.",
+      { cause },
+    );
+    if (
+      result?.cleanup === "uncertain" ||
+      hasCommandProcessCleanupError(cause) ||
+      (typeof cause === "object" &&
+        cause !== null &&
+        "cleanup" in cause &&
+        cause.cleanup === "uncertain")
+    ) {
+      const cleanupError = new CommandProcessCleanupError({ cause: unconfirmed });
+      cleanupError.message += ` ${unconfirmed.message}`;
+      throw cleanupError;
+    }
+    throw unconfirmed;
+  }
 }
 
 export async function resolveFallbackRuntime(

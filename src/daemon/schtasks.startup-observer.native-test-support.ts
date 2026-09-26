@@ -7,6 +7,10 @@ import { z } from "zod";
 import { spawnWindowsJobChild } from "../../scripts/lib/managed-windows-job.mts";
 import type { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import {
+  getWindowsCmdExePath,
+  getWindowsPowerShellExePath,
+} from "../infra/windows-install-roots.js";
 import { buildTaskScript, encodeWindowsLauncherScript } from "./schtasks-layout.js";
 import { startupArgvCaptureSource } from "./schtasks.startup-observer-fixtures.test-support.js";
 import type { GatewayServiceEnv } from "./service-types.js";
@@ -92,6 +96,8 @@ export async function runObservedStartupLaunch(params: {
         expectedExitTag,
         argvCapture,
         preOpenCodePage,
+        powershellPath: getWindowsPowerShellExePath(),
+        cmdPath: getWindowsCmdExePath(),
         invocationPath: `${prefix}.invocation.json`,
         stdoutPath: `${prefix}.stdout.log`,
         stderrPath: `${prefix}.stderr.log`,
@@ -205,6 +211,10 @@ export async function runObservedStartupLaunch(params: {
         jobLauncherPid: child.pid,
         observerCommandPid: job.commandPid,
         cmdMembershipAtCheckpoint:
+          params.mode === "batch" && record.event === "survived" && record.started
+            ? { pid: record.started.ppid, present: members.includes(record.started.ppid) }
+            : null,
+        powershellMembershipAtCheckpoint:
           params.mode === "batch" && record.invocation?.pid
             ? { pid: record.invocation.pid, present: members.includes(record.invocation.pid) }
             : null,
@@ -235,20 +245,36 @@ export async function runObservedStartupLaunch(params: {
         );
         assert.ok(record.invocation, "Owner invocation was not recorded");
         assert.equal(record.invocation.spawnObserved, true, "Owner spawn was not observed");
-        assert.equal(record.invocation.detached, true);
-        assert.equal(record.invocation.originalStdio, "ignore");
         assert.deepEqual(record.started?.argv.slice(1), [
           params.probePath,
           params.markerPath,
           params.parentPidPath,
         ]);
         assert.equal(record.started?.pid, record.childPid);
-        assert.equal(
-          record.started?.ppid,
-          params.mode === "direct" ? record.launcherPid : record.invocation.pid,
-        );
         if (params.mode === "direct") {
+          assert.equal(record.invocation.detached, true);
+          assert.equal(record.invocation.originalStdio, "ignore");
+          assert.equal(record.started?.ppid, record.launcherPid);
           assert.equal(record.invocation.pid, record.childPid);
+        } else {
+          assert.equal(record.invocation.transport, "powershell-control");
+          assert.equal(record.invocation.detached, false);
+          const cmdPid = identity.parse(record.started?.ppid);
+          assert.notEqual(cmdPid, record.invocation.pid);
+          assert.notEqual(cmdPid, record.launcherPid);
+          assert.ok(members.includes(cmdPid), "CMD parent escaped the original Job");
+          assert.ok(
+            record.invocation.pid && !members.includes(record.invocation.pid),
+            "PowerShell creation control is still alive",
+          );
+          assert.equal(record.invocation.command, getWindowsPowerShellExePath());
+          assert.equal(record.invocation.targetCommand, getWindowsCmdExePath());
+          assert.equal(record.invocation.exitObserved, true);
+          assert.equal(record.invocation.exitCode, 0);
+          assert.equal(record.invocation.exitSignal, null);
+          assert.equal(record.invocation.closeObserved, true);
+          assert.equal(record.invocation.closeCode, 0);
+          assert.equal(record.invocation.closeSignal, null);
         }
       }
       if (record.event === "survived" || record.event === "diagnostic-exit") {
@@ -522,7 +548,7 @@ export async function runObservedStartupLaunch(params: {
       `Startup fallback ${params.mode} failed with unchanged stdio; diagnostic cannot qualify it`,
       { cause: control },
     );
-    if (!params.signal.aborted) {
+    if (!params.signal.aborted && control.invocation?.transport !== "powershell-control") {
       try {
         const fileBacked = await run("file-backed-diagnostic");
         if (fileBacked.event === "failed" && !params.signal.aborted) {
