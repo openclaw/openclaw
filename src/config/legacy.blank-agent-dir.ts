@@ -81,9 +81,12 @@ function migrateBlankAgentDirRaw(
 
   if (Array.isArray(agents.list)) {
     for (const [index, entry] of agents.list.entries()) {
-      const agentDirPath = `agents.list[${index}].agentDir`;
+      // Match the writer's explicit-set path representation (dot notation,
+      // e.g. agents.list.0.agentDir) so prefix matching preserves a blank that
+      // the current write itself sets.
+      const agentDirPath = `agents.list.${index}.agentDir`;
       if (!isPreservedAgentDirPath(preservedAgentDirPaths, agentDirPath)) {
-        removeBlankAgentDirFromAgent(entry as Record<string, unknown>, `list[${index}]`, changes);
+        removeBlankAgentDirFromAgent(entry as Record<string, unknown>, `list.${index}`, changes);
       }
     }
   }
