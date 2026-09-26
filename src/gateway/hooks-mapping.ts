@@ -1,5 +1,3 @@
-// Gateway hook mapping resolver.
-// Normalizes hook presets, templates, transforms, and resolved hook actions.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -677,15 +675,12 @@ function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
     return undefined;
   }
   const parts: Array<string | number> = [];
-  const re = /([^.[\]]+)|(\[(\d+)\])/g;
-  let match = re.exec(pathExpr);
-  while (match) {
+  for (const match of pathExpr.matchAll(/([^.[\]]+)|(\[(\d+)\])/g)) {
     if (match[1]) {
       parts.push(match[1]);
     } else if (match[3]) {
       parts.push(Number(match[3]));
     }
-    match = re.exec(pathExpr);
   }
   let current: unknown = input;
   for (const part of parts) {

@@ -24,11 +24,11 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { PublicationSessionIdentity } from "./github-publication-availability.js";
 import { deferSharedGitHubPublicationChanged } from "./github-publication-events.js";
 import { createGitHubPublicationExecutionEffects } from "./github-publication-execution-effects.js";
 import {
   readSharedGitHubPublicationWorkspace,
-  type SharedGitHubPublicationSession,
   type SharedGitHubPublicationSelector,
 } from "./github-publication-shared-read.js";
 import { assertReadableSharedGitHubPublication } from "./github-publication-store.js";
@@ -62,7 +62,7 @@ function changed(
 
 /** Filter the mixed table before decoding; a private request ID never grants shared access. */
 export function readSharedRepositoryGitHubPublication(
-  session: SharedGitHubPublicationSession,
+  session: PublicationSessionIdentity,
   selector: SharedGitHubPublicationSelector,
   entry: SessionEntry,
 ): RepositoryGitHubPublicationRow | undefined {

@@ -118,11 +118,9 @@ function startSessionListDiagnostics(
           handlerElapsedMs: Math.round(handlerElapsedMs),
           phaseDurationsMs,
           ...cpuMetrics,
-          ...(projection
-            ? Object.fromEntries(
-                Object.entries(projection).map(([key, value]) => [key, Math.round(value)]),
-              )
-            : {}),
+          ...Object.fromEntries(
+            Object.entries(projection).map(([key, value]) => [key, Math.round(value)]),
+          ),
           handlerOutcome,
           responseOutcome,
         };

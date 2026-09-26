@@ -46,10 +46,9 @@ function hasConversationSessionBinding(
   return Boolean(conversation.sessionId && conversation.sessionKey);
 }
 
-function resultForCompletedOperation(params: {
-  operation: ReturnType<typeof beginConversationDeliveryOperation>["record"];
-}): ConversationTurnResult | undefined {
-  const { operation } = params;
+function resultForCompletedOperation(
+  operation: ReturnType<typeof beginConversationDeliveryOperation>["record"],
+): ConversationTurnResult | undefined {
   const messageId = operation.platformMessageId ?? operation.preparedMessageId;
   if (operation.status === "replied" && operation.reply && messageId) {
     return {
@@ -263,7 +262,7 @@ export async function runGatewayConversationTurn(params: {
   });
   const discoveredRouteFingerprint = resolveConversationRouteFingerprint(discoveredConversation);
   if (begun) {
-    const completed = resultForCompletedOperation({ operation: begun.record });
+    const completed = resultForCompletedOperation(begun.record);
     if (completed) {
       return completed;
     }
@@ -333,7 +332,7 @@ export async function runGatewayConversationTurn(params: {
       }
       throw error;
     }
-    const completed = resultForCompletedOperation({ operation: begun.record });
+    const completed = resultForCompletedOperation(begun.record);
     if (completed) {
       return completed;
     }
@@ -378,7 +377,7 @@ export async function runGatewayConversationTurn(params: {
     });
     if (sent.deliveryStatus !== "sent") {
       pending.cancel();
-      return resultForCompletedOperation({ operation: sent.operation })!;
+      return resultForCompletedOperation(sent.operation)!;
     }
     const exactMessageId = sent.messageId === preparedMessageId;
     if (!exactMessageId) {
@@ -395,22 +394,13 @@ export async function runGatewayConversationTurn(params: {
     }
     pending.markReady();
     const reply = await pending.wait();
-    return reply
-      ? {
-          status: "replied",
-          conversationRef: conversation.conversationRef,
-          channel: conversation.channel,
-          messageId: preparedMessageId,
-          correlationPersisted: true,
-          reply,
-        }
-      : {
-          status: "timeout",
-          conversationRef: conversation.conversationRef,
-          channel: conversation.channel,
-          messageId: preparedMessageId,
-          correlationPersisted: true,
-        };
+    const delivered = {
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageId: preparedMessageId,
+      correlationPersisted: true,
+    };
+    return reply ? { status: "replied", ...delivered, reply } : { status: "timeout", ...delivered };
   } catch (error) {
     pending.cancel();
     if (error instanceof ConversationDeliveryRejectedError) {

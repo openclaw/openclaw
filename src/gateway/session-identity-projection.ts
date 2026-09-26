@@ -30,13 +30,10 @@ import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { SessionEntryPair } from "./session-list-order.js";
-import type {
-  SessionActorProfileIdentity,
-  SessionIdentityProjection,
-} from "./session-utils-contracts.js";
+import type { SessionActorProfileIdentity } from "./session-utils-contracts.js";
 
 /** The row owner invalidates these facts on profile/config publication; entry replacement is exact. */
-export function createSessionIdentityProjection(): SessionIdentityProjection {
+export function createSessionIdentityProjection() {
   let owners = new WeakMap<SessionEntry, ReturnType<typeof projectSessionOwner>>();
   let participants = new WeakMap<SessionEntry, ReadonlyMap<string, SessionParticipant>>();
   let people = new WeakMap<SessionEntry, readonly SessionPerson[]>();

@@ -63,12 +63,7 @@ export function mergeActivationSectionsIntoRuntimeConfig(params: {
   };
 }
 
-// Resolves the effective plugin config the gateway startup *plan* is built from:
-// auto-enable the operator activation source, then merge those activation sections into
-// the runtime config (so runtime/defaulted fields survive). This is the exact assembly
-// `prepareGatewayPluginBootstrap` uses (non-minimal branch); sharing it keeps any consumer
-// that recomputes the startup plan — notably the `/status plugins` should-run drift check —
-// from drifting away from real gateway boot. Behavior-preserving extraction only.
+/** Startup and drift checks share reload's source activation, retaining runtime defaults. */
 export function resolveGatewayStartupPluginActivationConfig(params: {
   runtimeConfig: OpenClawConfig;
   activationSourceConfig: OpenClawConfig;
@@ -79,13 +74,13 @@ export function resolveGatewayStartupPluginActivationConfig(params: {
 }): OpenClawConfig {
   return mergeActivationSectionsIntoRuntimeConfig({
     runtimeConfig: params.runtimeConfig,
-    activationConfig: applyPluginAutoEnable({
-      config: params.activationSourceConfig,
+    activationConfig: resolveGatewayReloadPluginActivationCandidate({
+      sourceConfig: params.activationSourceConfig,
       env: params.env,
-      ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+      manifestRegistry: params.manifestRegistry,
       discovery: params.discovery,
       ambientEnvTriggers: params.ambientEnvTriggers,
-    }).config,
+    }),
   });
 }
 

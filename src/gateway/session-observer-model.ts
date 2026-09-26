@@ -49,10 +49,7 @@ type PrepareModel = typeof prepareUtilityCompletionForAgent;
 type CompleteModel = typeof runIsolatedCompletion;
 type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
-export type SessionObserverLifecycle = Pick<
-  SessionObserverDigest,
-  "sessionId" | "lifecycleRevision"
->;
+type SessionObserverLifecycle = Pick<SessionObserverDigest, "sessionId" | "lifecycleRevision">;
 
 export function isSameSessionObserverLifecycle(
   left: SessionObserverLifecycle | undefined,

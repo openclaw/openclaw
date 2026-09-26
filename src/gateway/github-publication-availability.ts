@@ -83,7 +83,7 @@ export function matchesCurrentGitHubPublicationIdentity(params: {
   });
 }
 
-type PublicationSessionIdentity = {
+export type PublicationSessionIdentity = {
   sessionId: string;
   sessionKey: string;
   agentId: string;

@@ -35,20 +35,11 @@ function toPromptBody(entry: ConversationEntry): string | null {
 
 /** Build the prompt text sent to an agent from ordered conversation entries. */
 export function buildAgentMessageFromConversationEntries(entries: ConversationEntry[]): string {
-  if (entries.length === 0) {
-    return "";
-  }
-
   // Prefer the last user/tool entry as "current message" so the agent responds to
   // the latest user input or tool output, not the assistant's previous message.
-  let currentIndex = -1;
-  for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const role = entries[i]?.role;
-    if (role === "user" || role === "tool") {
-      currentIndex = i;
-      break;
-    }
-  }
+  let currentIndex = entries.findLastIndex(
+    (entry) => entry?.role === "user" || entry?.role === "tool",
+  );
   if (currentIndex < 0) {
     currentIndex = entries.length - 1;
   }

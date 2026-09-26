@@ -128,10 +128,7 @@ export function evaluateChannelHealth(
   ) {
     return { healthy: true, reason: "startup-connect-grace" };
   }
-  if (snapshot.lifecycle === "stopped") {
-    return { healthy: false, reason: "not-running" };
-  }
-  if (!snapshot.running) {
+  if (snapshot.lifecycle === "stopped" || !snapshot.running) {
     return { healthy: false, reason: "not-running" };
   }
   const activeRuns =
@@ -154,24 +151,20 @@ export function evaluateChannelHealth(
   // Runtime snapshots are patch-merged, so a restarted lifecycle can temporarily
   // inherit stale busy fields from the previous instance. Ignore busy short-circuit
   // until run activity is known to belong to the current lifecycle.
-  if (isBusy) {
-    if (!busyStateInitializedForLifecycle) {
-      // Fall through to normal startup/disconnect checks below.
-    } else {
-      const runActivityAge =
-        lastRunActivityAt == null
-          ? Number.POSITIVE_INFINITY
-          : Math.max(0, policy.now - lastRunActivityAt);
-      const disconnectedRunStartAge =
-        snapshot.connected === false && activeRunStartedAt != null
-          ? Math.max(0, policy.now - activeRunStartedAt)
-          : 0;
-      const busyAge = Math.max(runActivityAge, disconnectedRunStartAge);
-      if (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
-        return { healthy: true, reason: "busy" };
-      }
-      return { healthy: false, reason: "stuck" };
+  if (isBusy && busyStateInitializedForLifecycle) {
+    const runActivityAge =
+      lastRunActivityAt == null
+        ? Number.POSITIVE_INFINITY
+        : Math.max(0, policy.now - lastRunActivityAt);
+    const disconnectedRunStartAge =
+      snapshot.connected === false && activeRunStartedAt != null
+        ? Math.max(0, policy.now - activeRunStartedAt)
+        : 0;
+    const busyAge = Math.max(runActivityAge, disconnectedRunStartAge);
+    if (busyAge < BUSY_ACTIVITY_STALE_THRESHOLD_MS) {
+      return { healthy: true, reason: "busy" };
     }
+    return { healthy: false, reason: "stuck" };
   }
   if (snapshot.lifecycle === undefined && currentLifecycleStarted) {
     const upDuration = policy.now - lastStartAt;

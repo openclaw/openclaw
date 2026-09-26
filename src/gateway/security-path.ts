@@ -35,15 +35,6 @@ function normalizePathForSecurity(pathname: string): string {
   );
 }
 
-function pushNormalizedCandidate(candidates: string[], seen: Set<string>, value: string): void {
-  const normalized = normalizePathForSecurity(value);
-  if (seen.has(normalized)) {
-    return;
-  }
-  seen.add(normalized);
-  candidates.push(normalized);
-}
-
 function buildCanonicalPathCandidates(
   pathname: string,
   maxDecodePasses = MAX_PATH_DECODE_PASSES,
@@ -53,9 +44,7 @@ function buildCanonicalPathCandidates(
   decodePassLimitReached: boolean;
   malformedEncoding: boolean;
 } {
-  const candidates: string[] = [];
-  const seen = new Set<string>();
-  pushNormalizedCandidate(candidates, seen, pathname);
+  const candidates = new Set([normalizePathForSecurity(pathname)]);
 
   let decoded = pathname;
   let malformedEncoding = false;
@@ -73,7 +62,7 @@ function buildCanonicalPathCandidates(
     }
     decodePasses += 1;
     decoded = nextDecoded;
-    pushNormalizedCandidate(candidates, seen, decoded);
+    candidates.add(normalizePathForSecurity(decoded));
   }
   let decodePassLimitReached = false;
   if (!malformedEncoding) {
@@ -84,7 +73,7 @@ function buildCanonicalPathCandidates(
     }
   }
   return {
-    candidates,
+    candidates: [...candidates],
     decodePasses,
     decodePassLimitReached,
     malformedEncoding,

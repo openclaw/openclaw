@@ -30,16 +30,14 @@ export function createSessionObserverCompletion(params: {
       modelRef,
       useUtilityModel: true,
     }));
-    let failed = true;
     try {
-      const prepared = await preparedPromise;
-      failed = false;
-      return prepared;
-    } finally {
+      return await preparedPromise;
+    } catch (error) {
       // Pending and successful preparation remain shared; settled failures do not.
-      if (failed && state.preparedPromise === preparedPromise) {
+      if (state.preparedPromise === preparedPromise) {
         state.preparedPromise = undefined;
       }
+      throw error;
     }
   };
 

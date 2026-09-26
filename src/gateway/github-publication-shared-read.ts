@@ -3,18 +3,13 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import type { PublicationSessionIdentity } from "./github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
 
-export type SharedGitHubPublicationSession = {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  lifecycleRevision?: string | null;
-};
 export type SharedGitHubPublicationSelector = { requestId: string } | { idempotencyKey?: string };
 
 export function readSharedGitHubPublicationSession(
-  session: SharedGitHubPublicationSession,
+  session: PublicationSessionIdentity,
   loaded: { agentId: string; canonicalKey: string; entry?: SessionEntry },
 ) {
   const entry = loaded.entry;
@@ -34,7 +29,7 @@ export function readSharedGitHubPublicationSession(
 /** Execution resolvers open mutable stores. Observation uses their recorded owners on this reader. */
 export function readSharedGitHubPublicationWorkspace(
   db: DatabaseSync,
-  session: SharedGitHubPublicationSession,
+  session: PublicationSessionIdentity,
   entry: SessionEntry,
 ) {
   if (entry.archivedAt !== undefined) {

@@ -88,15 +88,6 @@ export function parseControlUiUserAvatarPath(
     : canonical;
 }
 
-function matchControlUiResourcePath(
-  route: ControlUiResourceRoute,
-  pathname: string | null | undefined,
-  basePath?: string | null,
-): string | undefined {
-  const parsed = parseControlUiResourcePath(route, pathname, basePath);
-  return parsed.matched && parsed.value ? parsed.value : undefined;
-}
-
 /** Builds the authenticated conversation-avatar URL for a session. */
 export function buildControlUiChannelAvatarUrl(
   basePath: string,
@@ -130,10 +121,10 @@ export function matchControlUiResourceUrl(
     if (parsed.origin !== origin || `${parsed.pathname}${parsed.search}${parsed.hash}` !== value) {
       return undefined;
     }
-    const routeValue = matchControlUiResourcePath(route, parsed.pathname, basePath);
-    return routeValue === undefined
-      ? undefined
-      : { value: routeValue, search: parsed.search, hash: parsed.hash };
+    const resource = parseControlUiResourcePath(route, parsed.pathname, basePath);
+    return resource.matched && resource.value
+      ? { value: resource.value, search: parsed.search, hash: parsed.hash }
+      : undefined;
   } catch {
     return undefined;
   }

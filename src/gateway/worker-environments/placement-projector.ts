@@ -156,9 +156,8 @@ export function projectWorkerSessionPlacement(
   };
   switch (record.state) {
     case "local":
-      return { state: "local", ...timing };
     case "requested":
-      return { state: "requested", ...timing };
+      return { state: record.state, ...timing };
     case "provisioning":
       return {
         state: "provisioning",

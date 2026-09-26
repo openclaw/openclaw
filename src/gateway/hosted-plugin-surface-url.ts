@@ -16,14 +16,8 @@ export type HostedPluginSurfaceUrlParams = {
 };
 
 const normalizeHost = (value: HostSource, rejectLoopback: boolean) => {
-  if (!value) {
-    return "";
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (rejectLoopback && isLoopbackHost(trimmed)) {
+  const trimmed = value?.trim();
+  if (!trimmed || (rejectLoopback && isLoopbackHost(trimmed))) {
     return "";
   }
   return trimmed;
@@ -40,11 +34,9 @@ const parseHostHeader = (value: HostSource): ParsedHostHeader => {
   }
   try {
     const parsed = new URL(`http://${value.trim()}`);
-    const portRaw = parsed.port.trim();
-    const port = parseStrictPositiveInteger(portRaw);
     return {
       host: parsed.hostname,
-      port: Number.isFinite(port) ? port : undefined,
+      port: parseStrictPositiveInteger(parsed.port),
     };
   } catch {
     return { host: "" };
@@ -52,10 +44,7 @@ const parseHostHeader = (value: HostSource): ParsedHostHeader => {
 };
 
 const parseForwardedProto = (value: HostSource | HostSource[]) => {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return value;
+  return Array.isArray(value) ? value[0] : value;
 };
 
 const parseForwardedHost = (value: HostSource | HostSource[]) => {

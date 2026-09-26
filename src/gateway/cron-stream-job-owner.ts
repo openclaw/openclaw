@@ -92,12 +92,6 @@ function stopRequiresSourceRetirement(reason: CronStreamStopReason): boolean {
   );
 }
 
-function clearTimer(timer: NodeJS.Timeout | undefined): void {
-  if (timer) {
-    clearTimeout(timer);
-  }
-}
-
 function boundedCounter(value: number | undefined, increment = 0): number {
   return Math.min(COUNTER_MAX, Math.max(0, Math.floor(value ?? 0)) + increment);
 }
@@ -122,7 +116,7 @@ async function stopManagedRun(run: ManagedRun): Promise<void> {
       throw new Error(`stream source did not exit within ${STOP_SETTLE_TIMEOUT_MS}ms`);
     }
   } finally {
-    clearTimer(timeout);
+    clearTimeout(timeout);
   }
 }
 
@@ -298,7 +292,7 @@ export class CronStreamJobOwner {
       }
       this.run?.detachOutput?.();
       this.run = undefined;
-      clearTimer(this.stableTimer);
+      clearTimeout(this.stableTimer);
       this.stableTimer = undefined;
       // Drain accepted tail output before this child loses callback ownership.
       await this.output.drainBufferedOutput(generation);
@@ -310,34 +304,10 @@ export class CronStreamJobOwner {
       }
       const backoffGeneration = ++this.generation;
 
-      const stable = exit.durationMs >= STABLE_RUN_MS;
-      this.consecutiveFailures = stable ? 0 : boundedCounter(this.consecutiveFailures, 1);
-      const message = `stream source exited (${exit.reason}, code ${exit.exitCode ?? "none"})`;
-      if (this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        await this.output.dropPendingForTerminalStop();
-        this.desiredRunning = false;
-        this.state = "stopped";
-        this.restartExhausted = true;
-        await this.persistFailure(message, {
-          streamStatus: "error",
-          streamError: message,
-          streamConsecutiveFailures: this.consecutiveFailures,
-          streamRestartExhausted: true,
-          streamLastExitAtMs: this.params.nowMs(),
-        });
-        return;
-      }
-
-      this.state = "backoff";
-      await this.persistState({
-        streamStatus: "restarting",
-        streamError: message,
-        streamConsecutiveFailures: this.consecutiveFailures,
-        streamLastExitAtMs: this.params.nowMs(),
-      });
-      void this.scheduleRestart(
-        stable ? 0 : errorBackoffMs(this.consecutiveFailures, this.params.retryBackoffMs),
+      await this.recoverSource(
+        `stream source exited (${exit.reason}, code ${exit.exitCode ?? "none"})`,
         backoffGeneration,
+        exit,
       );
     });
   }
@@ -381,7 +351,7 @@ export class CronStreamJobOwner {
         }),
       ]);
     } finally {
-      clearTimer(timeout);
+      clearTimeout(timeout);
     }
   }
 
@@ -430,31 +400,7 @@ export class CronStreamJobOwner {
         this.state = "stopped";
         return;
       }
-      this.consecutiveFailures = boundedCounter(this.consecutiveFailures, 1);
-      const message = `stream source failed to start: ${String(error)}`;
-      if (this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        await this.output.dropPendingForTerminalStop();
-        this.desiredRunning = false;
-        this.state = "stopped";
-        this.restartExhausted = true;
-        await this.persistFailure(message, {
-          streamStatus: "error",
-          streamError: message,
-          streamConsecutiveFailures: this.consecutiveFailures,
-          streamRestartExhausted: true,
-        });
-        return;
-      }
-      this.state = "backoff";
-      await this.persistState({
-        streamStatus: "restarting",
-        streamError: message,
-        streamConsecutiveFailures: this.consecutiveFailures,
-      });
-      void this.scheduleRestart(
-        errorBackoffMs(this.consecutiveFailures, this.params.retryBackoffMs),
-        generation,
-      );
+      await this.recoverSource(`stream source failed to start: ${String(error)}`, generation);
       return;
     }
 
@@ -518,6 +464,36 @@ export class CronStreamJobOwner {
     );
   }
 
+  private async recoverSource(message: string, generation: number, exit?: RunExit): Promise<void> {
+    const stable = exit !== undefined && exit.durationMs >= STABLE_RUN_MS;
+    this.consecutiveFailures = stable ? 0 : boundedCounter(this.consecutiveFailures, 1);
+    const exhausted = this.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES;
+    if (exhausted) {
+      await this.output.dropPendingForTerminalStop();
+      this.desiredRunning = false;
+      this.state = "stopped";
+      this.restartExhausted = true;
+    } else {
+      this.state = "backoff";
+    }
+    const patch: Partial<CronJobState> = {
+      streamStatus: exhausted ? "error" : "restarting",
+      streamError: message,
+      streamConsecutiveFailures: this.consecutiveFailures,
+      ...(exhausted ? { streamRestartExhausted: true } : {}),
+      ...(exit ? { streamLastExitAtMs: this.params.nowMs() } : {}),
+    };
+    if (exhausted) {
+      await this.persistFailure(message, patch);
+      return;
+    }
+    await this.persistState(patch);
+    void this.scheduleRestart(
+      stable ? 0 : errorBackoffMs(this.consecutiveFailures, this.params.retryBackoffMs),
+      generation,
+    );
+  }
+
   private async stopOperation(reason: CronStreamStopReason, job?: CronStreamJob): Promise<void> {
     this.desiredRunning = false;
     if (reason === "removed") {
@@ -549,9 +525,9 @@ export class CronStreamJobOwner {
         retirementError = error;
       }
     }
-    clearTimer(this.restartTimer);
+    clearTimeout(this.restartTimer);
     this.restartTimer = undefined;
-    clearTimer(this.stableTimer);
+    clearTimeout(this.stableTimer);
     this.stableTimer = undefined;
     const outputStopState = this.output.beginStop();
 
@@ -618,7 +594,7 @@ export class CronStreamJobOwner {
       ) {
         return;
       }
-      clearTimer(this.restartTimer);
+      clearTimeout(this.restartTimer);
       if (delayMs <= 0) {
         void this.restartAfterBackoff(generation);
         return;
@@ -658,7 +634,7 @@ export class CronStreamJobOwner {
       ) {
         return;
       }
-      clearTimer(this.restartTimer);
+      clearTimeout(this.restartTimer);
       this.restartTimer = undefined;
       await this.spawnSource();
     });

@@ -50,13 +50,8 @@ export type GatewayMethodDescriptor = {
 };
 
 /** Input descriptor shape before registry normalization trims and validates the method name. */
-export type GatewayMethodDescriptorInput = Omit<
-  GatewayMethodDescriptor,
-  "name" | "profileAccess"
-> & {
-  name: string;
+export type GatewayMethodDescriptorInput = Omit<GatewayMethodDescriptor, "profileAccess"> & {
   profileAccess?: GatewayMethodProfileAccess;
-  sessionAccess?: GatewayMethodSessionAccess;
 };
 
 /** Creates a plugin-owned method descriptor with plugin namespace scope normalization. */

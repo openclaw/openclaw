@@ -1,4 +1,5 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
 import type { GitHubPublicationCoordinator } from "./github-publication.js";
@@ -67,14 +68,7 @@ export function createGitHubPublicationTranscriptReporter(
           provider: "openclaw",
           model: "gateway-publication",
           responseId: `${GITHUB_PUBLICATION_RESPONSE_PREFIX}${params.result.requestId}`,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: makeZeroUsageSnapshot(),
           stopReason: "stop",
           timestamp: Date.now(),
         },

@@ -1,6 +1,6 @@
 // Gateway control-plane audit helpers.
 // Extracts stable actor identity and compact changed-path summaries for audit logs.
-import { normalizeControlPlaneIdentityPart } from "./control-plane-identity.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayClient } from "./server-methods/types.js";
 
 /** Stable actor fields included in control-plane audit and rate-limit logs. */
@@ -14,10 +14,10 @@ export type ControlPlaneActor = {
 /** Extracts audit identity from a possibly missing or partially connected client. */
 export function resolveControlPlaneActor(client: GatewayClient | null): ControlPlaneActor {
   return {
-    actor: normalizeControlPlaneIdentityPart(client?.connect?.client?.id, "unknown-actor"),
-    deviceId: normalizeControlPlaneIdentityPart(client?.connect?.device?.id, "unknown-device"),
-    clientIp: normalizeControlPlaneIdentityPart(client?.clientIp, "unknown-ip"),
-    connId: normalizeControlPlaneIdentityPart(client?.connId, "unknown-conn"),
+    actor: normalizeOptionalString(client?.connect?.client?.id) ?? "unknown-actor",
+    deviceId: normalizeOptionalString(client?.connect?.device?.id) ?? "unknown-device",
+    clientIp: normalizeOptionalString(client?.clientIp) ?? "unknown-ip",
+    connId: normalizeOptionalString(client?.connId) ?? "unknown-conn",
   };
 }
 

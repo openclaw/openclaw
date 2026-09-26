@@ -17,6 +17,17 @@ export const REMOTE_WORKSPACE_MUTATION_LOCK_JS = String.raw`function removeTree(
 function sameInode(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
 }
+function removeQuarantinedLock(quarantine, observed, message) {
+  const directory = fs.lstatSync(quarantine);
+  const entry = fs.lstatSync(path.join(quarantine, observed.name));
+  if (
+    !sameInode(directory, observed.directoryStats) ||
+    !sameInode(entry, observed.entryStats)
+  ) {
+    throw new Error(message);
+  }
+  removeTree(quarantine);
+}
 const lockRoot = path.join(
   transactionRoot,
   ".openclaw-accepted-lock-" + workspaceKey,
@@ -215,15 +226,7 @@ function reclaimDeadOwner(observed) {
     claimed = validated;
     fs.renameSync(lockRoot, quarantine);
     quarantined = true;
-    const quarantinedDirectory = fs.lstatSync(quarantine);
-    const quarantinedEntry = fs.lstatSync(path.join(quarantine, claimed.name));
-    if (
-      !sameInode(quarantinedDirectory, claimed.directoryStats) ||
-      !sameInode(quarantinedEntry, claimed.entryStats)
-    ) {
-      throw new Error("workspace mutation lock changed during reclamation");
-    }
-    removeTree(quarantine);
+    removeQuarantinedLock(quarantine, claimed, "workspace mutation lock changed during reclamation");
     return true;
   } finally {
     if (!quarantined) restoreOwnerEntry(claimed);
@@ -298,13 +301,5 @@ function releaseWorkspaceLock() {
   }
   const quarantine = lockRoot + ".released." + process.pid + "." + lockToken;
   fs.renameSync(lockRoot, quarantine);
-  const quarantinedDirectory = fs.lstatSync(quarantine);
-  const quarantinedEntry = fs.lstatSync(path.join(quarantine, validated.name));
-  if (
-    !sameInode(quarantinedDirectory, validated.directoryStats) ||
-    !sameInode(quarantinedEntry, validated.entryStats)
-  ) {
-    throw new Error("workspace mutation lock changed during release");
-  }
-  removeTree(quarantine);
+  removeQuarantinedLock(quarantine, validated, "workspace mutation lock changed during release");
 }`;

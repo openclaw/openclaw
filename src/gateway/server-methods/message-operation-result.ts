@@ -129,18 +129,12 @@ async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
 
 const sourceReplyTranscriptMirrorQueue = new KeyedAsyncQueue();
 
-function resolveSourceReplyTranscriptMirrorQueueKey(
-  mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0],
-): string {
-  // Missing session keys are serialized together so global mirrors preserve delivery order.
-  return mirror.sessionKey?.trim() || "__global__";
-}
-
 export function scheduleDeliveredSourceReplyTranscriptMirror(params: {
   context: GatewayRequestContext;
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
 }): Promise<void> {
-  const queueKey = resolveSourceReplyTranscriptMirrorQueueKey(params.mirror);
+  // Missing session keys serialize together so global mirrors preserve delivery order.
+  const queueKey = params.mirror.sessionKey?.trim() || "__global__";
   // Queue per session so current-conversation source replies are visible before
   // a following turn can read the transcript.
   return sourceReplyTranscriptMirrorQueue.enqueue(queueKey, () =>

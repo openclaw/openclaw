@@ -95,32 +95,26 @@ export async function publishAppliedApprovalResolution(params: {
       }),
   });
   const nativeApprovalKind = params.record.kind;
-  if (
-    nativeApprovalKind === "exec" ||
-    nativeApprovalKind === "plugin" ||
-    nativeApprovalKind === "system-agent"
-  ) {
-    // Native approval routes are instance-local, so publish the canonical CAS
-    // winner directly instead of reconnecting to the Gateway over WebSocket.
-    if (nativeApprovalKind !== "system-agent" || params.record.status !== "allowed") {
-      runSynchronousSideEffect({
-        context: params.context,
-        approvalKind: nativeApprovalKind,
-        run: () => params.context.approvalEvents?.publishResolved(nativeApprovalKind, event),
-      });
-    }
-    const webPushDelivery = params.context.approvalWebPushDelivery;
-    if (webPushDelivery && (nativeApprovalKind === "exec" || nativeApprovalKind === "plugin")) {
-      await runSideEffect({
-        context: params.context,
-        approvalKind: nativeApprovalKind,
-        effect: "web-push",
-        run: () =>
-          params.record.status === "expired"
-            ? webPushDelivery.handleExpired(params.liveRecord)
-            : webPushDelivery.handleResolved(event),
-      });
-    }
+  // Native approval routes are instance-local, so publish the canonical CAS
+  // winner directly instead of reconnecting to the Gateway over WebSocket.
+  if (nativeApprovalKind !== "system-agent" || params.record.status !== "allowed") {
+    runSynchronousSideEffect({
+      context: params.context,
+      approvalKind: nativeApprovalKind,
+      run: () => params.context.approvalEvents?.publishResolved(nativeApprovalKind, event),
+    });
+  }
+  const webPushDelivery = params.context.approvalWebPushDelivery;
+  if (webPushDelivery && (nativeApprovalKind === "exec" || nativeApprovalKind === "plugin")) {
+    await runSideEffect({
+      context: params.context,
+      approvalKind: nativeApprovalKind,
+      effect: "web-push",
+      run: () =>
+        params.record.status === "expired"
+          ? webPushDelivery.handleExpired(params.liveRecord)
+          : webPushDelivery.handleResolved(event),
+    });
   }
   if (params.record.kind === "exec" && params.forwarder) {
     await runSideEffect({

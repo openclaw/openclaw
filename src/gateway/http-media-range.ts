@@ -37,10 +37,6 @@ function parseParameterValue(value: string): string | null {
   return escaped ? null : parsed;
 }
 
-function normalizeParameterValue(name: string, value: string): string {
-  return name === "charset" ? value.toLowerCase() : value;
-}
-
 type ParsedMediaType = {
   type: string;
   subtype: string;
@@ -102,7 +98,7 @@ function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType |
     if (parameterValue === null || parameters.has(name)) {
       return null;
     }
-    parameters.set(name, normalizeParameterValue(name, parameterValue));
+    parameters.set(name, name === "charset" ? parameterValue.toLowerCase() : parameterValue);
   }
   return { type, subtype, parameters, quality };
 }

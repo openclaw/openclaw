@@ -37,9 +37,6 @@ const parseDateParts = (raw: unknown): DateParts | undefined => {
   const year = Number(yearStr);
   const monthIndex = Number(monthStr) - 1;
   const day = Number(dayStr);
-  if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || !Number.isFinite(day)) {
-    return undefined;
-  }
   // The regex only checks shape; Date.* silently rolls impossible calendar dates over
   // (e.g. 2026-02-30 -> 2026-03-02), so a typo'd day would return usage for the wrong day.
   // Reject parts that don't round-trip through a UTC probe (also catches the JS 2-digit-year remap).
@@ -100,11 +97,7 @@ const datePartsToEndMs = (
   return undefined;
 };
 
-// usage.cost / sessions.usage accept optional startDate/endDate. parseDateParts returns
-// undefined for both absent and invalid input, so an explicitly supplied but unparseable
-// date (bad format or impossible calendar date like 2026-02-30) would otherwise silently
-// fall through to the default range and return a successful response for an unrelated range.
-// Return the offending field so range resolution can reject it instead of querying the wrong window.
+// Invalid explicit dates must not fall through to the unrelated default range.
 const findInvalidExplicitDate = (params: {
   startDate?: unknown;
   endDate?: unknown;
@@ -214,18 +207,14 @@ const getDateParts = (date: Date, interpretation: DateInterpretation): DateParts
     }
     return parts;
   }
-  if (interpretation.mode === "utc-offset") {
-    const shifted = new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
-    return {
-      year: shifted.getUTCFullYear(),
-      monthIndex: shifted.getUTCMonth(),
-      day: shifted.getUTCDate(),
-    };
-  }
+  const utcDate =
+    interpretation.mode === "utc-offset"
+      ? new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000)
+      : date;
   return {
-    year: date.getUTCFullYear(),
-    monthIndex: date.getUTCMonth(),
-    day: date.getUTCDate(),
+    year: utcDate.getUTCFullYear(),
+    monthIndex: utcDate.getUTCMonth(),
+    day: utcDate.getUTCDate(),
   };
 };
 
