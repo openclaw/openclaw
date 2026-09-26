@@ -347,41 +347,6 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     });
   });
 
-  it("routes strict review requirements to the human-visible guardian lane", async () => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-
-    await projector.handleNotification(
-      forCurrentTurn("item/autoApprovalReview/started", {
-        reviewId: "review-strict",
-        targetItemId: "cmd-strict",
-        review: { status: "inProgress" },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("autoApprovalReview/strictReviewRequired", {
-        startedAtMs: 1_787_273_600_000,
-      }),
-    );
-
-    expect(
-      findAgentEvent(onAgentEvent, {
-        stream: "codex_app_server.guardian",
-        phase: "strict_review_required",
-      }).data,
-    ).toMatchObject({
-      method: "autoApprovalReview/strictReviewRequired",
-      threadId: THREAD_ID,
-      turnId: TURN_ID,
-      reviewId: "review-strict",
-      targetItemId: "cmd-strict",
-      startedAtMs: 1_787_273_600_000,
-    });
-    expect(
-      projector.buildResult(buildEmptyToolTelemetry()).didSendDeterministicApprovalPrompt,
-    ).toBe(false);
-  });
-
   it("projects thread-scoped guardian warnings", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
@@ -446,11 +411,17 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
         phase: "strict_review_required",
       }).data,
     ).toMatchObject({
+      method: "autoApprovalReview/strictReviewRequired",
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
       reviewId: "strict-review",
       targetItemId: "cmd-1",
       command: "printf hello",
       startedAtMs: 1_787_273_600_000,
     });
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).didSendDeterministicApprovalPrompt,
+    ).toBe(false);
   });
 
   it.each([
@@ -458,11 +429,6 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
       name: "unsupported service tier",
       message:
         "Configured service tier `priority` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests.",
-    },
-    {
-      name: "unsupported flex tier",
-      message:
-        "Configured service tier `flex` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests.",
     },
     {
       name: "host-managed Code Mode metadata",
@@ -485,7 +451,6 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
 
   it.each([
     "Project hooks were disabled.",
-    "Configured service tier `priority` requires account access.",
     "Configured service tier `priority` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests. Additional action required.",
     "Code Mode is enabled in configuration, but model `gpt-5.6-sol` does not advertise Code Mode support. This may degrade model performance. Disable `features.code_mode` and `features.code_mode_only`, or select a model whose metadata enables Code Mode. Additional action required.",
   ])("surfaces startup and thread warnings: %s", async (message) => {
@@ -636,92 +601,32 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     expect(onContextCompacted).toHaveBeenCalledOnce();
   });
 
-  it("streams accumulated reasoning snapshots grouped by Codex reasoning indexes", async () => {
+  it.each([
+    ["textDelta", "contentIndex"],
+    ["summaryTextDelta", "summaryIndex"],
+  ])("streams reasoning %s snapshots in section order", async (method, indexField) => {
     const onReasoningStream = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      onReasoningStream,
-    });
+    const projector = await createProjector({ ...(await createParams()), onReasoningStream });
 
-    await projector.handleNotification(
-      forCurrentTurn("item/reasoning/textDelta", {
-        itemId: "reason-1",
-        contentIndex: 1,
-        delta: "Checking ",
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/reasoning/textDelta", {
-        itemId: "reason-1",
-        contentIndex: 0,
-        delta: "Reading ",
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/reasoning/textDelta", {
-        itemId: "reason-1",
-        contentIndex: 0,
-        delta: "files",
-      }),
-    );
+    for (const [index, delta] of [
+      [1, "Second"],
+      [0, "First "],
+      [0, "section"],
+    ] as const) {
+      await projector.handleNotification(
+        forCurrentTurn(`item/reasoning/${method}`, {
+          itemId: "reason-1",
+          [indexField]: index,
+          delta,
+        }),
+      );
+    }
 
-    expect(onReasoningStream).toHaveBeenCalledTimes(3);
-    expect(onReasoningStream).toHaveBeenNthCalledWith(1, {
-      text: "Checking ",
-      isReasoningSnapshot: true,
-    });
-    expect(onReasoningStream).toHaveBeenNthCalledWith(2, {
-      text: "Reading \n\nChecking ",
-      isReasoningSnapshot: true,
-    });
-    expect(onReasoningStream).toHaveBeenNthCalledWith(3, {
-      text: "Reading files\n\nChecking ",
-      isReasoningSnapshot: true,
-    });
-  });
-
-  it("streams accumulated reasoning summaries grouped by summary section", async () => {
-    const onReasoningStream = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      onReasoningStream,
-    });
-
-    await projector.handleNotification(
-      forCurrentTurn("item/reasoning/summaryTextDelta", {
-        itemId: "reason-1",
-        summaryIndex: 1,
-        delta: "Second",
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/reasoning/summaryTextDelta", {
-        itemId: "reason-1",
-        summaryIndex: 0,
-        delta: "First ",
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/reasoning/summaryTextDelta", {
-        itemId: "reason-1",
-        summaryIndex: 0,
-        delta: "section",
-      }),
-    );
-
-    expect(onReasoningStream).toHaveBeenCalledTimes(3);
-    expect(onReasoningStream).toHaveBeenNthCalledWith(1, {
-      text: "Second",
-      isReasoningSnapshot: true,
-    });
-    expect(onReasoningStream).toHaveBeenNthCalledWith(2, {
-      text: "First \n\nSecond",
-      isReasoningSnapshot: true,
-    });
-    expect(onReasoningStream).toHaveBeenNthCalledWith(3, {
-      text: "First section\n\nSecond",
-      isReasoningSnapshot: true,
-    });
+    expect(onReasoningStream.mock.calls).toEqual([
+      [{ text: "Second", isReasoningSnapshot: true }],
+      [{ text: "First \n\nSecond", isReasoningSnapshot: true }],
+      [{ text: "First section\n\nSecond", isReasoningSnapshot: true }],
+    ]);
   });
 
   it.each([false, true])(

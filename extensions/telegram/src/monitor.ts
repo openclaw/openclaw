@@ -13,6 +13,7 @@ import { isTelegramExecApprovalHandlerConfigured } from "./exec-approvals.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import type { MonitorTelegramOpts } from "./monitor.types.js";
 import { acquireTelegramPollingLease } from "./polling-lease.js";
+import { getTelegramRuntime } from "./runtime.js";
 import {
   createTelegramUpdateOffsetPersistence,
   normalizeTelegramUpdateId,
@@ -154,9 +155,26 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       onRotationDetected: async (info) => {
         log(formatTelegramOffsetRotationMessage(account.accountId, info));
         try {
+          if (info.previousBotId !== null && info.previousBotId !== info.currentBotId) {
+            const queue = getTelegramRuntime().state.openChannelIngressQueue({
+              accountId: account.accountId,
+            });
+            if (!queue.purge) {
+              throw new Error(
+                "The host does not support ingress identity resets; update OpenClaw.",
+              );
+            }
+            opts.abortSignal?.throwIfAborted();
+            await queue.purge();
+          }
+          // An abort keeps the old identity so the next start re-detects and repeats the purge.
+          opts.abortSignal?.throwIfAborted();
           await deleteTelegramUpdateOffset({ accountId: account.accountId });
         } catch (err) {
-          logError(`telegram: failed to delete stale update offset after rotation: ${String(err)}`);
+          throw new Error(
+            `telegram: failed to reset ingress for account "${account.accountId}" after rotation; restart the account to retry: ${formatErrorMessage(err)}`,
+            { cause: err },
+          );
         }
       },
     });

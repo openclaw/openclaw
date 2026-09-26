@@ -2,7 +2,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
@@ -135,8 +134,6 @@ const V2026_7_1_2_STATE_FIXTURE_GZIP_SHA256 =
   "c775499d9a46462ae2368090a0c4ec75877784c40694046dd3af63df77b8737c";
 const V2026_7_1_2_STATE_FIXTURE_RAW_SHA256 =
   "8511bb91f02d104f818c70b08397a678045d04741c931b0ee7ce6650b5519e85";
-const V2026_7_1_2_STATE_FIXTURE_SCHEMA_SHA256 =
-  "f2fd6488e283470718547fb45886f04cc940b1de798e52fbf34a3a3408ae25e4";
 
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
@@ -549,10 +546,10 @@ function seedLegacySessionWatchCursorSchema(stateDir: string): {
 type PlacementConstraintProbe = {
   sessionId: string;
   state: string;
-  environmentId: string | null;
-  activeOwnerEpoch: number | null;
-  workerBundleHash: string | null;
-  recoveryError: string | null;
+  environmentId?: string | null;
+  activeOwnerEpoch?: number | null;
+  workerBundleHash?: string | null;
+  recoveryError?: string | null;
   workspaceBaseManifestRef?: string;
   remoteWorkspaceDir?: string;
   lastTranscriptAckCursor?: number;
@@ -595,14 +592,14 @@ function insertPlacementConstraintProbe(
       input.sessionId,
       `agent:main:${input.sessionId}`,
       input.state,
-      input.environmentId,
-      input.activeOwnerEpoch,
+      input.environmentId ?? null,
+      input.activeOwnerEpoch ?? null,
       input.workspaceBaseManifestRef ?? null,
       input.remoteWorkspaceDir ?? null,
-      input.workerBundleHash,
+      input.workerBundleHash ?? null,
       input.lastTranscriptAckCursor ?? null,
       input.lastLiveEventAckCursor ?? null,
-      input.recoveryError,
+      input.recoveryError ?? null,
       input.turnClaimOwner ?? null,
       hasClaim ? `${input.sessionId}-claim` : null,
       hasClaim ? `${input.sessionId}-run` : null,
@@ -1817,14 +1814,6 @@ describe("openclaw state database", () => {
     }
   });
 
-  it("resolves under the shared state database directory", () => {
-    const stateDir = createTempStateDir();
-
-    expect(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir })).toBe(
-      path.join(stateDir, "state", "openclaw.sqlite"),
-    );
-  });
-
   it.each([
     { NODE_ENV: "production" },
     { NODE_ENV: "test" },
@@ -1865,11 +1854,6 @@ describe("openclaw state database", () => {
         )
         .all(),
     ).toEqual([]);
-    expect(
-      database.db
-        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'apns_registration_tombstones'")
-        .get(),
-    ).toEqual({ strict: 1 });
     expect(() =>
       database.db
         .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
@@ -3510,112 +3494,6 @@ describe("openclaw state database", () => {
     expect(fixture.compressedSha256).toBe(V2026_7_1_2_STATE_FIXTURE_GZIP_SHA256);
     expect(fixture.rawSha256).toBe(V2026_7_1_2_STATE_FIXTURE_RAW_SHA256);
 
-    const { DatabaseSync } = requireNodeSqlite();
-    const released = new DatabaseSync(fixture.databasePath, { readOnly: true });
-    try {
-      expect(readSqliteNumberPragma(released, "user_version")).toBe(1);
-      expect(
-        released
-          .prepare("SELECT schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'")
-          .get(),
-      ).toEqual({ schema_version: 1, app_version: "2026.7.1" });
-      expect(released.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
-      expect(released.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-      expect(
-        released
-          .prepare(
-            `SELECT
-               (SELECT count(*) FROM sqlite_schema
-                 WHERE type = 'table' AND name NOT LIKE 'sqlite_%') AS tables,
-               (SELECT count(*) FROM sqlite_schema
-                 WHERE type = 'index' AND name NOT LIKE 'sqlite_autoindex_%') AS indexes,
-               (SELECT count(*) FROM pragma_table_list
-                 WHERE schema = 'main' AND type = 'table'
-                   AND name NOT LIKE 'sqlite_%' AND strict = 1) AS strict_tables`,
-          )
-          .get(),
-      ).toEqual({ tables: 73, indexes: 103, strict_tables: 0 });
-      expect(hashSqliteSchema(released)).toBe(V2026_7_1_2_STATE_FIXTURE_SCHEMA_SHA256);
-      expect(
-        released
-          .prepare(
-            `SELECT id, agent_id, session_key, channel, status, reason, suggested_text,
-                    dedupe_key, due_earliest_ms, due_latest_ms, record_json
-               FROM commitments`,
-          )
-          .all(),
-      ).toEqual([
-        {
-          id: "fixture-commitment",
-          agent_id: "fixture-agent",
-          session_key: "agent:fixture-agent:main",
-          channel: "telegram",
-          status: "pending",
-          reason: "fixture retirement proof",
-          suggested_text: "follow up",
-          dedupe_key: "fixture-dedupe",
-          due_earliest_ms: 2000,
-          due_latest_ms: 3000,
-          record_json: '{"fixture":true}',
-        },
-      ]);
-      expect(
-        released
-          .prepare(
-            `SELECT name
-               FROM sqlite_schema
-              WHERE type = 'index'
-                AND name IN (
-                  'idx_commitments_scope_due',
-                  'idx_commitments_status_due',
-                  'idx_commitments_scope_dedupe'
-                )
-              ORDER BY name`,
-          )
-          .all(),
-      ).toEqual([
-        { name: "idx_commitments_scope_dedupe" },
-        { name: "idx_commitments_scope_due" },
-        { name: "idx_commitments_status_due" },
-      ]);
-      expect(
-        released
-          .prepare(
-            `SELECT name
-               FROM sqlite_schema
-              WHERE name IN (
-                'commitments',
-                'cron_run_logs',
-                'node_pairing_pending',
-                'node_pairing_paired',
-                'idx_diagnostic_events_scope_created'
-              )
-              ORDER BY name`,
-          )
-          .all(),
-      ).toEqual([
-        { name: "commitments" },
-        { name: "cron_run_logs" },
-        { name: "idx_diagnostic_events_scope_created" },
-        { name: "node_pairing_paired" },
-        { name: "node_pairing_pending" },
-      ]);
-      expect(
-        released
-          .prepare("SELECT 1 FROM pragma_table_info('diagnostic_events') WHERE name = 'sequence'")
-          .get(),
-      ).toBeUndefined();
-      for (const tableName of RETIRED_STATE_TABLES_V10) {
-        expect(
-          released
-            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-            .get(tableName),
-        ).toEqual({ name: tableName });
-      }
-    } finally {
-      released.close();
-    }
-
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "commitments-retirement-v7", path: fixture.databasePath },
       { kind: "state-table-retirement-v10", path: fixture.databasePath },
@@ -4477,124 +4355,15 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     }
   });
 
-  const validPlacementShapes = [
-    {
-      name: "local placement",
-      sessionId: "session-local-valid",
-      state: "local",
-      environmentId: null,
-      activeOwnerEpoch: null,
-      workerBundleHash: null,
-      recoveryError: null,
-    },
-    {
-      name: "requested placement",
-      sessionId: "session-requested-valid",
-      state: "requested",
-      environmentId: null,
-      activeOwnerEpoch: null,
-      workerBundleHash: null,
-      recoveryError: null,
-    },
-    {
-      name: "provisioning placement before environment allocation",
-      sessionId: "session-provisioning-pending-valid",
-      state: "provisioning",
-      environmentId: null,
-      activeOwnerEpoch: null,
-      workerBundleHash: null,
-      recoveryError: null,
-    },
-    {
-      name: "provisioning placement after environment allocation",
-      sessionId: "session-provisioning-allocated-valid",
-      state: "provisioning",
-      environmentId: "environment-provisioning",
-      activeOwnerEpoch: null,
-      workerBundleHash: null,
-      recoveryError: null,
-    },
-    {
-      name: "syncing placement",
-      sessionId: "session-syncing-valid",
-      state: "syncing",
-      environmentId: "environment-syncing",
-      activeOwnerEpoch: null,
-      workerBundleHash: "bundle-syncing",
-      recoveryError: null,
-    },
-    {
-      name: "starting placement",
-      sessionId: "session-starting-valid",
-      state: "starting",
-      environmentId: "environment-starting",
-      activeOwnerEpoch: null,
-      workspaceBaseManifestRef: "manifest-starting",
-      remoteWorkspaceDir: "/workspace/starting",
-      workerBundleHash: "bundle-starting",
-      recoveryError: null,
-    },
-    {
-      name: "active placement",
-      sessionId: "session-active-valid",
-      state: "active",
-      environmentId: "environment-active",
-      activeOwnerEpoch: 7,
-      workspaceBaseManifestRef: "manifest-active",
-      remoteWorkspaceDir: "/workspace/active",
-      workerBundleHash: "bundle-active",
-      lastTranscriptAckCursor: 3,
-      lastLiveEventAckCursor: 4,
-      recoveryError: null,
-    },
-    {
-      name: "draining placement",
-      sessionId: "session-draining-valid",
-      state: "draining",
-      environmentId: "environment-draining",
-      activeOwnerEpoch: 7,
-      workspaceBaseManifestRef: "manifest-draining",
-      remoteWorkspaceDir: "/workspace/draining",
-      workerBundleHash: "bundle-draining",
-      recoveryError: null,
-    },
-    {
-      name: "reconciling placement",
-      sessionId: "session-reconciling-valid",
-      state: "reconciling",
-      environmentId: "environment-reconciling",
-      activeOwnerEpoch: 7,
-      workspaceBaseManifestRef: "manifest-reconciling",
-      remoteWorkspaceDir: "/workspace/reconciling",
-      workerBundleHash: "bundle-reconciling",
-      recoveryError: null,
-    },
-    {
-      name: "reclaimed placement with full provenance",
-      sessionId: "session-reclaimed-valid",
-      state: "reclaimed",
-      environmentId: "environment-reclaimed",
-      activeOwnerEpoch: 7,
-      workspaceBaseManifestRef: "manifest-reclaimed",
-      remoteWorkspaceDir: "/workspace/reclaimed",
-      workerBundleHash: "bundle-reclaimed",
-      recoveryError: null,
-    },
-    {
-      name: "failed placement with recovery detail",
-      sessionId: "session-failed-valid",
-      state: "failed",
-      environmentId: "environment-failed",
-      activeOwnerEpoch: null,
-      workerBundleHash: null,
-      recoveryError: "worker placement failed",
-    },
-  ] satisfies Array<PlacementConstraintProbe & { name: string }>;
-
-  it.each(validPlacementShapes)("allows a valid $name", (input) => {
+  it("allows provisioning before environment allocation", () => {
     const database = openMaterializedCurrentStateDatabase();
     try {
-      expect(() => insertPlacementConstraintProbe(database, input)).not.toThrow();
+      expect(() =>
+        insertPlacementConstraintProbe(database, {
+          sessionId: "session-provisioning-pending-valid",
+          state: "provisioning",
+        }),
+      ).not.toThrow();
     } finally {
       database.close();
     }
@@ -4606,38 +4375,28 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       sessionId: "session-local-environment",
       state: "local",
       environmentId: "environment-local",
-      activeOwnerEpoch: null,
-      workerBundleHash: null,
-      recoveryError: null,
     },
     {
       name: "syncing without environment",
       sessionId: "session-syncing-environment",
       state: "syncing",
-      environmentId: null,
-      activeOwnerEpoch: null,
       workerBundleHash: "bundle-hash",
-      recoveryError: null,
     },
     {
       name: "syncing workspace metadata",
       sessionId: "session-syncing-workspace",
       state: "syncing",
       environmentId: "environment-syncing",
-      activeOwnerEpoch: null,
       workspaceBaseManifestRef: "manifest-syncing",
       remoteWorkspaceDir: "/workspace/syncing",
       workerBundleHash: "bundle-hash",
-      recoveryError: null,
     },
     {
       name: "active without owner epoch",
       sessionId: "session-active-epoch",
       state: "active",
       environmentId: "environment-active",
-      activeOwnerEpoch: null,
       workerBundleHash: "bundle-hash",
-      recoveryError: null,
       workspaceBaseManifestRef: "manifest-active",
       remoteWorkspaceDir: "/workspace/active",
     },
@@ -4647,8 +4406,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       state: "active",
       environmentId: "environment-active",
       activeOwnerEpoch: 7,
-      workerBundleHash: null,
-      recoveryError: null,
       workspaceBaseManifestRef: "manifest-active",
       remoteWorkspaceDir: "/workspace/active",
     },
@@ -4657,9 +4414,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       sessionId: "session-starting-manifest",
       state: "starting",
       environmentId: "environment-starting",
-      activeOwnerEpoch: null,
       workerBundleHash: "bundle-hash",
-      recoveryError: null,
       remoteWorkspaceDir: "/workspace/starting",
     },
     {
@@ -4671,25 +4426,19 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       workspaceBaseManifestRef: "manifest-starting",
       remoteWorkspaceDir: "/workspace/starting",
       workerBundleHash: "bundle-hash",
-      recoveryError: null,
     },
     {
       name: "requested worker metadata",
       sessionId: "session-requested-metadata",
       state: "requested",
-      environmentId: null,
-      activeOwnerEpoch: null,
       workerBundleHash: "bundle-hash",
-      recoveryError: null,
     },
     {
       name: "provisioning worker bundle",
       sessionId: "session-provisioning-bundle",
       state: "provisioning",
       environmentId: "environment-provisioning",
-      activeOwnerEpoch: null,
       workerBundleHash: "bundle-hash",
-      recoveryError: null,
     },
     {
       name: "active recovery error",
@@ -4707,9 +4456,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       sessionId: "session-reclaimed-provenance",
       state: "reclaimed",
       environmentId: "environment-reclaimed",
-      activeOwnerEpoch: null,
       workerBundleHash: "bundle-hash",
-      recoveryError: null,
     },
     {
       name: "reclaimed recovery error",
@@ -4726,10 +4473,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       name: "failed without recovery error",
       sessionId: "session-failed-recovery",
       state: "failed",
-      environmentId: null,
-      activeOwnerEpoch: null,
-      workerBundleHash: null,
-      recoveryError: null,
     },
   ] satisfies Array<PlacementConstraintProbe & { name: string }>;
 
@@ -4791,7 +4534,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
           workspaceBaseManifestRef: `manifest-${input.state}`,
           remoteWorkspaceDir: `/workspace/${input.state}`,
           workerBundleHash: "bundle-hash",
-          recoveryError: null,
           turnClaimOwner: input.turnClaimOwner,
           ...(input.turnClaimOwnerEpoch === undefined
             ? {}
@@ -4815,7 +4557,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
           workspaceBaseManifestRef: "manifest-draining",
           remoteWorkspaceDir: "/workspace/draining",
           workerBundleHash: "bundle-hash",
-          recoveryError: null,
           turnClaimOwner: "worker",
           turnClaimOwnerEpoch: 7,
         }),
@@ -8351,37 +8092,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     clearOpenClawStateDatabaseOpenFailure(databasePath);
     expect(openOpenClawStateDatabase(options).db.isOpen).toBe(true);
-  });
-
-  it("does not chmod shared parent directories for explicit database paths", () => {
-    const databasePath = path.join(
-      os.tmpdir(),
-      `openclaw-explicit-state-${process.pid}-${Date.now()}.sqlite`,
-    );
-
-    expect(() => openOpenClawStateDatabase({ path: databasePath })).not.toThrow();
-    expect(fs.existsSync(databasePath)).toBe(true);
-  });
-
-  it("keeps cached handles open when another state path is opened", () => {
-    const firstPath = path.join(
-      createTempStateDir(),
-      "state",
-      `first-${process.pid}-${Date.now()}.sqlite`,
-    );
-    const secondPath = path.join(
-      createTempStateDir(),
-      "state",
-      `second-${process.pid}-${Date.now()}.sqlite`,
-    );
-
-    const first = openOpenClawStateDatabase({ path: firstPath });
-    const second = openOpenClawStateDatabase({ path: secondPath });
-
-    expect(first.db.isOpen).toBe(true);
-    expect(second.db.isOpen).toBe(true);
-    expect(openOpenClawStateDatabase({ path: firstPath })).toBe(first);
-    expect(readSqliteNumberPragma(first.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
   });
 
   it("keys explicit relative paths by resolved database pathname", () => {

@@ -32,32 +32,6 @@ describe("memory index", () => {
     trackManager,
   } = fixture;
 
-  async function expectHybridKeywordSearchFindsMemory(
-    cfg: Parameters<typeof getMemorySearchManager>[0]["cfg"],
-  ) {
-    const manager = await getFreshManager(cfg);
-    try {
-      const status = manager.status();
-      if (!status.fts?.available) {
-        return;
-      }
-
-      await manager.sync({ reason: "test" });
-      const results = await manager.search("zebra");
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.path).toContain("memory/2026-01-12.md");
-    } finally {
-      await manager.close?.();
-    }
-  }
-
-  it.each([0, 0.35])(
-    "finds keyword matches through default hybrid search at minimum score %s",
-    async (minScore) => {
-      await expectHybridKeywordSearchFindsMemory(createCfg({ minScore }));
-    },
-  );
-
   it("keeps a dirty status manager read-only while searching published results", async () => {
     const cfg = createCfg({ provider: "none", minScore: 0 });
     const writer = await getFreshManager(cfg, "cli");

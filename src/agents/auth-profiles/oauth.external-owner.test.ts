@@ -37,6 +37,28 @@ async function loadOAuthModuleForTest() {
   resetOAuthRefreshQueuesForTest();
 }
 
+async function withMainAgent(run: (mainAgentDir: string) => Promise<void>): Promise<void> {
+  const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+  let tempRoot = "";
+  try {
+    resetFileLockStateForTest();
+    resetOAuthProviderRuntimeMocks({
+      refreshProviderOAuthCredentialWithPluginMock,
+      formatProviderAuthProfileApiKeyWithPluginMock,
+    });
+    clearRuntimeAuthProfileStoreSnapshots();
+    tempRoot = await createOAuthTestTempRoot("openclaw-oauth-external-owner-");
+    const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
+    await loadOAuthModuleForTest();
+    await run(mainAgentDir);
+  } finally {
+    envSnapshot.restore();
+    resetFileLockStateForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    await removeOAuthTestTempRoot(tempRoot);
+  }
+}
+
 vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [{ id: "openai" }, { id: "minimax-portal" }],
@@ -44,19 +66,7 @@ vi.mock("../../llm/oauth.js", () => ({
 
 describe("OAuth external owner boundaries", () => {
   it("refuses native refresh when durable metadata assigns the owner to an external CLI", async () => {
-    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
-    let tempRoot = "";
-
-    try {
-      resetFileLockStateForTest();
-      resetOAuthProviderRuntimeMocks({
-        refreshProviderOAuthCredentialWithPluginMock,
-        formatProviderAuthProfileApiKeyWithPluginMock,
-      });
-      clearRuntimeAuthProfileStoreSnapshots();
-      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-external-owner-");
-      const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
-      await loadOAuthModuleForTest();
+    await withMainAgent(async (mainAgentDir) => {
       const credential = createExpiredOauthStore({
         profileId: MINIMAX_CLI_PROFILE_ID,
         provider: "minimax-portal",
@@ -75,28 +85,11 @@ describe("OAuth external owner boundaries", () => {
       expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[MINIMAX_CLI_PROFILE_ID]).toEqual(
         credential.profiles[MINIMAX_CLI_PROFILE_ID],
       );
-    } finally {
-      envSnapshot.restore();
-      resetFileLockStateForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
-      await removeOAuthTestTempRoot(tempRoot);
-    }
+    });
   });
 
   it("refreshes an unmarked historical MiniMax native credential", async () => {
-    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
-    let tempRoot = "";
-
-    try {
-      resetFileLockStateForTest();
-      resetOAuthProviderRuntimeMocks({
-        refreshProviderOAuthCredentialWithPluginMock,
-        formatProviderAuthProfileApiKeyWithPluginMock,
-      });
-      clearRuntimeAuthProfileStoreSnapshots();
-      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-legacy-minimax-");
-      const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
-      await loadOAuthModuleForTest();
+    await withMainAgent(async (mainAgentDir) => {
       const credential = createExpiredOauthStore({
         profileId: MINIMAX_CLI_PROFILE_ID,
         provider: "minimax-portal",
@@ -118,28 +111,11 @@ describe("OAuth external owner boundaries", () => {
         }),
       ).resolves.toEqual(expect.objectContaining({ apiKey: "historical-native-refreshed-access" }));
       expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledOnce();
-    } finally {
-      envSnapshot.restore();
-      resetFileLockStateForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
-      await removeOAuthTestTempRoot(tempRoot);
-    }
+    });
   });
 
   it("lets native device-code login reclaim the reserved MiniMax CLI profile id", async () => {
-    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
-    let tempRoot = "";
-
-    try {
-      resetFileLockStateForTest();
-      resetOAuthProviderRuntimeMocks({
-        refreshProviderOAuthCredentialWithPluginMock,
-        formatProviderAuthProfileApiKeyWithPluginMock,
-      });
-      clearRuntimeAuthProfileStoreSnapshots();
-      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-native-minimax-");
-      const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
-      await loadOAuthModuleForTest();
+    await withMainAgent(async (mainAgentDir) => {
       const credential = createExpiredOauthStore({
         profileId: MINIMAX_CLI_PROFILE_ID,
         provider: "minimax-portal",
@@ -185,12 +161,7 @@ describe("OAuth external owner boundaries", () => {
         access: "native-refreshed-access",
         refresh: "native-refreshed-refresh",
       });
-    } finally {
-      envSnapshot.restore();
-      resetFileLockStateForTest();
-      clearRuntimeAuthProfileStoreSnapshots();
-      await removeOAuthTestTempRoot(tempRoot);
-    }
+    });
   });
 
   it("refuses to claim a generation still owned by a persisted external CLI profile", async () => {

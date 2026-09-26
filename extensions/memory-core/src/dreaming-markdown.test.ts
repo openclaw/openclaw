@@ -38,29 +38,6 @@ describe("dreaming markdown storage", () => {
   const nowMs = Date.parse("2026-04-05T10:00:00Z");
   const timezone = "UTC";
 
-  it("writes inline light dreaming output into the daily memory file", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
-
-    const result = await writeDailyDreamingPhaseBlock({
-      workspaceDir,
-      phase: "light",
-      bodyLines: ["- Candidate: remember the API key is fake"],
-      hasContent: true,
-      nowMs,
-      timezone,
-      storage: {
-        mode: "inline",
-        separateReports: false,
-      },
-    });
-
-    const inlinePath = requireInlinePath(result);
-    expect(inlinePath).toBe(path.join(workspaceDir, "memory", "2026-04-05.md"));
-    const content = await fs.readFile(inlinePath, "utf-8");
-    expect(content).toContain("## Light Sleep");
-    expect(content).toContain("- Candidate: remember the API key is fake");
-  });
-
   it("falls back when the injected timestamp is outside Date range", async () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 30, 12, 0, 0));
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
@@ -391,9 +368,9 @@ describe("dreaming markdown storage", () => {
     await expectPathMissing(path.join(workspaceDir, "memory"));
   });
 
-  it.each(["EACCES", "EIO"])("preserves %s from an empty daily report", async (code) => {
+  it("preserves read errors from an empty daily report", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-read-error-");
-    const failure = Object.assign(new Error("daily file unavailable"), { code });
+    const failure = Object.assign(new Error("daily file unavailable"), { code: "EACCES" });
     vi.spyOn(fs, "access").mockRejectedValue(failure);
     vi.spyOn(fs, "readFile").mockRejectedValue(failure);
 

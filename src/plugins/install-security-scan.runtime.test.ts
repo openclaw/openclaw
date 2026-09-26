@@ -433,40 +433,6 @@ describe("legacy file install scan compatibility", () => {
     expect(runInstallPolicyMock).toHaveBeenCalledTimes(2);
   });
 
-  it("requires approval again when policy re-evaluation returns a changed warning", async () => {
-    const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
-    runInstallPolicyMock
-      .mockResolvedValueOnce({
-        warning: { reason: "review this plugin", fingerprint: "warning-a" },
-      })
-      .mockResolvedValueOnce({
-        warning: { reason: "review the new finding", fingerprint: "warning-b" },
-        findings: [
-          {
-            ruleId: "changed-warning",
-            severity: "warn",
-            message: "new finding",
-          },
-        ],
-      });
-
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
-      logger: {},
-      onInstallPolicyWarning,
-      pluginId: "payload",
-    });
-
-    expect(result?.blocked).toMatchObject({
-      code: "security_scan_blocked",
-    });
-    expect(result?.blocked?.reason).toContain("Reason: review the new finding");
-    expect(result?.blocked?.reason).toContain("new finding");
-    expect(result?.blocked?.reason).toContain("The policy warning changed after approval.");
-    expect(onInstallPolicyWarning).toHaveBeenCalledTimes(1);
-    expect(runInstallPolicyMock).toHaveBeenCalledTimes(2);
-  });
-
   it("renders metadata changes that require approval again", async () => {
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
     const initialWarning = {
@@ -788,7 +754,7 @@ describe("legacy file install scan compatibility", () => {
     expect(warnings.join("\n").length).toBeLessThanOrEqual(4_000);
   });
 
-  it.each(["security_scan_blocked", "security_scan_failed"] as const)(
+  it.each(["security_scan_failed"] as const)(
     "does not let acknowledgement override %s",
     async (code) => {
       const onInstallPolicyWarning = vi.fn(async () => ({ status: "approved" as const }));

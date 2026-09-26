@@ -1,87 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { retainPluginSourceCaptureInstance } from "./plugin-source-capture-directory.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
-
-export function createPluginSourceLinkCapture() {
-  const links = new Set<string>();
-  return {
-    defer(filename: string, root: string): boolean {
-      if (
-        !fs.lstatSync(filename).isSymbolicLink() ||
-        isPathInside(root, fs.realpathSync(filename))
-      ) {
-        return false;
-      }
-      links.add(filename);
-      return true;
-    },
-    contains: (filename: string) => [...links].some((link) => isPathInside(link, filename)),
-  };
-}
-
-export const pluginSourceStatIdentity = (stat: fs.BigIntStats): string =>
-  `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
-
-export function readPluginSourceBytes(source: string, boundary: string): Buffer {
-  const opened = openRootFileSync({
-    absolutePath: source,
-    rootPath: boundary,
-    boundaryLabel: "plugin build source",
-    rejectHardlinks: false,
-  });
-  if (!opened.ok) {
-    throw new Error(`Cannot capture plugin source ${source}`, { cause: opened.error });
-  }
-  try {
-    return fs.readFileSync(opened.fd);
-  } finally {
-    fs.closeSync(opened.fd);
-  }
-}
-
-export const pluginSourceContentHash = (content: Buffer | string[]) =>
-  createHash("sha256")
-    .update(Array.isArray(content) ? JSON.stringify(content) : content)
-    .digest("hex");
-
-export type PluginSourceInput = {
-  identity: string;
-  contentHash: string;
-  directory: boolean;
-  boundary: string;
-};
-
-export function verifyPluginSourceInputs(
-  inputs: ReadonlyMap<string, PluginSourceInput>,
-  sources: Iterable<string>,
-): void {
-  for (const source of sources) {
-    const input = inputs.get(source)!;
-    if (
-      fs.realpathSync(source) !== source ||
-      pluginSourceStatIdentity(fs.statSync(source, { bigint: true })) !== input.identity ||
-      pluginSourceContentHash(
-        input.directory
-          ? fs.readdirSync(source).toSorted()
-          : readPluginSourceBytes(source, input.boundary),
-      ) !== input.contentHash
-    ) {
-      throw new Error(
-        "Plugin source changed while preparing its reload; retry after the edit finishes.",
-      );
-    }
-  }
-}
+import { verifyPluginSourceInputs, type PluginSourceInput } from "./plugin-source-verification.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
 
@@ -239,7 +168,7 @@ export function capturePluginDependencies(params: {
   return manifest;
 }
 
-function resolvePluginModulePackageRoot(filename: string): string {
+export function resolvePluginModulePackageRoot(filename: string): string {
   let directory = path.dirname(filename);
   while (path.basename(directory) !== "node_modules") {
     if (fs.existsSync(path.join(directory, "package.json"))) {
@@ -271,6 +200,8 @@ export function capturePluginPackageMetadata(
   root: string,
   destination: string,
   copy: (source: string, target: string) => void,
+  isRetainedReference?: (source: string, real: string) => boolean,
+  resolveSource?: (source: string) => { path: string; boundary: string } | undefined,
 ) {
   const manifest = path.join(destination, "package.json");
   copy(path.join(root, "package.json"), manifest);
@@ -298,11 +229,16 @@ export function capturePluginPackageMetadata(
         continue;
       }
       const filename = fileURLToPath(url);
-      if (
-        isPathInside(root, filename) &&
-        fs.statSync(filename, { throwIfNoEntry: false })?.isFile() &&
-        isPathInside(root, fs.realpathSync(filename))
-      ) {
+      const prepared = resolveSource?.(filename);
+      const input = prepared?.path ?? filename;
+      if (isPathInside(root, filename) && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
+        const real = fs.realpathSync(input);
+        if (
+          !isPathInside(prepared?.boundary ?? root, real) &&
+          !isRetainedReference?.(filename, real)
+        ) {
+          continue;
+        }
         copy(filename, path.join(destination, path.relative(root, filename)));
         break;
       }
@@ -344,6 +280,8 @@ function visitPluginPackageTargetFiles(params: {
   target: string;
   wildcard: boolean;
   visit: (filename: string) => void;
+  isRetainedReference?: (source: string, real: string) => boolean;
+  resolveSource?: (source: string) => { path: string; boundary: string } | undefined;
 }): void {
   if (!params.target.startsWith("./")) {
     return;
@@ -382,12 +320,17 @@ function visitPluginPackageTargetFiles(params: {
     ) {
       return;
     }
-    const stat = fs.statSync(source, { throwIfNoEntry: false });
+    const prepared = params.resolveSource?.(source);
+    const input = prepared?.path ?? source;
+    const stat = fs.statSync(input, { throwIfNoEntry: false });
     if (!stat) {
       return;
     }
-    const real = fs.realpathSync(source);
-    if (!isPathInside(params.boundary, real)) {
+    const real = fs.realpathSync(input);
+    if (
+      !isPathInside(prepared?.boundary ?? params.boundary, real) &&
+      !(stat.isFile() && params.isRetainedReference?.(source, real))
+    ) {
       return;
     }
     if (stat.isDirectory()) {
@@ -398,7 +341,7 @@ function visitPluginPackageTargetFiles(params: {
         throw new Error(`Plugin source contains a directory cycle: ${source}`);
       }
       ancestors.add(real);
-      for (const name of fs.readdirSync(source).toSorted()) {
+      for (const name of fs.readdirSync(input).toSorted()) {
         visit(path.join(source, name));
       }
       ancestors.delete(real);
@@ -471,6 +414,8 @@ export function findPluginCapturedPackage(
 /** Captured metadata and declared target preparation share the artifact lifetime. */
 export function createPluginPackageMetadataCapture(params: {
   sourceForCaptured: (filename: string) => string | undefined;
+  isRetainedReference?: (source: string, real: string) => boolean;
+  resolveSource?: (source: string) => { path: string; boundary: string } | undefined;
   packageForFile: (filename: string) =>
     | {
         sourceRoot: string;
@@ -532,6 +477,8 @@ export function createPluginPackageMetadataCapture(params: {
             boundary: owner.sourceRoot,
             target,
             wildcard: key.includes("*"),
+            isRetainedReference: params.isRetainedReference,
+            resolveSource: params.resolveSource,
             visit(filename) {
               owner.captureTarget(
                 path.join(
@@ -601,7 +548,7 @@ export function createPluginPackageMetadataCapture(params: {
         }
         let scope: (() => PackageScope) | undefined;
         const source = path.join(scopeDirectory, "package.json");
-        if (hasSource(source) || fs.existsSync(source)) {
+        if (hasSource(source) || fs.existsSync(params.resolveSource?.(source)?.path ?? source)) {
           const target = path.join(destination, path.relative(root, source));
           copy(source, target);
           let parsed: PackageScope | undefined;

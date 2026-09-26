@@ -13,7 +13,7 @@ import {
 } from "./outbound-media-contract.js";
 import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { lookupInboundMessageMetaForTarget } from "./quoted-message.js";
-import { toWhatsappJid } from "./text-runtime.js";
+import { toWhatsappJid } from "./targets-runtime.js";
 
 type WhatsAppSendMessage = typeof import("./send.js").sendMessageWhatsApp;
 type WhatsAppSendPoll = typeof import("./send.js").sendPollWhatsApp;

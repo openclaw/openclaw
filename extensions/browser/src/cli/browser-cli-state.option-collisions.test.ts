@@ -1,17 +1,8 @@
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as browserCliResizeModule from "./browser-cli-resize.js";
 import { mockBrowserGateway } from "./browser-cli.test-support.js";
 
-const mocks = vi.hoisted(() => ({
-  runBrowserResizeWithOutput: vi.fn(async (_params: unknown) => {}),
-}));
-
-const runActualBrowserResizeWithOutput = browserCliResizeModule.runBrowserResizeWithOutput;
 const gatewayMock = mockBrowserGateway();
-vi.spyOn(browserCliResizeModule, "runBrowserResizeWithOutput").mockImplementation(
-  mocks.runBrowserResizeWithOutput,
-);
 const {
   createBrowserProgram: createBrowserProgramShared,
   getBrowserCliRuntime,
@@ -63,7 +54,6 @@ describe("browser state option collisions", () => {
 
   beforeEach(() => {
     gatewayMock.mockClear();
-    mocks.runBrowserResizeWithOutput.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
     getBrowserCliRuntime().exit.mockImplementation(() => {});
   });
@@ -117,28 +107,20 @@ describe("browser state option collisions", () => {
     expect(runtimeLogs.map((line) => JSON.parse(line))).toEqual([{ " account ": "padded" }]);
   });
 
-  it("inherits the parent timeout for the viewport resize alias", async () => {
-    await runBrowserCommand(["--timeout", "60000", "set", "viewport", "1024", "768"]);
-
-    expect(mocks.runBrowserResizeWithOutput).toHaveBeenCalledWith(
-      expect.objectContaining({
-        parent: expect.objectContaining({ timeout: "60000" }),
-        width: 1024,
-        height: 768,
-      }),
-    );
-    expect(mocks.runBrowserResizeWithOutput.mock.calls.at(-1)?.[0]).not.toHaveProperty("timeoutMs");
-  });
-
-  it("keeps the parent timeout and normalized target at the shared resize request boundary", async () => {
-    await runActualBrowserResizeWithOutput({
-      parent: { timeout: "60000", json: true },
-      profile: "work",
-      width: 1024,
-      height: 768,
-      targetId: " tab-1 ",
-      successMessage: "unused",
-    });
+  it("inherits the parent timeout and profile and normalizes the viewport alias target", async () => {
+    await runBrowserCommand([
+      "--timeout",
+      "60000",
+      "--browser-profile",
+      "work",
+      "--json",
+      "set",
+      "viewport",
+      "1024",
+      "768",
+      "--target-id",
+      " tab-1 ",
+    ]);
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
@@ -211,7 +193,7 @@ describe("browser state option collisions", () => {
   it("rejects non-decimal viewport dimensions before resize dispatch", async () => {
     await runBrowserCommand(["set", "viewport", "1e3", "768"]);
 
-    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
     expectErrorMessage("Invalid width: must be a positive integer");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
@@ -219,7 +201,7 @@ describe("browser state option collisions", () => {
   it("rejects excessive viewport dimensions before resize dispatch", async () => {
     await runBrowserCommand(["set", "viewport", "8193", "768"]);
 
-    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
+    expect(gatewayMock).not.toHaveBeenCalled();
     expectErrorMessage("Invalid width: maximum is 8192");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });

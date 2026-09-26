@@ -68,6 +68,7 @@ import type {
 } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
+import type { TaskRetentionSource } from "../tasks/task-registry-retention-source.js";
 import type {
   TaskRegistryMutationScope,
   TaskRegistryStoreSnapshot,
@@ -123,6 +124,7 @@ export type OpenClawStateReadCommand =
   | ChannelIngressReadCommand
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
+  | { type: "acpSessions.list" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
   | {
       [Kind in keyof McpOAuthReadOnlyOperations]: {
@@ -162,6 +164,7 @@ export type OpenClawStateReadCommand =
       type: "tasks.mutationSnapshot";
       input: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[] | undefined;
     }
+  | { type: "tasks.retentionSource"; taskId: string }
   | { type: "sessionGroups.snapshot" }
   | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
@@ -242,6 +245,12 @@ export type OpenClawStateReadReply = (
     }
   | {
       ok: true;
+      type: "acpSessions.list";
+      sourceAdmitted: true;
+      rows: AcpSessionRow[];
+    }
+  | {
+      ok: true;
       type: "acpSessions.metadata";
       sourceAdmitted: true;
       rows: Array<AcpSessionRow | null>;
@@ -274,6 +283,12 @@ export type OpenClawStateReadReply = (
       type: "tasks.mutationSnapshot";
       sourceAdmitted: true;
       snapshot: TaskRegistryStoreSnapshot;
+    }
+  | {
+      ok: true;
+      type: "tasks.retentionSource";
+      sourceAdmitted: true;
+      source: TaskRetentionSource | undefined;
     }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {

@@ -87,6 +87,14 @@ When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
 before the method runs; retry within the request's budget. Started requests
 complete concurrently, so responses can arrive out of order.
 
+During cooperative suspension, identity reads (`agent.identity.get`) wait in the
+shared browser/CLI client for `gateway.suspension` with phase `accepting`. A
+retryable `UNAVAILABLE` with `details.reason: "gateway-suspending"` also parks the
+read, using `retryAfterMs` (60 seconds) as a fallback if the resume event is missed.
+The original request deadline and cancellation still apply. Disconnects settle
+pending reads normally and use the existing reconnect backoff. Writes are neither
+parked nor replayed by this identity-read policy.
+
 Ordinary UI/SDK requests may outlive a socket disconnect, but cannot start a
 handler in a retiring Gateway instance. Shutdown fences new request entry and
 joins pending handler loading and authorization before releasing their runtime.

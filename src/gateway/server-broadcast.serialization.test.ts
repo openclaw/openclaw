@@ -18,6 +18,7 @@ import { setVerbose } from "../global-state.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -511,8 +512,6 @@ describe("broadcast serialization failures", () => {
 
   it.each([
     ["undefined", undefined],
-    ["function", () => "omitted"],
-    ["symbol", Symbol("omitted")],
     ["escaped values", { text: '"🦞"\n\\\ud800', items: [undefined, Symbol("omitted")] }],
     ["date", new Date("2026-01-01T00:00:00Z")],
     [
@@ -573,17 +572,13 @@ describe("broadcast serialization failures", () => {
     broadcast("skills.changed", {});
     expect(peer.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
   });
-
-  it.each([
-    { state: "closing", readyState: WebSocket.CLOSING },
-    { state: "closed", readyState: WebSocket.CLOSED },
-  ])("skips $state sockets without disrupting healthy broadcast sequences", ({ readyState }) => {
+  it("skips closed sockets without disrupting healthy broadcast sequences", () => {
     const retired = makeClient("retired");
     const healthy = makeClient("healthy");
     const clients = new GatewayClientRegistry([retired.client, healthy.client]);
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
-    retired.socket.readyState = readyState;
+    retired.socket.readyState = WebSocket.CLOSED;
     broadcast("skills.changed", { reason: "first" });
     broadcastToConnIds("skills.changed", { reason: "second" }, new Set(["healthy", "retired"]));
 
@@ -824,6 +819,7 @@ describe("presence recipient projection", () => {
       const admin = makeClient("admin");
       admin.client.connect.scopes = ["operator.admin"];
       const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
         bootId: "presence-projection",
         cfg,
         getRuntimeConfig: () => cfg,

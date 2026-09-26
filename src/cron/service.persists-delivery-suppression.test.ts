@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService, type CronEvent } from "./service.js";
 import { createFinishedBarrier, setupCronServiceSuite } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite();
 
@@ -67,7 +67,7 @@ describe("CronService persists delivery suppression", () => {
         expect
           .soft(events)
           .toEqual([expect.objectContaining({ deliverySuppressionReason: "channel_transform" })]);
-        const history = readCronTaskRunHistoryPage({
+        const history = readCronRunHistoryPageForTests({
           storeKey: cronStoreKey(storePath),
           jobId: job.id,
         });
@@ -83,7 +83,7 @@ describe("CronService persists delivery suppression", () => {
         ).toBeUndefined();
         expect(events.at(-1)?.deliverySuppressionReason).toBeUndefined();
         expect(
-          readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId: job.id })
+          readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
             .entries[0]?.deliverySuppressionReason,
         ).toBeUndefined();
       } finally {

@@ -945,10 +945,7 @@ extension OpenClawChatView {
     }
 
     private var hasVisibleMessageListContent: Bool {
-        if !self.transcriptRows.isEmpty {
-            return true
-        }
-        return self.hasVisibleTransientContent
+        !self.transcriptRows.isEmpty || self.hasVisibleTransientContent
     }
 
     private var hasVisibleStreamingAssistantText: Bool {
@@ -1216,7 +1213,7 @@ extension OpenClawChatView {
                 continue
             }
 
-            let toolText = self.toolResultText(from: message)
+            let toolText = self.primaryText(in: message)
             var content = last.content
             // Preserve empty results too: receiving a result owns the outcome,
             // independently of whether it contains display text.
@@ -1273,7 +1270,7 @@ extension OpenClawChatView {
 
     private func shouldDisplayMessage(_ message: OpenClawChatMessage) -> Bool {
         let primaryText = self.primaryText(in: message)
-        if self.hasInlineAttachments(in: message) {
+        if message.content.contains(where: \.isInlineAttachment) {
             return true
         }
 
@@ -1294,7 +1291,7 @@ extension OpenClawChatView {
         }
 
         return self.displayOptions.contains(.toolActivity) &&
-            (!self.toolCalls(in: message).isEmpty || !self.inlineToolResults(in: message).isEmpty)
+            message.content.contains { $0.isToolCall || $0.isToolResult }
     }
 
     private func primaryText(in message: OpenClawChatMessage) -> String {
@@ -1303,33 +1300,12 @@ extension OpenClawChatView {
             includeThinking: self.displayOptions.contains(.reasoning))
     }
 
-    private func hasInlineAttachments(in message: OpenClawChatMessage) -> Bool {
-        message.content.contains(where: \.isInlineAttachment)
-    }
-
-    private func toolCalls(in message: OpenClawChatMessage) -> [OpenClawChatMessageContent] {
-        message.content.filter(\.isToolCall)
-    }
-
-    private func inlineToolResults(in message: OpenClawChatMessage) -> [OpenClawChatMessageContent] {
-        message.content.filter(\.isToolResult)
-    }
-
     private func toolCallIds(in message: OpenClawChatMessage) -> Set<String> {
-        var ids = Set<String>()
-        for content in self.toolCalls(in: message) {
-            if let id = content.id {
-                ids.insert(id)
-            }
-        }
+        var ids = Set(message.content.filter(\.isToolCall).compactMap(\.id))
         if let toolCallId = message.toolCallId {
             ids.insert(toolCallId)
         }
         return ids
-    }
-
-    private func toolResultText(from message: OpenClawChatMessage) -> String {
-        self.primaryText(in: message)
     }
 
     @ViewBuilder
@@ -1468,8 +1444,6 @@ private struct ChatAssistantIntroCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Rendered as a grey assistant bubble so the greeting reads like the
-            // agent's first message, matching the in-conversation bubble style.
             Text(self.text)
                 .font(OpenClawChatTypography.body)
                 .foregroundStyle(OpenClawChatTheme.assistantText)
@@ -1535,7 +1509,6 @@ private struct ChatNoticeCard: View {
     let action: (() -> Void)?
 
     var body: some View {
-        // Native empty/error state: SwiftUI's standard ContentUnavailableView, not a custom card.
         ContentUnavailableView {
             Label(self.title, systemImage: self.systemImage)
                 .font(OpenClawChatTypography.headline)

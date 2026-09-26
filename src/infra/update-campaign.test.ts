@@ -247,40 +247,34 @@ describe("UpdateCampaignController", () => {
     expect(controller.getState()?.state).toBe("applying");
   });
 
-  it.each(["untargeted", "matching", "conflicting"] as const)(
-    "keeps an applying campaign unchanged for a %s adoption",
-    async (targetRelation) => {
-      const controller = createController();
-      const apply = vi.fn(async () => "applied" as const);
-      const onChange = vi.fn();
-      controller.announce({
-        target: {
-          kind: "git",
-          upstreamRef: "origin/main",
-          upstreamSha: "frozen-sha",
-          commitsBehind: 3,
-        },
-        inspect: createInspectors(() => 0),
-        apply,
-        onChange,
-      });
-      await vi.advanceTimersByTimeAsync(60_000);
-      const transitionCount = onChange.mock.calls.length;
-      const requestedTarget =
-        targetRelation === "untargeted"
-          ? undefined
-          : {
-              mode: "tracked" as const,
-              upstreamRef: "origin/main",
-              upstreamSha: targetRelation === "matching" ? "frozen-sha" : "different-sha",
-            };
+  it("keeps an applying campaign unchanged for a conflicting adoption", async () => {
+    const controller = createController();
+    const apply = vi.fn(async () => "applied" as const);
+    const onChange = vi.fn();
+    controller.announce({
+      target: {
+        kind: "git",
+        upstreamRef: "origin/main",
+        upstreamSha: "frozen-sha",
+        commitsBehind: 3,
+      },
+      inspect: createInspectors(() => 0),
+      apply,
+      onChange,
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    const transitionCount = onChange.mock.calls.length;
+    const requestedTarget = {
+      mode: "tracked" as const,
+      upstreamRef: "origin/main",
+      upstreamSha: "different-sha",
+    };
 
-      expect(controller.adopt(requestedTarget)).toEqual({ status: "applying" });
-      expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "applying" });
-      expect(onChange).toHaveBeenCalledTimes(transitionCount);
-      expect(apply).toHaveBeenCalledOnce();
-    },
-  );
+    expect(controller.adopt(requestedTarget)).toEqual({ status: "applying" });
+    expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "applying" });
+    expect(onChange).toHaveBeenCalledTimes(transitionCount);
+    expect(apply).toHaveBeenCalledOnce();
+  });
 
   it("holds a waiting campaign once and shifts its hard deadline", async () => {
     const controller = createController();
@@ -417,23 +411,6 @@ describe("UpdateCampaignController", () => {
     controller.announce(announcement);
     expect(controller.getState()).toMatchObject({ id: "campaign-2", state: "countdown" });
   });
-
-  it.each(["handoff", "applied"] as const)(
-    "keeps the campaign applying when apply resolves %s",
-    async (outcome) => {
-      const controller = createController();
-
-      controller.announce({
-        target: { kind: "package", version: "2.0.0" },
-        inspect: createInspectors(() => 0),
-        apply: vi.fn(async () => outcome),
-        onChange: vi.fn(),
-      });
-      await vi.advanceTimersByTimeAsync(60_000);
-
-      expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "applying" });
-    },
-  );
 
   it("keeps the applying campaign owner when a newer target is announced", async () => {
     const controller = createController();

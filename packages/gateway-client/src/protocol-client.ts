@@ -358,6 +358,7 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.helloReceived = true;
+        this.requests.setSuspensionPhase(hello.snapshot?.suspension?.phase);
         this.clearHandshakeTimer();
         this.connectFailure = undefined;
         this.reconnectSupervisor.reset();
@@ -497,6 +498,14 @@ export class GatewayProtocolClient<TPlan> {
   ): void {
     // Snapshot before callbacks so replacement listeners cannot inherit a retired event.
     const listeners = this.listeners.snapshot();
+    if (
+      event.event === "gateway.suspension" &&
+      typeof event.payload === "object" &&
+      event.payload !== null &&
+      "phase" in event.payload
+    ) {
+      this.requests.setSuspensionPhase(event.payload.phase);
+    }
     this.invoke("event", () => this.opts.onEvent?.(event));
     for (const [listener, subscription] of listeners) {
       if (!this.isActive(socket, generation) || this.connectionAbort?.signal.aborted) {

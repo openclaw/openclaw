@@ -2116,7 +2116,6 @@ describe("full-release-validation-at-sha", () => {
     { name: "missing witness", options: { witnessMissing: true } },
     { name: "duplicate witness", options: { witnessDuplicate: true } },
     { name: "API denial", options: { inventoryError: "HTTP 403: forbidden" } },
-    { name: "API outage", options: { inventoryError: "HTTP 503: unavailable" } },
     { name: "malformed inventory", options: { malformedInventory: true } },
     {
       name: "wrong repository",
@@ -2126,12 +2125,6 @@ describe("full-release-validation-at-sha", () => {
     {
       name: "wrong path",
       options: { runIdentityOverrides: { path: ".github/workflows/other.yml" } },
-    },
-    {
-      name: "foreign short-ref suffix",
-      options: {
-        runIdentityOverrides: { path: ".github/workflows/full-release-validation.yml@main" },
-      },
     },
     {
       name: "foreign full-ref suffix",

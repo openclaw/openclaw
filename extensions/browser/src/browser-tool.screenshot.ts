@@ -67,23 +67,15 @@ export async function executeScreenshotAction({
   opts?: BrowserScreenshotOptions;
 }): Promise<AgentToolResult<unknown>> {
   const targetId = readStringParam(params, "targetId");
-  const fullPage = Boolean(params.fullPage);
-  const ref = readStringParam(params, "ref");
-  const element = readStringParam(params, "element");
-  const labels = typeof params.labels === "boolean" ? params.labels : undefined;
   const type = params.type === "jpeg" ? "jpeg" : "png";
-  const effectiveTimeoutMs = requestedTimeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
-  const request = {
-    targetId,
-    fullPage,
-    ref,
-    element,
-    type,
-    labels,
-    timeoutMs: effectiveTimeoutMs,
-  } satisfies Parameters<typeof browserScreenshotAction>[1];
   const result = await browserScreenshotAction(proxyRequest ?? baseUrl, {
-    ...request,
+    targetId,
+    fullPage: Boolean(params.fullPage),
+    ref: readStringParam(params, "ref"),
+    element: readStringParam(params, "element"),
+    type,
+    labels: typeof params.labels === "boolean" ? params.labels : undefined,
+    timeoutMs: requestedTimeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
     profile,
     signal,
   });

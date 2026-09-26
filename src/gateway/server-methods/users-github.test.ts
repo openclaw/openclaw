@@ -40,6 +40,7 @@ import {
   linkEmail,
   setUserProfileRole,
 } from "../../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -237,6 +238,7 @@ beforeEach(async () => {
     };
   });
   lifecycle = createGitHubOAuthLifecycle({
+    scheduler: createTestGatewayScheduler(),
     getConfig: () => config,
     getPersistedConfig: () => config,
     warn: vi.fn(),

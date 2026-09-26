@@ -15,10 +15,8 @@ import { msteamsRuntimeStub } from "./test-support/runtime.js";
 import { readAccessToken } from "./token-response.js";
 import {
   hasConfiguredMSTeamsCredentials,
-  loadDelegatedTokens,
   resolveDelegatedAccessToken,
   resolveMSTeamsCredentials,
-  saveDelegatedTokens,
 } from "./token.js";
 
 const oauthTokenMocks = vi.hoisted(() => ({
@@ -29,9 +27,10 @@ vi.mock("./oauth.token.js", () => ({
   refreshMSTeamsDelegatedTokens: oauthTokenMocks.refreshMSTeamsDelegatedTokens,
 }));
 
-vi.mock("./secret-input.js", async () => {
+vi.mock("openclaw/plugin-sdk/secret-input", async (importOriginal) => {
   const { normalizeOptionalString } = await import("openclaw/plugin-sdk/string-coerce-runtime");
   return {
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-input")>()),
     normalizeSecretInputString: normalizeOptionalString,
     normalizeResolvedSecretInputString: (opts: { value: unknown; path: string }) =>
       typeof opts.value === "string" && opts.value.trim() ? opts.value.trim() : undefined,
@@ -439,7 +438,7 @@ describe("resolveDelegatedAccessToken", () => {
     if (!stateDir) {
       throw new Error("missing stateDir");
     }
-    await saveDelegatedTokens({
+    await delegatedState.saveMSTeamsDelegatedTokens({
       accessToken: "stale-access",
       refreshToken: "refresh-token",
       expiresAt,
@@ -452,7 +451,7 @@ describe("resolveDelegatedAccessToken", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
 
-    expect(await loadDelegatedTokens()).toMatchObject({
+    expect(await delegatedState.loadMSTeamsDelegatedTokens()).toMatchObject({
       accessToken: "stale-access",
       refreshToken: "refresh-token",
     });
@@ -532,7 +531,7 @@ describe("resolveDelegatedAccessToken", () => {
       expect(await result).toBe(failWrite ? undefined : refreshed.accessToken);
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
-      expect((await loadDelegatedTokens())?.accessToken).toBe(
+      expect((await delegatedState.loadMSTeamsDelegatedTokens())?.accessToken).toBe(
         failWrite ? "stale-access" : refreshed.accessToken,
       );
     },

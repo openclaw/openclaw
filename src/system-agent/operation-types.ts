@@ -22,6 +22,8 @@ export type SystemAgentOperation =
       source: "env" | "file" | "exec" | "store";
       id: string;
       provider?: string;
+      /** Value the owner supplied; stored as secret-store entry `id` before the ref is written. */
+      secret?: string;
     }
   | { kind: "setup"; workspace?: string; model?: string; agentName?: string }
   | SystemAgentNavigationOperation

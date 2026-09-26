@@ -1,49 +1,17 @@
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { PersistedClawInstall } from "./provenance.js";
 import type {
-  ClawManifest,
   ClawOpenClawProfile,
   ClawPackage,
   ClawPackagePreflight,
   ClawSourceIdentity,
 } from "./types.js";
 import { applyClawUpdatePlan } from "./update-apply.js";
+import { install, manifest, source } from "./update-apply.test-helpers.js";
 import type { ClawUpdateAction, ClawUpdatePlan } from "./update-plan.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const source: ClawSourceIdentity = {
-  kind: "package",
-  name: "@acme/worker",
-  version: "2.0.0",
-  packageRoot: "/tmp/target",
-  manifestPath: "/tmp/target/openclaw.claw.json",
-  integrityKind: "artifact",
-  integrity: "sha256:target",
-  byteLength: 1,
-};
-const manifest: ClawManifest = {
-  schemaVersion: 1,
-  agent: { id: "worker", name: "Worker v2" },
-  workspace: { bootstrapFiles: {}, files: [] },
-  packages: [],
-  mcpServers: {},
-  cronJobs: [],
-};
-const install: PersistedClawInstall = {
-  schemaVersion: "openclaw.clawInstallRecord.v1",
-  claw: { ...source, version: "1.0.0", integrity: "sha256:current" },
-  manifestSchemaVersion: 1,
-  planIntegrity: "sha256:current-add-plan",
-  agentId: "worker",
-  workspace: "/tmp/workspace-worker",
-  agentConfigDigest: "sha256:current-agent",
-  agentOwnedPaths: ['agents.entries["worker"]'],
-  status: "complete",
-  addedAtMs: 1,
-  updatedAtMs: 1,
-};
 const weatherPackage: ClawPackage = {
   kind: "skill",
   source: "clawhub",
