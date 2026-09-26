@@ -539,6 +539,23 @@ describe("deliverSlackSlashReplies chunking", () => {
     });
   });
 
+  it("keeps long slash replies within the five-call response window", async () => {
+    const respond = vi.fn(async () => undefined);
+    const text = "a".repeat(20_001);
+
+    await deliverSlackSlashReplies({
+      replies: [{ text }],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(3);
+    const messages = respond.mock.calls.map((_call, index) => requireSlashMessage(respond, index));
+    expect(messages.map((message) => message.text).join("")).toBe(text);
+    expect(messages.every((message) => message.text.length <= 8000)).toBe(true);
+  });
+
   it("sends block-only slash replies instead of dropping them", async () => {
     const respond = vi.fn(async () => undefined);
     const blocks = [{ type: "divider" }];

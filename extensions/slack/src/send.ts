@@ -46,7 +46,11 @@ import {
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { getSlackWebApiErrorData } from "./errors.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
-import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
+import {
+  SLACK_EDIT_TEXT_MAX_BYTES,
+  SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
+  SLACK_TEXT_LIMIT,
+} from "./limits.js";
 import type { SlackEventScope } from "./monitor/event-scope.js";
 import {
   buildSlackNativeDataAccessibilityText,
@@ -533,9 +537,11 @@ function resolveSlackTextChunkLimit(params: {
   const configuredLimit =
     params.textLimit ??
     resolveTextChunkLimit(params.cfg, "slack", params.accountId, {
-      fallbackLimit: SLACK_TEXT_LIMIT,
+      fallbackLimit: SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
     });
-  return Math.min(configuredLimit, SLACK_TEXT_LIMIT);
+  // Chunk before chat.postMessage while rendered Markdown boundaries are still
+  // available. response_url has a separate call budget and keeps its own limit.
+  return Math.min(configuredLimit, SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT);
 }
 
 function resolveSlackTextChunks(params: {

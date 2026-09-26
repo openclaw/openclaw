@@ -2,11 +2,11 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import { rethrowSlackPermanentOutboundApiRejection } from "./client-delivery.js";
+import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import { isSlackInvalidBlocksError } from "./native-data-blocks.js";
 
 const { sendMessageSlack } = await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
-const SLACK_TEXT_LIMIT = 8000;
 
 function slackPlatformError(code: string): Error {
   return Object.assign(new Error(`An API error occurred: ${code}`), {
@@ -63,14 +63,18 @@ describe("sendMessageSlack permanent provider rejections", () => {
       .mockRejectedValueOnce(slackPlatformError("messages_tab_disabled"));
     const delivered: string[] = [];
 
-    const caught = await sendMessageSlack("channel:C123", "a".repeat(SLACK_TEXT_LIMIT + 1), {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      onDeliveryResult: (result) => {
-        delivered.push(result.messageId);
+    const caught = await sendMessageSlack(
+      "channel:C123",
+      "a".repeat(SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT + 1),
+      {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        onDeliveryResult: (result) => {
+          delivered.push(result.messageId);
+        },
       },
-    }).catch((error: unknown) => error);
+    ).catch((error: unknown) => error);
 
     expect(caught).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(delivered).toEqual(["171234.100"]);

@@ -588,7 +588,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
 
         const result = await sendUpload(alternateClient, {
           mediaUrl: "/tmp/alternate-root.png",
-          message: "a".repeat(8_500),
+          message: "a".repeat(4_500),
           threadTs: "171.222",
           onDeliveryResult,
         });

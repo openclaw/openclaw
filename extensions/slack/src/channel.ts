@@ -65,7 +65,7 @@ import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { isSlackWorkspaceInstallation } from "./installation-identity-state.js";
-import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { SlackProbe } from "./probe.js";
 import { normalizeSlackReplyPayload, resolveSlackReplyBlocks } from "./reply-blocks.js";
@@ -420,7 +420,7 @@ const resolveSlackAllowlistNames = createAccountScopedAllowlistNameResolver({
 const slackChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
-  textChunkLimit: SLACK_TEXT_LIMIT,
+  textChunkLimit: SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
   normalizePayload: ({ payload }) => normalizeSlackReplyPayload(payload),
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   deliveryCapabilities: {

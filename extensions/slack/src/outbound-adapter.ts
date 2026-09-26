@@ -28,7 +28,7 @@ import {
   type SlackAuthoredTextPlacement,
 } from "./authored-text.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
-import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT } from "./limits.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import {
@@ -249,7 +249,7 @@ async function prepareSlackOutboundSend(ctx: ChannelOutboundContext) {
 export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
-  textChunkLimit: SLACK_TEXT_LIMIT,
+  textChunkLimit: SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
   presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
   normalizePayload: ({ payload }) => normalizeSlackReplyPayload(payload),
   renderPresentation: ({ payload }) => {

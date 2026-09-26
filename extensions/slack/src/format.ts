@@ -4,6 +4,7 @@ import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   chunkTextForOutbound,
+  chunkTextRanges,
   FormatCapabilityProfile,
   markdownToIR,
   type MarkdownIR,
@@ -446,7 +447,7 @@ export function normalizeSlackOutboundText(
   );
 }
 
-/** Chunk already-rendered Slack mrkdwn without splitting entities or code markers. */
+/** Chunk already-rendered Slack mrkdwn at readable boundaries while preserving protected tokens. */
 export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
   if (text.length <= limit) {
     return [text];
@@ -458,12 +459,24 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
     text.includes("&gt;") ||
     (text.match(/<[^>\n]+>/gu)?.some(isAllowedSlackAngleToken) ?? false);
   if (!hasProtectedToken) {
-    return chunkTextForOutbound(text, limit, { preserveWhitespace: true });
+    return chunkTextRanges(text, { limit, mode: "preferred" }).map(({ start, end }) =>
+      text.slice(start, end),
+    );
   }
 
   const chunks: string[] = [];
   let activeMarker: SlackCodeMarker | undefined;
   let content = "";
+  let paragraphBreak = 0;
+  let newlineBreak = 0;
+  let whitespaceBreak = 0;
+  let followsNewline = false;
+  const resetBreaks = () => {
+    paragraphBreak = 0;
+    newlineBreak = 0;
+    whitespaceBreak = 0;
+    followsNewline = false;
+  };
   const wrapper = (marker: SlackCodeMarker | undefined) =>
     marker && limit > marker.length * 2 ? marker : undefined;
   const capacity = (marker: SlackCodeMarker | undefined) => limit - (wrapper(marker)?.length ?? 0);
@@ -473,6 +486,25 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
       chunks.push(marker ? `${content}${marker}` : content);
     }
     content = "";
+    resetBreaks();
+  };
+  const flushAtProseBoundary = () => {
+    const boundary = paragraphBreak || newlineBreak || whitespaceBreak;
+    if (!boundary) {
+      flush();
+      return "";
+    }
+    // These boundaries are outside code and complete Slack tokens, so the prefix
+    // needs no synthetic closing marker and the suffix retains its original state.
+    chunks.push(content.slice(0, boundary));
+    const remainder = content.slice(boundary);
+    paragraphBreak = Math.max(0, paragraphBreak - boundary);
+    newlineBreak = Math.max(0, newlineBreak - boundary);
+    whitespaceBreak = Math.max(0, whitespaceBreak - boundary);
+    if (!remainder) {
+      followsNewline = false;
+    }
+    return remainder;
   };
 
   for (const token of tokenizeSlackMrkdwn(text)) {
@@ -483,8 +515,8 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
       activeMarker = nextMarker;
       continue;
     }
-    if (content && content.length + token.length > capacity(nextMarker)) {
-      flush();
+    while (content && content.length + token.length > capacity(nextMarker)) {
+      content = flushAtProseBoundary();
     }
     activeMarker = nextMarker;
     if (!content && transition === undefined) {
@@ -516,6 +548,24 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
       continue;
     }
     content += token;
+    // Code-internal separators must stay inside balanced code wrappers. A native
+    // angle token can contain spaces, but is one indivisible token here.
+    if (activeMarker || transition !== null) {
+      followsNewline = false;
+    } else if (token === "\n") {
+      if (followsNewline) {
+        paragraphBreak = content.length;
+      }
+      newlineBreak = content.length;
+      followsNewline = true;
+    } else if (/^\s$/u.test(token)) {
+      whitespaceBreak = content.length;
+      if (token !== " " && token !== "\t" && token !== "\r") {
+        followsNewline = false;
+      }
+    } else {
+      followsNewline = false;
+    }
   }
   flush();
   return chunks;

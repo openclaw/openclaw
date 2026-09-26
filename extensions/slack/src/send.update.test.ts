@@ -49,11 +49,11 @@ describe("updateMessageSlack", () => {
     getSlackWriteClientMock.mockReset();
   });
 
-  it("caps chat.update text at the 4000-byte edit limit, not the 8000 send limit", async () => {
+  it("caps chat.update text at its 4000-byte edit limit", async () => {
     const client = createUpdateClient();
     getSlackWriteClientMock.mockReturnValue(client);
-    // Length between the edit and send limits: Slack rejects this edit with msg_too_long unless
-    // updateMessageSlack truncates it first.
+    // Slack rejects this oversized edit with msg_too_long unless updateMessageSlack
+    // truncates it first; edits cannot be split into multiple posts.
     const longText = "a".repeat(6_000);
 
     await updateMessageSlack({
