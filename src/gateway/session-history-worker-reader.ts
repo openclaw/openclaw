@@ -11,10 +11,10 @@ export async function readSessionHistoryRequest(
   request: SessionHistoryWorkerRequest,
   readTarget: PreparedSessionHistoryReadTarget,
 ): Promise<SessionHistoryWorkerResult> {
-  const { sourceDiscovery, ...target } = readTarget;
+  const { sourceDiscovery, ...readerTarget } = readTarget;
   const options = {
     readers: createReadonlySessionHistoryReader(
-      target,
+      readerTarget,
       sourceDiscovery
         ? () => resolveGatewaySessionStoreReadSources(sourceDiscovery).sources
         : undefined,
