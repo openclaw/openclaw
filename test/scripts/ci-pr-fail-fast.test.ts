@@ -147,6 +147,81 @@ afterEach(() => {
 });
 
 describe("PR failure monitor", () => {
+  it.each([
+    { pending: 1, plannerReady: true, missing: false, fast: true },
+    { pending: 3, plannerReady: true, missing: false, fast: true },
+    { pending: 4, plannerReady: true, missing: false, fast: false },
+    { pending: 1, plannerReady: false, missing: false, fast: false },
+    { pending: 1, plannerReady: true, missing: true, fast: false },
+  ])("polls promptly only when the final inventory is present: %j", async (scenario) => {
+    vi.useFakeTimers();
+    const waiting = Array.from({ length: scenario.pending }, (_, index) => job(index + 10, null));
+    const planner = scenario.plannerReady ? plannedChecks(0) : job(70, null, "check-plan");
+    const f = fixture({
+      jobs: [job(1), job(2), planner, ...waiting, job(90, "skipped")],
+      checkPlanExpected: true,
+    });
+    let completion: string | undefined;
+    const monitor = f.monitor(3 + scenario.pending + Number(scenario.missing)).then((reason) => {
+      completion = reason;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.fetchMock).toHaveBeenCalledTimes(2);
+    for (const row of waiting) {
+      Object.assign(row, job(row.id));
+    }
+    Object.assign(planner, plannedChecks(0));
+    if (scenario.missing) {
+      f.rows.push(job(80));
+    }
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(f.fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(completion).toBe(scenario.fast ? "completed" : undefined);
+    if (!scenario.fast) {
+      await vi.advanceTimersByTimeAsync(25_000);
+    }
+    await monitor;
+    expect(completion).toBe("completed");
+    expect(f.events).toEqual([]);
+  });
+
+  it("bounds extra API reads when the last job takes more than a minute", async () => {
+    vi.useFakeTimers();
+    const last = job(3, null);
+    const f = fixture({ jobs: [job(1), job(2), last, plannedChecks(0)], checkPlanExpected: true });
+    let completion: string | undefined;
+    const monitor = f.monitor().then((reason) => {
+      completion = reason;
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(completion).toBeUndefined();
+    expect(f.fetchMock).toHaveBeenCalledTimes(14);
+    Object.assign(last, job(3));
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(f.fetchMock).toHaveBeenCalledTimes(14);
+    await vi.advanceTimersByTimeAsync(1);
+    await monitor;
+    expect(completion).toBe("completed");
+    expect(f.events).toEqual([]);
+  });
+
+  it("retains failure cancellation authority during the final observation cadence", async () => {
+    vi.useFakeTimers();
+    const last = job(3, null);
+    const f = fixture({ jobs: [job(1), job(2), last, plannedChecks(0)], checkPlanExpected: true });
+    let completion: string | undefined;
+    const monitor = f.monitor().then((reason) => {
+      completion = reason;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    Object.assign(last, job(3, "failure"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(completion).toBe("failure-cancelled");
+    await monitor;
+    expect(f.events).toEqual(["cause 3", "POST /actions/runs/100/cancel"]);
+  });
+
   it("replaces the early check reservation with the completed planner's exact count", async () => {
     vi.useFakeTimers();
     const f = fixture({

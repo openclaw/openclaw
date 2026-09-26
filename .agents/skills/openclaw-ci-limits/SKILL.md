@@ -31,6 +31,13 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 ## Rejected Experiments
 
+- **Boundary asynchronous input preparation (2026-09-26):** Adding the existing
+  `CompilerInputSnapshot.prepare()` calls at the three declaration/boundary
+  callers increased full cold validation from 464.21s to 544.68s on the same
+  four-CPU/15.42-GiB Testbox; warm validation increased from 12.62s to 14.63s.
+  All 125 plugin checks and the canary passed, but CPU use also increased.
+  The six caller additions were removed. Do not repeat this as an assumed
+  speedup; any different use needs measured end-to-end benefit.
 - **Windows pnpm store (2026-09-20):** Original receipts from
   [run 35547255790](https://github.com/openclaw/openclaw/actions/runs/35547255790)
   measured median complete setup at 45.295s cold versus 52.738s restored
@@ -287,6 +294,14 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Frozen/manual targets, retries, untrusted authors and fully hosted fallback
   manifests remain outside this first-attempt limit, including existing >45-row
   fallbacks. Do not change the backend variable or existing caps to enable it.
+- The existing extension-package-boundary matrix row requests the 32-class
+  whenever its existing route selects Blacksmith. Its two-CPU compiler reserve
+  admits four children on the observed eight-CPU/30.95-GiB allocation, versus
+  two on the previous 16-class. Run 36248684656 measured a 569s complete job
+  on the 16-class; unchanged duration on the 32-class would add 151.7
+  class-vCPU-minutes (1.17% of that broad run). Include that allowance with
+  Node packing costs until native proof measures the new duration. No jobs,
+  registrations, permissions, compiler checks, or hosted eligibility are added.
 - Current fast plugin/channel contract families each share one checkout/setup.
   Their two weighted process envelopes run sequentially with unchanged include
   lists and package commands; channel invocations retain four project slots and

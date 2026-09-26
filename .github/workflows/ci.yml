@@ -2209,7 +2209,7 @@ jobs:
               { check_name: "report-plugin-sdk-api-diff", group: "plugin-sdk-api-diff", runner: "blacksmith-8vcpu-ubuntu-2404" },
             ] : []),
             // Keep these scans on available capacity; their resource guards remain authoritative.
-            { check_name: "check-additional-extension-package-boundary", group: "extension-package-boundary", runner: "blacksmith-16vcpu-ubuntu-2404" },
+            { check_name: "check-additional-extension-package-boundary", group: "extension-package-boundary", runner: "blacksmith-32vcpu-ubuntu-2404" },
             { check_name: "check-additional-runtime-topology-architecture", group: "runtime-topology-architecture", runner: "blacksmith-16vcpu-ubuntu-2404" },
           ].filter(({ group }) => !narrowCheckScope ||
             (group === "prompt-snapshots" ? changedScopeHasPromptSnapshotImpact :

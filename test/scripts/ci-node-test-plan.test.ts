@@ -2953,6 +2953,90 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
+  it("subdivides an oversized measured child without repricing its sibling inventory", async () => {
+    const config = agentVitestProjectOwners.support.config;
+    // The support owner selects subdirectories; top-level files belong to agents-core.
+    const files = Array.from(
+      { length: 70 },
+      (_, index) => `src/agents/fixture/entry-${String(index).padStart(3, "0")}.test.ts`,
+    );
+    const timings: Record<string, number> = { "agentic-agents-support": 240 };
+    vi.resetModules();
+    vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
+      fullSuiteVitestShards: [{ name: "agentic", config, projects: [config] }],
+    }));
+    vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>()),
+      listTrackedTestFiles: (root: string) => (root === "src/agents" ? files : []),
+    }));
+    vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({
+      ...testTimings,
+      readCompactGroupTimings: () => timings,
+      readRuntimePlacementTimings: () => [],
+    }));
+    vi.doMock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
+      ...(await importOriginal<
+        typeof import("../../scripts/lib/vitest-build-prerequisites.mts")
+      >()),
+      resolveVitestPretestBuildMode: () => undefined,
+    }));
+    try {
+      const { createNodeTestShardBundles: createPlan } =
+        await import("../../scripts/lib/ci-node-test-plan.mts");
+      const options = { compactMode: "push" as const, runnerBackend: "hybrid" };
+      const before = createPlan(options);
+      const [observed, sibling] = before.flatMap((job) => job.groups);
+      expect(before.flatMap((job) => job.groups)).toHaveLength(2);
+      expect(observed?.includePatterns).toHaveLength(35);
+      const timingKey = observed!.timing_key!;
+      timings[timingKey] = 362;
+      const after = createPlan(options);
+      const groups = after.flatMap((job) => job.groups);
+      expect(groups.flatMap((group) => group.includePatterns!).toSorted()).toEqual(files);
+      expect(groups.find((group) => group.timing_key === sibling!.timing_key)).toEqual(sibling);
+      const descendants = groups.filter((group) =>
+        parseCompactSplitTimingKey(group.timing_key!)?.parentShardName.startsWith(timingKey),
+      );
+      expect(descendants.length).toBeGreaterThan(1);
+      expect(descendants.flatMap((group) => group.includePatterns!).toSorted()).toEqual(
+        observed!.includePatterns!.toSorted(),
+      );
+      expect(descendants.every((group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2")).toBe(
+        true,
+      );
+      expect(after.every((job) => job.predictedTestSeconds! <= 300)).toBe(true);
+      const totalSeconds = after.reduce((total, job) => total + job.predictedSeconds!, 0);
+      expect(totalSeconds).toBeGreaterThanOrEqual(482);
+      expect(totalSeconds).toBeLessThan(487);
+      expect(createPlan(options)).toEqual(after);
+      delete timings[timingKey];
+      timings[timingKey.replace(/#generation-[^#]+/u, "#generation-000000000000")] = 362;
+      expect(createPlan(options)).toEqual(after);
+
+      const nestedKey = descendants[0]!.timing_key!;
+      timings[nestedKey] = 3_600;
+      const singleton = createPlan(options)
+        .flatMap((job) => job.groups)
+        .find(
+          (group) => group.timing_key?.startsWith(nestedKey) && group.includePatterns?.length === 1,
+        );
+      expect(singleton).toBeDefined();
+      timings[singleton!.timing_key!] = 500;
+      const indivisible = createPlan(options).find((job) =>
+        job.groups.some((group) => group.timing_key === singleton!.timing_key),
+      );
+      expect(indivisible?.groups).toHaveLength(1);
+      expect(indivisible?.predictedTestSeconds).toBeGreaterThanOrEqual(500);
+    } finally {
+      vi.doUnmock("../../scripts/lib/vitest-build-prerequisites.mts");
+      vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
+      vi.doUnmock("../../scripts/lib/list-test-files.mts");
+      vi.doUnmock("../vitest/vitest.test-shards.mjs");
+      vi.resetModules();
+    }
+  });
+
   it("partitions whole-config runtime consumers from ordinary serial CLI work", () => {
     const originalShards = fullSuiteVitestShards.slice();
     const config = "test/vitest/vitest.cli-process.config.ts";
@@ -3253,15 +3337,39 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         for (const group of groups.filter((entry) =>
           entry.configs.includes("test/vitest/vitest.commands.config.ts"),
         )) {
-          expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS, group.shard_name).toBeUndefined();
+          const explicitWorkers = group.env?.OPENCLAW_VITEST_MAX_WORKERS;
+          if (explicitWorkers !== undefined) {
+            expect(explicitWorkers, group.shard_name).toBe("2");
+            const selector =
+              parseCompactSplitTimingKey(group.timing_key!)?.selectorKey ??
+              createCompactSplitTimingGeneration({
+                configs: group.configs,
+                env: group.env,
+                parentShardName: group.timing_key!,
+                stripes: [group.includePatterns!],
+              }).selectorKey;
+            expect(
+              Math.max(
+                ...(["blacksmith", "github"] as const).map(
+                  (runner) =>
+                    testTimings.readCompleteSplitGenerationSeconds(
+                      testTimings.readCompactGroupTimings(runner),
+                      selector,
+                    ) ?? 0,
+                ),
+              ),
+              `${group.shard_name}: measured two-worker generation`,
+            ).toBeGreaterThan(0);
+          }
           const job = plan.find((entry) => entry.groups.includes(group))!;
-          const workers =
+          const jobWorkers =
             profile.name !== "GitHub-hosted" &&
             job.runner === EXTRA_LARGE_NODE_TEST_RUNNER &&
             job.planConcurrency === 1 &&
             job.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
               ? 8
               : 2;
+          const workers = Math.min(jobWorkers, Number(explicitWorkers ?? jobWorkers));
           expect(group.timing_key, group.shard_name).toContain(`#file-parallel-${workers}`);
           expect(group.fallbackMaxWorkers, group.shard_name).toBe(2);
         }

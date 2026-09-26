@@ -2626,6 +2626,96 @@ describe("CI changed Node test plan", () => {
     },
   );
 
+  it("packs measured native plugin envelopes without changing their one-file process lifetime", () => {
+    const config = "test/vitest/vitest.extension-database-workers.config.ts";
+    const files = databaseWorkerExtensionTestFiles
+      .filter((file) => file.startsWith("extensions/telegram/"))
+      .slice(0, 18);
+    expect(files).toHaveLength(18);
+    const ordinary = "extensions/telegram/src/ordinary-fixture.test.ts";
+    const inventory = [...files, ordinary];
+    try {
+      vi.spyOn(changedExtensions, "listAvailableExtensionIds").mockReturnValue(["telegram"]);
+      vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue(inventory);
+      const costs = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
+      const before = createChangedExtensionFallbackShards([
+        "scripts/lib/ci-changed-node-test-plan.mts",
+      ]);
+      expect(before).toHaveLength(1);
+      const groups = fallbackGroups(before).filter((group) => group.configs.includes(config));
+      expect(groups).toHaveLength(2);
+      const runs = [1, 2].map((id) => ({
+        id,
+        createdAt: "2026-09-26T00:00:00Z",
+        completeInventory: false,
+        pullRequestMergeRef: true,
+        logs: [
+          {
+            kind: "compact" as const,
+            labels: ["blacksmith-8vcpu-ubuntu-2404"],
+            text: [
+              "2026-09-26T00:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2",
+              `2026-09-26T00:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(groups)}`,
+              ...groups.flatMap((group, index) => [
+                `2026-09-26T00:0${index * 4}:00Z [shard:${group.shard_name}] begin`,
+                `2026-09-26T00:0${index * 4 + 3}:12Z [shard:${group.shard_name}] end (exit 0)`,
+              ]),
+            ].join("\n"),
+          },
+        ],
+      }));
+      const measured = refitTestTimings(runs).timings.compactGroupSeconds.blacksmith;
+      expect(Object.values(measured)).toEqual([192, 192]);
+      costs.mockReturnValue(measured);
+      const after = createChangedExtensionFallbackShards([
+        "scripts/lib/ci-changed-node-test-plan.mts",
+      ]);
+      expect(after).toHaveLength(2);
+      expect(
+        after.every(
+          (job) =>
+            job.predictedSeconds! <= 300 &&
+            job.planConcurrency === 1 &&
+            job.runner === "blacksmith-8vcpu-ubuntu-2404",
+        ),
+      ).toBe(true);
+      expect(
+        fallbackGroups(after)
+          .flatMap((group) => group.includePatterns ?? [])
+          .toSorted(),
+      ).toEqual(inventory.toSorted());
+      expect(
+        fallbackGroups(after)
+          .filter((group) => group.configs.includes(config))
+          .map((group) => group.includePatterns),
+      ).toEqual(groups.map((group) => group.includePatterns));
+      expect(extensionTestPlan.splitExtensionTestProcessTargets(config, files)).toEqual(
+        files.toSorted().map((file) => [file]),
+      );
+      // Exact measurements cannot price a different selection, config, or worker policy.
+      const selected = groups[0]!.includePatterns!;
+      expect(
+        extensionTestPlan.estimateExtensionTestCost(config, selected.length - 1, selected.slice(1)),
+      ).toBeLessThan(192);
+      expect(
+        extensionTestPlan.estimateExtensionTestCost(
+          "test/vitest/vitest.extension-telegram.config.ts",
+          selected.length,
+          selected,
+        ),
+      ).toBeLessThan(192);
+      const otherWorkerKey = extensionTestPlan.createExtensionTestTimingKey(config, selected, {
+        OPENCLAW_VITEST_MAX_WORKERS: "8",
+      })!;
+      costs.mockReturnValue({ [otherWorkerKey]: 500 });
+      expect(
+        extensionTestPlan.estimateExtensionTestCost(config, selected.length, selected),
+      ).toBeLessThan(192);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it.each([60, 61])("exchanges extension groups within the 300-second budget, tail %s", (tail) => {
     const costs = [180, 150, 90, tail, 120];
     const ids = costs.map((_, index) => `packing-fixture-${index}`);

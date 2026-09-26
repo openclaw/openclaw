@@ -37,6 +37,27 @@ The table compares eleven successful B1/R1 main runs with five later successful 
 
 Independent hosted checks reached at most 664 seconds in this sample. Artifact builds reached 898 seconds before the shared preflight and gate; they retain Blacksmith. Only the gate depends on `build-artifacts`: the workflow does not contain a serial build-to-test job dependency.
 
+The package-boundary check now requests the existing Blacksmith 32-class when
+its unchanged routing policy selects Blacksmith. In successful PR run
+`36248684656`, its 16-class allocation delivered four CPUs and the existing
+two-CPU reservation admitted two compilers. The 527-second check comprised
+257 seconds of declaration preparation and 268 seconds compiling all 125
+plugins. The 32-class delivers eight CPUs, allowing four compilers under that
+same policy. It adds no jobs or registrations. At the observed 569-second job
+duration, doubling the class would add 151.7 class-vCPU-minutes, or 1.17% of
+that run's 12,921.2 total; any speedup still requires native measurement. Hosted,
+retry, trust, and cache policies remain unchanged.
+
+Exact plugin envelopes and unsplit two-worker command envelopes now feed the
+existing timing owner using config, complete file inventory, and worker-bound
+identities. Plugin row ordinals never identify a workload. Static plugin rates
+remain the fallback for unmeasured selections, and the refitter still requires
+two independent runs before replacing a price. Conservative single-run floors
+are explicitly labeled in the committed timing provenance. An exact measured
+multi-file core child above 300 seconds can split again without repricing its
+siblings or combining unlike capacity samples into a parent. A single-file
+overrun remains visible.
+
 | Test family                               | Available complete-job evidence                                                    | Placement and remaining measurement                                                        |
 | ----------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | Compact large, baseline bin 13            | Blacksmith 932 [967]s across five runs                                             | Retain Blacksmith; correct underestimated serial packing                                   |

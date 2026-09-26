@@ -2,12 +2,17 @@ import { stripVTControlCharacters } from "node:util";
 import { decodeNodeTestGroups } from "./ci-node-test-groups-codec.mts";
 import {
   isRuntimePlacementTiming,
+  isRuntimePlacementIncludePatterns,
   runtimePlacementTimingIdentity,
   type CiTestTimings,
   type RuntimePlacementTiming,
 } from "./ci-test-timings-schema.mts";
+import { createExtensionTestTimingKey } from "./extension-test-plan.mts";
 import { isConstrainedCiCheckHost } from "./local-check-runtime.mts";
-import { parseCompactSplitTimingKey } from "./vitest-shard-metadata.mts";
+import {
+  createCompactSplitTimingGeneration,
+  parseCompactSplitTimingKey,
+} from "./vitest-shard-metadata.mts";
 
 export type CiTimingRun = {
   id: number;
@@ -39,18 +44,36 @@ function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {
   const encoded = new Set(
     [
       ...text.matchAll(
-        /\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: (\S+)$/gmu,
+        /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: (\S+)$/gmu,
       ),
     ].map((match) => match[1]!),
   );
-  if (encoded.size !== 1) {
+  if (encoded.size > 1) {
     return [];
   }
   try {
-    const groups = decodeNodeTestGroups([...encoded][0]!);
+    const jsonEnv = (key: string): unknown => {
+      const value = readLogEnv(text, key);
+      if (value === null) {
+        throw new Error(`Ambiguous ${key}`);
+      }
+      return value ? JSON.parse(value) : undefined;
+    };
+    // Singleton matrix rows use the same executor without a packed group descriptor.
+    const groups: unknown[] =
+      encoded.size === 1
+        ? decodeNodeTestGroups([...encoded][0]!)
+        : [
+            {
+              shard_name: readLogEnv(text, "OPENCLAW_VITEST_SHARD_NAME"),
+              configs: jsonEnv("OPENCLAW_NODE_TEST_CONFIGS_JSON"),
+              includePatterns: jsonEnv("OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON"),
+              env: jsonEnv("OPENCLAW_NODE_TEST_ENV_JSON") ?? undefined,
+            },
+          ];
     const strings = (value: unknown): value is string[] =>
       Array.isArray(value) && value.every((entry) => typeof entry === "string");
-    return groups.filter((group): group is RuntimeTimingGroup => {
+    const validGroups = groups.filter((group): group is RuntimeTimingGroup => {
       if (typeof group !== "object" || group === null) {
         return false;
       }
@@ -73,12 +96,14 @@ function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {
             Number.isSafeInteger(group.minTotalMemoryBytes) &&
             group.minTotalMemoryBytes > 0)) &&
         (!("env" in group) ||
+          group.env === undefined ||
           (typeof group.env === "object" &&
             group.env !== null &&
             !Array.isArray(group.env) &&
             Object.values(group.env).every((value) => typeof value === "string")))
       );
     });
+    return validGroups.length === groups.length ? validGroups : [];
   } catch {
     // Historical/malformed descriptors cannot supply a placement identity.
     return [];
@@ -128,7 +153,7 @@ function readLogEnv(text: string, key: string): string | null | undefined {
     [
       ...text.matchAll(
         new RegExp(
-          `\\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z\\s+${key}: (\\{\\n[\\s\\S]*?\\n\\}|[^\\n]*)$`,
+          `^\\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z\\s+${key}: ([\\[{]\\n[\\s\\S]*?\\n[\\]}]|[^\\n]*)$`,
           "gmu",
         ),
       ),
@@ -167,7 +192,7 @@ function readJobWorkerCeiling(text: string) {
 function readWorkerResources(text: string) {
   const matches = [
     ...text.matchAll(
-      /\d{4}-\d\d-\d\dT[\d:.]+Z\s+\[shard:resources\] logicalCpuCount=(\d+) totalMemoryBytes=(\d+) requested plans=(\d+) admitted plans=(\d+)$/gmu,
+      /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+\[shard:resources\] logicalCpuCount=(\d+) totalMemoryBytes=(\d+) requested plans=(\d+) admitted plans=(\d+)$/gmu,
     ),
   ];
   if (matches.length !== 1) {
@@ -233,12 +258,14 @@ function readCompactLog(
 ) {
   const profile = labels.some((label) => label.startsWith("blacksmith-")) ? "blacksmith" : "github";
   const starts = new Map<string, number>();
+  const ambiguousStarts = new Set<string>();
   const descriptors = readRuntimeTimingGroups(text);
   const runtimeModes = new Map<string, "runtime" | "private-qa">();
   const jobWorkerCeiling = readJobWorkerCeiling(text);
   const resources = readWorkerResources(text);
   const runnerEnvironment = readLogEnv(text, "RUNNER_ENVIRONMENT");
   const frozenTarget = readLogEnv(text, "FROZEN_TARGET");
+  const jobExtraArgs = readLogEnv(text, "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON");
   for (const line of text.split("\n")) {
     const readiness =
       /\[shard:([^\]]+)\] \[test\] preparing (runtime|private-qa) runtime before Vitest workers/u.exec(
@@ -255,7 +282,7 @@ function readCompactLog(
       }
     }
     const event =
-      /(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+.*?\[shard:([^\]]+)\] (begin|end \(exit (\d+)\))/u.exec(line);
+      /^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+\[shard:([^\]]+)\] (begin|end \(exit (\d+)\))$/u.exec(line);
     if (!event) {
       continue;
     }
@@ -264,12 +291,15 @@ function readCompactLog(
     const action = event[3]!;
     const exitCode = event[4];
     if (action === "begin") {
+      if (starts.has(key)) {
+        ambiguousStarts.add(key);
+      }
       starts.set(key, Date.parse(timestamp));
       runtimeModes.delete(key);
       continue;
     }
     const started = starts.get(key);
-    if (exitCode === "0" && started !== undefined) {
+    if (exitCode === "0" && started !== undefined && !ambiguousStarts.has(key)) {
       // Preserve the workload as executed. Packed plans may be serial or
       // concurrent, and admission must use the wrapper span it actually ran.
       const matches = descriptors.filter((group) => (group.timing_key ?? group.shard_name) === key);
@@ -317,8 +347,37 @@ function readCompactLog(
         workerCeiling = null;
       }
       const splitTiming = parseCompactSplitTimingKey(key);
-      if (!exactInventoryOnly || splitTiming) {
-        for (const identity of [key, splitTiming?.parentShardName]) {
+      const extensionGroup = group?.shard_name.startsWith("changed-extensions-config") === true;
+      let exactKey: string | undefined;
+      if (
+        group &&
+        !splitTiming &&
+        typeof workerCeiling === "number" &&
+        isRuntimePlacementIncludePatterns(group.includePatterns) &&
+        (jobExtraArgs === undefined || jobExtraArgs === "[]") &&
+        group.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON === undefined
+      ) {
+        const env = { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: String(workerCeiling) };
+        if (extensionGroup && group.configs.length === 1) {
+          exactKey = createExtensionTestTimingKey(group.configs[0]!, group.includePatterns, env);
+        } else if (workerCeiling === 2 && key.endsWith("#file-parallel-2")) {
+          // PR descriptors prove this selected inventory, never an unsplit family total.
+          // Eight-worker command placement rewrites the name after its selector is made.
+          exactKey = createCompactSplitTimingGeneration({
+            configs: group.configs,
+            env,
+            parentShardName: key,
+            stripes: [group.includePatterns],
+          }).timingKeys[0];
+        }
+      }
+      const measuredKeys = [
+        ...(!extensionGroup && (!exactInventoryOnly || splitTiming) ? [key] : []),
+        ...(exactKey ? [exactKey] : []),
+      ];
+      for (const measuredKey of measuredKeys) {
+        const measuredSplit = parseCompactSplitTimingKey(measuredKey);
+        for (const identity of [measuredKey, measuredSplit?.parentShardName]) {
           if (identity === undefined) {
             continue;
           }
@@ -327,7 +386,7 @@ function readCompactLog(
           workerCeilings[profile].set(identity, observed);
         }
         // An unsplit PR key does not prove that its full owner inventory ran.
-        recordSample(samples[profile], key, (Date.parse(timestamp) - started) / 1000);
+        recordSample(samples[profile], measuredKey, (Date.parse(timestamp) - started) / 1000);
       }
       if (group && workerCeiling !== null) {
         const observation = {
@@ -497,7 +556,7 @@ function recordCompleteParentSamples(
     observedParents.add(parsed.parentShardName);
     // A selected PR subset can share the reduced full inventory's parent name.
     // Its exact child key is evidence; completeness of that subset is not.
-    if (!foldParents) {
+    if (!foldParents || parsed.parentShardName.startsWith("extension-test:")) {
       continue;
     }
     const generation = generations.get(parsed.generationKey) ?? {
@@ -617,7 +676,12 @@ export function refitTestTimings(
       github: new Map<string, number[]>(),
     };
     for (const log of run.logs) {
-      const text = stripVTControlCharacters(log.text);
+      // `gh run view --log` adds job/step columns outside the timestamped record.
+      // A timestamped child line may quote that format; its contents stay nested.
+      const text = stripVTControlCharacters(log.text).replace(
+        /^(?!\d{4}-\d\d-\d\dT[\d:.]+Z(?:\s|$))[^\t\r\n]+\t[^\t\r\n]+\t(?=\d{4}-\d\d-\d\dT[\d:.]+Z(?:\s|$))/gmu,
+        "",
+      );
       if (log.kind === "tooling") {
         const profile = log.labels.some((label) => label.startsWith("blacksmith-"))
           ? "toolingBlacksmith"

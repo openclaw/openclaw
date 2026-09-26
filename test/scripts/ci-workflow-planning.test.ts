@@ -4895,7 +4895,7 @@ describe("ci workflow guards", () => {
     expect(readFrozenAdditionalCheckRows()).toContainEqual({
       check_name: "check-additional-extension-package-boundary",
       group: "extension-package-boundary",
-      runner: "blacksmith-16vcpu-ubuntu-2404",
+      runner: "blacksmith-32vcpu-ubuntu-2404",
     });
     const runStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Run additional check shard",

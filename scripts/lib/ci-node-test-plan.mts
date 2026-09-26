@@ -77,6 +77,7 @@ import {
 } from "./ci-test-timings.mts";
 import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-files.mts";
 import { isExclusiveCiTestConfig } from "./local-check-runtime.mts";
+import { readPositiveEnvInt } from "./numeric-options.mjs";
 import {
   listVitestRuntimeConsumerFiles,
   mergeVitestPretestBuildModes,
@@ -1425,14 +1426,14 @@ function estimateCompactStripeSeconds(
 // fixed stripes.
 function compactStripeFamily(group: NodeTestShardGroup): string | undefined {
   if (
-    /^agentic-commands-doctor-sessions-cron(?:-(?:memory|sqlite(?:-recovery)?))?(?:-hosted-\d+)?$/u.test(
+    /^agentic-commands-doctor-sessions-cron(?:-(?:memory|sqlite(?:-recovery)?))?(?:-hosted-\d+)*$/u.test(
       group.shard_name,
     )
   ) {
     return "agentic-commands-doctor-sessions-cron";
   }
   return (
-    /^(agentic-agents-embedded-base|agentic-gateway-core|core-runtime-media-ui|core-unit-src-security)-\d+(?:-hosted-\d+)?$/u.exec(
+    /^(agentic-agents-embedded-base|agentic-gateway-core|core-runtime-media-ui|core-unit-src-security)-\d+(?:-hosted-\d+)*$/u.exec(
       group.shard_name,
     )?.[1] ??
     (group.timing_key ? parseCompactSplitTimingKey(group.timing_key)?.selectorKey : undefined)
@@ -3535,6 +3536,7 @@ function selectHostedToolingTailDonation(
 function splitOversizedCompactGroup(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
+  observedSeconds = 0,
   runtimePartition?: ReturnType<typeof partitionRuntimeTestFiles>,
   splitHostedToolingTails = false,
   hostedToolingTailBudgets?: ReadonlyMap<string, number>,
@@ -3558,8 +3560,19 @@ function splitOversizedCompactGroup(
     hostedMain &&
     (group.includePatterns?.length ?? 0) > 1 &&
     group.includePatterns!.includes(HOSTED_MAIN_UPDATE_TEST);
-  const measuredProfileSeconds = estimateCompactGroupSeconds(group, runnerBackend);
-  const measuredHostedSeconds = estimateCompactGroupSeconds(group, "github");
+  const measuredProfileSeconds = Math.max(
+    estimateCompactGroupSeconds(group, runnerBackend),
+    observedSeconds,
+  );
+  const measuredHostedSeconds = Math.max(
+    estimateCompactGroupSeconds(group, "github"),
+    observedSeconds > 0
+      ? runnerBackend === "github"
+        ? observedSeconds
+        : estimateCompactStripeSeconds(group, "github") ||
+          observedSeconds * COMPACT_GITHUB_GROUP_SECONDS_SCALE
+      : 0,
+  );
   if (!canSplitWholeConfigGroup(group.shard_name)) {
     return [{ group, seconds: measuredProfileSeconds }];
   }
@@ -3819,6 +3832,9 @@ function splitOversizedCompactGroup(
       : runnerBackend === "hybrid"
         ? Math.max(completeBlacksmithSeconds, completeHostedSeconds)
         : completeBlacksmithSeconds;
+  // A measured two-worker envelope must keep that ceiling after its children move to solo rows.
+  const measuredGroup =
+    parallelCommands && completeMeasuredSeconds > 0 ? { ...group, env: timingEnv } : group;
   if (
     !runtimePartition &&
     !exceedsHostedFileLimit &&
@@ -3828,7 +3844,7 @@ function splitOversizedCompactGroup(
   ) {
     return [
       {
-        group,
+        group: measuredGroup,
         seconds: parallelCommands
           ? Math.max(
               profileSeconds,
@@ -3922,24 +3938,38 @@ function splitOversizedCompactGroup(
       );
     }
   }
-  return stripes.map((patterns, index) => {
+  return stripes.flatMap((patterns, index) => {
     const timingKey = timingGeneration.timingKeys[index]!;
     const child: NodeTestShardGroup = {
-      ...group,
+      ...measuredGroup,
       includePatterns: patterns,
       pretestBuildMode: mergeVitestPretestBuildModes(patterns.map((file) => buildModes.get(file))),
       shard_name: `${group.shard_name}-hosted-${index + 1}`,
       timing_key: timingKey,
     };
     if (isTooling) {
-      return {
-        group: child,
-        seconds: estimateParallelToolingSeconds(child, patterns, runnerBackend),
-      };
+      return [
+        { group: child, seconds: estimateParallelToolingSeconds(child, patterns, runnerBackend) },
+      ];
     }
     const measuredChild = estimateCompactStripeSeconds(child, runnerBackend);
     if (measuredChild > 0) {
-      return { group: child, seconds: measuredChild };
+      if (
+        measuredChild > COMPACT_SERIAL_NODE_TEST_JOB_SECONDS &&
+        !child.requiresDist &&
+        !child.pretestBuildMode &&
+        patterns.length > 1 &&
+        isRuntimePlacementIncludePatterns(patterns) &&
+        (child.env?.OPENCLAW_VITEST_MAX_WORKERS ?? "2") === "2"
+      ) {
+        // Repartition this measured envelope only; its siblings can have different worker policies.
+        return splitOversizedCompactGroup(
+          { ...child, env: { ...child.env, ...PINNED_COMPACT_GROUP_ENV } },
+          runnerBackend,
+          measuredChild,
+        );
+      }
+      return [{ group: child, seconds: measuredChild }];
     }
     const childWorkers = isAutoReplyReplyGroup(child)
       ? compactEffectiveFileWorkers(child, patterns.length)
@@ -3963,28 +3993,30 @@ function splitOversizedCompactGroup(
             (runnerBackend === "hybrid" ? COMPACT_HYBRID_GROUP_SECONDS_SCALE : 1)) /
             childWorkers,
         );
-    return {
-      group: child,
-      // Round once at the job boundary; per-child rounding can duplicate a build
-      // when many small consumers together still fit one preparation budget.
-      seconds: Math.max(
-        parallelCommands ? commandFileSecondsFloor(patterns, runnerBackend) : 0,
-        legacyCommandTimingKeys[index]
-          ? estimateLegacyCommandStripeSeconds(
-              patterns,
-              legacyCommandTimingKeys[index],
-              runnerBackend,
-            )
-          : 0,
-        projectedSeconds,
-        previousWorkerTimingKeys[index]
-          ? estimateCompactStripeSeconds(
-              { ...group, timing_key: previousWorkerTimingKeys[index] },
-              runnerBackend,
-            )
-          : 0,
-      ),
-    };
+    return [
+      {
+        group: child,
+        // Round once at the job boundary; per-child rounding can duplicate a build
+        // when many small consumers together still fit one preparation budget.
+        seconds: Math.max(
+          parallelCommands ? commandFileSecondsFloor(patterns, runnerBackend) : 0,
+          legacyCommandTimingKeys[index]
+            ? estimateLegacyCommandStripeSeconds(
+                patterns,
+                legacyCommandTimingKeys[index],
+                runnerBackend,
+              )
+            : 0,
+          projectedSeconds,
+          previousWorkerTimingKeys[index]
+            ? estimateCompactStripeSeconds(
+                { ...group, timing_key: previousWorkerTimingKeys[index] },
+                runnerBackend,
+              )
+            : 0,
+        ),
+      },
+    ];
   });
 }
 
@@ -4369,6 +4401,7 @@ function createCompactNodeTestShardBundles(
         ? splitOversizedCompactGroup(
             group,
             options.runnerBackend,
+            0,
             runtimePartition,
             splitHostedToolingTails,
             hostedToolingTailBudgets,
@@ -4483,7 +4516,10 @@ function createCompactNodeTestShardBundles(
               estimateCommandWorkerSeconds(
                 group,
                 seconds,
-                options.runnerBackend === "github" ? 2 : 8,
+                Math.min(
+                  options.runnerBackend === "github" ? 2 : 8,
+                  readPositiveEnvInt("OPENCLAW_VITEST_MAX_WORKERS", group.env ?? {}, 8),
+                ),
                 options.runnerBackend,
               ).seconds,
             )
@@ -5008,7 +5044,10 @@ function createCompactNodeTestShardBundles(
       const adjusted = estimateCommandWorkerSeconds(
         group,
         previousSeconds,
-        workers,
+        Math.min(
+          workers,
+          readPositiveEnvInt("OPENCLAW_VITEST_MAX_WORKERS", group.env ?? {}, workers),
+        ),
         options.runnerBackend,
       );
       savedSeconds += previousSeconds - adjusted.seconds;

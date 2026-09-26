@@ -173,6 +173,8 @@ async function main() {
           }
           afterCutoff ||= Date.parse(job.completed_at) > Date.parse(upper);
           const compactJob = /^checks-node-(?:changed-(?:config-)?)?compact-/u.test(job.name);
+          const extensionJob =
+            /^checks-node-changed-extensions-(?:bundle-\d+|config(?:-\d+)?)$/u.test(job.name);
           const kind =
             source === "release"
               ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
@@ -184,7 +186,7 @@ async function main() {
                   : undefined
                 : source === "main" && job.name.startsWith("checks-ui-e2e (")
                   ? "uiE2e"
-                  : compactJob
+                  : compactJob || extensionJob
                     ? "compact"
                     : undefined;
           if (kind) {

@@ -83,13 +83,19 @@ export function expectRuntimeReleaseInventory({
     plan.flatMap((shard) => shard.groups.flatMap(groupFiles));
   const beforeFiles = files(before);
   const afterFiles = files(after);
+  const timingLineage = (key: string) => {
+    const lineage = [key];
+    for (let split = parseCompactSplitTimingKey(key); split;) {
+      const parent = split.parentShardName;
+      lineage.push(parent);
+      split = parseCompactSplitTimingKey(parent);
+    }
+    return lineage;
+  };
   const fullTimingParents = new Set(
     before
       .flatMap((shard) =>
-        shard.groups.map((group) => {
-          const key = group.timing_key ?? group.shard_name;
-          return parseCompactSplitTimingKey(key)?.parentShardName ?? key;
-        }),
+        shard.groups.flatMap((group) => timingLineage(group.timing_key ?? group.shard_name)),
       )
       // The comparison plan can already omit tooling from mixed owners.
       .filter((parent) => !parent.startsWith("changed-")),
@@ -130,8 +136,11 @@ export function expectRuntimeReleaseInventory({
     for (const group of reduced) {
       expect(group.timing_key, "reduced runtime timing identity").toBeTypeOf("string");
       const timingKey = group.timing_key!;
-      const timingParent = parseCompactSplitTimingKey(timingKey)?.parentShardName ?? timingKey;
-      expect(fullTimingParents.has(timingParent), `${owner}: ${timingParent}`).toBe(false);
+      const lineage = timingLineage(timingKey);
+      for (const parent of lineage) {
+        expect(fullTimingParents.has(parent), `${owner}: ${parent}`).toBe(false);
+      }
+      const timingParent = lineage.at(-1)!;
       expect(
         timingParent.replace(
           /(?:#workers-4|#file-parallel-(?:2|8)|-parallel(?:-2)?(?:-native-serial)?(?:-stripes)?)$/u,

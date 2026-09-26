@@ -29,6 +29,7 @@ import {
   type RuntimePlacementTiming,
 } from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import { createExtensionTestTimingKey } from "../../scripts/lib/extension-test-plan.mts";
 import * as localCheckRuntime from "../../scripts/lib/local-check-runtime.mts";
 import { createCompactSplitTimingGeneration } from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
@@ -1072,6 +1073,121 @@ it.todo("retains todo coverage");
     });
   });
 
+  it.each(["plugin bundle", "plugin singleton", "Doctor"] as const)(
+    "refits complete explicit %s PR work without trusting ordinal or family names",
+    (kind) => {
+      const plugin = kind !== "Doctor";
+      const configs = [
+        plugin
+          ? "test/vitest/vitest.extension-database-workers.config.ts"
+          : "test/vitest/vitest.commands.config.ts",
+      ];
+      const files = plugin
+        ? ["extensions/telegram/src/native-a.test.ts", "extensions/telegram/src/native-b.test.ts"]
+        : ["src/commands/doctor-a.test.ts", "src/commands/doctor-b.test.ts"];
+      const env = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
+      const parent = "changed-agentic-commands-doctor#file-parallel-2";
+      const key = plugin
+        ? createExtensionTestTimingKey(configs[0]!, files, env)!
+        : createCompactSplitTimingGeneration({
+            configs,
+            env,
+            parentShardName: parent,
+            stripes: [files],
+          }).timingKeys[0]!;
+      const runs = [1, 2].map((id) => {
+        const name = plugin ? `changed-extensions-config-${id * 20}` : parent;
+        const descriptor = { configs, includePatterns: files.toReversed(), shard_name: name };
+        const text = [
+          "2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2",
+          ...(kind === "plugin singleton"
+            ? [
+                `2026-08-27T23:00:00Z OPENCLAW_VITEST_SHARD_NAME: ${name}`,
+                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_CONFIGS_JSON: ${JSON.stringify(configs, null, 2)}`,
+                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${JSON.stringify(files, null, 2)}`,
+                "2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_ENV_JSON: null",
+              ]
+            : [
+                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
+              ]),
+          compactLog(id === 1 ? 180 : 220, name),
+          // Nested tests cannot overwrite their containing job's resource/worker provenance.
+          "2026-08-27T23:04:00Z [shard:fixture] OPENCLAW_VITEST_MAX_WORKERS: 8",
+          `2026-08-27T23:04:01Z [shard:fixture] [shard:${name}] begin`,
+          `2026-08-27T23:59:00Z [shard:fixture] [shard:${name}] end (exit 0)`,
+          `2026-08-27T23:04:01Z [shard:fixture] job\tstep\t2026-08-27T23:04:01Z [shard:${name}] begin`,
+          `2026-08-27T23:59:00Z [shard:fixture] job\tstep\t2026-08-27T23:59:00Z [shard:${name}] end (exit 0)`,
+        ].join("\n");
+        return Object.assign(
+          timingRun(id, [
+            { kind: "compact" as const, labels: ["blacksmith-8vcpu-ubuntu-2404"], text },
+          ]),
+          { completeInventory: false, pullRequestMergeRef: true },
+        );
+      });
+      expect(refitTestTimings([runs[0]!, runs[0]!]).timings.compactGroupSeconds.blacksmith).toEqual(
+        {},
+      );
+      const result = refitTestTimings(runs);
+      expect(result.timings.compactGroupSeconds.blacksmith).toEqual({ [key]: 200 });
+      expect(result.timings.runtimePlacementTimings.blacksmith).toEqual([]);
+      if (plugin) {
+        for (const run of runs) {
+          run.completeInventory = true;
+          run.pullRequestMergeRef = false;
+        }
+        expect(refitTestTimings(runs).timings.compactGroupSeconds.blacksmith).toEqual({
+          [key]: 200,
+        });
+      }
+    },
+  );
+
+  it.each([
+    "missing workers",
+    "duplicate descriptor",
+    "glob",
+    "duplicate file",
+    "native shard",
+    "partial runtime",
+    "mismatched workers",
+  ])("rejects unsplit PR timing with %s evidence", (reason) => {
+    const key =
+      reason === "mismatched workers" ? "doctor#file-parallel-2" : "changed-extensions-config-1";
+    const group = {
+      configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+      includePatterns:
+        reason === "glob"
+          ? ["extensions/telegram/*.test.ts"]
+          : ["extensions/telegram/native.test.ts"],
+      shard_name: key,
+      ...(reason === "native shard"
+        ? { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--shard=1/2"]' } }
+        : {}),
+    };
+    if (reason === "duplicate file") {
+      group.includePatterns.push(group.includePatterns[0]!);
+    }
+    const text = [
+      ...(reason === "missing workers"
+        ? []
+        : [
+            `2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: ${reason === "mismatched workers" ? 8 : 2}`,
+          ]),
+      `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(reason === "duplicate descriptor" ? [group, group] : [group])}`,
+      compactLog(200, reason === "partial runtime" ? `node-subset:${key}` : key),
+    ].join("\n");
+    const runs = [1, 2].map((id) =>
+      Object.assign(
+        timingRun(id, [
+          { kind: "compact" as const, labels: ["blacksmith-8vcpu-ubuntu-2404"], text },
+        ]),
+        { completeInventory: false, pullRequestMergeRef: true },
+      ),
+    );
+    expect(refitTestTimings(runs).timings.compactGroupSeconds.blacksmith).toEqual({});
+  });
+
   it("keeps mixed worker ceilings out of compact weights and keys runtime observations by their inherited ceiling", () => {
     const descriptor = {
       configs: ["test/vitest/reader.config.ts"],
@@ -1975,6 +2091,9 @@ describe("CI timing sampler provenance", () => {
       parentShardName: "agentic-gateway-methods-hosted-2",
       stripes: [["src/gateway/selected.test.ts"]],
     }).timingKeys[0]!;
+    const extensionConfig = "test/vitest/vitest.extension-database-workers.config.ts";
+    const extensionFiles = ["extensions/telegram/src/native.test.ts"];
+    const extensionKey = createExtensionTestTimingKey(extensionConfig, extensionFiles)!;
     withSamplerFixture(
       {
         baseline: retained,
@@ -2004,6 +2123,25 @@ describe("CI timing sampler provenance", () => {
               labels: ["ubuntu-24.04"],
               log: compactLog(600, gatewayGroup),
             }),
+            samplerJob(id * 10 + 4, id, {
+              name:
+                id === 4
+                  ? "checks-node-changed-extensions-config"
+                  : `checks-node-changed-extensions-bundle-${id}`,
+              log: [
+                "2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2",
+                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(
+                  [
+                    {
+                      configs: [extensionConfig],
+                      includePatterns: extensionFiles,
+                      shard_name: `changed-extensions-config-${id}`,
+                    },
+                  ],
+                )}`,
+                compactLog(160 + id * 10, `changed-extensions-config-${id}`),
+              ].join("\n"),
+            }),
           ]),
         ],
       },
@@ -2020,6 +2158,7 @@ describe("CI timing sampler provenance", () => {
           blacksmith: {
             ...retained.compactGroupSeconds.blacksmith,
             [gatewayGroup]: 900,
+            [extensionKey]: 200,
           },
           github: { ...retained.compactGroupSeconds.github, [gatewayGroup]: 600 },
         });
@@ -2043,6 +2182,9 @@ describe("CI timing sampler provenance", () => {
         ).toBe(false);
         expect(
           fixture.requests().filter((args) => /\/jobs\/(?:31|41|51)\/logs$/u.test(args[1] ?? "")),
+        ).toHaveLength(3);
+        expect(
+          fixture.requests().filter((args) => /\/jobs\/(?:34|44|54)\/logs$/u.test(args[1] ?? "")),
         ).toHaveLength(3);
       },
     );

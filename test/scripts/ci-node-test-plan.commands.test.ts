@@ -41,7 +41,7 @@ describe("command CI ownership and parallel timing", () => {
         const roomy = job.runner === "blacksmith-32vcpu-ubuntu-2404";
         vi.spyOn(os, "availableParallelism").mockReturnValue(roomy ? 8 : 2);
         vi.spyOn(os, "totalmem").mockReturnValue((roomy ? 31 : 8) * 1024 ** 3);
-        const expected =
+        const jobWorkers =
           runnerBackend !== "github" &&
           roomy &&
           job.planConcurrency === 1 &&
@@ -69,6 +69,10 @@ describe("command CI ownership and parallel timing", () => {
           }),
         ).resolves.toBe(0);
         for (const group of commands) {
+          const expected = Math.min(
+            jobWorkers,
+            Number(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? jobWorkers),
+          );
           expect(seen.get(group.shard_name), group.shard_name).toBe(String(expected));
           expect(group.timing_key).toContain(`#file-parallel-${expected}`);
           if (expected === 8) {
@@ -225,6 +229,59 @@ describe("command CI ownership and parallel timing", () => {
       expect(
         affordable.groups.some((group) => group.shard_name === "agentic-gateway-server-isolated"),
       ).toBe(true);
+      const priorObservations = observations;
+      const parallelGeneration = createCompactSplitTimingGeneration({
+        configs: [config],
+        env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+        parentShardName: timingKey,
+        stripes: [files],
+      });
+      observations = { ...observations, [parallelGeneration.timingKeys[0]!]: 200 };
+      const measured = create();
+      const measuredJobs = measured.filter((job) =>
+        job.groups.some((group) => group.shard_name.startsWith(`${owner}-hosted-`)),
+      );
+      const measuredGroups = measuredJobs.flatMap((job) =>
+        job.groups.filter((group) => group.shard_name.startsWith(`${owner}-hosted-`)),
+      );
+      expect(measuredGroups.flatMap((group) => group.includePatterns!).toSorted()).toEqual(files);
+      expect(measuredGroups).toHaveLength(2);
+      expect(
+        measuredJobs.some(
+          (job) => job.runner === "blacksmith-32vcpu-ubuntu-2404" && job.planConcurrency === 1,
+        ),
+      ).toBe(true);
+      expect(totalSeconds(measured)).toBe(1280);
+      vi.spyOn(os, "availableParallelism").mockReturnValue(8);
+      vi.spyOn(os, "totalmem").mockReturnValue(31 * 1024 ** 3);
+      for (const job of measuredJobs) {
+        const seen = new Map<string, string | undefined>();
+        await expect(
+          runShardPlans(
+            resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(job.groups) }),
+            {
+              env: {
+                CI: "true",
+                RUNNER_ENVIRONMENT: "self-hosted",
+                OPENCLAW_VITEST_MAX_WORKERS: "8",
+                OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: String(job.planConcurrency),
+                OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(job.env ?? {}),
+              },
+              scratchDir: tempDirs.make("measured-command-workers-"),
+              runChild: async (_args, env, label) => {
+                seen.set(label, env.OPENCLAW_VITEST_MAX_WORKERS);
+                return 0;
+              },
+            },
+          ),
+        ).resolves.toBe(0);
+        for (const group of job.groups.filter((entry) => measuredGroups.includes(entry))) {
+          expect(seen.get(group.shard_name)).toBe("2");
+          expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+          expect(group.timing_key).toContain("#file-parallel-2#selector-");
+        }
+      }
+      observations = priorObservations;
       observations = { ...observations, [`${owner}#file-parallel-8`]: 250 };
       const admission = create();
       const commandJob = admission.find((job) =>
