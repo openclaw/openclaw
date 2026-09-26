@@ -68,8 +68,8 @@ describe("RetrySupervisor", () => {
   it("can unref the scheduled timer", async () => {
     const controller = new AbortController();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const sleeper = sleepWithAbort(60_000, controller.signal, { ref: false });
     try {
-      const sleeper = sleepWithAbort(60_000, controller.signal, { ref: false });
       const timer = setTimeoutSpy.mock.results.at(-1)?.value as NodeJS.Timeout | undefined;
 
       expect(timer?.hasRef()).toBe(false);
@@ -77,6 +77,8 @@ describe("RetrySupervisor", () => {
       await expect(sleeper).rejects.toMatchObject({ name: "AbortError", message: "aborted" });
     } finally {
       controller.abort();
+      // Observe the owned sleep even when the timer assertion fails first.
+      await sleeper.catch(() => {});
       setTimeoutSpy.mockRestore();
     }
   });

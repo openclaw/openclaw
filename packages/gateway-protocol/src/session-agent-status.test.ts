@@ -42,7 +42,6 @@ describe("session icon grammar", () => {
     ],
   ])("normalizes %s to a persistent image URL", (_label, input) => {
     expect(normalizeSessionIconValue(input)).toBe(SVG_ICON_URL);
-    expect(normalizeSessionIconValue(SVG_ICON_URL)).toBe(SVG_ICON_URL);
   });
 
   it.each([

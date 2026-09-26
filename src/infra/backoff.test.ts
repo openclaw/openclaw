@@ -60,10 +60,10 @@ describe("backoff helpers", () => {
     const controller = new AbortController();
     const addEventListenerSpy = vi.spyOn(controller.signal, "addEventListener");
     const removeEventListenerSpy = vi.spyOn(controller.signal, "removeEventListener");
+    const sleeper = sleepWithAbort(50, controller.signal);
+    const onSettled = vi.fn();
+    const settledSleep = sleeper.then(onSettled);
     try {
-      const sleeper = sleepWithAbort(50, controller.signal);
-      const onSettled = vi.fn();
-      void sleeper.then(onSettled);
       const abortListener = addEventListenerSpy.mock.calls[0]?.[1];
 
       expect(abortListener).toBeDefined();
@@ -76,6 +76,9 @@ describe("backoff helpers", () => {
       expect(removeEventListenerSpy).toHaveBeenCalledWith("abort", abortListener);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
+      // Join the sleep and its observer before restoring the fake clock.
+      controller.abort();
+      await Promise.allSettled([sleeper, settledSleep]);
       vi.restoreAllMocks();
       vi.useRealTimers();
     }
@@ -86,9 +89,9 @@ describe("backoff helpers", () => {
     const controller = new AbortController();
     const addEventListenerSpy = vi.spyOn(controller.signal, "addEventListener");
     const removeEventListenerSpy = vi.spyOn(controller.signal, "removeEventListener");
+    const sleeper = sleepWithAbort(50, controller.signal);
+    const rejectedSleep = expectAbortedSleep(sleeper);
     try {
-      const sleeper = sleepWithAbort(50, controller.signal);
-      const rejectedSleep = expectAbortedSleep(sleeper);
       const abortListener = addEventListenerSpy.mock.calls[0]?.[1];
 
       expect(abortListener).toBeDefined();
@@ -100,6 +103,9 @@ describe("backoff helpers", () => {
       expect(removeEventListenerSpy).toHaveBeenCalledWith("abort", abortListener);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
+      // A pre-abort assertion failure still owns the rejection observer.
+      controller.abort();
+      await Promise.allSettled([sleeper, rejectedSleep]);
       vi.restoreAllMocks();
       vi.useRealTimers();
     }
@@ -108,16 +114,20 @@ describe("backoff helpers", () => {
   it("clamps oversized sleep durations before scheduling", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const sleeper = sleepWithAbort(Number.MAX_SAFE_INTEGER);
     try {
-      const sleeper = sleepWithAbort(Number.MAX_SAFE_INTEGER);
-
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
 
       await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
       await expect(sleeper).resolves.toBeUndefined();
     } finally {
-      setTimeoutSpy.mockRestore();
-      vi.useRealTimers();
+      try {
+        // Keep the no-signal sleep owned if the scheduling assertion fails.
+        await Promise.all([vi.runOnlyPendingTimersAsync(), sleeper.catch(() => {})]);
+      } finally {
+        setTimeoutSpy.mockRestore();
+        vi.useRealTimers();
+      }
     }
   });
 

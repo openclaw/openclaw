@@ -51,7 +51,7 @@ describe("media-generation catalog", () => {
     expect(
       listMediaGenerationProviderModels({
         defaultModel: "video-default",
-        models: ["video-default", "video-pro"],
+        models: [" video-pro ", "video-default", "video-pro", "  "],
       }),
     ).toEqual(["video-default", "video-pro"]);
   });

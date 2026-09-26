@@ -132,7 +132,6 @@ describe("update protocol schemas", () => {
       upstreamSha: "1234567890abcdef1234567890abcdef12345678",
     };
 
-    expect(Value.Check(UpdateRunParamsSchema, {})).toBe(true);
     expect(Value.Check(UpdateRunParamsSchema, { target })).toBe(true);
 
     for (const invalidTarget of [

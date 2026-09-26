@@ -4,7 +4,7 @@ import { validateSessionsAssignOwnerParams } from "../index.js";
 import { SessionRowSchema } from "./sessions-row.js";
 
 describe("SessionRowSchema", () => {
-  it("round-trips optional sharing fields", () => {
+  it("accepts optional sharing fields", () => {
     const row = {
       key: "agent:main:main",
       kind: "global",
@@ -40,21 +40,20 @@ describe("SessionRowSchema", () => {
       sandboxMode: "off",
       sessionRoot: "/workspace/project",
     };
-    const roundTripped = structuredClone(row);
 
     expect(SessionRowSchema.properties.activeLeafEntryId).toBeDefined();
     expect(SessionRowSchema.properties.activeModel).toBeDefined();
     expect(SessionRowSchema.properties.activeModelProvider).toBeDefined();
     expect(SessionRowSchema.properties.lastRunId).toBeDefined();
     expect(SessionRowSchema.properties.parentSessionId).toBeDefined();
-    expect(Value.Check(SessionRowSchema, roundTripped)).toBe(true);
+    expect(Value.Check(SessionRowSchema, row)).toBe(true);
     expect(Value.Check(SessionRowSchema, { key: "agent:main:main", kind: "global" })).toBe(true);
-    expect(Value.Check(SessionRowSchema, { ...roundTripped, parentSessionId: 42 })).toBe(false);
-    expect(Value.Check(SessionRowSchema, { ...roundTripped, sandboxMode: "required" })).toBe(false);
-    expect(Value.Check(SessionRowSchema, { ...roundTripped, activeLeafEntryId: null })).toBe(true);
+    expect(Value.Check(SessionRowSchema, { ...row, parentSessionId: 42 })).toBe(false);
+    expect(Value.Check(SessionRowSchema, { ...row, sandboxMode: "required" })).toBe(false);
+    expect(Value.Check(SessionRowSchema, { ...row, activeLeafEntryId: null })).toBe(true);
     expect(
       Value.Check(SessionRowSchema, {
-        ...roundTripped,
+        ...row,
         participants: Array.from({ length: 5 }, (_, index) => ({
           identity: { type: "profile", id: `profile-${index}` },
         })),
@@ -62,7 +61,7 @@ describe("SessionRowSchema", () => {
     ).toBe(false);
     expect(
       Value.Check(SessionRowSchema, {
-        ...roundTripped,
+        ...row,
         expandedParticipants: Array.from({ length: 32 }, (_, index) => ({
           identity: { type: "profile", id: `profile-${index}` },
         })),
@@ -70,39 +69,16 @@ describe("SessionRowSchema", () => {
     ).toBe(true);
     expect(
       Value.Check(SessionRowSchema, {
-        ...roundTripped,
+        ...row,
         expandedParticipants: Array.from({ length: 33 }, (_, index) => ({
           identity: { type: "profile", id: `profile-${index}` },
         })),
       }),
     ).toBe(false);
-    expect(roundTripped).toMatchObject({
-      activeLeafEntryId: "leaf-rendered",
-      snapshotAt: 200,
-      lastRunId: "run-settled",
-      parentSessionKey: "agent:main:dashboard:parent",
-      parentSessionId: "sess-parent",
-      createdActor: { avatarUrl: "/api/users/profile-ada/avatar?v=7" },
-      participantCount: 2,
-      archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
-      archiveReason: "manual",
-      channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
-      visibility: "suggest",
-      sharingRole: "owner",
-      restartRecoveryStatus: "tombstoned",
-      permissionMode: "workspace",
-      sessionRoot: "/workspace/project",
-    });
-    expect(Value.Check(SessionRowSchema, { ...roundTripped, permissionMode: "unrestricted" })).toBe(
-      false,
-    );
-    expect(Value.Check(SessionRowSchema, { ...roundTripped, lastRunId: "" })).toBe(false);
-    expect(Value.Check(SessionRowSchema, { ...roundTripped, archiveReason: "age-retention" })).toBe(
-      true,
-    );
-    expect(Value.Check(SessionRowSchema, { ...roundTripped, archiveReason: "unknown" })).toBe(
-      false,
-    );
+    expect(Value.Check(SessionRowSchema, { ...row, permissionMode: "unrestricted" })).toBe(false);
+    expect(Value.Check(SessionRowSchema, { ...row, lastRunId: "" })).toBe(false);
+    expect(Value.Check(SessionRowSchema, { ...row, archiveReason: "age-retention" })).toBe(true);
+    expect(Value.Check(SessionRowSchema, { ...row, archiveReason: "unknown" })).toBe(false);
   });
 
   it("keeps sessions.assignOwner target actors closed and non-empty", () => {

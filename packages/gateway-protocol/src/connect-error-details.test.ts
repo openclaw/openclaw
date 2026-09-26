@@ -296,7 +296,6 @@ describe("classifyGatewayConnectFailure", () => {
     });
 
     expect(cloudflare.kind).toBe("identity-proxy");
-    expect(cloudflare.kind).not.toBe("unreachable");
     expect(cloudflare.remediation).toContain("Cloudflare Access");
     expect(generic.remediation).not.toContain("Cloudflare");
   });

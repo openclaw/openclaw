@@ -1,5 +1,5 @@
 import type { TSchema } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { composeProtocolSchemaFragments } from "./protocol-schema-composer.js";
 
 describe("composeProtocolSchemaFragments", () => {
@@ -8,6 +8,7 @@ describe("composeProtocolSchemaFragments", () => {
     const second = {} as TSchema;
     const registry = composeProtocolSchemaFragments([{ First: first }, { Second: second }]);
 
+    expectTypeOf<keyof typeof registry>().toEqualTypeOf<"First" | "Second">();
     expect(Object.keys(registry)).toEqual(["First", "Second"]);
     expect(Object.is(registry.First, first)).toBe(true);
     expect(Object.is(registry.Second, second)).toBe(true);
@@ -18,11 +19,5 @@ describe("composeProtocolSchemaFragments", () => {
     expect(() => composeProtocolSchemaFragments([{ Shared: schema }, { Shared: schema }])).toThrow(
       "Duplicate protocol schema key: Shared",
     );
-  });
-
-  it("retains literal registry keys", () => {
-    const registry = composeProtocolSchemaFragments([{ RequestFrame: {} as TSchema }]);
-    const key: keyof typeof registry = "RequestFrame";
-    expect(key).toBe("RequestFrame");
   });
 });

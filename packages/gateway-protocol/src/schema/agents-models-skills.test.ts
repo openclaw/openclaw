@@ -749,21 +749,20 @@ describe("SkillProposalEvaluationSchema", () => {
     expectAccepted(SkillsProposalEvaluateResultSchema, { record, evaluation });
   });
 
-  it("rejects non-primitive metrics and unknown decisions", () => {
-    expectRejected(SkillProposalEvaluationSchema, {
-      ...evaluation,
-      outcomes: [
-        {
-          ...completedOutcome,
-          result: {
-            findings: [],
-            metrics: { nested: { score: 1 } },
-            decision: "approve",
+  it.each([{ metrics: { nested: { score: 1 } } }, { decision: "approve" }])(
+    "rejects invalid evaluator result %j",
+    (invalidResult) => {
+      expectRejected(SkillProposalEvaluationSchema, {
+        ...evaluation,
+        outcomes: [
+          {
+            ...completedOutcome,
+            result: { ...completedOutcome.result, ...invalidResult },
           },
-        },
-      ],
-    });
-  });
+        ],
+      });
+    },
+  );
 
   it.each(["", "x".repeat(129)])("rejects invalid metric key %j", (key) => {
     expectRejected(SkillProposalEvaluationSchema, {

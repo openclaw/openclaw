@@ -58,23 +58,6 @@ describe("postJson", () => {
     expect(result).toEqual({ data: [{ embedding: [1, 2] }] });
   });
 
-  it("forwards abort signals to the remote HTTP request", async () => {
-    const controller = new AbortController();
-    remoteHttpMock.mockImplementationOnce(async (params) => {
-      expect(params.signal).toBe(controller.signal);
-      return await params.onResponse(jsonResponse({ ok: true }));
-    });
-
-    await postJson({
-      url: "https://memory.example/v1/post",
-      headers: {},
-      body: {},
-      signal: controller.signal,
-      errorPrefix: "post failed",
-      parse: (payload) => payload,
-    });
-  });
-
   it.each([200, 429])("aborts response body reads for HTTP %s", async (status) => {
     const fixture = createPendingResponse({ status });
     const controller = new AbortController();
@@ -98,6 +81,7 @@ describe("postJson", () => {
     try {
       await withTestTimeout(fixture.readStarted, 1_000, "POST JSON read did not start");
       expect(fixture.response.body?.locked).toBe(true);
+      expect(remoteHttpMock.mock.calls[0]?.[0].signal).toBe(controller.signal);
       controller.abort(expected);
 
       await expect(withTestTimeout(settled, 1_000, "POST JSON abort did not settle")).resolves.toBe(
