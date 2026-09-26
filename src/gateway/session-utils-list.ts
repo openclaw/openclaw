@@ -359,7 +359,11 @@ export async function prepareSessionSearchIdentityNames(
 // One filter set per resident owner; never retain viewer decisions or time-dependent predicates.
 const sessionListCandidates = new WeakMap<
   SessionEntryPair[],
-  { key: string; entries: SessionEntryPair[] }
+  {
+    key: string;
+    entries: SessionEntryPair[];
+    orders: Map<NonNullable<SessionsListParams["sortBy"]>, SessionEntryPair[]>;
+  }
 >();
 
 /** Shared synchronous membership policy for list pages and full-roster transcript search. */
@@ -399,24 +403,26 @@ export function prepareProjectedSessionList(params: {
   // Person references resolve against the full visible roster before candidate filtering.
   if (!opts.spawnedBy && !opts.involvingProfileId) {
     const candidateOptions = projectSessionListCandidateOptions(opts);
-    const key = JSON.stringify([exactKey, candidateOptions, opts.sortBy]);
+    const key = JSON.stringify([exactKey, candidateOptions]);
     let cached = sessionListCandidates.get(prepared.entries);
     if (cached?.key !== key) {
       cached = {
         key,
         entries: runSynchronousWork(
-          sortAndLimitSessionEntries(
-            runSynchronousWork(
-              filterSessionCandidateEntries({ ...prepared, opts: candidateOptions }),
-            ),
-            undefined,
-            opts.sortBy,
-          ),
+          filterSessionCandidateEntries({ ...prepared, opts: candidateOptions }),
         ),
+        orders: new Map(),
       };
       sessionListCandidates.set(prepared.entries, cached);
     }
-    candidates = cached.entries;
+    const sortBy = opts.sortBy ?? "updatedAt";
+    candidates = cached.orders.get(sortBy);
+    if (!candidates) {
+      candidates = runSynchronousWork(
+        sortAndLimitSessionEntries(cached.entries, undefined, sortBy),
+      );
+      cached.orders.set(sortBy, candidates);
+    }
   }
   const filters: SessionListFilterParams = {
     ...prepared,
