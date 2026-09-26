@@ -140,6 +140,11 @@ function parsePendingOperation(value: unknown): SystemAgentOperation | null {
         return null;
       }
       break;
+    case "config-unset":
+      if (!hasExactKeys(operation, ["kind", "path"]) || !isNonEmptyString(operation.path)) {
+        return null;
+      }
+      break;
     case "config-set":
       if (
         !hasExactKeys(operation, ["kind", "path", "value"]) ||
