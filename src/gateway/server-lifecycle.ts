@@ -224,6 +224,7 @@ export async function prepareGatewayLifecycle(params: {
     hooksConfig: initialHooksConfig,
     hookClientIpConfig: initialHookClientIpConfig,
     cronState: createLazyGatewayCronState({
+      scheduler: runtime.scheduler,
       cfg: cfgAtStart,
       deps,
       broadcast,

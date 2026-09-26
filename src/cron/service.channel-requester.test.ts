@@ -21,6 +21,7 @@ import {
   resolveMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
 } from "../gateway/mcp-grant-store.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { loadCronStore } from "./store.js";
@@ -32,6 +33,8 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 function createCronService(storePath: string) {
   return new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled: false,
     log: logger,

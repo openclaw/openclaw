@@ -1,6 +1,7 @@
 // Cron service delivery plan tests cover target selection for scheduled job output.
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import {
   createCronStoreHarness,
@@ -33,6 +34,7 @@ async function withCronService(
   await withCronServiceForTest(
     {
       makeStorePath,
+      scheduler: createTestGatewayScheduler(),
       logger: noopLogger,
       cronEnabled: false,
       runIsolatedAgentJob: params.runIsolatedAgentJob,

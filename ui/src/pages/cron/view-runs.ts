@@ -411,7 +411,7 @@ function renderRun(
   entry: CronRunLogEntry,
   formatTimestamp: ReturnType<typeof createMsFormatter>,
   highlightedRunId?: string | null,
-  onViewRunTranscript?: (entry: CronRunLogEntry) => void,
+  onViewRunTranscript?: CronProps["onViewRunTranscript"],
 ) {
   const status = runStatusLabel(entry.status ?? "unknown", entry.completionStatus);
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");
@@ -469,10 +469,17 @@ function renderRun(
               : nothing
           }
           ${
-            entry.sessionKey
+            entry.runId || entry.runAtMs !== undefined || entry.sessionKey
               ? html`<div>
-                  <button class="btn btn--sm" @click=${() => onViewRunTranscript?.(entry)}>
-                    ${t("tasksPage.viewTranscript")}
+                  <button
+                    class="btn btn--sm"
+                    @click=${(event: MouseEvent) => {
+                      if (event.currentTarget instanceof HTMLButtonElement) {
+                        onViewRunTranscript?.(entry, event.currentTarget);
+                      }
+                    }}
+                  >
+                    ${t("cron.runEntry.viewTranscript")}
                   </button>
                 </div>`
               : nothing

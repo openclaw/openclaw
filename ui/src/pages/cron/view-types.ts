@@ -102,5 +102,5 @@ export type CronProps = {
     cronRunsQuery?: string;
     cronRunsSortDir?: CronSortDir;
   }) => void | Promise<void>;
-  onViewRunTranscript?: (entry: CronRunLogEntry) => void;
+  onViewRunTranscript?: (entry: CronRunLogEntry, trigger: HTMLButtonElement) => void;
 };

@@ -8,6 +8,7 @@ import { createTestPluginApi } from "../../src/plugin-sdk/plugin-test-api.js";
 import { createPluginRuntimeMock } from "../../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry.js";
 import { startPluginServices, type PluginServicesHandle } from "../../src/plugins/services.js";
+import { createTestGatewayScheduler } from "../../src/test-utils/gateway-scheduler-clock.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "memory-dreaming-cron-" });
 const services = new Set<PluginServicesHandle>();
@@ -47,6 +48,8 @@ function registerDreaming(config: OpenClawConfig, logger: ReturnType<typeof crea
 async function createScheduler(cronEnabled: boolean, owner?: string) {
   const { storePath } = await makeStorePath();
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled,
     resolveDefaultAgentId: () => owner,
