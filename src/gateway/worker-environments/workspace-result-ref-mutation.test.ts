@@ -7,7 +7,10 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "../../agents/worktrees/service.js";
 import * as processExec from "../../process/exec.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   cleanupWorkerWorkspaceResultRef,
   deleteStagedWorkerWorkspaceResult,
@@ -21,7 +24,8 @@ import {
 
 const tempDirs = createTempDirTracker();
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   closeOpenClawStateDatabaseForTest();
@@ -46,7 +50,44 @@ async function repository() {
   return root;
 }
 
-it("shares ref serialization and deferred retention between snapshots and result recovery", async () => {
+it("shares ref serialization and deferred retention between snapshots and result recovery", async (ctx) => {
+  let phase = "repositories";
+  let resultDiscoveries = 0;
+  let reported = false;
+  const settlements = { gc: "not_started", move: "not_started", cleanup: "not_started" };
+  const commands: Array<{
+    verb: "update-ref" | "common-dir";
+    root: "subject" | "linked" | "other" | "unknown";
+    status: "pending" | "settled" | "rejected";
+    termination?: processExec.SpawnResult["termination"];
+    code?: number | null;
+  }> = [];
+  const report = () => {
+    if (reported) {
+      return;
+    }
+    reported = true;
+    console.error(
+      "workspace-ref-phase",
+      JSON.stringify({ phase, resultDiscoveries, settlements, commands }),
+    );
+  };
+  // Capture the stalled phase before timeout cleanup changes the observed owners.
+  ctx.signal.addEventListener("abort", report, { once: true });
+  ctx.onTestFailed(report);
+  ctx.onTestFinished(() => ctx.signal.removeEventListener("abort", report));
+  const observe = <T>(owner: keyof typeof settlements, work: Promise<T>): Promise<T> => {
+    settlements[owner] = "pending";
+    void work.then(
+      () => {
+        settlements[owner] = "fulfilled";
+      },
+      () => {
+        settlements[owner] = "rejected";
+      },
+    );
+    return work;
+  };
   vi.stubEnv("GIT_COMMON_DIR", undefined);
   const root = await repository();
   const other = await repository();
@@ -55,9 +96,13 @@ it("shares ref serialization and deferred retention between snapshots and result
     env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
     now: () => now,
   });
+  phase = "create";
   const worktree = await service.create({ repoRoot: root, name: "snapshot", baseRef: "HEAD" });
+  phase = "remove";
   const removed = await service.remove({ id: worktree.id, reason: "test" });
+  phase = "ref_setup";
   const snapshotRef = expectDefined(removed.snapshotRef, "removed worktree snapshot");
+  const snapshotHead = await requireGit(root, ["rev-parse", `${snapshotRef}^{commit}`]);
   const linked = path.join(root, "linked");
   await requireGit(root, ["worktree", "add", "--detach", linked, "HEAD"]);
   const stagedResultRef = workerWorkspaceResultRef("queued-result");
@@ -75,11 +120,37 @@ it("shares ref serialization and deferred retention between snapshots and result
   const started = createDeferred();
   const release = createDeferred();
   const discovered = createDeferred();
-  let resultDiscoveries = 0;
   const mutations: string[][] = [];
   const run = processExec.runCommandWithTimeout;
   vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
     const args = argv.slice(argv.indexOf("-C") + 2);
+    const commandRoot = argv[argv.indexOf("-C") + 1];
+    const verb =
+      args[0] === "update-ref"
+        ? "update-ref"
+        : args[0] === "rev-parse" && args[1] === "--git-common-dir"
+          ? "common-dir"
+          : undefined;
+    const receipt: (typeof commands)[number] | undefined = verb
+      ? {
+          verb,
+          root:
+            commandRoot === root
+              ? "subject"
+              : commandRoot === linked
+                ? "linked"
+                : commandRoot === other
+                  ? "other"
+                  : "unknown",
+          status: "pending",
+        }
+      : undefined;
+    if (receipt) {
+      if (commands.length === 8) {
+        commands.shift();
+      }
+      commands.push(receipt);
+    }
     if (args[0] === "update-ref" && argv[argv.indexOf("-C") + 1] !== other) {
       mutations.push(args);
       if (args[1] === "-d" && args[2] === snapshotRef) {
@@ -87,7 +158,20 @@ it("shares ref serialization and deferred retention between snapshots and result
         await release.promise;
       }
     }
-    const result = await run(argv, options);
+    let result: processExec.SpawnResult;
+    try {
+      result = await run(argv, options);
+    } catch (error) {
+      if (receipt) {
+        receipt.status = "rejected";
+      }
+      throw error;
+    }
+    if (receipt) {
+      receipt.status = "settled";
+      receipt.termination = result.termination;
+      receipt.code = result.code;
+    }
     if (
       argv[argv.indexOf("-C") + 1] === linked &&
       args[0] === "rev-parse" &&
@@ -98,34 +182,45 @@ it("shares ref serialization and deferred retention between snapshots and result
     }
     return result;
   });
-  const pruning = service.gc();
+  phase = "gc_admission";
+  const pruning = observe("gc", service.gc());
   let move: Promise<string> | undefined;
   let cleanup: Promise<void> | undefined;
   try {
     await started.promise;
-    move = moveStagedWorkerWorkspaceResultToCleanup({ root: linked, stagedResultRef });
-    cleanup = deleteWorkerWorkspaceResultCleanupRefs({
-      root: linked,
-      retainedRefs: readRetainedRefs,
-    });
+    phase = "ref_discovery";
+    move = observe(
+      "move",
+      moveStagedWorkerWorkspaceResultToCleanup({ root: linked, stagedResultRef }),
+    );
+    cleanup = observe(
+      "cleanup",
+      deleteWorkerWorkspaceResultCleanupRefs({
+        root: linked,
+        retainedRefs: readRetainedRefs,
+      }),
+    );
     // Both writers must capture their environment before the redirect below.
     await discovered.promise;
+    phase = "independent_write";
     // An independent full ref operation must progress while this repository's
     // writer is parked; a quick read alone can outrun the queued caller's discovery.
     await moveStagedWorkerWorkspaceResultToCleanup({ root: other, stagedResultRef });
     await expect(hasWorkerWorkspaceResultRef({ root: linked, stagedResultRef })).resolves.toBe(
       true,
     );
-    expect(mutations).toEqual([["update-ref", "-d", snapshotRef]]);
+    expect(mutations).toEqual([["update-ref", "-d", snapshotRef, snapshotHead]]);
     expect(readRetainedRefs).not.toHaveBeenCalled();
     // A queued result writer must not adopt a later repository redirect.
     vi.stubEnv("GIT_COMMON_DIR", path.join(other, ".git"));
   } finally {
+    phase = "release_join";
     retainedRefs.add(retainedRef);
     release.resolve();
     await Promise.allSettled([pruning, ...(move ? [move] : []), ...(cleanup ? [cleanup] : [])]);
     vi.stubEnv("GIT_COMMON_DIR", undefined);
   }
+  phase = "postconditions";
   await cleanup;
   expect(readRetainedRefs).toHaveBeenCalledOnce();
   await expect(hasWorkerWorkspaceResultRef({ root, stagedResultRef: retainedRef })).resolves.toBe(

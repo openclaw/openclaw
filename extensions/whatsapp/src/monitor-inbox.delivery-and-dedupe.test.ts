@@ -1,11 +1,15 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import { observeChannelIngressQueueWrite } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearWhatsAppApprovalReactionTargetsForTest,
   registerWhatsAppApprovalReactionTarget,
 } from "./approval-reactions.js";
-import { createWhatsAppDurableInboundQueue } from "./inbound/durable-receive.js";
+import {
+  createWhatsAppDurableInboundQueue,
+  type WhatsAppDurableInboundQueue,
+} from "./inbound/durable-receive.js";
 import { resolveWhatsAppIngressLifecycle } from "./inbound/ingress-lifecycle.js";
 import type { WebInboundMessage } from "./inbound/types.js";
 import {
@@ -29,6 +33,57 @@ vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: approvalResolver,
 }));
 
+async function withRetryClock(run: () => Promise<void>) {
+  // Drain milestones use real setImmediate; only retry clocks and timers advance virtually.
+  vi.useFakeTimers({
+    toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
+  try {
+    await run();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+function observeRetryRelease(queue: WhatsAppDurableInboundQueue) {
+  const persisted = createDeferred<boolean>();
+  const release = queue.release.bind(queue);
+  const spy = vi.spyOn(queue, "release").mockImplementation(async (claim, options) => {
+    const committed = await release(claim, options);
+    if (options?.lastError !== undefined) {
+      persisted.resolve(committed);
+    }
+    return committed;
+  });
+  return { persisted: persisted.promise, restore: () => spy.mockRestore() };
+}
+
+async function waitForPersistedRetry(
+  queue: WhatsAppDurableInboundQueue,
+  persisted: Promise<boolean>,
+  lastError: string,
+) {
+  expect(await persisted).toBe(true);
+  await waitForInboundWorkDrained();
+  const pending = await queue.listPending({ limit: "all" });
+  expect(pending).toHaveLength(1);
+  expect(pending[0]).toMatchObject({
+    attempts: 1,
+    lastAttemptAt: Date.now(),
+    lastError: expect.stringContaining(lastError),
+  });
+}
+
+function dmUpsert(id: string, text = "ping", timestamp = 1_700_000_000) {
+  return buildNotifyMessageUpsert({
+    id,
+    remoteJid: "999@s.whatsapp.net",
+    text,
+    timestamp,
+    pushName: "Tester",
+  });
+}
+
 describe("web monitor inbox delivery and dedupe", () => {
   installStreamsInboundMessageHooks();
   beforeEach(() => {
@@ -36,75 +91,93 @@ describe("web monitor inbox delivery and dedupe", () => {
     approvalResolver.mockReset();
   });
 
-  it("replays approval reactions after Gateway loss without losing batch siblings", async () => {
-    registerWhatsAppApprovalReactionTarget({
-      accountId: DEFAULT_ACCOUNT_ID,
-      remoteJid: "15551230000@s.whatsapp.net",
-      messageId: "approval-message",
-      approvalId: "exec-replay",
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once", "deny"],
-    });
-    const replayStarted = createDeferred<void>();
-    const finishReplay = createDeferred<void>();
-    approvalResolver
-      .mockRejectedValueOnce(new Error("gateway 503"))
-      .mockRejectedValueOnce(new Error("gateway still unavailable"))
-      .mockImplementationOnce(async () => {
-        replayStarted.resolve();
-        await finishReplay.promise;
-        return { applied: true, approval: { status: "allowed", decision: "allow-once" } };
+  it("replays approval reactions after Gateway loss without losing batch siblings", () =>
+    withRetryClock(async () => {
+      await registerWhatsAppApprovalReactionTarget({
+        accountId: DEFAULT_ACCOUNT_ID,
+        remoteJid: "15551230000@s.whatsapp.net",
+        messageId: "approval-message",
+        approvalId: "exec-replay",
+        approvalKind: "exec",
+        allowedDecisions: ["allow-once", "deny"],
       });
-    const onMessage = vi.fn();
-    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-      durableInboundQueue: queue,
-    });
-    try {
-      sock.ev.emit("messages.upsert", {
-        type: "notify",
-        messages: [
-          {
-            key: { id: "reaction-replay", remoteJid: "15551230000@s.whatsapp.net", fromMe: false },
-            message: {
-              reactionMessage: {
-                text: "👍",
-                key: { id: "approval-message", remoteJid: "15551230000@s.whatsapp.net" },
+      const replayStarted = createDeferred<void>();
+      const finishReplay = createDeferred<void>();
+      approvalResolver
+        .mockRejectedValueOnce(new Error("gateway 503"))
+        .mockRejectedValueOnce(new Error("gateway still unavailable"))
+        .mockImplementationOnce(async () => {
+          replayStarted.resolve();
+          await finishReplay.promise;
+          return { applied: true, approval: { status: "allowed", decision: "allow-once" } };
+        });
+      const onMessage = vi.fn();
+      const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+      const release = observeRetryRelease(queue);
+      let listener: Awaited<ReturnType<typeof startInboxMonitor>>["listener"] | undefined;
+      try {
+        const started = await startInboxMonitor(onMessage as InboxOnMessage, {
+          durableInboundQueue: queue,
+        });
+        listener = started.listener;
+        const { sock } = started;
+        sock.ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            {
+              key: {
+                id: "reaction-replay",
+                remoteJid: "15551230000@s.whatsapp.net",
+                fromMe: false,
               },
+              message: {
+                reactionMessage: {
+                  text: "👍",
+                  key: { id: "approval-message", remoteJid: "15551230000@s.whatsapp.net" },
+                },
+              },
+              messageTimestamp: 1_700_000_000,
             },
-            messageTimestamp: 1_700_000_000,
-          },
-          ...buildNotifyMessageUpsert({
-            id: "batch-survivor",
-            remoteJid: "999@s.whatsapp.net",
-            text: "batch survivor",
-            timestamp: 1_700_000_001,
-          }).messages,
-        ],
-      });
-      await replayStarted.promise;
-      const claim = (await queue.listClaims()).find((entry) => entry.attempts === 1);
-      expect(claim).toBeDefined();
-      if (!claim) {
-        throw new Error("expected the replayed approval claim");
+            ...buildNotifyMessageUpsert({
+              id: "batch-survivor",
+              remoteJid: "999@s.whatsapp.net",
+              text: "batch survivor",
+              timestamp: 1_700_000_001,
+            }).messages,
+          ],
+        });
+        await waitForPersistedRetry(queue, release.persisted, "gateway still unavailable");
+        expect(approvalResolver).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await replayStarted.promise;
+        const claim = (await queue.listClaims()).find((entry) => entry.attempts === 1);
+        expect(claim).toBeDefined();
+        if (!claim) {
+          throw new Error("expected the replayed approval claim");
+        }
+        const completed = observeChannelIngressQueueWrite(queue, "complete", claim.id);
+        finishReplay.resolve();
+        expect(await completed).toBe(true);
+        await waitForInboundWorkDrained();
+        expect(approvalResolver).toHaveBeenCalledTimes(3);
+        expect(approvalResolver.mock.calls[1]).toEqual(approvalResolver.mock.calls[0]);
+        expect(approvalResolver.mock.calls[2]).toEqual(approvalResolver.mock.calls[0]);
+        expect(onMessage).toHaveBeenCalledTimes(1);
+        expect(inboundMessage(onMessage).payload.body).toBe("batch survivor");
+        expect(await queue.listClaims()).toEqual([]);
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        await expect(
+          queue.enqueue(claim.id, claim.payload, { laneKey: claim.laneKey }),
+        ).resolves.toMatchObject({ kind: "completed" });
+      } finally {
+        finishReplay.resolve();
+        try {
+          await listener?.close();
+        } finally {
+          release.restore();
+        }
       }
-      finishReplay.resolve();
-      await waitForInboundWorkDrained();
-      expect(approvalResolver).toHaveBeenCalledTimes(3);
-      expect(approvalResolver.mock.calls[1]).toEqual(approvalResolver.mock.calls[0]);
-      expect(approvalResolver.mock.calls[2]).toEqual(approvalResolver.mock.calls[0]);
-      expect(onMessage).toHaveBeenCalledTimes(1);
-      expect(inboundMessage(onMessage).payload.body).toBe("batch survivor");
-      expect(await queue.listClaims()).toEqual([]);
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
-      await expect(
-        queue.enqueue(claim.id, claim.payload, { laneKey: claim.laneKey }),
-      ).resolves.toMatchObject({ kind: "completed" });
-    } finally {
-      finishReplay.resolve();
-      await listener.close();
-    }
-  });
+    }));
 
   it("delivery coordinator streams inbound messages", async () => {
     const onMessage = vi.fn(async (msg) => {
@@ -114,18 +187,17 @@ describe("web monitor inbox delivery and dedupe", () => {
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const readReceiptSent = createDeferred<void>();
+    sock.readMessages.mockImplementationOnce(async () => {
+      readReceiptSent.resolve();
+    });
     expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
     const messageId = nextMessageId("stream");
-    const upsert = buildNotifyMessageUpsert({
-      id: messageId,
-      remoteJid: "999@s.whatsapp.net",
-      text: "ping",
-      timestamp: 1_700_000_000,
-      pushName: "Tester",
-    });
+    const upsert = dmUpsert(messageId);
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
+    await readReceiptSent.promise;
 
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
@@ -176,16 +248,7 @@ describe("web monitor inbox delivery and dedupe", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const messageId = nextMessageId("delayed-read");
 
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: messageId,
-        remoteJid: "999@s.whatsapp.net",
-        text: "ping",
-        timestamp: 1_700_000_000,
-        pushName: "Tester",
-      }),
-    );
+    sock.ev.emit("messages.upsert", dmUpsert(messageId));
     await waitForMessageCalls(onMessage, 1);
 
     expect(sock.readMessages).not.toHaveBeenCalled();
@@ -208,13 +271,7 @@ describe("web monitor inbox delivery and dedupe", () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const messageId = nextMessageId("dup-prepared");
-    const upsert = buildNotifyMessageUpsert({
-      id: messageId,
-      remoteJid: "999@s.whatsapp.net",
-      text: "first",
-      timestamp: 1_700_000_000,
-      pushName: "Tester",
-    });
+    const upsert = dmUpsert(messageId, "first");
 
     sock.ev.emit("messages.upsert", upsert);
     // Duplicate delivery of the same message id stays pending behind the first claim.
@@ -245,16 +302,7 @@ describe("web monitor inbox delivery and dedupe", () => {
     });
     const messageId = nextMessageId("durable-fallback");
 
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: messageId,
-        remoteJid: "999@s.whatsapp.net",
-        text: "ping",
-        timestamp: 1_700_000_000,
-        pushName: "Tester",
-      }),
-    );
+    sock.ev.emit("messages.upsert", dmUpsert(messageId));
     await waitForMessageCalls(onMessage, 1);
 
     expect(inboundMessage(onMessage).payload.body).toBe("ping");
@@ -283,13 +331,7 @@ describe("web monitor inbox delivery and dedupe", () => {
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const messageId = nextMessageId("durable-pending");
-    const upsert = buildNotifyMessageUpsert({
-      id: messageId,
-      remoteJid: "999@s.whatsapp.net",
-      text: "ping",
-      timestamp: 1_700_000_000,
-      pushName: "Tester",
-    });
+    const upsert = dmUpsert(messageId);
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
@@ -306,13 +348,7 @@ describe("web monitor inbox delivery and dedupe", () => {
   it("delivery coordinator does not redispatch a completed transport-key duplicate", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    const upsert = buildNotifyMessageUpsert({
-      id: nextMessageId("durable-completed"),
-      remoteJid: "999@s.whatsapp.net",
-      text: "ping",
-      timestamp: 1_700_000_000,
-      pushName: "Tester",
-    });
+    const upsert = dmUpsert(nextMessageId("durable-completed"));
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
@@ -344,28 +380,13 @@ describe("web monitor inbox delivery and dedupe", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
       debounceMs: 20,
     });
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-steer-1"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "first",
-        timestamp: 1_700_000_000,
-        pushName: "Tester",
-      }),
-    );
+    sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("debounce-steer-1"), "first"));
     await waitForMessageCalls(onMessage, 1);
     expect(inboundMessage(onMessage).payload.body).toBe("first");
 
     sock.ev.emit(
       "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-steer-2"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "steer",
-        timestamp: 1_700_000_001,
-        pushName: "Tester",
-      }),
+      dmUpsert(nextMessageId("debounce-steer-2"), "steer", 1_700_000_001),
     );
     await waitForMessageCalls(onMessage, 2);
     expect(inboundMessage(onMessage, 1).payload.body).toBe("steer");
@@ -392,32 +413,11 @@ describe("web monitor inbox delivery and dedupe", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
       debounceMs: 20,
     });
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-close-1"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "first",
-        timestamp: 1_700_000_000,
-        pushName: "Tester",
-      }),
-    );
+    sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("debounce-close-1"), "first"));
     await waitForMessageCalls(onMessage, 1);
 
-    const second = buildNotifyMessageUpsert({
-      id: nextMessageId("debounce-close-2"),
-      remoteJid: "999@s.whatsapp.net",
-      text: "second",
-      timestamp: 1_700_000_001,
-      pushName: "Tester",
-    });
-    const third = buildNotifyMessageUpsert({
-      id: nextMessageId("debounce-close-3"),
-      remoteJid: "999@s.whatsapp.net",
-      text: "third",
-      timestamp: 1_700_000_002,
-      pushName: "Tester",
-    });
+    const second = dmUpsert(nextMessageId("debounce-close-2"), "second", 1_700_000_001);
+    const third = dmUpsert(nextMessageId("debounce-close-3"), "third", 1_700_000_002);
     sock.ev.emit("messages.upsert", {
       type: "notify",
       messages: [...second.messages, ...third.messages],
@@ -427,10 +427,9 @@ describe("web monitor inbox delivery and dedupe", () => {
     const closePromise = listener.close().then(() => {
       closed = true;
     });
-    await waitForMessageCalls(onMessage, 3);
+    await waitForMessageCalls(onMessage, 2);
     expect(closed).toBe(false);
-    expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
-    expect(inboundMessage(onMessage, 2).payload.body).toBe("third");
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("second\nthird");
 
     releaseFirst?.();
     await closePromise;
@@ -461,27 +460,12 @@ describe("web monitor inbox delivery and dedupe", () => {
       debounceMs: 60_000,
       shouldDebounce: (message) => message.payload.body !== "first",
     });
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-reused-key-1"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "first",
-        timestamp: 1_700_000_000,
-        pushName: "Tester",
-      }),
-    );
+    sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("debounce-reused-key-1"), "first"));
     await waitForMessageCalls(onMessage, 1);
 
     sock.ev.emit(
       "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-reused-key-2"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "second",
-        timestamp: 1_700_000_001,
-        pushName: "Tester",
-      }),
+      dmUpsert(nextMessageId("debounce-reused-key-2"), "second", 1_700_000_001),
     );
     await settleInboundWork();
     expect(onMessage).toHaveBeenCalledTimes(1);
@@ -506,13 +490,7 @@ describe("web monitor inbox delivery and dedupe", () => {
     });
     sock.ev.emit(
       "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("debounce-shutdown-durable"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "held in debounce",
-        timestamp: 1_700_000_100,
-        pushName: "Tester",
-      }),
+      dmUpsert(nextMessageId("debounce-shutdown-durable"), "held in debounce", 1_700_000_100),
     );
     // Let accept+pump reach the flush waiter without exhausting the debounce window.
     await settleInboundWork();
@@ -544,29 +522,14 @@ describe("web monitor inbox delivery and dedupe", () => {
       const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
         debounceMs: 50,
       });
-      sock.ev.emit(
-        "messages.upsert",
-        buildNotifyMessageUpsert({
-          id: nextMessageId("debounce-close-reply-1"),
-          remoteJid: "999@s.whatsapp.net",
-          text: "first",
-          timestamp: 1_700_000_000,
-          pushName: "Tester",
-        }),
-      );
+      sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("debounce-close-reply-1"), "first"));
       await vi.advanceTimersByTimeAsync(50);
       await waitForMessageCalls(onMessage, 1);
       expect(inboundMessage(onMessage).payload.body).toBe("first");
 
       sock.ev.emit(
         "messages.upsert",
-        buildNotifyMessageUpsert({
-          id: nextMessageId("debounce-close-reply-2"),
-          remoteJid: "999@s.whatsapp.net",
-          text: "second",
-          timestamp: 1_700_000_001,
-          pushName: "Tester",
-        }),
+        dmUpsert(nextMessageId("debounce-close-reply-2"), "second", 1_700_000_001),
       );
 
       const closePromise = listener.close();
@@ -614,16 +577,7 @@ describe("web monitor inbox delivery and dedupe", () => {
     });
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
 
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: nextMessageId("close-inflight"),
-        remoteJid: "999@s.whatsapp.net",
-        text: "first",
-        timestamp: 1_700_000_000,
-        pushName: "Tester",
-      }),
-    );
+    sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("close-inflight"), "first"));
 
     await handlerStarted;
     const closePromise = listener.close();
@@ -645,27 +599,6 @@ describe("web monitor inbox delivery and dedupe", () => {
     expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
       sock.end.mock.invocationCallOrder.at(0),
     );
-  });
-
-  it("delivery coordinator deduplicates redelivered messages by id", async () => {
-    const onMessage = vi.fn(async () => {});
-
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    const upsert = buildNotifyMessageUpsert({
-      id: nextMessageId("dedupe"),
-      remoteJid: "999@s.whatsapp.net",
-      text: "ping",
-      timestamp: 1_700_000_000,
-      pushName: "Tester",
-    });
-
-    sock.ev.emit("messages.upsert", upsert);
-    sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
-
-    expect(onMessage).toHaveBeenCalledTimes(1);
-
-    await listener.close();
   });
 
   it("delivery coordinator dispatches same-content messages with distinct ids in order", async () => {
@@ -690,64 +623,60 @@ describe("web monitor inbox delivery and dedupe", () => {
     await listener.close();
   });
 
-  it("delivery coordinator automatically retries after an explicit retryable failure", async () => {
-    let attempts = 0;
-    const onMessage = vi.fn(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        // Any non-permanent error is retryable to the drain classifier.
-        throw new Error("retry me");
-      }
-    });
-
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    const upsert = buildNotifyMessageUpsert({
-      id: nextMessageId("retryable-dedupe"),
-      remoteJid: "999@s.whatsapp.net",
-      text: "ping",
-      timestamp: 1_700_000_000,
-      pushName: "Tester",
-    });
-
-    sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 2);
-    await vi.waitFor(() => {
-      expect(sock.readMessages).toHaveBeenCalledTimes(1);
-    });
-
-    await listener.close();
-  });
-
-  it("delivery coordinator automatically retries after reply session conflicts", async () => {
-    let attempts = 0;
-    const onMessage = vi.fn(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new Error(
-          "reply session initialization conflicted for agent:main:whatsapp:direct:+15551234567",
+  it.each([
+    { reason: "an explicit retryable failure", error: "retry me", id: "retryable-dedupe" },
+    {
+      reason: "reply session conflicts",
+      error: "reply session initialization conflicted for agent:main:whatsapp:direct:+15551234567",
+      id: "session-init-conflict",
+    },
+  ])("delivery coordinator automatically retries after $reason", ({ error, id }) =>
+    withRetryClock(async () => {
+      const retried = createDeferred<void>();
+      const onMessage = vi.fn(async () => {
+        if (onMessage.mock.calls.length === 1) {
+          throw new Error(error);
+        }
+        retried.resolve();
+      });
+      const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+      const release = observeRetryRelease(queue);
+      let listener: Awaited<ReturnType<typeof startInboxMonitor>>["listener"] | undefined;
+      try {
+        const started = await startInboxMonitor(onMessage as InboxOnMessage, {
+          durableInboundQueue: queue,
+        });
+        listener = started.listener;
+        const { sock } = started;
+        sock.ev.emit(
+          "messages.upsert",
+          buildNotifyMessageUpsert({
+            id: nextMessageId(id),
+            remoteJid: "999@s.whatsapp.net",
+            text: "ping",
+            timestamp: 1_700_000_000,
+            pushName: "Tester",
+          }),
         );
+        await waitForPersistedRetry(queue, release.persisted, "turn-abandoned");
+        expect(onMessage).toHaveBeenCalledTimes(1);
+        expect(sock.readMessages).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await retried.promise;
+        await waitForInboundWorkDrained();
+        expect(onMessage).toHaveBeenCalledTimes(2);
+        expect(sock.readMessages).toHaveBeenCalledTimes(1);
+      } finally {
+        try {
+          await listener?.close();
+        } finally {
+          release.restore();
+        }
       }
-    });
+    }),
+  );
 
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    const upsert = buildNotifyMessageUpsert({
-      id: nextMessageId("session-init-conflict"),
-      remoteJid: "999@s.whatsapp.net",
-      text: "ping",
-      timestamp: 1_700_000_000,
-      pushName: "Tester",
-    });
-
-    sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 2);
-    await vi.waitFor(() => {
-      expect(sock.readMessages).toHaveBeenCalledTimes(1);
-    });
-
-    await listener.close();
-  });
-
-  it("delivery coordinator keeps same-lane follow-up pending until turn adoption", async () => {
+  it("delivery coordinator admits same-lane follow-up without settling the first deferred claim", async () => {
     let adoptFirst: (() => void | Promise<void>) | undefined;
     const onMessage = vi.fn(async (message: WebInboundMessage) => {
       if (!adoptFirst) {
@@ -760,7 +689,10 @@ describe("web monitor inbox delivery and dedupe", () => {
       }
     });
 
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      durableInboundQueue: queue,
+    });
     sock.ev.emit("messages.upsert", {
       type: "notify",
       messages: [
@@ -771,7 +703,8 @@ describe("web monitor inbox delivery and dedupe", () => {
         },
       ],
     });
-    await waitForMessageCalls(onMessage, 1);
+    await waitForInboundWorkDrained();
+    expect(onMessage).toHaveBeenCalledTimes(1);
 
     sock.ev.emit("messages.upsert", {
       type: "notify",
@@ -783,17 +716,17 @@ describe("web monitor inbox delivery and dedupe", () => {
         },
       ],
     });
-    await settleInboundWork();
-
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(inboundMessage(onMessage).payload.body).toBe("ping");
+    await waitForInboundWorkDrained();
+    expect(onMessage.mock.calls.map(([message]) => message.payload.body)).toEqual(["ping", "pong"]);
+    expect(await queue.listClaims()).toHaveLength(1);
+    expect(await queue.listPending({ limit: "all" })).toEqual([]);
 
     if (!adoptFirst) {
       throw new Error("expected first adoption callback");
     }
     await adoptFirst();
-    await waitForMessageCalls(onMessage, 2);
-    expect(inboundMessage(onMessage, 1).payload.body).toBe("pong");
+    expect(await queue.listClaims()).toEqual([]);
+    expect(onMessage).toHaveBeenCalledTimes(2);
     await listener.close();
   });
 });

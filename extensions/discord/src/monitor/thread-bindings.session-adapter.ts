@@ -1,44 +1,36 @@
-// Discord plugin module implements thread bindings.session adapter behavior.
 import {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
   resolveThreadBindingConversationIdFromBindingId,
-  type BindingTargetKind,
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDiscordChannelId } from "../target-parsing.js";
-import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
+import {
+  asOptionalObjectRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeDiscordBindingChannelId,
+  resolveChannelIdForBinding,
+} from "./thread-bindings.discord-api.js";
+import { snapshotThreadBindingJson } from "./thread-bindings.persistence.js";
 import {
   resolveBindingRecordKey,
   resolvePreparedThreadBindingLifecycle,
 } from "./thread-bindings.state.js";
-import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
+import {
+  DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
+  DEFAULT_THREAD_BINDING_MAX_AGE_MS,
+  type ThreadBindingManager,
+  type ThreadBindingRecord,
+} from "./thread-bindings.types.js";
 
 type ThreadBindingDefaults = {
   idleTimeoutMs: number;
   maxAgeMs: number;
 };
-
-function normalizeChildBindingParentChannelId(raw?: string | null): string | undefined {
-  const trimmed = normalizeOptionalString(raw) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    return resolveDiscordChannelId(trimmed);
-  } catch {
-    return undefined;
-  }
-}
-
-function toSessionBindingTargetKind(raw: string): BindingTargetKind {
-  return raw === "subagent" ? "subagent" : "session";
-}
-
-function toThreadBindingTargetKind(raw: BindingTargetKind): "subagent" | "acp" {
-  return raw === "subagent" ? "subagent" : "acp";
-}
 
 function toSessionBindingRecord(
   record: ThreadBindingRecord,
@@ -53,7 +45,7 @@ function toSessionBindingRecord(
   return {
     bindingId,
     targetSessionKey: record.targetSessionKey,
-    targetKind: toSessionBindingTargetKind(record.targetKind),
+    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
     conversation: {
       channel: "discord",
       accountId: record.accountId,
@@ -94,6 +86,7 @@ export function createThreadBindingSessionAdapter(params: {
       placements: ["current", "child"],
     },
     bind: async (input) => {
+      const assertCurrent = input.assertCurrent;
       if (input.conversation.channel !== "discord") {
         return null;
       }
@@ -103,31 +96,24 @@ export function createThreadBindingSessionAdapter(params: {
       }
       const conversationId = normalizeOptionalString(input.conversation.conversationId) ?? "";
       const placement = input.placement === "child" ? "child" : "current";
-      const metadata = input.metadata ?? {};
+      const metadata =
+        asOptionalObjectRecord(
+          snapshotThreadBindingJson(input.metadata ? { ...input.metadata } : undefined),
+        ) ?? {};
+      const targetKind = input.targetKind === "subagent" ? "subagent" : "acp";
       const label = normalizeOptionalString(metadata.label);
-      const threadName =
-        typeof metadata.threadName === "string"
-          ? normalizeOptionalString(metadata.threadName)
-          : undefined;
-      const introText =
-        typeof metadata.introText === "string"
-          ? normalizeOptionalString(metadata.introText)
-          : undefined;
-      const boundBy =
-        typeof metadata.boundBy === "string"
-          ? normalizeOptionalString(metadata.boundBy)
-          : undefined;
-      const agentId =
-        typeof metadata.agentId === "string"
-          ? normalizeOptionalString(metadata.agentId)
-          : undefined;
+      const threadName = normalizeOptionalString(metadata.threadName);
+      const introText = normalizeOptionalString(metadata.introText);
+      const boundBy = normalizeOptionalString(metadata.boundBy);
+      const agentId = normalizeOptionalString(metadata.agentId);
       let threadId: string | undefined;
       let channelId: string | undefined;
       let createThread = false;
 
       if (placement === "child") {
         createThread = true;
-        channelId = normalizeChildBindingParentChannelId(input.conversation.parentConversationId);
+        channelId =
+          normalizeDiscordBindingChannelId(input.conversation.parentConversationId) ?? undefined;
         if (!channelId && conversationId) {
           channelId =
             (await resolveChannelIdForBinding({
@@ -146,13 +132,14 @@ export function createThreadBindingSessionAdapter(params: {
         channelId,
         createThread,
         threadName,
-        targetKind: toThreadBindingTargetKind(input.targetKind),
+        targetKind,
         targetSessionKey,
         agentId,
         label,
         boundBy,
         introText,
         metadata,
+        ...(assertCurrent ? { assertCurrent } : {}),
       });
       return bound ? serializeBinding(bound) : null;
     },
@@ -170,14 +157,23 @@ export function createThreadBindingSessionAdapter(params: {
         accountId: params.accountId,
         bindingId,
       });
+      if (threadId) {
+        params.manager.touchThreadSync({ threadId, at, persist: true });
+      }
+    },
+    touchAsync: async (bindingId, at) => {
+      const threadId = resolveThreadBindingConversationIdFromBindingId({
+        accountId: params.accountId,
+        bindingId,
+      });
       if (!threadId) {
         return;
       }
-      params.manager.touchThread({ threadId, at, persist: true });
+      await params.manager.touchThread({ threadId, at, persist: true });
     },
     unbind: async (input) => {
       if (input.targetSessionKey?.trim()) {
-        const removed = params.manager.unbindBySessionKey({
+        const removed = await params.manager.unbindBySessionKey({
           targetSessionKey: input.targetSessionKey,
           reason: input.reason,
         });
@@ -190,11 +186,41 @@ export function createThreadBindingSessionAdapter(params: {
       if (!threadId) {
         return [];
       }
-      const removed = params.manager.unbindThread({
+      const removed = await params.manager.unbindThread({
         threadId,
         reason: input.reason,
       });
       return removed ? [serializeBinding(removed)] : [];
     },
+  };
+}
+
+/** Disabled bindings have a live empty owner; retirement still makes that owner unavailable. */
+export function createNoopThreadBindingManager(accountIdRaw?: string): ThreadBindingManager {
+  const accountId = normalizeAccountId(accountIdRaw);
+  const adapter: SessionBindingAdapter = {
+    channel: "discord",
+    accountId,
+    capabilities: { bindSupported: false, unbindSupported: false, placements: [] },
+    listBySession: () => [],
+    resolveByConversation: () => null,
+  };
+  registerSessionBindingAdapter(adapter);
+  return {
+    accountId,
+    isStopping: () => false,
+    getIdleTimeoutMs: () => DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
+    getMaxAgeMs: () => DEFAULT_THREAD_BINDING_MAX_AGE_MS,
+    getByThreadId: () => undefined,
+    getBySessionKey: () => undefined,
+    listBySessionKey: () => [],
+    listBindings: () => [],
+    touchThread: async () => null,
+    touchThreadSync: () => null,
+    bindTarget: async () => null,
+    unbindThread: async () => null,
+    unbindBySessionKey: async () => [],
+    notifyUnbound: () => {},
+    stop: async () => unregisterSessionBindingAdapter({ channel: "discord", accountId, adapter }),
   };
 }

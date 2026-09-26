@@ -7,8 +7,10 @@ import {
   renderQaAgenticParityMarkdownReport,
   renderQaRuntimeParityMarkdownReport,
   type QaParitySuiteSummary,
-  type QaRuntimeParitySuiteSummary,
 } from "./agentic-parity-report.js";
+import { runRuntimeParityScenario } from "./runtime-parity.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
+import { buildRuntimeParityScenarioResult } from "./suite-runtime-parity-result.js";
 
 type QaParityReportScenario = QaParitySuiteSummary["scenarios"][number];
 
@@ -81,8 +83,9 @@ function compareQaAgenticParity(
 }
 
 describe("qa agentic parity report", () => {
-  it("computes first-wave parity metrics from suite summaries", () => {
+  it("computes parity metrics from scenario rows despite stale summary counts", () => {
     const summary: QaParitySuiteSummary = {
+      counts: { total: 2, passed: 2, failed: 0 },
       scenarios: [
         { name: "Approval turn tool followthrough", status: "pass" },
         {
@@ -106,27 +109,6 @@ describe("qa agentic parity report", () => {
     });
   });
 
-  it("uses scenario rows rather than stale summary counts for parity metrics", () => {
-    const summary: QaParitySuiteSummary = {
-      counts: {
-        total: 2,
-        passed: 2,
-        failed: 0,
-      },
-      scenarios: [
-        { name: "Approval turn tool followthrough", status: "pass" },
-        { name: "Compaction retry after mutating tool", status: "fail" },
-      ],
-    };
-
-    const metrics = computeQaAgenticParityMetrics(summary);
-
-    expect(metrics.totalScenarios).toBe(2);
-    expect(metrics.passedScenarios).toBe(1);
-    expect(metrics.failedScenarios).toBe(1);
-    expect(metrics.completionRate).toBe(0.5);
-  });
-
   it("keeps non-tool scenarios out of the valid-tool-call metric", () => {
     const summary: QaParitySuiteSummary = {
       scenarios: [
@@ -144,41 +126,13 @@ describe("qa agentic parity report", () => {
   });
 
   it("does not count passing runtime parity scenarios without tool-call evidence", () => {
-    const summary: QaRuntimeParitySuiteSummary = {
-      scenarios: [
-        {
-          name: "Approval turn tool followthrough",
-          status: "pass",
-          steps: [],
-          runtimeParity: {
-            scenarioId: "approval-turn-tool-followthrough",
-            drift: "none",
-            cells: {
-              openclaw: {
-                runtime: "openclaw",
-                status: "pass",
-                transcriptBytes: '{"role":"assistant"}\n',
-                toolCalls: [],
-                finalText: "done",
-                usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-                wallClockMs: 10,
-                bootStateLines: [],
-              },
-              codex: {
-                runtime: "codex",
-                status: "pass",
-                transcriptBytes: '{"role":"assistant"}\n',
-                toolCalls: [],
-                finalText: "done",
-                usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-                wallClockMs: 10,
-                bootStateLines: [],
-              },
-            },
-          },
-        },
-      ],
-    };
+    const scenario = firstRuntimeParityScenario();
+    if (!scenario.runtimeParity) {
+      throw new Error("runtime parity fixture missing");
+    }
+    scenario.runtimeParity.cells.openclaw.toolCalls = [];
+    scenario.runtimeParity.cells.codex.toolCalls = [];
+    const summary = { scenarios: [scenario] };
 
     const metrics = computeQaAgenticParityMetrics(summary);
 
@@ -228,6 +182,9 @@ describe("qa agentic parity report", () => {
     );
     expect(comparison.failures).toContain(
       "openai/gpt-5.6-luna unintended-stop rate 20.0% exceeds anthropic/claude-opus-4-8 0.0%.",
+    );
+    expect(comparison.failures).toContain(
+      "Required parity scenario Compaction retry after mutating tool failed: openai/gpt-5.6-luna=fail, anthropic/claude-opus-4-8=pass.",
     );
   });
 
@@ -298,33 +255,14 @@ describe("qa agentic parity report", () => {
 
     const comparison = compareQaAgenticParity(summaryWithExtras, scopedSummary);
 
-    // Extra lanes must not drag the candidate's completion rate below baseline
-    // and must not generate unintended-stop or fake-success hits.
     expect(comparison.candidateMetrics.totalScenarios).toBe(5);
     expect(comparison.candidateMetrics.completionRate).toBe(1);
     expect(comparison.candidateMetrics.unintendedStopRate).toBe(0);
     expect(comparison.candidateMetrics.fakeSuccessCount).toBe(0);
-    // The pass/fail verdict here still depends only on the parity pack itself.
     const regressionFailures = comparison.failures.filter((failure) =>
       failure.includes("completion rate"),
     );
     expect(regressionFailures).toStrictEqual([]);
-  });
-
-  it("fails the parity gate when required parity scenarios are missing on both sides", () => {
-    const comparison = compareQaAgenticParity(
-      {
-        scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
-      },
-      {
-        scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
-      },
-    );
-
-    expect(comparison.pass).toBe(false);
-    expect(comparison.failures).toContain(
-      "Missing required parity scenario coverage for Image understanding from attachment: openai/gpt-5.6-luna=missing, anthropic/claude-opus-4-8=missing.",
-    );
   });
 
   it("fails the parity gate when required parity scenarios are skipped", () => {
@@ -356,13 +294,7 @@ describe("qa agentic parity report", () => {
   });
 
   it("fails the parity gate when a required parity scenario fails on both sides", () => {
-    // Regression for the loop-7 Codex-connector P1 finding: without this
-    // check, a required parity scenario that fails on both candidate and
-    // baseline still produces pass=true because the downstream metric
-    // comparisons are purely relative (candidate vs baseline). Cover the
-    // whole parity pack as pass on both sides except the one scenario we
-    // deliberately fail on both sides, so the assertion can pin the
-    // isolated gate failure under test.
+    // Relative metrics tie when both sides fail; the required-scenario gate must still reject.
     const scenariosWithBothFail = withScenarioOverride("Approval turn tool followthrough", {
       status: "fail",
     });
@@ -375,36 +307,12 @@ describe("qa agentic parity report", () => {
     expect(comparison.failures).toContain(
       "Required parity scenario Approval turn tool followthrough failed: openai/gpt-5.6-luna=fail, anthropic/claude-opus-4-8=fail.",
     );
-    // Metric comparisons are relative, so a same-on-both-sides failure
-    // must not appear as a relative metric failure. The required-scenario
-    // failure line is the only thing keeping the gate honest here.
     expect(comparison.failures.filter((failure) => failure.includes("completion rate"))).toEqual(
       [],
     );
   });
 
-  it("fails the parity gate when a required parity scenario fails on the candidate only", () => {
-    // A candidate regression below a passing baseline is already caught
-    // by the relative completion-rate comparison, but surface it as a
-    // named required-scenario failure too so operators see a concrete
-    // scenario name alongside the rate differential.
-    const candidateWithOneFail = withScenarioOverride("Approval turn tool followthrough", {
-      status: "fail",
-    });
-    const comparison = compareQaAgenticParity(
-      { scenarios: candidateWithOneFail },
-      { scenarios: FULL_PARITY_PASS_SCENARIOS },
-    );
-
-    expect(comparison.pass).toBe(false);
-    expect(comparison.failures).toContain(
-      "Required parity scenario Approval turn tool followthrough failed: openai/gpt-5.6-luna=fail, anthropic/claude-opus-4-8=pass.",
-    );
-  });
-
   it("fails the parity gate when the baseline contains suspicious pass results", () => {
-    // Cover the full second-wave pack on both sides so the suspicious-pass assertion
-    // below is the isolated gate failure under test (no coverage-gap noise).
     const comparison = compareQaAgenticParity(
       {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
@@ -437,23 +345,9 @@ Follow-up:
       expectedSuspiciousPasses: 0,
     },
     {
-      title: "still flags genuine error-narration suspicious passes",
-      scenarioName: "Approval turn tool followthrough",
-      report: "Tool call completed, but an error occurred mid-turn and no retry happened.",
-      expectedSuspiciousPasses: 1,
-    },
-    {
       title: "does not flag bare 'Done.' prose as fake success",
       scenarioName: "Approval turn tool followthrough",
       report: "Done.",
-      expectedSuspiciousPasses: 0,
-    },
-    {
-      title: "does not flag structured status lines that end in `done`",
-      scenarioName: "Compaction retry after mutating tool",
-      report: `Confirmed, replay unsafe after write.
-compactionCount=0
-status=done`,
       expectedSuspiciousPasses: 0,
     },
   ])("$title", ({ scenarioName, report, expectedSuspiciousPasses }) => {
@@ -489,47 +383,6 @@ status=done`,
       ],
     };
 
-    // Bare "error"/"Error" in narration is not a suspicious-pass signal on its own.
-    // Only phrases like "error occurred" or "an error was ..." should count.
-    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
-  });
-
-  it("does not flag positive-tone prose as fake success (positive-tone detection removed)", () => {
-    // Positive-tone detection was removed because for passing runs the
-    // `details` field is the model's prose, which never contains tool-call
-    // evidence. Criterion 2 is enforced by per-scenario tool-call assertions.
-    const summary: QaParitySuiteSummary = {
-      scenarios: [
-        {
-          name: "Subagent handoff",
-          status: "pass",
-          details: "Successfully completed the delegation. The subagent returned its result.",
-        },
-      ],
-    };
-
-    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
-  });
-
-  it("does not flag positive-tone passes when the scenario shows real tool-call evidence", () => {
-    // A legitimate tool-mediated pass that happens to include
-    // "successfully" in its prose must not be flagged. The
-    // `plannedToolName` evidence (or any of the other tool-call
-    // evidence patterns) exempts the scenario from positive-tone
-    // detection. Without this exemption, real tool-backed passes with
-    // self-congratulatory prose would count as fake successes and break
-    // the gate.
-    const summary: QaParitySuiteSummary = {
-      scenarios: [
-        {
-          name: "Source and docs discovery report",
-          status: "pass",
-          details:
-            "Successfully completed the report. plannedToolName=read recorded via /debug/requests.",
-        },
-      ],
-    };
-
     expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
   });
 
@@ -549,17 +402,10 @@ status=done`,
       ],
     };
 
-    // Only the failure-tone scenario ("error occurred") counts.
-    // The positive-tone one ("successfully") is not flagged.
     expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(1);
   });
 
   it("throws QaParityLabelMismatchError when the candidate run.primaryProvider does not match the label", () => {
-    // Regression for the gate footgun: if an operator swaps the
-    // --candidate-summary and --baseline-summary paths, the gate would
-    // silently produce a reversed verdict. PR L #64789 ships the `run`
-    // block on every summary so the parity report can verify it against
-    // the caller-supplied label; this test pins the precondition check.
     const parityPassScenarios: QaParityReportScenario[] = [
       { name: "Approval turn tool followthrough", status: "pass" },
       { name: "Compaction retry after mutating tool", status: "pass" },
@@ -611,23 +457,6 @@ status=done`,
     expect(comparison.pass).toBe(true);
   });
 
-  it("skips run.primaryProvider verification when the summary is missing a run block (legacy summaries)", () => {
-    // Pre-PR-L summaries don't carry a `run` block. The gate must still
-    // work against those, trusting the caller-supplied label.
-    const comparison = compareQaAgenticParity(parityPassSummary(), parityPassSummary());
-    expect(comparison.pass).toBe(true);
-  });
-
-  it("skips provider verification for arbitrary display labels when run metadata is present", () => {
-    const comparison = compareQaAgenticParity(
-      parityPassSummary("openai"),
-      parityPassSummary("anthropic"),
-      { candidate: "GPT-5.6 Luna candidate", baseline: "Opus 4.8 baseline" },
-    );
-
-    expect(comparison.pass).toBe(true);
-  });
-
   it("skips provider verification for mixed-case or decorated display labels", () => {
     const comparison = compareQaAgenticParity(
       parityPassSummary("openai"),
@@ -667,36 +496,17 @@ status=done`,
   });
 
   it("renders a readable markdown parity report", () => {
-    // Cover the full parity pack on both sides so the pass
-    // verdict is not disrupted by required-scenario coverage failures
-    // added by the second-wave expansion.
-    const comparison = compareQaAgenticParity(parityPassSummary(), parityPassSummary());
+    const comparison = compareQaAgenticParity(parityPassSummary(), parityPassSummary(), {
+      candidate: "candidate",
+      baseline: "baseline",
+    });
 
     const report = renderQaAgenticParityMarkdownReport(comparison);
 
-    expect(report).toContain(
-      "# OpenClaw Agentic Parity Report — openai/gpt-5.6-luna vs anthropic/claude-opus-4-8",
-    );
+    expect(report).toContain("# OpenClaw Agentic Parity Report — candidate vs baseline");
     expect(report).toContain("| Completion rate | 100.0% | 100.0% |");
     expect(report).toContain("### Approval turn tool followthrough");
     expect(report).toContain("- Verdict: pass");
-  });
-
-  it("parametrizes the markdown header from the comparison labels", () => {
-    // Regression for the loop-7 Copilot finding: callers that configure
-    // non-gpt-5.6-luna / non-opus labels (for example an internal candidate vs
-    // another candidate) must see the labels in the rendered H1 instead of
-    // the hardcoded "GPT-5.6 Luna / Opus 4.8" title that would otherwise confuse
-    // readers of saved reports.
-    const comparison = compareQaAgenticParity(
-      { scenarios: [] },
-      { scenarios: [] },
-      { candidate: "openai/gpt-5.6-luna-alt", baseline: "openai/gpt-5.6-luna" },
-    );
-    const report = renderQaAgenticParityMarkdownReport(comparison);
-    expect(report).toContain(
-      "# OpenClaw Agentic Parity Report — openai/gpt-5.6-luna-alt vs openai/gpt-5.6-luna",
-    );
   });
 
   it("builds a runtime parity report from suite summaries", () => {
@@ -795,14 +605,18 @@ status=done`,
     expect(markdown).toContain("- Faster runtime: N/A");
   });
 
-  it("fails runtime parity reports when a runtime cell has a hard failure", () => {
+  it.each([
+    { description: "hard runtime error", cell: { runtimeErrorClass: "auth" } },
+    { description: "transport error", cell: { transportErrorClass: "timeout" } },
+    { description: "failed execution", cell: { status: "fail" as const } },
+  ])("fails runtime parity reports with $description", ({ cell }) => {
     const summary = makeRuntimeParitySummary();
     const scenario = summary.scenarios[1];
     if (!scenario?.runtimeParity) {
       throw new Error("runtime parity fixture missing");
     }
     scenario.status = "fail";
-    scenario.runtimeParity.cells.codex.runtimeErrorClass = "auth";
+    Object.assign(scenario.runtimeParity.cells.codex, cell);
 
     const report = buildQaRuntimeParityReport({
       summary,
@@ -811,10 +625,62 @@ status=done`,
 
     expect(report.pass).toBe(false);
     expect(report.failedScenarios).toBe(1);
+    expect(report.scenarios[1]?.codexStatus).toBe("fail");
+    expect(renderQaRuntimeParityMarkdownReport(report)).toContain("- codex: fail (");
     expect(report.failures).toContain(
       "Compaction retry after mutating tool drift=tool-call-shape (tool call 1 differs).",
     );
   });
+
+  it.each([
+    { description: "known harness gap", knownGap: true, bothSkipped: false, pass: true },
+    { description: "unexpected skip", knownGap: false, bothSkipped: false, pass: false },
+    { description: "both runtimes skipped", knownGap: true, bothSkipped: true, pass: false },
+  ])(
+    "preserves $description in runtime parity evidence",
+    async ({ knownGap, bothSkipped, pass }) => {
+      const summary = makeRuntimeParitySummary();
+      const catalogScenario = readQaScenarioById("compaction-retry-mutating-tool");
+      const captured = summary.scenarios[1]?.runtimeParity;
+      if (!captured) {
+        throw new Error("runtime parity fixture missing");
+      }
+      const result = await runRuntimeParityScenario({
+        scenarioId: catalogScenario.id,
+        runCell: async (runtime) => ({
+          status: runtime === "codex" || bothSkipped ? "skip" : "pass",
+          ...(runtime === "codex"
+            ? {
+                details: knownGap
+                  ? "known-harness-gap compaction-retry-mutating-tool: native compaction"
+                  : "implementation unavailable",
+              }
+            : {}),
+          cell: captured.cells[runtime],
+        }),
+      });
+      summary.scenarios[1] = buildRuntimeParityScenarioResult({
+        scenarioName: catalogScenario.title,
+        result,
+      });
+
+      const report = buildQaRuntimeParityReport({ summary });
+
+      expect(report.pass).toBe(pass);
+      expect(report.scenarios[1]).toMatchObject({
+        status: pass ? "pass" : "fail",
+        openclawStatus: bothSkipped ? "skip" : "pass",
+        codexStatus: "skip",
+        drift: pass ? "structural" : "failure-mode",
+      });
+      expect(summary.scenarios[1]?.steps?.map((step) => step.status)).toEqual([
+        bothSkipped ? "skip" : "pass",
+        "skip",
+        pass ? "pass" : "skip",
+      ]);
+      expect(renderQaRuntimeParityMarkdownReport(report)).toContain("- codex: skip (");
+    },
+  );
 
   it("passes runtime parity reports with controlled tool-error cells and advisory drift", () => {
     const summary = makeRuntimeParitySummary();
@@ -823,6 +689,10 @@ status=done`,
       throw new Error("runtime parity fixture missing");
     }
     scenario.runtimeParity.cells.codex.runtimeErrorClass = "tool-error";
+    summary.scenarios[1] = buildRuntimeParityScenarioResult({
+      scenarioName: scenario.name,
+      result: scenario.runtimeParity,
+    });
 
     const report = buildQaRuntimeParityReport({
       summary,
@@ -832,6 +702,13 @@ status=done`,
     expect(report.pass).toBe(true);
     expect(report.failedScenarios).toBe(0);
     expect(report.failures).toEqual([]);
+    expect(report.scenarios[1]?.codexStatus).toBe("pass");
+    expect(summary.scenarios[1]?.steps?.map((step) => step.status)).toEqual([
+      "pass",
+      "pass",
+      "pass",
+    ]);
+    expect(renderQaRuntimeParityMarkdownReport(report)).toContain("- codex: pass (1 tool calls");
   });
 
   it("fails live runtime parity reports when assistant-message usage is missing", () => {

@@ -1,7 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Check } from "typebox/value";
+import { describe, expect, it, vi } from "vitest";
+import { ModelsListResultSchema } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DecisionProviderCapabilities } from "../../plugins/manifest-types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
@@ -11,27 +14,14 @@ import {
 } from "../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../server-model-catalog-auth.js";
+import type { GatewayModelCatalogContext } from "./models-list-context.js";
 import {
   buildModelsListResult,
   createGatewayAgentModelCatalogProjector,
+  prepareModelsListResult,
 } from "./models-list-result.js";
 import { modelsHandlers } from "./models.js";
 import type { GatewayRequestContext } from "./types.js";
-
-type PrepareHarnessCatalog =
-  (typeof import("./models-list-harness-catalog.js"))["prepareModelsListHarnessCatalog"];
-
-const mocks = vi.hoisted(() => ({
-  prepareHarnessCatalog: vi.fn<PrepareHarnessCatalog>(async (params) => ({
-    snapshot: params.snapshot,
-    defaultModel: undefined,
-    catalog: params.snapshot.entries,
-  })),
-}));
-
-vi.mock("./models-list-harness-catalog.js", () => ({
-  prepareModelsListHarnessCatalog: mocks.prepareHarnessCatalog,
-}));
 
 function catalogEntry(id: string): ModelCatalogEntry {
   return { id, name: id, provider: "custom", api: "openai-responses" };
@@ -58,9 +48,145 @@ function preparedMetadataSnapshot() {
 }
 
 describe("models.list plugin metadata handoff", () => {
-  beforeEach(() => {
-    mocks.prepareHarnessCatalog.mockClear();
-  });
+  it.each<{
+    name: string;
+    plugins: OpenClawConfig["plugins"];
+    expected: boolean;
+    provider?: string;
+    chat?: boolean;
+    expectedChat?: boolean;
+    error?: string;
+  }>([
+    { name: "available", plugins: {}, expected: true },
+    { name: "globally disabled", plugins: { enabled: false }, expected: false },
+    {
+      name: "plugin disabled",
+      plugins: { entries: { decisions: { enabled: false } } },
+      expected: false,
+    },
+    { name: "denied", plugins: { deny: ["decisions"] }, expected: false },
+    { name: "decision-only provider filter", plugins: {}, provider: "fixture", expected: true },
+    {
+      name: "disabled decision provider filter",
+      plugins: { entries: { decisions: { enabled: false } } },
+      provider: "fixture",
+      expected: false,
+    },
+    {
+      name: "unknown provider filter",
+      plugins: {},
+      provider: "missing",
+      expected: false,
+      error: "Unknown model catalog provider",
+    },
+    {
+      name: "normalized decision provider filter",
+      plugins: {},
+      provider: " Fixture ",
+      expected: true,
+    },
+    {
+      name: "decision provider filter with chat entries",
+      plugins: {},
+      provider: "fixture",
+      chat: true,
+      expected: true,
+    },
+    {
+      name: "chat provider filter with decision entries",
+      plugins: {},
+      provider: "custom",
+      chat: true,
+      expectedChat: true,
+      expected: false,
+    },
+    {
+      name: "mixed catalog without a filter",
+      plugins: {},
+      chat: true,
+      expectedChat: true,
+      expected: true,
+    },
+  ])(
+    "keeps decision discovery separate from chat routing: $name",
+    async ({ plugins, expected, provider, chat, expectedChat, error }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          ...(chat ? { defaults: { model: "custom/chat", models: { "custom/chat": {} } } } : {}),
+        },
+        plugins,
+      };
+      const snapshot: ModelCatalogSnapshot = {
+        entries: chat ? [catalogEntry("chat")] : [],
+        routeVariants: [],
+      };
+      const capabilities: DecisionProviderCapabilities = {
+        questionTypes: ["boolean", "choice", "score"],
+        maxQuestions: 32,
+        maxInputTokens: 512,
+        inputTokenScope: "state-plus-each-criterion",
+        confidence: "provider-specific",
+      };
+      const metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "decisions",
+            contracts: { decisionProviders: ["fixture"] },
+            decisionModels: [
+              { provider: "fixture", id: "fast", name: "Fast decisions", capabilities },
+            ],
+          },
+          ...(chat ? [{ id: "custom", providers: ["custom"] }] : []),
+        ],
+      });
+      const projector = createGatewayAgentModelCatalogProjector({
+        cfg,
+        agentId: "main",
+        snapshot,
+        metadataSnapshot,
+        preparedAuthStore: { version: 1, profiles: {} },
+      });
+      const loadGatewayModelCatalogSnapshot = vi.fn(() => {
+        throw new Error("Unexpected runtime discovery");
+      });
+      const context = {
+        getRuntimeConfig: () => cfg,
+        loadGatewayModelCatalogSnapshot,
+        logGateway: { debug: vi.fn() },
+      } satisfies GatewayModelCatalogContext;
+      const request = buildModelsListResult({
+        source: { kind: "gateway", context },
+        agentId: "main",
+        params: { view: "configured", ...(provider ? { provider } : {}) },
+        preloadedCatalog: { agentId: "main", config: cfg, snapshot },
+        preloadedOnly: true,
+        catalogProjector: projector,
+      });
+      if (error) {
+        await expect(request).rejects.toThrow(error);
+        expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+        return;
+      }
+      const result = await request;
+      expect(result.models.map((entry) => entry.id)).toEqual(expectedChat ? ["chat"] : []);
+      expect(result.decisionModels ?? []).toEqual(
+        expected
+          ? [
+              {
+                provider: "fixture",
+                id: "fast",
+                name: "Fast decisions",
+                pluginId: "decisions",
+                capabilities,
+              },
+            ]
+          : [],
+      );
+      expect(Check(ModelsListResultSchema, result)).toBe(true);
+      expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+    },
+  );
 
   it("reuses one Gateway-owned metadata snapshot across startup projection and browse", async () => {
     await withOpenClawTestState(
@@ -95,27 +221,34 @@ describe("models.list plugin metadata handoff", () => {
         });
         await projector.projectCatalog();
 
+        let currentConfig = cfg;
         const context = {
-          getRuntimeConfig: () => cfg,
+          getRuntimeConfig: () => currentConfig,
           loadGatewayModelCatalogSnapshot: vi.fn(),
           logGateway: { debug: vi.fn() },
         } as unknown as GatewayRequestContext;
-        await buildModelsListResult({
-          context,
+        const prepared = await prepareModelsListResult({
+          source: { kind: "gateway", context },
           agentId: "main",
           params: { view: "configured" },
           preloadedCatalog: { agentId: "main", config: cfg, snapshot },
           preloadedOnly: true,
           catalogProjector: projector,
         });
-        expect(mocks.prepareHarnessCatalog).toHaveBeenCalledWith(
-          expect.objectContaining({ allowHarnessDiscovery: false }),
-        );
+        expect(
+          prepared
+            .read()
+            .models.map((entry) => entry.id)
+            .toSorted(),
+        ).toEqual(["another", "modern"]);
+        expect(prepared.isCurrent()).toBe(true);
+        currentConfig = { ...cfg };
+        expect(prepared.isCurrent()).toBe(false);
       },
     );
   });
 
-  it("keeps prepared owner facts when preloaded-only browse requires full discovery", async () => {
+  it("keeps prepared owner facts for wildcard preloaded-only browse", async () => {
     const cfg = {
       agents: { defaults: { models: { "custom/*": {} } } },
     } as OpenClawConfig;
@@ -135,7 +268,7 @@ describe("models.list plugin metadata handoff", () => {
     });
 
     await buildModelsListResult({
-      context,
+      source: { kind: "gateway", context },
       params: { view: "configured" },
       preloadedCatalog: { agentId: "main", config: cfg, snapshot },
       preloadedOnly: true,
@@ -143,40 +276,6 @@ describe("models.list plugin metadata handoff", () => {
     });
 
     expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-    expect(mocks.prepareHarnessCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ allowHarnessDiscovery: false }),
-    );
-  });
-
-  it("discovers a harness catalog for an explicit configured picker read", async () => {
-    const cfg = { agents: { defaults: { model: "custom/modern" } } } as OpenClawConfig;
-    const snapshot: ModelCatalogSnapshot = {
-      entries: [catalogEntry("modern")],
-      routeVariants: [],
-    };
-    const projector = createGatewayAgentModelCatalogProjector({
-      cfg,
-      agentId: "main",
-      snapshot,
-      metadataSnapshot: preparedMetadataSnapshot(),
-      preparedAuthStore: { version: 1, profiles: {} },
-    });
-    const context = {
-      getRuntimeConfig: () => cfg,
-      loadGatewayModelCatalogSnapshot: vi.fn(),
-      logGateway: { debug: vi.fn() },
-    } as unknown as GatewayRequestContext;
-
-    await buildModelsListResult({
-      context,
-      params: { view: "configured" },
-      preloadedCatalog: { agentId: "main", config: cfg, snapshot },
-      catalogProjector: projector,
-    });
-
-    expect(mocks.prepareHarnessCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ allowHarnessDiscovery: true, agentId: "main", snapshot }),
-    );
   });
 
   it.each([
@@ -186,17 +285,11 @@ describe("models.list plugin metadata handoff", () => {
       expectedAvailable: true,
     },
     {
-      name: "fails closed when harness discovery supersedes the prepared generation",
+      name: "reports retryable unavailability when harness discovery supersedes the prepared generation",
       supersedeDuringDiscovery: true,
       expectedAvailable: false,
     },
   ])("$name", async ({ supersedeDuringDiscovery, expectedAvailable }) => {
-    const actualHarnessCatalog = await vi.importActual<
-      typeof import("./models-list-harness-catalog.js")
-    >("./models-list-harness-catalog.js");
-    mocks.prepareHarnessCatalog.mockImplementationOnce(
-      actualHarnessCatalog.prepareModelsListHarnessCatalog,
-    );
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -250,7 +343,11 @@ describe("models.list plugin metadata handoff", () => {
         unrelatedActiveRegistry.agentHarnesses.push({
           pluginId: runtimeId,
           source: "test",
-          harness: { ...harness, loadModelCatalog: loadActiveCatalog },
+          harness: {
+            ...harness,
+            loadModelCatalog: loadActiveCatalog,
+            readModelCatalogReadiness: () => undefined,
+          },
         });
         const previousRegistry = captureActivePluginRegistrySnapshot();
         setActivePluginRegistry(unrelatedActiveRegistry);
@@ -272,7 +369,10 @@ describe("models.list plugin metadata handoff", () => {
           };
           const loadGatewayModelCatalogSnapshot = vi.fn(async () => preparedSnapshot);
           registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
-            loadDeferred: async () => preparedSnapshot,
+            loadDeferred: async () => {
+              await loadPreparedCatalog();
+              return preparedSnapshot;
+            },
             readPrepared: async () => preparedSnapshot,
           });
           const respond = vi.fn();
@@ -281,14 +381,14 @@ describe("models.list plugin metadata handoff", () => {
             throw new Error("models.list handler missing");
           }
 
-          await handler({
+          const request = handler({
             req: {
               type: "req",
               id: "prepared-registry-models-list",
               method: "models.list",
-              params: { agentId: "main", view: "configured" },
+              params: { agentId: "main", view: "configured", refresh: true },
             },
-            params: { agentId: "main", view: "configured" },
+            params: { agentId: "main", view: "configured", refresh: true },
             respond,
             client: null,
             isWebchatConnect: () => false,
@@ -299,22 +399,35 @@ describe("models.list plugin metadata handoff", () => {
             } as never,
           });
 
-          expect(preparedRegistry).not.toBe(unrelatedActiveRegistry);
+          await request;
           expect(loadPreparedCatalog).toHaveBeenCalledOnce();
           expect(loadActiveCatalog).not.toHaveBeenCalled();
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({
-              models: [
-                expect.objectContaining({
-                  provider: "custom",
-                  id: "native-model",
-                  available: expectedAvailable,
-                }),
-              ],
-            }),
-            undefined,
-          );
+          if (supersedeDuringDiscovery) {
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "UNAVAILABLE",
+                message: expect.stringContaining("Model catalog changed"),
+                retryable: true,
+                retryAfterMs: 0,
+              }),
+            );
+          } else {
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              true,
+              expect.objectContaining({
+                models: [
+                  expect.objectContaining({
+                    provider: "custom",
+                    id: "native-model",
+                    available: expectedAvailable,
+                  }),
+                ],
+              }),
+              undefined,
+            );
+          }
         } finally {
           restoreActivePluginRegistrySnapshot(previousRegistry);
         }

@@ -1,5 +1,6 @@
 import type { IMessageActivityInput } from "@microsoft/teams.api";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Msteams plugin module implements sdk proactive behavior.
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import {
@@ -8,6 +9,11 @@ import {
 } from "./cloud.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
+import {
+  assertMSTeamsSendHandoff,
+  withMSTeamsConnectorHandoff,
+  type MSTeamsSendHandoff,
+} from "./send-handoff.js";
 
 type MSTeamsAccountRef = {
   id?: string;
@@ -144,10 +150,6 @@ function buildSdkConversationReference(
   };
 }
 
-function getStructuralApiClient(app: MSTeamsApp): MSTeamsApiClient {
-  return app.api as MSTeamsApiClient;
-}
-
 function sameServiceUrl(left: string | undefined, right: string): boolean {
   if (!left) {
     return false;
@@ -180,7 +182,7 @@ async function getApiClientForReference(
   app: MSTeamsApp,
   ref: MSTeamsSdkConversationReference,
 ): Promise<MSTeamsApiClient> {
-  const api = getStructuralApiClient(app);
+  const api: MSTeamsApiClient = app.api;
   if (sameServiceUrl(api.serviceUrl, ref.serviceUrl)) {
     return api;
   }
@@ -203,22 +205,12 @@ function mergeReferenceIntoActivity(
   activity: unknown,
   ref: MSTeamsSdkConversationReference,
 ): Record<string, unknown> {
-  const source =
-    activity && typeof activity === "object" && !Array.isArray(activity)
-      ? (activity as Record<string, unknown>)
-      : { type: "message", text: stringifyReferenceFallbackActivity(activity) };
-  const existingChannelData =
-    source.channelData &&
-    typeof source.channelData === "object" &&
-    !Array.isArray(source.channelData)
-      ? (source.channelData as Record<string, unknown>)
-      : undefined;
-  const existingTenant =
-    existingChannelData?.tenant &&
-    typeof existingChannelData.tenant === "object" &&
-    !Array.isArray(existingChannelData.tenant)
-      ? (existingChannelData.tenant as Record<string, unknown>)
-      : undefined;
+  const source = asOptionalRecord(activity) ?? {
+    type: "message",
+    text: stringifyReferenceFallbackActivity(activity),
+  };
+  const existingChannelData = asOptionalRecord(source.channelData);
+  const existingTenant = asOptionalRecord(existingChannelData?.tenant);
   let channelData = existingChannelData ? { ...existingChannelData } : undefined;
   if (ref.tenantId) {
     channelData ??= {};
@@ -243,35 +235,39 @@ export async function sendMSTeamsActivityWithReference(
   app: MSTeamsApp,
   source: MSTeamsSdkReferenceSource,
   activity: MSTeamsActivityLike,
-  options?: MSTeamsProactiveOptions,
+  options?: MSTeamsProactiveOptions & MSTeamsSendHandoff,
 ): Promise<{ id?: string }> {
-  const ref = buildSdkConversationReference(source, options);
-  const api = await getApiClientForReference(app, ref);
-  const activities = api.conversations.activities(ref.conversation.id);
-  const quotedActivity = options?.quoteActivityId
-    ? await quoteMSTeamsActivity(activity, options.quoteActivityId)
-    : activity;
-  const activityWithRef = mergeReferenceIntoActivity(quotedActivity, ref);
-  const isTargeted =
-    (activityWithRef.recipient as { isTargeted?: unknown } | undefined)?.isTargeted === true;
-  if (isTargeted && ref.conversation.conversationType === "personal") {
-    throw new Error("Targeted messages are not supported in 1:1 (personal) chats.");
-  }
+  return withMSTeamsConnectorHandoff(options ?? {}, async (handoff) => {
+    assertMSTeamsSendHandoff(handoff);
+    const ref = buildSdkConversationReference(source, options);
+    const api = await getApiClientForReference(app, ref);
+    const activities = api.conversations.activities(ref.conversation.id);
+    const quotedActivity = options?.quoteActivityId
+      ? await quoteMSTeamsActivity(activity, options.quoteActivityId)
+      : activity;
+    const activityWithRef = mergeReferenceIntoActivity(quotedActivity, ref);
+    const isTargeted =
+      (activityWithRef.recipient as { isTargeted?: unknown } | undefined)?.isTargeted === true;
+    if (isTargeted && ref.conversation.conversationType === "personal") {
+      throw new Error("Targeted messages are not supported in 1:1 (personal) chats.");
+    }
 
-  const activityId = typeof activityWithRef.id === "string" ? activityWithRef.id : undefined;
-  if (activityId) {
+    const activityId = typeof activityWithRef.id === "string" ? activityWithRef.id : undefined;
+    assertMSTeamsSendHandoff(handoff);
+    if (activityId) {
+      const res =
+        isTargeted && activities.updateTargeted
+          ? await activities.updateTargeted(activityId, activityWithRef)
+          : await activities.update(activityId, activityWithRef);
+      return { ...activityWithRef, ...(res && typeof res === "object" ? res : {}) };
+    }
+
     const res =
-      isTargeted && activities.updateTargeted
-        ? await activities.updateTargeted(activityId, activityWithRef)
-        : await activities.update(activityId, activityWithRef);
-    return { ...activityWithRef, ...(res && typeof res === "object" ? res : {}) };
-  }
-
-  const res =
-    isTargeted && activities.createTargeted
-      ? await activities.createTargeted(activityWithRef)
-      : await activities.create(activityWithRef);
-  return { ...activityWithRef, ...res };
+      isTargeted && activities.createTargeted
+        ? await activities.createTargeted(activityWithRef)
+        : await activities.create(activityWithRef);
+    return { ...activityWithRef, ...res };
+  });
 }
 
 export async function updateMSTeamsActivityWithReference(

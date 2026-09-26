@@ -6,20 +6,65 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
+import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
 
 const MAX_TREE_BYTES = 1024 * 1024 * 1024;
 const MAX_TREE_ENTRIES = 50_000;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_LAUNCHER_BYTES = 1024 * 1024;
-const MAX_SCAN_MS = 30_000;
 const log = createSubsystemLogger("update/package-integrity");
 let readerSequence = 0;
 
-type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
+export type PackageIntegrityFingerprint = { digest: string; identity: string; version: string };
+export type PackageDirectoryIdentity = Pick<PackageIntegrityFingerprint, "identity" | "version">;
+
+export type PackageLauncherFingerprint = {
+  type: "symlink" | "file";
+  mode: string;
+  uid: string;
+  gid: string;
+  contents: string;
+};
+
+export function packageLauncherDifferences(
+  expected: PackageLauncherFingerprint,
+  actual: PackageLauncherFingerprint,
+  ownershipPreserved = true,
+): string[] {
+  const symlink = expected.type === "symlink" && actual.type === "symlink";
+  return (["type", "mode", "uid", "gid", "contents"] as const)
+    .filter(
+      (field) =>
+        !(
+          symlink &&
+          (field === "mode" || (!ownershipPreserved && (field === "uid" || field === "gid")))
+        ) && expected[field] !== actual[field],
+    )
+    .map((field) => (field === "contents" && symlink ? "target" : field));
+}
+
+export class PackageIntegrityTimeoutError extends Error {
+  constructor(readonly budgetMs: number) {
+    super("Package rollback verification timed out");
+  }
+}
+
+/** Resource exhaustion is distinct from a filesystem-integrity failure. */
+export class PackageIntegrityLimitError extends Error {
+  constructor(readonly resource: "entry" | "byte") {
+    super(`Package rollback verification ${resource} limit exceeded`);
+  }
+}
 
 export type PackageRootIntegrityFingerprint =
   | { kind: "directory"; tree: PackageIntegrityFingerprint }
   | { kind: "link"; metadata: string[]; target: string };
+
+export async function readPackageVersionIfPresent(
+  packageRoot: string | null,
+): Promise<string | null> {
+  return packageRoot ? readPackageVersion(packageRoot) : null;
+}
 
 function identity(stat: BigIntStats): string {
   return `${stat.dev}:${stat.ino}`;
@@ -43,11 +88,9 @@ function unchanged(left: BigIntStats, right: BigIntStats): boolean {
 }
 
 /** Read-only, bounded observations. These do not exclude writers or seal an inode. */
-export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
+export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_MS) {
   const startedAtMonotonicMs = performance.now();
-  const budget = Number.isFinite(timeoutMs)
-    ? Math.min(MAX_SCAN_MS, Math.max(1, timeoutMs))
-    : MAX_SCAN_MS;
+  const budget = Number.isFinite(timeoutMs) ? Math.max(1, timeoutMs) : UPDATE_RUNNER_TIMEOUT_MS;
   const deadline = Date.now() + budget;
   const timing = {
     readerId: `${process.pid}:${++readerSequence}`,
@@ -70,7 +113,7 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
   }
 
   async function observe<T>(
-    phase: "baseline" | "retained" | "restored",
+    phase: "baseline" | "retained" | "restored" | "transaction",
     operation: () => Promise<T>,
   ): Promise<T> {
     const emit = (event: string, facts?: Record<string, unknown>) => {
@@ -115,7 +158,7 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
           )
           .catch(() => {});
       }
-      throw new Error("Package rollback verification timed out");
+      throw new PackageIntegrityTimeoutError(budget);
     }
     return value;
   }
@@ -140,7 +183,7 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
           break;
         }
         if (children.length >= limit) {
-          throw new Error("Package rollback verification entry limit exceeded");
+          throw new PackageIntegrityLimitError("entry");
         }
         children.push(child.name);
       }
@@ -151,8 +194,11 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
   }
 
   async function hashFile(file: string, stat: BigIntStats, remainingBytes: number) {
-    if (!stat.isFile() || stat.size > BigInt(remainingBytes)) {
+    if (!stat.isFile()) {
       throw new Error("Package rollback verification byte limit exceeded");
+    }
+    if (stat.size > BigInt(remainingBytes)) {
+      throw new PackageIntegrityLimitError("byte");
     }
     const handle = await read(
       () => fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK),
@@ -164,18 +210,17 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
       }
       const hash = createHash("sha256");
       const buffer = Buffer.allocUnsafe(64 * 1024);
+      const size = Number(stat.size);
       let position = 0;
-      while (true) {
+      // The final stat detects growth; an extra EOF read costs one OS call per file.
+      while (position < size) {
         const { bytesRead } = await read(() =>
-          handle.read(buffer, 0, Math.min(buffer.length, remainingBytes - position + 1), position),
+          handle.read(buffer, 0, Math.min(buffer.length, size - position), position),
         );
         if (bytesRead === 0) {
-          break;
+          throw new Error("Package rollback file changed while reading");
         }
         position += bytesRead;
-        if (position > remainingBytes) {
-          throw new Error("Package rollback verification byte limit exceeded");
-        }
         hash.update(buffer.subarray(0, bytesRead));
       }
       if (!unchanged(stat, await read(() => handle.stat({ bigint: true })))) {
@@ -300,7 +345,22 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     return { kind: "link", metadata: metadata(stat).slice(0, -1), target };
   }
 
-  async function launcher(file: string): Promise<string> {
+  async function directoryIdentity(root: string): Promise<PackageDirectoryIdentity | null> {
+    const stat = await read(() => fs.lstat(root, { bigint: true }));
+    if (stat.isSymbolicLink()) {
+      return null;
+    }
+    if (!stat.isDirectory() || stat.ino === 0n) {
+      throw new Error("Package rollback filesystem identity is unavailable");
+    }
+    const version = await read(() => readPackageVersion(root, { maxBytes: MAX_MANIFEST_BYTES }));
+    if (!version || !unchanged(stat, await read(() => fs.lstat(root, { bigint: true })))) {
+      throw new Error("Package rollback identity changed or version is unavailable");
+    }
+    return { identity: identity(stat), version };
+  }
+
+  async function launcher(file: string): Promise<PackageLauncherFingerprint> {
     const stat = await read(() => fs.lstat(file, { bigint: true }));
     const contents = stat.isSymbolicLink()
       ? await read(() => fs.readlink(file))
@@ -308,15 +368,13 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     if (!unchanged(stat, await read(() => fs.lstat(file, { bigint: true })))) {
       throw new Error("Package rollback launcher changed during verification");
     }
-    // Launchers are copied, unlike the package tree. Their copy is compared
-    // with the captured contents/target and permissions, not the new inode.
-    return JSON.stringify([
-      stat.isSymbolicLink() ? "symlink" : "file",
-      stat.mode.toString(),
-      stat.uid.toString(),
-      stat.gid.toString(),
+    return {
+      type: stat.isSymbolicLink() ? "symlink" : "file",
+      mode: stat.mode.toString(),
+      uid: stat.uid.toString(),
+      gid: stat.gid.toString(),
       contents,
-    ]);
+    };
   }
 
   async function exists(file: string): Promise<boolean> {
@@ -331,5 +389,5 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
     }
   }
 
-  return { tree, rootEntry, launcher, exists, entries, observe };
+  return { tree, rootEntry, directoryIdentity, launcher, exists, entries, observe };
 }

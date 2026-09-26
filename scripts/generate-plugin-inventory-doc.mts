@@ -3,13 +3,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import type { PluginManifest as RuntimePluginManifest } from "../src/plugins/manifest-types.js";
-import type { PackageManifest as RuntimePackageManifest } from "../src/plugins/package-manifest.js";
 import { collectExcludedPackagedExtensionDirs } from "./lib/packaged-extension-dirs.mts";
 import {
   assertPluginInventoryCoverage,
   resolvePluginSurface,
 } from "./lib/plugin-inventory-doc.mts";
+import {
+  collectPluginSourceEntries,
+  exportPluginInventory,
+  resolvePluginStatus,
+  type PluginManifest,
+  type PluginPackageJson,
+  type PluginSourceEntry,
+  type PluginStatus,
+} from "./lib/plugin-inventory.mts";
 
 const DOC_PATH = "docs/plugins/plugin-inventory.md";
 const REFERENCE_INDEX_PATH = "docs/plugins/reference.md";
@@ -72,24 +79,11 @@ const RELATED_DOC_PRODUCT_IDS = new Set([
   "whatsapp",
 ]);
 
-type PluginManifest = Partial<RuntimePluginManifest>;
-type PluginPackageJson = Partial<RuntimePackageManifest> & {
-  openclaw?: RuntimePackageManifest["openclaw"] & {
-    release?: Partial<Record<"publishToClawHub" | "publishToNpm", boolean>>;
-  };
-};
 type DocLink = { label: string; href: string };
-type PluginStatus = "core" | "external" | "source";
-type PluginSourceEntry = {
-  dirName: string;
-  id: string;
-  manifest: PluginManifest;
-  packageJson: PluginPackageJson;
-};
 
 function createPluginRecord(entry: PluginSourceEntry, excludedDirs: Set<string>) {
   const { id, manifest, packageJson } = entry;
-  const status = resolveStatus(entry, excludedDirs);
+  const status = resolvePluginStatus(entry, excludedDirs);
   return {
     description: resolveDescription(entry),
     docs: resolveDocs(entry),
@@ -411,23 +405,6 @@ function resolveInstallRoute(packageJson: PluginPackageJson, status: PluginStatu
   return "installable plugin";
 }
 
-function resolveStatus(
-  { dirName, packageJson }: PluginSourceEntry,
-  excludedDirs: Set<string>,
-): PluginStatus {
-  const release = packageJson.openclaw?.release;
-  const hasInstallSpec =
-    typeof packageJson.openclaw?.install?.clawhubSpec === "string" ||
-    typeof packageJson.openclaw?.install?.npmSpec === "string";
-  if (!excludedDirs.has(dirName)) {
-    return "core";
-  }
-  if (release?.publishToClawHub === true || release?.publishToNpm === true || hasInstallSpec) {
-    return "external";
-  }
-  return "source";
-}
-
 function escapeInventoryText(value: unknown) {
   return String(value).replaceAll("\n", " ").trim();
 }
@@ -542,7 +519,7 @@ ${renderSurface(record.surface)}${manualBlock ? `\n\n${manualBlock}` : ""}${rela
 function renderReferenceIndex(records: PluginRecord[]) {
   const referenceCount = records.filter(hasGeneratedReferencePage).length;
   return `---
-summary: "Generated index of OpenClaw plugin reference pages"
+summary: "Pointer to the generated OpenClaw plugin reference pages"
 read_when:
   - You need a reference page for a specific OpenClaw plugin
   - You are auditing plugin docs coverage
@@ -554,8 +531,10 @@ ${GENERATED_NOTICE}
 This section holds one reference page for each OpenClaw plugin. Each page states
 the package, the install route, and the surface the plugin adds.
 
-Use [Plugin inventory](/plugins/plugin-inventory) to browse all ${referenceCount}
-generated plugin reference pages by distribution, package, and description.
+This page is a pointer, not the index. The browsable list of all
+${referenceCount} generated plugin reference pages lives in
+[Plugin inventory](/plugins/plugin-inventory), sorted by distribution, package,
+and description.
 
 ## How this page is built
 
@@ -567,26 +546,6 @@ entries when \`package.json\` is present. Regenerate the page with:
 pnpm plugins:inventory:gen
 \`\`\`
 `;
-}
-
-function collectPluginSourceEntries(): PluginSourceEntry[] {
-  const entries: PluginSourceEntry[] = [];
-  for (const dirName of fs
-    .readdirSync(EXTENSIONS_DIR)
-    .toSorted((left, right) => left.localeCompare(right))) {
-    const packagePath = path.join(EXTENSIONS_DIR, dirName, "package.json");
-    const manifestPath = path.join(EXTENSIONS_DIR, dirName, "openclaw.plugin.json");
-    if (!fs.existsSync(manifestPath)) {
-      continue;
-    }
-    const packageJson = fs.existsSync(packagePath)
-      ? (readJsonPath(packagePath) as PluginPackageJson)
-      : {};
-    const manifest = readJsonPath(manifestPath) as PluginManifest;
-    const id = typeof manifest.id === "string" && manifest.id ? manifest.id : dirName;
-    entries.push({ dirName, id, manifest, packageJson });
-  }
-  return entries;
 }
 
 function enumerateTopLevelPluginManifests() {
@@ -654,7 +613,7 @@ function collectExternalPluginDocsInventoryEntries(): PluginSourceEntry[] {
 function collectPluginRecords() {
   const rootPackageJson = readJsonPath(path.join(ROOT, "package.json")) as { files?: unknown[] };
   const excludedDirs = collectExcludedPackagedExtensionDirs(rootPackageJson);
-  const sourceEntries = collectPluginSourceEntries();
+  const sourceEntries = collectPluginSourceEntries(ROOT);
   assertPluginInventoryCoverage(sourceEntries, enumerateTopLevelPluginManifests());
   const records = sourceEntries.map((entry) => createPluginRecord(entry, excludedDirs));
 
@@ -709,8 +668,7 @@ function readGeneratedDocs(records: PluginRecord[]) {
   ];
 }
 
-function renderDocument() {
-  const records = collectPluginRecords();
+function renderDocument(records: PluginRecord[]) {
   const groups = {
     core: records.filter((record) => record.status === "core"),
     external: records.filter((record) => record.status === "external"),
@@ -747,20 +705,20 @@ dependencies are available.
 
 Use the install route in each entry to decide whether install is needed. Plugins
 that say \`included in OpenClaw\` are already present in the core package.
-Official external packages need one install, then a Gateway restart.
+Official external packages need one install. Installation applies to the running
+local Gateway without restarting it; start the Gateway if it was stopped.
 
 For example, Discord is an official external package:
 
 \`\`\`bash
 openclaw plugins install @openclaw/discord
-openclaw gateway restart
 openclaw plugins inspect discord --runtime --json
 \`\`\`
 
-During the launch cutover, ordinary bare package specs still install from npm.
-Use \`clawhub:@openclaw/discord\` or \`npm:@openclaw/discord\` when you need an
-explicit source. After install, follow the plugin's setup doc, such as
-[Discord](/channels/discord), to add credentials and channel config. See
+Ordinary bare package specs install from npm. Use \`clawhub:@openclaw/discord\`
+or \`npm:@openclaw/discord\` when you need an explicit source. After install,
+follow the plugin's setup doc, such as [Discord](/channels/discord), to add
+credentials and channel config. See
 [Manage plugins](/plugins/manage-plugins) for update, uninstall, and publishing
 commands.
 
@@ -798,17 +756,28 @@ pnpm plugins:inventory:gen
 }
 
 function main(argv = process.argv.slice(2)) {
-  const write = argv.includes("--write");
-  const check = argv.includes("--check");
-  if (write === check) {
+  const [mode = "", ...args] = argv;
+  if (
+    !["--write", "--check", "--json"].includes(mode) ||
+    (mode === "--json"
+      ? args.length !== 0 && (args.length !== 2 || args[0] !== "--commit")
+      : args.length !== 0)
+  ) {
     console.error(
-      "usage: node --import tsx scripts/generate-plugin-inventory-doc.mts --write|--check",
+      "usage: node scripts/generate-plugin-inventory-doc.mts --write|--check|--json [--commit <SHA>]",
     );
-    process.exit(2);
+    console.error("[plugin-inventory] FAILED (exit 2)");
+    process.exitCode = 2;
+    return;
   }
+  if (mode === "--json") {
+    console.log(JSON.stringify(exportPluginInventory(ROOT, args[1]), null, 2));
+    return;
+  }
+  const write = mode === "--write";
 
   const records = collectPluginRecords();
-  const next = renderDocument();
+  const next = renderDocument(records);
   const docPath = path.join(ROOT, DOC_PATH);
   if (write) {
     fs.writeFileSync(docPath, next, "utf8");
@@ -818,17 +787,21 @@ function main(argv = process.argv.slice(2)) {
 
   const current = fs.existsSync(docPath) ? fs.readFileSync(docPath, "utf8") : "";
   if (current !== next) {
-    console.error(`${DOC_PATH} is stale. Run \`pnpm plugins:inventory:gen\`.`);
-    process.exit(1);
+    throw new Error(`${DOC_PATH} is stale. Run \`pnpm plugins:inventory:gen\`.`);
   }
   for (const [relativePath, expected] of readGeneratedDocs(records)) {
     const fullPath = path.join(ROOT, relativePath);
     const actual = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, "utf8") : "";
     if (actual !== expected) {
-      console.error(`${relativePath} is stale. Run \`pnpm plugins:inventory:gen\`.`);
-      process.exit(1);
+      throw new Error(`${relativePath} is stale. Run \`pnpm plugins:inventory:gen\`.`);
     }
   }
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  console.error("[plugin-inventory] FAILED (exit 1)");
+  process.exitCode = 1;
+}

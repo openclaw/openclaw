@@ -16,7 +16,8 @@ export async function prepareGatewayShutdownRuntime() {
     { stopGmailWatcher },
     { disposeAllCodeModeRuns },
     { closeProviderTransportDispatcherPool },
-    { clearActivePluginRegistry, prepareActivePluginRegistryShutdown },
+    { prepareActivePluginRegistryShutdown },
+    { waitForPluginCacheRetirement },
   ] = await Promise.all([
     import("./server-close.runtime.js"),
     import("../plugins/hook-runner-global.js"),
@@ -30,6 +31,7 @@ export async function prepareGatewayShutdownRuntime() {
     import("../agents/code-mode-state.js"),
     import("../agents/provider-transport-dispatcher-pool.js"),
     import("../plugins/runtime.js"),
+    import("../plugins/plugin-cache.js"),
   ]);
   await prepareActivePluginRegistryShutdown();
 
@@ -48,7 +50,7 @@ export async function prepareGatewayShutdownRuntime() {
     stopGmailWatcher,
     disposeAllCodeModeRuns,
     closeProviderTransportDispatcherPool,
-    clearActivePluginRegistry,
+    waitForPluginCacheRetirement,
   };
 }
 

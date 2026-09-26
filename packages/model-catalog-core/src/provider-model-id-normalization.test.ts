@@ -49,7 +49,14 @@ describe("provider model id policy normalization", () => {
     ).toBe("claude-haiku-4-5");
     // Bare family aliases track the current default for that family; pinned
     // version aliases keep resolving to their own model.
-    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus")).toBe("claude-opus-5");
+    for (const alias of ["opus", "opus-5.5", "opus-5-5", "anthropic/opus"]) {
+      expect(normalizeStaticProviderModelIdWithPolicies("anthropic", alias)).toBe(
+        "claude-opus-5-5",
+      );
+    }
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "claude-opus-5")).toBe(
+      "claude-opus-5",
+    );
     expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus-5")).toBe("claude-opus-5");
     expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus-4.8")).toBe(
       "claude-opus-4-8",
@@ -59,6 +66,24 @@ describe("provider model id policy normalization", () => {
     );
     expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "sonnet-5")).toBe(
       "claude-sonnet-5",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "fable")).toBe(
+      "claude-fable-5-1",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "fable-5")).toBe(
+      "claude-fable-5",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "fable-5.1")).toBe(
+      "claude-fable-5-1",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "haiku")).toBe(
+      "claude-haiku-4-5",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "opus-4.7")).toBe(
+      "claude-opus-4-7",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "mythos-5")).toBe(
+      "claude-mythos-5",
     );
     expect(normalizeStaticProviderModelIdWithPolicies("vercel-ai-gateway", "sonnet")).toBe(
       "anthropic/claude-sonnet-4-6",

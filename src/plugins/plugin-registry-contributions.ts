@@ -17,7 +17,10 @@ import {
   listPluginManifestContributionIds,
   type PluginMetadataContributionKey,
 } from "./plugin-metadata-contributions.js";
-import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshotForRegistry,
+  resolvePluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
@@ -25,7 +28,7 @@ import {
   type PluginRegistryIdNormalizerOptions,
 } from "./plugin-registry-id-normalizer.js";
 import {
-  loadPluginRegistrySnapshot,
+  canReusePluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata,
   type LoadPluginRegistryParams,
   type PluginRegistrySnapshot,
@@ -91,19 +94,7 @@ function loadManifestContractRecords(
 ): readonly PluginManifestRecord[] {
   let records = params.manifestRecords;
   if (!records) {
-    const requiresExplicitRegistry =
-      params.index !== undefined ||
-      params.preferPersisted === false ||
-      params.allowCurrent === false ||
-      params.stateDir !== undefined ||
-      params.filePath !== undefined ||
-      params.pluginIndexFilePath !== undefined ||
-      params.installRecords !== undefined ||
-      params.candidates !== undefined ||
-      params.diagnostics !== undefined ||
-      params.discovery !== undefined ||
-      params.now !== undefined;
-    if (requiresExplicitRegistry) {
+    if (!canReusePluginRegistrySnapshot(params)) {
       return loadPluginManifestRegistryForPluginRegistry({
         ...params,
         pluginIds: params.onlyPluginIds,
@@ -136,47 +127,42 @@ function createContributionPluginFilter(
   return createInstalledPluginEnabledPredicate(index.plugins, params.config, params.env);
 }
 
-function loadContributionManifestRegistry(
-  params: LoadPluginRegistryParams & {
-    index: PluginRegistrySnapshot;
-    includeDisabled?: boolean;
-  },
-): PluginManifestRegistry {
-  const pluginIds = params.index.plugins.map((plugin) => plugin.pluginId);
+function listContributionManifestPlugins(
+  params: PluginRegistryContributionOptions,
+): readonly PluginManifestRecord[] {
+  const lookUpTable = params.lookUpTable;
+  if (lookUpTable) {
+    const includePlugin = createContributionPluginFilter(params, lookUpTable.index);
+    return lookUpTable.plugins.filter((plugin) => includePlugin(plugin.id));
+  }
+  const { snapshot: index, manifestRegistry } = loadContributionRegistrySnapshot(params);
+  const pluginIds = index.plugins.map((plugin) => plugin.pluginId);
   return loadPluginManifestRegistryForInstalledIndex({
-    index: params.index,
+    index,
+    manifestRegistry,
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
     pluginIds: params.includeDisabled
       ? pluginIds
-      : pluginIds.filter(
-          createInstalledPluginEnabledPredicate(params.index.plugins, params.config, params.env),
-        ),
+      : pluginIds.filter(createContributionPluginFilter(params, index)),
     includeDisabled: true,
-  });
+  }).plugins;
 }
 
-function listContributionManifestPlugins(
-  params: PluginRegistryContributionOptions & {
-    index: PluginRegistrySnapshot;
-  },
-): readonly PluginManifestRecord[] {
-  const plugins = params.lookUpTable?.plugins;
-  if (plugins) {
-    const includePlugin = createContributionPluginFilter(params, params.index);
-    return plugins.filter((plugin) => includePlugin(plugin.id));
-  }
-  return loadContributionManifestRegistry({
-    ...params,
-    index: params.index,
-  }).plugins;
+function loadContributionRegistrySnapshot(params: LoadPluginRegistryManifestParams) {
+  const metadata = params.bundledChannelConfigCollector
+    ? undefined
+    : loadPluginMetadataSnapshotForRegistry(params);
+  return metadata
+    ? { snapshot: metadata.index, manifestRegistry: metadata.manifestRegistry }
+    : loadPluginRegistrySnapshotWithMetadata(params);
 }
 
 export function loadPluginManifestRegistryForPluginRegistry(
   params: LoadPluginRegistryManifestParams = {},
 ): PluginManifestRegistry {
-  const { snapshot: index, manifestRegistry } = loadPluginRegistrySnapshotWithMetadata(params);
+  const { snapshot: index, manifestRegistry } = loadContributionRegistrySnapshot(params);
   return loadPluginManifestRegistryForInstalledIndex({
     index,
     ...(manifestRegistry ? { manifestRegistry } : {}),
@@ -205,8 +191,7 @@ export function normalizePluginsConfigWithRegistry(
 export function listPluginContributionIds(
   params: ListPluginContributionIdsParams,
 ): readonly string[] {
-  const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
-  const plugins = listContributionManifestPlugins({ ...params, index });
+  const plugins = listContributionManifestPlugins(params);
   return normalizeSortedUniqueStringEntries(
     plugins.flatMap((plugin) => listPluginManifestContributionIds(plugin, params.contribution)),
   );
@@ -215,8 +200,8 @@ export function listPluginContributionIds(
 export function resolvePluginContributionOwners(
   params: ResolvePluginContributionOwnersParams,
 ): readonly string[] {
-  const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
   if (params.lookUpTable && typeof params.matches === "string") {
+    const index = params.lookUpTable.index;
     const owners = params.lookUpTable.owners[params.contribution].get(params.matches);
     if (!owners) {
       return [];
@@ -229,7 +214,7 @@ export function resolvePluginContributionOwners(
     typeof params.matches === "string"
       ? (contributionId: string) => contributionId === params.matches
       : params.matches;
-  const plugins = listContributionManifestPlugins({ ...params, index });
+  const plugins = listContributionManifestPlugins(params);
   return normalizeSortedUniqueStringEntries(
     plugins.flatMap((plugin) =>
       listPluginManifestContributionIds(plugin, params.contribution).some(matcher)

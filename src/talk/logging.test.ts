@@ -9,10 +9,18 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { createTalkLogRecord, recordTalkLogEvent } from "./logging.js";
+import { flushLogger, getChildLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { recordTalkLogEvent } from "./logging.js";
 import { recordTalkObservabilityEvent } from "./observability.js";
 import { createTalkEventSequencer } from "./talk-events.js";
+
+const TALK_CONTEXT = {
+  sessionId: "talk-session",
+  mode: "realtime",
+  transport: "gateway-relay",
+  brain: "agent-consult",
+  provider: "openai",
+} as const;
 
 function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => {
@@ -68,7 +76,8 @@ describe("talk logging", () => {
     setLoggerOverride({ level: "info", file: logFile });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await flushLogger();
     resetDiagnosticEventsForTest();
     setLoggerOverride(null);
     resetLogger();
@@ -82,13 +91,7 @@ describe("talk logging", () => {
         logs.push(event);
       }
     });
-    const events = createTalkEventSequencer({
-      sessionId: "talk-session",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: "openai",
-    });
+    const events = createTalkEventSequencer(TALK_CONTEXT);
     const talkEvent = events.next({
       type: "output.text.done",
       turnId: "turn-1",
@@ -98,21 +101,6 @@ describe("talk logging", () => {
       payload: {
         text: "private transcript should not be logged",
         durationMs: 42,
-      },
-    });
-
-    expect(createTalkLogRecord(talkEvent)).toEqual({
-      level: "info",
-      message: "talk event output.text.done",
-      attributes: {
-        sessionId: "talk-session",
-        talkEventType: "output.text.done",
-        talkMode: "realtime",
-        talkTransport: "gateway-relay",
-        talkBrain: "agent-consult",
-        talkProvider: "openai",
-        talkFinal: true,
-        talkDurationMs: 42,
       },
     });
 
@@ -143,12 +131,24 @@ describe("talk logging", () => {
     expect(serialized).not.toContain("call-1");
     expect(serialized).not.toContain("item-1");
 
+    // Other subsystems share the file sink and can log after diagnostic collection ends.
+    getChildLogger({ subsystem: "sibling" }).info("unrelated lifecycle event");
+
     // The file transport appends asynchronously; drain it before reading.
     await flushLogger();
     const fileLog = fs.readFileSync(logFile, "utf8");
-    const fileLogRecord = JSON.parse(fileLog.trim()) as Record<string, unknown>;
+    const fileLogRecords = fileLog
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const talkRecords = fileLogRecords.filter((record) => record["0"] === '{"subsystem":"talk"}');
+    expect(talkRecords).toHaveLength(1);
+    const fileLogRecord = expectDefined(talkRecords[0], "Talk file log record");
     expect(fileLogRecord.message).toBe("talk event output.text.done");
     expect(fileLogRecord.session_id).toBe("talk-session");
+    expect(fileLogRecords).toContainEqual(
+      expect.objectContaining({ message: "unrelated lifecycle event" }),
+    );
     expect(fileLog).not.toContain("private transcript");
     expect(fileLog).not.toContain("turn-1");
     expect(fileLog).not.toContain("call-1");
@@ -162,13 +162,7 @@ describe("talk logging", () => {
         logs.push(event);
       }
     });
-    const events = createTalkEventSequencer({
-      sessionId: "talk-session",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: "openai",
-    });
+    const events = createTalkEventSequencer(TALK_CONTEXT);
 
     recordTalkLogEvent(
       events.next({
@@ -195,13 +189,7 @@ describe("talk logging", () => {
     const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
       observed.push({ event, trusted: metadata.trusted });
     });
-    const events = createTalkEventSequencer({
-      sessionId: "talk-session",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: "openai",
-    });
+    const events = createTalkEventSequencer(TALK_CONTEXT);
 
     recordTalkObservabilityEvent(
       events.next({

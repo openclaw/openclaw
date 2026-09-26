@@ -14,6 +14,7 @@ import { resolveGatewayLockDir } from "../config/paths.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -113,18 +114,30 @@ function expectedTrashSourcePath(targetPath: string): string {
 }
 
 describe("moveToTrash", () => {
+  it("retains the target when ownership expires during asynchronous preparation", async () => {
+    const targetPath = path.join(tempDirs.make("openclaw-trash-expired-"), "target");
+    await fs.writeFile(targetPath, "retain me");
+    let owned = true;
+    const removal = moveToTrash(targetPath, createTestRuntime(), () => {
+      if (!owned) {
+        throw new Error("cleanup ownership expired");
+      }
+    });
+    owned = false;
+
+    await expect(removal).resolves.toBe(false);
+    expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalled();
+    expect(await fs.readFile(targetPath, "utf8")).toBe("retain me");
+  });
+
   it("uses fs-safe trash instead of resolving a PATH trash command", async () => {
-    const testRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-helper-"));
+    const testRoot = tempDirs.make("openclaw-trash-helper-");
     const targetPath = path.join(testRoot, "target");
     fsSync.mkdirSync(targetPath, { recursive: true });
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
     const sourcePath = expectedTrashSourcePath(targetPath);
 
-    try {
-      await moveToTrash(targetPath, runtime);
-    } finally {
-      fsSync.rmSync(testRoot, { recursive: true, force: true });
-    }
+    await moveToTrash(targetPath, runtime);
 
     expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
       allowedRoots: [path.dirname(sourcePath)],
@@ -134,7 +147,7 @@ describe("moveToTrash", () => {
   });
 
   it("allows fs-safe trash to move a symlink whose target resolves outside the parent", async () => {
-    const testRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-symlink-"));
+    const testRoot = tempDirs.make("openclaw-trash-symlink-");
     const targetPath = path.join(testRoot, "target-link");
     const outsideTarget = path.join(os.tmpdir(), "openclaw-trash-symlink-target");
     fsSync.writeFileSync(targetPath, "link placeholder");
@@ -146,11 +159,7 @@ describe("moveToTrash", () => {
     );
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
 
-    try {
-      await moveToTrash(targetPath, runtime);
-    } finally {
-      fsSync.rmSync(testRoot, { recursive: true, force: true });
-    }
+    await moveToTrash(targetPath, runtime);
 
     expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(targetPath, {
       allowedRoots: [path.dirname(targetPath), path.dirname(outsideTarget)],
@@ -164,11 +173,7 @@ describe("moveToTrash", () => {
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
     const sourcePath = expectedTrashSourcePath(targetPath);
 
-    try {
-      await expect(moveToTrash(targetPath, runtime)).resolves.toBe(true);
-    } finally {
-      fsSync.rmSync(testRoot, { recursive: true, force: true });
-    }
+    await expect(moveToTrash(targetPath, runtime)).resolves.toBe(true);
 
     expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
       allowedRoots: [path.dirname(sourcePath)],
@@ -176,7 +181,7 @@ describe("moveToTrash", () => {
   });
 
   it("canonicalizes a symlinked parent before calling fs-safe trash", async () => {
-    const testRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-trash-parent-link-"));
+    const testRoot = tempDirs.make("openclaw-trash-parent-link-");
     const lexicalParent = path.join(testRoot, "state-link");
     const realParent = path.join(testRoot, "state-real");
     const targetPath = path.join(lexicalParent, "openclaw.json");
@@ -191,11 +196,7 @@ describe("moveToTrash", () => {
     } as fsSync.Stats);
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
 
-    try {
-      await moveToTrash(targetPath, runtime);
-    } finally {
-      fsSync.rmSync(testRoot, { recursive: true, force: true });
-    }
+    await moveToTrash(targetPath, runtime);
 
     expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(sourcePath, {
       allowedRoots: [realParent],
@@ -631,16 +632,12 @@ describe("cleanup path removals", () => {
     const tmpRoot = tempDirs.make("openclaw-cleanup-workspace-");
     const workspaceDir = path.join(tmpRoot, "workspace");
 
-    try {
-      await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(workspaceDir, { recursive: true });
 
-      await removeWorkspaceDirs([workspaceDir], runtime, { removeStateRows: true });
+    await removeWorkspaceDirs([workspaceDir], runtime, { removeStateRows: true });
 
-      await expect(fs.stat(workspaceDir)).rejects.toThrow();
-      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
+    await expect(fs.stat(workspaceDir)).rejects.toThrow();
+    expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
   });
 
   it("cleans workspace state when the workspace directory is already missing", async () => {
@@ -649,19 +646,15 @@ describe("cleanup path removals", () => {
     const workspaceDir = path.join(tmpRoot, "workspace");
     const siblingMarker = `${workspaceDir}.attested`;
 
-    try {
-      await fs.writeFile(
-        siblingMarker,
-        "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
-      );
+    await fs.writeFile(
+      siblingMarker,
+      "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
+    );
 
-      await removeWorkspaceDirs([workspaceDir], runtime, { removeStateRows: true });
+    await removeWorkspaceDirs([workspaceDir], runtime, { removeStateRows: true });
 
-      await expect(fs.stat(siblingMarker)).rejects.toThrow();
-      expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
+    await expect(fs.stat(siblingMarker)).rejects.toThrow();
+    expect(workspaceStateMocks.deleteWorkspaceState).toHaveBeenCalledWith({ workspaceDir });
   });
 
   it("removes a retired sibling marker after workspace removal without opening SQLite", async () => {
@@ -670,21 +663,17 @@ describe("cleanup path removals", () => {
     const workspaceDir = path.join(tmpRoot, "workspace");
     const siblingMarker = `${workspaceDir}.attested`;
 
-    try {
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.writeFile(
-        siblingMarker,
-        "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
-      );
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      siblingMarker,
+      "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
+    );
 
-      await removeWorkspaceDirs([workspaceDir], runtime);
+    await removeWorkspaceDirs([workspaceDir], runtime);
 
-      await expect(fs.stat(workspaceDir)).rejects.toThrow();
-      await expect(fs.stat(siblingMarker)).rejects.toThrow();
-      expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
+    await expect(fs.stat(workspaceDir)).rejects.toThrow();
+    await expect(fs.stat(siblingMarker)).rejects.toThrow();
+    expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
   });
 
   it("does not delete workspace state during dry-run", async () => {
@@ -704,20 +693,16 @@ describe("cleanup path removals", () => {
     const workspaceDir = path.join(tmpRoot, "workspace");
     const siblingMarker = `${workspaceDir}.attested`;
 
-    try {
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.writeFile(
-        siblingMarker,
-        "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
-      );
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      siblingMarker,
+      "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n",
+    );
 
-      await removeWorkspaceDirs([workspaceDir], runtime, { dryRun: true });
+    await removeWorkspaceDirs([workspaceDir], runtime, { dryRun: true });
 
-      expect(runtime.log).toHaveBeenCalledWith(`[dry-run] remove ${siblingMarker}`);
-      await expect(fs.lstat(siblingMarker)).resolves.toBeDefined();
-    } finally {
-      await fs.rm(tmpRoot, { recursive: true, force: true });
-    }
+    expect(runtime.log).toHaveBeenCalledWith(`[dry-run] remove ${siblingMarker}`);
+    await expect(fs.lstat(siblingMarker)).resolves.toBeDefined();
   });
 
   it("retains workspace state when filesystem removal fails", async () => {

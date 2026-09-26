@@ -58,6 +58,8 @@ const cfg: OpenClawConfig = {
   },
 };
 
+const handlerContext = { cfg, accountId: "default", context: { account } };
+
 function createPendingView(): ExecApprovalPendingView {
   return {
     approvalId: "approval-1",
@@ -77,34 +79,19 @@ function createPendingView(): ExecApprovalPendingView {
     host: "gateway",
     nodeId: null,
     sessionKey: "agent:main:googlechat:spaces/AAA",
-    actions: [
-      {
-        kind: "decision",
-        decision: "allow-once",
-        label: "Allow Once",
-        style: "success",
-        command: "/approve approval-1 allow-once",
-        action: {
-          type: "approval",
-          approvalId: "approval-1",
-          approvalKind: "exec",
-          decision: "allow-once",
-        },
-      },
-      {
-        kind: "decision",
-        decision: "deny",
-        label: "Deny",
-        style: "danger",
-        command: "/approve approval-1 deny",
-        action: {
-          type: "approval",
-          approvalId: "approval-1",
-          approvalKind: "exec",
-          decision: "deny",
-        },
-      },
-    ],
+    actions: (
+      [
+        ["allow-once", "Allow Once", "success"],
+        ["deny", "Deny", "danger"],
+      ] as const
+    ).map(([decision, label, style]) => ({
+      kind: "decision",
+      decision,
+      label,
+      style,
+      command: `/approve approval-1 ${decision}`,
+      action: { type: "approval", approvalId: "approval-1", approvalKind: "exec", decision },
+    })),
     expiresAtMs: Date.now() + 60_000,
   };
 }
@@ -158,9 +145,7 @@ describe("googleChatApprovalNativeRuntime", () => {
       expiresAtMs: view.expiresAtMs,
     };
     const pendingPayload = await googleChatApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg,
-      accountId: "default",
-      context: { account },
+      ...handlerContext,
       request,
       approvalKind: "exec",
       nowMs,
@@ -172,9 +157,7 @@ describe("googleChatApprovalNativeRuntime", () => {
       reason: "preferred" as const,
     };
     const prepared = await googleChatApprovalNativeRuntime.transport.prepareTarget({
-      cfg,
-      accountId: "default",
-      context: { account },
+      ...handlerContext,
       plannedTarget,
       request,
       approvalKind: "exec",
@@ -216,21 +199,8 @@ describe("googleChatApprovalNativeRuntime", () => {
     sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/msg-1" });
     updateGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/msg-1" });
 
-    const view = createPendingView();
-    const pendingPayload = await googleChatApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg,
-      accountId: "default",
-      context: { account },
-      request: {
-        id: "approval-1",
-        request: { command: "echo hi" },
-        createdAtMs: Date.now(),
-        expiresAtMs: view.expiresAtMs,
-      },
-      approvalKind: "exec",
-      nowMs: Date.now(),
-      view,
-    });
+    const { pendingPayload, plannedTarget, prepared, request, view } =
+      await preparePendingDelivery();
 
     expect(JSON.stringify(pendingPayload)).toContain("cardsV2");
     const commandText = getTextParagraphText(pendingPayload, "Command");
@@ -240,44 +210,11 @@ describe("googleChatApprovalNativeRuntime", () => {
     );
     expect(JSON.stringify(pendingPayload.cardsV2)).not.toContain("/approve approval-1 allow-once");
 
-    const prepared = await googleChatApprovalNativeRuntime.transport.prepareTarget({
-      cfg,
-      accountId: "default",
-      context: { account },
-      plannedTarget: {
-        surface: "origin",
-        target: { to: "spaces/AAA", threadId: "threads/T1" },
-        reason: "preferred",
-      },
-      request: {
-        id: "approval-1",
-        request: { command: "echo hi" },
-        createdAtMs: Date.now(),
-        expiresAtMs: view.expiresAtMs,
-      },
-      approvalKind: "exec",
-      view,
-      pendingPayload,
-    });
-    if (!prepared) {
-      throw new Error("Expected prepared target");
-    }
     const entry = await googleChatApprovalNativeRuntime.transport.deliverPending({
-      cfg,
-      accountId: "default",
-      context: { account },
-      plannedTarget: {
-        surface: "origin",
-        target: { to: "spaces/AAA", threadId: "threads/T1" },
-        reason: "preferred",
-      },
+      ...handlerContext,
+      plannedTarget,
       preparedTarget: prepared.target,
-      request: {
-        id: "approval-1",
-        request: { command: "echo hi" },
-        createdAtMs: Date.now(),
-        expiresAtMs: view.expiresAtMs,
-      },
+      request,
       approvalKind: "exec",
       view,
       pendingPayload,
@@ -310,15 +247,8 @@ describe("googleChatApprovalNativeRuntime", () => {
       resolvedBy: "users/123",
     };
     const final = await googleChatApprovalNativeRuntime.presentation.buildResolvedResult({
-      cfg,
-      accountId: "default",
-      context: { account },
-      request: {
-        id: "approval-1",
-        request: { command: "echo hi" },
-        createdAtMs: Date.now(),
-        expiresAtMs: view.expiresAtMs,
-      },
+      ...handlerContext,
+      request,
       resolved: {
         id: "approval-1",
         decision: "allow-once",
@@ -333,16 +263,9 @@ describe("googleChatApprovalNativeRuntime", () => {
       throw new Error("Expected update result and entry");
     }
     await googleChatApprovalNativeRuntime.transport.updateEntry?.({
-      cfg,
-      accountId: "default",
-      context: { account },
+      ...handlerContext,
       entry,
-      request: {
-        id: "approval-1",
-        request: { command: "echo hi" },
-        createdAtMs: 0,
-        expiresAtMs: view.expiresAtMs,
-      },
+      request,
       approvalKind: "exec",
       payload: final.payload,
       phase: "resolved",
@@ -358,15 +281,13 @@ describe("googleChatApprovalNativeRuntime", () => {
   });
 
   it.each([
-    { terminalStatus: undefined, label: "Not applied" },
+    { terminalStatus: undefined, label: "Denied" },
     { terminalStatus: "cancelled", label: "Cancelled" },
   ] as const)(
     "preserves the $label system-agent heading after denial",
     async ({ terminalStatus, label }) => {
       const result = await googleChatApprovalNativeRuntime.presentation.buildResolvedResult({
-        cfg,
-        accountId: "default",
-        context: { account },
+        ...handlerContext,
         request: {
           approvalKind: "system-agent",
           id: "system-agent:change-1",
@@ -419,9 +340,7 @@ describe("googleChatApprovalNativeRuntime", () => {
       await preparePendingDelivery();
 
     const deliveryPromise = googleChatApprovalNativeRuntime.transport.deliverPending({
-      cfg,
-      accountId: "default",
-      context: { account },
+      ...handlerContext,
       plannedTarget,
       preparedTarget: prepared.target,
       request,
@@ -450,9 +369,7 @@ describe("googleChatApprovalNativeRuntime", () => {
 
     await expect(
       googleChatApprovalNativeRuntime.transport.deliverPending({
-        cfg,
-        accountId: "default",
-        context: { account },
+        ...handlerContext,
         plannedTarget,
         preparedTarget: prepared.target,
         request,

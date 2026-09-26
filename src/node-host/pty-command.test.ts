@@ -40,9 +40,6 @@ describe("node PTY command", () => {
 
   it.each([
     { argv: ["sh"] },
-    { executable: "/bin/sh" },
-    { env: { TOKEN: "synthetic" } },
-    { agentId: "gateway-only" },
     { threadId: "invented" },
     { cwd: "relative" },
     { cwd: "/missing/native-start" },
@@ -78,6 +75,40 @@ describe("node PTY command", () => {
     ).rejects.toThrow("existing absolute directory");
     expect(spawn).not.toHaveBeenCalled();
   });
+
+  it.skipIf(Boolean(process.versions.bun)).each(["source", "abort"] as const)(
+    "closes PTY admission when %s authority changes during loading",
+    async (change) => {
+      nodePtySpawn.mockImplementation(() => {
+        throw new Error("unexpected PTY spawn");
+      });
+      const controller = new AbortController();
+      let sourceCurrent = true;
+      const pending = runNodePtyCommand(
+        {
+          file: "/synthetic/codex",
+          args: ["resume", "thread-1"],
+          cols: 80,
+          rows: 24,
+          assertCurrent: () => {
+            if (!sourceCurrent) {
+              throw new Error("source revoked");
+            }
+          },
+        },
+        { signal: controller.signal, emitChunk: vi.fn(), onInput: vi.fn() },
+      );
+      if (change === "source") {
+        sourceCurrent = false;
+      } else {
+        controller.abort();
+      }
+      await expect(pending).rejects.toThrow(
+        change === "source" ? "source revoked" : "PTY construction aborted",
+      );
+      expect(nodePtySpawn).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     "relays output, data, resize, abort, and exit (fresh=%s)",

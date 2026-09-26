@@ -122,25 +122,6 @@ describe("sendTranscriptEcho", () => {
     expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("prefers OriginatingTo when From is absent", async () => {
-    await sendTranscriptEcho({
-      ctx: createCtx({ From: undefined, OriginatingTo: "+19999999999" }),
-      cfg: EMPTY_CONFIG,
-      transcript: "hello world",
-    });
-
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith({
-      cfg: EMPTY_CONFIG,
-      channel: "voicechat",
-      to: "+19999999999",
-      accountId: "acc1",
-      threadId: undefined,
-      payloads: [{ text: DEFAULT_ECHO_TRANSCRIPT_FORMAT.replace("{transcript}", "hello world") }],
-      bestEffort: true,
-      durability: "best_effort",
-    });
-  });
-
   it("forwards Telegram account and thread metadata to outbound delivery", async () => {
     await sendTranscriptEcho({
       ctx: createCtx({

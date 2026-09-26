@@ -59,24 +59,15 @@ function resolveKeyBudget(
     return undefined;
   }
   const period = resolveLimitReset(data?.limit_reset);
-  const periodUsage =
-    period === "daily"
-      ? parseProviderUsageNonNegativeNumber(data?.usage_daily)
-      : period === "weekly"
-        ? parseProviderUsageNonNegativeNumber(data?.usage_weekly)
-        : period === "monthly"
-          ? parseProviderUsageNonNegativeNumber(data?.usage_monthly)
-          : parseProviderUsageNonNegativeNumber(data?.usage);
+  const periodUsage = parseProviderUsageNonNegativeNumber(
+    period ? data?.[`usage_${period}`] : data?.usage,
+  );
   const byokUsage =
     data?.include_byok_in_limit !== true
       ? undefined
-      : period === "daily"
-        ? parseProviderUsageNonNegativeNumber(data.byok_usage_daily)
-        : period === "weekly"
-          ? parseProviderUsageNonNegativeNumber(data.byok_usage_weekly)
-          : period === "monthly"
-            ? parseProviderUsageNonNegativeNumber(data.byok_usage_monthly)
-            : parseProviderUsageNonNegativeNumber(data.byok_usage);
+      : parseProviderUsageNonNegativeNumber(
+          period ? data[`byok_usage_${period}`] : data.byok_usage,
+        );
   const remaining = parseProviderUsageNonNegativeNumber(data?.limit_remaining);
   // `limit_remaining` already incorporates BYOK usage when the key is configured to count it.
   const usage =
@@ -103,6 +94,7 @@ async function fetchEndpoint(params: {
   ssrfPolicy: ReturnType<typeof resolveOpenRouterSsrfPolicy>;
   dispatcherPolicy: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn: typeof fetch;
 }): Promise<EndpointResult> {
   let guardedResponse: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
@@ -118,6 +110,7 @@ async function fetchEndpoint(params: {
         redirect: "error",
       },
       timeoutMs: params.timeoutMs,
+      signal: params.signal,
       // The shared guard controls redirects manually; zero hops preserves fail-closed usage auth.
       maxRedirects: 0,
       policy: params.ssrfPolicy,
@@ -129,7 +122,8 @@ async function fetchEndpoint(params: {
   try {
     const { response } = guardedResponse;
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      // release() aborts transport before cancelling unread capture-tee bodies.
+      // Awaiting one branch here can hold the error result until the other ends.
       return { ok: false, status: response.status };
     }
     try {
@@ -149,6 +143,7 @@ export async function fetchOpenRouterUsage(params: {
   baseUrl?: string;
   request?: ModelProviderConfig["request"];
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn: typeof fetch;
 }): Promise<ProviderUsageSnapshot> {
   const requestConfig = resolveProviderHttpRequestConfig({
@@ -168,6 +163,7 @@ export async function fetchOpenRouterUsage(params: {
     ssrfPolicy: resolveOpenRouterSsrfPolicy(requestConfig, params.request),
     dispatcherPolicy: requestConfig.dispatcherPolicy,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
     fetchFn: params.fetchFn,
   };
   const [creditsResult, keyResult] = await Promise.all([

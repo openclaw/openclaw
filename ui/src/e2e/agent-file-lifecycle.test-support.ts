@@ -31,7 +31,7 @@ export async function captureAgentFileScreenshot(page: Page, name: string) {
 }
 
 export async function selectAgentFileWorkspace(page: Page, name: string) {
-  const select = page.locator(".agents-control-select openclaw-agent-select");
+  const select = page.locator(".settings-sidebar__agent openclaw-agent-select");
   await select.locator(".agent-select__trigger").click();
   await select.locator("wa-dropdown-item[data-agent-option]").filter({ hasText: name }).click();
   await expect

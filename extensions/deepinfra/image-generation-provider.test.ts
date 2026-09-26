@@ -44,12 +44,12 @@ describe("deepinfra image generation provider", () => {
   it("sends OpenAI-compatible image generation requests and sniffs JPEG output", async () => {
     const release = vi.fn(async () => {});
     const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
-    postJsonRequestMock.mockResolvedValue({
+    postJsonRequestMock.mockImplementation(async () => ({
       response: Response.json({
         data: [{ b64_json: jpegBytes.toString("base64"), revised_prompt: "red square" }],
       }),
       release,
-    });
+    }));
 
     const provider = buildDeepInfraImageGenerationProvider();
     const result = await provider.generateImage({
@@ -127,7 +127,7 @@ describe("deepinfra image generation provider", () => {
   });
 
   it("sends image edits as multipart OpenAI-compatible requests", async () => {
-    postMultipartRequestMock.mockResolvedValue({
+    postMultipartRequestMock.mockImplementation(async () => ({
       response: Response.json({
         data: [
           {
@@ -138,7 +138,7 @@ describe("deepinfra image generation provider", () => {
         ],
       }),
       release: vi.fn(async () => {}),
-    });
+    }));
 
     const provider = buildDeepInfraImageGenerationProvider();
     const result = await provider.generateImage({

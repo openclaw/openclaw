@@ -1,7 +1,3 @@
-/**
- * Message normalization utilities for chat rendering.
- */
-
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import {
   asFiniteNumber,
@@ -14,21 +10,22 @@ import {
   extractCanvasShortcodes,
   isCanvasBoardWidgetName,
 } from "../../../../src/chat/canvas-render.js";
+import { readMessageClientSources } from "../../../../src/chat/message-client-source.js";
 import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identity.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
-import {
-  isRelativeAssistantMediaReference,
-  splitMediaFromOutput,
-} from "../../../../src/media/parse.js";
+import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
+import { splitMediaFromOutput } from "../../../../src/media/parse.js";
+import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
-import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
+import { normalizeImageContentBlock } from "./message-normalizer-images.ts";
+import { formatSenderLabel, normalizeSenderIdentity, type SenderIdentity } from "./sender-label.ts";
 
 // Keep legacy labels readable without treating their UUID suffix as profile evidence.
 const OPAQUE_ID_LABEL_SUFFIX_RE =
@@ -69,10 +66,12 @@ export function readMessageSenderSession(value: unknown): NormalizedMessage["sen
   }
   const sessionKey = normalizeOptionalString(source.sessionKey);
   const agentId = normalizeOptionalString(source.agentId);
+  const label = normalizeOptionalString(source.label);
   return sessionKey || agentId
     ? {
         ...("sessionKey" in source ? { sessionKey } : {}),
         ...("agentId" in source ? { agentId } : {}),
+        ...(label ? { label } : {}),
       }
     : undefined;
 }
@@ -83,6 +82,7 @@ function normalizeOmittedMediaContentBlock(
   if (
     item.type !== "image" ||
     item.omitted !== true ||
+    normalizeOptionalString(item.artifactId) !== undefined ||
     normalizeOptionalString(item.url) !== undefined
   ) {
     return null;
@@ -131,6 +131,34 @@ export function resolveMessageRole(message: unknown): string {
   return hasToolContent || hasToolMessageEnvelope(m)
     ? "toolResult"
     : (readStringField(m, "role") ?? "unknown");
+}
+
+export function resolveMessageSender(
+  metadata: Record<string, unknown> | undefined,
+): SenderIdentity | null {
+  const identity = readTranscriptSenderIdentity(metadata?.senderIdentity);
+  return normalizeSenderIdentity({
+    identity,
+    id: metadata?.senderId,
+    name: metadata?.senderName,
+    username: metadata?.senderUsername,
+    profileAvatarUrl: identity?.type === "profile" ? metadata?.senderProfileAvatarUrl : undefined,
+  });
+}
+
+export function resolveMessageSenderLabel(
+  message: unknown,
+  sender?: SenderIdentity | null,
+): string | null {
+  const m = asOptionalRecord(message);
+  const rawLabel = readStringField(m, "senderLabel")?.trim() ?? "";
+  if (rawLabel) {
+    return rawLabel.replace(OPAQUE_ID_LABEL_SUFFIX_RE, "").trim();
+  }
+  // Full normalization already prepared the sender; null is a known absence.
+  return formatSenderLabel(
+    sender === undefined ? resolveMessageSender(asOptionalRecord(m?.["__openclaw"])) : sender,
+  );
 }
 
 export function isToolResultMessage(message: unknown): boolean {
@@ -337,17 +365,13 @@ function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem
   return merged.filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
-export function stripMessageDisplayMetadataText(text: string): string {
-  return stripInboundMetadata(text);
-}
-
 function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageContentItem[] {
   return items
     .map((item) => {
       if (item.type !== "text" || typeof item.text !== "string") {
         return item;
       }
-      return { ...item, text: stripMessageDisplayMetadataText(item.text) };
+      return { ...item, text: stripInboundMetadata(item.text) };
     })
     .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
@@ -375,10 +399,6 @@ function expandTextContent(
 
   for (const segment of segments) {
     if (segment.type === "media") {
-      if (isRelativeAssistantMediaReference(segment.url)) {
-        parts.push({ type: "text", text: `MEDIA:${segment.url}` });
-        continue;
-      }
       const inferred = inferAttachmentKind(segment.url);
       parts.push({
         type: "attachment",
@@ -423,25 +443,25 @@ function expandTextContent(
     content:
       content.length > 0
         ? content
-        : (parsed.mediaUrls ?? []).some(isRelativeAssistantMediaReference)
-          ? (parsed.mediaUrls ?? [])
-              .filter(isRelativeAssistantMediaReference)
-              .map((url) => ({ type: "text" as const, text: `MEDIA:${url}` }))
-          : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
-            ? [{ type: "text", text: parsed.text }]
-            : [],
+        : replyTarget === null && !audioAsVoice && parsed.text.trim().length > 0
+          ? [{ type: "text", text: parsed.text }]
+          : [],
     audioAsVoice,
     replyTarget,
   };
 }
 
-/**
- * Normalize a raw message object into a consistent structure.
- */
 export function normalizeMessage(message: unknown): NormalizedMessage {
-  const m = asOptionalRecord(projectImportedMessageForDisplay(message)) ?? {};
+  const m =
+    asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
+    {};
   const role = resolveMessageRole(m);
-  const contentRaw = m.content;
+  const contentRaw =
+    typeof m.content === "string" || Array.isArray(m.content)
+      ? m.content
+      : typeof m.text === "string"
+        ? m.text
+        : undefined;
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
   const isAssistantMessage = role === "assistant";
   const delivery = isAssistantMessage ? readMessageDelivery(m.openclawDelivery) : undefined;
@@ -452,19 +472,18 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     return preview ? [preview] : [];
   });
 
-  // Extract content
   let content: MessageContentItem[] = [];
   let audioAsVoice = false;
   let replyTarget: NormalizedMessage["replyTarget"] = null;
 
-  if (typeof m.content === "string") {
+  if (typeof contentRaw === "string") {
     if (isAssistantMessage) {
-      const expanded = expandTextContent(m.content, delivery, projectedCanvasPreviews);
+      const expanded = expandTextContent(contentRaw, delivery, projectedCanvasPreviews);
       content = expanded.content;
       audioAsVoice = expanded.audioAsVoice;
       replyTarget = expanded.replyTarget;
     } else {
-      content = [{ type: "text", text: m.content }];
+      content = [{ type: "text", text: contentRaw }];
     }
   } else if (contentItems) {
     content = contentItems.flatMap((value) => {
@@ -476,7 +495,15 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       if (omittedMedia) {
         return [omittedMedia];
       }
+      const image = normalizeImageContentBlock(item);
+      if (image) {
+        return [image];
+      }
       const type = item.type;
+      if (type === "clawhub") {
+        const recommendation = isAssistantMessage ? readClawHubRecommendation(item) : null;
+        return recommendation ? [recommendation] : [];
+      }
       const text = readStringField(item, "text");
       if (type === "thinking") {
         const thinking = readStringField(item, "thinking");
@@ -548,15 +575,6 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         },
       ];
     });
-  } else if (typeof m.text === "string") {
-    if (isAssistantMessage) {
-      const expanded = expandTextContent(m.text, delivery, projectedCanvasPreviews);
-      content = expanded.content;
-      audioAsVoice = expanded.audioAsVoice;
-      replyTarget = expanded.replyTarget;
-    } else {
-      content = [{ type: "text", text: m.text }];
-    }
   }
 
   const timestamp = asFiniteNumber(m.timestamp) ?? Date.now();
@@ -569,20 +587,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const replyPreviewRecord = asOptionalRecord(openClawMeta?.replyToPreview);
   const replyPreviewText = readStringField(replyPreviewRecord, "text")?.trim() ?? "";
   const replyPreviewSender = readStringField(replyPreviewRecord, "senderLabel")?.trim() ?? "";
-  const identity = readTranscriptSenderIdentity(openClawMeta?.senderIdentity);
-  const metaSender = normalizeSenderIdentity({
-    identity,
-    id: openClawMeta?.senderId,
-    name: openClawMeta?.senderName,
-    username: openClawMeta?.senderUsername,
-    profileAvatarUrl:
-      identity?.type === "profile" ? openClawMeta?.senderProfileAvatarUrl : undefined,
-  });
-  const rawLabel = readStringField(m, "senderLabel")?.trim() ?? "";
-  const senderLabel = rawLabel
-    ? rawLabel.replace(OPAQUE_ID_LABEL_SUFFIX_RE, "").trim()
-    : formatSenderLabel(metaSender);
+  const metaSender = resolveMessageSender(openClawMeta);
+  const senderLabel = resolveMessageSenderLabel(m, metaSender);
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
+  const sourceClients = role === "user" ? readMessageClientSources(m) : [];
 
   content = stripMessageDisplayMetadata(content);
   const senderSession = readMessageSenderSession(m.senderSession);
@@ -595,6 +603,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     senderLabel,
     ...(senderSession ? { senderSession } : {}),
     ...(sender ? { sender } : {}),
+    ...(sourceClients.length ? { sourceClients } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyPreviewText
       ? {

@@ -218,6 +218,7 @@ export async function resolveSessionToolAccess(params: {
   displayAction?: SessionAccessAction | "search";
   requesterAgentId: string;
   requesterSessionKey: string;
+  sessionReadScopeKey?: string;
   mainSessionKey?: string;
   authorizationTargetSessionKey?: string;
   targetAgentId: string;
@@ -238,7 +239,22 @@ export async function resolveSessionToolAccess(params: {
     });
     return denial;
   };
-  const scoped = createSessionVisibilityChecker.resolveScopedAccess({
+  if (params.sessionReadScopeKey) {
+    // Invocation read caps are ceilings: a grant held by the observed session
+    // must not widen the auxiliary reader beyond that selected session.
+    const capped = createSessionVisibilityDecisionChecker({
+      action: params.action,
+      defaultAgentId: params.targetAgentId,
+      requesterAgentId: params.requesterAgentId,
+      requesterSessionKey: params.sessionReadScopeKey,
+      visibility: "self",
+      a2aPolicy: params.a2aPolicy,
+    }).check({ key: authorizationTargetSessionKey, agentId: params.targetAgentId });
+    if (!capped.allowed) {
+      return deny(capped);
+    }
+  }
+  const scoped = await createSessionVisibilityChecker.resolveScopedAccessAsync({
     action: params.action,
     requesterSessionKey: params.requesterSessionKey,
     // A bare key is not globally unique under explicit ownership. Callers

@@ -1,5 +1,6 @@
 // Lazy command-group registration: placeholder commands are replaced by real subcommand groups.
 import type { Command } from "commander";
+import { getCliPluginInvocationResources } from "../runtime-cleanup-scope.js";
 import { removeCommandByName } from "./command-tree.js";
 import { registerLazyCommand } from "./register-lazy-command.js";
 
@@ -87,8 +88,13 @@ export function registerCommandGroups(
   },
 ) {
   if (params.eager) {
+    const resources = getCliPluginInvocationResources();
     for (const entry of entries) {
-      void entry.register(program);
+      if (resources) {
+        resources.register(() => entry.register(program));
+      } else {
+        void entry.register(program);
+      }
     }
     return;
   }

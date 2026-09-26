@@ -1,23 +1,19 @@
-// Imessage plugin module implements deliver behavior.
 import {
   createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { chunkMarkdownTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { sendMessageIMessage } from "../send.js";
-import {
-  chunkTextWithMode,
-  convertMarkdownTables,
-  resolveChunkMode,
-  resolveMarkdownTableMode,
-} from "./deliver.runtime.js";
 import type { SentMessageCache } from "./echo-cache.js";
 import { sanitizeOutboundText } from "./sanitize-outbound.js";
 
@@ -66,7 +62,7 @@ export async function deliverIMessageReply(params: {
     delivered = await deliverTextOrMediaReply({
       payload,
       text: reply.text,
-      chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
+      chunkText: (value) => chunkMarkdownTextWithMode(value, textLimit, chunkMode),
       sendText: sendAccepted,
       sendMedia: ({ mediaUrl, caption }) => sendAccepted(caption ?? "", mediaUrl),
     });

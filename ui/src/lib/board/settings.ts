@@ -12,7 +12,7 @@ export type BoardSessionView = {
 
 export type BoardSessionViews = Record<string, BoardSessionView>;
 
-const MAX_BOARD_SESSION_VIEWS = 50;
+const MAX_BOARD_SESSION_VIEWS = 500;
 
 export function normalizeBoardSessionViews(value: unknown): BoardSessionViews {
   if (!isRecord(value)) {

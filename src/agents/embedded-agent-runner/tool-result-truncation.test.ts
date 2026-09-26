@@ -106,14 +106,14 @@ function makeToolResult(text: string, toolCallId = "call_1", details?: unknown):
   };
 }
 
-function preparePromptProjectionStateForTest(params: {
+async function preparePromptProjectionStateForTest(params: {
   sessionId: string;
   messages: AgentMessage[];
   state: ToolResultPromptProjectionState;
   raw?: boolean;
 }) {
   const prompt = params.raw ? "raw probe" : "continue";
-  prepareEmbeddedAttemptPromptContext({
+  await prepareEmbeddedAttemptPromptContext({
     capabilityToolNames: new Set(),
     attempt: {
       config: {},
@@ -131,7 +131,6 @@ function preparePromptProjectionStateForTest(params: {
     },
     replaceSessionMessages: () => {},
     sessionAgentId: "main",
-    setActiveSessionSystemPrompt: () => {},
     systemPromptText: params.raw ? "" : "system",
     toolResultPromptProjectionState: params.state,
   });
@@ -297,16 +296,19 @@ describe("truncateToolResultText", () => {
     ).toBe("[100");
   });
 
-  it("keeps both head and tail cuts on complete code points", () => {
-    const marker = "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
-    const text = `${"a".repeat(6)}😀${"m".repeat(100)}😀${"x".repeat(22)} Error`;
-    expect(
-      truncateToolResultText(text, 100, {
-        suffix: "!",
-        minKeepChars: 1,
-      }),
-    ).toBe(`${"a".repeat(6)}${marker}${"x".repeat(22)} Error!`);
-  });
+  it.each(["m", "你𠀀😀"])(
+    "keeps both head and tail cuts on complete code points (%s)",
+    (middle) => {
+      const marker = "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
+      const text = `${"a".repeat(6)}😀${middle.repeat(100)}😀${"x".repeat(22)} Error`;
+      expect(
+        truncateToolResultText(text, 100, {
+          suffix: "!",
+          minKeepChars: 1,
+        }),
+      ).toBe(`${"a".repeat(6)}${marker}${"x".repeat(22)} Error!`);
+    },
+  );
 });
 
 describe("getToolResultTextLength", () => {
@@ -868,7 +870,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(second.messages.slice(0, history.length)).toEqual(first.messages);
   });
 
-  it("reclaims #99495 state from canonical compaction, not filtered projections", () => {
+  it("reclaims #99495 state from canonical compaction, not filtered projections", async () => {
     const sessionId = "session-99495-reclamation";
     const state = getEmbeddedSessionPromptState(sessionId).toolResults;
     const removed = makeToolResult("removed".repeat(100_000), "removed_after_compaction");
@@ -885,10 +887,10 @@ describe("truncateOversizedToolResultsInMessages", () => {
     truncateOversizedToolResultsInMessages([retained], 128_000, 5_000, 20_000, state);
     expect(state.sourceHashByKey.size).toBe(2);
 
-    preparePromptProjectionStateForTest({ sessionId, messages: [], state, raw: true });
+    await preparePromptProjectionStateForTest({ sessionId, messages: [], state, raw: true });
     expect(state.sourceHashByKey.size).toBe(2);
 
-    preparePromptProjectionStateForTest({ sessionId, messages: [retained], state });
+    await preparePromptProjectionStateForTest({ sessionId, messages: [retained], state });
 
     expect(state.sourceHashByKey.size).toBe(1);
     expect(state.frozen.size).toBe(1);
@@ -1525,14 +1527,14 @@ describe("truncateOversizedToolResultsInMessages", () => {
       ["a", "bc"],
     ],
     [["\ud800"], ["\ud801"]],
-  ])("invalidates rewritten canonical text with preserved framing: %j", (before, after) => {
+  ])("invalidates rewritten canonical text with preserved framing: %j", async (before, after) => {
     const state = createPromptProjectionStateForTest();
     const source = makeToolResult("", "rewritten-source");
     const blocks = (parts: string[]) => parts.map((text) => ({ type: "text" as const, text }));
     source.content = blocks(["x".repeat(15_000), ...before]);
     truncateOversizedToolResultsInMessages([source], 128_000, 5_000, 20_000, state);
     const rewritten = { ...source, content: blocks(["x".repeat(15_000), ...after]) };
-    preparePromptProjectionStateForTest({
+    await preparePromptProjectionStateForTest({
       sessionId: "rewritten-source",
       messages: [rewritten],
       state,
@@ -1541,7 +1543,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(state.frozen.size).toBe(0);
   });
 
-  it("freezes #99495 ambiguous-key projections across filtered history", () => {
+  it("freezes #99495 ambiguous-key projections across filtered history", async () => {
     const projectionState = createPromptProjectionStateForTest();
     const duplicate = (text: string) => ({
       role: "toolResult" as const,
@@ -1568,7 +1570,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
 
     expect(first.messages[0]).not.toEqual(first.messages[1]);
     expect(filtered.messages[0]).toEqual(first.messages[1]);
-    preparePromptProjectionStateForTest({
+    await preparePromptProjectionStateForTest({
       sessionId: "ambiguous-filtered-history",
       messages: [duplicate("b".repeat(100))],
       state: projectionState,
@@ -1586,7 +1588,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
         projectionState,
       ).messages[0],
     ).toEqual(first.messages[1]);
-    preparePromptProjectionStateForTest({
+    await preparePromptProjectionStateForTest({
       sessionId: "ambiguous-removed-history",
       messages: [],
       state: projectionState,
@@ -1594,7 +1596,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(projectionState.ambiguousBaseKeys.size).toBe(0);
   });
 
-  it("drops an unselected identical-occurrence key without changing projected bytes", () => {
+  it("drops an unselected identical-occurrence key without changing projected bytes", async () => {
     const projectionState = createPromptProjectionStateForTest();
     const duplicate = (): ToolResultMessage => ({
       role: "toolResult",
@@ -1615,7 +1617,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
     const stateWithStaleOccurrence = cloneToolResultPromptProjectionState(projectionState);
     expect(stateWithStaleOccurrence.frozen.size).toBe(2);
 
-    preparePromptProjectionStateForTest({
+    await preparePromptProjectionStateForTest({
       sessionId: "identical-occurrence-compaction",
       messages: [duplicate()],
       state: projectionState,
@@ -1710,7 +1712,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
     const listener = vi.fn();
     const cleanup = onInternalSessionTranscriptUpdate(listener);
-    const result = truncateOversizedToolResultsInSessionManager({
+    const result = await truncateOversizedToolResultsInSessionManager({
       sessionManager: SessionManager.open(scope),
       ...scope,
       contextWindowTokens: 100,
@@ -1801,7 +1803,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     ).messages[0];
     const staleProjectionState = cloneToolResultPromptProjectionState(projectionState);
 
-    const result = truncateOversizedToolResultsInSessionManager({
+    const result = await truncateOversizedToolResultsInSessionManager({
       sessionManager: SessionManager.open(scope),
       ...scope,
       contextWindowTokens: 128_000,
@@ -1814,7 +1816,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(projectionState.sourceHashByKey.size).toBe(0);
     expect(projectionState.replacements.size).toBe(0);
     expect(projectionState.frozen.size).toBe(0);
-    preparePromptProjectionStateForTest({
+    await preparePromptProjectionStateForTest({
       sessionId,
       messages: SessionManager.open(scope).buildSessionContext().messages,
       state: staleProjectionState,
@@ -1871,7 +1873,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
     // A provider context failure then demands recovery under a tighter budget:
     // frozen history is the only reducible mass and must still shrink.
-    const result = truncateOversizedToolResultsInSessionManager({
+    const result = await truncateOversizedToolResultsInSessionManager({
       sessionManager: SessionManager.open(scope),
       ...scope,
       contextWindowTokens: 128_000,
@@ -1948,7 +1950,7 @@ describe("truncateOversizedToolResultsInSession", () => {
       },
     ]);
 
-    const result = truncateOversizedToolResultsInSessionManager({
+    const result = await truncateOversizedToolResultsInSessionManager({
       sessionManager: SessionManager.open(scope),
       ...scope,
       contextWindowTokens: 100,

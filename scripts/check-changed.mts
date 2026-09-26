@@ -9,7 +9,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -38,6 +37,7 @@ import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
+import { readNativeTypeScriptConfig } from "./lib/native-typescript-config.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
 import type { createChangedCoreTestCheck } from "./run-tsgo-core-test-shards.mts";
@@ -51,7 +51,18 @@ type ChangedCheckCommand = {
   env?: NodeJS.ProcessEnv;
 };
 
+type CiLintSelection = {
+  packages: string[];
+  coreStripes: number[];
+  extensionStripes: number[];
+  groups: ("core" | "extensions" | "scripts")[];
+  central: boolean;
+};
+
 type ChangedCheckPlanOptions = {
+  lintOnly?: boolean;
+  lintSelection?: CiLintSelection;
+  lintThreads?: 1 | 8;
   env?: NodeJS.ProcessEnv;
   staged?: boolean;
   base?: string;
@@ -84,6 +95,7 @@ type TargetedOxlintCommandOptions = TargetedLintOptions & {
   neutralPathRe: RegExp;
   paths: string[];
   tsconfig: string;
+  maxPaths?: number;
 };
 
 type NpmLockPackageDirsResolver = (changedPaths: string[]) => string[];
@@ -121,6 +133,7 @@ const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
 const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
 const ROOT_TEST_TS_CONFIG = "test/tsconfig/tsconfig.test.root.json";
 const TARGETED_LINT_PATH_LIMIT = 8;
+const CORE_LINT_ARGV_BYTES = 24 * 1024;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
@@ -143,7 +156,7 @@ const MACOS_APP_CI_PATH_RE =
   /^(?:apps\/(?:macos\/(?!Tests\/.+\.swift$)|(?:macos-mlx-tts|shared|swabble)\/)|Swabble\/|src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$)/u;
 let corepackPnpmShimDir: string | undefined;
 let corepackPnpmShimCleanupRegistered = false;
-let cachedGeneratedExtensionAssetPaths: Set<string> | undefined;
+let cachedGeneratedExtensionAssetPaths: { cwd: string; paths: Set<string> } | undefined;
 let npmLockPackageDirsForChangedPaths: NpmLockPackageDirsResolver | undefined;
 
 async function ensureChangedCheckRuntimeDependencies(paths: string[]) {
@@ -291,7 +304,7 @@ function buildDelegatedChangedCheckArgv(argv: string[], options: { cwd?: string 
   if (!args.staged || args.paths.length > 0) {
     return argv;
   }
-  const stagedPaths = listStagedChangedPaths(options.cwd);
+  const stagedPaths = listStagedChangedPaths(options.cwd, args.base);
   const timedArgs = args.timed ? ["--timed"] : [];
   if (stagedPaths.length === 0) {
     return [...timedArgs, "--no-changes"];
@@ -300,7 +313,7 @@ function buildDelegatedChangedCheckArgv(argv: string[], options: { cwd?: string 
     ...timedArgs,
     "--paths-from-git",
     "--base",
-    "HEAD",
+    args.base ?? "HEAD",
     "--head",
     "HEAD",
     "--",
@@ -312,11 +325,11 @@ export function shouldRunNpmLockGuard(paths: string[]) {
   return paths.some((changedPath) => NPM_LOCK_POLICY_PATH_RE.test(changedPath));
 }
 
-export function shouldRunPromptSnapshotCheck(paths: string[]) {
+function shouldRunPromptSnapshotCheck(paths: string[]) {
   return paths.some((changedPath) => PROMPT_SNAPSHOT_CHECK_PATH_RE.test(changedPath));
 }
 
-export function shouldRunPromptSnapshotOwnerTest(paths: string[]) {
+function shouldRunPromptSnapshotOwnerTest(paths: string[]) {
   return paths.some((changedPath) => PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE.test(changedPath));
 }
 
@@ -324,17 +337,17 @@ export function shouldRunControlUiI18nVerify(paths: string[]) {
   return paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath));
 }
 
-export function shouldRunRuntimeSidecarBaselineCheck(paths: string[]) {
+function shouldRunRuntimeSidecarBaselineCheck(paths: string[]) {
   return paths.some((changedPath) => RUNTIME_SIDECAR_BASELINE_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can drift bundled doctor-contract declarations or closures. */
-export function shouldRunDoctorContractOwnerTests(paths: string[]) {
+function shouldRunDoctorContractOwnerTests(paths: string[]) {
   return paths.some((changedPath) => DOCTOR_CONTRACT_OWNER_TEST_PATH_RE.test(changedPath));
 }
 
 /** Returns whether changed files can affect the sessions/transcripts SQLite schema baseline. */
-export function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]) {
+function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]) {
   return paths.some((changedPath) => SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE.test(changedPath));
 }
 
@@ -354,7 +367,7 @@ export function shouldRunWrapperShadowingCheck(paths: string[]) {
 }
 
 export function shouldRunAppcastOwnerTest(paths: string[]) {
-  return paths.includes("appcast.xml");
+  return paths.some((changedPath) => /^appcast(?:-(?:arm64|x86_64))?\.xml$/u.test(changedPath));
 }
 
 export function shouldRunTestTempCreationReport(paths: string[]) {
@@ -463,12 +476,22 @@ export function createChangedCheckPlan(
   const commands: ChangedCheckCommand[] = [];
   const broadAudits = new Set<ChangedCheckCommand>();
   const typechecks = new Set<ChangedCheckCommand>();
+  const lintChecks = new Set<ChangedCheckCommand>();
   const baseEnv: NodeJS.ProcessEnv = createChangedCheckChildEnv(options.env ?? process.env);
-  const generatedExtensionAssetPaths = result.paths.some((changedPath) =>
-    LINTABLE_EXTENSION_PATH_RE.test(changedPath),
-  )
-    ? (cachedGeneratedExtensionAssetPaths ??= new Set(listGeneratedExtensionAssetSources()))
-    : new Set<string>();
+  const cwd = process.cwd();
+  if (
+    result.paths.some((changedPath) => LINTABLE_EXTENSION_PATH_RE.test(changedPath)) &&
+    cachedGeneratedExtensionAssetPaths?.cwd !== cwd
+  ) {
+    cachedGeneratedExtensionAssetPaths = {
+      cwd,
+      paths: new Set(listGeneratedExtensionAssetSources()),
+    };
+  }
+  const generatedExtensionAssetPaths =
+    cachedGeneratedExtensionAssetPaths?.cwd === cwd
+      ? cachedGeneratedExtensionAssetPaths.paths
+      : new Set<string>();
   const add = (name: string, args: string[], env?: NodeJS.ProcessEnv) => {
     const existing = commands.find(
       (command) => command.name === name && sameArgs(command.args, args),
@@ -493,6 +516,8 @@ export function createChangedCheckPlan(
   };
   const addTypecheck = (name: string, args: string[]) =>
     typechecks.add(add(name, args, createSparseTsgoSkipEnv(baseEnv)));
+  const addLintCommand = (name: string, bin: string, args: string[], env?: NodeJS.ProcessEnv) =>
+    lintChecks.add(addCommand(name, bin, args, env));
   const finishPlan = (summary: string) => {
     // Full lint shards exclude test/. Keep changed root sources covered even
     // when another path selects the all-lane early return, without widening lint.
@@ -502,33 +527,46 @@ export function createChangedCheckPlan(
     if (rootTestTargets.length > 0) {
       // --tsconfig affects import resolution, not native semantic discovery or
       // target selection. Expand the canonical roots before passing explicit files.
-      const ts = createRequire(import.meta.url)("typescript") as typeof import("typescript");
-      const config = ts.getParsedCommandLineOfConfigFile(
-        path.resolve(ROOT_TEST_TS_CONFIG),
-        {},
-        {
-          ...ts.sys,
-          onUnRecoverableConfigFileDiagnostic(diagnostic) {
-            throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
-          },
-        },
-      );
-      if (!config || config.errors.length > 0) {
-        throw new Error(
-          `Invalid ${ROOT_TEST_TS_CONFIG}: ${config?.errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, "\n")).join("\n")}`,
-        );
-      }
+      const config = readNativeTypeScriptConfig({
+        cwd: process.cwd(),
+        configFileName: ROOT_TEST_TS_CONFIG,
+      });
       const roots = new Set(config.fileNames.map((file) => path.resolve(file)));
       rootTestTargets = rootTestTargets.filter((file) => roots.has(path.resolve(file)));
     }
     for (let offset = 0; offset < rootTestTargets.length; offset += TARGETED_LINT_PATH_LIMIT) {
       const batch = rootTestTargets.slice(offset, offset + TARGETED_LINT_PATH_LIMIT);
-      addCommand(
+      addLintCommand(
         batch.length === 1 ? "lint test root changed file" : "lint test root changed files",
         "node",
         ["scripts/run-oxlint.mjs", "--tsconfig", ROOT_TEST_TS_CONFIG, ...batch],
         baseEnv,
       );
+    }
+    if (options.lintOnly) {
+      const lintCommands = commands.filter((command) => lintChecks.has(command));
+      const selection = options.lintSelection;
+      return {
+        commands: selection
+          ? [
+              ...(selection.central
+                ? lintCommands
+                    .filter((command) => !targetedLintOwner(command))
+                    .map((command) =>
+                      options.lintThreads &&
+                      command.bin === "node" &&
+                      command.args[0] === "scripts/run-oxlint.mjs"
+                        ? Object.assign({}, command, {
+                            args: [...command.args, `--threads=${options.lintThreads}`],
+                          })
+                        : command,
+                    )
+                : []),
+              ...createCiLintCommands(selection, options.lintThreads ?? 1, baseEnv),
+            ]
+          : lintCommands,
+        summary,
+      };
     }
     const end = commands.findLastIndex((command) => typechecks.has(command)) + 1;
     const prefix = commands.slice(0, end);
@@ -543,7 +581,7 @@ export function createChangedCheckPlan(
       summary,
     };
   };
-  const addLint = (name: string, args: string[]) => add(name, args, baseEnv);
+  const addLint = (name: string, args: string[]) => lintChecks.add(add(name, args, baseEnv));
   const addTargetedLint = (
     createCommand: (
       paths: string[],
@@ -582,7 +620,7 @@ export function createChangedCheckPlan(
       return !fallbackWithoutTargets;
     }
     for (const command of targetedCommands) {
-      addCommand(command.name, command.bin, command.args, command.env);
+      addLintCommand(command.name, command.bin, command.args, command.env);
     }
     return true;
   };
@@ -596,7 +634,7 @@ export function createChangedCheckPlan(
       [
         "scripts/report-test-temp-creations.mjs",
         ...(options.staged
-          ? ["--staged"]
+          ? ["--staged", ...(options.base ? ["--base", options.base] : [])]
           : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
       ],
       baseEnv,
@@ -613,6 +651,16 @@ export function createChangedCheckPlan(
   }
   add("conflict markers", ["check:no-conflict-markers"]);
   if (
+    result.paths.some((file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file) || file === ".oxlintrc.json")
+  ) {
+    add("line-cap growth ratchet", [
+      "check:line-cap-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
+  }
+  if (
     result.paths.some(
       (filePath) =>
         filePath === SHRINK_RATCHET_OWNER_PATH ||
@@ -625,7 +673,7 @@ export function createChangedCheckPlan(
       "check:max-lines-ratchet",
       ...(options.staged ? ["--staged"] : []),
       "--base",
-      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
     ]);
   }
   if (
@@ -641,7 +689,7 @@ export function createChangedCheckPlan(
       "check:assertion-safety",
       ...(options.staged ? ["--staged"] : []),
       "--base",
-      options.staged ? "HEAD" : (options.base ?? "origin/main"),
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
     ]);
   }
   add("changelog attributions", ["check:changelog-attributions"]);
@@ -658,12 +706,14 @@ export function createChangedCheckPlan(
   broadAudits.add(add("coercion helper declaration guard", ["check:coercion-helpers"]));
   add("dependency pin guard", ["deps:pins:check"]);
   if (result.paths.length > 0) {
-    add("format changed files", [
-      "format:check",
-      "--no-error-on-unmatched-pattern",
-      "--",
-      ...result.paths,
-    ]);
+    lintChecks.add(
+      add("format changed files", [
+        "format:check",
+        "--no-error-on-unmatched-pattern",
+        "--",
+        ...result.paths,
+      ]),
+    );
   }
   const npmLockGuardCommand = createNpmLockGuardCommand(result.paths);
   if (npmLockGuardCommand) {
@@ -780,7 +830,14 @@ export function createChangedCheckPlan(
   addTestTempCreationReport();
 
   const lanes = result.lanes;
-  const runAll = lanes.all;
+  const runAll =
+    lanes.all ||
+    (options.lintOnly &&
+      result.paths.some((file) =>
+        /^(?:\.oxlint|config\/(?:oxlint|tsconfig\/oxlint)|scripts\/(?:run-oxlint|oxlint)|scripts\/lib\/local-check-runtime\.)|(?:^|\/)tsconfig[^/]*\.json$/u.test(
+          file,
+        ),
+      ));
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
   // Typechecking alone accepts extension imports; the graph guard also covers
@@ -801,9 +858,11 @@ export function createChangedCheckPlan(
     add("release metadata guard", [
       "release-metadata:check",
       ...(options.staged
-        ? ["--staged"]
+        ? ["--staged", ...(options.base ? ["--base", options.base] : [])]
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
     ]);
+    // Metadata selectors bind Git/index bytes; artifact checks inspect the working tree.
+    add("release changelog artifacts", ["changelog:check"]);
     add("Android version sync", ["android:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
     add("root dependency ownership", ["deps:root-ownership:check"]);
@@ -863,14 +922,16 @@ export function createChangedCheckPlan(
         !LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath)
       );
     });
-    addTargetedLint(
-      createTargetedCoreLintCommand,
-      LINTABLE_CORE_PATH_RE,
-      "lint core",
-      ["lint:core"],
-      undefined,
-      fallbackWithoutTargets,
-    );
+    const coreLint = createTargetedCoreLintCommands(result.paths, baseEnv, {
+      platform: options.platform,
+    });
+    if (coreLint) {
+      for (const command of coreLint) {
+        addLintCommand(command.name, command.bin, command.args, command.env);
+      }
+    } else if (fallbackWithoutTargets) {
+      addLint("lint core", ["lint:core"]);
+    }
   }
   if (lanes.ui) {
     const targets = result.paths
@@ -880,7 +941,7 @@ export function createChangedCheckPlan(
       .toSorted((left, right) => left.localeCompare(right));
     for (let offset = 0; offset < targets.length; offset += TARGETED_LINT_PATH_LIMIT) {
       const batch = targets.slice(offset, offset + TARGETED_LINT_PATH_LIMIT);
-      addCommand(
+      addLintCommand(
         batch.length === 1 ? "lint UI changed style file" : "lint UI changed style files",
         "node",
         ["--import", "tsx", "scripts/run-stylelint.mts", ...batch],
@@ -922,11 +983,11 @@ export function createChangedCheckPlan(
         "lint:scripts",
       ])
     ) {
-      addLint("lint docker-e2e", ["lint:docker-e2e"]);
-      addLint("raw HTTP/2 import guard", ["lint:tmp:no-raw-http2-imports"]);
+      add("lint docker-e2e", ["lint:docker-e2e"]);
+      add("raw HTTP/2 import guard", ["lint:tmp:no-raw-http2-imports"]);
     }
   }
-  if (lanes.apps) {
+  if (lanes.apps && !options.lintOnly) {
     const appScopes = result.paths
       .filter((changedPath) => getChangedPathFacts(changedPath).surface === "app")
       .map((changedPath) => detectChangedScope([changedPath]));
@@ -996,13 +1057,199 @@ export function createChangedCheckPlan(
   );
 }
 
-export function createTargetedCoreLintCommand(
+function targetedLintOwner(
+  command: ChangedCheckCommand,
+): "core" | "extensions" | "scripts" | undefined {
+  if (
+    command.bin !== "node" ||
+    command.args[0] !== "scripts/run-oxlint.mjs" ||
+    command.args[1] !== "--tsconfig"
+  ) {
+    return undefined;
+  }
+  return command.args[2] === CORE_OXLINT_TS_CONFIG
+    ? "core"
+    : command.args[2] === EXTENSIONS_OXLINT_TS_CONFIG
+      ? "extensions"
+      : command.args[2] === SCRIPTS_OXLINT_TS_CONFIG
+        ? "scripts"
+        : undefined;
+}
+
+function createCiLintCommands(
+  selection: CiLintSelection,
+  threads: 1 | 8,
+  env: NodeJS.ProcessEnv,
+): ChangedCheckCommand[] {
+  if (selection.packages.length === 0) {
+    return [];
+  }
+  const command = (name: string, args: string[]) => ({
+    name,
+    bin: "node",
+    env,
+    args: [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/run-oxlint-shards.mts",
+      ...args,
+      `--threads=${threads}`,
+      "--packages-json",
+      JSON.stringify(selection.packages),
+    ],
+  });
+  return [
+    ...selection.coreStripes.map((stripe) =>
+      command(`lint core package stripe ${stripe}`, [
+        "--only=core",
+        "--split-core",
+        `--core-stripe=${stripe}/5`,
+      ]),
+    ),
+    ...selection.extensionStripes.map((stripe) =>
+      command(`lint extension package stripe ${stripe}`, [
+        "--only=extensions",
+        `--extension-stripe=${stripe}/6`,
+      ]),
+    ),
+    ...(selection.groups.length
+      ? [
+          command(
+            "lint remaining package groups",
+            selection.groups.map((group) => `--only=${group}`),
+          ),
+        ]
+      : []),
+  ];
+}
+
+/** Keep complete changed packages with the existing full-CI lint owners. */
+export async function createChangedCiLintPlan(
+  result: ChangedLaneResult,
+  { runnerProfile }: { runnerProfile: string },
+) {
+  const commands = createChangedCheckPlan(result, { lintOnly: true }).commands;
+  if (
+    result.paths.some((file) => path.basename(file) === "package.json") ||
+    commands.some(({ args }) =>
+      ["lint", "lint:core", "lint:extensions", "lint:scripts"].includes(args[0] ?? ""),
+    )
+  ) {
+    return null;
+  }
+  const {
+    createOxlintShards,
+    resolveChangedOxlintPackageScope,
+    selectCoreOxlintStripe,
+    selectExtensionOxlintStripe,
+  } = await import("./run-oxlint-shards.mts");
+  const files = commands
+    .filter((command) => targetedLintOwner(command))
+    .flatMap((command) => command.args.slice(3));
+  const packageScope = await resolveChangedOxlintPackageScope(files);
+  if (!packageScope) {
+    return null;
+  }
+  const shards = createOxlintShards({ splitCore: true, splitExtensions: true, platform: "linux" });
+  const packages = packageScope.packages;
+  const selected = packageScope.selectShards(shards);
+  if (
+    files.some(
+      (file) =>
+        !selected.some((shard) =>
+          shard.args.slice(2).some((root) => file === root || file.startsWith(`${root}/`)),
+        ),
+    )
+  ) {
+    return null;
+  }
+  const central: CiLintSelection = {
+    packages,
+    coreStripes: [],
+    extensionStripes: [],
+    groups: [],
+    central: true,
+  };
+  const core: { stripe: number; lint_selection_json: string }[] = [];
+  const extensions: { stripe: number; lint_selection_json: string }[] = [];
+  if (runnerProfile !== "github" && runnerProfile !== "hybrid") {
+    central.groups = ["core", "extensions", "scripts"].filter(
+      (group): group is "core" | "extensions" | "scripts" =>
+        selected.some((shard) => shard.name === group || shard.name.startsWith(`${group}:`)),
+    );
+    return { core, extensions, central };
+  }
+  const coreStripes = [1, 2, 3, 4, 5].filter(
+    (index) =>
+      packageScope.selectShards(
+        selectCoreOxlintStripe(
+          shards.filter((shard) => shard.name.startsWith("core:")),
+          { index, total: 5 },
+        ),
+      ).length > 0,
+  );
+  const extensionStripes = [1, 2, 3, 4, 5, 6].filter(
+    (index) =>
+      packageScope.selectShards(
+        selectExtensionOxlintStripe(
+          shards.filter((shard) => shard.name.startsWith("extensions:")),
+          { index, total: 6 },
+        ),
+      ).length > 0,
+  );
+  const row = (
+    stripe: number,
+    selectedCoreStripes: number[],
+    selectedExtensionStripes: number[],
+  ) => ({
+    stripe,
+    lint_selection_json: JSON.stringify({
+      packages,
+      coreStripes: selectedCoreStripes,
+      extensionStripes: selectedExtensionStripes,
+      groups: [],
+      central: false,
+    }),
+  });
+  if (runnerProfile === "hybrid") {
+    for (const [index, stripes] of [
+      coreStripes.filter((stripe) => stripe <= 2),
+      coreStripes.filter((stripe) => stripe > 2),
+    ].entries()) {
+      if (stripes.length) {
+        core.push(row(index + 1, stripes, []));
+      }
+    }
+    for (const stripe of extensionStripes) {
+      extensions.push(row(stripe, [], [stripe]));
+    }
+  } else {
+    for (const stripe of [1, 2, 3, 4, 5]) {
+      if (coreStripes.includes(stripe) || extensionStripes.includes(stripe)) {
+        core.push(
+          row(
+            stripe,
+            coreStripes.includes(stripe) ? [stripe] : [],
+            extensionStripes.includes(stripe) ? [stripe] : [],
+          ),
+        );
+      }
+    }
+    central.extensionStripes = extensionStripes.filter((stripe) => stripe === 6);
+  }
+  if (selected.some((shard) => shard.name === "scripts")) {
+    central.groups = ["scripts"];
+  }
+  return { core, extensions, central };
+}
+
+export function createTargetedCoreLintCommands(
   paths: string[],
   env: NodeJS.ProcessEnv = process.env,
-  options: TargetedLintOptions = {},
+  options: TargetedLintOptions & { platform?: NodeJS.Platform } = {},
 ) {
-  return createTargetedOxlintCommand({
-    env,
+  const command = createTargetedOxlintCommand({
+    env: createChangedCheckChildEnv(env),
     label: "core",
     lintablePathRe: LINTABLE_CORE_PATH_RE,
     neutralPathRe: CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
@@ -1010,6 +1257,44 @@ export function createTargetedCoreLintCommand(
     tsconfig: CORE_OXLINT_TS_CONFIG,
     ...options,
   });
+  return command ? batchCoreLintCommand(command, options.platform ?? process.platform) : null;
+}
+
+function batchCoreLintCommand(command: TargetedLintCommand, platform: NodeJS.Platform) {
+  const prefix = command.args.slice(0, 3);
+  const windows = platform === "win32";
+  // POSIX uses the formatter's conservative argv budget. Keep Windows batches
+  // unchanged until the installed cmd/pnpm shim chain has its own budget.
+  const maxBytes = windows ? Infinity : CORE_LINT_ARGV_BYTES;
+  const maxPaths = windows ? TARGETED_LINT_PATH_LIMIT : Infinity;
+  const argumentBytes = (args: string[]) =>
+    args.reduce((bytes, arg) => bytes + Buffer.byteLength(arg, "utf8") + 1, 0);
+  const prefixBytes = argumentBytes([command.bin, ...prefix]);
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let bytes = prefixBytes;
+  for (const file of command.args.slice(3)) {
+    const fileBytes = argumentBytes([file]);
+    if (prefixBytes + fileBytes > maxBytes) {
+      throw new Error(`Core lint target exceeds the command-line budget: ${file}`);
+    }
+    if (batch.length === maxPaths || bytes + fileBytes > maxBytes) {
+      batches.push(batch);
+      batch = [];
+      bytes = prefixBytes;
+    }
+    batch.push(file);
+    bytes += fileBytes;
+  }
+  if (batch.length) {
+    batches.push(batch);
+  }
+  return batches.map((files) => ({
+    name: files.length === 1 ? "lint core changed file" : "lint core changed files",
+    bin: command.bin,
+    args: [...prefix, ...files],
+    env: command.env,
+  }));
 }
 
 export function createTargetedExtensionLintCommand(
@@ -1024,11 +1309,12 @@ export function createTargetedExtensionLintCommand(
     neutralPathRe: TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
     paths,
     tsconfig: EXTENSIONS_OXLINT_TS_CONFIG,
+    maxPaths: TARGETED_LINT_PATH_LIMIT,
     ...options,
   });
 }
 
-export function createTargetedScriptLintCommand(
+function createTargetedScriptLintCommand(
   paths: string[],
   env: NodeJS.ProcessEnv = process.env,
   options: TargetedLintOptions = {},
@@ -1040,6 +1326,7 @@ export function createTargetedScriptLintCommand(
     neutralPathRe: TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
     paths,
     tsconfig: SCRIPTS_OXLINT_TS_CONFIG,
+    maxPaths: TARGETED_LINT_PATH_LIMIT,
     ...options,
   });
 }
@@ -1052,6 +1339,7 @@ function createTargetedOxlintCommand({
   neutralPathRe,
   paths,
   tsconfig,
+  maxPaths,
 }: TargetedOxlintCommandOptions) {
   if (
     paths.some(
@@ -1070,7 +1358,7 @@ function createTargetedOxlintCommand({
   const targets = paths
     .filter((changedPath) => lintablePathRe.test(changedPath))
     .toSorted((left, right) => left.localeCompare(right));
-  if (targets.length === 0 || targets.length > TARGETED_LINT_PATH_LIMIT) {
+  if (targets.length === 0 || (maxPaths !== undefined && targets.length > maxPaths)) {
     return null;
   }
   if (!targets.every((target) => fileExists(target))) {
@@ -1084,7 +1372,10 @@ function createTargetedOxlintCommand({
   };
 }
 
-async function runChangedCheck(result: ChangedLaneResult, options: ChangedCheckRunOptions = {}) {
+export async function runChangedCheck(
+  result: ChangedLaneResult,
+  options: ChangedCheckRunOptions = {},
+) {
   if (result.paths.length === 0) {
     console.error("[check:changed] no changed paths; nothing to run");
     return 0;
@@ -1270,8 +1561,16 @@ function parseArgs(argv: string[]) {
   const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
   const explicitPaths = separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1);
   const preservePathTokens = flagArgv.includes("--paths-from-git");
-  const args = {
-    base: "origin/main",
+  const args: {
+    base?: string;
+    head: string;
+    staged: boolean;
+    dryRun: boolean;
+    timed: boolean;
+    noChanges: boolean;
+    help: boolean;
+    paths: string[];
+  } = {
     head: "HEAD",
     staged: false,
     dryRun: false,
@@ -1316,7 +1615,7 @@ function printUsage() {
       "Usage: node scripts/check-changed.mjs [options] [-- <paths...>]",
       "",
       "Options:",
-      "  --base <ref>     Base ref for changed paths (default: origin/main)",
+      "  --base <ref>     Base ref (default: HEAD with --staged, otherwise origin/main)",
       "  --head <ref>     Head ref for changed paths (default: HEAD)",
       "  --staged         Check staged paths instead of git diff paths",
       "  --dry-run        Print the planned checks without running them",
@@ -1353,8 +1652,8 @@ async function main() {
         : args.paths.length > 0
           ? args.paths
           : args.staged
-            ? listStagedChangedPaths()
-            : listChangedPathsFromGit({ base: args.base, head: args.head });
+            ? listStagedChangedPaths(undefined, args.base)
+            : listChangedPathsFromGit({ base: args.base ?? "origin/main", head: args.head });
     } catch (error) {
       // A sparse/fresh checkout may not have the requested base ref yet. The remote
       // workflow fetches it, so preserve explicit/default delegation instead of dying locally.
@@ -1372,7 +1671,7 @@ async function main() {
     if (paths) {
       const result = detectChangedLanesForPaths({
         paths,
-        base: args.base,
+        base: args.base ?? (args.staged ? "HEAD" : "origin/main"),
         head: args.head,
         staged: args.staged,
       });
@@ -1382,7 +1681,7 @@ async function main() {
           diffRefsReady: result.lanes.releaseMetadata
             ? args.staged ||
               changedCheckDiffRefsReady({
-                base: args.base,
+                base: args.base ?? "origin/main",
                 head: args.head,
               })
             : undefined,

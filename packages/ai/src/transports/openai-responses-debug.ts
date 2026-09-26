@@ -1,11 +1,10 @@
-import { createHash } from "node:crypto";
 import type { Api, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveModelPayloadDebugMode } from "./model-transport-debug.js";
 import { RESPONSE_FAILED_NO_DETAILS_MESSAGE } from "./openai-responses-contracts.js";
 import { log } from "./openai-transport-shared.js";
-import { redactIdentifier, redactSensitiveText } from "./transport-utils.js";
+import { redactIdentifier, redactSensitiveText, sha256Hex } from "./transport-utils.js";
 
 function stringifyUnknown(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
@@ -91,10 +90,6 @@ function responseInputItemShape(input: unknown): string {
   );
 }
 
-function hashOpaqueResponsesValue(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function summarizeResponsesCompactionItems(input: unknown): string[] {
   if (!Array.isArray(input)) {
     return [
@@ -108,11 +103,9 @@ function summarizeResponsesCompactionItems(input: unknown): string[] {
     if (!isRecord(item) || item.type !== "compaction") {
       return [];
     }
-    const idHash = typeof item.id === "string" ? hashOpaqueResponsesValue(item.id) : undefined;
+    const idHash = typeof item.id === "string" ? sha256Hex(item.id) : undefined;
     const payloadHash =
-      typeof item.encrypted_content === "string"
-        ? hashOpaqueResponsesValue(item.encrypted_content)
-        : undefined;
+      typeof item.encrypted_content === "string" ? sha256Hex(item.encrypted_content) : undefined;
     return [{ idHash, inputIndex, payloadHash }];
   });
   return [
@@ -151,7 +144,7 @@ function readResponsesToolDisplayName(tool: unknown): string {
   return typeof type === "string" && type !== "function" ? type : "";
 }
 
-export function summarizeResponsesTools(tools: unknown): string {
+function summarizeResponsesTools(tools: unknown): string {
   if (!Array.isArray(tools)) {
     return "count=0";
   }
@@ -163,7 +156,7 @@ export function summarizeResponsesTools(tools: unknown): string {
   return `count=${tools.length}${shown ? ` ${label}=${shown}` : ""}`;
 }
 
-export function stringifyRedactedPayload(value: unknown): string {
+function stringifyRedactedPayload(value: unknown): string {
   try {
     const encoded = JSON.stringify(value, (key, child) =>
       key === "encrypted_content" ? "<opaque data omitted>" : child,
@@ -381,7 +374,7 @@ function buildResponsesFailedFailureFields(
   return fields;
 }
 
-export function buildResponsesFailedNoDetailsObservation(
+function buildResponsesFailedNoDetailsObservation(
   event: Record<string, unknown>,
   model: Model,
   response: Record<string, unknown> | undefined = isRecord(event.response)
@@ -419,7 +412,7 @@ export function buildResponsesFailedNoDetailsObservation(
   };
 }
 
-export function summarizeResponsesFailedNoDetailsObservation(
+function summarizeResponsesFailedNoDetailsObservation(
   observation: ResponsesFailedNoDetailsObservation,
 ): string {
   const requestIds = observation.requestIdHashes.join(",");

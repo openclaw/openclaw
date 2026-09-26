@@ -3,9 +3,9 @@ import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-
  * Maps ClickClack senders and conversations onto the shared channel ingress
  * allowlist/command authorization contract.
  */
-import {
+import type {
   resolveStableChannelMessageIngress,
-  type StableChannelIngressIdentityParams,
+  StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
@@ -15,7 +15,7 @@ import {
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
 import { resolveClickClackDiscussionRoute } from "./discussions/routing.js";
-import { resolveClickClackBotPolicy, resolveClickClackGroupPolicy } from "./group-policy.js";
+import { resolveClickClackGroupPolicy } from "./group-policy.js";
 import { resolveClickClackMentionFacts } from "./mention-facts.js";
 import { getClickClackRuntime } from "./runtime.js";
 import { buildClickClackTarget } from "./target.js";
@@ -42,7 +42,7 @@ const clickClackIngressIdentity = {
 } satisfies StableChannelIngressIdentityParams;
 
 type ClickClackDiscussionRoute = Extract<
-  ReturnType<typeof resolveClickClackDiscussionRoute>,
+  Awaited<ReturnType<typeof resolveClickClackDiscussionRoute>>,
   { state: "active" }
 >["route"];
 
@@ -116,11 +116,11 @@ function resolveAccountAgentRoute(params: {
   };
 }
 
-function resolvePreparedInboundRoute(params: {
+async function resolvePreparedInboundRoute(params: {
   account: ResolvedClickClackAccount;
   config: CoreConfig;
   message: ClickClackMessage;
-}): ClickClackPreparedInboundRoute {
+}): Promise<ClickClackPreparedInboundRoute> {
   const runtime = getClickClackRuntime();
   const isDirect = Boolean(params.message.direct_conversation_id);
   const target = buildClickClackTarget(
@@ -136,9 +136,8 @@ function resolvePreparedInboundRoute(params: {
   });
   const discussionResolution =
     !isDirect && params.message.channel_id
-      ? resolveClickClackDiscussionRoute({
+      ? await resolveClickClackDiscussionRoute({
           runtime,
-          config: params.config,
           accountId: params.account.accountId,
           serverBaseUrl: params.account.baseUrl,
           workspaceId: params.message.workspace_id,
@@ -194,13 +193,12 @@ export async function resolveClickClackInboundAccess(params: {
 }): Promise<ClickClackInboundAccess> {
   const runtime = getClickClackRuntime();
   const cfg = params.config as OpenClawConfig;
-  const preparedRoute = resolvePreparedInboundRoute(params);
+  const preparedRoute = await resolvePreparedInboundRoute(params);
   const shouldCheckCommand = runtime.channel.commands.shouldComputeCommandAuthorized(
     params.message.body,
     cfg,
   );
 
-  // Resolve group policy and mention facts for the channel.
   const effectiveGroupPolicy = resolveClickClackGroupPolicy({
     account: params.account,
     channelId: params.message.channel_id,
@@ -223,10 +221,6 @@ export async function resolveClickClackInboundAccess(params: {
       preparedRoute,
     };
   }
-  const effectiveBotPolicy = resolveClickClackBotPolicy({
-    account: params.account,
-    channelId: params.message.channel_id,
-  });
   // Older ClickClack servers may omit author classification. Preserve the
   // legacy ingress path for those responses and apply bot-only policy only to
   // messages positively classified as bot-authored.
@@ -239,8 +233,8 @@ export async function resolveClickClackInboundAccess(params: {
     : params.account.allowFrom;
   const botMentionAllowed =
     !isBotAuthor ||
-    effectiveBotPolicy.allowBots === true ||
-    (effectiveBotPolicy.allowBots === "mentions" &&
+    effectiveGroupPolicy.allowBots === true ||
+    (effectiveGroupPolicy.allowBots === "mentions" &&
       (preparedRoute.isDirect || mentionFacts.wasMentioned));
   if (!botMentionAllowed) {
     return {
@@ -267,7 +261,7 @@ export async function resolveClickClackInboundAccess(params: {
           receiverId: params.account.botUserId,
           eventId: params.message.id,
           ...(botLoopNowMs !== undefined ? { nowMs: botLoopNowMs } : {}),
-          config: effectiveBotPolicy.botLoopProtection,
+          config: effectiveGroupPolicy.botLoopProtection,
           defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
           defaultEnabled: true,
         }
@@ -280,7 +274,7 @@ export async function resolveClickClackInboundAccess(params: {
       commandSource: "text",
     });
 
-  const resolved = await resolveStableChannelMessageIngress({
+  const resolved = await runtime.channel.inbound.ingress.resolveStable({
     channelId: CHANNEL_ID,
     accountId: params.account.accountId,
     identity: clickClackIngressIdentity,
@@ -295,6 +289,7 @@ export async function resolveClickClackInboundAccess(params: {
     contextBinding: {
       agentId: preparedRoute.route.agentId,
       sessionKey: preparedRoute.route.sessionKey,
+      nativeChannelId: params.message.channel_id || params.message.direct_conversation_id,
       messageId: params.message.id,
       inboundEventKind: "user_request",
     },

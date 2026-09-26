@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -19,7 +23,93 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { prepareMemoryFlushSession } from "./memory-flush-session.js";
+import { ensureMemoryFlushTargetFile, prepareMemoryFlushSession } from "./memory-flush-session.js";
+
+it.each([
+  { boundary: "mkdir", owner: "operator" },
+  { boundary: "mkdir", owner: "run" },
+  { boundary: "open", owner: "operator" },
+] as const)(
+  "settles memory target preparation after $owner revocation during $boundary",
+  async ({ boundary, owner }) => {
+    await withOpenClawTestState({ label: "memory-target-authority" }, async (state) => {
+      const targetPath = path.join(state.workspaceDir, "memory", "checkpoint.md");
+      const originalMkdir = fs.mkdir.bind(fs);
+      const originalOpen = fs.open.bind(fs);
+      const runAbort = new AbortController();
+      const refusal = new Error("memory target authority revoked");
+      let operatorCurrent = true;
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "guest",
+        scopes: ["operator.write"],
+        assertCurrent: () => {
+          if (!operatorCurrent) {
+            throw refusal;
+          }
+        },
+      });
+      const revoke = () => {
+        if (owner === "run") {
+          runAbort.abort(refusal);
+        } else {
+          operatorCurrent = false;
+        }
+      };
+      let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+      let closes = 0;
+      let restoreClose: (() => void) | undefined;
+      const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementationOnce(async (directory, options) => {
+        const created = await originalMkdir(directory, options);
+        if (boundary === "mkdir") {
+          revoke();
+        }
+        return created;
+      });
+      const openSpy = vi.spyOn(fs, "open").mockImplementationOnce(async (file, flags, mode) => {
+        handle = await originalOpen(file, flags, mode);
+        const close = handle.close.bind(handle);
+        const closeSpy = vi.spyOn(handle, "close").mockImplementation(async () => {
+          closes += 1;
+          await close();
+        });
+        restoreClose = () => closeSpy.mockRestore();
+        if (boundary === "open") {
+          revoke();
+        }
+        return handle;
+      });
+      try {
+        await expect(
+          ensureMemoryFlushTargetFile({
+            workspaceDir: state.workspaceDir,
+            relativePath: "memory/checkpoint.md",
+            assertCurrent: () => {
+              runAbort.signal.throwIfAborted();
+              operatorAuthority.assertCurrent();
+            },
+          }),
+        ).rejects.toBe(refusal);
+        expect(openSpy).toHaveBeenCalledTimes(boundary === "open" ? 1 : 0);
+        expect(closes).toBe(boundary === "open" ? 1 : 0);
+        if (boundary === "open") {
+          await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("");
+        } else {
+          await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      } finally {
+        mkdirSpy.mockRestore();
+        openSpy.mockRestore();
+        try {
+          if (handle && closes === 0) {
+            await handle.close();
+          }
+        } finally {
+          restoreClose?.();
+        }
+      }
+    });
+  },
+);
 
 async function withAdmittedInput(
   compacted: boolean,
@@ -48,11 +138,7 @@ async function withAdmittedInput(
         stopReason: "stop",
       }),
     );
-    const retained = source.appendMessage({
-      role: "user",
-      content: "Keep the Cedar project receipt.",
-      timestamp: 3,
-    });
+    const retained = source.appendMessage(makeUserMessage("Keep the Cedar project receipt.", 3));
     source.appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Cedar receipt is maple-17." }],
@@ -128,11 +214,9 @@ it.each([false, true])(
         }
         checkpoint.sessionManager.branch(first.id);
       }
-      const instruction = checkpoint.sessionManager.appendMessage({
-        role: "user",
-        content: "Checkpoint instruction",
-        timestamp: 5,
-      });
+      const instruction = checkpoint.sessionManager.appendMessage(
+        makeUserMessage("Checkpoint instruction", 5),
+      );
       checkpoint.sessionManager.appendMessage(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "NO_REPLY" }],
@@ -177,14 +261,7 @@ it.each(["compaction", "reset"] as const)(
           stopReason: "toolUse",
         }),
       );
-      source.appendMessage({
-        role: "toolResult",
-        toolCallId: "read-call",
-        toolName: "read",
-        content: [{ type: "text", text: "Paired result" }],
-        isError: false,
-        timestamp: 4,
-      });
+      source.appendMessage(makeTextToolResult("read-call", "read", "Paired result", false, 4));
       const boundary =
         boundaryType === "compaction"
           ? source.appendCompaction("Summary", opaqueCut, 100)

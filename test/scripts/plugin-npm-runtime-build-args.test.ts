@@ -1,12 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseArgs as parseBulkBuildArgs } from "../../scripts/check-plugin-npm-runtime-builds.mts";
-import { listMissingPackageStaticAssetSources } from "../../scripts/lib/plugin-npm-runtime-assets.mts";
 import { parseArgs as parseSingleBuildArgs } from "../../scripts/lib/plugin-npm-runtime-build.mts";
-import { createScriptTestHarness } from "./test-helpers.js";
-
-const { createTempDir } = createScriptTestHarness();
 
 describe("plugin npm runtime build args", () => {
   it("parses explicit plugin package build targets", () => {
@@ -52,6 +46,64 @@ describe("plugin npm runtime build args", () => {
     ).toThrow(/unexpected/u);
   });
 
+  it.each([
+    ["--qa-gateway-fixture", "extensions/qa-lab"],
+    ["extensions/qa-lab", "--qa-gateway-fixture"],
+    ["--", "--qa-gateway-fixture", "extensions/qa-lab"],
+  ])("selects the private Gateway graph for %j", (...args) => {
+    expect(parseSingleBuildArgs(args)).toEqual({
+      packageDir: "extensions/qa-lab",
+      profile: "qa-gateway-fixture",
+    });
+  });
+
+  it("refuses source-host preparation for portable Gateway fixtures", () => {
+    expect(() =>
+      parseSingleBuildArgs([
+        "extensions/qa-lab",
+        "--qa-gateway-fixture",
+        "--prepare-native-import",
+      ]),
+    ).toThrow("QA Gateway fixtures cannot prepare source-native host imports");
+    expect(() => parseSingleBuildArgs(["--qa-gateway-fixture"])).toThrow(/usage:/u);
+  });
+
+  it.each([
+    { argv: ["extensions/slack", ""] },
+    { argv: ["extensions/slack", " \t "] },
+    { argv: ["extensions/slack", "", "extra"] },
+    { argv: ["extensions/slack", "", "--unexpected"] },
+    { argv: ["--", "extensions/slack", ""] },
+    { argv: ["--prepare-native-import", "extensions/slack", ""] },
+    { argv: ["extensions/slack", "", "--prepare-native-import"] },
+    { argv: ["extensions/slack", "--prepare-native-import", "", "--unexpected"] },
+    { argv: ["--", "--prepare-native-import", "extensions/slack", ""] },
+    { argv: ["--prepare-native-import", "extensions/slack", "", "--prepare-native-import"] },
+    { argv: ["extensions/qa-lab", "--qa-gateway-fixture", ""] },
+    { argv: ["extensions/qa-lab", "--qa-gateway-fixture", "--qa-gateway-fixture"] },
+  ])("rejects excess runtime build argv $argv after extracting its mode", ({ argv }) => {
+    expect(() => parseSingleBuildArgs(argv)).toThrow(
+      "unexpected plugin npm runtime build argument",
+    );
+  });
+
+  it("preserves help, literal targets, and the bulk builder's separate grammar", () => {
+    expect(parseSingleBuildArgs(["--", "--help", ""])).toEqual({ help: true, packageDir: "" });
+    expect(parseSingleBuildArgs(["--prepare-native-import", "--help"])).toEqual({
+      help: true,
+      packageDir: "",
+    });
+    expect(parseSingleBuildArgs([" extensions/slack "])).toEqual({
+      packageDir: " extensions/slack ",
+    });
+    expect(parseSingleBuildArgs(["--", "extensions/slack", "--prepare-native-import"])).toEqual({
+      packageDir: "extensions/slack",
+      prepareNativeImport: true,
+    });
+    expect(() => parseBulkBuildArgs(["--package", "extensions/slack", ""])).toThrow(/usage:/u);
+    expect(() => parseBulkBuildArgs(["--package", ""])).toThrow("missing value for --package");
+  });
+
   it("rejects missing or option-looking package targets", () => {
     expect(() => parseBulkBuildArgs(["--package"])).toThrow("missing value for --package");
     expect(() => parseBulkBuildArgs(["--package", "--package", "extensions/slack"])).toThrow(
@@ -64,46 +116,5 @@ describe("plugin npm runtime build args", () => {
     expect(() => parseSingleBuildArgs(["extensions/slack", "extra"])).toThrow(
       "unexpected plugin npm runtime build argument: extra",
     );
-  });
-
-  it("reports package-local missing static asset sources", () => {
-    const repoRoot = createTempDir("openclaw-plugin-npm-runtime-assets-");
-    const demoDir = path.join(repoRoot, "extensions", "demo");
-    const otherDir = path.join(repoRoot, "extensions", "other");
-    fs.mkdirSync(path.join(demoDir, "assets"), { recursive: true });
-    fs.mkdirSync(otherDir, { recursive: true });
-    fs.writeFileSync(path.join(demoDir, "assets", "present.js"), "export {};\n", "utf8");
-    fs.writeFileSync(
-      path.join(demoDir, "package.json"),
-      JSON.stringify({
-        openclaw: {
-          build: {
-            staticAssets: [
-              { source: "./assets/present.js", output: "assets/present.js" },
-              { source: "./assets/missing.js", output: "assets/missing.js" },
-            ],
-          },
-        },
-      }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(otherDir, "package.json"),
-      JSON.stringify({
-        openclaw: {
-          build: {
-            staticAssets: [{ source: "./assets/other-missing.js", output: "assets/other.js" }],
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    expect(
-      listMissingPackageStaticAssetSources({
-        repoRoot,
-        pluginDir: "demo",
-      }),
-    ).toEqual(["extensions/demo/assets/missing.js"]);
   });
 });

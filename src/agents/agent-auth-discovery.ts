@@ -33,7 +33,12 @@ export type DiscoverAuthStorageOptions = {
   syntheticAuthProviderRefs?: Iterable<string>;
 } & AgentDiscoveryAuthLookupOptions;
 
-type SyntheticAuth = { apiKey?: string } | undefined;
+type SyntheticAuth =
+  | {
+      apiKey?: string;
+      nativeAuth?: { runtime: string; mode: "api-key" | "oauth" | "token" };
+    }
+  | undefined;
 type AmbientAgentCredentialOptions = AgentDiscoveryAuthLookupOptions & {
   authoritativeSyntheticAuthProviderRefs?: Iterable<string>;
   resolveSyntheticAuth?: (provider: string) => SyntheticAuth;
@@ -101,7 +106,11 @@ function addSyntheticCredential(
 ) {
   const apiKey = resolved?.apiKey?.trim();
   if (apiKey) {
-    credentials[normalizeProviderId(provider) || provider] = { type: "api_key", key: apiKey };
+    credentials[normalizeProviderId(provider) || provider] = {
+      type: "api_key",
+      key: apiKey,
+      ...(resolved?.nativeAuth ? { nativeAuth: resolved.nativeAuth } : {}),
+    };
   }
 }
 

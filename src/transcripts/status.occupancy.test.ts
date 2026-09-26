@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
-import * as providerRegistry from "./provider-registry.js";
 import type { TranscriptOccupancyWatchRequest, TranscriptStartRequest } from "./provider-types.js";
 import {
   transcriptStatusRoom as room,
@@ -11,18 +10,56 @@ import {
 const fixture = useTranscriptStatusFixture();
 
 describe("configured transcript occupancy diagnostics", () => {
+  it("joins an initially occupied capture while releasing its watcher before startup settles", async () => {
+    const f = fixture({ transcripts: { autoStart: [{ ...room, whenOccupied: true }] } });
+    const entered = createDeferred<TranscriptStartRequest>();
+    const gate = createDeferred();
+    const unwatched = createDeferred();
+    f.provider.watchOccupancy = async (request) => {
+      request.onOccupied();
+      return { ok: true, value: { stop: () => unwatched.resolve() } };
+    };
+    f.provider.start = async (request) => {
+      entered.resolve(request);
+      await gate.promise;
+      return { ok: true, session: request.session };
+    };
+    const service = createTranscriptsAutoStartService(f.ctx);
+    try {
+      let settled = false;
+      const starting = service.start().settled.then(() => {
+        settled = true;
+      });
+      const request = await entered.promise;
+      expect(settled).toBe(false);
+      const stopping = service.stop();
+      await unwatched.promise;
+      expect(request.abortSignal?.aborted).toBe(true);
+      expect(settled).toBe(false);
+      gate.resolve();
+      await starting;
+      await stopping;
+      expect((await f.read()).active).toEqual([]);
+    } finally {
+      gate.resolve();
+      await service.stop();
+    }
+  });
+
   it.each(["retrying", "starting", "reoccupied"] as const)(
     "settles a %s capture when its room becomes empty",
     async (mode) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const f = fixture({ transcripts: { autoStart: [{ ...room, whenOccupied: true }] } });
       const gate = createDeferred();
+      const startCalled = createDeferred();
       const watch = vi.fn(async (request: TranscriptOccupancyWatchRequest) => {
         request.onOccupied();
         return { ok: true as const, value: { stop: vi.fn() } };
       });
       f.provider.watchOccupancy = watch;
       const start = vi.fn(async (request: TranscriptStartRequest) => {
+        startCalled.resolve();
         if (start.mock.calls.length === 1) {
           if (mode === "retrying") {
             return { ok: false as const, error: "temporary capture failure" };
@@ -35,7 +72,8 @@ describe("configured transcript occupancy diagnostics", () => {
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         service.start();
-        await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+        await startCalled.promise;
+        expect(start).toHaveBeenCalledOnce();
         await vi.waitFor(async () =>
           expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe(
             mode === "retrying" ? "retrying" : "starting",
@@ -92,16 +130,14 @@ describe("configured transcript occupancy diagnostics", () => {
       }
       const start = vi.fn(f.provider.start!);
       f.provider.start = start;
-      vi.mocked(providerRegistry.getTranscriptSourceProvider).mockReturnValue(undefined);
+      f.setProviders([]);
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         service.start();
-        await vi.waitFor(async () =>
-          expect(
-            (await f.read()).configuredSources.map((source) => source.startDiagnostic),
-          ).toEqual(entries.map(() => "retrying")),
+        expect((await f.read()).configuredSources.map((source) => source.startDiagnostic)).toEqual(
+          entries.map(() => "retrying"),
         );
-        vi.mocked(providerRegistry.getTranscriptSourceProvider).mockReturnValue(f.provider);
+        f.setProviders([f.provider]);
         await vi.advanceTimersByTimeAsync(5_000);
         await vi.waitFor(async () =>
           expect((await f.read()).configuredSources.map((source) => source.state)).toEqual(

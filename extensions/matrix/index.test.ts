@@ -1,7 +1,6 @@
 // Matrix tests cover index plugin behavior.
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import { registerMatrixCliMetadata } from "./cli-metadata.js";
 import entry, { registerMatrixFullRuntime } from "./index.js";
 
 const cliMocks = vi.hoisted(() => ({
@@ -25,7 +24,10 @@ vi.mock("./src/cli.js", () => {
 });
 
 vi.mock("./plugin-entry.handlers.runtime.js", () => runtimeMocks);
-vi.mock("./runtime-setter-api.js", () => ({ setMatrixRuntime: runtimeMocks.setMatrixRuntime }));
+vi.mock("./runtime-setter-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime-setter-api.js")>()),
+  setMatrixRuntime: runtimeMocks.setMatrixRuntime,
+}));
 vi.mock("./src/matrix/subagent-hooks.js", () => runtimeMocks);
 
 function requireFirstCliRegistration(mock: ReturnType<typeof vi.fn>) {
@@ -51,7 +53,7 @@ describe("matrix plugin", () => {
       registerGatewayMethod,
     });
 
-    registerMatrixCliMetadata(api);
+    entry.register(api);
 
     expect(registerCli).toHaveBeenCalledTimes(1);
     const [registrar, options] = requireFirstCliRegistration(registerCli);
@@ -81,37 +83,6 @@ describe("matrix plugin", () => {
     }
     entry.setChannelRuntime({ marker: "runtime" } as never);
     expect(runtimeMocks.setMatrixRuntime).not.toHaveBeenCalled();
-  });
-
-  it("wires CLI metadata through the bundled entry", () => {
-    const registerCli = vi.fn();
-    const registerGatewayMethod = vi.fn();
-    const api = createTestPluginApi({
-      id: "matrix",
-      name: "Matrix",
-      source: "test",
-      config: {},
-      runtime: {} as never,
-      registrationMode: "cli-metadata",
-      registerCli,
-      registerGatewayMethod,
-    });
-
-    entry.register(api);
-
-    expect(registerCli).toHaveBeenCalledTimes(1);
-    const [registrar, options] = requireFirstCliRegistration(registerCli);
-    expect(typeof registrar).toBe("function");
-    expect(options).toEqual({
-      descriptors: [
-        {
-          name: "matrix",
-          description: "Manage Matrix accounts, verification, devices, and profile state",
-          hasSubcommands: true,
-        },
-      ],
-    });
-    expect(registerGatewayMethod).not.toHaveBeenCalled();
   });
 
   it("registers subagent lifecycle hooks during full runtime registration", async () => {

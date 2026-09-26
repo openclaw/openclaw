@@ -249,7 +249,13 @@ async function openActiveTurn(scenario: Parameters<typeof installMockGateway>[1]
 
 async function assertSteeredRecoveryOrder(
   page: Page,
-  texts: { original: string; beforeSteer: string; steer: string; afterSteer: string },
+  texts: {
+    original: string;
+    beforeSteer: string;
+    steer: string;
+    afterSteer: string;
+    latest: string;
+  },
 ): Promise<void> {
   const thread = page.locator(".chat-thread");
   await assertActiveTurnVisible(page, texts.afterSteer);
@@ -257,6 +263,9 @@ async function assertSteeredRecoveryOrder(
     await expect(thread.getByText(text, { exact: true })).toHaveCount(1, { timeout: 10_000 });
   }
   await expect(page.locator(".chat-working-indicator")).toHaveCount(1, { timeout: 10_000 });
+  await expect(thread.locator(".chat-text").filter({ hasText: texts.latest })).toHaveText(
+    texts.latest,
+  );
 
   const order = await thread.evaluate((element, expected) => {
     const visibleText = Array.from(element.querySelectorAll<HTMLElement>(".chat-bubble"));
@@ -349,7 +358,11 @@ suite.define(() => {
   it.each([true, false])(
     "keeps an owned reconnect prompt before a durable reply while history recovery is pending (active=%s)",
     async (active) => {
-      const { context, page, gateway } = await openActiveTurn({ deferredMethods: ["chat.send"] });
+      const { context, page, gateway } = await openActiveTurn({
+        deferredMethods: ["chat.send"],
+        // Terminal events can request ordinary history alongside outbox recovery.
+        heldMethods: ["chat.history"],
+      });
       const readPane = () =>
         page.locator("openclaw-chat-pane").evaluate((element) => {
           const state = (element as HTMLElement & { state: ChatPageHost }).state;
@@ -443,7 +456,6 @@ suite.define(() => {
         const historyCount = (await gateway.getRequests("chat.history")).length;
         const subscriptionCount = (await gateway.getRequests("sessions.messages.subscribe")).length;
         await gateway.deferNext("chat.startup", { sessionKey });
-        await gateway.deferNext("chat.history", { sessionKey, limit: 1000 });
         await gateway.setOnline(true);
         await waitForGatewayConnected(page);
         await gateway.waitForRequest("sessions.messages.subscribe", { after: subscriptionCount });
@@ -596,6 +608,7 @@ suite.define(() => {
       beforeSteer: "The first recovery note is visible.",
       steer: "Please include the verification pass.",
       afterSteer: "The second recovery note is visible.",
+      latest: "Verifying the remaining work.",
     };
     const fixtureNow = Date.now();
     const snapshot = activeRunSnapshot(runId, texts.original, "", {
@@ -658,6 +671,18 @@ suite.define(() => {
             kind: "preamble",
             itemId: "fixture-preamble-after-steer",
             progressText: texts.afterSteer,
+          },
+        },
+        {
+          runId,
+          seq: 4,
+          stream: "item",
+          ts: fixtureNow + 5_000,
+          sessionKey: "agent:main:main",
+          data: {
+            kind: "preamble",
+            itemId: "fixture-latest-preamble",
+            progressText: texts.latest,
           },
         },
       ],

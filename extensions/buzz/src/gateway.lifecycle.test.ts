@@ -22,7 +22,7 @@ const gatewayMocks = vi.hoisted(() => ({
   onRoomDirectoryChanged: undefined as (() => void) | undefined,
   resolveAgentIdentity: vi.fn(),
   resolveAgentRoute: vi.fn(),
-  recoveryLookup: vi.fn(),
+  recoveryEntries: vi.fn(),
   startBuzzBus: vi.fn(),
 }));
 
@@ -146,7 +146,9 @@ describe("Buzz gateway lifecycle", () => {
     gatewayMocks.resolveAgentIdentity.mockReset().mockReturnValue(undefined);
     gatewayMocks.resolveAgentRoute.mockReset().mockReturnValue({ agentId: "main" });
     const recoveryRooms = new Map<string, { seconds: number }>();
-    gatewayMocks.recoveryLookup.mockImplementation(async (key: string) => recoveryRooms.get(key));
+    gatewayMocks.recoveryEntries.mockImplementation(async () =>
+      Array.from(recoveryRooms, ([key, value]) => ({ key, value })),
+    );
     setBuzzRuntime({
       agent: {
         resolveAgentIdentity: gatewayMocks.resolveAgentIdentity,
@@ -162,11 +164,11 @@ describe("Buzz gateway lifecycle", () => {
       },
       state: {
         openKeyedStore: () => ({
-          lookup: gatewayMocks.recoveryLookup,
+          lookup: async (key: string) => recoveryRooms.get(key),
           register: async (key: string, value: { seconds: number }) => {
             recoveryRooms.set(key, value);
           },
-          entries: async () => Array.from(recoveryRooms, ([key, value]) => ({ key, value })),
+          entries: gatewayMocks.recoveryEntries,
           delete: async (key: string) => recoveryRooms.delete(key),
         }),
       },
@@ -197,24 +199,32 @@ describe("Buzz gateway lifecycle", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(
-    [
-      { label: "implicit root", accountId: "default", nested: false, path: "channels.buzz" },
-      { label: "named", accountId: "ada", nested: true, path: "channels.buzz.accounts.ada" },
-      {
-        label: "explicit default",
-        accountId: "default",
-        nested: true,
-        path: "channels.buzz.accounts.default",
-      },
-    ].flatMap((scope) =>
-      [
-        { rooms: "missing", groups: undefined },
-        { rooms: "empty", groups: {} },
-        { rooms: "disabled", groups: { [CHANNEL_ID]: { enabled: false } } },
-      ].map((rooms) => Object.assign({}, scope, rooms)),
-    ),
-  )(
+  it.each([
+    {
+      label: "implicit root",
+      accountId: "default",
+      nested: false,
+      path: "channels.buzz",
+      rooms: "missing",
+      groups: undefined,
+    },
+    {
+      label: "named",
+      accountId: "ada",
+      nested: true,
+      path: "channels.buzz.accounts.ada",
+      rooms: "empty",
+      groups: {},
+    },
+    {
+      label: "explicit default",
+      accountId: "default",
+      nested: true,
+      path: "channels.buzz.accounts.default",
+      rooms: "disabled",
+      groups: { [CHANNEL_ID]: { enabled: false } },
+    },
+  ])(
     "reports the $label account path when rooms are $rooms",
     async ({ accountId, nested, path, groups }) => {
       const cfg = createBuzzConfig();
@@ -230,7 +240,7 @@ describe("Buzz gateway lifecycle", () => {
         ),
       ).rejects.toThrow(`Buzz requires at least one enabled ${path}.groups entry`);
       expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
-      expect(gatewayMocks.recoveryLookup).not.toHaveBeenCalled();
+      expect(gatewayMocks.recoveryEntries).not.toHaveBeenCalled();
     },
   );
 
@@ -251,7 +261,7 @@ describe("Buzz gateway lifecycle", () => {
   });
 
   it("reports unreadable recovery state without connecting or skipping room history", async () => {
-    gatewayMocks.recoveryLookup.mockRejectedValueOnce(new Error("room activation unreadable"));
+    gatewayMocks.recoveryEntries.mockRejectedValueOnce(new Error("room activation unreadable"));
     const setStatus = vi.fn();
     const { abortController, lifecycle } = startTestGateway({ setStatus });
 

@@ -4,9 +4,12 @@ import type { AgentsWorkspaceGetResult } from "../../../../packages/gateway-prot
 import type { MemorySearchResponse } from "../../../../src/gateway/server-methods/memory-search.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/memory-memories.css";
+
+registerSettingsEnglish();
 
 type SearchResult = MemorySearchResponse["results"][number];
 type SearchState =
@@ -61,7 +64,6 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
   @state() private details = new Map<string, DetailState>();
 
   private searchRequest: object | null = null;
-  private detailRequests = new Map<string, object>();
 
   protected override updated(changed: PropertyValues<this>) {
     if (
@@ -76,7 +78,6 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
 
   private resetSearch() {
     this.searchRequest = null;
-    this.detailRequests.clear();
     this.query = "";
     this.searchState = { kind: "idle" };
     this.openResultKey = null;
@@ -96,7 +97,6 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
     this.searchState = { kind: "loading", query: normalizedQuery };
     this.openResultKey = null;
     this.details = new Map();
-    this.detailRequests.clear();
     try {
       const result = await client.request<MemorySearchResponse>("memory.search", {
         query: normalizedQuery,
@@ -125,45 +125,40 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
       return;
     }
     this.openResultKey = key;
-    if (!this.details.has(key)) {
-      void this.loadDetail(key, result);
+    if (!this.details.has(result.path)) {
+      void this.loadDetail(result.path);
     }
   }
 
-  private async loadDetail(key: string, result: SearchResult) {
+  private async loadDetail(path: string) {
     const client = this.connected ? this.client : null;
     const agentId = this.agentId;
     if (!client || !agentId) {
       return;
     }
-    const request = { client, agentId, path: result.path };
-    this.detailRequests.set(key, request);
-    this.details = new Map(this.details).set(key, { kind: "loading" });
+    const pending: DetailState = { kind: "loading" };
+    this.details = new Map(this.details).set(path, pending);
     try {
       const response = await client.request<AgentsWorkspaceGetResult>("agents.workspace.get", {
         agentId,
-        path: result.path,
+        path,
       });
-      if (this.detailRequests.get(key) !== request || this.agentId !== agentId) {
+      if (this.details.get(path) !== pending || this.agentId !== agentId) {
         return;
       }
       const detail: DetailState =
         response.file.encoding === "utf8"
           ? { kind: "ready", content: response.file.content }
           : { kind: "error", message: t("memoryPage.memories.fileUnsupported") };
-      this.details = new Map(this.details).set(key, detail);
+      this.details = new Map(this.details).set(path, detail);
     } catch (error) {
-      if (this.detailRequests.get(key) !== request || this.agentId !== agentId) {
+      if (this.details.get(path) !== pending || this.agentId !== agentId) {
         return;
       }
-      this.details = new Map(this.details).set(key, {
+      this.details = new Map(this.details).set(path, {
         kind: "error",
         message: formatUiError(error),
       });
-    } finally {
-      if (this.detailRequests.get(key) === request) {
-        this.detailRequests.delete(key);
-      }
     }
   }
 
@@ -171,7 +166,7 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
     if (this.openResultKey !== key) {
       return nothing;
     }
-    const detail = this.details.get(key);
+    const detail = this.details.get(result.path);
     return html`<div id=${panelId} class="memory-memories__detail">
       ${
         !detail || detail.kind === "loading"

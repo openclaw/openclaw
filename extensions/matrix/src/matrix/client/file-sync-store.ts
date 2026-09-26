@@ -6,26 +6,22 @@ import {
   type ISyncResponse,
   type IStoredClientOpts,
 } from "matrix-js-sdk/lib/matrix.js";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
-import { createAsyncLock } from "../async-lock.js";
 import { LogService } from "../sdk/logger.js";
 import { claimCurrentTokenStorageState } from "./storage.js";
 import {
   MATRIX_SYNC_CACHE_VERSION,
-  deleteMatrixSyncCacheStateFromSyncStore,
+  deleteMatrixSyncCacheStateFromStore,
   openMatrixSyncCacheStoreOptions,
-  readPersistedStoreFromSyncStore,
-  writeMatrixSyncCacheStateToSyncStore,
+  readPersistedStoreFromStore,
+  writeMatrixSyncCacheStateToStore,
   type MatrixSyncCacheRecord,
   type PersistedMatrixSyncStore,
 } from "./sync-cache-state.js";
 
 const PERSIST_DEBOUNCE_MS = 250;
-
-function cloneJson<T>(value: T): T {
-  return structuredClone(value);
-}
 
 function syncDataToSyncResponse(syncData: ISyncData): ISyncResponse {
   return {
@@ -40,8 +36,6 @@ function syncDataToSyncResponse(syncData: ISyncData): ISyncResponse {
 export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private readonly persistLock = createAsyncLock();
   private readonly accumulator = new SyncAccumulator();
-  private readonly store: PluginStateSyncKeyedStore<MatrixSyncCacheRecord>;
-  private readonly storeUnavailableError: unknown;
   private savedSync: ISyncData | null = null;
   private savedClientOptions: IStoredClientOpts | undefined;
   private readonly hadSavedSyncOnLoad: boolean;
@@ -52,28 +46,32 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   private persistTimer: NodeJS.Timeout | null = null;
   private persistPromise: Promise<void> | null = null;
 
-  constructor(private readonly storageRootDir: string) {
-    super();
-
-    let restoredSavedSync: ISyncData | null = null;
-    let restoredClientOptions: IStoredClientOpts | undefined;
-    let restoredCleanShutdown = false;
-    let syncCacheStore = createNoopMatrixSyncCacheStore();
-    let syncCacheStoreUnavailableError: unknown;
+  static async create(storageRootDir: string): Promise<SqliteBackedMatrixSyncStore> {
+    let store: PluginStateKeyedStore<MatrixSyncCacheRecord> | undefined;
+    let persisted: PersistedMatrixSyncStore | null = null;
+    let unavailableError: unknown;
     try {
-      syncCacheStore = openMatrixSyncCacheStore(storageRootDir);
-      const persisted = readPersistedStoreFromSyncStore(syncCacheStore);
-      if (persisted) {
-        restoredSavedSync = persisted.savedSync;
-        restoredClientOptions = persisted.clientOptions;
-        restoredCleanShutdown = persisted.cleanShutdown === true;
-      }
-    } catch (err) {
-      syncCacheStoreUnavailableError = err;
-      LogService.warn("MatrixSyncCacheStore", "Failed to load Matrix sync cache:", err);
+      store = getMatrixRuntime().state.openKeyedStore<MatrixSyncCacheRecord>(
+        openMatrixSyncCacheStoreOptions(storageRootDir),
+      );
+      persisted = await readPersistedStoreFromStore({ storageRootDir, store });
+    } catch (error) {
+      unavailableError = error;
+      LogService.warn("MatrixSyncCacheStore", "Failed to load Matrix sync cache:", error);
     }
-    this.store = syncCacheStore;
-    this.storeUnavailableError = syncCacheStoreUnavailableError;
+    return new SqliteBackedMatrixSyncStore(storageRootDir, store, persisted, unavailableError);
+  }
+
+  private constructor(
+    private readonly storageRootDir: string,
+    private readonly store: PluginStateKeyedStore<MatrixSyncCacheRecord> | undefined,
+    persisted: PersistedMatrixSyncStore | null,
+    private readonly storeUnavailableError: unknown,
+  ) {
+    super();
+    const restoredSavedSync = persisted?.savedSync ?? null;
+    const restoredClientOptions = persisted?.clientOptions;
+    const restoredCleanShutdown = persisted?.cleanShutdown === true;
 
     this.savedSync = restoredSavedSync;
     this.savedClientOptions = restoredClientOptions;
@@ -99,7 +97,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   }
 
   override getSavedSync(): Promise<ISyncData | null> {
-    return Promise.resolve(this.savedSync ? cloneJson(this.savedSync) : null);
+    return Promise.resolve(this.savedSync ? structuredClone(this.savedSync) : null);
   }
 
   override getSavedSyncToken(): Promise<string | null> {
@@ -118,7 +116,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
 
   override getClientOptions() {
     return Promise.resolve(
-      this.savedClientOptions ? cloneJson(this.savedClientOptions) : undefined,
+      this.savedClientOptions ? structuredClone(this.savedClientOptions) : undefined,
     );
   }
 
@@ -126,7 +124,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     if (this.frozen) {
       return Promise.resolve();
     }
-    this.savedClientOptions = cloneJson(options);
+    this.savedClientOptions = structuredClone(options);
     void super.storeClientOptions(options);
     this.markDirtyAndSchedulePersist();
     return Promise.resolve();
@@ -146,20 +144,22 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   }
 
   override async deleteAllData(): Promise<void> {
-    this.assertStoreAvailable();
+    const store = this.requireStore();
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
       this.persistTimer = null;
     }
     this.dirty = false;
-    await this.persistPromise?.catch(() => undefined);
-    await super.deleteAllData();
-    this.savedSync = null;
-    this.savedClientOptions = undefined;
-    this.cleanShutdown = false;
-    await deleteMatrixSyncCacheStateFromSyncStore({
-      storageRootDir: this.storageRootDir,
-      store: this.store,
+    await this.enqueuePersistence(async () => {
+      await super.deleteAllData();
+      this.savedSync = null;
+      this.savedClientOptions = undefined;
+      this.cleanShutdown = false;
+      this.dirty = false;
+      await deleteMatrixSyncCacheStateFromStore({
+        storageRootDir: this.storageRootDir,
+        store,
+      });
     });
   }
 
@@ -174,7 +174,9 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
       clearTimeout(this.persistTimer);
       this.persistTimer = null;
     }
-    await this.persistPromise;
+    while (this.persistPromise) {
+      await this.persistPromise;
+    }
   }
 
   discardPendingSyncCursorPersistence(): void {
@@ -194,9 +196,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
     }
     while (this.dirty || this.persistPromise) {
       if (this.dirty && !this.persistPromise) {
-        this.persistPromise = this.persist().finally(() => {
-          this.persistPromise = null;
-        });
+        void this.enqueuePersistence(() => this.persist());
       }
       await this.persistPromise;
     }
@@ -221,54 +221,45 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
   }
 
   private async persist(): Promise<void> {
-    this.assertStoreAvailable();
+    const store = this.requireStore();
     this.dirty = false;
     const payload: PersistedMatrixSyncStore = {
       version: MATRIX_SYNC_CACHE_VERSION,
-      savedSync: this.savedSync ? cloneJson(this.savedSync) : null,
+      savedSync: this.savedSync ? structuredClone(this.savedSync) : null,
       cleanShutdown: this.cleanShutdown,
-      ...(this.savedClientOptions ? { clientOptions: cloneJson(this.savedClientOptions) } : {}),
+      ...(this.savedClientOptions
+        ? { clientOptions: structuredClone(this.savedClientOptions) }
+        : {}),
     };
     try {
-      await this.persistLock(async () => {
-        writeMatrixSyncCacheStateToSyncStore({ payload, store: this.store });
-        claimCurrentTokenStorageState({
-          rootDir: this.storageRootDir,
-        });
+      await writeMatrixSyncCacheStateToStore({
+        storageRootDir: this.storageRootDir,
+        payload,
+        store,
       });
+      await claimCurrentTokenStorageState({ rootDir: this.storageRootDir });
     } catch (err) {
       this.dirty = true;
       throw err;
     }
   }
 
-  private assertStoreAvailable(): void {
-    if (this.storeUnavailableError == null) {
-      return;
+  private enqueuePersistence(operation: () => Promise<void>): Promise<void> {
+    const pending = this.persistLock(operation).finally(() => {
+      if (this.persistPromise === pending) {
+        this.persistPromise = null;
+      }
+    });
+    this.persistPromise = pending;
+    return pending;
+  }
+
+  private requireStore(): PluginStateKeyedStore<MatrixSyncCacheRecord> {
+    if (this.store && this.storeUnavailableError == null) {
+      return this.store;
     }
     throw new Error("Matrix sync cache SQLite store is unavailable; cannot persist sync state", {
       cause: this.storeUnavailableError,
     });
   }
-}
-
-function createNoopMatrixSyncCacheStore(): PluginStateSyncKeyedStore<MatrixSyncCacheRecord> {
-  return {
-    register: () => {},
-    registerIfAbsent: () => false,
-    lookup: () => undefined,
-    lookupMany: (keys) => keys.map(() => ({ ok: true, value: undefined })),
-    consume: () => undefined,
-    delete: () => false,
-    entries: () => [],
-    clear: () => {},
-  };
-}
-
-function openMatrixSyncCacheStore(
-  storageRootDir: string,
-): PluginStateSyncKeyedStore<MatrixSyncCacheRecord> {
-  return getMatrixRuntime().state.openSyncKeyedStore<MatrixSyncCacheRecord>(
-    openMatrixSyncCacheStoreOptions(storageRootDir),
-  );
 }

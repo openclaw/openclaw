@@ -21,14 +21,11 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { applyClawAddPlan } from "./add.js";
 import { clawCronGatewayInput, markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
 import { withClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
-import {
-  buildClawRemovalFixture,
-  quiescentClawMonitorGateway,
-} from "./lifecycle-remove.test-support.js";
+import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
+import { createClawRemoveTestFixtures } from "./lifecycle-state.test-helpers.js";
 import {
   persistClawInstallRecord,
   persistClawPackageRef,
@@ -45,6 +42,21 @@ afterEach(async () => {
   await state.cleanup();
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { fixture, addFixture } = createClawRemoveTestFixtures(tempDirs, () => state);
+
+function removeOptions(
+  current: Awaited<ReturnType<typeof addFixture>>,
+  plan: Parameters<typeof applyClawRemovePlan>[0],
+  config = current.getConfig(),
+) {
+  return {
+    monitorGateway: quiescentClawMonitorGateway,
+    trashPath: async () => true,
+    consentPlanIntegrity: plan.planIntegrity,
+    env: current.env,
+    config,
+  };
+}
 
 const packageIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -84,32 +96,6 @@ function seedAttachedCronJob(
     },
     0,
   );
-}
-
-async function fixture(params: Parameters<typeof buildClawRemovalFixture>[1] = {}) {
-  const current = await buildClawRemovalFixture(tempDirs.make("openclaw-claw-remove-"), params);
-  return { ...current, env: { OPENCLAW_STATE_DIR: state.stateDir } };
-}
-
-async function addFixture(
-  params: { withFile?: boolean; withCron?: boolean; withMcp?: boolean } = {},
-) {
-  const current = await fixture(params);
-  let config: OpenClawConfig = {};
-  await applyClawAddPlan(current.plan, {
-    consentPlanIntegrity: current.plan.planIntegrity,
-    env: current.env,
-    commitConfig: async (transform) => {
-      config = transform(config);
-      await state.writeConfig(config);
-    },
-    cronGateway: { add: async () => ({ id: "scheduler-daily" }) },
-    ...(params.withMcp ? { installMcpServers: async () => [] } : {}),
-  });
-  return {
-    ...current,
-    getConfig: loadConfig,
-  };
 }
 
 describe("Claw status and remove", () => {
@@ -402,75 +388,44 @@ describe("Claw status and remove", () => {
     });
   });
 
-  it("previews and blocks operator-owned cron jobs attached to the agent", async () => {
-    const current = await addFixture();
+  it("keeps Claw-owned cron removal actions separate from independent jobs", async () => {
+    const current = await addFixture({ withCron: true });
     seedAttachedCronJob(current.env, {
-      id: "operator-job",
-      name: "Operator job",
-      schedule: { kind: "every", everyMs: 60_000 },
+      id: "scheduler-daily",
+      name: "Claw job",
+      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
     });
+    for (const id of ["z-operator-job", "a-operator-job"]) {
+      seedAttachedCronJob(current.env, {
+        id,
+        name: "Operator job",
+        schedule: { kind: "every", everyMs: 60_000 },
+      });
+    }
 
     const plan = await buildClawRemovePlan("worker", {
       env: current.env,
       config: current.getConfig(),
     });
-
-    expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "agent_job_attached" }));
-    expect(plan.actions).toContainEqual(
-      expect.objectContaining({
-        kind: "scheduledJob",
-        id: "operator-job",
-        action: "retain",
-        blocked: true,
-      }),
+    const independentIds = ["a-operator-job", "z-operator-job"];
+    expect(plan.blockers).toEqual(
+      independentIds.map((id) => ({
+        code: "agent_job_attached",
+        message: expect.stringContaining(JSON.stringify(id)),
+      })),
     );
+    expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toEqual(
+      independentIds.map((id) => expect.objectContaining({ id, action: "retain", blocked: true })),
+    );
+    expect(plan.actions.filter((action) => action.kind === "cronJob")).toEqual([
+      expect.objectContaining({
+        id: "daily-report",
+        target: "scheduler-daily",
+        action: "remove",
+        blocked: false,
+      }),
+    ]);
   });
-
-  it.each([false, true])(
-    "keeps Claw-owned cron removal actions consistent (independent jobs=%s)",
-    async (withIndependentJobs) => {
-      const current = await addFixture({ withCron: true });
-      seedAttachedCronJob(current.env, {
-        id: "scheduler-daily",
-        name: "Claw job",
-        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-      });
-      if (withIndependentJobs) {
-        for (const id of ["z-operator-job", "a-operator-job"]) {
-          seedAttachedCronJob(current.env, {
-            id,
-            name: "Operator job",
-            schedule: { kind: "every", everyMs: 60_000 },
-          });
-        }
-      }
-
-      const plan = await buildClawRemovePlan("worker", {
-        env: current.env,
-        config: current.getConfig(),
-      });
-      const independentIds = withIndependentJobs ? ["a-operator-job", "z-operator-job"] : [];
-      expect(plan.blockers).toEqual(
-        independentIds.map((id) => ({
-          code: "agent_job_attached",
-          message: expect.stringContaining(JSON.stringify(id)),
-        })),
-      );
-      expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toEqual(
-        independentIds.map((id) =>
-          expect.objectContaining({ id, action: "retain", blocked: true }),
-        ),
-      );
-      expect(plan.actions.filter((action) => action.kind === "cronJob")).toEqual([
-        expect.objectContaining({
-          id: "daily-report",
-          target: "scheduler-daily",
-          action: "remove",
-          blocked: false,
-        }),
-      ]);
-    },
-  );
 
   it("removes the agent and unchanged files but only releases package refs", async () => {
     const current = await addFixture({ withFile: true });
@@ -499,11 +454,7 @@ describe("Claw status and remove", () => {
     });
     const config = current.getConfig();
     const result = await applyClawRemovePlan(plan, {
-      monitorGateway: quiescentClawMonitorGateway,
-      trashPath: async () => true,
-      consentPlanIntegrity: plan.planIntegrity,
-      env: current.env,
-      config,
+      ...removeOptions(current, plan, config),
     });
     expect(result).toMatchObject({
       status: "complete",
@@ -540,11 +491,7 @@ describe("Claw status and remove", () => {
     const config = current.getConfig();
     const order: string[] = [];
     const result = await applyClawRemovePlan(plan, {
-      monitorGateway: quiescentClawMonitorGateway,
-      trashPath: async () => true,
-      consentPlanIntegrity: plan.planIntegrity,
-      env: current.env,
-      config,
+      ...removeOptions(current, plan, config),
       cronGateway: {
         get: async () =>
           cronReadView("worker", readClawCronRefs("worker", { env: current.env })[0]!),
@@ -576,11 +523,7 @@ describe("Claw status and remove", () => {
     const remove = vi.fn().mockResolvedValue({ ok: true });
 
     const result = await applyClawRemovePlan(plan, {
-      monitorGateway: quiescentClawMonitorGateway,
-      trashPath: async () => true,
-      consentPlanIntegrity: plan.planIntegrity,
-      env: current.env,
-      config: current.getConfig(),
+      ...removeOptions(current, plan),
       cronGateway: {
         get: async () => ({
           ...live,
@@ -622,11 +565,7 @@ describe("Claw status and remove", () => {
       config: current.getConfig(),
     });
     const result = await applyClawRemovePlan(plan, {
-      monitorGateway: quiescentClawMonitorGateway,
-      trashPath: async () => true,
-      consentPlanIntegrity: plan.planIntegrity,
-      env: current.env,
-      config: current.getConfig(),
+      ...removeOptions(current, plan),
       cronGateway: {
         get: async () =>
           cronReadView("worker", readClawCronRefs("worker", { env: current.env })[0]!),
@@ -655,11 +594,7 @@ describe("Claw status and remove", () => {
     const config = current.getConfig();
 
     const result = await applyClawRemovePlan(plan, {
-      monitorGateway: quiescentClawMonitorGateway,
-      trashPath: async () => true,
-      consentPlanIntegrity: plan.planIntegrity,
-      env: current.env,
-      config,
+      ...removeOptions(current, plan, config),
       cronGateway: {
         get: async () => (present ? cronReadView("worker", ref) : undefined),
         remove: async () => {
@@ -684,11 +619,7 @@ describe("Claw status and remove", () => {
     const remove = vi.fn();
 
     const result = await applyClawRemovePlan(plan, {
-      monitorGateway: quiescentClawMonitorGateway,
-      trashPath: async () => true,
-      consentPlanIntegrity: plan.planIntegrity,
-      env: current.env,
-      config: current.getConfig(),
+      ...removeOptions(current, plan),
       cronGateway: {
         get: async () => ({
           ...cronReadView("worker", readClawCronRefs("worker", { env: current.env })[0]!),
@@ -717,11 +648,7 @@ describe("Claw status and remove", () => {
     const remoteRemovals: string[] = [];
 
     const result = await applyClawRemovePlan(plan, {
-      monitorGateway: quiescentClawMonitorGateway,
-      trashPath: async () => true,
-      consentPlanIntegrity: plan.planIntegrity,
-      env: current.env,
-      config,
+      ...removeOptions(current, plan, config),
       cronGateway: {
         remove: async (id) => {
           remoteRemovals.push(id);
@@ -930,11 +857,7 @@ describe("Claw status and remove", () => {
 
     await expect(
       applyClawRemovePlan(plan, {
-        monitorGateway: quiescentClawMonitorGateway,
-        trashPath: async () => true,
-        env: current.env,
-        config,
-        consentPlanIntegrity: plan.planIntegrity,
+        ...removeOptions(current, plan, config),
         packageDeps,
       }),
     ).resolves.toMatchObject({ status: "complete", agentRemoved: true });
@@ -949,11 +872,7 @@ describe("Claw status and remove", () => {
     expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "agent_modified" }));
     await expect(
       applyClawRemovePlan(plan, {
-        monitorGateway: quiescentClawMonitorGateway,
-        trashPath: async () => true,
-        env: current.env,
-        config,
-        consentPlanIntegrity: plan.planIntegrity,
+        ...removeOptions(current, plan, config),
       }),
     ).rejects.toMatchObject({
       code: "remove_blocked",

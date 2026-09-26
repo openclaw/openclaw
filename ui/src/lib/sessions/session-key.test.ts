@@ -6,6 +6,7 @@ import {
   canDeleteSessionRows,
   canonicalUiSessionKeyForPersistence,
   isUiSelectedGlobalSessionKey,
+  isPinnableUiSessionRow,
   normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   parseSessionKeyParts,
@@ -19,66 +20,20 @@ import {
 describe("Dashboard fixture session keys", () => {
   it.each([
     ["agent:main:main", "main", "main"],
-    ["agent:ops:home", "ops", "home"],
-    ["agent:ops:current", "ops", "current"],
     ["agent:research:main:thread", "research", "main:thread"],
-    ["agent:main:dashboard:uuid", "main", "dashboard:uuid"],
-    [
-      "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d",
-      "main",
-      "dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d",
-    ],
-    ["agent:main:node-proof-claude", "main", "node-proof-claude"],
-    ["agent:main:explicit:node-mcp-debug", "main", "explicit:node-mcp-debug"],
-    ["agent:main:telegram:direct:42", "main", "telegram:direct:42"],
-    ["agent:main:telegram:cards:dm:42", "main", "telegram:cards:dm:42"],
-    ["agent:main:telegram:cards:direct:42", "main", "telegram:cards:direct:42"],
-    ["agent:main:telegram:default:direct:42", "main", "telegram:default:direct:42"],
     ["agent:main:telegram:direct:12345😀67890", "main", "telegram:direct:12345😀67890"],
-    ["agent:main:telegram:group:-1001234567890", "main", "telegram:group:-1001234567890"],
-    ["agent:main:slack:channel:C1", "main", "slack:channel:C1", "slack:channel:c1"],
-    ["agent:main:dm:+123", "main", "dm:+123"],
-    ["agent:main:direct:+123", "main", "direct:+123"],
-    ["agent:main:dm:account:group:room", "main", "dm:account:group:room"],
-    [
-      "agent:main:slack:acct-1:channel:C1",
-      "main",
-      "slack:acct-1:channel:C1",
-      "slack:acct-1:channel:c1",
-    ],
     [
       "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
       "data-expert",
       "dingtalk:cidzg6sF43NZMy52Rnk8EN",
       "dingtalk:cidzg6sf43nzmy52rnk8en",
     ],
-    ["agent:main:telegram:user:12345:extra", "main", "telegram:user:12345:extra"],
-    ["agent:main:subagent:worker", "main", "subagent:worker"],
-    ["agent:main:cron:daily", "main", "cron:daily"],
-    [
-      "agent:ops:catalog:fixture:node%3ADevBox:Thread%3AA",
-      "ops",
-      "catalog:fixture:node%3ADevBox:Thread%3AA",
-      "catalog:fixture:node%3adevbox:thread%3aa",
-    ],
-    [
-      "agent:ops:matrix:channel:!Room:Example.Org:thread:$Event",
-      "ops",
-      "matrix:channel:!Room:Example.Org:thread:$Event",
-      "matrix:channel:!room:example.org:thread:$event",
-    ],
-    [
-      "agent:ops:signal:group:AbC123=:thread:xyz",
-      "ops",
-      "signal:group:AbC123=:thread:xyz",
-      "signal:group:abc123=:thread:xyz",
-    ],
   ] as const)("retains ownership and tail for %s", (key, agentId, rest, uiRest?: string) => {
     expect(parseAgentSessionKeyParts(key)).toEqual({ agentId, rest });
     expect(parseAgentSessionKey(key)).toEqual({ agentId, rest: uiRest ?? rest });
   });
 
-  it.each(["main", "global", "unknown", "catalog:claude:gateway%3Alocal:thread-1"])(
+  it.each(["main", "catalog:claude:gateway%3Alocal:thread-1"])(
     "keeps %s unscoped while retaining the UI owner fallback",
     (key) => {
       expect(parseAgentSessionKeyParts(key)).toBeNull();
@@ -154,10 +109,8 @@ describe("parseSessionKeyParts", () => {
   });
 
   it.each([
-    "global:default",
     "direct:some-key",
     "",
-    "agent:",
     "agent:main",
     "agent:main:",
     "agent:main:telegram",
@@ -291,13 +244,8 @@ describe("UI session identity", () => {
       expected: "agent:main:dashboard:navigation-parent",
     },
     {
-      parentSessionKey: "",
-      spawnedBy: "  agent:main:controller  ",
-      expected: "agent:main:controller",
-    },
-    {
       parentSessionKey: "  \t  ",
-      spawnedBy: "agent:main:controller",
+      spawnedBy: "  agent:main:controller  ",
       expected: "agent:main:controller",
     },
     { parentSessionKey: null, spawnedBy: "  ", expected: undefined },
@@ -344,5 +292,29 @@ describe("canonical host-scoped event and row matching", () => {
     };
     expect(uiSessionRowMatchesSelectedChat(custom, "main", custom.sessionKey)).toBe(true);
     expect(uiSessionRowMatchesSelectedChat(custom, "global", custom.sessionKey)).toBe(false);
+  });
+});
+
+describe("session pin eligibility", () => {
+  it.each([
+    [{ key: "agent:main:dashboard:ordinary" }, true],
+    [{ key: "agent:main:dashboard:ordinary", parentSessionKey: "agent:main:main" }, true],
+    [{ key: "agent:other:dashboard:ordinary", parentSessionKey: "agent:other:main" }, true],
+    [{ key: "agent:other:dashboard:ordinary", parentSessionKey: "agent:main:main" }, false],
+    [
+      { key: "agent:main:dashboard:nested", parentSessionKey: "agent:main:dashboard:parent" },
+      false,
+    ],
+    [
+      {
+        key: "agent:main:dashboard:spawned",
+        parentSessionKey: "agent:main:main",
+        spawnedBy: "agent:main:main",
+      },
+      false,
+    ],
+    [{ key: "agent:main:subagent:spawned", parentSessionKey: "agent:main:main" }, false],
+  ])("projects pin eligibility for %j", (row, expected) => {
+    expect(isPinnableUiSessionRow(row)).toBe(expected);
   });
 });

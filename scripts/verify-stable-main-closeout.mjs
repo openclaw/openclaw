@@ -2,8 +2,16 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { verifyStableMainCloseout } from "./lib/stable-release-closeout.mjs";
+import { basename, resolve } from "node:path";
+import { loadReleaseChangelog } from "./lib/release-changelog.mjs";
+import {
+  findAppcastWithdrawal,
+  requiresThinMacArtifacts,
+  requiresLinuxUpdaterObservation,
+  verifyReleaseEvidenceChecksum,
+  verifyStableMainCloseout,
+} from "./lib/stable-release-closeout.mjs";
+import { inspectLinuxUpdaterManifest } from "./linux-updater-manifest.mjs";
 
 function parseArgs(argv) {
   const values = new Map();
@@ -11,6 +19,11 @@ function parseArgs(argv) {
     const key = argv[index];
     if (!key.startsWith("--")) {
       throw new Error(`unexpected argument: ${key}`);
+    }
+    if (key === "--stable-soak-waiver" || key === "--lane-waiver") {
+      throw new Error(
+        `${key} was removed. Closeout requires the original strict validation evidence; historical waiver-bearing receipt replay is unsupported, and a fresh run cannot replace its published binding.`,
+      );
     }
     const value = argv[index + 1];
     if (!value || value.startsWith("-")) {
@@ -44,6 +57,17 @@ function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+function readOptionalText(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 function gitSha(dir) {
   return execFileSync("git", ["-C", dir, "rev-parse", "HEAD"], {
     encoding: "utf8",
@@ -51,22 +75,86 @@ function gitSha(dir) {
 }
 
 function main() {
+  if (process.argv[2] === "verify-checksum") {
+    if (process.argv.length !== 4) {
+      throw new Error("usage: verify-stable-main-closeout.mjs verify-checksum <evidence-file>");
+    }
+    const path = resolve(process.argv[3]);
+    verifyReleaseEvidenceChecksum({
+      assetName: basename(path),
+      assetBytes: readFileSync(path),
+      checksum: readFileSync(`${path}.sha256`, "utf8"),
+    });
+    console.log(`release evidence checksum verified: ${basename(path)}`);
+    return;
+  }
   const args = parseArgs(process.argv.slice(2));
   const mainDir = resolve(args["main-dir"]);
   const tagDir = resolve(args["tag-dir"]);
+  const tagPackageJson = readJson(resolve(tagDir, "package.json"));
+  const tagVersion = args.tag.replace(/^v/u, "");
+  const version =
+    tagPackageJson.version === tagVersion.replace(/-[1-9]\d*$/u, "")
+      ? tagPackageJson.version
+      : tagVersion;
+  const release = readJson(resolve(args["release-json"]));
+  const existingManifest = args["existing-manifest"]
+    ? readJson(resolve(args["existing-manifest"]))
+    : undefined;
+  const thinMacAppcasts = requiresThinMacArtifacts(args.tag)
+    ? {
+        mainArm64Appcast: readOptionalText(resolve(mainDir, "appcast-arm64.xml")),
+        mainX86_64Appcast: readOptionalText(resolve(mainDir, "appcast-x86_64.xml")),
+        ...(args["published-appcast-arm64"]
+          ? {
+              publishedArm64Appcast: readFileSync(resolve(args["published-appcast-arm64"]), "utf8"),
+            }
+          : {}),
+        ...(args["published-appcast-x86-64"]
+          ? {
+              publishedX86_64Appcast: readFileSync(
+                resolve(args["published-appcast-x86-64"]),
+                "utf8",
+              ),
+            }
+          : {}),
+      }
+    : {};
+  const repository = process.env.GITHUB_REPOSITORY ?? "openclaw/openclaw";
+  const mainSha = gitSha(mainDir);
+  const linuxUpdaterObservation = requiresLinuxUpdaterObservation({ release, existingManifest })
+    ? inspectLinuxUpdaterManifest({ repository, carrierTag: args.tag })
+    : undefined;
   const result = verifyStableMainCloseout({
+    // Replay reads the current main feed, so its withdrawal marker lives on main too.
+    findAppcastWithdrawal: (withdrawnVersion) =>
+      findAppcastWithdrawal(
+        JSON.parse(
+          execFileSync(
+            "gh",
+            [
+              "api",
+              `repos/${repository}/commits?sha=${existingManifest ? "main" : mainSha}&path=appcast.xml&per_page=100`,
+            ],
+            { encoding: "utf8" },
+          ),
+        ),
+        withdrawnVersion,
+      ),
     tag: args.tag,
     mainPackageJson: readJson(resolve(mainDir, "package.json")),
-    tagPackageJson: readJson(resolve(tagDir, "package.json")),
-    mainChangelog: readFileSync(resolve(mainDir, "CHANGELOG.md"), "utf8"),
-    tagChangelog: readFileSync(resolve(tagDir, "CHANGELOG.md"), "utf8"),
+    tagPackageJson,
+    mainRelease: loadReleaseChangelog({ rootDir: mainDir, version }),
+    tagRelease: loadReleaseChangelog({ rootDir: tagDir, version }),
     mainAppcast: readFileSync(resolve(mainDir, "appcast.xml"), "utf8"),
     publishedAppcast: args["published-appcast"]
       ? readFileSync(resolve(args["published-appcast"]), "utf8")
       : undefined,
-    release: readJson(resolve(args["release-json"])),
+    ...thinMacAppcasts,
+    release,
+    linuxUpdaterObservation,
     releaseTagSha: gitSha(tagDir),
-    mainSha: gitSha(mainDir),
+    mainSha,
     fullReleaseValidationRunId: args["full-release-validation-run-id"],
     fullReleaseValidationRunAttempt: args["full-release-validation-run-attempt"],
     releasePublishRunId: args["release-publish-run-id"],
@@ -74,9 +162,10 @@ function main() {
     rollbackDrillDate: args["rollback-drill-date"],
     allowStaleRollbackDrill: args["allow-stale-rollback-drill"] === "true",
     allowFailedPublishRecovery: args["allow-failed-publish-recovery"] === "true",
-    existingManifest: args["existing-manifest"]
-      ? readJson(resolve(args["existing-manifest"]))
+    publishRecovery: args["publish-recovery"]
+      ? readJson(resolve(args["publish-recovery"]))
       : undefined,
+    existingManifest,
     nowMs: Date.now(),
   });
   if (result.errors.length > 0 || !result.manifest) {

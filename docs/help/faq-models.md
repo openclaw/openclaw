@@ -80,11 +80,17 @@ troubleshooting, see the main [FAQ](/help/faq).
     cloud models such as `kimi-k2.5:cloud` need no local pull. To switch
     manually: `openclaw models list`, then `openclaw models set ollama/<model>`.
 
+    [llmman](/providers/llmman) is the alternative when you want models pulled
+    from OCI registries or Hugging Face, unmodified upstream `llama-server`,
+    `vllm`, or `mlx-lm` engines, or hybrid routing that keeps small requests on
+    a local model such as `qwen3.8` and overflows large ones to a hosted model.
+
     Smaller/heavily quantized models are more vulnerable to prompt injection.
     Use large models for any bot with tool access; if you use small models
     anyway, enable sandboxing and strict tool allowlists.
 
-    Docs: [Ollama](/providers/ollama), [Local models](/gateway/local-models),
+    Docs: [Ollama](/providers/ollama), [llmman](/providers/llmman),
+    [Local models](/gateway/local-models),
     [Model providers](/concepts/model-providers), [Security](/gateway/security),
     [Sandboxing](/gateway/sandboxing).
 
@@ -253,7 +259,7 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     | Alias | Resolves to |
     | --- | --- |
-    | `opus` | `anthropic/claude-opus-5` |
+    | `opus` | `anthropic/claude-opus-5-5` |
     | `sonnet` | `anthropic/claude-sonnet-5` |
     | `gpt` | `openai/gpt-5.4` |
     | `gpt-mini` | `openai/gpt-5.4-mini` |
@@ -399,8 +405,9 @@ troubleshooting, see the main [FAQ](/help/faq).
       `~/.openclaw/.env` or enable `env.shellEnv`.
     - Confirm you're configuring the right agent — use `--agent <agentId>`
       with `openclaw models auth login` to select its local store.
-    - Run `openclaw models status` to see configured models and provider
-      auth state.
+    - Run `openclaw models status --agent <agentId>` for that agent's model
+      routes and auth state. A stored profile alone does not prove readiness;
+      see [Read status correctly](/cli/models#read-status-correctly).
 
     **For "No credentials found for profile anthropic" (no email suffix):**
 

@@ -4,52 +4,10 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { buildAggregatesFromSessions } from "./metrics.ts";
 import { buildUsageFilterOptions } from "./query.ts";
+import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
+import { createUsageProps, usageSession } from "./view.test-support.ts";
 import { renderUsage } from "./view.ts";
-
-const noop = vi.fn();
-
-function usageSession(
-  key: string,
-  agentId: string,
-  provider: string,
-  totalsOverrides: Partial<UsageTotals> = {},
-): UsageSessionEntry {
-  const totals: UsageTotals = {
-    input: 100,
-    output: 20,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 120,
-    totalCost: 1,
-    inputCost: 0.8,
-    outputCost: 0.2,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
-    ...totalsOverrides,
-  };
-  return {
-    key,
-    label: `${agentId} session`,
-    agentId,
-    modelProvider: provider,
-    model: `${provider}-model`,
-    updatedAt: Date.now(),
-    usage: {
-      ...totals,
-      messageCounts: {
-        total: 2,
-        user: 1,
-        assistant: 1,
-        toolCalls: 0,
-        toolResults: 0,
-        errors: 0,
-      },
-      modelUsage: [{ provider, model: `${provider}-model`, count: 1, totals }],
-    },
-  };
-}
 
 function insightCard(container: ParentNode, title: string): Element | undefined {
   return Array.from(container.querySelectorAll(".usage-insight-card")).find(
@@ -57,119 +15,19 @@ function insightCard(container: ParentNode, title: string): Element | undefined 
   );
 }
 
-function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
+function averageCostSummary(container: ParentNode) {
+  const hint = container.querySelector("#usage-summary-hint-average-cost");
   return {
-    data: {
-      loading: false,
-      exporting: false,
-      error: null,
-      sessions: [],
-      agents: [],
-      sessionsLimitReached: false,
-      totals: null,
-      aggregates: null,
-      costDaily: [],
-      cacheRefresh: "complete",
-      providerUsage: [],
-      providerUsageStalled: false,
-      providerUsageUnavailable: false,
-    },
-    filters: {
-      startDate: "2026-05-14",
-      endDate: "2026-05-14",
-      scope: "family",
-      selectedSessions: [],
-      selectedDays: [],
-      selectedHours: [],
-      agentId: null,
-      query: "",
-      queryDraft: "",
-      timeZone: "local",
-    },
-    display: {
-      chartMode: "tokens",
-      dailyChartMode: "total",
-      sessionSort: "tokens",
-      sessionSortDir: "desc",
-      recentSessions: [],
-      sessionsTab: "all",
-      visibleColumns: [],
-      contextExpanded: false,
-      headerPinned: false,
-    },
-    detail: {
-      context: {
-        weight: undefined,
-        loading: false,
-        status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
-      },
-      timeSeriesMode: "cumulative",
-      timeSeriesBreakdownMode: "total",
-      timeSeries: null,
-      timeSeriesLoading: false,
-      timeSeriesStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
-      timeSeriesCursorStart: null,
-      timeSeriesCursorEnd: null,
-      sessionLogs: null,
-      sessionLogsLoading: false,
-      sessionLogsStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
-      sessionLogsExpanded: false,
-      logFilters: {
-        roles: [],
-        tools: [],
-        hasTools: false,
-        query: "",
-      },
-    },
-    callbacks: {
-      filters: {
-        onStartDateChange: noop,
-        onEndDateChange: noop,
-        onScopeChange: noop,
-        onAgentChange: noop,
-        onRefresh: noop,
-        onTimeZoneChange: noop,
-        onToggleHeaderPinned: noop,
-        onSelectDay: noop,
-        onSelectHour: noop,
-        onClearDays: noop,
-        onClearHours: noop,
-        onClearSessions: noop,
-        onClearFilters: noop,
-        onQueryDraftChange: noop,
-        onApplyQuery: noop,
-        onClearQuery: noop,
-      },
-      display: {
-        onExportJson: noop,
-        onChartModeChange: noop,
-        onDailyChartModeChange: noop,
-        onSessionSortChange: noop,
-        onSessionSortDirChange: noop,
-        onSessionsTabChange: noop,
-        onToggleColumn: noop,
-      },
-      details: {
-        onToggleContextExpanded: noop,
-        onToggleSessionLogsExpanded: noop,
-        onLogFilterRolesChange: noop,
-        onLogFilterToolsChange: noop,
-        onLogFilterHasToolsChange: noop,
-        onLogFilterQueryChange: noop,
-        onLogFilterClear: noop,
-        onSelectSession: noop,
-        onTimeSeriesModeChange: noop,
-        onTimeSeriesBreakdownChange: noop,
-        onTimeSeriesCursorRangeChange: noop,
-      },
-    },
-    ...overrides,
+    hint: hint?.parentElement?.querySelector('[slot="content"]')?.textContent?.trim(),
+    value: hint
+      ?.closest(".usage-summary-card")
+      ?.querySelector(".usage-summary-value")
+      ?.textContent?.trim(),
   };
 }
 
 it.each([
   { query: "provider:openai" },
-  { agentId: "main" },
   { selectedSessions: ["agent:main:matched"] },
   { selectedSessions: ["agent:main:matched", "agent:main:earlier"] },
   { query: "provider:openai", selectedHours: [12] },
@@ -255,6 +113,7 @@ it.each([
   );
   const { date, tokens: _tokens, cost: _cost, ...expectedTotals } = selectedDay;
   expect(onExportJson.mock.calls[0]?.[0].totals).toEqual(expectedTotals);
+  expect(onExportJson.mock.calls[0]?.[0].sessions).toEqual([matched]);
   expect(
     onExportJson.mock.calls[0]?.[0].daily.find(
       (day: { date: string }) => day.date === "2026-05-13",
@@ -276,6 +135,77 @@ it("renders shared skeletons while initial usage is loading", () => {
 });
 
 describe("renderUsage", () => {
+  it.each([
+    { name: "known zero", sessionIndex: 0, value: "$0.00", missing: false },
+    { name: "known positive", sessionIndex: 1, value: "$0.10", missing: false },
+    { name: "unknown zero", sessionIndex: 2, value: "$0.00", missing: true },
+    { name: "mixed positive", sessionIndex: null, value: "$0.03", missing: true },
+  ])("respects recorded cost availability for $name", ({ sessionIndex, value, missing }) => {
+    const base = createUsageProps();
+    const fixture = createRecordedCostUsage();
+    const sessions = sessionIndex === null ? fixture.sessions : [fixture.sessions[sessionIndex]!];
+    const container = document.createElement("div");
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...base.data,
+            sessions,
+            totals: sessionIndex === null ? fixture.totals : sessions[0]!.usage!,
+            aggregates: buildAggregatesFromSessions(sessions),
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(averageCostSummary(container)).toEqual({
+      hint: missing
+        ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
+        : "Average cost per message when providers report costs.",
+      value,
+    });
+  });
+
+  it.each(["query", "session", "day"] as const)(
+    "restores the range warning after clearing a known-zero %s filter",
+    (filter) => {
+      const base = createUsageProps();
+      const fixture = createRecordedCostUsage();
+      const zeroSession = fixture.sessions[0]!;
+      const selected: Partial<UsageProps["filters"]> =
+        filter === "query"
+          ? { query: 'label:"Known zero"', queryDraft: 'label:"Known zero"' }
+          : filter === "session"
+            ? { selectedSessions: [zeroSession.key] }
+            : { selectedDays: zeroSession.usage!.activityDates! };
+      const props = createUsageProps({
+        data: {
+          ...base.data,
+          ...fixture,
+          aggregates: buildAggregatesFromSessions(fixture.sessions),
+        },
+        filters: { ...base.filters, startDate: fixture.costDaily[0]!.date },
+      });
+      const clearedFilters = { ...props.filters };
+      const container = document.createElement("div");
+      for (const { filters, missing, value } of [
+        { filters: clearedFilters, missing: true, value: "$0.03" },
+        { filters: { ...clearedFilters, ...selected }, missing: false, value: "$0.00" },
+        { filters: clearedFilters, missing: true, value: "$0.03" },
+      ]) {
+        props.filters = filters;
+        render(renderUsage(props), container);
+        expect(averageCostSummary(container)).toEqual({
+          hint: missing
+            ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
+            : "Average cost per message when providers report costs.",
+          value,
+        });
+      }
+    },
+  );
+
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
     const container = document.createElement("div");
     const base = createUsageProps();
@@ -298,16 +228,16 @@ describe("renderUsage", () => {
 
   it("keeps pending sessions on their selected local or UTC activity day", () => {
     const localOffsetMs = -7 * 60 * 60 * 1000;
-    const localYear = vi
-      .spyOn(Date.prototype, "getFullYear")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
-      });
-    const localMonth = vi
-      .spyOn(Date.prototype, "getMonth")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCMonth();
-      });
+    const localYear = vi.spyOn(Date.prototype, "getFullYear").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+    });
+    const localMonth = vi.spyOn(Date.prototype, "getMonth").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+    });
     const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
       return new Date(this.getTime() + localOffsetMs).getUTCDate();
     });
@@ -350,7 +280,7 @@ describe("renderUsage", () => {
     }
   });
 
-  it("keeps insight aggregates scoped to the selected agent", () => {
+  it("filters visible sessions and insight aggregates with an explicit agent query", () => {
     const container = document.createElement("div");
     const sessions = [
       usageSession("agent:main:main", "main", "openai"),
@@ -366,7 +296,11 @@ describe("renderUsage", () => {
             totals: sessions[0]?.usage ?? null,
             aggregates: buildAggregatesFromSessions(sessions),
           },
-          filters: { ...createUsageProps().filters, agentId: "research" },
+          filters: {
+            ...createUsageProps().filters,
+            query: "agent:research",
+            queryDraft: "agent:research",
+          },
         }),
       ),
       container,
@@ -375,6 +309,9 @@ describe("renderUsage", () => {
     const providers = insightCard(container, "Top Providers");
     expect(providers?.textContent).toContain("anthropic");
     expect(providers?.textContent).not.toContain("openai");
+    const rows = container.querySelectorAll(".session-bar-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain("research session");
   });
 
   it("does not fall back to global insights when a query matches no sessions", () => {
@@ -600,8 +537,14 @@ describe("renderUsage", () => {
         )!
         .querySelectorAll<HTMLElement & { checked: boolean }>(".usage-filter-option");
     const values = () => [...providerOptions()].map((option) => option.textContent?.trim());
+    const chartModeButton = (label: string) =>
+      [...container.querySelectorAll<HTMLButtonElement>(".usage-view-options button")].find(
+        (button) => button.textContent?.trim() === label,
+      );
 
     render(renderUsage(props), container);
+    expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
+    expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
     expect(values()).toEqual(["first", "second"]);
     expect([...providerOptions()].find((option) => option.checked)?.textContent?.trim()).toBe(
       "second",
@@ -612,8 +555,12 @@ describe("renderUsage", () => {
 
     props.display.chartMode = "cost";
     render(renderUsage(props), container);
+    expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("false");
+    expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("true");
     expect(values()).toEqual(["second", "first"]);
     props.filters.agentId = "main";
+    // The replacement report is already scoped by the Gateway.
+    props.data.sessions = props.data.sessions.filter((session) => session.agentId === "main");
     render(renderUsage(props), container);
     expect(values()).toEqual(["first"]);
     expect(container.querySelector(".usage-query-suggestion")).toBeNull();
@@ -732,71 +679,50 @@ describe("renderUsage", () => {
     ).toEqual(["$64.50", "$5.00 / $20.00", "¥13 / ¥20", "1.5  Credits  / 3  Credits "]);
   });
 
-  it("filters visible sessions when an agent scope is selected", () => {
+  it("keeps complete agent totals and history while limiting session-derived insights to the visible page", () => {
     const container = document.createElement("div");
+    const base = createUsageProps();
+    const totals: UsageTotals = {
+      input: 1_000,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 1_000,
+      totalCost: 10,
+      inputCost: 10,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 1,
+    };
+    const visibleDay = {
+      ...totals,
+      missingCostEntries: 0,
+      date: "2026-05-14",
+      input: 10,
+      totalTokens: 10,
+      totalCost: 0.1,
+      inputCost: 0.1,
+    };
 
     render(
       renderUsage(
         createUsageProps({
           data: {
-            ...createUsageProps().data,
-            agents: ["main", "research"],
-            sessions: [
-              {
-                key: "agent:main:main",
-                agentId: "main",
-                lastUpdated: Date.now(),
-                usage: {
-                  totalTokens: 10,
-                  totalCost: 0,
-                } as UsageProps["data"]["sessions"][number]["usage"],
-              } as UsageProps["data"]["sessions"][number],
-              {
-                key: "agent:research:main",
-                agentId: "research",
-                lastUpdated: Date.now(),
-                usage: {
-                  totalTokens: 20,
-                  totalCost: 0,
-                } as UsageProps["data"]["sessions"][number]["usage"],
-              } as UsageProps["data"]["sessions"][number],
-            ],
-          },
-          filters: {
-            ...createUsageProps().filters,
-            agentId: "research",
-          },
-        }),
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("agent:research:main");
-    expect(container.textContent).not.toContain("agent:main:main");
-  });
-
-  it("keeps session-derived insights scoped to the visible page when the page limit is hit", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
+            ...base.data,
             sessionsLimitReached: true,
-            totals: {
-              input: 1_000,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 1_000,
-              totalCost: 10,
-              inputCost: 10,
-              outputCost: 0,
-              cacheReadCost: 0,
-              cacheWriteCost: 0,
-              missingCostEntries: 0,
-            },
+            totals,
+            costDaily: [
+              {
+                ...totals,
+                date: "2026-05-01",
+                input: 990,
+                totalTokens: 990,
+                totalCost: 9.9,
+                inputCost: 9.9,
+              },
+              visibleDay,
+            ],
             aggregates: {
               messages: {
                 total: 100,
@@ -817,7 +743,7 @@ describe("renderUsage", () => {
               {
                 key: "agent:main:visible",
                 agentId: "main",
-                lastUpdated: Date.now(),
+                updatedAt: Date.UTC(2026, 4, 14, 12),
                 usage: {
                   input: 10,
                   output: 0,
@@ -830,6 +756,7 @@ describe("renderUsage", () => {
                   cacheReadCost: 0,
                   cacheWriteCost: 0,
                   missingCostEntries: 0,
+                  dailyBreakdown: [{ ...visibleDay, tokens: 10, cost: 0.1 }],
                   messageCounts: {
                     total: 2,
                     user: 1,
@@ -839,8 +766,14 @@ describe("renderUsage", () => {
                     errors: 0,
                   },
                 },
-              } as UsageProps["data"]["sessions"][number],
+              },
             ],
+          },
+          filters: {
+            ...base.filters,
+            agentId: "main",
+            startDate: "2026-05-01",
+            endDate: "2026-05-14",
           },
         }),
       ),
@@ -851,6 +784,21 @@ describe("renderUsage", () => {
       ".usage-overview-card .usage-summary-card--hero .usage-summary-value",
     );
     expect(messagesValue?.textContent?.trim()).toBe("2");
+    expect(container.textContent).toContain(
+      "Cost data is missing for some or all sessions in this range.",
+    );
+    expect(
+      [...container.querySelectorAll(".usage-metric-badge strong")].map((el) => el.textContent),
+    ).toEqual(["1.0K", "$10.00", "1"]);
+    const firstDay = container.querySelector(".daily-bar-wrapper");
+    expect(firstDay?.getAttribute("aria-label")).toContain("May 1, 2026");
+    expect(firstDay?.getAttribute("aria-label")).toContain("990 tokens, $9.90");
+    expect(firstDay?.querySelector(".daily-bar--empty")).toBeNull();
+    expect(
+      container
+        .querySelector(".cost-window-card--range .cost-window-card__value")
+        ?.textContent?.trim(),
+    ).toBe("$10.00");
   });
 
   it("hides range-wide cost windows when a post-load filter is active", () => {
@@ -875,7 +823,6 @@ describe("renderUsage", () => {
     };
     const filterCases: Array<Partial<UsageProps["filters"]>> = [
       { query: "provider:openai" },
-      { agentId: "main" },
       { selectedDays: ["2026-05-14"] },
       { selectedHours: [12] },
       { selectedSessions: ["agent:main:main"] },

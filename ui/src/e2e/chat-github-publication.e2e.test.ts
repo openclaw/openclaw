@@ -81,7 +81,7 @@ suite.define(() => {
           workspace: "/synthetic/research",
           communityInvite: false,
           sessionKey,
-          sessionScope: scope === "global" ? "global" : "agent",
+          sessionScope: scope === "global" ? "global" : "per-sender",
           operatorScopes: ["operator.read", "operator.write"],
           featureMethods: publicationMethods,
           sessions: [row],
@@ -101,7 +101,7 @@ suite.define(() => {
               ],
               defaultId: "ops",
               mainKey: "main",
-              scope: scope === "global" ? "global" : "agent",
+              scope: scope === "global" ? "global" : "per-sender",
             },
             "sessions.list": {
               ts: 1,
@@ -317,7 +317,7 @@ suite.define(() => {
       },
     });
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
-    await showPublicationBranch(gateway);
+    await showPublicationBranch(gateway, undefined, sessionA);
     const activePane = page.locator(".chat-pane-cache__pane--active");
     await activePane.getByRole("button", { name: "Publication account", exact: true }).click();
     await activePane.getByRole("combobox", { name: "Publication account" }).selectOption(source);
@@ -352,7 +352,7 @@ suite.define(() => {
       .toBe(navigation !== "LRU eviction");
     await sessionLink(sessionA).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
-    await showPublicationBranch(gateway);
+    await showPublicationBranch(gateway, undefined, sessionA);
     const publication = activePane.locator('.chat-pr[data-state="branch"]');
     await publication.waitFor();
     await expect
@@ -657,7 +657,7 @@ suite.define(() => {
         "https://github.com/synthetic/publication-demo/pull/42",
       );
       const newPublication = page.getByRole("button", {
-        name: "Choose a new publication",
+        name: "Dismiss",
         exact: true,
       });
       await expect.poll(() => newPublication.count()).toBe(1);
@@ -876,9 +876,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("link", { name: "Open PR" }).getAttribute("href"))
         .toBe("https://github.com/team/demo/pull/42");
-      await expect
-        .poll(() => page.locator("[data-publication-account]").textContent())
-        .toContain("Publish as @alice-tools");
+      expect(await page.locator(".chat-pr__publication-outcome").count()).toBe(0);
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
     },
   );
@@ -949,7 +947,7 @@ suite.define(() => {
         await takeControlUiViewportScreenshot(page, page.locator(".shell"), [openPr]),
       );
     }
-    const dismiss = page.locator('.chat-pr[data-state="branch"]').getByRole("button", {
+    const dismiss = page.locator(".chat-prs").getByRole("button", {
       name: "Dismiss",
       exact: true,
     });

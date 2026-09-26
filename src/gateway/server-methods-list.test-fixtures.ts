@@ -44,8 +44,7 @@ skills.proposals.update skills.proposals.revise skills.proposals.requestRevision
 skills.proposals.apply skills.proposals.reject skills.proposals.quarantine update.status
 update.run voicewake.get voicewake.set secrets.reload secrets.resolve voicewake.routing.get
 sessions.list sessions.subscribe sessions.messages.subscribe sessions.messages.unsubscribe
-sessions.viewers.set sessions.preview sessions.describe sessions.compaction.list
-sessions.compaction.branch sessions.compaction.restore sessions.branches.list
+sessions.viewers.set sessions.preview sessions.describe sessions.branches.list
 sessions.branches.switch sessions.rewind sessions.fork sessions.create sessions.recover
 sessions.send sessions.abort sessions.patch sessions.goal.update sessions.goal.clear
 sessions.pluginPatch sessions.cleanup sessions.reset sessions.delete sessions.compact

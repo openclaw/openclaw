@@ -4,20 +4,29 @@ import {
   type CommandClientPresentationAction,
 } from "../../app/command-client-presentation.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
 import {
   autoPromptNotificationsOnSend,
   hasActiveNotificationPromptGesture,
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
+import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import {
   canonicalUiSessionKeyForPersistence,
   isUiSelectedGlobalSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { requestChatAbort } from "./chat-abort-request.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-events.ts";
+import { setChatError } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import {
@@ -26,12 +35,17 @@ import {
   retryQueuedChatMessage,
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
+import {
+  openSessionWorkspacePreview,
+  clearSessionWorkspacePreviews,
+} from "./components/chat-session-workspace-state.ts";
+import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -60,39 +74,70 @@ import {
   closeSlot,
   fitSidebarLayout,
   normalizeSidebarLayout,
+  type SidebarLayout,
   openSlot,
+  sidebarDashboardPresentation,
 } from "./sidebar-layout.ts";
 import type { RunOutputUsage } from "./tool-stream-contract.ts";
-import { resetToolStream } from "./tool-stream.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
+
+function cancelPendingQueuedChatInput(state: ChatPageHost, id: string): boolean {
+  const view = getChatPendingInputs(state);
+  const input = view?.queuedInputs.find(
+    (item) => `pending-input:${item.id}` === id && item.queued && item.state === "queued",
+  );
+  const client = state.client;
+  if (!view || !input?.runId) {
+    return false;
+  }
+  if (!client || !state.connected) {
+    return true;
+  }
+  const epoch = state.connectionEpoch;
+  const current = () =>
+    getChatPendingInputs(state) === view &&
+    state.client === client &&
+    state.connected &&
+    state.connectionEpoch === epoch;
+  void requestChatAbort(client, {
+    sessionKey: view.sessionKey,
+    agentId: view.agentId,
+    runId: input.runId,
+  }).then(async (result) => {
+    if (!current()) {
+      return;
+    }
+    if (!result.ok) {
+      state.chatError = formatUiError(result.error);
+      state.requestUpdate?.();
+      return;
+    }
+    await loadChatHistory(state, { supersedeInFlight: true });
+  });
+  return true;
+}
 
 type ChatPageElement = {
+  sessionKey?: string;
   dispatchEvent: (event: Event) => boolean;
   getBoundingClientRect?: () => DOMRect;
   querySelector: (selectors: string) => Element | null;
 };
 
-function clearImageLightbox(state: ChatPageHost) {
+export function invalidateImageLightbox(state: ChatPageHost) {
+  state.imageLightboxRequestVersion += 1;
   const item = state.imageLightbox;
   state.imageLightbox = null;
   item?.release?.();
-}
-
-export function invalidateImageLightbox(state: ChatPageHost) {
-  state.imageLightboxRequestVersion += 1;
-  clearImageLightbox(state);
   return state.imageLightboxRequestVersion;
 }
 
-async function loadPageAssistantIdentity(
-  state: ChatPageHost,
-  opts?: { sessionKey?: string; expectedSessionKey?: string },
-) {
+async function loadPageAssistantIdentity(state: ChatPageHost) {
   if (!state.client || !state.connected) {
     return;
   }
   const client = state.client;
-  const sessionKey = opts?.sessionKey?.trim() || state.sessionKey.trim();
-  const expectedSessionKey = opts?.expectedSessionKey?.trim() || sessionKey;
+  const sessionKey = state.sessionKey.trim();
   const agentId = resolveAgentIdForSession({
     sessionKey,
     assistantAgentId: state.assistantAgentId,
@@ -109,7 +154,7 @@ async function loadPageAssistantIdentity(
       state.client !== client ||
       !state.connected ||
       state.assistantIdentityRequestVersion !== requestVersion ||
-      state.sessionKey.trim() !== expectedSessionKey ||
+      state.sessionKey.trim() !== sessionKey ||
       resolveAgentIdForSession(state) !== agentId ||
       !identity
     ) {
@@ -140,13 +185,18 @@ export function createPageState(
   chatMessagesBySession: ChatMessageCache = new Map(),
 ): ChatPageHost {
   const settings = loadSettings();
+  const initialSessionKey = page.sessionKey?.trim() || settings.sessionKey;
   const sidebarSessionKey = canonicalUiSessionKeyForPersistence(
     { agentsList: context.agents.state.agentsList, hello: context.gateway?.snapshot.hello },
-    settings.sessionKey,
+    initialSessionKey,
   );
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
   const state = {
+    captureComposerRecoveryReload: () => {
+      const options = createGatewayControlUiReloadOptions(context.gateway);
+      return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });
+    },
     sessions: context.sessions,
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
@@ -175,7 +225,7 @@ export function createPageState(
     terminalAvailable: false,
     browserPanelAvailable: false,
     assistantAgentId: context.agentSelection.state.selectedId,
-    sessionKey: settings.sessionKey,
+    sessionKey: initialSessionKey,
     chatLoading: false,
     chatHistoryPagination: { hasMore: false },
     chatSending: false,
@@ -187,6 +237,7 @@ export function createPageState(
     chatBranchesConnectionEpoch: null,
     chatToolMessages: [],
     guardianNotices: [],
+    providerPolicyNotice: null,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatQueueModeOverride: undefined,
@@ -217,6 +268,11 @@ export function createPageState(
     chatModelPickerOpenSessionKey: null,
     chatModelsLoading: false,
     chatModelCatalog: [],
+    chatModelCatalogInitialized: hasUnrestrictedModelCatalogSnapshot(
+      context.gateway.snapshot.client,
+    ),
+    chatModelSelectionPolicy: undefined,
+    chatModelCatalogRetired: false,
     chatModelCatalogError: null,
     chatAccountSelection: null,
     modelAuthStatusRequestVersion: 0,
@@ -234,7 +290,7 @@ export function createPageState(
     refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
     pendingAbort: null,
     pendingSessionMessageReloadSessionKey: null,
-    chatSubmitGuards: new Map<string, Promise<void>>(),
+    chatSubmitGuards: new Set<string>(),
     chatGoalDraftMode: null,
     chatSendTimingsByRun: new Map(),
     chatQueue: [],
@@ -258,9 +314,9 @@ export function createPageState(
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
+    chatReadingHistory: false,
     sidebarLayout: normalizeSidebarLayout(settings.sidebarSessionLayouts?.[sidebarSessionKey]),
     sidebarContent: null,
-    attachmentSidebarContent: null,
     sidebarFocusPanelId: settings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "",
     sidebarFocusVersion: 0,
     imageLightbox: null,
@@ -283,7 +339,7 @@ export function createPageState(
     querySelector: page.querySelector.bind(page),
   } as unknown as ChatPageHost;
 
-  state.resetToolStream = () => resetToolStream(state as never);
+  state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {
@@ -303,7 +359,7 @@ export function createPageState(
     });
     renderLifecycle.invalidate();
   };
-  attachChatRealtimeActions(state);
+  attachChatRealtimeActions(state, () => !chatProviderReviewRow(state)?.providerReview);
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
   state.handleSendChat = (messageOverride, options, submissionAction) => {
     const message = messageOverride ?? state.chatMessage;
@@ -331,12 +387,15 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.removeQueuedMessage = (id) => {
+    if (cancelPendingQueuedChatInput(state, id)) {
+      return;
+    }
     if (isQueuedMessageBeingEdited(state, id)) {
       setChatError(state, QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR);
       renderLifecycle.invalidate();
       return;
     }
-    const outcome = removeQueuedMessage(state, id);
+    const outcome = removeQueuedMessage(state, id, { discard: true });
     if (outcome === "removed") {
       setChatError(state, null);
       void resumeStoredChatOutboxes(state);
@@ -353,13 +412,19 @@ export function createPageState(
     await steerQueuedChatMessage(state, id);
     renderLifecycle.invalidate();
   };
-  state.moveQueuedChatMessage = (id, toIndex) => {
-    moveQueuedChatMessage(state, id, toIndex);
+  state.moveQueuedChatMessage = (id, targetId) => {
+    moveQueuedChatMessage(state, id, targetId);
     renderLifecycle.invalidate();
   };
   state.editQueuedChatMessage = (id) => {
     if (beginQueuedMessageEdit(state, id) === "unavailable") {
       setChatError(state, QUEUED_MESSAGE_EDIT_CONFLICT_ERROR);
+    } else {
+      for (const key of ["lastError", "chatError"] as const) {
+        if (state[key] === QUEUED_MESSAGE_EDIT_CONFLICT_ERROR) {
+          state[key] = null;
+        }
+      }
     }
     renderLifecycle.invalidate();
   };
@@ -390,16 +455,96 @@ export function createPageState(
     }
     renderLifecycle.invalidate();
   };
-  state.updateSidebarLayout = (layout) => {
+  const transientResources = new Set<"desktop" | "browser">();
+  let transientResourceScope = "";
+  state.updateSidebarLayout = (layout, options) => {
+    const layoutKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
+    const scope = JSON.stringify([state.settings.gatewayUrl, layoutKey]);
+    if (scope !== transientResourceScope) {
+      transientResources.clear();
+      transientResourceScope = scope;
+    }
     const normalized = normalizeSidebarLayout(layout);
+    const previous = state.sidebarLayout;
+    const includesResource = (value: SidebarLayout, slot: "desktop" | "browser") =>
+      value.columns.some((column) => column.panels.some((panel) => panel.slot === slot));
+    if (
+      options?.automaticResource &&
+      !includesResource(previous, options.automaticResource) &&
+      includesResource(normalized, options.automaticResource)
+    ) {
+      transientResources.add(options.automaticResource);
+    }
+    for (const resource of transientResources) {
+      const panel = normalized.columns
+        .flatMap((column) => column.panels)
+        .find((entry) => entry.slot === resource);
+      // Explicit targets are saved choices, even when discovery first opened the tab.
+      if (!panel || (resource === "desktop" && panel.environmentId !== undefined)) {
+        transientResources.delete(resource);
+      }
+    }
+    if (
+      previous.resourceAutoOpenDismissed ||
+      (options?.persist !== false &&
+        ((previous.open && !normalized.open) ||
+          (includesResource(previous, "desktop") && !includesResource(normalized, "desktop")) ||
+          (includesResource(previous, "browser") && !includesResource(normalized, "browser"))))
+    ) {
+      normalized.resourceAutoOpenDismissed = true;
+    }
+    if (
+      state.sidebarLayout.columns
+        .flatMap((column) => column.panels)
+        .find((panel) => panel.slot === "tasks")?.taskId !==
+      normalized.columns.flatMap((column) => column.panels).find((panel) => panel.slot === "tasks")
+        ?.taskId
+    ) {
+      resetTaskDetail(state);
+    }
+    const presentation =
+      options?.dashboardPresentation === "personal"
+        ? sidebarDashboardPresentation(normalized)
+        : undefined;
+    if (presentation) {
+      const row = selectedChatSessionRow(state);
+      // Unknown metadata cannot establish that the user chose the shared default.
+      normalized.dashboardPresentationOverride =
+        row && presentation === (row.boardPresentation ?? "split") ? null : presentation;
+    }
+    // Every close route commits here; tab switches retain the pending selection.
+    if (
+      (state.sidebarContent?.kind === "loading" || state.sidebarContent?.kind === "unavailable") &&
+      !normalized.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"))
+    ) {
+      state.sidebarContent = null;
+    }
     state.sidebarLayout = normalized;
+    if (options?.persist === false) {
+      renderLifecycle.invalidate();
+      return;
+    }
+    // Other layout edits cannot persist an automatically discovered target before
+    // ownership is checked again on reload. Dashboard restoration has its own policy.
+    let persisted = normalized;
+    for (const resource of transientResources) {
+      persisted = closeSlot(persisted, resource);
+    }
     state.settings = patchSettings({
       sidebarSessionLayouts: updateSidebarSessionLayout(
         loadSettings().sidebarSessionLayouts,
-        canonicalUiSessionKeyForPersistence(state, state.sessionKey),
-        normalized,
+        layoutKey,
+        persisted,
+        {
+          geometryOnly: options?.geometryOnly,
+          dashboardPresentationOverride: presentation
+            ? normalized.dashboardPresentationOverride
+            : undefined,
+        },
       ),
     });
+    normalized.dashboardPresentationOverride =
+      state.settings.sidebarSessionLayouts?.[layoutKey]?.dashboardPresentationOverride;
     renderLifecycle.invalidate();
   };
   state.updateSidebarActivePanel = (panelId) => {
@@ -409,6 +554,13 @@ export function createPageState(
     }
     state.sidebarFocusPanelId = normalizedPanelId;
     state.sidebarFocusVersion += 1;
+    const selected = state.sidebarLayout.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.id === normalizedPanelId)?.slot;
+    if ((selected === "desktop" || selected === "browser") && transientResources.has(selected)) {
+      renderLifecycle.invalidate();
+      return;
+    }
     state.settings = patchSettings({
       sidebarSessionActivePanels: updateSidebarSessionActivePanel(
         loadSettings().sidebarSessionActivePanels,
@@ -419,8 +571,17 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.handleOpenSidebar = (content) => {
-    const attachmentPreview = content?.kind === "attachment";
-    const targetSlot = attachmentPreview ? "workspace" : "detail";
+    const fileTab =
+      content?.fileTab ??
+      (content?.kind === "attachment"
+        ? {
+            id: `attachment:${content.sourceIdentity ?? content.src ?? crypto.randomUUID()}`,
+            label: content.title,
+          }
+        : content?.kind === "file"
+          ? { id: `file:${content.path}`, label: content.name }
+          : null);
+    const targetSlot = fileTab ? "workspace" : "detail";
     let opened = openSlot(state.sidebarLayout, targetSlot);
     const targetPanel = opened.columns
       .flatMap((column) => column.panels)
@@ -433,8 +594,8 @@ export function createPageState(
       availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
-    if (attachmentPreview) {
-      state.attachmentSidebarContent = content;
+    if (fileTab && content) {
+      openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
     } else {
       state.sidebarContent = content;
     }
@@ -445,7 +606,7 @@ export function createPageState(
   };
   state.handleCloseSidebar = (slot) => {
     if (slot === "workspace") {
-      state.attachmentSidebarContent = null;
+      clearSessionWorkspacePreviews(state);
     }
     state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
   };

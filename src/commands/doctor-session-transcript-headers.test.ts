@@ -84,12 +84,15 @@ describe("doctor SQLite session transcript header repair", () => {
     expect(replaceTranscriptEventsSync(scope, [...events])).toBe(true);
   }
 
-  it("checks healthy large transcripts under a 256 MiB heap without changing bytes", async () => {
-    expect(await probeTranscriptHealthMemory(state.stateDir, "headers")).toMatchObject({
-      scenario: "headers",
-      eventCount: 4096,
-    });
-  });
+  it.each(["headers", "headers-after-event"] as const)(
+    "checks large %s histories under a 256 MiB heap without changing bytes",
+    async (scenario) => {
+      expect(await probeTranscriptHealthMemory(state.stateDir, scenario)).toMatchObject({
+        scenario,
+        eventCount: 4096,
+      });
+    },
+  );
 
   it("repairs headerless history with legacy projection and unchanged event bytes", async () => {
     const userText =
@@ -216,6 +219,32 @@ describe("doctor SQLite session transcript header repair", () => {
     ).resolves.toEqual({ found: 0, repaired: 0 });
     expect(readTranscriptStorageRows(database, SESSION_ID)).toEqual(afterFirstRepair);
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("preserves an opaque first row when repairing headerless history", async () => {
+    await seedTranscript([
+      { type: "plugin_record", id: "opaque-1", payload: { retained: true } },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        timestamp: "2026-07-15T21:23:03.698Z",
+        message: { role: "user", content: "Retained message" },
+      },
+    ]);
+    const database = openOpenClawAgentDatabase({ agentId: AGENT_ID, env: state.env });
+    const before = readTranscriptStorageRows(database, SESSION_ID);
+
+    await expect(
+      noteSessionTranscriptHeaderHealth({ cfg, env: state.env, shouldRepair: true }),
+    ).resolves.toEqual({ found: 1, repaired: 1 });
+    expect(readTranscriptStorageRows(database, SESSION_ID).slice(1)).toEqual(
+      before.map((row) => ({
+        createdAt: row.createdAt,
+        eventJson: row.eventJson,
+        seq: row.seq + 1,
+      })),
+    );
   });
 
   it.each([3, 4, 99])(

@@ -1,12 +1,13 @@
 // Public web-search registration helpers for provider plugins.
 
-import type {
+export type {
   WebSearchCredentialResolutionSource,
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
   WebSearchProviderToolExecutionContext,
 } from "../plugins/types.js";
+export { readProviderEnvValue } from "../secrets/provider-credential-values.js";
 export {
   jsonResult,
   readNonNegativeIntegerParam,
@@ -29,7 +30,6 @@ export {
   parseWebSearchTimeFilters,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readProviderEnvValue,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
@@ -73,10 +73,3 @@ export {
 export { enablePluginInConfig } from "../plugins/enable.js";
 export { formatCliCommand } from "../cli/command-format.js";
 export { wrapWebContent } from "../security/external-content.js";
-export type {
-  WebSearchCredentialResolutionSource,
-  WebSearchProviderSetupContext,
-  WebSearchProviderPlugin,
-  WebSearchProviderToolDefinition,
-  WebSearchProviderToolExecutionContext,
-};

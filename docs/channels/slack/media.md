@@ -38,6 +38,7 @@ In a channel with `requireMention: true`, a captionless audio clip can satisfy t
     - `channels.slack.streaming.chunkMode="newline"` enables paragraph-first splitting
     - file sends use Slack upload APIs and can include thread replies (`thread_ts`)
     - long file captions use the first Slack-safe text chunk as the upload comment and send remaining chunks as follow-up messages
+    - text and context blocks preserve code formatting and literal backslashes across section boundaries
     - outbound media cap follows `channels.slack.mediaMaxMb` when configured; otherwise channel sends use MIME-kind defaults from media pipeline
 
     Native Block Kit sections retain all fields even when their combined accessibility text exceeds the preferred text chunk size. Slack's block limits and the 40,000-character message text hard limit still apply.
@@ -58,6 +59,26 @@ In a channel with `requireMention: true`, a captionless audio clip can satisfy t
 ## Attachment media reference
 
 Slack can attach downloaded media to the agent turn when Slack file downloads succeed and size limits permit. Audio clips can be transcribed, image files can pass through the media-understanding path or directly to a vision-capable reply model, and other files remain available as downloadable file context.
+
+### Downloading an attachment by file ID
+
+The `message` tool's `download-file` action requires a Slack `fileId` from a
+message or file placeholder. It uses the current Slack channel unless you provide
+an explicit `channelId`. An explicit `threadId` additionally requires the file to
+be shared in that thread; an ambient conversation thread does not narrow a
+channel-only download.
+
+OpenClaw checks the channel's existing access policy and fresh `files.info` share
+evidence before downloading. It repeats the file-share check if Slack refreshes
+an expired download URL. Verified official npm and ClawHub installations use
+the same provider checks as the bundled Slack plugin.
+
+An allowed download returns the existing local media artifact. Images also
+return image content within the configured image dimension limit. The configured
+read credentials, Slack/GovSlack host restrictions, HTTPS and redirect checks,
+and `channels.slack.mediaMaxMb` size cap continue to apply. For agent downloads,
+a canceled or revoked read cannot return an accepted artifact; cleanup removes
+its own newly created file while preserving preexisting or replaced files.
 
 ### Supported media types
 

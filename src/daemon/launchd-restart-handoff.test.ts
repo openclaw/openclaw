@@ -46,7 +46,7 @@ function requireSpawnCall(callIndex = 0): SpawnCall {
 async function executeHandoff(
   mode: "park" | "reload" | "start-after-exit",
   launchctlStub: string,
-  systemOwnership: "absent" | "loaded" = "absent",
+  systemOwnership: "absent" | "loaded" | "interrupted extraction" = "absent",
 ): Promise<{
   calls: string[];
   exitCode: number;
@@ -91,6 +91,23 @@ ${launchctlStub}
     fs.chmodSync(path.join(stubDir, "launchctl"), 0o755);
     fs.writeFileSync(path.join(stubDir, "sleep"), "#!/bin/sh\nexit 0\n");
     fs.chmodSync(path.join(stubDir, "sleep"), 0o755);
+    const parser = path.join(stubDir, "plutil");
+    if (systemOwnership === "interrupted extraction") {
+      fs.writeFileSync(
+        path.join(systemDaemonsDir, "owner.plist"),
+        '<plist version="1.0"><dict><key>Label</key><string>ai.openclaw.gateway</string></dict></plist>',
+      );
+      fs.writeFileSync(
+        parser,
+        `#!/bin/sh
+for last; do :; done
+if [ "$last" != '-' ]; then exit 1; fi
+if [ "$1" = '-extract' ]; then kill -TERM "$$"; fi
+exec /usr/bin/plutil "$@"
+`,
+        { mode: 0o755 },
+      );
+    }
 
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock, once: vi.fn() });
     if (mode === "park") {
@@ -106,10 +123,12 @@ ${launchctlStub}
       });
     }
     const [, args, options] = requireSpawnCall();
-    const script = args[1]?.replaceAll(
-      "/Library/LaunchDaemons",
-      `'${systemDaemonsDir.replaceAll("'", "'\\''")}'`,
-    );
+    const script = args[1]
+      ?.replaceAll("/Library/LaunchDaemons", `'${systemDaemonsDir.replaceAll("'", "'\\''")}'`)
+      .replaceAll(
+        "/usr/bin/plutil",
+        systemOwnership === "interrupted extraction" ? parser : "/usr/bin/plutil",
+      );
     if (!script) {
       throw new Error("expected generated restart script");
     }
@@ -201,25 +220,6 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(unrefMock).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the service target for start-after-exit mode", () => {
-    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock, once: vi.fn() });
-
-    scheduleDetachedLaunchdRestartHandoff({
-      env: {
-        HOME: "/Users/test",
-        OPENCLAW_PROFILE: "default",
-      },
-      mode: "start-after-exit",
-    });
-
-    const [, args] = requireSpawnCall();
-    expect(args[1]).toContain('if launchctl kickstart "$service_target"; then');
-    expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
-    expect(args[1]).not.toContain('kickstart -k "$service_target"');
-    expect(args[1]).not.toContain('if launchctl start "$label"; then');
-    expect(args[1]).not.toContain('basename "$service_target"');
-  });
-
   it("kickstarts after exit without replacing a running KeepAlive process", async () => {
     const result = await executeHandoff(
       "start-after-exit",
@@ -234,18 +234,28 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(result.log).toContain("restart done");
   });
 
-  it("refuses detached activation when the system domain owns the label", async () => {
-    const result = await executeHandoff(
-      "start-after-exit",
-      'case "$1" in enable|kickstart) exit 0 ;; *) exit 1 ;; esac',
-      "loaded",
-    );
+  it.for(["loaded", "interrupted extraction"] as const)(
+    "refuses detached activation for %s ownership",
+    async (scenario, context) => {
+      if (scenario === "interrupted extraction" && process.platform !== "darwin") {
+        context.skip();
+      }
+      const result = await executeHandoff(
+        "start-after-exit",
+        'case "$1" in enable|kickstart) exit 0 ;; *) exit 1 ;; esac',
+        scenario,
+      );
 
-    expect(result.exitCode).toBe(78);
-    expect(result.calls).toEqual([]);
-    expect(result.log).toContain("restart blocked");
-    expect(result.log).toContain("loaded system LaunchDaemon system/ai.openclaw.gateway");
-  });
+      expect(result.exitCode).toBe(78);
+      expect(result.calls).toEqual([]);
+      expect(result.log).toContain("restart blocked");
+      expect(result.log).toContain(
+        scenario === "loaded"
+          ? "loaded system LaunchDaemon system/ai.openclaw.gateway"
+          : "could not inspect system LaunchDaemon plist",
+      );
+    },
+  );
 
   it("parks the service with bootout after the caller exits", async () => {
     const result = await executeHandoff(

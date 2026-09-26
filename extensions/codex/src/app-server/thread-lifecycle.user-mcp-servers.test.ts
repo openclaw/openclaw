@@ -28,6 +28,27 @@ import {
   writePolicyProbeServer,
 } from "./thread-lifecycle.user-mcp-servers.test-support.js";
 
+function createRequest(
+  startThreadId: string,
+  options: { readRequirements?: boolean; resumeThreadId?: string } = {},
+) {
+  return vi.fn(async (method: string, _params: unknown) => {
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read" && options.readRequirements !== false) {
+      return { requirements: null };
+    }
+    if (method === "thread/start") {
+      return threadStartResult(startThreadId);
+    }
+    if (method === "thread/resume" && options.resumeThreadId) {
+      return threadResumeResult(options.resumeThreadId);
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+}
+
 describe("startOrResumeThread — user mcp.servers projection (regression: #80814)", () => {
   let tempDir = "";
 
@@ -72,6 +93,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
               transport: "stdio",
               command: process.execPath,
               args: [serverPath],
+              connectionTimeoutMs: 12_345,
+              requestTimeoutMs: 20_125,
+              supportsParallelToolCalls: true,
             },
           },
         },
@@ -88,6 +112,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       docs: {
         command: process.execPath,
         args: [serverPath],
+        startup_timeout_sec: 12.345,
+        tool_timeout_sec: 20.125,
+        supports_parallel_tool_calls: true,
         enabled_tools: ["delete_docs", "read_docs"],
         disabled_tools: ["app_docs", "task_docs"],
       },
@@ -112,21 +139,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         },
       },
     };
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-policy");
-      }
-      if (method === "thread/resume") {
-        return threadResumeResult("thread-policy");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createRequest("thread-policy", { resumeThreadId: "thread-policy" });
     let wire = await createLeasedCodexLifecycleHarness({
       agentDir: path.join(tempDir, "agent"),
       respond: request,
@@ -165,6 +178,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         };
       };
       expect(callParams?.config?.mcp_servers?.docs).toMatchObject({
+        command: process.execPath,
+        args: [serverPath],
         enabled_tools: ["read_docs"],
         disabled_tools: ["app_docs", "delete_docs", "task_docs"],
       });
@@ -189,18 +204,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         },
       },
     };
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-session-override");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createRequest("thread-session-override");
     const run: EmbeddedRunAttemptParams = {
       ...createParams(sessionFile, workspaceDir, config),
       toolOverrides: { mcpToolsDeny: { docs: ["delete_docs"] } },
@@ -243,18 +247,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         },
       },
     };
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-agent-scope");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createRequest("thread-agent-scope");
 
     await startOrResumeThread({
       client: { request } as never,
@@ -276,18 +269,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
     const workspaceDir = path.join(tempDir, "workspace");
     const serverPath = await writePolicyProbeServer(tempDir);
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createRequest("thread-1");
 
     await startOrResumeThread({
       client: { request } as never,
@@ -335,21 +317,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
           },
         },
       } as unknown as EmbeddedRunAttemptParams["config"];
-      const request = vi.fn(async (method: string, _params: unknown) => {
-        if (method === "config/read") {
-          return { config: {}, origins: {}, layers: [] };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
-        if (method === "thread/start") {
-          return threadStartResult("thread-beta5");
-        }
-        if (method === "thread/resume") {
-          return threadResumeResult("thread-beta5");
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
+      const request = createRequest("thread-beta5", { resumeThreadId: "thread-beta5" });
       let wire = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         respond: request,
@@ -429,18 +397,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:atlas:session-1");
     const workspaceDir = path.join(tempDir, "workspace");
     const url = await startPolicyHttpServer();
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createRequest("thread-1");
 
     await startOrResumeThread({
       client: { request } as never,
@@ -491,18 +448,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
   it("omits mcp_servers from the start config when cfg has no user MCP servers", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createRequest("thread-1");
 
     await startOrResumeThread({
       client: { request } as never,
@@ -510,41 +456,6 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createAppServerOptions(),
-    });
-
-    const startCall = request.mock.calls.find(([method]) => method === "thread/start");
-    const startParams = startCall?.[1] as { config?: { mcp_servers?: Record<string, unknown> } };
-    expect(startParams?.config?.mcp_servers).toBeUndefined();
-  });
-
-  it("omits user MCP servers when runtime policy disables native tool surfaces", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir, {
-        mcp: {
-          servers: {
-            notes: {
-              transport: "stdio",
-              command: "node",
-              args: ["/opt/notes-mcp/dist/index.js"],
-            },
-          },
-        },
-      } as unknown as EmbeddedRunAttemptParams["config"]),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-      nativeCodeModeEnabled: false,
-      userMcpServersEnabled: false,
     });
 
     const startCall = request.mock.calls.find(([method]) => method === "thread/start");
@@ -564,18 +475,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       modelProvider: "openai",
     });
 
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-restarted");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createRequest("thread-restarted");
 
     await startOrResumeThread({
       client: { request } as never,
@@ -616,14 +516,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       modelProvider: "openai",
       dynamicToolsFingerprint: "[]",
     });
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-restricted");
-      }
-      if (method === "thread/resume") {
-        return threadResumeResult("thread-native");
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = createRequest("thread-restricted", {
+      readRequirements: false,
+      resumeThreadId: "thread-native",
     });
 
     await startOrResumeThread({
@@ -636,8 +531,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       userMcpServersEnabled: false,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-    const startParams = request.mock.calls[0]?.[1] as {
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read", "thread/start"]);
+    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
       environments?: unknown[];
       config?: {
         "features.code_mode"?: boolean;
@@ -664,12 +559,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       dynamicToolsFingerprint: "[]",
       mcpServersFingerprint: "mcp-v1",
     });
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-restricted");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createRequest("thread-restricted", { readRequirements: false });
 
     await startOrResumeThread({
       client: { request } as never,
@@ -683,8 +573,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       userMcpServersEnabled: false,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-    const startParams = request.mock.calls[0]?.[1] as {
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read", "thread/start"]);
+    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
       config?: {
         "features.code_mode"?: boolean;
         mcp_servers?: Record<string, unknown>;
@@ -709,18 +599,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       webSearchThreadConfigFingerprint: "web-search-v1",
       mcpServersFingerprint: "mcp-v1",
     });
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-fallback");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createRequest("thread-fallback");
 
     await startOrResumeThread({
       client: { request } as never,
@@ -758,21 +637,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         },
       },
     } as unknown as EmbeddedRunAttemptParams["config"];
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-started");
-      }
-      if (method === "thread/resume") {
-        return threadResumeResult("thread-existing");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createRequest("thread-started", { resumeThreadId: "thread-existing" });
 
     await startOrResumeThread({
       client: { request } as never,
@@ -794,8 +659,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       userMcpServersEnabled: false,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
-    const startParams = request.mock.calls[0]?.[1] as {
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read", "thread/start"]);
+    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
       config?: { mcp_servers?: Record<string, unknown> };
     };
     expect(startParams?.config?.mcp_servers).toBeUndefined();
@@ -821,20 +686,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
           },
         },
       }) as unknown as EmbeddedRunAttemptParams["config"];
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-with-current-bearer");
-      }
-      if (method === "thread/resume") {
-        return threadResumeResult("thread-with-stale-bearer");
-      }
-      throw new Error(`unexpected method: ${method}`);
+    const request = createRequest("thread-with-current-bearer", {
+      resumeThreadId: "thread-with-stale-bearer",
     });
 
     await startOrResumeThread({
@@ -892,18 +745,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     if (!address || typeof address === "string") {
       throw new Error("expected loopback MCP server address");
     }
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-without-oauth-mcp");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = createRequest("thread-without-oauth-mcp");
 
     try {
       await startOrResumeThread({
@@ -944,81 +786,5 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     };
     expect(startParams?.config?.mcp_servers).toBeUndefined();
     expect(mcpRequestCount).toBe(0);
-  });
-
-  it("resends user MCP config when resuming a thread with the matching fingerprint", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const serverPath = await writePolicyProbeServer(tempDir);
-    const config = {
-      mcp: {
-        servers: {
-          notes: {
-            transport: "stdio",
-            command: process.execPath,
-            args: [serverPath],
-          },
-        },
-      },
-    } as unknown as EmbeddedRunAttemptParams["config"];
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-with-user-mcp");
-      }
-      if (method === "thread/resume") {
-        return threadResumeResult("thread-with-user-mcp");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    let wire = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond: request,
-    });
-    await startOrResumeThread({
-      client: wire.client,
-      params: createParams(sessionFile, workspaceDir, config),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-    });
-
-    await wire.client.closeAndWait();
-    wire = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond: request,
-      persistedThreads: ["thread-with-user-mcp"],
-    });
-    request.mockClear();
-
-    await startOrResumeThread({
-      client: wire.client,
-      params: createParams(sessionFile, workspaceDir, config),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-    });
-
-    expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-    ]);
-    const resumeCall = request.mock.calls.find(([method]) => method === "thread/resume");
-    const resumeParams = resumeCall?.[1] as {
-      config?: { mcp_servers?: Record<string, unknown> };
-    };
-    expect(resumeCall).toBeDefined();
-    expect(resumeParams?.config?.mcp_servers).toMatchObject({
-      notes: { command: process.execPath, args: [serverPath] },
-    });
   });
 });

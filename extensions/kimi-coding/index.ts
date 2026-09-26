@@ -1,7 +1,7 @@
+import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 // Kimi Coding plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -12,20 +12,8 @@ import { wrapKimiProviderStream } from "./stream.js";
 
 const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
+const PROVIDER_ALIASES = ["kimi-code", "kimi-coding"];
 
-function findExplicitProviderConfig(
-  providers: Record<string, unknown> | undefined,
-  providerId: string,
-): Record<string, unknown> | undefined {
-  if (!providers) {
-    return undefined;
-  }
-  const normalizedProviderId = normalizeProviderId(providerId);
-  const match = Object.entries(providers).find(
-    ([configuredProviderId]) => normalizeProviderId(configuredProviderId) === normalizedProviderId,
-  );
-  return isRecord(match?.[1]) ? match[1] : undefined;
-}
 export default defineSingleProviderPluginEntry({
   id: PLUGIN_ID,
   name: "Kimi Provider",
@@ -34,7 +22,7 @@ export default defineSingleProviderPluginEntry({
   provider: {
     id: PROVIDER_ID,
     label: "Kimi",
-    aliases: ["kimi-code", "kimi-coding"],
+    aliases: PROVIDER_ALIASES,
     docsPath: "/providers/moonshot",
     envVars: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
     manifestAuth: {
@@ -55,14 +43,14 @@ export default defineSingleProviderPluginEntry({
         if (!apiKey) {
           return null;
         }
-        const explicitProvider = findExplicitProviderConfig(
-          ctx.config.models?.providers as Record<string, unknown> | undefined,
+        const explicitProvider = findNormalizedProviderValue(
+          ctx.config.models?.providers,
           PROVIDER_ID,
         );
         const builtInProvider = buildKimiCodingProvider();
         const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl) ?? "";
         const explicitHeaders = isRecord(explicitProvider?.headers)
-          ? (explicitProvider.headers as Record<string, SecretInput>)
+          ? explicitProvider.headers
           : undefined;
         return {
           provider: {
@@ -80,6 +68,20 @@ export default defineSingleProviderPluginEntry({
           },
         };
       },
+    },
+    classifyFailoverReason: ({ provider, status, errorMessage }) => {
+      if (!provider || status !== 403) {
+        return undefined;
+      }
+      const providerId = normalizeProviderId(provider);
+      if (providerId !== PROVIDER_ID && !PROVIDER_ALIASES.includes(providerId)) {
+        return undefined;
+      }
+      return /\b(?:weekly(?:\s+\(7-day\))?|(?:7|seven)[ -]day)\s+(?:usage\s+)?limit\b/i.test(
+        errorMessage,
+      ) || /\bquota\s+will\s+reset\b/i.test(errorMessage)
+        ? "rate_limit"
+        : undefined;
     },
     buildReplayPolicy: () => KIMI_REPLAY_POLICY,
     normalizeResolvedModel: ({ model }) => {

@@ -1,5 +1,4 @@
-// Gateway operator-approvals client helper.
-// Connects a backend Gateway client scoped to operator approval events.
+import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -8,7 +7,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
-import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import { getOperatorApprovalRuntimeToken } from "./operator-approval-runtime-token.js";
 
@@ -17,12 +15,6 @@ function shouldSendApprovalRuntimeToken(urlSource: string): boolean {
   return (
     urlSource === "local loopback" || urlSource === "missing gateway.remote.url (fallback local)"
   );
-}
-
-function shouldOmitApprovalRuntimeDeviceIdentity(params: {
-  sendsApprovalRuntimeToken: boolean;
-}): boolean {
-  return params.sendsApprovalRuntimeToken;
 }
 
 /** Create a Gateway client authorized for operator approval event handling. */
@@ -61,11 +53,7 @@ export async function createOperatorApprovalsGatewayClient(
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
     scopes: ["operator.approvals"],
-    deviceIdentity: shouldOmitApprovalRuntimeDeviceIdentity({
-      sendsApprovalRuntimeToken,
-    })
-      ? null
-      : undefined,
+    deviceIdentity: sendsApprovalRuntimeToken ? null : undefined,
     onEvent: params.onEvent,
     onHelloOk: params.onHelloOk,
     onConnectError: params.onConnectError,

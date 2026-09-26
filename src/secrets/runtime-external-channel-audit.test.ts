@@ -54,9 +54,9 @@ const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks()
 const EXTERNALIZED_CHANNEL_IDS = [
   "discord",
   "feishu",
-  "googlechat",
   "msteams",
   "nextcloud-talk",
+  "qqbot",
   "zalo",
 ] as const;
 
@@ -66,6 +66,23 @@ function ref(id: string) {
   return { source: "env", provider: "default", id };
 }
 
+function createQqBotConfig(accountId = "work") {
+  return {
+    channels: {
+      qqbot: {
+        appId: "qqbot-default-app",
+        clientSecret: ref("QQBOT_DEFAULT_SECRET"),
+        accounts: {
+          [accountId]: {
+            appId: "qqbot-named-app",
+            clientSecret: ref("QQBOT_NAMED_SECRET"),
+          },
+        },
+      },
+    },
+  };
+}
+
 function inactiveExecRef(id: string) {
   return { source: "exec", provider: "vault", id };
 }
@@ -73,7 +90,7 @@ function inactiveExecRef(id: string) {
 function createExternalChannelRecord(id: ExternalizedChannelId): PluginManifestRecord {
   const rootDir = path.resolve("extensions", id);
   return {
-    id,
+    id: id === "qqbot" ? "openclaw-qqbot" : id,
     channels: [id],
     providers: [],
     cliBackends: [],
@@ -98,110 +115,11 @@ function externalChannelOrigins(records: readonly PluginManifestRecord[]) {
   return new Map(records.map((record) => [record.id, record.origin] as const));
 }
 
-function mockBundledPublicArtifactMiss() {
-  loadBundledPublicArtifactMock.mockImplementation(
-    (params: { dirName: string; artifactCandidates: string[] }) => {
-      if (
-        params.dirName === "googlechat" &&
-        params.artifactCandidates[0] === "secret-contract-api.js"
-      ) {
-        return createGoogleChatSecretContractApi();
-      }
-      return null;
-    },
-  );
-}
-
-function createGoogleChatSecretContractApi() {
-  const secretTargetRegistryEntries = [
-    {
-      id: "channels.googlechat.accounts.*.serviceAccount",
-      targetType: "channels.googlechat.serviceAccount",
-      targetTypeAliases: ["channels.googlechat.accounts.*.serviceAccount"],
-      configFile: "openclaw.json",
-      pathPattern: "channels.googlechat.accounts.*.serviceAccount",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string-or-object",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-      accountIdPathSegmentIndex: 3,
-    },
-    {
-      id: "channels.googlechat.serviceAccount",
-      targetType: "channels.googlechat.serviceAccount",
-      configFile: "openclaw.json",
-      pathPattern: "channels.googlechat.serviceAccount",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string-or-object",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-    },
-  ];
-  const collectRuntimeConfigAssignments = (params: {
-    config: { channels?: { googlechat?: Record<string, unknown> } };
-    context: {
-      assignments: Array<{
-        ref: unknown;
-        path: string;
-        expected: "string-or-object";
-        apply: (value: unknown) => void;
-      }>;
-      warnings: Array<{ code: string; path: string; message: string }>;
-    };
-  }) => {
-    const googlechat = params.config.channels?.googlechat;
-    if (!googlechat) {
-      return;
-    }
-    const collect = (target: Record<string, unknown>, pathKey: string, active: boolean) => {
-      const refValue = target.serviceAccount;
-      if (!refValue) {
-        return;
-      }
-      const pathLocal = `${pathKey}.serviceAccount`;
-      if (!active) {
-        params.context.warnings.push({
-          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: pathLocal,
-          message: `${pathLocal}: Google Chat account is disabled.`,
-        });
-        return;
-      }
-      params.context.assignments.push({
-        ref: refValue,
-        path: pathLocal,
-        expected: "string-or-object",
-        apply: (value) => {
-          target.serviceAccount = value;
-        },
-      });
-    };
-
-    collect(googlechat, "channels.googlechat", googlechat.enabled !== false);
-    const accounts = googlechat.accounts as Record<string, Record<string, unknown>> | undefined;
-    for (const [accountId, account] of Object.entries(accounts ?? {})) {
-      collect(account, `channels.googlechat.accounts.${accountId}`, account.enabled !== false);
-    }
-  };
-  return {
-    channelSecrets: {
-      secretTargetRegistryEntries,
-      collectRuntimeConfigAssignments,
-    },
-    secretTargetRegistryEntries,
-    collectRuntimeConfigAssignments,
-  };
-}
-
 function expectMetadataBackedContractsWereUsed(
   channelIds: readonly ExternalizedChannelId[] = EXTERNALIZED_CHANNEL_IDS,
 ) {
   expect(getBootstrapChannelSecretsMock).not.toHaveBeenCalled();
-  if (channelIds.some((channelId) => channelId !== "googlechat")) {
-    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalled();
-  }
+  expect(loadPluginMetadataSnapshotMock).toHaveBeenCalled();
   for (const channelId of channelIds) {
     expect(loadBundledPublicArtifactMock).toHaveBeenCalledWith({
       dirName: channelId,
@@ -225,7 +143,7 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     getBootstrapChannelSecretsMock.mockReset();
     getBootstrapChannelSecretsMock.mockReturnValue(undefined);
     loadBundledPublicArtifactMock.mockReset();
-    mockBundledPublicArtifactMiss();
+    loadBundledPublicArtifactMock.mockReturnValue(null);
     loadPluginMetadataSnapshotMock.mockReset();
   });
 
@@ -300,18 +218,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
               },
             },
           },
-          googlechat: {
-            serviceAccount: ref("GOOGLECHAT_SERVICE_ACCOUNT"),
-            accounts: {
-              inherited: {
-                enabled: true,
-              },
-              work: {
-                enabled: true,
-                serviceAccount: ref("GOOGLECHAT_WORK_SERVICE_ACCOUNT"),
-              },
-            },
-          },
           msteams: {
             appPassword: ref("MSTEAMS_APP_PASSWORD"),
           },
@@ -326,6 +232,16 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
                 enabled: true,
                 botSecret: ref("NEXTCLOUD_TALK_WORK_BOT_SECRET"),
                 apiPassword: ref("NEXTCLOUD_TALK_WORK_API_PASSWORD"),
+              },
+            },
+          },
+          qqbot: {
+            appId: "qqbot-default-app",
+            clientSecret: ref("QQBOT_DEFAULT_SECRET"),
+            accounts: {
+              work: {
+                appId: "qqbot-work-app",
+                clientSecret: ref("QQBOT_WORK_SECRET"),
               },
             },
           },
@@ -369,13 +285,13 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
           FEISHU_WORK_APP_SECRET: "feishu-work-app-secret",
           FEISHU_WORK_ENCRYPT_KEY: "feishu-work-encrypt-key",
           FEISHU_WORK_VERIFICATION_TOKEN: "feishu-work-verification-token",
-          GOOGLECHAT_SERVICE_ACCOUNT: "googlechat-service-account",
-          GOOGLECHAT_WORK_SERVICE_ACCOUNT: "googlechat-work-service-account",
           MSTEAMS_APP_PASSWORD: "msteams-app-password",
           NEXTCLOUD_TALK_BOT_SECRET: "nextcloud-talk-bot-secret",
           NEXTCLOUD_TALK_API_PASSWORD: "nextcloud-talk-api-password",
           NEXTCLOUD_TALK_WORK_BOT_SECRET: "nextcloud-talk-work-bot-secret",
           NEXTCLOUD_TALK_WORK_API_PASSWORD: "nextcloud-talk-work-api-password",
+          QQBOT_DEFAULT_SECRET: "qqbot-default-secret",
+          QQBOT_WORK_SECRET: "qqbot-work-secret",
           ZALO_BOT_TOKEN: "zalo-bot-token",
           ZALO_WEBHOOK_SECRET: "zalo-webhook-secret",
           ZALO_WORK_BOT_TOKEN: "zalo-work-bot-token",
@@ -402,13 +318,13 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
         "channels.feishu.accounts.work.appSecret": "feishu-work-app-secret",
         "channels.feishu.accounts.work.encryptKey": "feishu-work-encrypt-key",
         "channels.feishu.accounts.work.verificationToken": "feishu-work-verification-token",
-        "channels.googlechat.serviceAccount": "googlechat-service-account",
-        "channels.googlechat.accounts.work.serviceAccount": "googlechat-work-service-account",
         "channels.msteams.appPassword": "msteams-app-password",
         "channels.nextcloud-talk.botSecret": "nextcloud-talk-bot-secret",
         "channels.nextcloud-talk.apiPassword": "nextcloud-talk-api-password",
         "channels.nextcloud-talk.accounts.work.botSecret": "nextcloud-talk-work-bot-secret",
         "channels.nextcloud-talk.accounts.work.apiPassword": "nextcloud-talk-work-api-password",
+        "channels.qqbot.clientSecret": "qqbot-default-secret",
+        "channels.qqbot.accounts.work.clientSecret": "qqbot-work-secret",
         "channels.zalo.botToken": "zalo-bot-token",
         "channels.zalo.webhookSecret": "zalo-webhook-secret",
         "channels.zalo.accounts.work.botToken": "zalo-work-bot-token",
@@ -485,16 +401,6 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
             },
           },
         },
-        googlechat: {
-          enabled: false,
-          serviceAccount: inactiveExecRef("GOOGLECHAT_DISABLED_SERVICE_ACCOUNT"),
-          accounts: {
-            disabled: {
-              enabled: false,
-              serviceAccount: inactiveExecRef("GOOGLECHAT_DISABLED_ACCOUNT_SERVICE_ACCOUNT"),
-            },
-          },
-        },
         msteams: {
           enabled: false,
           appPassword: inactiveExecRef("MSTEAMS_DISABLED_APP_PASSWORD"),
@@ -508,6 +414,18 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
               enabled: false,
               botSecret: inactiveExecRef("NEXTCLOUD_TALK_DISABLED_ACCOUNT_BOT_SECRET"),
               apiPassword: inactiveExecRef("NEXTCLOUD_TALK_DISABLED_ACCOUNT_API_PASSWORD"),
+            },
+          },
+        },
+        qqbot: {
+          enabled: false,
+          appId: "qqbot-disabled-app",
+          clientSecret: inactiveExecRef("QQBOT_DISABLED_SECRET"),
+          accounts: {
+            disabled: {
+              enabled: false,
+              appId: "qqbot-disabled-account-app",
+              clientSecret: inactiveExecRef("QQBOT_DISABLED_ACCOUNT_SECRET"),
             },
           },
         },
@@ -555,13 +473,13 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
       "channels.feishu.accounts.disabled.encryptKey",
       "channels.feishu.verificationToken",
       "channels.feishu.accounts.disabled.verificationToken",
-      "channels.googlechat.serviceAccount",
-      "channels.googlechat.accounts.disabled.serviceAccount",
       "channels.msteams.appPassword",
       "channels.nextcloud-talk.botSecret",
       "channels.nextcloud-talk.accounts.disabled.botSecret",
       "channels.nextcloud-talk.apiPassword",
       "channels.nextcloud-talk.accounts.disabled.apiPassword",
+      "channels.qqbot.clientSecret",
+      "channels.qqbot.accounts.disabled.clientSecret",
       "channels.zalo.botToken",
       "channels.zalo.accounts.disabled.botToken",
       "channels.zalo.webhookSecret",
@@ -600,6 +518,147 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     });
     expect(snapshot.warnings).toStrictEqual([]);
     expectMetadataBackedContractsWereUsed(["feishu"]);
+  });
+
+  it.each(["default", "named"] as const)(
+    "isolates a missing QQBot %s ref without replacing it or blocking its sibling",
+    async (missingAccount) => {
+      const records = configureExternalChannelRecords(["qqbot"]);
+      const namedId = missingAccount === "named" ? "Named.Team" : "work";
+      const config = createQqBotConfig(namedId);
+      const defaultPath = ["channels", "qqbot", "clientSecret"];
+      const namedPath = ["channels", "qqbot", "accounts", namedId, "clientSecret"];
+      const missingPath = missingAccount === "default" ? defaultPath : namedPath;
+      const healthyPath = missingAccount === "default" ? namedPath : defaultPath;
+      const missingRef = getPath(config, missingPath);
+      const missingOwner = `qqbot:${missingAccount === "default" ? "default" : "named-team"}`;
+      const healthyOwner = `qqbot:${missingAccount === "default" ? "work" : "default"}`;
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig(config),
+        env: {
+          [missingAccount === "default" ? "QQBOT_NAMED_SECRET" : "QQBOT_DEFAULT_SECRET"]:
+            "synthetic-healthy-secret",
+          QQBOT_CLIENT_SECRET: "synthetic-env-fallback-must-not-win",
+        },
+        includeAuthStoreRefs: false,
+        allowUnavailableSecretOwners: true,
+        loadablePluginOrigins: externalChannelOrigins(records),
+      });
+
+      expect(getPath(snapshot.config, missingPath)).toEqual(missingRef);
+      expect(getPath(snapshot.config, healthyPath)).toBe("synthetic-healthy-secret");
+      expect(snapshot.degradedOwners).toEqual([
+        expect.objectContaining({
+          ownerKind: "account",
+          ownerId: missingOwner,
+          state: "unavailable",
+          degradationState: "cold",
+          paths: [
+            missingAccount === "default"
+              ? "channels.qqbot.clientSecret"
+              : 'channels.qqbot.accounts["Named.Team"].clientSecret',
+          ],
+        }),
+      ]);
+      activateSecretsRuntimeSnapshot(snapshot);
+      expect(() => assertSecretOwnerAvailable("account", missingOwner)).toThrow(
+        "configured but unavailable",
+      );
+      expect(() => assertSecretOwnerAvailable("account", healthyOwner)).not.toThrow();
+      expectMetadataBackedContractsWereUsed(["qqbot"]);
+    },
+  );
+
+  it.each(["default", "named"] as const)(
+    "retains stale QQBot %s credentials only while their own account contract is unchanged",
+    async (missingAccount) => {
+      const records = configureExternalChannelRecords(["qqbot"]);
+      const config = createQqBotConfig();
+      const prepare = (candidate: typeof config, env: NodeJS.ProcessEnv) =>
+        prepareSecretsRuntimeSnapshot({
+          config: asConfig(candidate),
+          env,
+          includeAuthStoreRefs: false,
+          allowUnavailableSecretOwners: true,
+          loadablePluginOrigins: externalChannelOrigins(records),
+        });
+      activateSecretsRuntimeSnapshot(
+        await prepare(config, {
+          QQBOT_DEFAULT_SECRET: "synthetic-original-default",
+          QQBOT_NAMED_SECRET: "synthetic-original-named",
+        }),
+      );
+
+      const siblingChanged = structuredClone(config);
+      if (missingAccount === "default") {
+        siblingChanged.channels.qqbot.accounts.work!.appId = "changed-sibling-app";
+      } else {
+        siblingChanged.channels.qqbot.clientSecret = ref("QQBOT_CHANGED_DEFAULT_SECRET");
+      }
+      const healthyRefId =
+        missingAccount === "default" ? "QQBOT_NAMED_SECRET" : "QQBOT_CHANGED_DEFAULT_SECRET";
+      const defaultPath = ["channels", "qqbot", "clientSecret"];
+      const namedPath = ["channels", "qqbot", "accounts", "work", "clientSecret"];
+      const missingPath = missingAccount === "default" ? defaultPath : namedPath;
+      const healthyPath = missingAccount === "default" ? namedPath : defaultPath;
+      const missingOwner = `qqbot:${missingAccount === "default" ? "default" : "work"}`;
+      const stale = await prepare(siblingChanged, { [healthyRefId]: "synthetic-refreshed-secret" });
+
+      expect(stale.degradedOwners).toEqual([
+        expect.objectContaining({ ownerId: missingOwner, degradationState: "stale" }),
+      ]);
+      expect(getPath(stale.config, missingPath)).toBe(`synthetic-original-${missingAccount}`);
+      expect(getPath(stale.config, healthyPath)).toBe("synthetic-refreshed-secret");
+      activateSecretsRuntimeSnapshot(stale);
+      expect(() => assertSecretOwnerAvailable("account", missingOwner)).not.toThrow();
+
+      const ownerChanged = structuredClone(siblingChanged);
+      const owner =
+        missingAccount === "default"
+          ? ownerChanged.channels.qqbot
+          : ownerChanged.channels.qqbot.accounts.work!;
+      owner.appId = "changed-owner-app";
+      const cold = await prepare(ownerChanged, { [healthyRefId]: "synthetic-next-secret" });
+
+      expect(cold.degradedOwners).toEqual([
+        expect.objectContaining({ ownerId: missingOwner, degradationState: "cold" }),
+      ]);
+      expect(getPath(cold.config, missingPath)).toEqual(getPath(ownerChanged, missingPath));
+      expect(getPath(cold.config, healthyPath)).toBe("synthetic-next-secret");
+      activateSecretsRuntimeSnapshot(cold);
+      expect(() => assertSecretOwnerAvailable("account", missingOwner)).toThrow(
+        "configured but unavailable",
+      );
+      expect(() =>
+        assertSecretOwnerAvailable(
+          "account",
+          `qqbot:${missingAccount === "default" ? "work" : "default"}`,
+        ),
+      ).not.toThrow();
+    },
+  );
+
+  it.each([
+    { label: "malformed", secret: ref("invalid-lowercase-id"), error: /invalid/i },
+    {
+      label: "unknown provider",
+      secret: { source: "file", provider: "unconfigured", id: "/qqbot/clientSecret" },
+      error: /provider/i,
+    },
+  ])("keeps $label QQBot SecretRefs strict", async ({ secret, error }) => {
+    const records = configureExternalChannelRecords(["qqbot"]);
+
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          channels: { qqbot: { appId: "qqbot-default-app", clientSecret: secret } },
+        }),
+        env: { QQBOT_CLIENT_SECRET: "synthetic-env-fallback-must-not-win" },
+        includeAuthStoreRefs: false,
+        allowUnavailableSecretOwners: true,
+        loadablePluginOrigins: externalChannelOrigins(records),
+      }),
+    ).rejects.toThrow(error);
   });
 
   it("publishes an unavailable Discord realtime provider owner as a typed redacted error", async () => {

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 
 const mocks = vi.hoisted(() => ({
@@ -131,7 +132,11 @@ describe("createAgent", () => {
         };
         mocks.persisted = transformed.nextConfig;
         mocks.config = transformed.nextConfig;
-        return { result: transformed.result, nextConfig: transformed.nextConfig };
+        return {
+          path: "/tmp/created-config.json",
+          result: transformed.result,
+          nextConfig: transformed.nextConfig,
+        };
       },
     );
   });
@@ -158,9 +163,6 @@ describe("createAgent", () => {
     { kind: "not-armed", armed: false, detail: "owner-unresolved" },
     { kind: "no-legacy-rows", armed: true },
     { kind: "migrated-in-place", armed: true, canonicalKey: "agent:robby:main" },
-    { kind: "migrated-cross-store", armed: true, canonicalKey: "agent:robby:main" },
-    { kind: "canonical-exists-identical", armed: true, canonicalKey: "agent:robby:main" },
-    { kind: "divergent-canonical", armed: true, canonicalKey: "agent:robby:main" },
     { kind: "divergent-aliases", armed: true, canonicalKey: "agent:robby:main" },
     { kind: "legacy-json-store", armed: true, paths: ["/tmp/sessions.json"] },
     { kind: "store-unreadable", armed: true, paths: ["/tmp/store.sqlite"] },
@@ -327,15 +329,17 @@ describe("createAgent", () => {
         name: "Researcher",
         workspace: "/tmp/staged-work",
       },
-      expectedConfigHash: null,
       stagedConfig: {
-        agents: {
-          entries: {
-            main: {},
-            researcher: { workspace: "/tmp/staged-work" },
+        writeSnapshot: { snapshot: createTestConfigSnapshot({}), writeOptions: {} },
+        config: {
+          agents: {
+            entries: {
+              main: {},
+              researcher: { workspace: "/tmp/staged-work" },
+            },
           },
+          channels: { telegram: { enabled: true } },
         },
-        channels: { telegram: { enabled: true } },
       },
     });
 
@@ -351,14 +355,20 @@ describe("createAgent", () => {
     expect(result.config).toEqual(mocks.persisted);
   });
 
-  it("requires a config revision for guided staging", async () => {
+  it("rejects guided staging whose original revision no longer owns creation", async () => {
     await expect(
       createAgent({
         entry: { id: "researcher" },
-        stagedConfig: { agents: { entries: { researcher: {} } } },
+        stagedConfig: {
+          config: { agents: { entries: { researcher: {} } } },
+          writeSnapshot: {
+            snapshot: { ...createTestConfigSnapshot({}), hash: "stale-revision" },
+            writeOptions: {},
+          },
+        },
       }),
-    ).rejects.toThrow("staged agent creation requires an expected config hash");
-    expect(mocks.withConfigMutationExclusive).not.toHaveBeenCalled();
+    ).rejects.toThrow("config changed before first-agent creation");
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
 
   it("replaces only the load-time compatibility roster when creating a named first agent", async () => {
@@ -370,7 +380,7 @@ describe("createAgent", () => {
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledWith(
       expect.objectContaining({
-        writeOptions: { allowedAgentRosterRemovals: ["main"] },
+        writeOptions: expect.objectContaining({ allowedAgentRosterRemovals: ["main"] }),
       }),
     );
     expect(mocks.persisted).toMatchObject({
@@ -627,38 +637,31 @@ describe("createAgent", () => {
     expect(result).toMatchObject({ status: "created", agentId: "researcher" });
   });
 
-  it("finishes workspace setup before publishing config", async () => {
-    mocks.ensureAgentWorkspace.mockImplementation(async ({ dir }: { dir: string }) => {
-      expect(mocks.persisted).not.toHaveProperty("agents");
-      return { dir, bootstrapPending: true };
-    });
-
-    await createAgent({ name: "researcher" });
-
-    expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
-  });
-
   it("prepares staged config effects after setup and immediately before publication", async () => {
     mocks.ensureAgentWorkspace.mockResolvedValue({
       dir: "/tmp/default-researcher",
       bootstrapPending: false,
     });
+    const commit = vi.fn();
     const prepareConfigCommit = vi.fn(async () => {
       expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
       expect(mocks.mkdir).toHaveBeenCalledOnce();
       expect(mocks.rootWrite).toHaveBeenCalledOnce();
       expect(mocks.persisted).not.toHaveProperty("agents");
+      return { commit, rollback: vi.fn() };
     });
 
     await createAgent({ name: "researcher", prepareConfigCommit });
 
     expect(prepareConfigCommit).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledOnce();
     expect(mocks.persisted).toHaveProperty("agents.entries.researcher");
   });
 
   it("rolls staged config effects back once when config publication fails", async () => {
     const rollback = vi.fn();
-    const prepareConfigCommit = vi.fn(async () => rollback);
+    const commit = vi.fn();
+    const prepareConfigCommit = vi.fn(async () => ({ commit, rollback }));
     mocks.transformConfigFileWithRetry.mockImplementationOnce(async ({ transform }) => {
       await transform(structuredClone(mocks.config), {
         snapshot: { exists: false },
@@ -672,10 +675,12 @@ describe("createAgent", () => {
     );
 
     expect(prepareConfigCommit).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
     expect(rollback).toHaveBeenCalledOnce();
   });
 
   it("does not roll staged config effects back after config publication", async () => {
+    const commit = vi.fn();
     const rollback = vi.fn();
     mocks.recordAgentProvenance.mockImplementationOnce(() => {
       throw new Error("injected provenance failure");
@@ -684,11 +689,12 @@ describe("createAgent", () => {
     await expect(
       createAgent({
         name: "researcher",
-        prepareConfigCommit: async () => rollback,
+        prepareConfigCommit: async () => ({ commit, rollback }),
       }),
     ).rejects.toThrow("injected provenance failure");
 
     expect(mocks.persisted).toHaveProperty("agents.entries.researcher");
+    expect(commit).toHaveBeenCalledOnce();
     expect(rollback).not.toHaveBeenCalled();
   });
 

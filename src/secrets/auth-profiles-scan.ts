@@ -10,8 +10,7 @@ type AuthProfileFieldSpec = {
   refField: string;
 };
 
-type ApiKeyCredentialVisit = {
-  kind: "api_key";
+type StaticCredentialVisit = {
   profileId: string;
   provider: string;
   /** Original mutable profile record from auth-profiles.json. */
@@ -22,21 +21,7 @@ type ApiKeyCredentialVisit = {
   refField: string;
   value: unknown;
   refValue: unknown;
-};
-
-type TokenCredentialVisit = {
-  kind: "token";
-  profileId: string;
-  provider: string;
-  /** Original mutable profile record from auth-profiles.json. */
-  profile: Record<string, unknown>;
-  /** Plaintext value field name derived from the secret target registry. */
-  valueField: string;
-  /** SecretRef sibling field name derived from the secret target registry. */
-  refField: string;
-  value: unknown;
-  refValue: unknown;
-};
+} & ({ kind: "api_key" } | { kind: "token" });
 
 type OauthCredentialVisit = {
   kind: "oauth";
@@ -49,10 +34,7 @@ type OauthCredentialVisit = {
   hasRefresh: boolean;
 };
 
-type AuthProfileCredentialVisit =
-  | ApiKeyCredentialVisit
-  | TokenCredentialVisit
-  | OauthCredentialVisit;
+type AuthProfileCredentialVisit = StaticCredentialVisit | OauthCredentialVisit;
 
 function getAuthProfileFieldName(pathPattern: string): string {
   const segments = pathPattern.split(".").filter(Boolean);
@@ -81,18 +63,13 @@ const AUTH_PROFILE_FIELD_SPEC_BY_TYPE = (() => {
   return defaults;
 })();
 
-/** Returns the value/ref field names for one auth-profile credential type. */
-function getAuthProfileFieldSpec(type: AuthProfileCredentialType): AuthProfileFieldSpec {
-  return AUTH_PROFILE_FIELD_SPEC_BY_TYPE[type];
-}
-
 function toSecretCredentialVisit(params: {
   kind: AuthProfileCredentialType;
   profileId: string;
   provider: string;
   profile: Record<string, unknown>;
-}): ApiKeyCredentialVisit | TokenCredentialVisit {
-  const spec = getAuthProfileFieldSpec(params.kind);
+}): StaticCredentialVisit {
+  const spec = AUTH_PROFILE_FIELD_SPEC_BY_TYPE[params.kind];
   return {
     kind: params.kind,
     profileId: params.profileId,

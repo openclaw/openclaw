@@ -19,8 +19,10 @@ Beam ships with OpenClaw but is disabled by default. When enabled, it registers:
 
 ```bash
 openclaw plugins enable beam
-openclaw gateway restart
 ```
+
+Enablement applies to a running Gateway automatically. If it is offline, start
+it to use Beam. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 Equivalent config:
 
@@ -38,7 +40,6 @@ Disable the plugin when the ingest route is not needed:
 
 ```bash
 openclaw plugins disable beam
-openclaw gateway restart
 ```
 
 ## Authentication
@@ -104,12 +105,13 @@ bare-id links and links with an older title still resolve, and the browser repla
 the name with the current title without adding history. Titles that produce no slug
 use the bare id. A configured Control UI base path prefixes the route, for example
 `/openclaw/beam/fix-the-upload-flow-0123456789ab`. Longer prefixes through the full
-32-character Beam id also work. Update the Beam skill before updating the receiver
-so its response validator accepts named links.
+32-character Beam id also work. Named links shipped in the 2026.8.2 receiver;
+update the Beam skill before updating the receiver so its response validator
+accepts them.
 
 Uploading the same `beamId` updates the existing catalog row when its `updatedAt` is newer. Equal-timestamp uploads may refresh the same state or mark a live row completed, but cannot regress a completed row to live. Older uploads and equal-timestamp completion regressions still return the normal `200` success response, but OpenClaw ignores them. Only accepted updates refresh retention and uploader attribution.
 
-`sourceModel` is optional. Current automatic mirrors include the latest model reported by the source catalog. Older clients and snapshots remain valid without it.
+`sourceModel` is optional. Automatic mirrors include the latest model reported by the source catalog. Older clients and snapshots remain valid without it.
 
 ## Continue on the Team Gateway
 
@@ -128,6 +130,13 @@ Beam stores sanitized payloads in OpenClaw's shared SQLite-backed plugin state:
 - oldest-entry eviction when the catalog reaches its bound
 - server receipt time controls catalog ordering; clients cannot move themselves ahead with a forged timestamp
 
+The sidebar reuses an in-memory metadata inventory rather than loading every
+transcript on each poll. Uploads and deletions invalidate that inventory immediately;
+the next list shares one canonical reload. A plugin service preloads the inventory
+and refreshes it every 30 seconds to pick up changes made by other processes.
+Expired entries are hidden on every list. Transcript reads and continuation always
+read canonical storage. No stored-data migration is needed on update.
+
 The catalog is intentionally shared across the Gateway operator domain. Every client with `operator.read` can view every beamed session. Uploading or continuing requires `operator.write` or `operator.admin`; agent access policy must also allow the chosen agent. Any write-authorized operator that knows a Beam id can update that row. Uploader attribution does not grant ownership or change access. OpenClaw operator scopes are not tenant isolation; use a separate Gateway when sessions must be isolated between teams or machines.
 
 A continuation belongs to the authenticated operator who creates it. From then on it follows ordinary session sharing, sandbox, tool, and model policy for that Team agent. Access to the original Beam does not grant access to another operator's continuation.
@@ -137,7 +146,9 @@ User turns are attributed to the verified publisher of the current snapshot, usi
 ### Delete
 
 Any operator with `operator.write` can delete a Beam from its sidebar row menu.
-Deletion is permanent and immediate. Re-uploading the same `beamId` recreates the
+After confirmation, the sidebar hides the row while deletion finishes. If deletion
+fails, the row returns and an error appears. Successful deletion is permanent.
+Re-uploading the same `beamId` recreates the
 row, whether through the manual skill or a still-active mirror's next upload.
 Mirrors skip unchanged snapshots, so recreation does not necessarily happen on
 the next poll. Deleting a Beam does not affect continuations already created from it.
@@ -189,29 +200,17 @@ When browsing Claude sessions on paired nodes, update those nodes alongside the 
 
 ## Troubleshooting
 
-`404 Not Found`
+**`404 Not Found`** The Beam plugin is disabled, runtime application failed, or the request is reaching another Gateway. Check the enablement result and [inspect the plugin](/plugins/manage-plugins#apply-changes-and-inspect).
 
-: The Beam plugin is disabled, the Gateway has not reloaded it since enablement, or the request is reaching another Gateway.
+**`401 Unauthorized`** The request did not satisfy Gateway HTTP auth. Check the bearer credential or trusted-proxy/Access session.
 
-`401 Unauthorized`
+**`405 Method Not Allowed`** The receiver accepts only `POST`.
 
-: The request did not satisfy Gateway HTTP auth. Check the bearer credential or trusted-proxy/Access session.
+**`413 Payload Too Large`** The serialized request exceeded 56 KiB. The official skill drops older sanitized messages until the snapshot fits.
 
-`405 Method Not Allowed`
+**`429 Too Many Requests`** The authenticated client exceeded the bounded request or concurrency limit. Retry after the current minute window.
 
-: The receiver accepts only `POST`.
-
-`413 Payload Too Large`
-
-: The serialized request exceeded 56 KiB. The official skill drops older sanitized messages until the snapshot fits.
-
-`429 Too Many Requests`
-
-: The authenticated client exceeded the bounded request or concurrency limit. Retry after the current minute window.
-
-`beam mirror upload blocked ... receiver returned redirect`
-
-: The configured mirror endpoint returned a redirect. Beam does not follow redirects and suppresses repeated attempts for the current service instance; set `mirror.endpoint` to the final receiver URL. A Gateway restart probes the configured endpoint once again.
+**`beam mirror upload blocked ... receiver returned redirect`** The configured mirror endpoint returned a redirect. Beam does not follow redirects and suppresses repeated attempts for the current service instance; set `mirror.endpoint` to the final receiver URL. A Gateway restart probes the configured endpoint once again.
 
 ## Related
 

@@ -1,4 +1,3 @@
-// Discord plugin module implements setup account state behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { inspectDiscordAccountTokenState } from "./account-token-inspect.js";
@@ -19,16 +18,12 @@ type InspectedDiscordSetupAccount = {
   config: DiscordAccountConfig;
 };
 
-export function resolveDefaultDiscordSetupAccountId(cfg: OpenClawConfig): string {
-  return resolveDefaultDiscordAccountId(cfg);
-}
-
 export function resolveDiscordSetupAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): { accountId: string; config: DiscordAccountConfig } {
   const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultDiscordSetupAccountId(params.cfg),
+    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
   );
   return {
     accountId,

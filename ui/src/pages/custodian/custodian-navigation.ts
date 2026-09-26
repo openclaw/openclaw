@@ -1,5 +1,6 @@
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
 import {
   resolveSessionNavigationAgentId,
@@ -9,11 +10,24 @@ import {
   buildAgentMainSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import type { CustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
+
+export function navigateFromCustodianSetup(
+  context: ApplicationContext | null,
+  destination: "chat" | "model-setup" | "profile",
+  inferenceState: CustodianConfiguredInferenceState,
+): void {
+  if (destination === "chat" && inferenceState === "utility") {
+    context?.navigate("model-setup", { search: "?firstRun=1" });
+  } else {
+    context?.navigate(destination);
+  }
+}
 
 /**
  * Route an `open-agent` reply to the destination agent chat. Resolves the
- * target session (refreshing the roster for an explicit agent), then either
- * navigates with a hatch draft or reports that the caller should exit setup.
+ * target session (refreshing the roster for an explicit agent), navigates to
+ * it, focuses its composer, and closes the Ask OpenClaw dock when present.
  * Returns "stale" when the store's request context moved on mid-refresh.
  */
 export async function performCustodianAgentHandoff(params: {
@@ -37,21 +51,10 @@ export async function performCustodianAgentHandoff(params: {
       agentId: params.agentId,
     });
   }
-  if (params.hatchDraft && sessionKey) {
-    context.navigate("chat", {
-      pathname: pathForCustodianAgentHandoff(context, sessionKey),
-      search: `?draft=${encodeURIComponent(t("custodian.hatchDraft"))}`,
-    });
-    return "navigated";
+  if (!sessionKey) {
+    return "exit-setup";
   }
-  return "exit-setup";
-}
-
-function pathForCustodianAgentHandoff(
-  context: Pick<ApplicationContext, "agents" | "agentSelection" | "basePath" | "gateway">,
-  sessionKey: string,
-): string {
-  return sessionNavigationTarget({
+  const target = sessionNavigationTarget({
     face: "chat",
     sessionKey,
     fallbackAgentId: resolveSessionNavigationAgentId(context),
@@ -60,5 +63,16 @@ function pathForCustodianAgentHandoff(
       agentsList: context.agents.state.agentsList,
       hello: context.gateway.snapshot.hello,
     }),
-  }).href;
+    focusComposer: !params.hatchDraft,
+  });
+  context.navigate("chat", {
+    pathname: target.options.pathname,
+    ...(params.hatchDraft
+      ? { search: `?draft=${encodeURIComponent(t("custodian.hatchDraft"))}` }
+      : target.options.search
+        ? { search: target.options.search }
+        : {}),
+  });
+  window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: false } }));
+  return "navigated";
 }

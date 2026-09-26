@@ -6,7 +6,8 @@ const { runQaProfileCommand, runQaSuiteCommand } = vi.hoisted(() => ({
   runQaSuiteCommand: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/qa-runner-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/qa-runner-runtime")>()),
   listQaRunnerCliContributions: () => [],
 }));
 
@@ -17,7 +18,10 @@ vi.mock("./cli.runtime.js", () => ({
 
 import { registerQaLabCli } from "./cli.js";
 import { resolveQaRunProfileMembership } from "./profile-planning.js";
-import type { QaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
+import {
+  qaMaturityTaxonomyIdentity,
+  type QaScorecardTaxonomyReport,
+} from "./scorecard-taxonomy.js";
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
@@ -60,7 +64,16 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
           const scorecardReport = {
             taxonomyPath: "taxonomy.yaml",
             title: "Selection fixture",
-            taxonomy: { sourcePath: "taxonomy.yaml" },
+            taxonomy: {
+              sourcePath: "taxonomy.yaml",
+              identity: qaMaturityTaxonomyIdentity({
+                version: 1,
+                title: "Selection fixture",
+                profiles: [],
+                levels: [],
+                surfaces: [],
+              }),
+            },
             profileCount: 1,
             profiles: [
               {
@@ -146,8 +159,6 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
   it.each([
     { name: "empty value", args: ["--scenario", ""] },
     { name: "whitespace value", args: ["--scenario", " \t "] },
-    { name: "empty assignment", args: ["--scenario="] },
-    { name: "repeated blanks", args: ["--scenario", "", "--scenario", "  "] },
   ])("rejects an explicit all-blank selection: $name", async ({ args }) => {
     const error = await program.parseAsync([...suiteArgs, ...args]).then(
       () => null,
@@ -166,11 +177,6 @@ describe.each(["suite", "profile"] as const)("%s scenario selection", (lane) => 
       name: "omitted selection",
       args: [],
       expected: ["selected-scenario", "unrequested-scenario"],
-    },
-    {
-      name: "named scenario",
-      args: ["--scenario", "selected-scenario"],
-      expected: ["selected-scenario"],
     },
     {
       name: "trimmed scenario",

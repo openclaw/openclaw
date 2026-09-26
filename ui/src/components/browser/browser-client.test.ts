@@ -4,7 +4,10 @@ import { i18n } from "../../i18n/index.ts";
 import {
   fetchBrowserScreenshotDataUrl,
   requestBrowserScreencast,
+  requestBrowserDashboard,
   isBrowserScreencastUnsupportedError,
+  bindBrowserRequestClient,
+  downloadBrowserDocument,
 } from "./browser-client.ts";
 
 afterEach(async () => {
@@ -12,6 +15,136 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   await i18n.setLocale("en");
+});
+
+describe("session browser requests", () => {
+  const dashboard = {
+    sessionKey: "agent:main:review",
+    agentId: "main",
+    name: "preview",
+    instanceId: "preview-1",
+    sessionScoped: true,
+  };
+
+  it("binds tab actions to the session owner without forwarding global browser selectors", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    let current = true;
+    const client = bindBrowserRequestClient(
+      { request },
+      { target: "node", node: "global-node", profile: "personal" },
+      () => current,
+      dashboard,
+    );
+    await client.request("browser.request", {
+      method: "POST",
+      path: "/navigate",
+      target: "host",
+      query: { targetId: "foreign-tab", profile: "personal", node: "foreign-node" },
+      body: {
+        targetId: "foreign-tab",
+        profile: "personal",
+        target: "node",
+        url: "https://example.test",
+      },
+    });
+    expect(request).toHaveBeenCalledExactlyOnceWith("browser.dashboard.request", {
+      method: "POST",
+      path: "/navigate",
+      query: {},
+      body: { url: "https://example.test" },
+      sessionKey: dashboard.sessionKey,
+      agentId: "main",
+      dashboard: { name: "preview", instanceId: "preview-1" },
+    });
+    current = false;
+    await expect(
+      client.request("browser.request", { method: "POST", path: "/act" }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["open", "POST"],
+    ["resume", "POST"],
+    ["stop", "DELETE"],
+    ["inspect", "GET"],
+  ] as const)("sends %s through scoped dashboard admission", async (action, method) => {
+    const request = vi.fn().mockResolvedValue({
+      sessionKey: dashboard.sessionKey,
+      name: dashboard.name,
+      instanceId: dashboard.instanceId,
+      revision: 1,
+      paused: true,
+      stopping: false,
+      url: "https://example.test",
+    });
+    await requestBrowserDashboard({ request }, dashboard, action);
+    expect(request).toHaveBeenCalledWith(
+      "browser.dashboard.request",
+      {
+        sessionKey: dashboard.sessionKey,
+        agentId: "main",
+        dashboard: { name: "preview", instanceId: "preview-1" },
+        method,
+        path: "/dashboard",
+        ...(action === "inspect"
+          ? { query: {} }
+          : { body: action === "resume" ? { resume: true } : {} }),
+        timeoutMs: 120_000,
+      },
+      { timeoutMs: 150_000 },
+    );
+  });
+});
+
+describe("downloadBrowserDocument", () => {
+  it("retains route authority, cancellation and the transfer deadline", async () => {
+    const request = vi.fn().mockResolvedValue({
+      download: { path: "/managed/report.pdf", suggestedFilename: "Report.pdf" },
+    });
+    const signal = new AbortController().signal;
+    const client = bindBrowserRequestClient(
+      { request },
+      { target: "node", node: "browser-node", profile: "work" },
+    );
+    await expect(
+      downloadBrowserDocument(client, "tab-a", "https://assets.example.test/report", signal),
+    ).resolves.toEqual({ path: "/managed/report.pdf", filename: "Report.pdf" });
+    expect(request).toHaveBeenCalledWith(
+      "browser.request",
+      {
+        method: "POST",
+        path: "/download",
+        target: "node",
+        node: "browser-node",
+        query: { profile: "work" },
+        body: {
+          targetId: "tab-a",
+          currentDocument: true,
+          expectedUrl: "https://assets.example.test/report",
+          timeoutMs: 120_000,
+        },
+        timeoutMs: 150_000,
+      },
+      { signal, timeoutMs: 150_000 },
+    );
+  });
+
+  it.each([
+    {},
+    { download: { path: "/managed/report.pdf" } },
+    { download: { suggestedFilename: "Report.pdf" } },
+  ])("rejects incomplete managed file replies %#", async (reply) => {
+    const request = vi.fn().mockResolvedValue(reply);
+    await expect(
+      downloadBrowserDocument(
+        { request },
+        "tab-a",
+        "https://assets.example.test/report",
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("No file returned.");
+  });
 });
 
 describe("fetchBrowserScreenshotDataUrl", () => {

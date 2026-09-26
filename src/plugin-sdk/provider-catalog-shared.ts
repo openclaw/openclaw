@@ -10,13 +10,18 @@ import { resolveProviderRequestCapabilities } from "../agents/provider-attributi
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { recordLiveCatalogExpiry } from "../plugins/provider-catalog-expiry.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
+
+export { normalizeOpenRouterModelReasoning } from "@openclaw/model-catalog-core/model-catalog-normalize";
 
 export type {
   ProviderCatalogContext,
   ProviderCatalogOutcome,
   ProviderCatalogResult,
 } from "../plugins/types.js";
+
+export { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 
 export {
   buildManifestModelProviderConfig,
@@ -61,7 +66,7 @@ function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
 }
 
 /**
- * Caches one live catalog load promise by stable key parts for a short TTL.
+ * Shares pending loads and caches successful values for a short TTL after completion.
  */
 export async function getCachedLiveCatalogValue<T>(params: {
   /** Stable JSON-serializable values that identify one provider/config catalog load. */
@@ -70,13 +75,14 @@ export async function getCachedLiveCatalogValue<T>(params: {
   load: () => Promise<T>;
   /** Optional predicate for values that are healthy enough to retain. */
   shouldCache?: (value: T) => boolean;
-  /** Cache lifetime in milliseconds; defaults to a short provider-discovery TTL. */
+  /** Successful-value cache lifetime in milliseconds; defaults to a short discovery TTL. */
   ttlMs?: number;
   /** Test hook for deterministic cache expiry. */
   now?: () => number;
 }): Promise<T> {
   const rawNow = params.now?.() ?? Date.now();
-  const expiresAt = resolveExpiresAtMsFromDurationMs(params.ttlMs ?? 30_000, { nowMs: rawNow });
+  const ttlMs = params.ttlMs ?? 30_000;
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
   // Uncached callers must neither reuse nor disturb an existing entry.
   if (expiresAt === undefined) {
     return await params.load();
@@ -85,7 +91,9 @@ export async function getCachedLiveCatalogValue<T>(params: {
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
   if (existing) {
     if (isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })) {
-      return await existing.value;
+      const value = await existing.value;
+      recordLiveCatalogExpiry(existing.expiresAt);
+      return value;
     }
     liveCatalogCache.delete(key);
   }
@@ -98,6 +106,19 @@ export async function getCachedLiveCatalogValue<T>(params: {
   try {
     const resolved = await entry.value;
     retain = params.shouldCache?.(resolved) ?? true;
+    if (retain) {
+      // Keep the initial deadline for stalled in-flight work, but do not publish
+      // a successful slow discovery with an already-expired cache lifetime.
+      const completedExpiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, {
+        nowMs: params.now?.() ?? Date.now(),
+      });
+      if (completedExpiresAt === undefined) {
+        retain = false;
+      } else {
+        entry.expiresAt = completedExpiresAt;
+        recordLiveCatalogExpiry(completedExpiresAt);
+      }
+    }
     return resolved;
   } finally {
     // Expired work may finish after a replacement load. Only its own entry

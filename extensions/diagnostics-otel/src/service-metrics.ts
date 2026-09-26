@@ -59,7 +59,7 @@ export function createDiagnosticsMetrics(
     }),
     gatewayRpcQueueWaitHistogram: createHistogram("openclaw.gateway.rpc.queue_wait_ms", {
       unit: "ms",
-      description: "Gateway operator request start queue wait",
+      description: "Gateway operator start queue or worker frame queue wait",
       advice: { explicitBucketBoundaries: AGENT_DURATION_MS_BUCKETS },
     }),
     tokensCounter: createCounter("openclaw.tokens", {

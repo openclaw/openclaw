@@ -343,6 +343,38 @@ describe("Zalo API request methods", () => {
     }
   });
 
+  it.each([
+    { name: "short", caption: "caption text", expected: "caption text" },
+    {
+      name: "exact UTF-16 boundary",
+      caption: `${"a".repeat(1998)}🐱`,
+      expected: `${"a".repeat(1998)}🐱`,
+    },
+    {
+      name: "surrogate crossing the boundary",
+      caption: `${"a".repeat(1999)}🐱tail`,
+      expected: "a".repeat(1999),
+    },
+    { name: "oversized ASCII", caption: "a".repeat(2001), expected: "a".repeat(2000) },
+  ])("bounds $name photo captions in the serialized API request", async ({ caption, expected }) => {
+    const fetcher = createOkFetcher();
+
+    await sendPhoto(
+      "test-token",
+      { chat_id: "chat-123", photo: "https://example.com/image.png", caption },
+      fetcher,
+    );
+
+    const [, request] = expectDefined(fetcher.mock.calls[0], "Zalo photo request");
+    expect(request?.body).toBe(
+      JSON.stringify({
+        chat_id: "chat-123",
+        photo: "https://example.com/image.png",
+        caption: expected,
+      }),
+    );
+  });
+
   it("keeps URL-only photo sends past the default and bounds the media window", async () => {
     vi.useFakeTimers();
     try {

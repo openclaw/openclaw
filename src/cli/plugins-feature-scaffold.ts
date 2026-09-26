@@ -30,7 +30,7 @@ export function writeFeaturePluginScaffold(params: {
         files: ["dist", "openclaw.plugin.json", "README.md"],
         peerDependencies: { openclaw: `>=${VERSION}` },
         dependencies: { typebox: "^1.3.17" },
-        devDependencies: { openclaw: "latest", esbuild: "0.28.2", typescript: "^5.9.0" },
+        devDependencies: { openclaw: "latest", esbuild: "0.28.2", typescript: "7.0.2" },
         openclaw: {
           extensions: ["./dist/index.js"],
           controlUi: "./src/control-ui.ts",
@@ -185,16 +185,17 @@ npm install
 npm run build
 npm run validate
 openclaw plugins install .
-openclaw gateway restart
 \`\`\`
+
+Installation applies the plugin in the running local Gateway. If the Gateway is stopped, start it to load the saved installation.
 
 For native UI, enable **Settings > Labs > Custom plugin UI** (\`gateway.controlUi.experimental.customPlugins: true\`), then restart the Gateway and reload the browser tab. This setting is off by default; backend installation does not require it.
 
 Select ${params.name} in the Control UI sidebar. Open **Plugins > Customize UI** and choose Draft composer to try the replacement; choose Built-in to restore it.
 
-For agent-requested activation, run \`npm run pack\`. The receipt contains the exact archive path and SHA-256 digest for \`plugin_activate_artifact\`. Approval applies to those bundled bytes and does not enable Custom plugin UI. The archive has no install scripts or package dependencies; backend activation still requires a Gateway restart.
+For agent-requested activation, run \`npm run pack\`. The receipt contains the exact archive path and SHA-256 digest for \`plugin_activate_artifact\`. Approval applies to those bundled bytes and does not enable Custom plugin UI. The archive has no install scripts or package dependencies; backend activation applies through the running Gateway.
 
-After browser-only changes, run the build again and use **Plugins > Customize UI > Reload plugin UI** as an administrator. Backend changes require the normal plugin update and Gateway restart. Native plugins run trusted code in the Gateway and browser; install only code you trust.
+After browser-only changes, run the build again and use **Plugins > Customize UI > Reload plugin UI** as an administrator. After editing installed backend source, run \`openclaw plugins reload ${params.id}\`. Rebuild compiled code before reloading; for a copied installation, reinstall the rebuilt package. Plugin install and update commands apply changes through the running Gateway. Native plugins run trusted code in the Gateway and browser; install only code you trust.
 
 Keep browser imports on the browser-safe \`control-ui\` and \`feature-contract\` SDK entrypoints. Bundle framework dependencies with the plugin. Return a dispose handle for DOM, subscriptions, and other resources; check the view's abort signal after asynchronous work.
 `,

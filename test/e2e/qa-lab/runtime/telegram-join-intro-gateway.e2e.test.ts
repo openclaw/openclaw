@@ -10,6 +10,7 @@ import {
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 type JsonObject = Record<string, unknown>;
 type TelegramCall = { method: string; body: JsonObject };
@@ -140,7 +141,15 @@ test("introduces itself once when Telegram reports joining an allowed supergroup
     const upstream = await fetch(`${mock.baseUrl}${pathname}`, {
       method: req.method,
       ...(raw ? { body: raw } : {}),
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(typeof req.headers.session_id === "string"
+          ? { session_id: req.headers.session_id }
+          : {}),
+        ...(typeof req.headers["x-session-affinity"] === "string"
+          ? { "x-session-affinity": req.headers["x-session-affinity"] }
+          : {}),
+      },
     });
     let payload = await upstream.text();
     if (
@@ -232,11 +241,13 @@ test("introduces itself once when Telegram reports joining an allowed supergroup
         const gatewayOwner = createQaGatewayChild();
         let gateway: QaGatewayChild | undefined;
         try {
+          const repoRoot = path.resolve(import.meta.dirname, "../../../..");
           mock = await startQaMockOpenAiServer();
           gateway = await gatewayOwner.start({
-            repoRoot: path.resolve(import.meta.dirname, "../../../.."),
-            useRepoCli: true,
+            repoRoot,
+            command: createQaPreparedRepoCliCommand(repoRoot),
             providerBaseUrl: `${apiRoot}/v1`,
+            mockSessionObserverUrl: mock.sessionObserverUrl,
             transportBaseUrl: apiRoot,
             transport: {
               requiredPluginIds: ["telegram"],

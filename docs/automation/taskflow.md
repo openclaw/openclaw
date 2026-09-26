@@ -7,7 +7,7 @@ read_when:
 title: "Task flow"
 ---
 
-Task Flow (formerly ClawFlow) is the orchestration layer above [background tasks](/automation/tasks). A flow is a durable record of multi-step work with its own status, JSON state, revision counter, and linked task records. Flows survive gateway restarts; individual tasks remain the unit of detached work.
+Task Flow is the orchestration layer above [background tasks](/automation/tasks). A flow is a durable record of multi-step work with its own status, JSON state, revision counter, and linked task records. Flows survive gateway restarts; individual tasks remain the unit of detached work.
 
 ## When to use Task Flow
 
@@ -35,15 +35,17 @@ Launch ACP/subagent work through its supported runtime **before** calling `runTa
 
 For Gateway-backed plugin subagents, the public path is `api.runtime.subagent.run({ completionDelivery: "current-requester", ... })` inside a real requester-bound `before_dispatch` hook handling an authenticated inbound request. The host creates the canonical subagent task and mirrored flow. Ordinary plugin runs without this setting deliberately have `not_applicable` completion delivery and cannot supply that mirrored backing. Merely binding `managedFlows.fromToolContext(ctx)` does not grant requester launch authority.
 
-Use the returned identities and current owner-visible task facts, not invented status/timing. A child can finish before linkage; `runTask` does not replay past terminal events. Do not create a running projection of completed work. See the [SDK Tasks contract](/plugins/sdk-runtime) for the launch, synchronous pre-link check, result handling and revision rules.
+Use the returned identities and current owner-visible task facts, not invented status/timing. Prefer `await api.runtime.tasks.async.managedFlows.bindSession(...).runTask(...)`; its worker rereads current backing before linking and refuses a new active projection of completed work. A child can finish before linkage; `runTask` does not replay past terminal events. See the [SDK Tasks contract](/plugins/sdk-runtime) for launch, result handling, revision rules, and the deprecated synchronous contract.
 
 #### Run a managed Lobster workflow
 
 For operator/agent use, the optional [Lobster tool](/tools/lobster) can execute a workflow with `flowControllerId` and `flowGoal`. It creates a managed flow, records a real approval pause as waiting, and finishes or fails from the workflow outcome. The workflow steps are not detached child task records.
 
-The tool returns envelope fields plus `flow` and `mutation` at the top level of its details. Check `mutation.applied` and use `mutation.flow`, the post-mutation record, for the next `flowExpectedRevision`. After the user's decision, resume with the returned token or approval ID and the actual flow id/revision; check cancellation through `mutation.cancelled`. Report errors and rejected updates instead of treating workflow output as proof that flow state persisted.
+The tool returns envelope fields plus `flow` and `mutation` at the top level of its details. Check `mutation.applied` and use `mutation.flow`, the post-mutation record, for the next `flowExpectedRevision`. After the user's decision, resume with the actual flow id/revision; omit the token and approval ID to recover the checkpoint saved in that flow. Explicit checkpoint credentials must match the saved approval. Check cancellation through `mutation.cancelled`. Report errors and rejected updates instead of treating workflow output as proof that flow state persisted.
 
 The bundled TaskFlow skill examples route synthetic inbox/PR batches and suspend for approval without contacting external services. A workflow approval is not an arbitrary Slack-reply listener: a real controller must register that listener, persist thread correlation and resume when the matching event arrives.
+
+The same skill includes subagent recipes for research/review fan-out, implementation with independent verification, and recovery from canonical task IDs. Optional [Workboard](/plugins/workboard#agent-tools) claims coordinate cooperating writers through its existing claim/heartbeat/release lifecycle. Claims apply to cards, not paths or shell processes; overlapping writers must agree on the same card or use isolated worktrees.
 
 ### Mirrored mode
 
@@ -69,7 +71,9 @@ with a blocked outcome.
 
 ## Durable state and revision tracking
 
-Flow records persist in the shared SQLite state database (`~/.openclaw/state/openclaw.sqlite`, `flow_runs` table) alongside task records, so progress survives gateway restarts. Each write bumps the flow's `revision`; concurrent writers that pass a stale expected revision get a conflict and must re-read. WAL growth is bounded by SQLite autocheckpointing plus periodic passive checkpoints, with truncate checkpoints on shutdown. The legacy `flows/registry.sqlite` sidecar from older installs is imported by `openclaw doctor`.
+Flow records persist in the shared SQLite state database (`~/.openclaw/state/openclaw.sqlite`, `flow_runs` table) alongside task records, so progress survives gateway restarts. Each write bumps the flow's `revision`; concurrent writers that pass a stale expected revision get a conflict and must re-read. WAL growth is bounded by SQLite autocheckpointing plus periodic passive checkpoints, with truncate checkpoints on shutdown.
+
+The shared database replaced the `flows/registry.sqlite` sidecar in `v2026.5.30-beta.1`, stable from `v2026.6.1`. Current versions leave this pre-June file untouched. Older installations that need its records must first [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions) and run its Doctor migrations before installing `latest`.
 
 Durability covers records, not a JavaScript call stack or automatic scheduling. After restart, the owning controller reloads the flow, checks cancellation and terminal state, reconciles any child outcome, and explicitly resumes from the latest revision. Waiting metadata alone does not register a timer or event listener. Use an automation or controller-owned event handler for wakeups; never blindly replay side effects after a revision conflict.
 
@@ -184,3 +188,4 @@ Flows coordinate tasks, not replace them. A single flow may drive multiple backg
 - [CLI: tasks](/cli/tasks) - CLI command reference for `openclaw tasks flow`
 - [Automation Overview](/automation) - all automation mechanisms at a glance
 - [Automations](/automation/cron-jobs) - scheduled jobs that may feed into flows
+- [Goal](/tools/goal) - durable per-session objectives and the `/goal` controls

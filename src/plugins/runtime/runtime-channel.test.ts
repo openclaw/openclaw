@@ -19,18 +19,39 @@ function requireWatcherEvent(mock: ReturnType<typeof vi.fn>, index: number) {
 }
 
 describe("inbound dispatch", () => {
-  it("carries the owning runtime reply dispatcher into routed channel turns", async () => {
-    const boundReplyDispatch = vi.fn();
-    const channel = createRuntimeChannel({ dispatchReplyFromConfig: boundReplyDispatch });
-    const turn = { channel: "qa-channel" } as Parameters<typeof channel.inbound.dispatch>[0];
-
-    await channel.inbound.dispatch(turn);
-
-    expect(dispatchRoutedChannelTurn).toHaveBeenCalledWith({
-      ...turn,
-      dispatchReplyFromConfig: boundReplyDispatch,
-    });
+  it("keeps the complete deprecated turn object identical to inbound", () => {
+    const channel = createRuntimeChannel();
+    expect(channel.turn).toBe(channel.inbound);
+    expect(channel.turn.dispatch).toBe(channel.inbound.dispatch);
   });
+  it.each([
+    { surface: "inbound", bound: true },
+    { surface: "turn", bound: true },
+    { surface: "inbound", bound: false },
+    { surface: "turn", bound: false },
+  ] as const)(
+    "$surface preserves dispatch precedence (bound=$bound)",
+    async ({ surface, bound }) => {
+      const boundReplyDispatch = bound ? vi.fn() : undefined;
+      const callerDispatch = vi.fn();
+      const channel = createRuntimeChannel({ dispatchReplyFromConfig: boundReplyDispatch });
+      const turn = {
+        cfg: {},
+        channel: "qa-channel",
+        route: { agentId: "main", sessionKey: "agent:main:qa-channel:direct:test" },
+        ctxPayload: { Body: "test", CommandAuthorized: false },
+        delivery: { deliver: async () => undefined },
+        dispatchReplyFromConfig: callerDispatch,
+      } satisfies Parameters<typeof channel.inbound.dispatch>[0];
+
+      await channel[surface].dispatch(turn);
+
+      expect(dispatchRoutedChannelTurn).toHaveBeenCalledWith({
+        ...turn,
+        dispatchReplyFromConfig: boundReplyDispatch ?? callerDispatch,
+      });
+    },
+  );
 });
 
 describe("runtimeContexts", () => {

@@ -1,4 +1,3 @@
-// Telegram plugin module implements exec approvals behavior.
 import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
   createChannelExecApprovalProfile,
@@ -16,17 +15,12 @@ import type {
   OpenClawConfig,
   TelegramExecApprovalConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./targets.js";
 
-function normalizeApproverId(value: string | number): string {
-  return normalizeOptionalString(String(value)) ?? "";
-}
-
 function normalizeTelegramDirectApproverId(value: string | number): string | undefined {
-  const normalized = normalizeApproverId(value);
+  const normalized = normalizeOptionalString(String(value)) ?? "";
   const chatId = normalizeTelegramChatId(normalized);
   if (!chatId || chatId.startsWith("-")) {
     return undefined;
@@ -159,20 +153,6 @@ export function shouldInjectTelegramExecApprovalButtons(params: {
   return target === "both";
 }
 
-export function shouldSuppressLocalTelegramExecApprovalPrompt(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  payload: ReplyPayload;
-}): boolean {
-  return telegramExecApprovalProfile.shouldSuppressLocalPrompt(params);
-}
-
-export function isTelegramExecApprovalHandlerConfigured(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): boolean {
-  return isChannelExecApprovalClientEnabledFromConfig({
-    enabled: resolveTelegramExecApprovalConfig(params)?.enabled,
-    approverCount: getTelegramExecApprovalApprovers(params).length,
-  });
-}
+export const shouldSuppressLocalTelegramExecApprovalPrompt =
+  telegramExecApprovalProfile.shouldSuppressLocalPrompt;
+export const isTelegramExecApprovalHandlerConfigured = telegramExecApprovalProfile.isClientEnabled;

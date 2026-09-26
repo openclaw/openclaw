@@ -18,10 +18,11 @@ import {
 import { registerTuiReconnectTests } from "./tui-pty-reconnect-test-support.js";
 import {
   exerciseStreamingRendering,
-  exerciseToolCardRendering,
+  registerToolCardRenderingTests,
   streamingPrefixFrame,
   toolFrame,
 } from "./tui-pty-rendering-test-support.js";
+import { exerciseStartupHistoryRendering } from "./tui-pty-startup-session-fixture-test-support.js";
 const STARTUP_TIMEOUT_MS = 20_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 25_000;
@@ -71,7 +72,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
         },
       }),
       startTuiFixture({
-        env: { OPENCLAW_TUI_PTY_STARTUP_DELAY_MS: "400" },
+        holdStartupHistory: true,
       }),
     ]);
     const [mainBoot, compactBoot, thinkingOverrideBoot, slowBoot] = boots;
@@ -235,14 +236,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   it(
     "shows startup activity while post-connect initialization is pending",
     async () => {
-      const output = await slowStartupFixture.run.waitForOutput(
-        "local ready | idle",
-        STARTUP_TIMEOUT_MS,
-      );
-      // PTY output is append-only, so first-occurrence order proves the startup
-      // activity frame rendered before the delayed post-connect init completed.
-      expect(output.indexOf("starting up")).toBeGreaterThanOrEqual(0);
-      expect(output.indexOf("starting up")).toBeLessThan(output.indexOf("local ready | idle"));
+      await exerciseStartupHistoryRendering(slowStartupFixture, STARTUP_TIMEOUT_MS);
     },
     STARTUP_TEST_TIMEOUT_MS,
   );
@@ -763,11 +757,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     TEST_TIMEOUT_MS,
   );
 
-  it(
-    "authenticates running partial and completed tool cards in real terminal frames",
-    async () => await exerciseToolCardRendering(startTuiFixture, STARTUP_TIMEOUT_MS),
-    STARTUP_TEST_TIMEOUT_MS,
-  );
+  registerToolCardRenderingTests(startTuiFixture, STARTUP_TIMEOUT_MS, STARTUP_TEST_TIMEOUT_MS);
 
   it(
     "blocks overlapping normal messages while a run is busy",
@@ -831,9 +821,13 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     TEST_TIMEOUT_MS,
   );
 
-  it(
-    "authenticates a streamed prefix before the complete ordered final frame",
-    async () => await exerciseStreamingRendering(startTuiFixture, STARTUP_TIMEOUT_MS),
+  it.each([
+    ["authenticates a streamed prefix before the complete ordered final frame", undefined],
+    ["preserves streaming activity when Ctrl+C selects clear", "clear"],
+    ["preserves streaming activity when Ctrl+C selects warn", "warn"],
+  ] as const)(
+    "%s",
+    (_name, ctrlC) => exerciseStreamingRendering(startTuiFixture, STARTUP_TIMEOUT_MS, ctrlC),
     STARTUP_TEST_TIMEOUT_MS,
   );
 

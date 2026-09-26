@@ -1,9 +1,7 @@
-// Qa Lab plugin module implements multipass behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
@@ -82,7 +80,8 @@ type QaMultipassPlan = {
   fastMode?: boolean;
   thinkingDefault?: string;
   runtimePair?: [RuntimeId, RuntimeId];
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
+  channelDriver?: string;
+  channelId?: string;
   enabledPluginIds?: string[];
   scenarioIds: string[];
   forwardedEnv: Record<string, string>;
@@ -218,17 +217,6 @@ function createQaMultipassOutputDir(repoRoot: string) {
   return path.join(repoRoot, ".artifacts", "qa-e2e", `multipass-${createOutputStamp()}`);
 }
 
-function resolveGuestMountedPath(repoRoot: string, hostPath: string) {
-  return resolveMountedOutputPath(repoRoot, hostPath);
-}
-
-function appendScenarioArgs(command: string[], scenarioIds: string[]) {
-  for (const scenarioId of scenarioIds) {
-    command.push("--scenario", scenarioId);
-  }
-  return command;
-}
-
 function createQaMultipassPlan(params: {
   repoRoot: string;
   outputDir?: string;
@@ -243,7 +231,8 @@ function createQaMultipassPlan(params: {
   scenarioIds?: string[];
   concurrency?: number;
   runtimePair?: [RuntimeId, RuntimeId];
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
+  channelDriver?: string;
+  channelId?: string;
   enabledPluginIds?: string[];
   image?: string;
   cpus?: number;
@@ -268,39 +257,32 @@ function createQaMultipassPlan(params: {
       ? liveProviderConfig.path
       : undefined;
   const vmName = `openclaw-qa-${createVmSuffix()}`;
-  const guestOutputDir = resolveGuestMountedPath(params.repoRoot, outputDir);
-  const qaCommand = appendScenarioArgs(
-    [
-      "pnpm",
-      "openclaw",
-      "qa",
-      "suite",
-      "--transport",
-      transportId,
-      "--provider-mode",
-      providerMode,
-      "--output-dir",
-      guestOutputDir,
-      ...(params.primaryModel ? ["--model", params.primaryModel] : []),
-      ...(params.alternateModel ? ["--alt-model", params.alternateModel] : []),
-      ...(params.fastMode ? ["--fast"] : []),
-      ...(params.thinkingDefault ? ["--thinking", params.thinkingDefault] : []),
-      ...(params.allowFailures ? ["--allow-failures"] : []),
-      ...(params.failFast ? ["--fail-fast"] : []),
-      ...(params.concurrency ? ["--concurrency", String(params.concurrency)] : []),
-      ...(params.runtimePair ? ["--runtime-pair", params.runtimePair.join(",")] : []),
-      ...(params.channelDriverSelection
-        ? [
-            "--channel-driver",
-            params.channelDriverSelection.channelDriver,
-            "--channel",
-            params.channelDriverSelection.channel,
-          ]
-        : []),
-      ...enabledPluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
-    ],
-    scenarioIds,
-  );
+  const guestOutputDir = resolveMountedOutputPath(params.repoRoot, outputDir);
+  const qaCommand = [
+    "pnpm",
+    "openclaw",
+    "qa",
+    "suite",
+    "--transport",
+    transportId,
+    "--provider-mode",
+    providerMode,
+    "--output-dir",
+    guestOutputDir,
+    ...(params.primaryModel ? ["--model", params.primaryModel] : []),
+    ...(params.alternateModel ? ["--alt-model", params.alternateModel] : []),
+    ...(params.fastMode ? ["--fast"] : []),
+    ...(params.thinkingDefault ? ["--thinking", params.thinkingDefault] : []),
+    ...(params.allowFailures ? ["--allow-failures"] : []),
+    ...(params.failFast ? ["--fail-fast"] : []),
+    ...(params.concurrency ? ["--concurrency", String(params.concurrency)] : []),
+    ...(params.runtimePair ? ["--runtime-pair", params.runtimePair.join(",")] : []),
+    ...(params.channelDriver && params.channelId
+      ? ["--channel-driver", params.channelDriver, "--channel", params.channelId]
+      : []),
+    ...enabledPluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
+    ...scenarioIds.flatMap((scenarioId) => ["--scenario", scenarioId]),
+  ];
 
   return {
     repoRoot: params.repoRoot,
@@ -323,7 +305,8 @@ function createQaMultipassPlan(params: {
     fastMode: params.fastMode,
     thinkingDefault: params.thinkingDefault,
     runtimePair: params.runtimePair,
-    channelDriverSelection: params.channelDriverSelection,
+    channelDriver: params.channelDriver,
+    channelId: params.channelId,
     enabledPluginIds,
     scenarioIds,
     forwardedEnv,
@@ -468,19 +451,24 @@ async function runMultipassCommand(logPath: string, args: string[], options: Exe
   return result;
 }
 
-async function waitForGuestReady(logPath: string, vmName: string) {
+async function retryMultipassCommand(
+  logPath: string,
+  args: string[],
+  retryLabel: string,
+  attempts: number,
+) {
   let lastError: unknown;
-  for (let attempt = 1; attempt <= 12; attempt += 1) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      await runMultipassCommand(logPath, ["exec", vmName, "--", "bash", "-lc", "echo guest-ready"]);
+      await runMultipassCommand(logPath, args);
       return;
     } catch (error) {
       lastError = error;
       await appendMultipassLog(
         logPath,
-        `guest-ready retry ${attempt}/12: ${coerceErrorMessage(error)}\n\n`,
+        `${retryLabel} retry ${attempt}/${attempts}: ${coerceErrorMessage(error)}\n\n`,
       );
-      if (attempt < 12) {
+      if (attempt < attempts) {
         await sleep(2_000);
       }
     }
@@ -488,52 +476,8 @@ async function waitForGuestReady(logPath: string, vmName: string) {
   throw toStringifiedError(lastError);
 }
 
-async function mountRepo(logPath: string, repoRoot: string, vmName: string) {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    try {
-      await runMultipassCommand(logPath, [
-        "mount",
-        repoRoot,
-        `${vmName}:${MULTIPASS_MOUNTED_REPO_PATH}`,
-      ]);
-      return;
-    } catch (error) {
-      lastError = error;
-      await appendMultipassLog(
-        logPath,
-        `mount retry ${attempt}/5: ${coerceErrorMessage(error)}\n\n`,
-      );
-      if (attempt < 5) {
-        await sleep(2_000);
-      }
-    }
-  }
-  throw toStringifiedError(lastError);
-}
-
-async function mountCodexHome(logPath: string, hostCodexHomePath: string, vmName: string) {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    try {
-      await runMultipassCommand(logPath, [
-        "mount",
-        hostCodexHomePath,
-        `${vmName}:${MULTIPASS_GUEST_CODEX_HOME_PATH}`,
-      ]);
-      return;
-    } catch (error) {
-      lastError = error;
-      await appendMultipassLog(
-        logPath,
-        `codex-home mount retry ${attempt}/5: ${coerceErrorMessage(error)}\n\n`,
-      );
-      if (attempt < 5) {
-        await sleep(2_000);
-      }
-    }
-  }
-  throw toStringifiedError(lastError);
+async function mountPath(logPath: string, hostPath: string, guestPath: string, retryLabel: string) {
+  await retryMultipassCommand(logPath, ["mount", hostPath, guestPath], retryLabel, 5);
 }
 
 async function transferLiveProviderConfig(plan: QaMultipassPlan) {
@@ -562,26 +506,9 @@ async function tryCopyGuestBootstrapLog(plan: QaMultipassPlan) {
   }
 }
 
-export async function runQaMultipass(params: {
-  repoRoot: string;
-  outputDir?: string;
-  transportId?: string;
-  providerMode?: QaProviderMode;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  allowFailures?: boolean;
-  failFast?: boolean;
-  scenarioIds?: string[];
-  concurrency?: number;
-  runtimePair?: [RuntimeId, RuntimeId];
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
-  enabledPluginIds?: string[];
-  image?: string;
-  cpus?: number;
-  memory?: string;
-  disk?: string;
-}) {
+export async function runQaMultipass(
+  params: Omit<Parameters<typeof createQaMultipassPlan>[0], "thinkingDefault">,
+) {
   const plan = createQaMultipassPlan(params);
   await mkdir(plan.outputDir, { recursive: true });
   await writeFile(
@@ -636,10 +563,25 @@ export async function runQaMultipass(params: {
       plan.image,
     ]);
     launched = true;
-    await waitForGuestReady(plan.hostLogPath, plan.vmName);
-    await mountRepo(plan.hostLogPath, plan.repoRoot, plan.vmName);
+    await retryMultipassCommand(
+      plan.hostLogPath,
+      ["exec", plan.vmName, "--", "bash", "-lc", "echo guest-ready"],
+      "guest-ready",
+      12,
+    );
+    await mountPath(
+      plan.hostLogPath,
+      plan.repoRoot,
+      `${plan.vmName}:${MULTIPASS_MOUNTED_REPO_PATH}`,
+      "mount",
+    );
     if (plan.hostCodexHomePath) {
-      await mountCodexHome(plan.hostLogPath, plan.hostCodexHomePath, plan.vmName);
+      await mountPath(
+        plan.hostLogPath,
+        plan.hostCodexHomePath,
+        `${plan.vmName}:${MULTIPASS_GUEST_CODEX_HOME_PATH}`,
+        "codex-home mount",
+      );
     }
     await transferLiveProviderConfig(plan);
     await runMultipassCommand(plan.hostLogPath, [

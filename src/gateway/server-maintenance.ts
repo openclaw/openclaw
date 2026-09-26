@@ -2,16 +2,26 @@
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
+import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
+import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
   resolveWorktreeCleanupLimits,
   WORKTREE_GC_INTERVAL_MS,
 } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
-import { pruneExpiredDeliveryQueueTombstones } from "../infra/delivery-queue-sqlite.js";
+import {
+  hasAgentRunContextExecutionOwner,
+  sweepStaleRunContexts,
+} from "../infra/agent-run-registry.js";
+import {
+  captureDeliveryQueueStateContext,
+  pruneExpiredDeliveryQueueTombstones,
+} from "../infra/delivery-queue-sqlite.js";
 import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
+import { formatErrorMessage as formatError } from "../infra/errors.js";
 import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkInspectors,
@@ -22,9 +32,11 @@ import { generateSecureInt } from "../infra/secure-random.js";
 import { checkTelemetryUpdate } from "../infra/telemetry.js";
 import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import {
+  getGatewayRestartDrainSignal,
   isGatewayWorkAdmissionClosed,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
 import {
@@ -58,9 +70,10 @@ import {
 } from "./server-media-cleanup-lifecycle.js";
 import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-active-runs.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
-import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import { startSessionColdStorageMaintenance } from "./session-cold-storage-maintenance.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { checkGatewayInstallationReplacement } from "./stale-install.js";
 
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
@@ -105,18 +118,18 @@ export function startGatewayMaintenanceTimers(params: {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   isNixMode?: boolean;
   getRuntimeConfig: () => OpenClawConfig;
-  runWorktreeGc?: () => Promise<unknown>;
+  runWorktreeGc?: () => Promise<ManagedWorktreeGcResult | void>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
 }): {
-  tickInterval: ReturnType<typeof setInterval>;
-  healthInterval: ReturnType<typeof setInterval>;
-  dedupeCleanup: ReturnType<typeof setInterval>;
+  stopPeriodicTasks: () => Promise<void>;
   startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
-  worktreeCleanup: ReturnType<typeof setInterval>;
-  skillUsageCleanup: () => void;
+  skillUsageCleanup: () => Promise<void>;
 } {
+  const restartDrainSignal = getGatewayRestartDrainSignal();
+  const periodicWork = new AsyncWorkScope();
+  let periodicTasksStopPromise: Promise<void> | undefined;
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
       stateVersion: {
@@ -130,6 +143,14 @@ export function startGatewayMaintenanceTimers(params: {
   const restartChannelsIfIdle = async (
     mode: "new-thaw" | "deferred-retry",
   ): Promise<HostThawChannelRestartOutcome> => {
+    const snapshot = createGatewayActiveWorkSnapshot(params.activeWorkInspectors, {
+      ignoreTerminalSessions: true,
+    });
+    if (!snapshot.idle) {
+      return { status: "retry", reason: "active-work" };
+    }
+    // Inspection and admission commit are synchronous: no new work can enter
+    // between them, and a busy tick never changes the admission phase.
     let invalidated = false;
     const admission = tryBeginGatewaySuspendAdmission(() => {
       invalidated = true;
@@ -137,26 +158,14 @@ export function startGatewayMaintenanceTimers(params: {
     if (!admission) {
       return { status: "retry", reason: "admission-closed" };
     }
-    let snapshot: ReturnType<typeof createGatewayActiveWorkSnapshot>;
-    try {
-      snapshot = createGatewayActiveWorkSnapshot(params.activeWorkInspectors, {
-        ignoreTerminalSessions: true,
-      });
-    } catch (error) {
-      // Inspection runs while admission is preparing. Never strand that global
-      // fence closed when an inspector fails before the restart can commit.
-      admission.rollback();
-      throw error;
-    }
-    if (!snapshot.idle) {
-      admission.rollback();
-      return { status: "retry", reason: "active-work" };
-    }
     if (!admission.commit()) {
       return { status: "retry", reason: "admission-closed" };
     }
     try {
-      const restarted = await params.restartRunningChannels(mode, () => !invalidated);
+      const restarted = await params.restartRunningChannels(
+        mode,
+        () => !invalidated && !periodicTasksStopPromise,
+      );
       return restarted
         ? { status: "completed" }
         : { status: "retry", reason: "channel-restart-incomplete" };
@@ -173,21 +182,40 @@ export function startGatewayMaintenanceTimers(params: {
     },
     refreshPresence: params.refreshPresence,
     resetEventLoopHealth: params.resetEventLoopHealth,
-    isAdmissionClosed: isGatewayWorkAdmissionClosed,
+    isAdmissionClosed: () => Boolean(periodicTasksStopPromise) || isGatewayWorkAdmissionClosed(),
     logger: params.logHealth,
   });
 
   let nextTelemetryCheckAtMs = Date.now() + generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS);
+  let telemetryCheckInFlight: Promise<void> | undefined;
+  const performTelemetryCheck = () => {
+    telemetryCheckInFlight ??= periodicWork
+      .track(() => checkTelemetryUpdate(params.getRuntimeConfig, { surface: "gateway" }))
+      .then(() => undefined)
+      .catch(() => {})
+      .finally(() => {
+        telemetryCheckInFlight = undefined;
+      });
+  };
   // periodic keepalive
   const tickInterval = setInterval(() => {
-    void hostThawRecovery.tick();
+    void periodicWork
+      .track(checkGatewayInstallationReplacement)
+      .catch((error: unknown) =>
+        params.logHealth.error(`installation check failed: ${formatError(error)}`),
+      );
+    void periodicWork
+      .track(() => hostThawRecovery.tick())
+      .catch((error: unknown) =>
+        params.logHealth.error(`host thaw recovery failed: ${formatError(error)}`),
+      );
     const now = Date.now();
     if (!params.isNixMode && now >= nextTelemetryCheckAtMs) {
       nextTelemetryCheckAtMs =
         now +
         TELEMETRY_MAINTENANCE_INTERVAL_MS +
         generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS);
-      void checkTelemetryUpdate(params.getRuntimeConfig(), { surface: "gateway" }).catch(() => {});
+      performTelemetryCheck();
     }
     const payload = { ts: now };
     params.broadcast("tick", payload);
@@ -197,15 +225,19 @@ export function startGatewayMaintenanceTimers(params: {
   // Keep cached health warm without request-time live channel probes. Explicit
   // status/doctor probe paths still pass probe=true when the operator asks.
   const healthInterval = setInterval(() => {
-    void params
-      .refreshGatewayHealthSnapshot({ probe: false })
+    void periodicWork
+      .track(() => params.refreshGatewayHealthSnapshot({ probe: false }))
       .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
   }, HEALTH_REFRESH_INTERVAL_MS);
 
   // Prime cache so first client gets a snapshot without waiting.
-  void params
-    .refreshGatewayHealthSnapshot({ probe: false })
-    .catch((err: unknown) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
+  if (!restartDrainSignal.aborted) {
+    void periodicWork
+      .track(() => params.refreshGatewayHealthSnapshot({ probe: false }))
+      .catch((err: unknown) =>
+        params.logHealth.error(`initial refresh failed: ${formatError(err)}`),
+      );
+  }
 
   const runWorktreeGc =
     params.runWorktreeGc ??
@@ -218,39 +250,77 @@ export function startGatewayMaintenanceTimers(params: {
         limits: resolveWorktreeCleanupLimits(),
       });
     });
+  let worktreeGcInFlight: Promise<void> | undefined;
   const performWorktreeGc = () =>
-    runWorktreeGc().catch((err: unknown) => {
-      params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);
-    });
+    (worktreeGcInFlight ??= periodicWork
+      .track(runWorktreeGc)
+      .then((result) => {
+        if (!result) {
+          return;
+        }
+        if (result.outcome === "partial") {
+          params.logHealth.error(formatWorktreeGcResult(result));
+        } else if (result.outcome === "deferred") {
+          params.logHealth.info(formatWorktreeGcResult(result));
+        }
+      })
+      .catch((err: unknown) => {
+        params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);
+      })
+      .finally(() => {
+        worktreeGcInFlight = undefined;
+      }));
+  // Retention is hourly best-effort work; leave the first hour free for Gateway warmup.
   const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
-  void performWorktreeGc();
 
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
+  let mediaCleanupStopped = false;
+  const createMediaCleanupLoader = (label: string, run: () => Promise<unknown>) => {
+    const loader = createLazyPromiseLoader(async () => {
+      try {
+        await run();
+      } catch (error) {
+        params.logHealth.error(`${label} failed: ${formatError(error)}`);
+      } finally {
+        loader.clear();
+      }
+    });
+    return loader;
+  };
   const runDeliveryQueueMediaGc =
     params.runDeliveryQueueMediaGc ??
     (async () => {
+      const context = captureDeliveryQueueStateContext();
       try {
-        pruneExpiredDeliveryQueueTombstones();
+        await pruneExpiredDeliveryQueueTombstones(undefined, context);
       } finally {
-        await pruneOrphanedDeliveryQueueMedia();
+        await pruneOrphanedDeliveryQueueMedia(undefined, context);
       }
     });
   let deliveryQueueMediaGcStartedAtMs = 0;
-  const deliveryQueueMediaGcLoader = createLazyPromiseLoader(async () => {
-    try {
-      await runDeliveryQueueMediaGc();
-    } catch (error) {
-      params.logHealth.error(`delivery queue maintenance failed: ${formatError(error)}`);
-    } finally {
-      deliveryQueueMediaGcLoader.clear();
-    }
-  });
+  const deliveryQueueMediaGcLoader = createMediaCleanupLoader(
+    "delivery queue maintenance",
+    runDeliveryQueueMediaGc,
+  );
+  let deliveryQueueMediaGcStartPromise: Promise<void> | undefined;
   const performDeliveryQueueMediaGc = () => {
-    if (!deliveryQueueMediaGcLoader.peek()) {
-      deliveryQueueMediaGcStartedAtMs = Date.now();
+    if (mediaCleanupStopped) {
+      return undefined;
     }
-    return deliveryQueueMediaGcLoader.load();
+    const running = deliveryQueueMediaGcLoader.peek();
+    if (running) {
+      return running;
+    }
+    deliveryQueueMediaGcStartPromise ??= waitForMediaCleanupDrainsToSettle().then(() => {
+      deliveryQueueMediaGcStartPromise = undefined;
+      if (mediaCleanupStopped) {
+        return undefined;
+      }
+      deliveryQueueMediaGcStartedAtMs = Date.now();
+      return deliveryQueueMediaGcLoader.load();
+    });
+    return deliveryQueueMediaGcStartPromise;
   };
   void performDeliveryQueueMediaGc();
 
@@ -259,7 +329,8 @@ export function startGatewayMaintenanceTimers(params: {
     if (devicePairSetupCompletionGcInFlight) {
       return devicePairSetupCompletionGcInFlight;
     }
-    devicePairSetupCompletionGcInFlight = pruneExpiredDevicePairSetupCompletions({ nowMs })
+    devicePairSetupCompletionGcInFlight = periodicWork
+      .track(() => pruneExpiredDevicePairSetupCompletions({ nowMs }))
       .then(() => undefined)
       .catch((error: unknown) => {
         params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
@@ -269,7 +340,9 @@ export function startGatewayMaintenanceTimers(params: {
       });
     return devicePairSetupCompletionGcInFlight;
   };
-  void performDevicePairSetupCompletionGc(Date.now());
+  if (!restartDrainSignal.aborted) {
+    void performDevicePairSetupCompletionGc(Date.now());
+  }
 
   const skillUsageCleanup = registerSkillUsageTracking();
 
@@ -277,6 +350,7 @@ export function startGatewayMaintenanceTimers(params: {
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
+    params.chatRunState.toolEventRecipients.pruneExpired(now);
     void performDevicePairSetupCompletionGc(now);
     if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
       void performDeliveryQueueMediaGc();
@@ -405,10 +479,16 @@ export function startGatewayMaintenanceTimers(params: {
     // growth when many unique clients connect over time.
     pruneStaleControlPlaneBuckets(now);
 
-    // Sweep stale buffers for runs that were never explicitly aborted.
-    // Only reap orphaned buffers after the abort controller is gone; active
-    // runs can legitimately sit idle while tools/models work.
+    // Idle execution and queued delivery retain their projection until their owners settle.
     for (const [runId, record] of params.chatRunState.runs) {
+      if (
+        params.chatAbortControllers.has(runId) ||
+        params.chatQueuedTurns.has(runId) ||
+        hasAgentRunContextExecutionOwner(runId) ||
+        isActiveEmbeddedRunId(runId)
+      ) {
+        continue;
+      }
       if (record.abortMarker !== undefined) {
         if (now - chatAbortMarkerTimestampMs(record.abortMarker) > ABORTED_RUN_TTL_MS) {
           params.chatRunState.deleteAbortMarker(runId);
@@ -416,16 +496,7 @@ export function startGatewayMaintenanceTimers(params: {
         }
         continue;
       }
-      if (params.chatAbortControllers.has(runId)) {
-        continue;
-      }
-      const staleTimestamp = [
-        record.deltaSentAt,
-        record.bufferUpdatedAt,
-        record.agentText?.assistant?.lastSentAt,
-        record.agentText?.thinking?.lastSentAt,
-      ].some((timestamp) => timestamp !== undefined && now - timestamp > ABORTED_RUN_TTL_MS);
-      if (staleTimestamp) {
+      if (now - record.lastActivityAt > ABORTED_RUN_TTL_MS) {
         params.chatRunState.clearRun(runId);
       }
     }
@@ -433,15 +504,10 @@ export function startGatewayMaintenanceTimers(params: {
     sweepStaleRunContexts();
   }, 60_000);
 
-  const playbackTranscodeCacheCleanupLoader = createLazyPromiseLoader(async () => {
-    try {
-      await prunePlaybackTranscodeCache();
-    } catch (err) {
-      params.logHealth.error(`playback transcode cache cleanup failed: ${formatError(err)}`);
-    } finally {
-      playbackTranscodeCacheCleanupLoader.clear();
-    }
-  });
+  const playbackTranscodeCacheCleanupLoader = createMediaCleanupLoader(
+    "playback transcode cache cleanup",
+    prunePlaybackTranscodeCache,
+  );
   const runManagedOutgoingMediaGc =
     params.runManagedOutgoingMediaGc ??
     (async () => {
@@ -458,15 +524,10 @@ export function startGatewayMaintenanceTimers(params: {
         },
       });
     });
-  const managedOutgoingCleanupLoader = createLazyPromiseLoader(async () => {
-    try {
-      await runManagedOutgoingMediaGc();
-    } catch (err) {
-      params.logHealth.error(`managed outgoing media cleanup failed: ${formatError(err)}`);
-    } finally {
-      managedOutgoingCleanupLoader.clear();
-    }
-  });
+  const managedOutgoingCleanupLoader = createMediaCleanupLoader(
+    "managed outgoing media cleanup",
+    runManagedOutgoingMediaGc,
+  );
 
   let mediaCleanupInFlight: Promise<void> | null = null;
   const runMediaCleanup = () => {
@@ -489,7 +550,6 @@ export function startGatewayMaintenanceTimers(params: {
   };
 
   let mediaCleanupInterval: ReturnType<typeof setInterval> | undefined;
-  let mediaCleanupStopped = false;
   const runMediaMaintenance = () => {
     if (mediaCleanupStopped) {
       return;
@@ -525,6 +585,7 @@ export function startGatewayMaintenanceTimers(params: {
         mediaCleanupInterval = undefined;
       }
       const pending = [
+        deliveryQueueMediaGcLoader.peek(),
         playbackTranscodeCacheCleanupLoader.peek(),
         managedOutgoingCleanupLoader.peek(),
         mediaCleanupInFlight,
@@ -544,13 +605,52 @@ export function startGatewayMaintenanceTimers(params: {
     return stopMediaCleanupPromise;
   };
 
+  const sessionColdStorageMaintenance = startSessionColdStorageMaintenance({
+    getRuntimeConfig: params.getRuntimeConfig,
+    onError: (message) => params.logHealth.error(`transcript cold storage failed: ${message}`),
+  });
+
+  const stopPeriodicTasks = () => {
+    if (!periodicTasksStopPromise) {
+      restartDrainSignal.removeEventListener("abort", onRestartDrain);
+      clearInterval(tickInterval);
+      clearInterval(healthInterval);
+      clearInterval(dedupeCleanup);
+      clearInterval(worktreeCleanup);
+      periodicTasksStopPromise = Promise.allSettled([
+        // Retire producers first, then let admitted callbacks and their cleanup
+        // finish before closing their scope or aborting its cancellation signal.
+        AsyncWorkScope.runWhenAllIdle(
+          () => [periodicWork],
+          () => periodicWork.drain(),
+        ),
+        sessionColdStorageMaintenance.stop(),
+        stopMediaCleanup(),
+      ]).then((results) => {
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Gateway periodic maintenance failed to stop");
+        }
+      });
+      // Drain starts before shutdown joins; retain failures for its warning report.
+      void periodicTasksStopPromise.catch(() => {});
+    }
+    return periodicTasksStopPromise;
+  };
+  const onRestartDrain = () => {
+    void stopPeriodicTasks();
+  };
+  restartDrainSignal.addEventListener("abort", onRestartDrain, { once: true });
+  if (restartDrainSignal.aborted) {
+    onRestartDrain();
+  }
+
   return {
-    tickInterval,
-    healthInterval,
-    dedupeCleanup,
+    stopPeriodicTasks,
     startMediaCleanup,
     stopMediaCleanup,
-    worktreeCleanup,
     skillUsageCleanup,
   };
 }

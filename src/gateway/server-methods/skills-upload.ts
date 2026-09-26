@@ -14,10 +14,8 @@ import {
   areUploadedSkillArchivesEnabled,
   UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE,
 } from "../../skills/lifecycle/upload-install.js";
-import {
-  defaultSkillUploadStore,
-  SkillUploadRequestError,
-} from "../../skills/lifecycle/upload-store.js";
+import { SkillUploadRequestError } from "../../skills/lifecycle/upload-store-error.js";
+import { defaultSkillUploadStore } from "../../skills/lifecycle/upload-store.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 

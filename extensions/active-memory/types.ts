@@ -92,6 +92,10 @@ const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
 const TIMEOUT_PARTIAL_DATA_GRACE_MS = 500;
 const HOOK_TIMEOUT_RECOVERY_GRACE_MS = TIMEOUT_PARTIAL_DATA_GRACE_MS + 1_000;
+// Optional trigger lookup must give up strictly before the preflight
+// watchdog fires, or the watchdog skips the whole invocation instead of
+// letting model recall continue without trigger context.
+const TRIGGER_LOOKUP_SETTLE_RESERVE_MS = 50;
 const MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS = 480;
 const TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS = 25;
 
@@ -140,18 +144,12 @@ type ResolvedActiveRecallPluginConfig = {
   agents: string[];
   model?: string;
   modelFallback?: string;
-  allowedChatTypes: Array<"direct" | "group" | "channel" | "explicit">;
+  allowedChatTypes: ActiveMemoryChatType[];
   allowedChatIds: string[];
   deniedChatIds: string[];
   thinking: ActiveMemoryThinkingLevel;
   fastMode?: ActiveMemoryFastMode;
-  promptStyle:
-    | "balanced"
-    | "strict"
-    | "contextual"
-    | "recall-heavy"
-    | "precision-heavy"
-    | "preference-only";
+  promptStyle: ActiveMemoryPromptStyle;
   toolsAllow: string[];
   promptOverride?: string;
   promptAppend?: string;
@@ -178,11 +176,6 @@ type ActiveRecallRecentTurn = {
   text: string;
 };
 
-type PluginDebugEntry = {
-  pluginId: string;
-  lines: string[];
-};
-
 type ActiveMemorySearchDebug = {
   backend?: string;
   configuredMode?: string;
@@ -195,26 +188,24 @@ type ActiveMemorySearchDebug = {
   error?: string;
 };
 
-type ActiveRecallResult =
+type ActiveRecallResult = {
+  elapsedMs: number;
+  searchDebug?: ActiveMemorySearchDebug;
+} & (
   | {
       status: "empty" | "failed" | "no_relevant_memory" | "timeout" | "unavailable";
-      elapsedMs: number;
       summary: string | null;
-      searchDebug?: ActiveMemorySearchDebug;
     }
   | {
       status: "timeout_partial";
-      elapsedMs: number;
       summary: string;
-      searchDebug?: ActiveMemorySearchDebug;
     }
   | {
       status: "ok";
-      elapsedMs: number;
       rawReply: string;
       summary: string;
-      searchDebug?: ActiveMemorySearchDebug;
-    };
+    }
+);
 
 type ActiveMemoryPartialTimeoutData = Partial<RecallSubagentResult> & {
   cleanupFailed?: boolean;
@@ -329,6 +320,7 @@ export {
   DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
   DEFAULT_TRANSCRIPT_READ_MAX_LINES,
   HOOK_TIMEOUT_RECOVERY_GRACE_MS,
+  TRIGGER_LOOKUP_SETTLE_RESERVE_MS,
   LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
   MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS,
   MAX_ACTIVE_MEMORY_TOOLS_ALLOW,
@@ -361,7 +353,6 @@ export type {
   CachedActiveRecallResult,
   CircuitBreakerEntry,
   ConversationRecallContext,
-  PluginDebugEntry,
   RecallSubagentResult,
   ResolvedActiveRecallPluginConfig,
   TerminalMemorySearchResult,

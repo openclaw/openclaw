@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   issueDeviceBootstrapToken,
@@ -10,6 +10,7 @@ import { persistDevicePairingStoreState } from "../../../infra/device-pairing-st
 import type { PairedDevice } from "../../../infra/device-pairing.types.js";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../../shared/device-bootstrap-profile.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createPresencePublisher } from "../presence-events.js";
 
 vi.mock("../health-state.js", () => ({
   buildGatewaySnapshot: vi.fn(() => ({
@@ -30,10 +31,10 @@ vi.mock("../health-state.js", () => ({
 
 vi.mock("../../../state/user-profiles.js", () => ({
   hasMultipleSessionSharingIdentities: vi.fn(() => false),
-  listProfiles: vi.fn(() => []),
 }));
 
 vi.mock("../../control-ui-plugin-tabs.js", () => ({
+  listControlUiLinkReaders: vi.fn(() => []),
   listControlUiPluginTabs: vi.fn(() => []),
   listControlUiPluginWidgetKinds: vi.fn(() => []),
 }));
@@ -44,13 +45,69 @@ vi.mock("./connect-auth-security.js", () => ({
 
 import { sendGatewayHello } from "./connect-hello.js";
 
+function createBootstrapState(paired: PairedDevice, bootstrapTokenCandidate: string) {
+  return {
+    resolvedAuth: { mode: "none" },
+    role: "operator",
+    scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+    device: { id: paired.deviceId },
+    devicePublicKey: paired.publicKey,
+    hasTokenAuth: false,
+    hasPasswordAuth: false,
+    bootstrapTokenCandidate,
+    authResult: { ok: true, method: "bootstrap-token" },
+    authMethod: "bootstrap-token",
+    issuedBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    deviceToken: null,
+    bootstrapDeviceTokens: [],
+  };
+}
+
+function createFailedHelloContext(
+  name: string,
+  sendFrame: () => Promise<void>,
+  broadcast?: ReturnType<typeof vi.fn>,
+) {
+  return {
+    handler: {
+      getClient: () => null,
+      connId: `conn-${name}`,
+      gatewayMethods: [],
+      events: [],
+      buildRequestContext: () => ({
+        broadcast: broadcast ?? vi.fn(),
+        publishPresence: vi.fn(),
+        nodeRegistry: { get: vi.fn() },
+      }),
+      refreshHealthSnapshot: vi.fn(async () => ({})),
+      close: vi.fn(),
+      advanceHandshakePhase: vi.fn(),
+      setCloseCause: vi.fn(),
+      logGateway: { warn: vi.fn() },
+      logHealth: { error: vi.fn() },
+    },
+    frame: { id: `hello-${name}` },
+    connectParams: {
+      client: { id: "openclaw-ios", version: "dev", platform: "test", mode: "backend" },
+      role: "operator",
+      scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+    },
+    configSnapshot: {},
+    sendFrame: vi.fn(sendFrame),
+    onHelloDelivered: vi.fn(),
+    pendingNodePairingCleanup: {},
+    releasePendingNodePairingCleanup: vi.fn(async () => undefined),
+  };
+}
+
 afterEach(() => {
   vi.clearAllMocks();
 });
 
 describe("sendGatewayHello setup completion ordering", () => {
   it.each([false, true])(
-    "persists setup status before presence publication (failure=%s)",
+    "confirms setup status before queued presence delivery (failure=%s)",
     async (presenceFails) => {
       await withOpenClawTestState(
         { label: "ws-setup-completion-order", layout: "state-only" },
@@ -82,10 +139,22 @@ describe("sendGatewayHello setup completion ordering", () => {
 
           const handoffStarted = createDeferred();
           const releaseHandoff = createDeferred();
+          const onHelloDelivered = vi.fn();
           const broadcast = vi.fn((event: string) => {
             if (presenceFails && event === "presence") {
               throw new Error("test presence publication failure");
             }
+          });
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          const presence = createPresencePublisher({
+            broadcast,
+            incrementPresenceVersion: () => 2,
+            getHealthVersion: () => 1,
+            prepare: () => undefined,
+          });
+          onTestFinished(() => {
+            presence.stop();
+            vi.useRealTimers();
           });
           const context = {
             handler: {
@@ -96,8 +165,7 @@ describe("sendGatewayHello setup completion ordering", () => {
               events: [],
               buildRequestContext: () => ({
                 broadcast,
-                incrementPresenceVersion: () => 2,
-                getHealthVersion: () => 1,
+                publishPresence: presence.publish,
                 nodeRegistry: { get: () => undefined },
               }),
               refreshHealthSnapshot: vi.fn(async () => ({})),
@@ -123,25 +191,11 @@ describe("sendGatewayHello setup completion ordering", () => {
               handoffStarted.resolve();
               await releaseHandoff.promise;
             }),
+            onHelloDelivered,
             pendingNodePairingCleanup: {},
             releasePendingNodePairingCleanup: vi.fn(async () => undefined),
           };
-          const state = {
-            resolvedAuth: { mode: "none" },
-            role: "operator",
-            scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
-            device: { id: paired.deviceId },
-            devicePublicKey: paired.publicKey,
-            hasTokenAuth: false,
-            hasPasswordAuth: false,
-            bootstrapTokenCandidate: issued.token,
-            authResult: { ok: true, method: "bootstrap-token" },
-            authMethod: "bootstrap-token",
-            issuedBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-            handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-            deviceToken: null,
-            bootstrapDeviceTokens: [],
-          };
+          const state = createBootstrapState(paired, issued.token);
 
           const hello = sendGatewayHello(context as never, state as never, {});
           await handoffStarted.promise;
@@ -149,11 +203,9 @@ describe("sendGatewayHello setup completion ordering", () => {
             setupId: issued.setupId,
           });
           releaseHandoff.resolve();
-          if (presenceFails) {
-            await expect(hello).rejects.toThrow("test presence publication failure");
-          } else {
-            await hello;
-          }
+          await hello;
+          expect(broadcast.mock.calls.some(([event]) => event === "presence")).toBe(false);
+          expect(() => vi.advanceTimersByTime(50)).not.toThrow();
           const completionAfterHandoff = await readDevicePairSetupCompletion({
             setupId: issued.setupId,
           });
@@ -166,6 +218,10 @@ describe("sendGatewayHello setup completion ordering", () => {
             deliveryState: "uncertain",
           });
           expect(completionAfterHandoff).toMatchObject({ deliveryState: "confirmed" });
+          expect(onHelloDelivered).toHaveBeenCalledOnce();
+          expect(onHelloDelivered.mock.invocationCallOrder[0]).toBeLessThan(
+            broadcast.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+          );
           expect(broadcast).toHaveBeenCalledWith(
             "device.pair.setup.completed",
             expect.objectContaining({ setupId: issued.setupId }),
@@ -209,54 +265,21 @@ describe("sendGatewayHello setup completion ordering", () => {
         await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
 
         const broadcast = vi.fn();
-        const close = vi.fn();
-        const context = {
-          handler: {
-            getClient: () => null,
-            connId: "conn-setup-send-failure",
-            gatewayMethods: [],
-            events: [],
-            buildRequestContext: () => ({ broadcast, nodeRegistry: { get: vi.fn() } }),
-            refreshHealthSnapshot: vi.fn(async () => ({})),
-            close,
-            advanceHandshakePhase: vi.fn(),
-            setCloseCause: vi.fn(),
-            logGateway: { warn: vi.fn() },
-            logHealth: { error: vi.fn() },
-          },
-          frame: { id: "hello-setup-send-failure" },
-          connectParams: {
-            client: { id: "openclaw-ios", version: "dev", platform: "test", mode: "backend" },
-            role: "operator",
-            scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
-          },
-          configSnapshot: {},
-          sendFrame: vi.fn(async () => {
+        const context = createFailedHelloContext(
+          "setup-send-failure",
+          async () => {
             throw new Error("socket closed");
-          }),
-          pendingNodePairingCleanup: {},
-          releasePendingNodePairingCleanup: vi.fn(async () => undefined),
-        };
-        const state = {
-          resolvedAuth: { mode: "none" },
-          role: "operator",
-          scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
-          device: { id: paired.deviceId },
-          devicePublicKey: paired.publicKey,
-          hasTokenAuth: false,
-          hasPasswordAuth: false,
-          bootstrapTokenCandidate: issued.token,
-          authResult: { ok: true, method: "bootstrap-token" },
-          authMethod: "bootstrap-token",
-          issuedBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-          handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-          deviceToken: null,
-          bootstrapDeviceTokens: [],
-        };
+          },
+          broadcast,
+        );
+        const { onHelloDelivered } = context;
+        const { close } = context.handler;
+        const state = createBootstrapState(paired, issued.token);
 
         await sendGatewayHello(context as never, state as never, {});
 
         expect(close).toHaveBeenCalled();
+        expect(onHelloDelivered).not.toHaveBeenCalled();
         expect(broadcast).toHaveBeenCalledWith(
           "device.pair.setup.deliveryUncertain",
           expect.objectContaining({ setupId: issued.setupId, deviceId: paired.deviceId }),
@@ -317,48 +340,9 @@ describe("sendGatewayHello setup completion ordering", () => {
           undefined,
           "paired",
         );
-        const close = vi.fn();
-        const context = {
-          handler: {
-            getClient: () => null,
-            connId: "conn-setup-replaced",
-            gatewayMethods: [],
-            events: [],
-            buildRequestContext: () => ({ broadcast: vi.fn(), nodeRegistry: { get: vi.fn() } }),
-            refreshHealthSnapshot: vi.fn(async () => ({})),
-            close,
-            advanceHandshakePhase: vi.fn(),
-            setCloseCause: vi.fn(),
-            logGateway: { warn: vi.fn() },
-            logHealth: { error: vi.fn() },
-          },
-          frame: { id: "hello-setup-replaced" },
-          connectParams: {
-            client: { id: "openclaw-ios", version: "dev", platform: "test", mode: "backend" },
-            role: "operator",
-            scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
-          },
-          configSnapshot: {},
-          sendFrame: vi.fn(async () => undefined),
-          pendingNodePairingCleanup: {},
-          releasePendingNodePairingCleanup: vi.fn(async () => undefined),
-        };
-        const state = {
-          resolvedAuth: { mode: "none" },
-          role: "operator",
-          scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
-          device: { id: paired.deviceId },
-          devicePublicKey: paired.publicKey,
-          hasTokenAuth: false,
-          hasPasswordAuth: false,
-          bootstrapTokenCandidate: issued.token,
-          authResult: { ok: true, method: "bootstrap-token" },
-          authMethod: "bootstrap-token",
-          issuedBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-          handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-          deviceToken: null,
-          bootstrapDeviceTokens: [],
-        };
+        const context = createFailedHelloContext("setup-replaced", async () => undefined);
+        const { close } = context.handler;
+        const state = createBootstrapState(paired, issued.token);
 
         await sendGatewayHello(context as never, state as never, {});
 
@@ -407,50 +391,11 @@ describe("sendGatewayHello setup completion ordering", () => {
         };
         await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
 
-        const close = vi.fn();
-        const context = {
-          handler: {
-            getClient: () => null,
-            connId: "conn-generic-send-failure",
-            gatewayMethods: [],
-            events: [],
-            buildRequestContext: () => ({ broadcast: vi.fn(), nodeRegistry: { get: vi.fn() } }),
-            refreshHealthSnapshot: vi.fn(async () => ({})),
-            close,
-            advanceHandshakePhase: vi.fn(),
-            setCloseCause: vi.fn(),
-            logGateway: { warn: vi.fn() },
-            logHealth: { error: vi.fn() },
-          },
-          frame: { id: "hello-generic-send-failure" },
-          connectParams: {
-            client: { id: "openclaw-ios", version: "dev", platform: "test", mode: "backend" },
-            role: "operator",
-            scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
-          },
-          configSnapshot: {},
-          sendFrame: vi.fn(async () => {
-            throw new Error("socket closed");
-          }),
-          pendingNodePairingCleanup: {},
-          releasePendingNodePairingCleanup: vi.fn(async () => undefined),
-        };
-        const state = {
-          resolvedAuth: { mode: "none" },
-          role: "operator",
-          scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
-          device: { id: paired.deviceId },
-          devicePublicKey: paired.publicKey,
-          hasTokenAuth: false,
-          hasPasswordAuth: false,
-          bootstrapTokenCandidate: issued.token,
-          authResult: { ok: true, method: "bootstrap-token" },
-          authMethod: "bootstrap-token",
-          issuedBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-          handoffBootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
-          deviceToken: null,
-          bootstrapDeviceTokens: [],
-        };
+        const context = createFailedHelloContext("generic-send-failure", async () => {
+          throw new Error("socket closed");
+        });
+        const { close } = context.handler;
+        const state = createBootstrapState(paired, issued.token);
 
         await sendGatewayHello(context as never, state as never, {});
 

@@ -1,9 +1,5 @@
 // Discord tests cover channel.message adapter plugin behavior.
-import {
-  verifyChannelMessageAdapterCapabilityProofs,
-  verifyChannelMessageLiveCapabilityAdapterProofs,
-  verifyChannelMessageLiveFinalizerProofs,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createDiscordOutboundHoisted,
@@ -21,7 +17,6 @@ beforeAll(async () => {
 });
 
 type DiscordMessageAdapter = NonNullable<typeof discordPlugin.message>;
-type DiscordMessageSender = NonNullable<DiscordMessageAdapter["send"]>;
 
 function requireDiscordMessageAdapter(): DiscordMessageAdapter {
   const adapter = discordPlugin.message;
@@ -31,46 +26,6 @@ function requireDiscordMessageAdapter(): DiscordMessageAdapter {
   return adapter;
 }
 
-function requireTextSender(
-  adapter: DiscordMessageAdapter,
-): NonNullable<DiscordMessageSender["text"]> {
-  const text = adapter.send?.text;
-  if (!text) {
-    throw new Error("Expected discord message adapter text sender");
-  }
-  return text;
-}
-
-function requireMediaSender(
-  adapter: DiscordMessageAdapter,
-): NonNullable<DiscordMessageSender["media"]> {
-  const media = adapter.send?.media;
-  if (!media) {
-    throw new Error("Expected discord message adapter media sender");
-  }
-  return media;
-}
-
-function requirePayloadSender(
-  adapter: DiscordMessageAdapter,
-): NonNullable<DiscordMessageSender["payload"]> {
-  const payload = adapter.send?.payload;
-  if (!payload) {
-    throw new Error("Expected discord message adapter payload sender");
-  }
-  return payload;
-}
-
-function requirePollSender(
-  adapter: DiscordMessageAdapter,
-): NonNullable<DiscordMessageSender["poll"]> {
-  const poll = adapter.send?.poll;
-  if (!poll) {
-    throw new Error("Expected discord message adapter poll sender");
-  }
-  return poll;
-}
-
 describe("discord channel message adapter", () => {
   beforeEach(() => {
     resetDiscordOutboundMocks(hoisted);
@@ -78,10 +33,15 @@ describe("discord channel message adapter", () => {
 
   it("backs declared durable-final capabilities with outbound send proofs", async () => {
     const adapter = requireDiscordMessageAdapter();
-    const sendText = requireTextSender(adapter);
-    const sendMedia = requireMediaSender(adapter);
-    const sendPayload = requirePayloadSender(adapter);
-    const sendPoll = requirePollSender(adapter);
+    const {
+      text: sendText,
+      media: sendMedia,
+      payload: sendPayload,
+      poll: sendPoll,
+    } = adapter.send ?? {};
+    if (!sendText || !sendMedia || !sendPayload || !sendPoll) {
+      throw new Error("Expected Discord text, media, payload, and poll senders");
+    }
 
     const proveText = async () => {
       resetDiscordOutboundMocks(hoisted);
@@ -230,40 +190,17 @@ describe("discord channel message adapter", () => {
     });
   });
 
-  it("backs declared live preview finalizer capabilities with adapter proofs", async () => {
+  it("declares fresh final delivery and pending preview cleanup", () => {
     const adapter = requireDiscordMessageAdapter();
-    const sendText = requireTextSender(adapter);
-
-    await verifyChannelMessageLiveCapabilityAdapterProofs({
-      adapterName: "discordMessageAdapter",
-      adapter,
-      proofs: {
-        draftPreview: () => {
-          expect(adapter.live?.finalizer?.capabilities?.discardPending).toBe(true);
-        },
-        previewFinalization: () => {
-          expect(adapter.live?.finalizer?.capabilities?.normalFallback).toBe(true);
-        },
-        progressUpdates: () => {
-          expect(adapter.live?.capabilities?.draftPreview).toBe(true);
-        },
-      },
+    expect(adapter.live?.capabilities).toEqual({
+      draftPreview: true,
+      previewFinalization: true,
+      progressUpdates: true,
     });
-
-    await verifyChannelMessageLiveFinalizerProofs({
-      adapterName: "discordMessageAdapter",
-      adapter,
-      proofs: {
-        finalEdit: () => {
-          expect(adapter.live?.finalizer?.capabilities?.finalEdit).toBe(false);
-        },
-        normalFallback: () => {
-          expect(sendText).toBeTypeOf("function");
-        },
-        discardPending: () => {
-          expect(adapter.live?.capabilities?.draftPreview).toBe(true);
-        },
-      },
+    expect(adapter.live?.finalizer?.capabilities).toEqual({
+      finalEdit: false,
+      normalFallback: true,
+      discardPending: true,
     });
   });
 });

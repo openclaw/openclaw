@@ -1,4 +1,3 @@
-// Slack plugin module implements target parsing behavior.
 import {
   buildMessagingTarget,
   ensureTargetId,
@@ -73,6 +72,28 @@ export function formatSlackTarget(params: {
     throw new Error("Invalid Slack workspace-qualified target");
   }
   return `team:${encodeURIComponent(teamId)}:${params.kind}:${encodeURIComponent(id)}`;
+}
+
+export function resolveWorkspaceQualifiedSlackTarget(
+  input: string,
+  kind: SlackTargetKind,
+): { input: string; resolved: true; id: string } | undefined {
+  if (!/^team:/i.test(input)) {
+    return undefined;
+  }
+  try {
+    const target = parseSlackTarget(input);
+    if (target?.kind !== kind || !target.teamId) {
+      return undefined;
+    }
+    return {
+      input,
+      resolved: true,
+      id: formatSlackTarget({ teamId: target.teamId, kind, id: target.id }),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function isUnambiguousSlackUserId(rawId: string): boolean {

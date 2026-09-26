@@ -1,5 +1,5 @@
 // Resolves channel implicit-mention policy across account, channel, and shared defaults.
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
 import type { ChannelImplicitMentionsConfig } from "./types.channels.js";
@@ -26,9 +26,10 @@ export function resolveChannelImplicitMentions(params: {
   const channelConfig = params.cfg.channels?.[params.channel] as
     | ChannelImplicitMentionsSource
     | undefined;
-  const accountConfig = resolveAccountEntry(
+  const accountConfig = resolveChannelAccountEntry(
     channelConfig?.accounts,
     normalizeAccountId(params.accountId),
+    params.channel,
   );
   const defaults = params.cfg.channels?.defaults?.implicitMentions;
   return {

@@ -3,6 +3,7 @@ set -euo pipefail
 trap "" PIPE
 export TERM=xterm-256color
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/onboard/first-agent-flow.sh
 OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY="${OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY:-0}"
 if [ "$OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY" != "1" ]; then
   openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
@@ -163,9 +164,15 @@ run_wizard_cmd() {
   local log_path="$OPENCLAW_E2E_LOG_DIR/${case_name}.log"
   WIZARD_LOG_PATH="$log_path"
   export WIZARD_LOG_PATH
-  # Run under script to keep an interactive TTY for clack prompts.
-  openclaw_e2e_run_script_with_pty "$command" "$log_path" <"$input_fifo" >/dev/null 2>&1 &
+  # Anchor the FIFO before forking so a fast-exiting reader cannot strand open().
+  if ! exec 3<>"$input_fifo"; then
+    cleanup_wizard_case
+    return 1
+  fi
+  # Open stdin before dropping the inherited anchor; only the driver keeps a writer.
+  openclaw_e2e_run_script_with_pty "$command" "$log_path" <"$input_fifo" 3>&- >/dev/null 2>&1 &
   wizard_pid=$!
+  # Restore write-only semantics so an exited wizard still produces EPIPE.
   if ! exec 3>"$input_fifo"; then
     cleanup_wizard_case
     return 1
@@ -245,7 +252,7 @@ send_skills_flow() {
 send_guided_skip_ui_flow() {
   wait_for_log "Help make OpenClaw better?" 120 || return $?
   send $'\r' 0.8
-  wait_for_log "What should we call your first agent?" 120 || return $?
+  wait_for_first_agent_prompt log_contains 120 0.8 || return $?
   send $'\r' 0.8
   wait_for_log "How should I set things up?" 120 || return $?
   send $'\r' 0.8

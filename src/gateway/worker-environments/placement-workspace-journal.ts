@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { find, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { MAX_RECONCILIATION_PACK_BYTES } from "./workspace-manifest.js";
 import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
@@ -170,6 +172,12 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
           );
           if (deleted.numAffectedRows === 1n) {
             pruned.push(owner);
+            if (placement) {
+              sessionChanges.emit(
+                { agentId: placement.agentId, sessionKey: placement.sessionKey },
+                db,
+              );
+            }
           }
         }
         return pruned;
@@ -209,7 +217,7 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
         throw new Error(`Worker workspace journal metadata is inconsistent for ${owner.sessionId}`);
       }
       if (
-        row.base_pack.byteLength > 256 * 1024 * 1024 ||
+        row.base_pack.byteLength > MAX_RECONCILIATION_PACK_BYTES ||
         createHash("sha256").update(row.base_pack).digest("hex") !== plan.basePackSha256
       ) {
         throw new Error(`Worker workspace journal snapshot is invalid for ${owner.sessionId}`);
@@ -251,6 +259,7 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
             `Worker workspace reconciliation is already pending for ${owner.sessionId}`,
           );
         }
+        sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
       });
     },
 
@@ -260,8 +269,9 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
     ): void {
       write((db) => {
         if (!options.force) {
-          assertJournalOwner(db, owner);
+          const placement = assertJournalOwner(db, owner);
           clearWorkerWorkspaceReconciliation(db, owner.sessionId);
+          sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
           return;
         }
         // Forced teardown owns this exact durable journal even when placement
@@ -278,6 +288,7 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Worker workspace journal changed for ${owner.sessionId}`);
         }
+        sessionChanges.emit({ all: true, scope: "worker-placements" }, db);
       });
     },
   };

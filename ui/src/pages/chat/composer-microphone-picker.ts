@@ -5,7 +5,7 @@ import {
   observeRealtimeTalkDevices,
   type RealtimeTalkDeviceIssue,
   type RealtimeTalkInputDevice,
-} from "./realtime-talk-input.ts";
+} from "./talk/input.ts";
 
 export type ComposerTalkCapabilityStatus = "checking" | "ready" | "unavailable" | "unknown";
 

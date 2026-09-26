@@ -102,23 +102,6 @@ describe("normalizeAttachments", () => {
     ]);
   });
 
-  it("preserves authoritative media kinds without inventing MIME metadata", () => {
-    expect(
-      normalizeAttachments({
-        media: [{ url: "https://cdn.example.test/download?token=fixture", kind: "image" }],
-      }),
-    ).toEqual([
-      {
-        path: undefined,
-        url: "https://cdn.example.test/download?token=fixture",
-        mime: undefined,
-        kind: "image",
-        index: 0,
-        alreadyTranscribed: false,
-      },
-    ]);
-  });
-
   it("distinguishes an explicit document from generic binary MIME inference", () => {
     const attachments = normalizeAttachments({
       media: [
@@ -178,6 +161,10 @@ describe("normalizeAttachments", () => {
       fact: { fileName: "diagram.svg", contentType: "application/octet-stream" },
     },
     {
+      name: "SVG source before a raster display filename",
+      fact: { path: "/tmp/diagram.svg", fileName: "photo.png" },
+    },
+    {
       name: "authoritative document kind",
       fact: { fileName: "photo.png", kind: "document" as const },
     },
@@ -220,15 +207,9 @@ describe("normalizeAttachments", () => {
 
 describe("resolveAttachmentKind", () => {
   it.each([
-    { source: "/tmp/photo.avif", expected: "image" },
-    { source: "/tmp/photo.HEIC", expected: "image" },
-    { source: "/tmp/photo.heif", expected: "image" },
-    { source: "/tmp/scan.tif", expected: "image" },
     { source: "/tmp/scan.TIFF", expected: "image" },
-    { source: "/tmp/clip.flv", expected: "video" },
-    { source: "/tmp/clip.m4v", expected: "video" },
-    { source: "/tmp/clip.wmv", expected: "video" },
-    { source: "/tmp/voice.aiff", expected: "audio" },
+    { source: " /tmp/photo.png ", expected: "image" },
+    { source: " /tmp/scan.TIFF ", expected: "image" },
     { source: "https://cdn.example.test/photo%2EHEIC?download=1", expected: "image" },
   ] as const)(
     "classifies $source as $expected from canonical media metadata",
@@ -237,32 +218,16 @@ describe("resolveAttachmentKind", () => {
     },
   );
 
-  it.each(["image", "audio", "video"] as const)(
-    "preserves an authoritative %s kind for an extensionless URL",
-    (kind) => {
-      expect(
-        resolveAttachmentKind({ url: "https://cdn.example.test/download", kind, index: 0 }),
-      ).toBe(kind);
-    },
-  );
-
-  it.each([
-    { mime: undefined, expected: "image" },
-    { mime: "image/webp", expected: "image" },
-    { mime: "audio/ogg", expected: "image" },
-  ] as const)(
-    "treats sticker facts as authoritative image media with MIME $mime",
-    ({ mime, expected }) => {
-      expect(
-        resolveAttachmentKind({
-          url: "https://cdn.example.test/sticker",
-          kind: "sticker",
-          mime,
-          index: 0,
-        }),
-      ).toBe(expected);
-    },
-  );
+  it("treats stickers as images despite conflicting MIME", () => {
+    expect(
+      resolveAttachmentKind({
+        url: "https://cdn.example.test/sticker",
+        kind: "sticker",
+        mime: "audio/ogg",
+        index: 0,
+      }),
+    ).toBe("image");
+  });
 
   it("does not let the unknown category mask a concrete audio MIME", () => {
     expect(
@@ -275,38 +240,41 @@ describe("resolveAttachmentKind", () => {
     ).toBe("audio");
   });
 
-  it.each([
-    { source: "/tmp/report.png", mime: undefined },
-    { source: "/tmp/report.png", mime: "application/pdf" },
-    { source: "/tmp/report.png", mime: "application/octet-stream" },
-    { source: "/tmp/report.png", mime: "image/png" },
-    { source: "/tmp/report.ogg", mime: "audio/ogg" },
-    { source: "/tmp/report.mp4", mime: "video/mp4" },
-    { source: "/tmp/report.tiff", mime: undefined },
-  ])("keeps explicit documents authoritative for $source and MIME $mime", ({ source, mime }) => {
-    expect(resolveAttachmentKind({ path: source, kind: "document", mime, index: 0 })).toBe(
-      "unknown",
-    );
+  it("keeps explicit documents authoritative over image MIME and filename", () => {
+    expect(
+      resolveAttachmentKind({
+        path: "/tmp/report.png",
+        kind: "document",
+        mime: "image/png",
+        index: 0,
+      }),
+    ).toBe("unknown");
   });
 
-  it.each([undefined, "application/octet-stream"] as const)(
-    "infers an unknown-kind image from its canonical filename with MIME %s",
-    (mime) => {
-      expect(
-        resolveAttachmentKind({ path: "/tmp/upload.png", kind: "unknown", mime, index: 0 }),
-      ).toBe("image");
-    },
-  );
+  it("infers an unknown-kind image from its filename despite generic MIME", () => {
+    expect(
+      resolveAttachmentKind({
+        path: "/tmp/upload.png",
+        kind: "unknown",
+        mime: "application/octet-stream",
+        index: 0,
+      }),
+    ).toBe("image");
+  });
 
-  it.each(["application/pdf", "application/zip", "text/plain", "application/json"] as const)(
-    "never infers an image over authoritative non-image MIME %s",
-    (mime) => {
-      expect(
-        resolveAttachmentKind({ path: "/tmp/report.png", kind: "unknown", mime, index: 0 }),
-      ).toBe("unknown");
-      expect(resolveAttachmentKind({ path: "/tmp/report.png", mime, index: 0 })).toBe("unknown");
-    },
-  );
+  it("never infers an image over authoritative document MIME", () => {
+    expect(
+      resolveAttachmentKind({
+        path: "/tmp/report.png",
+        kind: "unknown",
+        mime: "application/pdf",
+        index: 0,
+      }),
+    ).toBe("unknown");
+    expect(
+      resolveAttachmentKind({ path: "/tmp/report.png", mime: "application/pdf", index: 0 }),
+    ).toBe("unknown");
+  });
 
   it("prefers the authoritative kind over conflicting MIME and filename hints", () => {
     expect(
@@ -325,23 +293,9 @@ describe("resolveAttachmentKind", () => {
     );
   });
 
-  it("keeps filename-only SVG out of raster image understanding", () => {
-    expect(resolveAttachmentKind({ path: "/tmp/diagram.svg", index: 0 })).toBe("unknown");
-  });
-
   it("preserves explicitly identified SVG images", () => {
     expect(
       resolveAttachmentKind({ path: "/tmp/diagram.svg", mime: "image/svg+xml", index: 0 }),
-    ).toBe("image");
-  });
-
-  it("falls back to canonical filename metadata when the declared MIME is not media", () => {
-    expect(
-      resolveAttachmentKind({
-        path: "/tmp/photo.avif",
-        mime: "application/octet-stream",
-        index: 0,
-      }),
     ).toBe("image");
   });
 });

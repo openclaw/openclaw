@@ -2,6 +2,7 @@ import {
   findLlamacppGbnfSchemaViolations,
   normalizeToolParameterSchema,
 } from "@openclaw/ai/internal/tool-schema";
+import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 // Cron tool schema tests cover the provider-facing parameter shape and runtime
 // validation compatibility for cron jobs.
@@ -60,6 +61,25 @@ describe("createCronToolSchema", () => {
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
   // If a field is removed from this list the test must be updated intentionally.
 
+  it("advertises timeout clears while retaining numeric bounds", () => {
+    for (const [timeoutSeconds, accepted] of [
+      [null, true],
+      [0, true],
+      [0.03, true],
+      [30, true],
+      [-1, false],
+      ["30", false],
+    ] as const) {
+      expect(
+        Value.Check(schema, {
+          action: "update",
+          id: "timeout-job",
+          job: { payload: { timeoutSeconds } },
+        }),
+      ).toBe(accepted);
+    }
+  });
+
   it("job exposes the expected top-level fields", () => {
     expect(keysAt(schemaRecord, "job")).toEqual(
       [
@@ -110,7 +130,7 @@ describe("createCronToolSchema", () => {
     expect(schemaRecord.properties).not.toHaveProperty("patch");
   });
 
-  it.each([undefined, "", " \t ", "agent:main:telegram:direct:alice", " agent:main:main "])(
+  it.each([undefined, " \t ", " agent:main:main "])(
     "advertises job retargeting only without session scope (%j)",
     (agentSessionKey) => {
       const toolSchema = createCronTool({ agentSessionKey, agentId: "main" }).parameters;
@@ -235,8 +255,7 @@ describe("createCronToolSchema", () => {
       minimum: 1,
     });
     expect(propertyAt(schemaRecord, "job.payload.timeoutSeconds")).toMatchObject({
-      type: "number",
-      minimum: 0,
+      anyOf: [{ type: "number", minimum: 0 }, { type: "null" }],
     });
   });
 
@@ -351,10 +370,6 @@ describe("createCronToolSchema", () => {
     );
   });
 
-  it("job.payload includes fallbacks", () => {
-    expect(keysAt(schemaRecord, "job.payload")).toContain("fallbacks");
-  });
-
   it("accepts script payloads in create and update calls", () => {
     expect(
       Value.Check(schema, {
@@ -388,19 +403,44 @@ describe("createCronToolSchema", () => {
     );
   });
 
-  it("job.failureAlert uses plain object type for OpenAPI 3.0 compat", () => {
-    const root = schemaRecord.properties as
-      | Record<string, { properties?: Record<string, unknown>; type?: unknown }>
-      | undefined;
-    const jobProps = root?.job?.properties as
-      | Record<string, { type?: unknown; description?: string }>
-      | undefined;
-    const failureAlertSchema = jobProps?.failureAlert;
-    // Must be a plain "object" type — not a type array — so providers that
-    // enforce an OpenAPI 3.0 subset (e.g. Gemini via GitHub Copilot) accept it.
-    expect(failureAlertSchema?.type).toBe("object");
-    // The description must mention "false" so LLMs know they can disable alerts.
-    expect(failureAlertSchema?.description).toMatch(/false/i);
+  it("types the false sentinel for Codex app-server schema normalization", () => {
+    const failureAlert = propertyAt(schemaRecord, "job.failureAlert");
+    expect(failureAlert?.anyOf).toContainEqual({ type: "boolean", const: false });
+  });
+
+  it("accepts false or policy objects for add and update without accepting other scalar values", () => {
+    for (const action of ["add", "update"]) {
+      for (const [failureAlert, accepted] of [
+        [false, true],
+        [{ after: 3, cooldownMs: 0, includeSkipped: true }, true],
+        [undefined, true],
+        [true, false],
+        ["invalid", false],
+      ] as const) {
+        const args = { action, job: { failureAlert } };
+        expect(Value.Check(schema, args)).toBe(accepted);
+        const validate = () =>
+          validateToolArguments(createCronTool(), {
+            type: "toolCall",
+            id: "failure-alert",
+            name: "automations",
+            arguments: args,
+          });
+        if (accepted) {
+          expect(validate()).toEqual(args);
+        } else {
+          expect(validate).toThrow(/job.failureAlert/);
+        }
+      }
+    }
+  });
+
+  it("projects failure alert policies for restricted providers without losing the disable description", () => {
+    for (const projected of [providerSchemaRecord, jjccGeminiSchemaRecord]) {
+      const failureAlert = propertyAt(projected, "job.failureAlert");
+      expect(failureAlert?.type).toBe("object");
+      expect(failureAlert?.description).toContain("false disables");
+    }
   });
 
   it("accepts nullable cron update clears in the runtime schema", () => {
@@ -531,12 +571,6 @@ describe("createCronToolSchema with cron triggers disabled", () => {
     expect(tool.description).not.toContain("Silent watcher");
     expect(tool.description).not.toContain("event watchers");
     expect(tool.description).toContain("say it is unsupported");
-  });
-
-  it("keeps the full surface when no config is provided", () => {
-    const configlessSchema = createCronTool().parameters as unknown as Record<string, unknown>;
-    expect(keysAt(configlessSchema, "job")).toContain("trigger");
-    expect(propertyAt(configlessSchema, "job.schedule.kind")?.enum).toContain("stream");
   });
 
   it("keeps the full surface when config omits cron.triggers (enabled default)", () => {

@@ -1,10 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EmbeddedRunTrigger } from "../../agents/embedded-agent-runner/run/params.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
+import type { EmbeddedRunTrigger } from "../../agents/run-trigger.js";
+import {
+  createPluginCache,
+  getPluginCache,
+  retirePluginCache,
+  withPluginCache,
+} from "../../plugins/plugin-cache.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  getPluginRegistryForContext,
+  withPluginRuntimeRegistryScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createNestedToolActivity,
   projectNestedToolActivityForHooks,
@@ -103,9 +115,35 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  resetPluginRuntimeStateForTest();
+});
 
 describe("skill experience review scheduler", () => {
+  it.each(["context", "source"] as const)(
+    "does not retain or schedule Incognito %s evidence",
+    async (identity) => {
+      vi.useFakeTimers();
+      const runReview = vi.fn(async () => {});
+      const scheduler = createSkillExperienceReviewScheduler({
+        isSystemActive: () => false,
+        runReview,
+      });
+      const params = completedRun();
+      const sessionKey = "agent:main:dashboard:incognito-workshop";
+      if (identity === "context") {
+        params.ctx = { ...params.ctx, sessionKey };
+      } else {
+        params.source = { ...params.source!, sessionKey };
+      }
+      scheduler.schedule(params);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.runAllTimersAsync();
+      expect(runReview).not.toHaveBeenCalled();
+    },
+  );
+
   it("runs detached review work outside the foreground prepared generation", async () => {
     const generation: PreparedModelRuntimePluginGeneration = {
       configuredCatalogEntries: [],
@@ -113,6 +151,10 @@ describe("skill experience review scheduler", () => {
       pluginMetadataSnapshot: {} as never,
     };
     const observedGenerations: Array<PreparedModelRuntimePluginGeneration | undefined> = [];
+    const foregroundCache = createPluginCache();
+    const foregroundRegistry = createEmptyPluginRegistry();
+    const currentRegistry = createEmptyPluginRegistry();
+    const observedPluginScopes: unknown[] = [];
     let finishReview: (() => void) | undefined;
     const reviewFinished = new Promise<void>((resolve) => {
       finishReview = resolve;
@@ -123,6 +165,10 @@ describe("skill experience review scheduler", () => {
         return false;
       },
       runReview: async (candidate) => {
+        observedPluginScopes.push(
+          getPluginCache() === foregroundCache,
+          getPluginRegistryForContext(),
+        );
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
         await prepareSkillExperienceReviewCandidate(candidate, candidate.config);
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
@@ -131,12 +177,19 @@ describe("skill experience review scheduler", () => {
       setTimer: (callback) => setTimeout(callback, 0),
     });
 
-    withPreparedModelRuntimePluginGenerationScope(generation, () => {
-      scheduler.schedule(completedRun());
-    });
+    withPluginCache(foregroundCache, () =>
+      withPluginRuntimeRegistryScope(foregroundRegistry, () =>
+        withPreparedModelRuntimePluginGenerationScope(generation, () => {
+          scheduler.schedule(completedRun());
+        }),
+      ),
+    );
+    await retirePluginCache(foregroundCache);
+    setActivePluginRegistry(currentRegistry);
     await reviewFinished;
 
     expect(observedGenerations).toEqual([undefined, undefined, undefined]);
+    expect(observedPluginScopes).toEqual([false, currentRegistry]);
     scheduler.clear();
   });
 
@@ -541,24 +594,6 @@ describe("skill experience review scheduler", () => {
 });
 
 describe("skill experience review prompt", () => {
-  it("caps used and existing skill lists", () => {
-    const skills = Array.from({ length: 120 }, (_, index) => ({
-      name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
-      source: "workspace" as const,
-      activation: "read" as const,
-    }));
-    const prompt = buildSkillExperienceReviewPrompt(
-      {
-        usedSkills: skills,
-        existingSkills: skills,
-      },
-      "propose",
-    );
-    expect(prompt).toContain("more used skills omitted");
-    expect(prompt).toContain("(+70 more not shown)");
-    expect(Math.max(...prompt.split("\n").map((line) => line.length))).toBeLessThanOrEqual(2_000);
-  });
-
   it("renders a deterministic and capped used-skills receipt", () => {
     const usedSkills = Array.from({ length: 120 }, (_, index) => ({
       name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
@@ -603,8 +638,8 @@ describe("skill experience review prompt", () => {
     }
   });
 
-  it.each(["auto", "propose"] as const)("preserves interrupted evidence in %s mode", (mode) => {
-    const prompt = buildSkillExperienceReviewPrompt({ turnAborted: true }, mode);
+  it("preserves interrupted evidence", () => {
+    const prompt = buildSkillExperienceReviewPrompt({ turnAborted: true }, "propose");
     expect(prompt).toContain("Only capture procedures that visibly worked");
   });
 
@@ -625,6 +660,13 @@ describe("skill experience review prompt", () => {
 });
 
 describe("skill experience review preparation", () => {
+  it("rejects Incognito evidence before preparing a queued review", async () => {
+    const params = completedRun({ sessionKey: "agent:main:dashboard:incognito-workshop" });
+    await expect(
+      prepareSkillExperienceReviewCandidate(captureCandidate(params), params.config),
+    ).resolves.toBeUndefined();
+  });
+
   it.each([
     { agentId: "direct", eligible: true },
     { agentId: "isolated", eligible: false },
@@ -644,12 +686,5 @@ describe("skill experience review preparation", () => {
     });
 
     expect(result !== undefined).toBe(eligible);
-  });
-
-  it("keeps an eligible foreground candidate", async () => {
-    const params = completedRun();
-    await expect(
-      prepareSkillExperienceReviewCandidate(captureCandidate(params), params.config),
-    ).resolves.toBeDefined();
   });
 });

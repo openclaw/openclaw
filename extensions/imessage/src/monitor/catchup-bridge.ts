@@ -1,4 +1,3 @@
-// Imessage plugin module implements catchup bridge behavior.
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import type { IMessageRpcClient } from "../client.js";
@@ -13,11 +12,12 @@ import {
 import { parseIMessageNotification } from "./parse-notification.js";
 import type { IMessagePayload } from "./types.js";
 
-// Per-chat history fetch budget. messages.history is per-chat; we cap each
-// chat's fetch to the global perRunLimit so a single noisy group cannot
-// dominate the cursor advance — the cross-chat sort + final slice still
-// caps the global pass at perRunLimit.
-const PER_CHAT_HISTORY_LIMIT_CAP = 500;
+// Per-chat history fetch budget. Upstream `messages.history` serves rows
+// `ORDER BY date DESC LIMIT ?`, so a smaller limit trims the OLDEST rows
+// server-side before we ever see them. Always request the full budget: the
+// cross-chat sort plus the perRunLimit slice below can only pick the true
+// oldest rows if the per-chat page reached them.
+const PER_CHAT_HISTORY_LIMIT = 500;
 
 // chats.list page size used during catchup. 200 covers far more than any
 // realistic offline window worth of distinct chats while staying well under
@@ -113,7 +113,6 @@ export async function runIMessageCatchup(
     }
     const chats = chatsResult?.chats ?? [];
     const collected: IMessageCatchupRow[] = [];
-    const perChatLimit = Math.min(limit, PER_CHAT_HISTORY_LIMIT_CAP);
     let historyFetchFailed = false;
     // Track the highest rowid / date the imsg bridge actually returned across
     // all chats, regardless of whether each row passed the parser. The catchup
@@ -143,7 +142,7 @@ export async function runIMessageCatchup(
           "messages.history",
           {
             chat_id: chatId,
-            limit: perChatLimit,
+            limit: PER_CHAT_HISTORY_LIMIT,
             start: sinceISO,
             attachments: includeAttachments,
           },
@@ -268,13 +267,8 @@ export async function runIMessageCatchup(
       warnLog(`imessage catchup: missing payload for guid=${row.guid}, skipping`);
       return { ok: false };
     }
-    try {
-      await dispatchPayload(entry.message, entry.rawEnvelope);
-      return { ok: true };
-    } catch (err) {
-      warnLog(`imessage catchup: dispatch threw for guid=${row.guid}: ${String(err)}`);
-      return { ok: false };
-    }
+    await dispatchPayload(entry.message, entry.rawEnvelope);
+    return { ok: true };
   };
 
   return await performIMessageCatchup({

@@ -18,6 +18,8 @@ import android.content.Context
 import android.provider.Settings
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.TouchInjectionScope
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -353,7 +355,7 @@ class SidebarCatalogGroupingTest {
           )
         }
       }
-      composeRule.onNodeWithText("Work").assertDoesNotExist()
+      composeRule.onNodeWithText("Overview").assertDoesNotExist()
       composeRule.onNodeWithText("Home").assertIsDisplayed()
       composeRule.onNodeWithText("Settings").assertIsDisplayed().performTouchInput(dragOnePageDown)
 
@@ -376,7 +378,7 @@ class SidebarCatalogGroupingTest {
       composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
       composeRule.onNodeWithText("Edit pinned items").performClick()
       composeRule.onNodeWithText("EDIT PINNED ITEMS").assertIsDisplayed()
-      composeRule.onNodeWithText("Work").assertIsDisplayed().performTouchInput(dragOnePageDown)
+      composeRule.onNodeWithText("Overview").assertIsDisplayed().performTouchInput(dragOnePageDown)
       composeRule.runOnIdle {
         assertEquals(listOf("home", "settings", "work", "skills", "threads"), prefs.sidebarPageOrder.value)
         assertEquals(listOf("settings", "home", "skills", "threads"), prefs.sidebarVisiblePages.value)
@@ -557,6 +559,27 @@ class SidebarCatalogGroupingTest {
         liveSessions.value = liveSessions.value.map { it.copy(displayName = null) }
       }
       composeRule.onNodeWithText("Refreshed native title").assertIsDisplayed()
+
+      val adoptedLive = liveSessions.value.single()
+      val working = composeRule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Working"), useUnmergedTree = true)
+      composeRule.runOnIdle {
+        liveSessions.value = emptyList()
+        catalogState.value =
+          catalogState.value.copy(
+            catalogs = listOf(catalog.copy(hosts = listOf(host("codex", sessions = listOf(adopted.copy(name = "Refreshed native title", status = "active")))))),
+          )
+      }
+      working.assertIsDisplayed()
+      for ((status, flag, active) in listOf(
+        Triple("running", false, false),
+        Triple("done", true, false),
+        Triple("running", null, true),
+        Triple(null, true, true),
+      )) {
+        composeRule.runOnIdle { liveSessions.value = listOf(adoptedLive.copy(status = status, hasActiveRun = flag)) }
+        composeRule.onNodeWithText("Refreshed native title").assertIsDisplayed()
+        if (active) working.assertIsDisplayed() else working.assertDoesNotExist()
+      }
     } finally {
       viewModels.clear()
       try {

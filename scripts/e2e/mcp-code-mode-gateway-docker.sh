@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Runs a deterministic packaged Gateway/code-mode/MCP smoke using the Docker
 # functional image and the local mock OpenAI Responses server.
 set -euo pipefail
@@ -7,7 +11,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
-openclaw_resolve_frozen_core_harness_capabilities "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
+openclaw_resolve_frozen_mcp_code_mode_contract "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-mcp-code-mode-gateway-e2e" OPENCLAW_IMAGE)"
 PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_MCP_CODE_MODE_GATEWAY_PORT 18789)"
@@ -19,11 +23,7 @@ CONTAINER_NAME="openclaw-mcp-code-mode-e2e-$$"
 
 CLIENT_LOG="$(mktemp -t openclaw-mcp-code-mode-client-log.XXXXXX)"
 
-cleanup() {
-  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  rm -f "$CLIENT_LOG"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_container_run "$CONTAINER_NAME" "$CLIENT_LOG"' EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-code-mode-gateway
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 mcp-code-mode-gateway empty)"
@@ -55,9 +55,9 @@ docker_e2e_run_with_harness \
   -e "GW_TOKEN=$TOKEN" \
   -e "OPENCLAW_MCP_CODE_MODE_CLIENT_TIMEOUT_MS=$CLIENT_TIMEOUT_MS" \
   -e "OPENCLAW_MCP_CODE_MODE_CLIENT_BODY_MAX_BYTES=$CLIENT_BODY_MAX_BYTES" \
-  "${MCP_CODE_MODE_SEED_ENV_ARGS[@]}" \
+  ${MCP_CODE_MODE_SEED_ENV_ARGS[@]+"${MCP_CODE_MODE_SEED_ENV_ARGS[@]}"} \
   -e "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1" \
-  "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
+  ${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]+"${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}"} \
   "$IMAGE_NAME" \
   bash scripts/e2e/lib/mcp-code-mode/scenario.sh mock "$PORT" "$MOCK_PORT" >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}

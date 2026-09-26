@@ -8,7 +8,6 @@ type GenerateImageParams = Parameters<
 
 const {
   resolveApiKeyForProviderMock,
-  isProviderApiKeyConfiguredMock,
   postJsonRequestMock,
   postMultipartRequestMock,
   assertOkOrThrowHttpErrorMock,
@@ -18,19 +17,11 @@ const {
   sanitizeConfiguredModelProviderRequestMock,
 } = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "xai-key" })),
-  isProviderApiKeyConfiguredMock: vi.fn(() => true),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
     const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
-    // Stub mirroring the xAI attribution policy headers (real wire is locked in provider-attribution.test.ts).
-    if (params.provider === "xai") {
-      const version = process.env.OPENCLAW_VERSION?.trim() || "unknown";
-      headers.set("User-Agent", `openclaw/${version}`);
-      headers.set("originator", "openclaw");
-      headers.set("version", version);
-    }
     return {
       baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.x.ai/v1",
       allowPrivateNetwork: false,
@@ -50,10 +41,6 @@ const {
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
-
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-http", async () => {
@@ -116,7 +103,7 @@ function requirePostJsonCall(index = 0): {
 describe("xai image generation provider", () => {
   afterEach(() => {
     resolveApiKeyForProviderMock.mockClear();
-    isProviderApiKeyConfiguredMock.mockClear();
+    vi.unstubAllEnvs();
     postJsonRequestMock.mockReset();
     assertOkOrThrowHttpErrorMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
@@ -154,11 +141,23 @@ describe("xai image generation provider", () => {
     if (!isConfigured) {
       throw new Error("expected XAI image provider config predicate");
     }
-    expect(isConfigured({ agentDir: "/tmp/openclaw-xai-test" })).toBe(true);
-    expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
-      provider: "xai",
-      agentDir: "/tmp/openclaw-xai-test",
-    });
+    vi.stubEnv("XAI_API_KEY", undefined);
+    expect(isConfigured({})).toBe(false);
+    expect(
+      isConfigured({
+        cfg: {
+          models: {
+            providers: {
+              xai: {
+                apiKey: "xai-image-test-key",
+                baseUrl: "https://api.x.ai/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 
   it("uses main provider URL and resolves auth for generation", async () => {
@@ -254,30 +253,6 @@ describe("xai image generation provider", () => {
     expect(image?.url).toContain("data:image/png;base64,");
     expect(image?.type).toBe("image_url");
     expect(request.body?.response_format).toBe("b64_json");
-  });
-
-  it("forwards xAI attribution User-Agent through the SDK image request", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    postJsonRequestMock.mockResolvedValue({
-      response: jsonResponse({
-        data: [{ b64_json: Buffer.from("ua-png").toString("base64") }],
-      }),
-      release: vi.fn(async () => {}),
-    });
-
-    const provider = buildXaiImageGenerationProvider();
-    await provider.generateImage({
-      provider: "xai",
-      model: "grok-imagine-image",
-      prompt: "ua check",
-      cfg: {},
-    } as GenerateImageParams);
-
-    const request = requirePostJsonCall();
-    expect(request.headers?.get("user-agent")).toBe("openclaw/2026.3.22");
-    expect(request.headers?.get("originator")).toBe("openclaw");
-    expect(request.headers?.get("version")).toBe("2026.3.22");
-    vi.unstubAllEnvs();
   });
 
   it("uses the plural xAI images payload for multiple edit inputs", async () => {

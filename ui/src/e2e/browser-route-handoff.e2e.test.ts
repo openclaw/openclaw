@@ -262,6 +262,9 @@ suite.define(() => {
           );
 
           // The same live transport must still carry actionable browser results.
+          const focusCountBeforeBrowserResult = requests.filter(
+            (request) => asNullableRecord(request.params)?.path === "/tabs/focus",
+          ).length;
           await emitTool({
             phase: "start",
             toolCallId: "browser-control",
@@ -275,7 +278,12 @@ suite.define(() => {
             result: {
               content: [{ type: "text", text: "Browser control output" }],
               details: {
-                browserTab: { target: "host", profile: "managed", targetId: "default-tab" },
+                browserTab: {
+                  target: "host",
+                  profile: "managed",
+                  targetId: "default-tab",
+                  url: "https://default.example/",
+                },
               },
             },
           });
@@ -293,13 +301,18 @@ suite.define(() => {
               }),
             )
             .toBe(true);
+          expect(
+            (await gateway.getRequests("browser.request")).filter(
+              (request) => asNullableRecord(request.params)?.path === "/tabs/focus",
+            ),
+          ).toHaveLength(focusCountBeforeBrowserResult);
         },
       );
     },
   );
 
   it.each(["panel", "older card"])(
-    "preserves browser routes when first opened through %s",
+    "preserves browser routes after automatic reveal through %s",
     async (firstOpen) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
@@ -406,14 +419,15 @@ suite.define(() => {
           const hostCard = page
             .locator("openclaw-browser-tab-card")
             .filter({ hasText: "Managed tab" });
-          // Card thumbnails legitimately capture both routes before the panel opens.
+          // Thumbnails may capture both routes; automatic reveal follows only the latest live result.
           await hostCard.locator(".shot img").waitFor();
           await page
             .locator("openclaw-browser-tab-card")
             .filter({ hasText: "Node tab" })
             .locator(".shot img")
             .waitFor();
-          expect(await page.locator("section.bp").count()).toBe(0);
+          await page.locator('section.bp .bp-shot[alt="Node tab"]').waitFor();
+          expect(await page.locator("section.bp").count()).toBe(1);
           expect(
             (await gateway.getRequests("browser.request")).some(
               (request) => asNullableRecord(request.params)?.path === "/tabs/focus",
@@ -421,21 +435,20 @@ suite.define(() => {
           ).toBe(false);
           const panel = page.locator("section.bp");
           if (firstOpen === "panel") {
-            await openChatSidePanelType(page, "Browser");
+            await page.locator(".chat-side-panel-toggle").click();
+            await panel.waitFor({ state: "hidden" });
+            const beforePanelOpen = (await gateway.getRequests("browser.request")).length;
+            await page.locator(".chat-side-panel-toggle").click();
             await panel.locator('.bp-shot[alt="Node tab"]').waitFor();
             expect(await panel.locator(".bp-profile").textContent()).toBe("work");
-            await expect
-              .poll(async () =>
-                (await gateway.getRequests("browser.request")).map((request) => request.params),
-              )
-              .toContainEqual({
-                method: "POST",
-                path: "/tabs/focus",
-                target: "node",
-                node: "node-a",
-                query: { profile: "work" },
-                body: { targetId: "t1" },
-              });
+            const panelOpenRequests = (await gateway.getRequests("browser.request")).slice(
+              beforePanelOpen,
+            );
+            expect(
+              panelOpenRequests.some(
+                (request) => asNullableRecord(request.params)?.path === "/tabs/focus",
+              ),
+            ).toBe(false);
           }
           const beforeHostOpen = (await gateway.getRequests("browser.request")).length;
           await hostCard.getByRole("button", { name: "Open", exact: true }).click();

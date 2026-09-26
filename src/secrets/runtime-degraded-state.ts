@@ -116,6 +116,7 @@ export function redactSecretDegradationReason(reason: string): SecretDegradation
     case "secret reference was not found":
     case "secret reference was not materialized by the active runtime":
     case "resolved secret value was invalid":
+    case "resolved secret value is a redaction placeholder":
     case "secret resolution failed":
       return reason;
     default:
@@ -162,20 +163,11 @@ function ownerKey(ownerKind: DegradedSecretOwner["ownerKind"], ownerId: string):
   return `${ownerKind}\0${ownerId}`;
 }
 
-function cloneOwner(owner: DegradedSecretOwner): DegradedSecretOwner {
+function cloneOwner<T extends DegradedSecretOwner>(owner: T): T {
   return {
     ...owner,
     paths: [...owner.paths],
     refKeys: [...owner.refKeys],
-  };
-}
-
-function cloneResolutionErrorOwner(owner: SecretResolutionErrorOwner): SecretResolutionErrorOwner {
-  return {
-    ...cloneOwner(owner),
-    degradationState: owner.degradationState,
-    failureMatched: owner.failureMatched,
-    source: owner.source,
   };
 }
 
@@ -220,7 +212,7 @@ export function associateSecretResolutionErrorOwners(
   if ((typeof error !== "object" && typeof error !== "function") || error === null) {
     return;
   }
-  resolutionErrorOwners.set(error, owners.map(cloneResolutionErrorOwner));
+  resolutionErrorOwners.set(error, owners.map(cloneOwner));
 }
 
 /** Returns owner metadata recorded for a strict activation failure. */
@@ -228,7 +220,7 @@ export function listSecretResolutionErrorOwners(error: unknown): SecretResolutio
   if ((typeof error !== "object" && typeof error !== "function") || error === null) {
     return [];
   }
-  return (resolutionErrorOwners.get(error) ?? []).map(cloneResolutionErrorOwner);
+  return (resolutionErrorOwners.get(error) ?? []).map(cloneOwner);
 }
 
 /** Returns one active degraded owner, if present. */

@@ -9,14 +9,6 @@ const pluginSdkLightEntries = [
     test: "src/plugin-sdk/keyed-async-queue.test.ts",
   },
   { source: "src/plugin-sdk/lazy-value.ts", test: "src/plugin-sdk/lazy-value.test.ts" },
-  {
-    source: "src/plugin-sdk/memory-host-events.ts",
-    test: "src/plugin-sdk/memory-host-events.test.ts",
-  },
-  {
-    source: "src/plugin-sdk/persistent-dedupe.ts",
-    test: "src/plugin-sdk/memory-host-events.test.ts",
-  },
   { source: "src/plugin-sdk/provider-entry.ts", test: "src/plugin-sdk/provider-entry.test.ts" },
   {
     source: "src/plugin-sdk/provider-model-shared.ts",
@@ -38,14 +30,20 @@ const pluginSdkLightEntries = [
   },
 ];
 
-const pluginSdkLightIncludePatternByFile = new Map(
-  pluginSdkLightEntries.flatMap(({ source, test }) => [
+const providerToolsNullableTest = "src/plugin-sdk/provider-tools.nullable.test.ts";
+const pluginSdkLightIncludePatternByFile = new Map([
+  ...pluginSdkLightEntries.flatMap(({ source, test }) => [
     [source, test],
     [test, test],
   ]),
-);
+  ["src/plugin-sdk/provider-tools.ts", "src/plugin-sdk/provider-tools{,.nullable}.test.ts"],
+  [providerToolsNullableTest, providerToolsNullableTest],
+]);
 
-export const pluginSdkLightTestFiles = pluginSdkLightEntries.map(({ test }) => test);
+export const pluginSdkLightTestFiles = [
+  ...pluginSdkLightEntries.map(({ test }) => test),
+  providerToolsNullableTest,
+];
 
 export function isPluginSdkLightTarget(file) {
   return pluginSdkLightIncludePatternByFile.has(normalizeRepoPath(file));

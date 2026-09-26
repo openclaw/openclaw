@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
+import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 
 export const capabilityCatalogFamilies = [
   "speechProviders",
@@ -23,7 +24,7 @@ export function resolveCapabilityProviderRegistration<T extends { id: string }>(
       "Capability provider factories require host context; supply resolveCapabilityCatalogContext when creating the registry.",
     );
   }
-  const provider = entry(resolveContext());
+  const provider = entry(wrapCurrentPluginInstance(resolveContext()));
   if (isPromiseLike(provider)) {
     void Promise.resolve(provider).catch(() => {});
     throw new Error("capability provider factories must be synchronous");

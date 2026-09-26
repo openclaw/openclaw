@@ -258,6 +258,114 @@ suite.define(() => {
     }
   });
 
+  it("hydrates one terminal when same-run tool history overlaps final persistence", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const runId = "tool-heavy-run";
+    const promptText = "Inspect the repository.";
+    const boundaryText = "Checking the repository.";
+    const finalText = "The repair is complete.";
+    const prompt = {
+      role: "user",
+      content: [{ type: "text", text: promptText }],
+      __openclaw: { id: "prompt", idempotencyKey: `${runId}:user`, seq: 1 },
+      timestamp: Date.now(),
+    };
+    const toolBoundary = {
+      role: "assistant",
+      content: [
+        { type: "text", text: boundaryText },
+        { type: "toolCall", id: "read-1", name: "read", arguments: { path: "AGENTS.md" } },
+      ],
+      __openclaw: { id: "assistant-tool-boundary", runId, seq: 2 },
+      timestamp: Date.now(),
+    };
+    const persistedFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: finalText }],
+      __openclaw: { id: "assistant-final", runId, runTerminal: true, seq: 4 },
+      timestamp: Date.now(),
+    };
+
+    try {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.history"],
+        methodResponses: {
+          "chat.history": {
+            messages: [],
+            sessionId: "session:agent:main:main",
+            sessionInfo: {
+              activeRunIds: [],
+              hasActiveRun: false,
+              key: "main",
+              kind: "direct",
+              status: "done",
+              updatedAt: Date.now(),
+            },
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitChatFinal({ runId, text: finalText });
+      await page.locator(".chat-thread-inner").getByText(finalText, { exact: true }).waitFor();
+
+      await gateway.setHistoryMessages([prompt, toolBoundary, persistedFinal]);
+      const historyBefore = (await gateway.getRequests("chat.history")).length;
+      await gateway.emitGatewayEvent("session.message", {
+        activeRunIds: [],
+        hasActiveRun: false,
+        message: prompt,
+        messageId: "prompt",
+        messageSeq: 1,
+        session: {
+          activeRunIds: [],
+          hasActiveRun: false,
+          key: "main",
+          kind: "direct",
+          status: "done",
+          updatedAt: Date.now(),
+        },
+        sessionKey: "main",
+      });
+      await gateway.waitForRequest("chat.history", { after: historyBefore });
+      await gateway.resolveDeferred("chat.history", {
+        messages: [prompt, toolBoundary, persistedFinal],
+        sessionId: "session:agent:main:main",
+        sessionInfo: {
+          activeRunIds: [],
+          hasActiveRun: false,
+          key: "main",
+          kind: "direct",
+          lastRunId: runId,
+          status: "done",
+          updatedAt: Date.now(),
+        },
+      });
+
+      const thread = page.locator(".chat-thread-inner");
+      await thread.getByText(boundaryText, { exact: true }).waitFor();
+      await expect
+        .poll(() =>
+          thread.locator(".chat-group.assistant .chat-bubble", { hasText: finalText }).count(),
+        )
+        .toBe(1);
+      await expect
+        .poll(() =>
+          thread.evaluate(
+            (element, texts) => {
+              const rows = Array.from(element.querySelectorAll(".chat-bubble"));
+              return texts.map((text) => rows.findIndex((row) => row.textContent?.includes(text)));
+            },
+            [promptText, boundaryText, finalText],
+          ),
+        )
+        .toEqual([0, 1, 2]);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps durable turns ordered when a live final arrives before transcript events", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();

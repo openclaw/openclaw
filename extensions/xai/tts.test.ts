@@ -1,9 +1,18 @@
 // Xai tests cover tts plugin behavior.
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { isValidXaiTtsVoice, XAI_TTS_FALLBACK_VOICES } from "./speech-provider-metadata.js";
 import { listXaiTtsVoices, xaiTTS, xaiTTSStream } from "./tts.js";
+
+const ttsRequest = {
+  text: "hello",
+  apiKey: "dummy",
+  baseUrl: XAI_BASE_URL,
+  voiceId: "eve",
+  timeoutMs: 5_000,
+};
 
 const { FakeWebSocket } = vi.hoisted(() => {
   type Listener = (...args: unknown[]) => void;
@@ -70,29 +79,10 @@ vi.mock("./ws-runtime.js", () => ({
   WebSocket: FakeWebSocket,
 }));
 
-function createStreamingAudioResponse(params: {
-  chunkCount: number;
-  chunkSize: number;
-  byte: number;
-}): { response: Response; getReadCount: () => number } {
-  let reads = 0;
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (reads >= params.chunkCount) {
-        controller.close();
-        return;
-      }
-      reads += 1;
-      controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
-    },
-  });
-  return {
-    response: new Response(stream, {
-      status: 200,
-      headers: { "Content-Type": "audio/mpeg" },
-    }),
-    getReadCount: () => reads,
-  };
+function mockFetch(response: Response) {
+  const fetchMock = vi.fn<typeof fetch>(async () => response);
+  globalThis.fetch = fetchMock;
+  return fetchMock;
 }
 
 describe("xai tts", () => {
@@ -132,27 +122,22 @@ describe("xai tts", () => {
   describe("listXaiTtsVoices", () => {
     it("maps the authenticated catalog and sends the expected request", async () => {
       vi.stubEnv("OPENCLAW_VERSION", "2026.7.9");
-      const fetchMock = vi.fn(
-        async (_input: RequestInfo | URL, _init?: RequestInit) =>
-          new Response(
-            JSON.stringify({
-              voices: [
-                {
-                  voice_id: "altair",
-                  name: "Altair",
-                  language: "en",
-                  gender: "male",
-                },
-                { voice_id: "  celeste  ", name: " Celeste " },
-                { voice_id: " " },
-                { name: "missing id" },
-                null,
-              ],
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
+      const fetchMock = mockFetch(
+        Response.json({
+          voices: [
+            {
+              voice_id: "altair",
+              name: "Altair",
+              language: "en",
+              gender: "male",
+            },
+            { voice_id: "  celeste  ", name: " Celeste " },
+            { voice_id: " " },
+            { name: "missing id" },
+            null,
+          ],
+        }),
       );
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
 
       const voices = await listXaiTtsVoices({
         apiKey: "xai-key",
@@ -179,25 +164,24 @@ describe("xai tts", () => {
     });
 
     it("includes provider detail and request id for catalog errors", async () => {
-      globalThis.fetch = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              error: {
-                message: "Invalid API key",
-                type: "invalid_request_error",
-                code: "invalid_api_key",
-              },
-            }),
-            {
-              status: 401,
-              headers: {
-                "Content-Type": "application/json",
-                "x-request-id": "req_voices",
-              },
+      mockFetch(
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "Invalid API key",
+              type: "invalid_request_error",
+              code: "invalid_api_key",
             },
-          ),
-      ) as unknown as typeof fetch;
+          }),
+          {
+            status: 401,
+            headers: {
+              "Content-Type": "application/json",
+              "x-request-id": "req_voices",
+            },
+          },
+        ),
+      );
 
       await expect(listXaiTtsVoices({ apiKey: "bad-key" })).rejects.toThrow(
         "xAI TTS voices API error (401): Invalid API key [type=invalid_request_error, code=invalid_api_key] [request_id=req_voices]",
@@ -205,13 +189,7 @@ describe("xai tts", () => {
     });
 
     it("rejects malformed catalog payloads", async () => {
-      globalThis.fetch = vi.fn(
-        async () =>
-          new Response(JSON.stringify({ items: [] }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-      ) as unknown as typeof fetch;
+      mockFetch(Response.json({ items: [] }));
 
       await expect(listXaiTtsVoices({ apiKey: "xai-key" })).rejects.toThrow(
         "xAI TTS voices: malformed JSON response",
@@ -219,13 +197,7 @@ describe("xai tts", () => {
     });
 
     it("caps catalog responses before parsing JSON", async () => {
-      globalThis.fetch = vi.fn(
-        async () =>
-          new Response(JSON.stringify({ voices: [], padding: "x".repeat(1024 * 1024) }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-      ) as unknown as typeof fetch;
+      mockFetch(Response.json({ voices: [], padding: "x".repeat(1024 * 1024) }));
 
       await expect(listXaiTtsVoices({ apiKey: "xai-key" })).rejects.toThrow(
         "xAI TTS voices: JSON response exceeds 1048576 bytes",
@@ -236,14 +208,10 @@ describe("xai tts", () => {
   describe("xaiTTSStream", () => {
     it("streams decoded audio chunks without buffering the full body", async () => {
       const resultPromise = xaiTTSStream({
-        text: "hello",
-        apiKey: "dummy",
-        baseUrl: XAI_BASE_URL,
-        voiceId: "eve",
+        ...ttsRequest,
         language: "en",
         responseFormat: "mp3",
         speed: 1.1,
-        timeoutMs: 5_000,
         maxBytes: 3_000,
       });
       const ws = FakeWebSocket.instances.at(0);
@@ -278,11 +246,7 @@ describe("xai tts", () => {
 
     it("errors and releases the stream for malformed audio base64", async () => {
       const resultPromise = xaiTTSStream({
-        text: "hello",
-        apiKey: "dummy",
-        baseUrl: XAI_BASE_URL,
-        voiceId: "eve",
-        timeoutMs: 5_000,
+        ...ttsRequest,
       });
       const ws = FakeWebSocket.instances.at(0);
       ws?.emit("open");
@@ -301,11 +265,8 @@ describe("xai tts", () => {
     it("splits text above xAI's 15,000-character limit into ordered delta frames", async () => {
       const text = `${"a".repeat(15_000)}${"b".repeat(15_000)}c`;
       const resultPromise = xaiTTSStream({
+        ...ttsRequest,
         text,
-        apiKey: "dummy",
-        baseUrl: XAI_BASE_URL,
-        voiceId: "eve",
-        timeoutMs: 5_000,
       });
       const ws = FakeWebSocket.instances.at(0);
       ws?.emit("open");
@@ -325,11 +286,8 @@ describe("xai tts", () => {
     it("does not split a surrogate pair at the delta frame boundary", async () => {
       const text = `${"a".repeat(14_999)}😀${"b".repeat(15_000)}`;
       const resultPromise = xaiTTSStream({
+        ...ttsRequest,
         text,
-        apiKey: "dummy",
-        baseUrl: XAI_BASE_URL,
-        voiceId: "eve",
-        timeoutMs: 5_000,
       });
       const ws = FakeWebSocket.instances.at(0);
       ws?.emit("open");
@@ -354,11 +312,8 @@ describe("xai tts", () => {
     it("keeps exactly 15,000 characters in one delta frame", async () => {
       const text = "a".repeat(15_000);
       const resultPromise = xaiTTSStream({
+        ...ttsRequest,
         text,
-        apiKey: "dummy",
-        baseUrl: XAI_BASE_URL,
-        voiceId: "eve",
-        timeoutMs: 5_000,
       });
       const ws = FakeWebSocket.instances.at(0);
       ws?.emit("open");
@@ -375,13 +330,9 @@ describe("xai tts", () => {
 
     it("rejects upgrade failures before streaming starts", async () => {
       const resultPromise = xaiTTSStream({
-        text: "hello",
-        apiKey: "dummy",
-        baseUrl: XAI_BASE_URL,
-        voiceId: "eve",
+        ...ttsRequest,
         language: "en",
         responseFormat: "mp3",
-        timeoutMs: 5_000,
       });
       const ws = FakeWebSocket.instances.at(0);
       ws?.emit("unexpected-response", {}, { statusCode: 401, statusMessage: "Unauthorized" });
@@ -393,13 +344,10 @@ describe("xai tts", () => {
     it("rejects non-native baseUrl hosts before opening a WebSocket", async () => {
       await expect(
         xaiTTSStream({
-          text: "hello",
-          apiKey: "dummy",
+          ...ttsRequest,
           baseUrl: "https://proxy.example/v1",
-          voiceId: "eve",
           language: "en",
           responseFormat: "mp3",
-          timeoutMs: 5_000,
         }),
       ).rejects.toThrow('only supports the native api.x.ai endpoint; got host "proxy.example"');
       expect(FakeWebSocket.instances).toHaveLength(0);
@@ -408,13 +356,10 @@ describe("xai tts", () => {
     it("rejects HTTP native baseUrl before opening a WebSocket", async () => {
       await expect(
         xaiTTSStream({
-          text: "hello",
-          apiKey: "dummy",
+          ...ttsRequest,
           baseUrl: "http://api.x.ai/v1",
-          voiceId: "eve",
           language: "en",
           responseFormat: "mp3",
-          timeoutMs: 5_000,
         }),
       ).rejects.toThrow("only supports HTTPS for the native api.x.ai endpoint");
       expect(FakeWebSocket.instances).toHaveLength(0);
@@ -429,11 +374,8 @@ describe("xai tts", () => {
     ])("rejects non-canonical native endpoint shape %s", async (baseUrl) => {
       await expect(
         xaiTTSStream({
-          text: "hello",
-          apiKey: "dummy",
+          ...ttsRequest,
           baseUrl,
-          voiceId: "eve",
-          timeoutMs: 5_000,
         }),
       ).rejects.toThrow(`requires the canonical ${XAI_BASE_URL} base URL`);
       expect(FakeWebSocket.instances).toHaveLength(0);
@@ -441,10 +383,7 @@ describe("xai tts", () => {
 
     it("fails promptly when the socket closes before open", async () => {
       const resultPromise = xaiTTSStream({
-        text: "hello",
-        apiKey: "dummy",
-        baseUrl: XAI_BASE_URL,
-        voiceId: "eve",
+        ...ttsRequest,
         language: "en",
         responseFormat: "mp3",
         timeoutMs: 60_000,
@@ -456,13 +395,9 @@ describe("xai tts", () => {
 
     it("closes idempotently when released before audio.done", async () => {
       const resultPromise = xaiTTSStream({
-        text: "hello",
-        apiKey: "dummy",
-        baseUrl: XAI_BASE_URL,
-        voiceId: "eve",
+        ...ttsRequest,
         language: "en",
         responseFormat: "mp3",
-        timeoutMs: 5_000,
       });
       const ws = FakeWebSocket.instances.at(0);
       ws?.emit("open");
@@ -479,13 +414,9 @@ describe("xai tts", () => {
     it("refreshes the synthesis idle timeout for each audio chunk", async () => {
       vi.useFakeTimers();
       const resultPromise = xaiTTSStream({
-        text: "hello",
-        apiKey: "dummy",
-        baseUrl: XAI_BASE_URL,
-        voiceId: "eve",
+        ...ttsRequest,
         language: "en",
         responseFormat: "mp3",
-        timeoutMs: 5_000,
       });
       const ws = FakeWebSocket.instances.at(0);
       ws?.emit("open");
@@ -507,13 +438,9 @@ describe("xai tts", () => {
 
     it("caps streamed audio responses instead of forwarding oversized output", async () => {
       const resultPromise = xaiTTSStream({
-        text: "hello",
-        apiKey: "dummy",
-        baseUrl: XAI_BASE_URL,
-        voiceId: "eve",
+        ...ttsRequest,
         language: "en",
         responseFormat: "mp3",
-        timeoutMs: 5_000,
         maxBytes: 4,
       });
       const ws = FakeWebSocket.instances.at(0);
@@ -531,36 +458,31 @@ describe("xai tts", () => {
 
   describe("xaiTTS diagnostics", () => {
     it("includes parsed provider detail and request id for JSON API errors", async () => {
-      const fetchMock = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              error: {
-                message: "Invalid API key",
-                type: "invalid_request_error",
-                code: "invalid_api_key",
-              },
-            }),
-            {
-              status: 401,
-              headers: {
-                "Content-Type": "application/json",
-                "x-request-id": "req_123",
-              },
+      mockFetch(
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "Invalid API key",
+              type: "invalid_request_error",
+              code: "invalid_api_key",
             },
-          ),
+          }),
+          {
+            status: 401,
+            headers: {
+              "Content-Type": "application/json",
+              "x-request-id": "req_123",
+            },
+          },
+        ),
       );
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
 
       await expect(
         xaiTTS({
-          text: "hello",
+          ...ttsRequest,
           apiKey: "bad-key",
-          baseUrl: XAI_BASE_URL,
-          voiceId: "eve",
           language: "en",
           responseFormat: "mp3",
-          timeoutMs: 5_000,
         }),
       ).rejects.toThrow(
         "xAI TTS API error (401): Invalid API key [type=invalid_request_error, code=invalid_api_key] [request_id=req_123]",
@@ -569,23 +491,18 @@ describe("xai tts", () => {
 
     it("sends an openclaw User-Agent on xAI TTS requests", async () => {
       vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-      const fetchMock = vi.fn(
-        async (_input: RequestInfo | URL, _init?: RequestInit) =>
-          new Response(Buffer.from("audio-bytes"), {
-            status: 200,
-            headers: { "Content-Type": "audio/mpeg" },
-          }),
+      const fetchMock = mockFetch(
+        new Response(Buffer.from("audio-bytes"), {
+          status: 200,
+          headers: { "Content-Type": "audio/mpeg" },
+        }),
       );
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
 
       await xaiTTS({
-        text: "hello",
+        ...ttsRequest,
         apiKey: "ok-key",
-        baseUrl: XAI_BASE_URL,
-        voiceId: "eve",
         language: "en",
         responseFormat: "mp3",
-        timeoutMs: 5_000,
       });
 
       const init = fetchMock.mock.calls.at(0)?.[1];
@@ -596,23 +513,20 @@ describe("xai tts", () => {
     });
 
     it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
-      const streamed = createStreamingAudioResponse({
+      const streamed = createStreamingResponse({
         chunkCount: 20,
         chunkSize: 1024,
         byte: 121,
+        headers: { "Content-Type": "audio/mpeg" },
       });
-      const fetchMock = vi.fn(async () => streamed.response);
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      mockFetch(streamed.response);
 
       await expect(
         xaiTTS({
-          text: "hello",
+          ...ttsRequest,
           apiKey: "ok-key",
-          baseUrl: XAI_BASE_URL,
-          voiceId: "eve",
           language: "en",
           responseFormat: "mp3",
-          timeoutMs: 5_000,
           maxBytes: 2048,
         }),
       ).rejects.toThrow("xAI TTS audio response exceeds 2048 bytes");
@@ -621,20 +535,14 @@ describe("xai tts", () => {
     });
 
     it("falls back to raw body text when the error body is non-JSON", async () => {
-      const fetchMock = vi.fn(
-        async () => new Response("temporary upstream outage", { status: 503 }),
-      );
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      mockFetch(new Response("temporary upstream outage", { status: 503 }));
 
       await expect(
         xaiTTS({
-          text: "hello",
+          ...ttsRequest,
           apiKey: "test-key",
-          baseUrl: XAI_BASE_URL,
-          voiceId: "eve",
           language: "en",
           responseFormat: "mp3",
-          timeoutMs: 5_000,
         }),
       ).rejects.toThrow("xAI TTS API error (503): temporary upstream outage");
     });
@@ -645,22 +553,14 @@ describe("xai tts", () => {
     { name: "HTML", contentType: "text/html; charset=utf-8", body: "<html>sign in</html>" },
     { name: "empty audio", contentType: "audio/mpeg", body: "" },
   ])("rejects a successful $name response as synthesized audio", async ({ contentType, body }) => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(body, { status: 200, headers: { "content-type": contentType } }),
-      );
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    mockFetch(new Response(body, { status: 200, headers: { "content-type": contentType } }));
 
     await expect(
       xaiTTS({
-        text: "hello",
+        ...ttsRequest,
         apiKey: "ok-key",
-        baseUrl: XAI_BASE_URL,
-        voiceId: "eve",
         language: "en",
         responseFormat: "mp3",
-        timeoutMs: 5_000,
       }),
     ).rejects.toThrow("xAI TTS API error: malformed audio response");
   });

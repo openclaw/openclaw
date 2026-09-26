@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements lab server ui behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
@@ -8,6 +7,7 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath, format as formatUrl } from "node:url";
+import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeError } from "./bus-server.js";
 
@@ -72,23 +72,15 @@ function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd())
   );
 }
 
-function listUiAssetFiles(rootDir: string, currentDir = rootDir): string[] {
-  const entries = fs
-    .readdirSync(currentDir, { withFileTypes: true })
-    .toSorted((left, right) => left.name.localeCompare(right.name));
-  const files: string[] = [];
-  for (const entry of entries) {
-    const resolved = path.join(currentDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...listUiAssetFiles(rootDir, resolved));
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    files.push(path.relative(rootDir, resolved));
+function listUiAssetFiles(rootDir: string): string[] {
+  const scan = walkDirectorySync(rootDir, {
+    symlinks: "skip",
+    include: (entry) => entry.kind === "file",
+  });
+  if (scan.failedDirs.length > 0) {
+    throw scan.failedDirs[0]!.error;
   }
-  return files;
+  return scan.entries.map((entry) => entry.relativePath).toSorted();
 }
 
 export function resolveUiAssetVersion(

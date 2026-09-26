@@ -1,6 +1,8 @@
 import { type Mock, vi } from "vitest";
+import type { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
-import type { configureNodeHost } from "./config.js";
+import type { loadDeviceAuthTokenReadOnly } from "../infra/device-auth-store.js";
+import type { configureNodeHost, NodeHostConfig } from "./config.js";
 
 const mocks = vi.hoisted(() => ({
   capturedGatewayClientOptions: [] as GatewayClientOptions[],
@@ -9,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     request: Mock<(method: string, params?: unknown) => Promise<unknown>>;
     start: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
+    stopAndWait: ReturnType<typeof vi.fn<() => Promise<void>>>;
     updateNodeManifest: ReturnType<typeof vi.fn>;
   }>,
   mcpDescriptors: [] as Array<Record<string, unknown>>,
@@ -17,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
   runtimeSteps: [] as string[],
   useFakeRuntime: false,
+  useRealGatewayClient: false,
   fakeRuntimeWorkerHosting: false,
   fakeRuntimeWorkerHostingDisabledReason: undefined as string | undefined,
   runnerCapacityChanged: undefined as
@@ -32,7 +36,8 @@ const mocks = vi.hoisted(() => ({
     | { request: (method: string, params?: unknown) => Promise<unknown> }
     | undefined,
   closeMcpManager: vi.fn(async () => undefined),
-  runStartupMigrations: vi.fn(async () => undefined),
+  loadNodeHostConfig: vi.fn<() => Promise<NodeHostConfig | null>>(async () => null),
+  loadDeviceAuthTokenReadOnly: vi.fn<typeof loadDeviceAuthTokenReadOnly>(async () => null),
   configureNodeHost: vi.fn(async (params: Parameters<typeof configureNodeHost>[0]) => {
     mocks.capturedConfiguredGatewayConfigs.push(params.gateway);
     return {
@@ -43,17 +48,23 @@ const mocks = vi.hoisted(() => ({
     };
   }),
   getRuntimeConfig: vi.fn<() => unknown>(() => ({ gateway: { handshakeTimeoutMs: 1_000 } })),
-  startGatewayClientWhenEventLoopReady: vi.fn(async () => ({
-    ready: false,
-    aborted: false,
-    elapsedMs: 0,
-  })),
+  startGatewayClientWhenEventLoopReady: vi.fn<typeof startGatewayClientWhenEventLoopReady>(
+    async () => ({
+      ready: false,
+      aborted: false,
+      elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 0,
+    }),
+  ),
   resolveGatewayCredentialsWithSecretInputs: vi.fn(async (_params: { config: unknown }) => ({})),
   activeRuntime: {
     invoke: vi.fn(async () => {}),
     handleInput: vi.fn(),
     cancel: vi.fn(),
     cancelAll: vi.fn(),
+    tryPauseForUpdate: vi.fn(async () => true),
+    resumeAfterUpdate: vi.fn(),
     updateGatewayConnection: vi.fn(),
     close: vi.fn(async () => {}),
   },
@@ -63,7 +74,7 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
-vi.mock("../gateway/client-start-readiness.js", () => ({
+vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: mocks.startGatewayClientWhenEventLoopReady,
 }));
 
@@ -72,10 +83,14 @@ vi.mock("../gateway/client.js", async (importOriginal) => {
   return {
     ...actual,
     GatewayClient: function GatewayClient(opts: GatewayClientOptions) {
+      if (mocks.useRealGatewayClient) {
+        return new actual.GatewayClient(opts);
+      }
       const client = {
         request: vi.fn(async () => ({})),
         start: vi.fn(),
         stop: vi.fn(),
+        stopAndWait: vi.fn(async () => {}),
         updateNodeManifest: vi.fn(),
       };
       mocks.capturedGatewayClientOptions.push(opts);
@@ -89,11 +104,17 @@ vi.mock("../gateway/credentials-secret-inputs.js", () => ({
   resolveGatewayCredentialsWithSecretInputs: mocks.resolveGatewayCredentialsWithSecretInputs,
 }));
 
-vi.mock("../infra/device-identity.js", () => ({
+vi.mock("../infra/device-auth-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-auth-store.js")>()),
+  loadDeviceAuthTokenReadOnly: mocks.loadDeviceAuthTokenReadOnly,
+}));
+
+vi.mock("../infra/device-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
   loadOrCreateDeviceIdentity: vi.fn(() => ({
-    id: "device-test",
-    publicKey: "public-key-test",
-    privateKey: "private-key-test",
+    deviceId: "device-test",
+    publicKeyPem: "public-key-test",
+    privateKeyPem: "private-key-test",
   })),
 }));
 
@@ -120,10 +141,12 @@ vi.mock("../infra/path-env.js", () => ({
 
 vi.mock("./config.js", () => ({
   configureNodeHost: mocks.configureNodeHost,
+  loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
 
 vi.mock("./plugin-node-host.js", () => ({
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
+  notifyRegisteredNodeHostCommandDisconnect: vi.fn(async () => {}),
   listRegisteredNodeHostCapsAndCommands: vi.fn((context: { env: NodeJS.ProcessEnv }) => {
     mocks.runtimeSteps.push(`commands:${context.env.PATH ?? ""}`);
     return {
@@ -166,8 +189,8 @@ vi.mock("./skills.js", () => ({
   scanNodeHostedSkills: vi.fn(() => mocks.nodeSkillDescriptors),
 }));
 
-vi.mock("./startup-state-migrations.js", () => ({
-  runStartupMigrations: mocks.runStartupMigrations,
+vi.mock("./startup-state-readiness.js", () => ({
+  ensureNodeHostStateReady: () => {},
 }));
 
 vi.mock("./runtime.js", async (importOriginal) => {
@@ -187,6 +210,7 @@ vi.mock("./runtime.js", async (importOriginal) => {
           pathEnv: process.env.PATH ?? "",
         },
         workerHostingEnabled: mocks.fakeRuntimeWorkerHosting,
+        preparedWorkspacesEnabled: false,
         workerHostingDisabledReason: mocks.fakeRuntimeWorkerHostingDisabledReason,
         initialInventory: { skills: [], pluginTools: [] },
         start: (params) => {
@@ -225,6 +249,7 @@ export function resetRunnerTestState() {
   mocks.nodeSkillDescriptors = [];
   mocks.runtimeSteps = [];
   mocks.useFakeRuntime = false;
+  mocks.useRealGatewayClient = false;
   mocks.fakeRuntimeWorkerHosting = false;
   mocks.fakeRuntimeWorkerHostingDisabledReason = undefined;
   mocks.runnerCapacityChanged = undefined;
@@ -236,6 +261,8 @@ export function resetRunnerTestState() {
   mocks.resolvedExecutables.clear();
   mocks.runtimeClient = undefined;
   vi.clearAllMocks();
+  mocks.loadNodeHostConfig.mockReset().mockResolvedValue(null);
+  mocks.loadDeviceAuthTokenReadOnly.mockReset().mockResolvedValue(null);
   mocks.getRuntimeConfig.mockReturnValue({
     gateway: { handshakeTimeoutMs: 1_000 },
   });

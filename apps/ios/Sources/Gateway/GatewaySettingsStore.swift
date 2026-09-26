@@ -1,6 +1,7 @@
 import Foundation
 import OpenClawKit
 import os
+import Security
 
 enum GatewayCredentialPersistenceError: Error, Equatable, LocalizedError {
     case invalidOwner
@@ -72,26 +73,6 @@ enum GatewaySettingsStore {
         var useTLS: Bool
         var contextPath: String?
         var lastConnectedAtMs: Int?
-
-        init(
-            stableID: String,
-            kind: Kind,
-            name: String,
-            host: String?,
-            port: Int?,
-            useTLS: Bool,
-            contextPath: String? = nil,
-            lastConnectedAtMs: Int?)
-        {
-            self.stableID = stableID
-            self.kind = kind
-            self.name = name
-            self.host = host
-            self.port = port
-            self.useTLS = useTLS
-            self.contextPath = contextPath
-            self.lastConnectedAtMs = lastConnectedAtMs
-        }
 
         var id: GatewayStableIdentifier.Key {
             GatewayStableIdentifier.Key(self.stableID)
@@ -167,7 +148,9 @@ enum GatewaySettingsStore {
     }
 
     static func loadStableInstanceID() -> String? {
-        if let value = KeychainStore.loadString(service: self.nodeService, account: self.instanceIdAccount)?
+        if let value = GenericPasswordKeychainStore.loadString(
+            service: self.nodeService,
+            account: self.instanceIdAccount)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty
         {
@@ -178,46 +161,49 @@ enum GatewaySettingsStore {
     }
 
     static func saveStableInstanceID(_ instanceId: String) {
-        _ = KeychainStore.saveString(instanceId, service: self.nodeService, account: self.instanceIdAccount)
+        _ = GenericPasswordKeychainStore.saveString(
+            instanceId,
+            service: self.nodeService,
+            account: self.instanceIdAccount)
     }
 
     static func loadPreferredGatewayStableID() -> String? {
-        GatewayStableIdentifier.exact(KeychainStore.loadString(
+        GatewayStableIdentifier.exact(GenericPasswordKeychainStore.loadString(
             service: self.gatewayService,
             account: self.preferredGatewayStableIDAccount))
     }
 
     static func savePreferredGatewayStableID(_ stableID: String) {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return }
-        _ = KeychainStore.saveString(
+        _ = GenericPasswordKeychainStore.saveString(
             stableID,
             service: self.gatewayService,
             account: self.preferredGatewayStableIDAccount)
     }
 
     static func clearPreferredGatewayStableID(defaults: UserDefaults = .standard) {
-        _ = KeychainStore.delete(
+        _ = GenericPasswordKeychainStore.delete(
             service: self.gatewayService,
             account: self.preferredGatewayStableIDAccount)
         defaults.removeObject(forKey: self.preferredGatewayStableIDDefaultsKey)
     }
 
     static func loadLastDiscoveredGatewayStableID() -> String? {
-        GatewayStableIdentifier.exact(KeychainStore.loadString(
+        GatewayStableIdentifier.exact(GenericPasswordKeychainStore.loadString(
             service: self.gatewayService,
             account: self.lastDiscoveredGatewayStableIDAccount))
     }
 
     static func saveLastDiscoveredGatewayStableID(_ stableID: String) {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return }
-        _ = KeychainStore.saveString(
+        _ = GenericPasswordKeychainStore.saveString(
             stableID,
             service: self.gatewayService,
             account: self.lastDiscoveredGatewayStableIDAccount)
     }
 
     static func clearLastDiscoveredGatewayStableID(defaults: UserDefaults = .standard) {
-        _ = KeychainStore.delete(
+        _ = GenericPasswordKeychainStore.delete(
             service: self.gatewayService,
             account: self.lastDiscoveredGatewayStableIDAccount)
         defaults.removeObject(forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
@@ -321,18 +307,18 @@ enum GatewaySettingsStore {
         guard !stableID.isEmpty else { return [:] }
         let account = self.customHeadersAccount(stableID: stableID)
         let legacyAccount = self.legacyCustomHeadersAccount(stableID: stableID)
-        let canonicalJSON = KeychainStore.loadString(service: service, account: account)
+        let canonicalJSON = GenericPasswordKeychainStore.loadString(service: service, account: account)
         let legacyJSON = self.canSafelyReadLegacyRawStorageKey(stableID)
-            ? KeychainStore.loadString(service: service, account: legacyAccount)
+            ? GenericPasswordKeychainStore.loadString(service: service, account: legacyAccount)
             : nil
         guard let json = canonicalJSON ?? legacyJSON,
               let data = json.data(using: .utf8),
               let headers = try? JSONDecoder().decode([String: String].self, from: data)
         else { return [:] }
         if canonicalJSON == nil,
-           KeychainStore.saveString(json, service: service, account: account)
+           GenericPasswordKeychainStore.saveString(json, service: service, account: account)
         {
-            _ = KeychainStore.delete(service: service, account: legacyAccount)
+            _ = GenericPasswordKeychainStore.delete(service: service, account: legacyAccount)
         }
         return GatewayCustomHeaders.sanitized(headers)
     }
@@ -361,9 +347,9 @@ enum GatewaySettingsStore {
         guard let data = try? JSONEncoder().encode(sanitized),
               let json = String(data: data, encoding: .utf8)
         else { return false }
-        guard KeychainStore.saveString(json, service: service, account: account) else { return false }
+        guard GenericPasswordKeychainStore.saveString(json, service: service, account: account) else { return false }
         if self.canSafelyReadLegacyRawStorageKey(stableID) {
-            _ = KeychainStore.delete(
+            _ = GenericPasswordKeychainStore.delete(
                 service: service,
                 account: self.legacyCustomHeadersAccount(stableID: stableID))
         }
@@ -388,20 +374,24 @@ enum GatewaySettingsStore {
         let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
         guard !stableID.isEmpty else { return false }
         let account = self.customHeadersAccount(stableID: stableID)
-        let canonicalDeleted = KeychainStore.delete(service: service, account: account)
+        let canonicalDeleted = GenericPasswordKeychainStore.delete(service: service, account: account)
         var legacyCleared = true
         if self.canSafelyReadLegacyRawStorageKey(stableID) {
             let legacyAccount = self.legacyCustomHeadersAccount(stableID: stableID)
-            let legacyDeleted = KeychainStore.delete(service: service, account: legacyAccount)
-            legacyCleared = legacyDeleted || KeychainStore.loadString(service: service, account: legacyAccount) == nil
+            let legacyDeleted = GenericPasswordKeychainStore.delete(service: service, account: legacyAccount)
+            legacyCleared = legacyDeleted || GenericPasswordKeychainStore.loadString(
+                service: service,
+                account: legacyAccount) == nil
         }
-        let canonicalCleared = canonicalDeleted || KeychainStore.loadString(service: service, account: account) == nil
+        let canonicalCleared = canonicalDeleted || GenericPasswordKeychainStore.loadString(
+            service: service,
+            account: account) == nil
         return canonicalCleared && legacyCleared
     }
 
     @discardableResult
     static func clearGatewayCustomHeaders(service: String) -> Bool {
-        KeychainStore.deleteAll(service: service)
+        GenericPasswordKeychainStore.deleteAll(service: service)
     }
 
     private static func customHeadersAccount(stableID: String) -> String {
@@ -429,7 +419,7 @@ enum GatewaySettingsStore {
             self.gatewayPasswordAccount(instanceId: trimmedInstanceID),
         ]
         let hasLegacyCredentials = legacyAccounts.contains { account in
-            self.normalizedCredential(KeychainStore.loadString(
+            self.normalizedCredential(GenericPasswordKeychainStore.loadString(
                 service: self.gatewayService,
                 account: account)) != nil
         }
@@ -463,7 +453,7 @@ enum GatewaySettingsStore {
     }
 
     static func saveLegacyGatewayTokenForMigrationTest(_ token: String, instanceId: String) {
-        _ = KeychainStore.saveString(
+        _ = GenericPasswordKeychainStore.saveString(
             token,
             service: self.gatewayService,
             account: self.gatewayTokenAccount(instanceId: instanceId))
@@ -480,7 +470,7 @@ enum GatewaySettingsStore {
     static func loadTalkProviderApiKey(provider: String) -> String? {
         guard let providerId = self.normalizedTalkProviderID(provider) else { return nil }
         let account = self.talkProviderApiKeyAccount(providerId: providerId)
-        let value = KeychainStore.loadString(
+        let value = GenericPasswordKeychainStore.loadString(
             service: self.talkService,
             account: account)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -489,7 +479,7 @@ enum GatewaySettingsStore {
     }
 
     static func loadGatewayRegistry() -> GatewayRegistry {
-        guard let json = KeychainStore.loadString(
+        guard let json = GenericPasswordKeychainStore.loadString(
             service: self.gatewayService,
             account: self.gatewayRegistryAccount),
             let data = json.data(using: .utf8),
@@ -500,12 +490,7 @@ enum GatewaySettingsStore {
     }
 
     @discardableResult
-    static func upsertGatewayRegistryEntry(_ entry: GatewayRegistryEntry) -> Bool {
-        self.upsertGatewayRegistryEntry(entry, activate: false)
-    }
-
-    @discardableResult
-    static func upsertGatewayRegistryEntry(_ entry: GatewayRegistryEntry, activate: Bool) -> Bool {
+    static func upsertGatewayRegistryEntry(_ entry: GatewayRegistryEntry, activate: Bool = false) -> Bool {
         guard let normalized = self.normalizedGatewayRegistryEntry(entry) else { return false }
         var registry = self.loadGatewayRegistry()
         if let index = registry.entries.firstIndex(where: {
@@ -572,35 +557,15 @@ enum GatewaySettingsStore {
             if GatewayStableIdentifier.matches(defaultsValue, stableID) {
                 defaults.removeObject(forKey: defaultsKey)
             }
-            let keychainValue = KeychainStore.loadString(service: self.gatewayService, account: account)
+            let keychainValue = GenericPasswordKeychainStore.loadString(service: self.gatewayService, account: account)
             if GatewayStableIdentifier.matches(keychainValue, stableID) {
-                _ = KeychainStore.delete(service: self.gatewayService, account: account)
+                _ = GenericPasswordKeychainStore.delete(service: self.gatewayService, account: account)
             }
         }
     }
 
-    static func clearGatewayRegistry(defaults: UserDefaults = .standard) {
-        _ = KeychainStore.delete(service: self.gatewayService, account: self.gatewayRegistryAccount)
-        _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
-        self.removeLastGatewayDefaults(defaults)
-    }
-
-    static func saveGatewayRegistry(_ registry: GatewayRegistry) -> Bool {
-        guard self.gatewayRegistryMutationsAllowed() else { return false }
-        let normalized = self.normalizedGatewayRegistry(registry)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(normalized),
-              let json = String(data: data, encoding: .utf8)
-        else { return false }
-        return KeychainStore.saveString(
-            json,
-            service: self.gatewayService,
-            account: self.gatewayRegistryAccount)
-    }
-
     private static func gatewayRegistryMutationsAllowed() -> Bool {
-        guard let json = KeychainStore.loadString(
+        guard let json = GenericPasswordKeychainStore.loadString(
             service: self.gatewayService,
             account: self.gatewayRegistryAccount)
         else { return true }
@@ -676,7 +641,7 @@ enum GatewaySettingsStore {
     }
 
     private static func migrateGatewayRegistryIfNeeded(defaults: UserDefaults = .standard) {
-        if let json = KeychainStore.loadString(
+        if let json = GenericPasswordKeychainStore.loadString(
             service: self.gatewayService,
             account: self.gatewayRegistryAccount)
         {
@@ -685,7 +650,9 @@ enum GatewaySettingsStore {
                   (1...2).contains(registry.version)
             else { return }
             _ = self.saveGatewayRegistry(registry)
-            _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
+            _ = GenericPasswordKeychainStore.delete(
+                service: self.gatewayService,
+                account: self.lastGatewayConnectionAccount)
             self.removeLastGatewayDefaults(defaults)
             return
         }
@@ -697,14 +664,16 @@ enum GatewaySettingsStore {
             connectedStableIDs: [entry.stableID],
             entries: [entry])
         guard self.saveGatewayRegistry(registry) else { return }
-        _ = KeychainStore.delete(service: self.gatewayService, account: self.lastGatewayConnectionAccount)
+        _ = GenericPasswordKeychainStore.delete(
+            service: self.gatewayService,
+            account: self.lastGatewayConnectionAccount)
         self.removeLastGatewayDefaults(defaults)
     }
 
     private static func loadLegacyLastGatewayConnection(
         defaults: UserDefaults) -> LegacyLastGatewayConnectionData?
     {
-        if let json = KeychainStore.loadString(
+        if let json = GenericPasswordKeychainStore.loadString(
             service: self.gatewayService,
             account: self.lastGatewayConnectionAccount),
             let data = json.data(using: .utf8),
@@ -752,7 +721,7 @@ enum GatewaySettingsStore {
     static func deleteGatewayCredentials(instanceId: String, stableID: String) {
         let trimmed = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let stableID = GatewayStableIdentifier.exact(stableID), !trimmed.isEmpty else { return }
-        _ = KeychainStore.delete(
+        _ = GenericPasswordKeychainStore.delete(
             service: self.gatewayService,
             account: self.gatewayCredentialBundleAccount(instanceId: trimmed, stableID: stableID))
         self.deleteLegacyScopedCredentialBundleIfOwned(instanceId: trimmed, stableID: stableID)
@@ -761,52 +730,58 @@ enum GatewaySettingsStore {
     static func deleteAllGatewayCredentials(instanceId: String) {
         let trimmed = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        _ = KeychainStore.deleteAccounts(
+        _ = self.deleteGatewayCredentialAccounts(
             service: self.gatewayService,
             accountPrefix: self.legacyGatewayCredentialBundleAccount(instanceId: trimmed) + ".")
-        _ = KeychainStore.delete(
+        _ = GenericPasswordKeychainStore.delete(
             service: self.gatewayService,
             account: self.legacyGatewayCredentialBundleAccount(instanceId: trimmed))
         self.deleteLegacyGatewayCredentials(instanceId: trimmed)
     }
 
-    static func loadGatewayClientIdOverride(stableID: String) -> String? {
-        guard let stableID = GatewayStableIdentifier.exact(stableID) else { return nil }
-        let defaults = UserDefaults.standard
-        let key = self.gatewayDefaultsKey(prefix: self.clientIdOverrideDefaultsPrefix, stableID: stableID)
-        let legacyKey = self.clientIdOverrideDefaultsPrefix + stableID
-        let value = (defaults.string(forKey: key) ??
-            (self.canSafelyReadLegacyRawStorageKey(stableID) ? defaults.string(forKey: legacyKey) : nil))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if value?.isEmpty == false {
-            if defaults.string(forKey: key) == nil {
-                defaults.set(value, forKey: key)
-                defaults.removeObject(forKey: legacyKey)
-            }
-            return value
+    private static func deleteGatewayCredentialAccounts(service: String, accountPrefix: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return true }
+        guard status == errSecSuccess else { return false }
+        let matches = item as? [[String: Any]] ?? []
+        let accounts = matches
+            .compactMap { $0[kSecAttrAccount as String] as? String }
+            .filter { $0.hasPrefix(accountPrefix) }
+        var deletedAll = true
+        for account in accounts where !GenericPasswordKeychainStore.delete(service: service, account: account) {
+            deletedAll = false
         }
-        return nil
+        return deletedAll
+    }
+
+    static func loadGatewayClientIdOverride(stableID: String) -> String? {
+        self.loadGatewayDefault(prefix: self.clientIdOverrideDefaultsPrefix, stableID: stableID)
     }
 
     static func saveGatewayClientIdOverride(stableID: String, clientId: String?) {
-        guard let stableID = GatewayStableIdentifier.exact(stableID) else { return }
-        let key = self.gatewayDefaultsKey(prefix: self.clientIdOverrideDefaultsPrefix, stableID: stableID)
-        let trimmedClientId = clientId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if trimmedClientId.isEmpty {
-            UserDefaults.standard.removeObject(forKey: key)
-        } else {
-            UserDefaults.standard.set(trimmedClientId, forKey: key)
-        }
-        if self.canSafelyReadLegacyRawStorageKey(stableID) {
-            UserDefaults.standard.removeObject(forKey: self.clientIdOverrideDefaultsPrefix + stableID)
-        }
+        self.saveGatewayDefault(clientId, prefix: self.clientIdOverrideDefaultsPrefix, stableID: stableID)
     }
 
     static func loadGatewaySelectedAgentId(stableID: String) -> String? {
+        self.loadGatewayDefault(prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
+    }
+
+    static func saveGatewaySelectedAgentId(stableID: String, agentId: String?) {
+        self.saveGatewayDefault(agentId, prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
+    }
+
+    private static func loadGatewayDefault(prefix: String, stableID: String) -> String? {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return nil }
         let defaults = UserDefaults.standard
-        let key = self.gatewayDefaultsKey(prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
-        let legacyKey = self.selectedAgentDefaultsPrefix + stableID
+        let key = self.gatewayDefaultsKey(prefix: prefix, stableID: stableID)
+        let legacyKey = prefix + stableID
         let value = (defaults.string(forKey: key) ??
             (self.canSafelyReadLegacyRawStorageKey(stableID) ? defaults.string(forKey: legacyKey) : nil))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -820,17 +795,17 @@ enum GatewaySettingsStore {
         return nil
     }
 
-    static func saveGatewaySelectedAgentId(stableID: String, agentId: String?) {
+    private static func saveGatewayDefault(_ value: String?, prefix: String, stableID: String) {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return }
-        let key = self.gatewayDefaultsKey(prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
-        let trimmedAgentId = agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if trimmedAgentId.isEmpty {
+        let key = self.gatewayDefaultsKey(prefix: prefix, stableID: stableID)
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
             UserDefaults.standard.removeObject(forKey: key)
         } else {
-            UserDefaults.standard.set(trimmedAgentId, forKey: key)
+            UserDefaults.standard.set(trimmed, forKey: key)
         }
         if self.canSafelyReadLegacyRawStorageKey(stableID) {
-            UserDefaults.standard.removeObject(forKey: self.selectedAgentDefaultsPrefix + stableID)
+            UserDefaults.standard.removeObject(forKey: prefix + stableID)
         }
     }
 
@@ -879,8 +854,8 @@ enum GatewaySettingsStore {
         let legacyAccount = self.legacyScopedGatewayCredentialBundleAccount(
             instanceId: trimmedInstanceID,
             stableID: stableID)
-        let canonicalJSON = KeychainStore.loadString(service: self.gatewayService, account: account)
-        guard let json = canonicalJSON ?? KeychainStore.loadString(
+        let canonicalJSON = GenericPasswordKeychainStore.loadString(service: self.gatewayService, account: account)
+        guard let json = canonicalJSON ?? GenericPasswordKeychainStore.loadString(
             service: self.gatewayService,
             account: legacyAccount),
             let data = json.data(using: .utf8),
@@ -898,9 +873,9 @@ enum GatewaySettingsStore {
         if canonicalJSON == nil,
            let migratedData = try? JSONEncoder().encode(bundle),
            let migratedJSON = String(data: migratedData, encoding: .utf8),
-           KeychainStore.saveString(migratedJSON, service: self.gatewayService, account: account)
+           GenericPasswordKeychainStore.saveString(migratedJSON, service: self.gatewayService, account: account)
         {
-            _ = KeychainStore.delete(service: self.gatewayService, account: legacyAccount)
+            _ = GenericPasswordKeychainStore.delete(service: self.gatewayService, account: legacyAccount)
         }
         return bundle
     }
@@ -909,19 +884,21 @@ enum GatewaySettingsStore {
         let instanceID = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instanceID.isEmpty else { return }
         let legacyAccount = self.legacyGatewayCredentialBundleAccount(instanceId: instanceID)
-        guard let json = KeychainStore.loadString(service: self.gatewayService, account: legacyAccount),
+        guard let json = GenericPasswordKeychainStore.loadString(service: self.gatewayService, account: legacyAccount),
               let data = json.data(using: .utf8),
               let legacy = try? JSONDecoder().decode(GatewayCredentialBundle.self, from: data)
         else { return }
         guard let stableID = GatewayStableIdentifier.exact(legacy.gatewayStableID) else { return }
         let scopedAccount = self.gatewayCredentialBundleAccount(instanceId: instanceID, stableID: stableID)
-        let scopedExists = KeychainStore.loadString(service: self.gatewayService, account: scopedAccount) != nil
-        guard scopedExists || KeychainStore.saveString(
+        let scopedExists = GenericPasswordKeychainStore.loadString(
+            service: self.gatewayService,
+            account: scopedAccount) != nil
+        guard scopedExists || GenericPasswordKeychainStore.saveString(
             json,
             service: self.gatewayService,
             account: scopedAccount)
         else { return }
-        _ = KeychainStore.delete(service: self.gatewayService, account: legacyAccount)
+        _ = GenericPasswordKeychainStore.delete(service: self.gatewayService, account: legacyAccount)
         self.deleteLegacyGatewayCredentials(instanceId: instanceID)
     }
 
@@ -932,12 +909,12 @@ enum GatewaySettingsStore {
         let account = self.legacyScopedGatewayCredentialBundleAccount(
             instanceId: instanceId,
             stableID: stableID)
-        guard let json = KeychainStore.loadString(service: self.gatewayService, account: account),
+        guard let json = GenericPasswordKeychainStore.loadString(service: self.gatewayService, account: account),
               let data = json.data(using: .utf8),
               let bundle = try? JSONDecoder().decode(GatewayCredentialBundle.self, from: data),
               GatewayStableIdentifier.matches(bundle.gatewayStableID, stableID)
         else { return }
-        _ = KeychainStore.delete(service: self.gatewayService, account: account)
+        _ = GenericPasswordKeychainStore.delete(service: self.gatewayService, account: account)
     }
 
     private static func canSafelyReadLegacyRawStorageKey(_ stableID: String) -> Bool {
@@ -952,16 +929,16 @@ enum GatewaySettingsStore {
     }
 
     private static func deleteLegacyGatewayCredentials(instanceId: String) {
-        _ = KeychainStore.delete(
+        _ = GenericPasswordKeychainStore.delete(
             service: self.gatewayService,
             account: self.gatewayTokenAccount(instanceId: instanceId))
-        _ = KeychainStore.delete(
+        _ = GenericPasswordKeychainStore.delete(
             service: self.gatewayService,
             account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
-        _ = KeychainStore.delete(
+        _ = GenericPasswordKeychainStore.delete(
             service: self.gatewayService,
             account: self.gatewayPasswordAccount(instanceId: instanceId))
-        _ = KeychainStore.delete(
+        _ = GenericPasswordKeychainStore.delete(
             service: self.gatewayService,
             account: "gateway-credential-metadata.\(instanceId)")
     }
@@ -1034,6 +1011,41 @@ enum GatewaySettingsStore {
 }
 
 extension GatewaySettingsStore {
+    /// Invalidates read-only UI projections after the registry owner commits a mutation.
+    static let gatewayRegistryDidChange = Notification.Name("GatewaySettingsStore.gatewayRegistryDidChange")
+
+    static func clearGatewayRegistry(defaults: UserDefaults = .standard) {
+        let registryRemoved = GenericPasswordKeychainStore.delete(
+            service: self.gatewayService,
+            account: self.gatewayRegistryAccount)
+        if registryRemoved {
+            NotificationCenter.default.post(name: self.gatewayRegistryDidChange, object: nil)
+        }
+        _ = GenericPasswordKeychainStore.delete(
+            service: self.gatewayService,
+            account: self.lastGatewayConnectionAccount)
+        self.removeLastGatewayDefaults(defaults)
+    }
+
+    static func saveGatewayRegistry(_ registry: GatewayRegistry) -> Bool {
+        guard self.gatewayRegistryMutationsAllowed() else { return false }
+        let normalized = self.normalizedGatewayRegistry(registry)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(normalized),
+              let json = String(data: data, encoding: .utf8)
+        else { return false }
+        guard GenericPasswordKeychainStore.saveString(
+            json,
+            service: self.gatewayService,
+            account: self.gatewayRegistryAccount)
+        else { return false }
+        NotificationCenter.default.post(name: self.gatewayRegistryDidChange, object: nil)
+        return true
+    }
+}
+
+extension GatewaySettingsStore {
     @discardableResult
     static func completeGatewayCredentialHandoff(
         instanceId: String,
@@ -1042,7 +1054,7 @@ extension GatewaySettingsStore {
             Void,
             GenericPasswordKeychainStore.MutationError,
         > = { service, account in
-            KeychainStore.deleteResult(service: service, account: account)
+            GenericPasswordKeychainStore.deleteResult(service: service, account: account)
         }) throws -> Bool
     {
         let stableID = self.authenticationOwnerID(routeStableID: gatewayStableID)
@@ -1117,11 +1129,12 @@ extension GatewaySettingsStore {
         if bundle.hasCredentials || suppressStoredDeviceAuth {
             try self.saveGatewayCredentialBundle(bundle, account: account)
         } else {
-            switch KeychainStore.deleteResult(service: self.gatewayService, account: account) {
+            switch GenericPasswordKeychainStore.deleteResult(service: self.gatewayService, account: account) {
             case .success:
                 break
             case let .failure(error):
-                guard KeychainStore.loadString(service: self.gatewayService, account: account) == nil else {
+                guard GenericPasswordKeychainStore.loadString(service: self.gatewayService, account: account) == nil
+                else {
                     throw GatewayCredentialPersistenceError.keychain(error)
                 }
             }
@@ -1142,7 +1155,7 @@ extension GatewaySettingsStore {
             throw GatewayCredentialPersistenceError.encodingFailed
         }
         do {
-            try KeychainStore.saveStringResult(
+            try GenericPasswordKeychainStore.saveStringResult(
                 json,
                 service: self.gatewayService,
                 account: account).get()
@@ -1202,10 +1215,10 @@ enum GatewayDiagnostics {
         return String(collapsed[..<end]) + "..."
     }
 
-    private static func isoTimestamp() -> String {
+    private static func isoTimestamp(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: Date())
+        return formatter.string(from: date)
     }
 
     private static var fileURL: URL? {
@@ -1263,10 +1276,11 @@ enum GatewayDiagnostics {
     }
 
     static func bootstrap() {
-        guard let url = fileURL else { return }
+        let date = Date()
         self.queue.async {
+            guard let url = fileURL else { return }
             self.truncateLogIfNeeded(url: url)
-            let timestamp = self.isoTimestamp()
+            let timestamp = self.isoTimestamp(date)
             let line = "[\(timestamp)] gateway diagnostics started\n"
             if let data = line.data(using: .utf8) {
                 self.appendToLog(url: url, data: data)
@@ -1276,12 +1290,12 @@ enum GatewayDiagnostics {
     }
 
     static func log(_ message: String) {
-        let timestamp = self.isoTimestamp()
-        let line = "[\(timestamp)] \(message)"
-        self.logger.info("\(line, privacy: .public)")
-
-        guard let url = fileURL else { return }
+        // Developer log transport can block; preserve occurrence time without blocking callers.
+        let date = Date()
         self.queue.async {
+            let line = "[\(self.isoTimestamp(date))] \(message)"
+            self.logger.info("\(line, privacy: .public)")
+            guard let url = fileURL else { return }
             let shouldTruncate = self.logWritesSinceCheck.withLock { count in
                 count += 1
                 if count >= self.logSizeCheckEveryWrites {

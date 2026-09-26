@@ -486,6 +486,15 @@ export const zh_TW = {
       allReadyTitle: "所有技能已就緒",
     },
     channels: {
+      commandOwnerTitle: "透過聊天管理",
+      commandOwnerHelp:
+        "聊天存取權限允許使用者與你的代理交談。命令擁有者還可以更新 OpenClaw、重新啟動 Gateway、變更設定並核准命令。請僅選擇你自己信任的管理員帳號。伺服器和群組無需 DM 配對也可使用此功能；它不會授予聊天存取權限或變更頻道存取規則。",
+      commandOwnerSetup: "設定透過你自己的聊天帳號進行管理？",
+      commandOwnerOwnAccount: "設定我的管理員帳號",
+      commandOwnerChannel: "你的管理員帳號位於哪個頻道？",
+      commandOwnerUserId: "你的個人 {label} 使用者 ID（不是機器人、伺服器或頻道 ID）",
+      commandOwnerInvalidId: "請輸入一個不含空格或萬用字元的使用者 ID。",
+      commandOwnerConfirm: "這是我的帳號：允許 {owner} 管理此安裝？",
       account: "{label} 帳號",
       configuredAction: "{label} 已設定。你想怎麼處理？",
       configuredDeleteUnsupported: "{label} 不支援刪除設定項。",

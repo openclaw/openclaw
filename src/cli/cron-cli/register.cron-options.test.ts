@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
+import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
 
 const callGatewayFromCli = vi.fn();
 
@@ -51,10 +52,303 @@ const topicMutationCases = [
   },
 ] as const;
 
+const creationCwdCases = [
+  { flag: "--command-cwd", args: ["--every", "1m", "--command", "pwd"], target: "payload" },
+  { flag: "--on-exit-cwd", args: ["--on-exit", "pwd", "--message", "run"], target: "schedule" },
+  {
+    flag: "--stream-cwd",
+    args: ["--stream-command", '["node","events.mjs"]', "--message", "run"],
+    target: "schedule",
+  },
+] as const;
+
 describe("shared automation mutation options", () => {
   beforeEach(() => {
     callGatewayFromCli.mockReset();
     callGatewayFromCli.mockResolvedValue({ ok: true });
+  });
+
+  it.each([
+    { operation: "add", method: "cron.add", args: ["add", "--name", "shell", "--every", "1h"] },
+    { operation: "edit", method: "cron.update", args: ["edit", "job-1"] },
+  ])(
+    "preserves escaped trailing whitespace in --command on $operation",
+    async ({ method, args }) => {
+      const command = "printf %s hello\\ ";
+      await createMutationProgram().parseAsync([...args, "--command", command], { from: "user" });
+
+      const payload = { kind: "command", argv: ["sh", "-lc", command] };
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        method,
+        expect.anything(),
+        expect.objectContaining(
+          method === "cron.add"
+            ? { payload: expect.objectContaining(payload) }
+            : { patch: { payload } },
+        ),
+      );
+    },
+  );
+
+  it.each(
+    creationCwdCases.flatMap((entry) =>
+      ["add", "create"].flatMap((operation) =>
+        [
+          { label: "omitted", value: undefined, expected: undefined, rejects: false },
+          { label: "empty", value: "", expected: undefined, rejects: true },
+          { label: "whitespace", value: "   ", expected: undefined, rejects: true },
+          { label: "valid", value: " /repo ", expected: "/repo", rejects: false },
+        ].map(({ label, value, expected, rejects }) => ({
+          flag: entry.flag,
+          args: entry.args,
+          target: entry.target,
+          operation,
+          label,
+          value,
+          expected,
+          rejects,
+        })),
+      ),
+    ),
+  )(
+    "handles $label $flag on $operation before RPC",
+    async ({ flag, args, target, operation, value, expected, rejects }) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      try {
+        const run = createMutationProgram().parseAsync(
+          [
+            operation,
+            "--name",
+            "cwd-proof",
+            "--agent",
+            "main",
+            ...args,
+            ...(value === undefined ? [] : [flag, value]),
+          ],
+          { from: "user" },
+        );
+        if (rejects) {
+          await expect(run).rejects.toMatchObject({ name: "ExitError", code: 1 });
+          expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+            expect.stringContaining(`${flag} must not be blank`),
+          );
+          expect(callGatewayFromCli).not.toHaveBeenCalled();
+        } else {
+          await run;
+          const creation = callGatewayFromCli.mock.calls.find(([method]) => method === "cron.add");
+          expect(creation?.[2]).toHaveProperty(target);
+          expect(creation?.[2]?.[target]?.cwd).toBe(expected);
+          expect(errorSpy).not.toHaveBeenCalled();
+        }
+      } finally {
+        errorSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(creationCwdCases)(
+    "preserves the JSON validation error for blank $flag",
+    async ({ flag, args }) => {
+      const argv = process.argv;
+      const input = [
+        "create",
+        "--name",
+        "cwd-json",
+        "--agent",
+        "main",
+        ...args,
+        flag,
+        "",
+        "--json",
+      ];
+      process.argv = [...argv.slice(0, 2), "automations", ...input];
+      try {
+        let failure: unknown;
+        try {
+          await createMutationProgram().parseAsync(input, { from: "user" });
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toBeInstanceOf(ExpectedCliError);
+        expect(formatCliJsonFailure(failure)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message: `${flag} must not be blank` },
+        });
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        process.argv = argv;
+      }
+    },
+  );
+
+  it.each(["add", "create"])(
+    "rejects blank command cwd with a positional schedule on %s",
+    async (operation) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      try {
+        await expect(
+          createMutationProgram().parseAsync(
+            [
+              operation,
+              "every 1m",
+              "--name",
+              "cwd-positional",
+              "--agent",
+              "main",
+              "--command",
+              "pwd",
+              "--command-cwd",
+              "   ",
+            ],
+            { from: "user" },
+          ),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("--command-cwd must not be blank"),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each([undefined, "", "   "])("preserves stream cwd edit semantics for %j", async (value) => {
+    callGatewayFromCli.mockImplementation(async (method: string) =>
+      method === "cron.get"
+        ? {
+            id: "job-1",
+            schedule: { kind: "stream", command: ["node", "events.mjs"], cwd: "/repo" },
+            payload: { kind: "agentTurn", message: "run" },
+          }
+        : { ok: true },
+    );
+    await createMutationProgram().parseAsync(
+      [
+        "edit",
+        "job-1",
+        "--stream-mode",
+        "line",
+        ...(value === undefined ? [] : ["--stream-cwd", value]),
+      ],
+      { from: "user" },
+    );
+    const update = callGatewayFromCli.mock.calls.find(([method]) => method === "cron.update");
+    expect(update?.[2]).toMatchObject({
+      id: "job-1",
+      patch: { schedule: { kind: "stream", command: ["node", "events.mjs"] } },
+    });
+    expect(update?.[2]?.patch?.schedule?.cwd).toBe(value === undefined ? "/repo" : undefined);
+  });
+
+  it.each(
+    ["--at", "--every", "--cron", "--on-exit"].flatMap((flag) =>
+      ["", "   "].map((value) => ({ flag, value })),
+    ),
+  )("rejects explicit blank $flag=$value on edit before RPC", async ({ flag, value }) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        createMutationProgram().parseAsync(["edit", "job-1", flag, value], { from: "user" }),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("Schedule values must not be blank"),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it.each(
+    ["add", "create"].flatMap((operation) => ["", "   "].map((value) => ({ operation, value }))),
+  )("rejects a blank schedule mixed with --every on $operation", async ({ operation, value }) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        createMutationProgram().parseAsync(
+          [
+            operation,
+            "--name",
+            "blank-schedule",
+            "--agent",
+            "main",
+            "--message",
+            "hello",
+            "--every",
+            "1h",
+            "--cron",
+            value,
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("Schedule values must not be blank"),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("rejects a blank schedule before mutation after a pacing read", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) =>
+      method === "cron.get"
+        ? {
+            id: "job-1",
+            configRevision: "fixture-revision-1",
+            pacing: { min: "1m", max: "1h" },
+          }
+        : { ok: true },
+    );
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        createMutationProgram().parseAsync(
+          ["edit", "job-1", "--pacing-min", "30m", "--every", ""],
+          { from: "user" },
+        ),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("Schedule values must not be blank"),
+      );
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+        id: "job-1",
+      });
+      expect(callGatewayFromCli.mock.calls.map(([method]) => method)).not.toContain("cron.update");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    { label: "omitted", args: [], rejects: false },
+    { label: "blank", args: ["--every", ""], rejects: true },
+  ])("distinguishes an $label schedule from a name-only edit", async ({ args, rejects }) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    try {
+      const run = createMutationProgram().parseAsync(
+        ["edit", "job-1", "--name", "Renamed", ...args],
+        { from: "user" },
+      );
+      if (rejects) {
+        await expect(run).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("Schedule values must not be blank"),
+        );
+        expect(callGatewayFromCli).not.toHaveBeenCalled();
+      } else {
+        await run;
+        expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+          id: "job-1",
+          patch: { name: "Renamed" },
+        });
+        expect(errorSpy).not.toHaveBeenCalled();
+      }
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it.each([

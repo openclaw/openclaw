@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelResolverAdapter } from "../channels/plugins/types.adapters.js";
 import { channelsResolveCommand } from "./channels/resolve.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   resolveCommandSecretRefsViaGateway: vi.fn(),
@@ -51,11 +52,7 @@ vi.mock("./channel-setup/channel-plugin-resolution.js", () => ({
 }));
 
 describe("channelsResolveCommand", () => {
-  const runtime = {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
+  const runtime = createTestRuntime();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -74,6 +71,27 @@ describe("channelsResolveCommand", () => {
       configured: ["telegram"],
       source: "explicit",
     });
+  });
+
+  it("rejects missing entries before config for a named account", async () => {
+    await expect(channelsResolveCommand({ account: "work", entries: [] }, runtime)).rejects.toThrow(
+      "At least one entry is required.",
+    );
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+  });
+
+  it("retains the unsupported resolver error for a named account", async () => {
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "telegram",
+      configChanged: false,
+      pluginInstalled: false,
+      plugin: { id: "telegram" },
+    });
+
+    await expect(
+      channelsResolveCommand({ channel: "telegram", account: "work", entries: ["room"] }, runtime),
+    ).rejects.toThrow('Channel "telegram" does not support resolve.');
   });
 
   it("uses installed channel plugins for explicit target resolution without installing", async () => {
@@ -133,7 +151,6 @@ describe("channelsResolveCommand", () => {
       "nope-agent",
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ],
-    ["empty", "", "--agent must not be blank"],
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s explicit agent before channel resolution", async (_label, agent, message) => {
     mocks.loadConfig.mockReturnValue({

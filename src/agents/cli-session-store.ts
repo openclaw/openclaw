@@ -13,6 +13,7 @@ import {
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 
 type CliSessionStoreTarget = {
+  agentId: string;
   provider: string;
   sessionKey?: string;
   storePath?: string;
@@ -37,7 +38,7 @@ async function patchCliSessionBindingInStore(
   const expected = { ...params.expectedSession };
   let committed: SessionEntry | undefined;
   await patchSessionEntryCore(
-    { sessionKey, storePath },
+    { agentId: params.agentId, sessionKey, storePath },
     (entry) => {
       // Native ids can survive reset. Publication belongs to the exact local lifecycle/writer.
       if (

@@ -26,32 +26,42 @@ function createSubscriptionStub(
   return { id, close } as unknown as ReturnType<Relay["prepareSubscription"]>;
 }
 
+function createDirectoryState() {
+  return new BuzzDirectoryState({
+    publicKey: BOT_PUBLIC_KEY,
+    fallbackProfileName: "OpenClaw",
+    channelIds: [],
+  });
+}
+
+function createProfileRelay(relayClose?: ReturnType<typeof vi.fn>) {
+  const subscriptions: SubscriptionRecord[] = [];
+  const relay = {
+    ...(relayClose ? { close: relayClose } : {}),
+    idleSince: undefined,
+    ongoingOperations: 0,
+    prepareSubscription: vi.fn(
+      (
+        filters: Filter[],
+        handlers: SubscriptionRecord["handlers"],
+      ): ReturnType<Relay["prepareSubscription"]> => {
+        const close = vi.fn();
+        subscriptions.push({ filters, handlers, close });
+        return createSubscriptionStub(`sub:${subscriptions.length}`, close);
+      },
+    ),
+    send: vi.fn(async () => {}),
+  } as unknown as Relay;
+  return { relay, subscriptions };
+}
+
 describe("Buzz directory relay", () => {
   it("waits for EOSE and collapses queued profile replacements to the latest set", () => {
-    const subscriptions: SubscriptionRecord[] = [];
-    const relay = {
-      idleSince: undefined,
-      ongoingOperations: 0,
-      prepareSubscription: vi.fn(
-        (
-          filters: Filter[],
-          handlers: SubscriptionRecord["handlers"],
-        ): ReturnType<Relay["prepareSubscription"]> => {
-          const close = vi.fn();
-          subscriptions.push({ filters, handlers, close });
-          return createSubscriptionStub(`sub:${subscriptions.length}`, close);
-        },
-      ),
-      send: vi.fn(async () => {}),
-    } as unknown as Relay;
+    const { relay, subscriptions } = createProfileRelay();
     const directory = startBuzzDirectoryRelay({
       relay,
       relayPublicKey: RELAY_PUBLIC_KEY,
-      state: new BuzzDirectoryState({
-        publicKey: BOT_PUBLIC_KEY,
-        fallbackProfileName: "OpenClaw",
-        channelIds: [],
-      }),
+      state: createDirectoryState(),
     });
 
     directory.replaceProfilePublicKeys([BOT_PUBLIC_KEY, FIRST_MEMBER_PUBLIC_KEY]);
@@ -75,30 +85,11 @@ describe("Buzz directory relay", () => {
   });
 
   it("does not start a queued profile replacement after the relay closes", () => {
-    const subscriptions: SubscriptionRecord[] = [];
-    const relay = {
-      idleSince: undefined,
-      ongoingOperations: 0,
-      prepareSubscription: vi.fn(
-        (
-          filters: Filter[],
-          handlers: SubscriptionRecord["handlers"],
-        ): ReturnType<Relay["prepareSubscription"]> => {
-          const close = vi.fn();
-          subscriptions.push({ filters, handlers, close });
-          return createSubscriptionStub(`sub:${subscriptions.length}`, close);
-        },
-      ),
-      send: vi.fn(async () => {}),
-    } as unknown as Relay;
+    const { relay, subscriptions } = createProfileRelay();
     const directory = startBuzzDirectoryRelay({
       relay,
       relayPublicKey: RELAY_PUBLIC_KEY,
-      state: new BuzzDirectoryState({
-        publicKey: BOT_PUBLIC_KEY,
-        fallbackProfileName: "OpenClaw",
-        channelIds: [],
-      }),
+      state: createDirectoryState(),
     });
 
     directory.replaceProfilePublicKeys([BOT_PUBLIC_KEY, FIRST_MEMBER_PUBLIC_KEY]);
@@ -109,30 +100,11 @@ describe("Buzz directory relay", () => {
   });
 
   it("closes sibling profile subscriptions when one chunk fails", () => {
-    const subscriptions: SubscriptionRecord[] = [];
-    const relay = {
-      idleSince: undefined,
-      ongoingOperations: 0,
-      prepareSubscription: vi.fn(
-        (
-          filters: Filter[],
-          handlers: SubscriptionRecord["handlers"],
-        ): ReturnType<Relay["prepareSubscription"]> => {
-          const close = vi.fn();
-          subscriptions.push({ filters, handlers, close });
-          return createSubscriptionStub(`sub:${subscriptions.length}`, close);
-        },
-      ),
-      send: vi.fn(async () => {}),
-    } as unknown as Relay;
+    const { relay, subscriptions } = createProfileRelay();
     const directory = startBuzzDirectoryRelay({
       relay,
       relayPublicKey: RELAY_PUBLIC_KEY,
-      state: new BuzzDirectoryState({
-        publicKey: BOT_PUBLIC_KEY,
-        fallbackProfileName: "OpenClaw",
-        channelIds: [],
-      }),
+      state: createDirectoryState(),
     });
 
     directory.replaceProfilePublicKeys(
@@ -149,33 +121,13 @@ describe("Buzz directory relay", () => {
 
   it("recycles the owning relay when profile subscriptions never reach EOSE", async () => {
     vi.useFakeTimers();
-    const subscriptions: SubscriptionRecord[] = [];
     const relayClose = vi.fn();
     const onFatalError = vi.fn();
-    const relay = {
-      close: relayClose,
-      idleSince: undefined,
-      ongoingOperations: 0,
-      prepareSubscription: vi.fn(
-        (
-          filters: Filter[],
-          handlers: SubscriptionRecord["handlers"],
-        ): ReturnType<Relay["prepareSubscription"]> => {
-          const close = vi.fn();
-          subscriptions.push({ filters, handlers, close });
-          return createSubscriptionStub(`sub:${subscriptions.length}`, close);
-        },
-      ),
-      send: vi.fn(async () => {}),
-    } as unknown as Relay;
+    const { relay, subscriptions } = createProfileRelay(relayClose);
     const directory = startBuzzDirectoryRelay({
       relay,
       relayPublicKey: RELAY_PUBLIC_KEY,
-      state: new BuzzDirectoryState({
-        publicKey: BOT_PUBLIC_KEY,
-        fallbackProfileName: "OpenClaw",
-        channelIds: [],
-      }),
+      state: createDirectoryState(),
       onFatalError,
     });
 
@@ -216,11 +168,7 @@ describe("Buzz directory relay", () => {
     const query = queryBuzzDirectoryRooms({
       relay,
       relayPublicKey: RELAY_PUBLIC_KEY,
-      state: new BuzzDirectoryState({
-        publicKey: BOT_PUBLIC_KEY,
-        fallbackProfileName: "OpenClaw",
-        channelIds: [],
-      }),
+      state: createDirectoryState(),
       channelIds: ["7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"],
       signal: abort.signal,
     });
@@ -249,11 +197,7 @@ describe("Buzz directory relay", () => {
     const query = queryBuzzDirectoryRooms({
       relay,
       relayPublicKey: RELAY_PUBLIC_KEY,
-      state: new BuzzDirectoryState({
-        publicKey: BOT_PUBLIC_KEY,
-        fallbackProfileName: "OpenClaw",
-        channelIds: [],
-      }),
+      state: createDirectoryState(),
       channelIds: ["7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"],
     });
 
@@ -282,11 +226,7 @@ describe("Buzz directory relay", () => {
     const directory = startBuzzDirectoryRelay({
       relay,
       relayPublicKey: RELAY_PUBLIC_KEY,
-      state: new BuzzDirectoryState({
-        publicKey: BOT_PUBLIC_KEY,
-        fallbackProfileName: "OpenClaw",
-        channelIds: [],
-      }),
+      state: createDirectoryState(),
       onFatalError,
     });
     const refresh = directory.refreshRooms(["7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"]);

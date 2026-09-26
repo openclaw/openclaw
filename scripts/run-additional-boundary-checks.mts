@@ -92,19 +92,9 @@ export const BOUNDARY_CHECKS = (
     ["deps:root-ownership:check", "pnpm", ["deps:root-ownership:check"]],
     ["web-fetch-provider-boundary", "pnpm", ["run", "lint:web-fetch-provider-boundaries"]],
     [
-      "extension-src-outside-plugin-sdk-boundary",
-      "pnpm",
-      ["run", "lint:extensions:no-src-outside-plugin-sdk"],
-    ],
-    [
-      "extension-normalization-core-bypass-boundary",
-      "pnpm",
-      ["run", "lint:extensions:no-normalization-core-bypass"],
-    ],
-    [
-      "extension-relative-outside-package-boundary",
-      "pnpm",
-      ["run", "lint:extensions:no-relative-outside-package"],
+      "extension-plugin-sdk-boundaries",
+      "node",
+      ["--import", "./scripts/tsx.mjs", "scripts/check-extension-plugin-sdk-boundary.mts", "--all"],
     ],
     [
       "lint:extensions:telegram-grammy-types",

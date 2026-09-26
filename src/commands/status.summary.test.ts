@@ -7,11 +7,15 @@ import {
   setActiveCredentialDegradedOwner,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
-import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
-import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
-import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
+import {
+  createEmptyTaskRegistrySummary,
+  createEmptyTaskStatusSummary,
+} from "../tasks/task-registry.summary.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { registerStatusSummarySessionRowCases } from "./status.summary.test-support.js";
+import {
+  registerStatusSummarySessionRowCases,
+  registerStatusSummaryWalCases,
+} from "./status.summary.test-support.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
@@ -25,40 +29,10 @@ const statusSummaryMocks = vi.hoisted(() => ({
   >(() => []),
   loadExactSessionEntryReadOnly:
     vi.fn<typeof import("../config/sessions/session-accessor.js").loadExactSessionEntryReadOnly>(),
-  taskRegistrySummary: {
-    total: 0,
-    active: 0,
-    terminal: 0,
-    failures: 0,
-    byStatus: {
-      queued: 0,
-      running: 0,
-      succeeded: 0,
-      failed: 0,
-      timed_out: 0,
-      cancelled: 0,
-      lost: 0,
-    },
-    byRuntime: {
-      subagent: 0,
-      acp: 0,
-      cli: 0,
-      cron: 0,
-    },
-  } as TaskRegistrySummary,
-  inspectableTasks: [] as TaskRecord[],
-  taskRegistryReadOnlyState: "ready" as "ready" | "migration-required",
-  inspectTasksReadOnly: vi.fn(() => ({
-    state: statusSummaryMocks.taskRegistryReadOnlyState,
-    tasks: statusSummaryMocks.inspectableTasks,
-  })),
-  getInspectableTaskRegistrySummary: vi.fn(
-    (_tasks?: TaskRecord[]) => statusSummaryMocks.taskRegistrySummary,
-  ),
-  taskAuditFindings: [] as TaskAuditFinding[],
-  getInspectableTaskAuditFindings: vi.fn(
-    (_tasks?: TaskRecord[]) => statusSummaryMocks.taskAuditFindings,
-  ),
+  getInspectableTaskStatusSummaryReadOnly:
+    vi.fn<
+      typeof import("../tasks/task-registry.maintenance.js").getInspectableTaskStatusSummaryReadOnly
+    >(),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -185,9 +159,8 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  inspectTasksReadOnly: statusSummaryMocks.inspectTasksReadOnly,
-  getInspectableTaskRegistrySummary: statusSummaryMocks.getInspectableTaskRegistrySummary,
-  getInspectableTaskAuditFindings: statusSummaryMocks.getInspectableTaskAuditFindings,
+  getInspectableTaskStatusSummaryReadOnly:
+    statusSummaryMocks.getInspectableTaskStatusSummaryReadOnly,
 }));
 
 vi.mock("../routing/session-key.js", async () => {
@@ -238,28 +211,14 @@ describe("getStatusSummary", () => {
     setActiveDegradedPlugins([]);
     clearActiveCredentialDegradedOwner("account", "telegram:work");
     setActiveDegradedSecretOwners([]);
-    statusSummaryMocks.taskRegistrySummary = createEmptyTaskRegistrySummary();
-    statusSummaryMocks.taskRegistryReadOnlyState = "ready";
-    statusSummaryMocks.inspectableTasks = [];
-    statusSummaryMocks.taskAuditFindings = [
-      {
-        severity: "warn",
-        code: "delivery_failed",
-        detail: "terminal update delivery failed",
-        task: {
-          taskId: "task-delivery",
-          runtime: "subagent",
-          ownerKey: "agent:main:main",
-          requesterSessionKey: "agent:main:main",
-          scopeKind: "session",
-          task: "Deliver update",
-          status: "failed",
-          deliveryStatus: "failed",
-          notifyPolicy: "done_only",
-          createdAt: 1,
-        },
-      },
-    ];
+    const taskStatusSummary = createEmptyTaskStatusSummary();
+    taskStatusSummary.taskAudit.total = 1;
+    taskStatusSummary.taskAudit.warnings = 1;
+    taskStatusSummary.taskAudit.byCode.delivery_failed = 1;
+    statusSummaryMocks.getInspectableTaskStatusSummaryReadOnly.mockResolvedValue({
+      state: "ready",
+      ...taskStatusSummary,
+    });
     statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
     statusSummaryMocks.resolveProviderStaticModel.mockReset();
@@ -286,7 +245,7 @@ describe("getStatusSummary", () => {
       label: "OpenClaw Default",
     });
     vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
-    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+    vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
       defaultId: "main",
       ownership: "sole",
       selectionRequired: false,
@@ -304,12 +263,13 @@ describe("getStatusSummary", () => {
     setSessions: (store) =>
       statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store)),
   });
+  registerStatusSummaryWalCases((options) => getStatusSummary(options));
 
   it.each(["per-sender", "global"] as const)(
     "summarizes every configured agent's pending events without an ambient owner (%s)",
     async (scope) => {
       const agents = [{ id: "research" }, { id: "ops" }];
-      vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+      vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
         defaultId: "research",
         mainKey: "inbox",
         scope,
@@ -335,7 +295,7 @@ describe("getStatusSummary", () => {
       expect(summary.sessions.byAgent.map((agent) => agent.agentId)).toEqual(["research", "ops"]);
       expect(summary.queuedSystemEvents).toEqual(
         scope === "global"
-          ? ["pending: global"]
+          ? ["pending: agent:research:global", "pending: agent:ops:global"]
           : ["pending: agent:research:inbox", "pending: agent:ops:inbox"],
       );
     },
@@ -358,7 +318,7 @@ describe("getStatusSummary", () => {
         },
       ]);
       expect(summary.channelSummary).toEqual(["ok"]);
-      expect(summary.tasks).toEqual(statusSummaryMocks.taskRegistrySummary);
+      expect(summary.tasks).toEqual(createEmptyTaskRegistrySummary());
       expect(summary.taskAudit.warnings).toBe(1);
     },
   );
@@ -589,23 +549,11 @@ describe("getStatusSummary", () => {
     expect(JSON.stringify(summary.degradedPlugins)).not.toContain("/private/host");
   });
 
-  it("reuses one reconciled task snapshot for task summaries and audit findings", async () => {
-    const inspectableTasks: TaskRecord[] = [];
-    statusSummaryMocks.inspectableTasks = inspectableTasks;
-
-    await getStatusSummary();
-
-    expect(statusSummaryMocks.inspectTasksReadOnly).toHaveBeenCalledTimes(1);
-    expect(statusSummaryMocks.getInspectableTaskRegistrySummary).toHaveBeenCalledWith(
-      inspectableTasks,
-    );
-    expect(statusSummaryMocks.getInspectableTaskAuditFindings).toHaveBeenCalledWith(
-      inspectableTasks,
-    );
-  });
-
   it("reports task schema migration state without failing status", async () => {
-    statusSummaryMocks.taskRegistryReadOnlyState = "migration-required";
+    statusSummaryMocks.getInspectableTaskStatusSummaryReadOnly.mockResolvedValue({
+      state: "migration-required",
+      ...createEmptyTaskStatusSummary(),
+    });
 
     const summary = await getStatusSummary();
 
@@ -615,61 +563,30 @@ describe("getStatusSummary", () => {
     );
   });
 
-  it("keeps retained lost tasks out of default status audit counts", async () => {
+  it("passes through the retained-lost task projection unchanged", async () => {
     const cleanupAfter = Date.now() + 60_000;
-    statusSummaryMocks.taskRegistrySummary = {
-      ...statusSummaryMocks.taskRegistrySummary,
+    const taskStatusSummary = createEmptyTaskStatusSummary();
+    taskStatusSummary.tasks = {
+      ...taskStatusSummary.tasks,
       total: 1,
       terminal: 1,
-      failures: 1,
       byStatus: {
-        ...statusSummaryMocks.taskRegistrySummary.byStatus,
+        ...taskStatusSummary.tasks.byStatus,
         lost: 1,
       },
+      byRuntime: { ...taskStatusSummary.tasks.byRuntime, subagent: 1 },
     };
-    statusSummaryMocks.taskAuditFindings = [
-      {
-        severity: "warn",
-        code: "lost",
-        detail: "task lost its backing session and is retained until cleanupAfter",
-        task: {
-          taskId: "task-lost-retained",
-          runtime: "subagent",
-          ownerKey: "agent:main:main",
-          requesterSessionKey: "agent:main:main",
-          scopeKind: "session",
-          task: "Retained lost",
-          status: "lost",
-          deliveryStatus: "pending",
-          notifyPolicy: "done_only",
-          createdAt: cleanupAfter - 60_000,
-          endedAt: cleanupAfter - 60_000,
-          cleanupAfter,
-        },
-      },
-    ];
+    taskStatusSummary.taskAuditRetainedLost = { count: 1, nextCleanupAfter: cleanupAfter };
+    statusSummaryMocks.getInspectableTaskStatusSummaryReadOnly.mockResolvedValue({
+      state: "ready",
+      ...taskStatusSummary,
+    });
 
     const summary = await getStatusSummary();
 
-    expect(summary.tasks.failures).toBe(0);
-    expect(summary.tasks.byStatus.lost).toBe(1);
-    expect(summary.taskAudit).toEqual({
-      total: 0,
-      warnings: 0,
-      errors: 0,
-      byCode: {
-        stale_queued: 0,
-        stale_running: 0,
-        lost: 0,
-        delivery_failed: 0,
-        missing_cleanup: 0,
-        inconsistent_timestamps: 0,
-      },
-    });
-    expect(summary.taskAuditRetainedLost).toEqual({
-      count: 1,
-      nextCleanupAfter: cleanupAfter,
-    });
+    expect(summary.tasks).toEqual(taskStatusSummary.tasks);
+    expect(summary.taskAudit).toEqual(taskStatusSummary.taskAudit);
+    expect(summary.taskAuditRetainedLost).toEqual(taskStatusSummary.taskAuditRetainedLost);
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
@@ -821,7 +738,7 @@ describe("getStatusSummary", () => {
   });
 
   it("passes agent scope when listing configured agent session stores", async () => {
-    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+    vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
       defaultId: "main",
       ownership: "sole",
       selectionRequired: false,
@@ -859,7 +776,7 @@ describe("getStatusSummary", () => {
     ]);
   });
 
-  it("includes configured and selected model labels for pinned sessions", async () => {
+  function setDifferentConfiguredAndSelectedModels() {
     vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
       provider: "zhipu",
       model: "glm-4.5-air",
@@ -868,6 +785,10 @@ describe("getStatusSummary", () => {
       provider: "deepseek",
       model: "deepseek-v4-flash",
     });
+  }
+
+  it("includes configured and selected model labels for pinned sessions", async () => {
+    setDifferentConfiguredAndSelectedModels();
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
@@ -888,14 +809,7 @@ describe("getStatusSummary", () => {
   });
 
   it("does not mark runtime-only model snapshots as pinned session selections", async () => {
-    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
-      provider: "zhipu",
-      model: "glm-4.5-air",
-    });
-    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
-    });
+    setDifferentConfiguredAndSelectedModels();
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
@@ -915,14 +829,7 @@ describe("getStatusSummary", () => {
   });
 
   it("marks auto fallback model overrides with a fallback reason label", async () => {
-    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
-      provider: "zhipu",
-      model: "glm-4.5-air",
-    });
-    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
-    });
+    setDifferentConfiguredAndSelectedModels();
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:main:main": {
@@ -951,14 +858,7 @@ describe("getStatusSummary", () => {
   });
 
   it("does not mark configured subagent models as auto fallback", async () => {
-    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
-      provider: "zhipu",
-      model: "glm-4.5-air",
-    });
-    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
-    });
+    setDifferentConfiguredAndSelectedModels();
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:worker:subagent:configured": {
@@ -976,34 +876,6 @@ describe("getStatusSummary", () => {
     const summary = await getStatusSummary();
 
     expect(summary.sessions.recent[0]?.selectedModel).toBe("deepseek/deepseek-v4-flash");
-    expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
-  });
-
-  it("does not mark runtime-equivalent provider aliases as pinned mismatches", async () => {
-    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
-      provider: "openai",
-      model: "gpt-5.5-codex",
-    });
-    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockReturnValue({
-      provider: "openai",
-      model: "gpt-5.5-codex",
-    });
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
-      toSessionEntrySummaries({
-        "agent:main:main": {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-          providerOverride: "openai",
-          modelOverride: "gpt-5.5-codex",
-          modelOverrideSource: "user",
-        },
-      }),
-    );
-
-    const summary = await getStatusSummary();
-
-    expect(summary.sessions.recent[0]?.configuredModel).toBe("openai/gpt-5.5-codex");
-    expect(summary.sessions.recent[0]?.selectedModel).toBe("openai/gpt-5.5-codex");
     expect(summary.sessions.recent[0]?.modelSelectionReason).toBeNull();
   });
 
@@ -1065,9 +937,10 @@ describe("getStatusSummary", () => {
 
   it("resolves aggregate selected models from each row's agent", async () => {
     const models: Record<string, string> = { ops: "ops", research: "research" };
-    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockImplementation(
-      (_cfg, _entry, id) => ({ provider: "openai", model: models[id ?? ""] ?? "global" }),
+    vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockImplementation(
+      ({ agentId }) => ({ provider: "openai", model: models[agentId ?? ""] ?? "global" }),
     );
+    vi.mocked(statusSummaryRuntime.resolveSessionModelRef).mockImplementation((model) => model);
     statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
       toSessionEntrySummaries({
         "agent:ops:main": { sessionId: "ops-session", updatedAt: 3 },

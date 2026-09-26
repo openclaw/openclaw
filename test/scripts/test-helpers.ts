@@ -4,6 +4,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach } from "vitest";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 export function linkPnpmBootstrapShellTools(binDir: string): void {
   // Omit package managers: absence must not depend on the host's installed tools.
@@ -38,15 +39,7 @@ const query = args.at(-1) ?? "";
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
 const print = (value) => process.stdout.write(String(value ?? "") + "\\n");
 
-if (query === ".login") print(input.login);
-else if (query === ".name // empty") print(input.name ?? "");
-else if (query === ".created_at") print(input.created_at);
-else if (query === ".type") print(input.type);
-else if (query === ".totalCommitContributions") print(input.totalCommitContributions);
-else if (query === ".totalIssueContributions") print(input.totalIssueContributions);
-else if (query === ".totalPullRequestContributions") print(input.totalPullRequestContributions);
-else if (query === ".totalPullRequestReviewContributions") print(input.totalPullRequestReviewContributions);
-else if (query.includes("{id: .profileId")) {
+if (query.includes("{id: .profileId")) {
   const profiles = input.auth?.oauth?.profiles ?? [];
   const profile = profiles.filter((item) => item.provider === "anthropic" && item.type === "oauth").sort((a, b) => (b.expiresAt ?? 0) - (a.expiresAt ?? 0))[0];
   print(profile?.profileId ?? "none");
@@ -68,29 +61,18 @@ else if (query.includes("{id: .profileId")) {
 export function createScriptTestHarness() {
   const tempDirs: string[] = [];
 
-  afterEach(() => {
-    while (tempDirs.length > 0) {
-      const dir = tempDirs.pop();
-      if (dir) {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    }
-  });
+  afterEach(() => cleanupTempDirs(tempDirs));
 
   function createTempDir(prefix: string): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    tempDirs.push(dir);
-    return dir;
+    return trackTempDir(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   }
 
   async function createTempDirAsync(prefix: string): Promise<string> {
-    const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), prefix));
-    tempDirs.push(dir);
-    return dir;
+    return trackTempDir(await fsPromises.mkdtemp(path.join(os.tmpdir(), prefix)));
   }
 
   function trackTempDir(dir: string): string {
-    tempDirs.push(dir);
+    tempDirs.unshift(dir);
     return dir;
   }
 

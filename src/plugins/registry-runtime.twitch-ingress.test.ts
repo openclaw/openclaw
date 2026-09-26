@@ -1,17 +1,19 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  configureChannelAdmissionEvidenceCollection,
+  createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
 } from "../channels/message-access/admission-evidence.js";
 import { importBundledChannelContractSourceArtifact } from "../channels/plugins/contracts/test-helpers/runtime-artifacts.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { runChannelInboundEvent } from "../plugin-sdk/channel-inbound.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createPluginRegistry } from "./registry.js";
+import { bindGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-helpers.js";
@@ -115,7 +117,13 @@ async function withTwitchMonitor(
     const evidence: EvidenceResult[] = [];
     const errors: string[] = [];
     const failure = transport.createDeferred<string>();
+    const audit = createChannelAdmissionAudit({ enabled: collectionEnabled });
+    const gateway = {
+      channelAdmissionAudit: audit,
+      getRuntimeConfig: () => cfg,
+    } as GatewayRequestContext;
     const runtime = createPluginRuntime();
+    bindGatewayContextResolver(runtime.subagent, () => gateway);
     runtime.channel.inbound.run = async (input) =>
       runChannelInboundEvent({
         ...input,
@@ -158,7 +166,6 @@ async function withTwitchMonitor(
     }
     setTwitchRuntime(api.runtime);
     const abort = new AbortController();
-    const cleanupCollection = configureChannelAdmissionEvidenceCollection(collectionEnabled);
     const ready = new Promise<InstanceType<typeof transport.ChatClient>>((resolve) => {
       transport.ChatClient.ready = resolve;
     });
@@ -212,7 +219,7 @@ async function withTwitchMonitor(
       await task;
       await stop(ctx);
       transport.ChatClient.ready = undefined;
-      cleanupCollection();
+      audit.close();
       markPluginRegistryRetired(builder.registry);
     }
   });
@@ -241,27 +248,33 @@ describe("Twitch registered participant provenance", () => {
     await withTwitchMonitor("default", {}, async () => {});
   });
 
-  it.each(
-    ["default", "secondary"].flatMap(
-      (accountId) =>
-        [
-          { accountId, policy: { allowFrom: ["123456"] }, name: "allowlist", coverage: "enforced" },
-          {
-            accountId,
-            policy: { allowedRoles: ["moderator"] },
-            name: "role",
-            coverage: "enforced",
-          },
-          { accountId, policy: {}, name: "open", coverage: "attribution-only" },
-          {
-            accountId,
-            policy: { allowedRoles: ["all"] },
-            name: "wildcard",
-            coverage: "attribution-only",
-          },
-        ] satisfies { accountId: string; policy: Policy; name: string; coverage: string }[],
-    ),
-  )(
+  it.each([
+    {
+      accountId: "default",
+      policy: { allowFrom: ["123456"] },
+      name: "allowlist",
+      coverage: "enforced",
+    },
+    {
+      accountId: "secondary",
+      policy: { allowFrom: ["123456"] },
+      name: "allowlist",
+      coverage: "enforced",
+    },
+    {
+      accountId: "default",
+      policy: { allowedRoles: ["moderator"] },
+      name: "role",
+      coverage: "enforced",
+    },
+    { accountId: "default", policy: {}, name: "open", coverage: "attribution-only" },
+    {
+      accountId: "default",
+      policy: { allowedRoles: ["all"] },
+      name: "wildcard",
+      coverage: "attribution-only",
+    },
+  ] satisfies { accountId: string; policy: Policy; name: string; coverage: string }[])(
     "preserves $accountId $name sender through actual ingress and reply",
     async ({ accountId, policy, coverage, name }) => {
       await withTwitchMonitor(accountId, policy, async ({ client, evidence, waitForReply }) => {

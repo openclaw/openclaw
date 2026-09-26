@@ -24,6 +24,7 @@ type SignalMediaContext = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   replyToId?: string;
+  assertDirectAdapterHandoff?: () => void;
   deps?: { signal: typeof sendMessageSignal };
 };
 
@@ -79,6 +80,8 @@ describe("Signal host-owned outbound media access", () => {
   let server: http.Server;
   let cfg: OpenClawConfig;
   let requests: Array<{ envelope: SignalRpcEnvelope; attachment: Buffer | undefined }>;
+  let onRequest: (() => void) | undefined;
+  let rejectQuotes: boolean;
 
   beforeEach(async () => {
     state = await createOpenClawTestState({
@@ -86,6 +89,8 @@ describe("Signal host-owned outbound media access", () => {
       prefix: "openclaw-signal-media-access-",
     });
     requests = [];
+    onRequest = undefined;
+    rejectQuotes = false;
     server = http.createServer((request, response) => {
       const chunks: Buffer[] = [];
       request.on("data", (chunk: Buffer | string) => {
@@ -99,7 +104,18 @@ describe("Signal host-owned outbound media access", () => {
             envelope,
             attachment: attachmentPath ? await fs.readFile(attachmentPath) : undefined,
           });
+          onRequest?.();
           response.writeHead(200, { "content-type": "application/json" });
+          if (rejectQuotes && envelope.params?.quoteTimestamp !== undefined) {
+            response.end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: envelope.id,
+                error: { code: -32602, message: "quote metadata invalid" },
+              }),
+            );
+            return;
+          }
           response.end(
             JSON.stringify({
               jsonrpc: "2.0",
@@ -124,6 +140,7 @@ describe("Signal host-owned outbound media access", () => {
     cfg = {
       channels: {
         signal: {
+          reactionLevel: "minimal",
           accounts: {
             default: {
               account: "+15550001111",
@@ -213,6 +230,165 @@ describe("Signal host-owned outbound media access", () => {
       });
     },
   );
+
+  it.each(SIGNAL_MEDIA_ADAPTERS)(
+    "stops the $name when its caller closes during the approved media read",
+    async ({ deliver }) => {
+      await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
+      const caller = new AbortController();
+      const readFile = vi.fn(async (filePath: string) => {
+        const bytes = await fs.readFile(filePath);
+        caller.abort(new Error("Signal caller closed"));
+        return bytes;
+      });
+
+      await expect(
+        deliver(
+          createContext({
+            mediaAccess: {
+              localRoots: [state.workspaceDir],
+              workspaceDir: state.workspaceDir,
+              readFile,
+            },
+            assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+          }),
+        ),
+      ).rejects.toThrow("Signal caller closed");
+
+      expect(readFile).toHaveBeenCalledOnce();
+      expect(requests).toHaveLength(0);
+    },
+  );
+
+  it.each(SIGNAL_MEDIA_ADAPTERS)(
+    "preserves the $name result when its caller closes after transmission",
+    async ({ deliver }) => {
+      await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
+      const caller = new AbortController();
+      onRequest = () => caller.abort(new Error("Signal caller closed"));
+
+      await expect(
+        deliver(
+          createContext({
+            mediaAccess: { localRoots: [state.workspaceDir], workspaceDir: state.workspaceDir },
+            assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+          }),
+        ),
+      ).resolves.toMatchObject({ messageId: "1700000000999" });
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.attachment).toEqual(SIGNAL_IMAGE);
+    },
+  );
+
+  it.each(["message", "formatted", "attached"] as const)(
+    "checks the current caller after preparation for %s text delivery",
+    async (adapter) => {
+      const caller = new AbortController();
+      const send =
+        adapter === "message"
+          ? signalPlugin.message?.send?.text
+          : adapter === "formatted"
+            ? signalPlugin.outbound?.sendFormattedText
+            : signalPlugin.outbound?.sendText;
+      if (!send) {
+        throw new Error("Signal text sender is unavailable");
+      }
+      const delivery = send({
+        cfg,
+        to: "+15551234567",
+        text: "A pending reply",
+        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+      });
+      caller.abort(new Error("Signal caller closed"));
+
+      await expect(delivery).rejects.toThrow("Signal caller closed");
+      expect(requests).toHaveLength(0);
+    },
+  );
+
+  it.each([false, true])("keeps quote fallback on the same caller (closed=%s)", async (closed) => {
+    const send = signalPlugin.message?.send?.text;
+    if (!send) {
+      throw new Error("Signal message text adapter is unavailable");
+    }
+    await registerSignalReplyContext({
+      accountId: "default",
+      to: "+15551234567",
+      replyToId: "1700000000001",
+      author: "+15550002222",
+      body: "original message",
+    });
+    const caller = new AbortController();
+    rejectQuotes = true;
+    if (closed) {
+      onRequest = () => caller.abort(new Error("Signal caller closed"));
+    }
+    const delivery = send({
+      cfg,
+      to: "+15551234567",
+      text: "A quoted reply",
+      replyToId: "1700000000001",
+      assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+    });
+
+    if (closed) {
+      await expect(delivery).rejects.toThrow("Signal caller closed");
+      expect(requests).toHaveLength(1);
+    } else {
+      await expect(delivery).resolves.toMatchObject({ messageId: "1700000000999" });
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.envelope.params).not.toHaveProperty("quoteTimestamp");
+    }
+    expect(requests[0]?.envelope.params?.quoteTimestamp).toBe(1700000000001);
+  });
+
+  it("preserves a reported text chunk and stops later chunks when its caller closes", async () => {
+    const send = signalPlugin.outbound?.sendFormattedText;
+    if (!send) {
+      throw new Error("Signal formatted text adapter is unavailable");
+    }
+    const caller = new AbortController();
+    const delivered: unknown[] = [];
+
+    await expect(
+      send({
+        cfg: {
+          ...cfg,
+          channels: { signal: { ...cfg.channels?.signal, textChunkLimit: 4 } },
+        },
+        to: "+15551234567",
+        text: "one\n\ntwo\n\nthree",
+        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+        onDeliveryResult: (result) => {
+          delivered.push(result);
+          caller.abort(new Error("Signal caller closed between chunks"));
+        },
+      }),
+    ).rejects.toThrow("Signal caller closed between chunks");
+    expect(requests).toHaveLength(1);
+    expect(delivered).toEqual([expect.objectContaining({ messageId: "1700000000999" })]);
+  });
+
+  it.each([false, true])("stops a closed caller's reaction (remove=%s)", async (remove) => {
+    const react = signalPlugin.actions?.handleAction;
+    if (!react) {
+      throw new Error("Signal reaction adapter is unavailable");
+    }
+    const caller = new AbortController();
+    caller.abort(new Error("Signal caller closed"));
+
+    await expect(
+      react({
+        channel: "signal",
+        action: "react",
+        cfg,
+        params: { to: "+15551234567", messageId: "1700000000001", emoji: "👍", remove },
+        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+      }),
+    ).rejects.toThrow("Signal caller closed");
+    expect(requests).toHaveLength(0);
+  });
 
   it.each(SIGNAL_MEDIA_ADAPTERS)(
     "rejects traversal before reading or contacting Signal through the $name",

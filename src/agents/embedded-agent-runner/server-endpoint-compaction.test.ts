@@ -1,3 +1,4 @@
+import { captureOpenAIResponsesCompaction } from "@openclaw/ai/transports";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { Model } from "openclaw/plugin-sdk/llm";
@@ -13,6 +14,7 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
   requestPreparedOpenAIResponsesCompaction: requestPreparedCompactionMock,
 }));
 
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { testing } from "../openai-transport-stream.test-support.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 
@@ -29,15 +31,23 @@ const model = {
   maxTokens: 8_192,
 } satisfies Model;
 
-function createSession() {
+const openAIModel = {
+  ...model,
+  id: "gpt-5.6-luna",
+  name: "GPT-5.6 Luna",
+  provider: "openai",
+  baseUrl: "https://api.openai.com/v1",
+} satisfies Model;
+
+function createSession(sessionModel: Model = model) {
   const sessionManager = SessionManager.inMemory();
   sessionManager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
   sessionManager.appendMessage({
     role: "assistant",
     content: [{ type: "text", text: "remembered" }],
-    api: "openai-responses",
-    provider: "xai",
-    model: "grok-4.5",
+    api: sessionModel.api,
+    provider: sessionModel.provider,
+    model: sessionModel.id,
     usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: 2,
@@ -50,7 +60,7 @@ function createSession() {
 }
 
 function attempt(overrides: Partial<Parameters<typeof attemptServerEndpointCompaction>[0]> = {}) {
-  const session = createSession();
+  const session = createSession(overrides.model ?? model);
   return {
     session,
     result: attemptServerEndpointCompaction({
@@ -66,9 +76,8 @@ function attempt(overrides: Partial<Parameters<typeof attemptServerEndpointCompa
   };
 }
 
-beforeEach(() => {
-  requestPreparedCompactionMock.mockReset();
-  requestPreparedCompactionMock.mockResolvedValue({
+function createCompactionResponse(responseModel: Model = model) {
+  return {
     item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
     output: [
       { type: "message", role: "user", content: [{ type: "input_text", text: "remember copper" }] },
@@ -76,17 +85,28 @@ beforeEach(() => {
     ],
     historyMode: "retained-users",
     usage: { input_tokens: 1_000, output_tokens: 200, dropped_message_count: 1 },
-    model,
-    replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
+    model: responseModel,
+    replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(responseModel, {
       sessionId: "session-1",
     }),
-  });
+  };
+}
+
+beforeEach(() => {
+  requestPreparedCompactionMock.mockReset();
+  requestPreparedCompactionMock.mockResolvedValue(createCompactionResponse());
 });
 
 describe("attemptServerEndpointCompaction", () => {
-  it.each([false, true])(
-    "reports a committed rewrite without fallback when observer throws=%s",
-    async (throws) => {
+  it.each([
+    { trigger: "manual", throws: false, model },
+    { trigger: "manual", throws: true, model },
+    { trigger: "budget", throws: false, model },
+    { trigger: "budget", throws: false, model: openAIModel },
+  ] as const)(
+    "reports a committed $model.provider $trigger rewrite without fallback when observer throws=$throws",
+    async ({ trigger, throws, model: requestModel }) => {
+      requestPreparedCompactionMock.mockResolvedValueOnce(createCompactionResponse(requestModel));
       let committedOwner: ReturnType<SessionManager["getLeafEntry"]>;
       const observerError = new Error("committed observer failed");
       const onCompactionCommitted = vi.fn(() => {
@@ -95,7 +115,7 @@ describe("attemptServerEndpointCompaction", () => {
           throw observerError;
         }
       });
-      const request = { trigger: "manual" as const, onCompactionCommitted };
+      const request = { trigger, model: requestModel, onCompactionCommitted };
       const { session, result } = attempt(request);
 
       if (throws) {
@@ -130,7 +150,7 @@ describe("attemptServerEndpointCompaction", () => {
         },
       });
       expect(owner.message.providerReplay).not.toHaveProperty("replayIndex");
-      expect(onCompactionCommitted).toHaveBeenCalledExactlyOnceWith();
+      expect(onCompactionCommitted).toHaveBeenCalledExactlyOnceWith(1_000);
       expect(committedOwner).toMatchObject({
         id: owner.id,
         message: {
@@ -226,6 +246,43 @@ describe("attemptServerEndpointCompaction", () => {
     expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
   });
 
+  it("leaves a missing canonical checkpoint window to client budget compaction", async () => {
+    const session = createSession();
+    const owner = session.messages.at(-1);
+    if (owner?.role !== "assistant") {
+      throw new Error("expected assistant checkpoint owner");
+    }
+    captureOpenAIResponsesCompaction(
+      owner,
+      { type: "compaction", id: "cmp_legacy", encrypted_content: "opaque-legacy" },
+      "retained-users",
+      model,
+      testing.buildOpenAIResponsesReasoningReplayMetadata(model, { sessionId: "session-1" }),
+    );
+    const before = structuredClone(session.sessionManager.getBranch());
+    const { result } = attempt({
+      trigger: "budget",
+      sessionManager: session.sessionManager,
+      context: { systemPrompt: "system", messages: session.messages },
+    });
+
+    await expect(result).resolves.toBeUndefined();
+    expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
+    expect(session.sessionManager.getBranch()).toEqual(before);
+  });
+
+  it("preserves the transcript for client recovery when the budget endpoint rejects", async () => {
+    requestPreparedCompactionMock.mockRejectedValueOnce(new Error("Context window exceeded"));
+    const onCompactionCommitted = vi.fn();
+    const { session, result } = attempt({ trigger: "budget", onCompactionCommitted });
+    const before = structuredClone(session.sessionManager.getBranch());
+
+    await expect(result).resolves.toBeUndefined();
+    expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
+    expect(onCompactionCommitted).not.toHaveBeenCalled();
+    expect(session.sessionManager.getBranch()).toEqual(before);
+  });
+
   it("preserves custom instructions by falling back to client compaction", async () => {
     const { result } = attempt({ customInstructions: "Retain the security caveats." });
 
@@ -234,11 +291,7 @@ describe("attemptServerEndpointCompaction", () => {
   });
 
   it("does not compact transcript entries that remain after the checkpoint owner", async () => {
-    const messages = createSession().messages.concat({
-      role: "user",
-      content: "trailing turn",
-      timestamp: 3,
-    });
+    const messages = createSession().messages.concat(makeUserMessage("trailing turn", 3));
     const { result } = attempt({ context: { systemPrompt: "system", messages } });
 
     await expect(result).resolves.toBeUndefined();

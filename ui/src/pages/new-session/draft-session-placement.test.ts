@@ -6,20 +6,56 @@ import {
 } from "./draft-session-placement.ts";
 
 describe("new-session placement target", () => {
-  it("resolves a selected paired device through the generic placement target", () => {
+  it("retains a recovered classless target when the catalog now displays a machine", () => {
+    const target = { kind: "profile" as const, profileId: "aws" };
     expect(
       resolveDraftSessionPlacement(
-        { sessionKey: "", target: null },
-        { cloudProfileId: "", deviceId: "runner", autoDevice: false, machineClass: "" },
+        { sessionKey: "agent:main:pending", target },
+        {
+          cloudProfileId: "aws",
+          deviceId: "",
+          autoDevice: false,
+          cloudSelection: { os: "linux", machineClass: "small" },
+        },
       ).target,
-    ).toEqual({ kind: "device", deviceId: "runner" });
+    ).toEqual(target);
+  });
+
+  it.each([
+    {
+      place: {
+        cloudProfileId: "",
+        deviceId: "runner",
+        autoDevice: false,
+        cloudSelection: { os: "", machineClass: "" },
+      },
+      target: { kind: "device", deviceId: "runner" },
+    },
+    {
+      place: {
+        cloudProfileId: "aws",
+        deviceId: "",
+        autoDevice: false,
+        cloudSelection: { os: "windows/wsl2", machineClass: "tiny" },
+      },
+      target: { kind: "profile", profileId: "aws", os: "windows/wsl2", machineClass: "tiny" },
+    },
+  ])("preserves selected placement options for $target.kind", ({ place, target }) => {
+    expect(resolveDraftSessionPlacement({ sessionKey: "", target: null }, place).target).toEqual(
+      target,
+    );
   });
 
   it("preserves automatic device selection through the draft placement target", () => {
     expect(
       resolveDraftSessionPlacement(
         { sessionKey: "", target: null },
-        { cloudProfileId: "", deviceId: "", autoDevice: true, machineClass: "" },
+        {
+          cloudProfileId: "",
+          deviceId: "",
+          autoDevice: true,
+          cloudSelection: { os: "", machineClass: "" },
+        },
       ).target,
     ).toEqual({ kind: "auto-device" });
   });
@@ -42,13 +78,13 @@ describe("new-session placement target", () => {
     });
   });
 
-  it("restores draft visibility and capability choices from a creating recovery", () => {
+  it("restores the empty workspace, visibility, and capability choices from a creating recovery", () => {
     expect(
       projectDraftSessionPlacementRecovery({
         sessionKey: "agent:main:cloud",
         messageId: "message-cloud",
         message: "continue in the cloud",
-        target: { kind: "profile", profileId: "aws" },
+        target: { kind: "profile", profileId: "aws", os: "windows/wsl2", machineClass: "tiny" },
         agentId: "main",
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
@@ -61,9 +97,16 @@ describe("new-session placement target", () => {
           visibility: "draft",
           toolOverrides: { skills: { release: false } },
           worktree: true,
+          worktreeSource: "empty",
         },
       }),
     ).toMatchObject({
+      placement: {
+        profileId: "aws",
+        os: "windows/wsl2",
+        machineClass: "tiny",
+        worktreeSource: "empty",
+      },
       draft: {
         permissionMode: "guarded",
         visibility: "draft",

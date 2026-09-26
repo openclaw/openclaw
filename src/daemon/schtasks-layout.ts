@@ -12,15 +12,21 @@ import {
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";
-import { resolveGatewayTaskScriptPath } from "./paths.js";
-import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { resolveGatewayTaskScriptPath as resolveTaskScriptPath } from "./paths.js";
+import { probeScheduledTaskState } from "./schtasks-state-probe.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
+import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
   GatewayServiceReadOptions,
   GatewayServiceRenderArgs,
 } from "./service-types.js";
-import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
+import {
+  WINDOWS_TASK_LAUNCHER_ACTIVE,
+  WINDOWS_TASK_LAUNCHER_ENV,
+  WINDOWS_TASK_SUPERVISOR_FLAG,
+} from "./windows-task-supervisor-contract.js";
 
 export function resolveTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
@@ -34,8 +40,105 @@ export function resolveTaskName(env: GatewayServiceEnv): string {
 // heuristics fail closed for permission prompts (#112173).
 const STDIN_NUL_REDIRECT = "< NUL";
 
-function stripStdinNulRedirect(commandLine: string): string {
-  return commandLine.replace(/\s*<\s*NUL\s*$/i, "");
+function stripTrailingCmdRedirections(commandLine: string): string {
+  const tokens: { start: number; end: number; redirect?: string }[] = [];
+  // Validate the entire command before removing anything. A compound command or
+  // uncertain cmd/argv quote boundary must never become exact process-ownership proof.
+  for (let index = 0; index < commandLine.length;) {
+    if (/[ \t]/.test(commandLine.charAt(index))) {
+      index++;
+      continue;
+    }
+    let start = index;
+    const operator = commandLine[index];
+    if (operator === ">" || operator === "<") {
+      const previous = tokens.at(-1);
+      if (previous && !previous.redirect && previous.end === index) {
+        const word = commandLine.slice(previous.start, previous.end);
+        if (/\d$/.test(word)) {
+          // A digit attached to an argument can instead be cmd's handle number.
+          // Do not guess which bytes of that argument belong to the process.
+          if (!/^\d$/.test(word)) {
+            return commandLine;
+          }
+          start = previous.start;
+          tokens.pop();
+        }
+      }
+      index++;
+      let redirect: "<" | ">" | ">>" | ">&" = operator;
+      if (operator === ">" && commandLine[index] === ">") {
+        redirect = ">>";
+        index++;
+      }
+      if (redirect === ">" && commandLine[index] === "&") {
+        if (!/[0-9]/.test(commandLine[index + 1] ?? "")) {
+          return commandLine;
+        }
+        redirect = ">&";
+        index += 2;
+      }
+      tokens.push({ start, end: index, redirect });
+      continue;
+    }
+    let quoted = false;
+    while (index < commandLine.length) {
+      const char = commandLine.charAt(index);
+      if (
+        char === "\r" ||
+        char === "\n" ||
+        (char === "\\" && commandLine[index + 1] === '"') ||
+        (char === "^" && (!quoted || commandLine[index + 1] === '"'))
+      ) {
+        return commandLine;
+      }
+      if (char === '"') {
+        quoted = !quoted;
+      } else if (!quoted) {
+        if ("&|()".includes(char)) {
+          return commandLine;
+        }
+        if (/[ \t<>]/.test(char)) {
+          break;
+        }
+      }
+      index++;
+    }
+    if (quoted) {
+      return commandLine;
+    }
+    tokens.push({ start, end: index });
+  }
+
+  const firstRedirect = tokens.findIndex((token) => token.redirect !== undefined);
+  const firstToken = tokens[firstRedirect];
+  if (!firstToken) {
+    return commandLine;
+  }
+  for (let index = firstRedirect; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (!token?.redirect) {
+      return commandLine;
+    }
+    if (token.redirect === ">&") {
+      continue;
+    }
+    const target = tokens[++index];
+    if (!target || target.redirect) {
+      return commandLine;
+    }
+    const value = commandLine.slice(target.start, target.end);
+    // Unquoted expansions can introduce filename delimiters and leave extra argv.
+    if (
+      (value.includes('"') && !/^"[^"]+"$/.test(value)) ||
+      (!value.includes('"') && /[,;=%!]/.test(value)) ||
+      (token.redirect === "<" && !/^(?:NUL|"NUL")$/i.test(value))
+    ) {
+      return commandLine;
+    }
+  }
+  // Redirection alone has no executable for the service reader to inspect.
+  return commandLine.slice(0, firstToken.start);
 }
 
 export function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
@@ -47,10 +150,6 @@ export function shouldFallbackToStartupEntry(params: { code: number; detail: str
     /schtasks timed out/i.test(params.detail) ||
     /schtasks produced no output/i.test(params.detail)
   );
-}
-
-export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
-  return resolveGatewayTaskScriptPath(env);
 }
 
 function resolveWindowsStartupDir(env: GatewayServiceEnv): string {
@@ -180,7 +279,11 @@ export async function writeTaskXmlTempFile(xml: string): Promise<string> {
   // Task Scheduler `/XML` expects UTF-16 LE with a BOM on every locale.
   const bom = Buffer.from([0xff, 0xfe]);
   const body = Buffer.from(xml, "utf16le");
-  await fs.writeFile(xmlPath, Buffer.concat([bom, body]));
+  await publishServiceFile({
+    filePath: xmlPath,
+    contents: Buffer.concat([bom, body]),
+    mode: 0o600,
+  });
   return xmlPath;
 }
 
@@ -219,6 +322,8 @@ export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
   options?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceCommandConfig | null> {
+  const deadline =
+    options?.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs;
   const scriptPath = resolveTaskScriptPath(env);
   try {
     const content = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
@@ -252,9 +357,9 @@ export async function readScheduledTaskCommand(
         workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
         continue;
       }
-      // Generated launchers redirect stdin so a hidden service console never
-      // presents as interactive (#112173); the redirection is not an argument.
-      commandLine = stripStdinNulRedirect(line);
+      // Generated stdin and operator-added output redirections are shell syntax,
+      // not arguments of the process whose ownership lifecycle controls verify.
+      commandLine = stripTrailingCmdRedirections(line);
       break;
     }
     if (!commandLine) {
@@ -286,9 +391,17 @@ export async function readScheduledTaskCommand(
     if (!options?.requireEffective) {
       return null;
     }
+    const remaining = deadline === undefined ? undefined : deadline - performance.now();
     if (
       hasErrnoCode(error, "ENOENT") &&
-      (await isScheduledTaskDefinitionAbsent(env, options.timeoutMs).catch(() => false))
+      (remaining === undefined || remaining > 0) &&
+      (await isScheduledTaskDefinitionAbsent(env, remaining).catch((inspectionError: unknown) => {
+        if (inspectionError instanceof ServiceInspectionError) {
+          throw inspectionError;
+        }
+        return false;
+      })) &&
+      (deadline === undefined || performance.now() < deadline)
     ) {
       return null;
     }
@@ -302,7 +415,11 @@ async function isScheduledTaskDefinitionAbsent(
   timeoutMs?: number,
 ): Promise<boolean> {
   // A missing script can still belong to a registered task or Startup login item.
-  if (probeScheduledTaskExists(resolveTaskName(env), timeoutMs) !== false) {
+  const probe = probeScheduledTaskState(resolveTaskName(env), timeoutMs);
+  if (probe.status === "unknown") {
+    throw new ServiceInspectionError("windows-task-inspection-failed", probe.diagnostic);
+  }
+  if (probe.status !== "missing") {
     return false;
   }
   for (const pathname of [resolveTaskScriptPath(env), ...resolveStartupEntryPaths(env)]) {
@@ -339,7 +456,10 @@ export function buildTaskScript({
       if (
         value === undefined ||
         (!value && key.toUpperCase() !== "NODE_OPTIONS") ||
-        key.toUpperCase() === "PATH"
+        key.toUpperCase() === "PATH" ||
+        // This preference chooses the launcher at install time. Persisting it
+        // would overwrite the live WScript marker inherited by the supervisor.
+        key.toUpperCase() === WINDOWS_TASK_LAUNCHER_ENV
       ) {
         continue;
       }
@@ -384,13 +504,10 @@ function quoteVbsString(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
-function quoteVbsRunCommand(scriptPath: string): string {
-  return quoteVbsString(`"${scriptPath}"`);
-}
-
 export function buildHiddenLauncherScript(params: {
   description?: string;
   scriptPath: string;
+  taskSupervisor?: boolean;
 }): string {
   const lines = [];
   const trimmedDescription = params.description?.trim();
@@ -398,10 +515,14 @@ export function buildHiddenLauncherScript(params: {
     assertNoCmdLineBreak(trimmedDescription, "Hidden launcher description");
     lines.push(`' ${trimmedDescription}`);
   }
-  lines.push(
-    `WScript.Quit CreateObject("WScript.Shell").Run(${quoteVbsRunCommand(params.scriptPath)}, 0, True)`,
-  );
+  lines.push('Set shell = CreateObject("WScript.Shell")');
+  if (params.taskSupervisor) {
+    lines.push(
+      `shell.Environment("Process")("${WINDOWS_TASK_LAUNCHER_ENV}") = "${WINDOWS_TASK_LAUNCHER_ACTIVE}"`,
+    );
+  }
+  lines.push(`WScript.Quit shell.Run(${quoteVbsString(`"${params.scriptPath}"`)}, 0, True)`);
   return `${lines.join("\r\n")}\r\n`;
 }
 
-export { encodeWindowsLauncherScript };
+export { encodeWindowsLauncherScript, resolveTaskScriptPath };

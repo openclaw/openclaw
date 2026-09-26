@@ -1,9 +1,66 @@
 import Darwin
 import Foundation
+import Observation
 import Synchronization
 import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
+
+@MainActor
+struct GatewayReadinessDeadlinePolicyTests {
+    private let epoch = ContinuousClock.now
+
+    @Test(arguments: [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ])
+    func `migration extension requires fresh proof only without progress or prior grace`(
+        responsiveProgress: Bool,
+        priorGrace: Bool,
+        requiresLaunchdProof: Bool) throws
+    {
+        let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
+        let decision = try #require(policy.extensionDecision(
+            deadline: self.epoch.advanced(by: .seconds(6)),
+            finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
+            responsiveStartupProgressObserved: responsiveProgress,
+            freshInstallGraceAuthorized: priorGrace))
+
+        #expect(decision.deadline == self.epoch.advanced(by: .seconds(12)))
+        #expect(decision.requiresLaunchdProof == requiresLaunchdProof)
+    }
+
+    @Test func `migration extension is capped at the final deadline`() throws {
+        let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
+        let decision = try #require(policy.extensionDecision(
+            deadline: self.epoch.advanced(by: .seconds(116)),
+            finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
+            responsiveStartupProgressObserved: true,
+            freshInstallGraceAuthorized: false))
+
+        #expect(decision.deadline == self.epoch.advanced(by: .seconds(120)))
+    }
+
+    @Test(arguments: [120.0, 126.0])
+    func `exhausted migration budget cannot extend despite progress and prior grace`(deadline: TimeInterval) {
+        let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
+        #expect(policy.extensionDecision(
+            deadline: self.epoch.advanced(by: .seconds(deadline)),
+            finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
+            responsiveStartupProgressObserved: true,
+            freshInstallGraceAuthorized: true) == nil)
+    }
+
+    @Test func `fixed readiness policy refuses migration extensions`() {
+        let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.fixed(timeout: 6)
+        #expect(policy.extensionDecision(
+            deadline: self.epoch.advanced(by: .seconds(6)),
+            finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
+            responsiveStartupProgressObserved: true,
+            freshInstallGraceAuthorized: true) == nil)
+    }
+}
 
 @Suite(.serialized)
 @MainActor
@@ -88,12 +145,13 @@ struct GatewayProcessManagerTests {
         let environment: [String: String?] = [
             "OPENCLAW_CONFIG_PATH": configPath,
             "OPENCLAW_GATEWAY_PORT": nil,
-            "HOME": isolatedHome.path,
-            "CFFIXED_USER_HOME": isolatedHome.path,
         ]
-        return try await TestIsolation.withEnvValues(environment) {
+        return try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: isolatedHome,
+            env: environment)
+        {
             // Service ownership reads must stay inside this fixture's home, even without an explicit plist.
-            try #require(FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL == isolatedHome
+            try #require(LaunchAgentPlist.homeDirectoryURL.standardizedFileURL == isolatedHome
                 .standardizedFileURL)
             return try await body()
         }
@@ -103,7 +161,7 @@ struct GatewayProcessManagerTests {
         mode: String = "local",
         port: Int? = nil,
         homeDirectory: URL? = nil,
-        statusPayload: String? = nil,
+        statusPayload: String? = #"{"ok":true,"service":{"loaded":false}}"#,
         statusPayloads: [String]? = nil,
         commandDelayNanoseconds: UInt64 = 0,
         commandHook: (@Sendable ([String]) async -> Void)? = nil,
@@ -140,6 +198,7 @@ struct GatewayProcessManagerTests {
 
     private func makeGatewayReadinessFixture(
         url: URL,
+        clock: any Clock<Duration> = ContinuousClock(),
         taskFactory: @escaping GatewayTestWebSocketSession.TaskFactory)
         -> (session: GatewayTestWebSocketSession, connection: GatewayConnection, manager: GatewayProcessManager)
     {
@@ -149,7 +208,7 @@ struct GatewayProcessManagerTests {
             sessionBox: WebSocketSessionBox(session: session))
         // Keep fixture dependencies private for the manager's whole lifetime;
         // late probe cleanup must not fall back to shared app services.
-        let manager = GatewayProcessManager()
+        let manager = GatewayProcessManager(readinessClock: clock)
         manager.setTestingConnection(connection)
         manager.setTestingSkipControlChannelRefresh(true)
         return (session, connection, manager)
@@ -190,7 +249,8 @@ struct GatewayProcessManagerTests {
     private nonisolated func gatewayTask(
         healthSucceedsAfter unavailableResponses: Int?,
         stallsFirstHealthResponse: Bool = false,
-        healthResponseGates: [AsyncTestGate] = []) -> GatewayTestWebSocketTask
+        healthResponseGates: [AsyncTestGate] = [],
+        firstHealthRequest: AsyncTestGate? = nil) -> GatewayTestWebSocketTask
     {
         let healthRequests = Mutex(0)
         return GatewayTestWebSocketTask(
@@ -205,6 +265,7 @@ struct GatewayProcessManagerTests {
                     $0 += 1
                     return $0
                 }
+                if healthIndex == 1 { firstHealthRequest?.open() }
                 if healthResponseGates.indices.contains(healthIndex - 1) {
                     await healthResponseGates[healthIndex - 1].wait()
                 }
@@ -351,37 +412,48 @@ struct GatewayProcessManagerTests {
     @Test func `coalesced drain returns each request installation result`() async throws {
         let firstPort = 19107
         let secondPort = 19108
+        let installStarted = AsyncTestGate()
+        let finishInstall = AsyncTestGate()
+        let secondQueued = AsyncTestGate()
+        defer { finishInstall.open() }
         try await self.withLaunchAgentEnvironment(
             statusPayloads: [
                 #"{"ok":true,"service":{"loaded":false}}"#,
                 self.loadedGatewayStatus(port: secondPort),
             ],
-            commandDelayNanoseconds: 100_000_000)
-        {
-            let manager = self.manager
-            let first = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeededInstalled(
-                    bundlePath: "/Applications/OpenClaw.app",
-                    port: firstPort)
-            }
-            await self.waitForCondition(attempts: 1000) {
-                GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                    .contains(where: { $0.first == "install" })
-            }
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                .contains(where: { $0.first == "install" }))
+            commandHook: { arguments in
+                if arguments.first == "install" {
+                    installStarted.open()
+                    await finishInstall.wait()
+                }
+            }, {
+                let manager = self.manager
+                let first = Task { @MainActor in
+                    await manager._testEnableLaunchAgentIfNeededInstalled(
+                        bundlePath: "/Applications/OpenClaw.app",
+                        port: firstPort)
+                }
+                await installStarted.wait()
+                withObservationTracking {
+                    _ = manager._testPendingLaunchAgentPort()
+                } onChange: {
+                    secondQueued.open()
+                }
 
-            let second = Task { @MainActor in
-                await manager._testEnableLaunchAgentIfNeededInstalled(
-                    bundlePath: "/Applications/OpenClaw.app",
-                    port: secondPort)
-            }
+                let second = Task { @MainActor in
+                    await manager._testEnableLaunchAgentIfNeededInstalled(
+                        bundlePath: "/Applications/OpenClaw.app",
+                        port: secondPort)
+                }
+                await secondQueued.wait()
+                #expect(manager._testPendingLaunchAgentPort() == secondPort)
+                finishInstall.open()
 
-            #expect(await first.value)
-            #expect(await second.value == false)
-            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-            #expect(calls.filter { $0.first == "install" }.count == 1)
-        }
+                #expect(await first.value)
+                #expect(await second.value == false)
+                let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                #expect(calls.filter { $0.first == "install" }.count == 1)
+            })
     }
 
     @Test func `stop discards queued enables and disables after the active request`() async throws {
@@ -548,6 +620,129 @@ struct GatewayProcessManagerTests {
 
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
         }
+    }
+
+    @Test(arguments: [
+        (
+            """
+            {"service":{"loaded":null,"loadState":{"status":"unknown"},
+            "runtime":{"status":"unknown"}}}
+            """,
+            false),
+        (
+            """
+            {"service":{"loaded":true,"loadState":{"status":"loaded"},
+            "runtime":{"status":"unknown","inspectionFailure":{
+              "code":"service-runtime-inspection-failed","detail":"launchctl print failed"}}}}
+            """,
+            false),
+        (#"{"ok":false,"error":"Gateway service inspection failed."}"#, false),
+        (
+            """
+            {"service":{"loaded":false,"loadState":{"status":"not-loaded"},
+            "runtime":{"status":"unknown","missingUnit":true}}}
+            """,
+            true),
+    ])
+    func `persistence ensure distinguishes unknown inspection from a missing service`(
+        statusPayload: String,
+        shouldInstall: Bool) async throws
+    {
+        let port = try self.availableGatewayPort()
+        // Queue status alone so an erroneous install still receives the fixture's success response.
+        try await self.withLaunchAgentEnvironment(port: port, statusPayloads: [statusPayload]) {
+            try #require(GatewayEnvironment.gatewayPort() == port)
+            let manager = self.manager
+            manager.setTestingDesiredActive(true)
+
+            let installed = await manager.ensureLaunchAgentEnabledIfNeeded()
+
+            var expectedCalls = [["status", "--json", "--no-probe"]]
+            if shouldInstall {
+                expectedCalls.append(["install", "--force", "--port", String(port), "--runtime", "node"])
+            }
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == expectedCalls)
+            #expect(installed == shouldInstall)
+        }
+    }
+
+    @Test(arguments: ["unresolved", "healthy", "responsive-error"])
+    func `startup readiness preserves the most specific failure`(_ outcome: String) async throws {
+        let port = try self.availableGatewayPort()
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let inspectedService = Mutex(false)
+        let inspectionError = "launchctl inspection failed"
+        let guidance = "openclaw gateway status --deep"
+        let healthError = "fixture health rejected"
+        let statusPayload = """
+        {"ok":false,"error":"\(inspectionError)","hints":["\(guidance)"]}
+        """
+
+        try await self.withLaunchAgentEnvironment(
+            port: port,
+            statusPayload: statusPayload,
+            commandHook: { arguments in
+                if arguments.first == "status" {
+                    inspectedService.withLock { $0 = true }
+                }
+            }) {
+                try #require(GatewayEnvironment.gatewayPort() == port)
+                let session = GatewayTestWebSocketSession {
+                    GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0,
+                              let id = GatewayWebSocketTestSupport.requestID(from: message)
+                        else { return }
+                        if outcome == "responsive-error",
+                           GatewayWebSocketTestSupport.requestMethod(from: message) == "health"
+                        {
+                            task.emitReceiveSuccess(.data(Data("""
+                            {"type":"res","id":"\(id)","ok":false,
+                            "error":{"code":"INVALID_REQUEST","message":"\(healthError)"}}
+                            """.utf8)))
+                        } else {
+                            task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                        }
+                    })
+                }
+                let connection = GatewayConnection(
+                    configProvider: {
+                        // Keep the initial attach unavailable until startup inspects the service.
+                        guard inspectedService.withLock({ $0 }), outcome != "unresolved" else {
+                            throw URLError(.cannotConnectToHost)
+                        }
+                        return (url: url, token: nil, password: nil)
+                    },
+                    sessionBox: WebSocketSessionBox(session: session))
+                let manager = GatewayProcessManager()
+                manager.setTestingConnection(connection)
+                manager.setTestingSkipControlChannelRefresh(true)
+                manager.setTestingDesiredActive(true)
+                defer { manager.setTestingDesiredActive(false) }
+
+                manager.startIfNeeded()
+                await manager.waitForStartupAttempt()
+                await connection.shutdown()
+
+                let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                #expect(!calls.isEmpty)
+                #expect(calls.allSatisfy { $0 == ["status", "--json", "--no-probe"] })
+                if outcome == "healthy" {
+                    guard case .running = manager.status else {
+                        Issue.record("expected healthy startup after the deferred service inspection")
+                        return
+                    }
+                    #expect(manager.lastFailureReason == nil)
+                } else {
+                    guard case let .failed(reason) = manager.status else {
+                        Issue.record("expected terminal startup failure")
+                        return
+                    }
+                    let expected = outcome == "unresolved" ? inspectionError : healthError
+                    #expect(reason.contains(expected))
+                    #expect(manager.lastFailureReason == reason)
+                    #expect(reason.contains(guidance) == (outcome == "unresolved"))
+                }
+            }
     }
 
     @Test func `newer inactive lifecycle retains the pending disable`() async throws {
@@ -1084,7 +1279,16 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    @Test func `transient unavailable health response retries until ready`() async throws {
+    @Test(arguments: [
+        (Duration.zero, Duration.milliseconds(300), true),
+        (.milliseconds(600), .milliseconds(300), true),
+        (.milliseconds(900), .milliseconds(100), false),
+    ])
+    func `transient unavailable health response retries within its budget`(
+        responseDelay: Duration,
+        retryDelay: Duration,
+        becomesReady: Bool) async throws
+    {
         let stateDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-gateway-ready-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: stateDir) }
@@ -1094,14 +1298,23 @@ struct GatewayProcessManagerTests {
                 // Named profiles require the healthy listener to match their managed service.
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port))
                 let url = try #require(URL(string: "ws://example.invalid"))
-                let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-                    self.gatewayTask(healthSucceedsAfter: 1)
+                let clock = ManualTestClock()
+                let startedAt = clock.now
+                let firstHealthRequest = AsyncTestGate()
+                let responseGate = AsyncTestGate()
+                defer { responseGate.open() }
+                let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url, clock: clock) {
+                    self.gatewayTask(
+                        healthSucceedsAfter: 1,
+                        healthResponseGates: [responseGate],
+                        firstHealthRequest: firstHealthRequest)
                 }
                 let descriptor = self.gatewayDescriptor(pid: 4242)
 
                 manager.setTestingDesiredActive(true)
                 manager.setTestingStatus(.starting)
                 manager._testClearLaunchAgentReadinessFailure()
+                manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
                 await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
                 defer {
                     manager.setTestingDesiredActive(false)
@@ -1110,13 +1323,24 @@ struct GatewayProcessManagerTests {
                     manager._testSetLastObservedGatewayPID(nil)
                 }
 
-                // The readiness budget covers the unavailable reply and retry; cold
-                // connection setup must not consume the behavior under test.
                 _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
-                #expect(await manager.waitForGatewayReady(timeout: 1))
+                let readiness = Task { await manager.waitForGatewayReady(timeout: 1) }
+                await clock.waitForSleep(until: startedAt.advanced(by: .seconds(1)))
+                await firstHealthRequest.wait()
+                clock.advance(by: responseDelay)
+                let probeRegistration = clock.sleepRegistrations
+                responseGate.open()
+                // A clipped retry shares the old probe's deadline, but must own a new timer.
+                await clock.waitForSleep(until: clock.now.advanced(by: retryDelay), after: probeRegistration)
+                #expect(session.latestTask()?.snapshotSendCount() == 3)
+                #expect(manager.status == .starting)
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+                clock.advance(by: retryDelay)
+
+                #expect(await readiness.value == becomesReady)
                 #expect(session.snapshotMakeCount() == 1)
-                #expect(session.latestTask()?.snapshotSendCount() == 4)
-                #expect(manager.status == .running(details: "pid 4242"))
+                #expect(session.latestTask()?.snapshotSendCount() == (becomesReady ? 4 : 3))
+                #expect(manager.status == (becomesReady ? .running(details: "pid 4242") : .starting))
                 #expect(!manager._testHasLaunchAgentReadinessFailure())
 
                 await connection.shutdown()
@@ -1127,47 +1351,90 @@ struct GatewayProcessManagerTests {
 
     @Test func `readiness waiter rechecks after current owner fails past its timeout`() async throws {
         let port = 19114
+        let waiterTimeout: TimeInterval = 6
         let url = try #require(URL(string: "ws://example.invalid"))
-        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            self.gatewayTask(
-                healthSucceedsAfter: 0,
-                stallsFirstHealthResponse: true)
+        let ownerReachedFailure = AsyncTestGate()
+        let finishOwner = AsyncTestGate()
+        let waiterStarted = AsyncTestGate()
+        let readinessFinished = Mutex(false)
+        let healthMaySucceed = Mutex(false)
+        let recoveryHealthRequests = Mutex(0)
+        defer { finishOwner.open() }
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                if GatewayWebSocketTestSupport.requestMethod(from: message) == "health" {
+                    guard healthMaySucceed.withLock({ $0 }) else { return }
+                    recoveryHealthRequests.withLock { $0 += 1 }
+                }
+                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            })
         }
 
         try await self.withLaunchAgentEnvironment(
             port: port,
-            statusPayload: self.loadedGatewayStatus(port: port))
-        {
-            manager.setTestingLastFailureReason(nil)
-            manager._testClearLaunchAgentReadinessFailure()
-            let descriptor = self.gatewayDescriptor(pid: 4242)
-            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
-            defer {
+            statusPayload: self.loadedGatewayStatus(port: port),
+            commandHook: { arguments in
+                guard arguments.first == "status" else { return }
+                ownerReachedFailure.open()
+                await finishOwner.wait()
+            }) {
                 manager.setTestingLastFailureReason(nil)
                 manager._testClearLaunchAgentReadinessFailure()
+                let descriptor = self.gatewayDescriptor(pid: 4242)
+                await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+                defer {
+                    manager.setTestingDesiredActive(false)
+                    manager.setTestingLastFailureReason(nil)
+                    manager._testClearLaunchAgentReadinessFailure()
+                }
+
+                _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
+                manager._testStartLaunchdGatewayReadiness(
+                    port: port,
+                    pid: 4242,
+                    readinessWindow: 0.5,
+                    firstInstallReadinessBudget: 0.5)
+                let readiness = Task { @MainActor in
+                    waiterStarted.open()
+                    let ready = await manager.waitForGatewayReady(timeout: waiterTimeout)
+                    readinessFinished.withLock { $0 = true }
+                    return ready
+                }
+
+                await waiterStarted.wait()
+                await ownerReachedFailure.wait()
+                // Keep the owner pending beyond the waiter's audit budget.
+                // Recovery then gets its own budget, independent of this wait.
+                do {
+                    try await Task.sleep(for: .seconds(waiterTimeout))
+                } catch {
+                    readiness.cancel()
+                    finishOwner.open()
+                    await manager.waitForStartupAttempt()
+                    _ = await readiness.value
+                    await connection.shutdown()
+                    await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+                    throw error
+                }
+                #expect(!readinessFinished.withLock { $0 })
+                #expect(manager.status == .starting)
+                #expect(manager.lastFailureReason == nil)
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+                healthMaySucceed.withLock { $0 = true }
+                finishOwner.open()
+
+                #expect(await readiness.value)
+                #expect(manager.status == .running(details: "pid 4242"))
+                #expect(recoveryHealthRequests.withLock { $0 } == 1)
+                #expect(manager.lastFailureReason == nil)
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+                await connection.shutdown()
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             }
-
-            manager._testStartLaunchdGatewayReadiness(
-                port: port,
-                pid: 4242,
-                readinessWindow: 0.5,
-                firstInstallReadinessBudget: 0.5)
-            let readiness = Task { @MainActor in
-                await manager.waitForGatewayReady(timeout: 0.01)
-            }
-
-            await self.waitForCondition { session.snapshotMakeCount() > 0 }
-            #expect(session.snapshotMakeCount() > 0)
-            #expect(manager.status == .starting)
-            #expect(manager.lastFailureReason == nil)
-            #expect(!manager._testHasLaunchAgentReadinessFailure())
-            #expect(await readiness.value)
-            #expect(manager.status == .running(details: "pid 4242"))
-            #expect((session.latestTask()?.snapshotSendCount() ?? 0) > 1)
-
-            await connection.shutdown()
-            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
-        }
     }
 
     @Test func `cancelling an owner readiness waiter preserves startup state`() async throws {
@@ -1258,61 +1525,6 @@ struct GatewayProcessManagerTests {
             #expect(manager.lastFailureReason == nil)
             #expect(!manager._testHasLaunchAgentReadinessFailure())
             #expect(manager._testControlChannelRefreshForces().last == true)
-
-            await connection.shutdown()
-            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
-        }
-    }
-
-    @Test func `responsive startup progress extends readiness without launchd status proof`() async throws {
-        let port = 19119
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                guard sendIndex > 0,
-                      let id = GatewayWebSocketTestSupport.requestID(from: message)
-                else { return }
-                if sendIndex == 2 {
-                    let response = Data(
-                        """
-                        {"type":"res","id":"\(id)","ok":false,
-                         "error":{"code":"UNAVAILABLE","message":"gateway awaiting authorization"}}
-                        """.utf8)
-                    task.emitReceiveSuccess(.data(response))
-                } else {
-                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                }
-            })
-        }
-
-        try await self.withLaunchAgentEnvironment(
-            port: port,
-            statusPayload: #"{"ok":true,"service":{"loaded":false}}"#)
-        {
-            manager._testClearLaunchAgentReadinessFailure()
-            let descriptor = self.gatewayDescriptor(pid: 4242)
-            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
-            defer {
-                manager._testClearLaunchAgentReadinessFailure()
-            }
-
-            // Establish the socket first; the unavailable health reply must exercise
-            // readiness extension without spending its window on the handshake.
-            _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
-            manager._testStartLaunchdGatewayReadiness(
-                port: port,
-                pid: 4242,
-                readinessWindow: 0.05,
-                firstInstallReadinessBudget: 0.5)
-            await manager.waitForStartupAttempt()
-
-            #expect(session.snapshotMakeCount() == 1)
-            #expect(session.latestTask()?.snapshotSendCount() == 4)
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                .filter { $0.first == "status" }.isEmpty)
-            #expect(manager.status == .running(details: "pid 4242"))
-            #expect(manager.lastFailureReason == nil)
-            #expect(!manager._testHasLaunchAgentReadinessFailure())
 
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
@@ -1457,9 +1669,11 @@ struct GatewayProcessManagerTests {
 
     @Test func `transport cancellation does not publish readiness failure`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let cancellationThrows = Mutex(0)
         let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
             GatewayTestWebSocketTask(
                 receiveHook: { _, _ in
+                    cancellationThrows.withLock { $0 += 1 }
                     throw URLError(.cancelled)
                 })
         }
@@ -1474,9 +1688,8 @@ struct GatewayProcessManagerTests {
             manager._testClearLaunchAgentReadinessFailure()
         }
 
-        let startedAt = Date()
         #expect(await manager.waitForGatewayReady(timeout: 0.5) == false)
-        #expect(Date().timeIntervalSince(startedAt) < 1.5)
+        #expect(cancellationThrows.withLock { $0 } > 0)
         #expect(manager.status == .running(details: "pid 4242"))
         #expect(manager.lastFailureReason == "keep current state")
         #expect(manager._testHasLaunchAgentReadinessCandidate())
@@ -1643,14 +1856,18 @@ struct GatewayProcessManagerTests {
 
     @Test func `readiness timeout includes a stalled socket connect`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let receiveGate = AsyncTestGate()
+        defer { receiveGate.open() }
+        let socket = GatewayTestWebSocketTask(
+            receiveHook: { _, receiveIndex in
+                if receiveIndex == 0 {
+                    await receiveGate.wait()
+                    try Task.checkCancellation()
+                }
+                return .data(GatewayWebSocketTestSupport.connectChallengeData())
+            })
         let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                receiveHook: { _, receiveIndex in
-                    if receiveIndex == 0 {
-                        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                    }
-                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                })
+            socket
         }
         manager.setTestingDesiredActive(true)
         manager.setTestingStatus(.attachedExisting(details: "pid 3131"))
@@ -1663,13 +1880,16 @@ struct GatewayProcessManagerTests {
             manager._testClearLaunchAgentReadinessFailure()
         }
 
-        let startedAt = Date()
         let ready = await manager.waitForGatewayReady(timeout: 0.1)
-        let elapsed = Date().timeIntervalSince(startedAt)
+        // The readiness deadline must return before the shared handshake's own timeout.
+        // Capture its state before shutdown supplies cancellation during cleanup.
+        let socketState = socket.state
+        let socketCancelCount = socket.snapshotCancelCount()
         await connection.shutdown()
 
         #expect(!ready)
-        #expect(elapsed < 1)
+        #expect(socketState == .running)
+        #expect(socketCancelCount == 0)
         #expect(session.snapshotMakeCount() == 1)
         #expect(manager.status == .failed("Gateway did not start in time"))
         #expect(manager.lastFailureReason == "gateway readiness timeout")

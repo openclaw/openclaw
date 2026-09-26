@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isRecord } from "../utils.js";
 import {
+  extractBundleServerMap,
   loadEnabledBundleConfig,
   readBundleJsonObject,
   resolveBundleJsonOpenFailure,
@@ -89,25 +90,7 @@ function resolveBundleMcpConfigPaths(params: {
 }
 
 export function extractMcpServerMap(raw: unknown): Record<string, BundleMcpServerConfig> {
-  if (!isRecord(raw)) {
-    return {};
-  }
-  const nested = isRecord(raw.mcpServers)
-    ? raw.mcpServers
-    : isRecord(raw.servers)
-      ? raw.servers
-      : raw;
-  if (!isRecord(nested)) {
-    return {};
-  }
-  const result: Record<string, BundleMcpServerConfig> = {};
-  for (const [serverName, serverRaw] of Object.entries(nested)) {
-    if (!isRecord(serverRaw)) {
-      continue;
-    }
-    result[serverName] = { ...serverRaw };
-  }
-  return result;
+  return extractBundleServerMap(raw, ["mcpServers", "servers"]);
 }
 
 function isExplicitRelativePath(value: string): boolean {
@@ -452,29 +435,7 @@ function loadBundleFileBackedMcpConfig(params: {
   };
 }
 
-function loadBundleInlineMcpConfig(params: {
-  raw: Record<string, unknown>;
-  baseDir: string;
-}): BundleMcpRuntimeConfig {
-  if (!isRecord(params.raw.mcpServers)) {
-    return { mcpServers: {}, prepareDataDirsByServer: {} };
-  }
-  const baseDir = normalizeBundlePath(params.baseDir);
-  const servers = extractMcpServerMap(params.raw.mcpServers);
-  return {
-    mcpServers: Object.fromEntries(
-      Object.entries(servers).map(([serverName, server]) => [
-        serverName,
-        absolutizeBundleMcpServer({ rootDir: baseDir, baseDir, server }),
-      ]),
-    ),
-    prepareDataDirsByServer: Object.fromEntries(
-      Object.keys(servers).map((serverName) => [serverName, null]),
-    ),
-  };
-}
-
-function loadNativePluginMcpConfig(params: {
+function loadRootRelativeMcpConfig(params: {
   rootDir: string;
   mcpServers: Record<string, BundleMcpServerConfig>;
 }): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
@@ -539,10 +500,10 @@ function loadBundleMcpConfig(params: {
   if (params.bundleFormat !== "agent") {
     merged = applyMergePatch(
       merged,
-      loadBundleInlineMcpConfig({
-        raw: manifestLoaded.raw,
-        baseDir: params.rootDir,
-      }),
+      loadRootRelativeMcpConfig({
+        rootDir: params.rootDir,
+        mcpServers: extractMcpServerMap(manifestLoaded.raw.mcpServers),
+      }).config,
     ) as BundleMcpRuntimeConfig;
   }
 
@@ -561,7 +522,7 @@ export function inspectNativePluginMcpRuntimeSupport(params: {
   rootDir: string;
   mcpServers: Record<string, BundleMcpServerConfig>;
 }): BundleMcpRuntimeSupport {
-  return inspectMcpServerRuntimeSupport(loadNativePluginMcpConfig(params));
+  return inspectMcpServerRuntimeSupport(loadRootRelativeMcpConfig(params));
 }
 
 function inspectMcpServerRuntimeSupport(loaded: {
@@ -609,7 +570,7 @@ export function loadEnabledBundleMcpConfig(params: {
     loadBundleConfig: loadBundleMcpConfig,
     loadNativePluginConfig: ({ record }) =>
       record.mcpServers
-        ? loadNativePluginMcpConfig({
+        ? loadRootRelativeMcpConfig({
             rootDir: record.rootDir,
             mcpServers: record.mcpServers,
           })

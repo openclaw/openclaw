@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { withContainerEnvFile } from "../infra/container-env-file.js";
+import { createRedactingStreamWriter } from "../logging/redacting-stream.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -11,7 +12,6 @@ import {
   type CellContainerProfile,
   type FleetContainerRuntimeName,
 } from "./cell-profile.js";
-import { createRedactingStreamWriter } from "./containers.redaction.js";
 
 type FleetContainerCommandOptions = {
   allowFailure?: boolean;
@@ -54,6 +54,7 @@ type FleetContainerStreamExecutor = (
 
 type FleetContainerLogsOptions = {
   follow?: boolean;
+  timestamps?: boolean;
   tail?: number;
   since?: string;
   redactValues: readonly string[];
@@ -529,6 +530,9 @@ function buildLogsArgs(containerName: string, options: FleetContainerLogsOptions
   const args = ["logs"];
   if (options.follow) {
     args.push("--follow");
+  }
+  if (options.timestamps) {
+    args.push("--timestamps");
   }
   if (options.tail !== undefined) {
     if (!Number.isSafeInteger(options.tail) || options.tail < 1) {

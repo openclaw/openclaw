@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DiagnosticModelCallContent } from "../../../infra/diagnostic-events.js";
 import {
   cloneDiagnosticContentValue,
@@ -12,37 +13,38 @@ import type {
   ModelCallObservationState,
   ModelCallObserver,
   ModelCallPromptStats,
-  ModelCallSizeTimingFields,
   ModelCallUsage,
 } from "./attempt.model-diagnostic-lifecycle.js";
 
 const MODEL_CALL_SEMANTIC_PROGRESS_REASON = "model_call:semantic_result";
 
-function utf8JsonByteLength(value: unknown): number | undefined {
+function jsonLength(value: unknown, utf8: boolean): number | undefined {
   try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
+    let stringLengths = 0;
+    const serialized = JSON.stringify(value, (_key, part: unknown) => {
+      if (typeof part !== "string" || part.length < 4096) {
+        return part;
+      }
+      // Keep large strings out of the combined JSON allocation. Native encoding
+      // still owns escaping, surrogate handling, toJSON, and container semantics.
+      const encoded = JSON.stringify(part);
+      stringLengths += (utf8 ? Buffer.byteLength(encoded, "utf8") : encoded.length) - 2;
+      return "";
+    });
+    return serialized === undefined
+      ? undefined
+      : stringLengths + (utf8 ? Buffer.byteLength(serialized, "utf8") : serialized.length);
   } catch {
     return undefined;
   }
 }
 
-function assignRequestPayloadBytes(state: ModelCallObservationState, payload: unknown): void {
-  const bytes = utf8JsonByteLength(payload);
-  if (bytes !== undefined) {
-    state.requestPayloadBytes = bytes;
-  }
-}
-
-function utf8StringByteLength(value: string): number {
-  return Buffer.byteLength(value, "utf8");
+function utf8JsonByteLength(value: unknown): number | undefined {
+  return jsonLength(value, true);
 }
 
 function jsonCharLength(value: unknown): number | undefined {
-  try {
-    return JSON.stringify(value)?.length;
-  } catch {
-    return undefined;
-  }
+  return jsonLength(value, false);
 }
 
 function streamDeltaByteLength(chunk: Record<string, unknown>): number | undefined {
@@ -51,7 +53,7 @@ function streamDeltaByteLength(chunk: Record<string, unknown>): number | undefin
     (type === "text_delta" || type === "thinking_delta" || type === "toolcall_delta") &&
     typeof chunk.delta === "string"
   ) {
-    return utf8StringByteLength(chunk.delta);
+    return Buffer.byteLength(chunk.delta, "utf8");
   }
   return undefined;
 }
@@ -156,24 +158,22 @@ function observeModelCallTerminalMessage(state: ModelCallObservationState, value
   let rawUsage: unknown;
   try {
     rawUsage = value.usage;
+    const stopReason = value.stopReason;
     if (
       value.role === "assistant" &&
-      (value.stopReason === "stop" ||
-        value.stopReason === "length" ||
-        value.stopReason === "toolUse")
+      (stopReason === "stop" || stopReason === "length" || stopReason === "toolUse")
     ) {
       state.terminalSucceeded = true;
+      state.terminalReason = stopReason;
     }
     // The stream contract returns failed assistant messages without throwing.
     // Keep their terminal fact for both iterator and result-only completion.
     // Abort state takes precedence over transport errors raised during cancellation.
-    if (
-      value.role === "assistant" &&
-      (value.stopReason === "error" || value.stopReason === "aborted")
-    ) {
+    if (value.role === "assistant" && (stopReason === "error" || stopReason === "aborted")) {
+      state.terminalReason = stopReason;
       state.terminalError ??= Object.assign(
-        new Error(typeof value.errorMessage === "string" ? value.errorMessage : value.stopReason),
-        { code: value.stopReason === "aborted" ? "ABORT_ERR" : value.errorCode },
+        new Error(typeof value.errorMessage === "string" ? value.errorMessage : stopReason),
+        { code: stopReason === "aborted" ? "ABORT_ERR" : value.errorCode },
       );
     }
   } catch {
@@ -214,6 +214,12 @@ function observeResultMessageContent(
   startedAt: number,
   result: unknown,
 ): void {
+  // A result decorator can settle long after the terminal stream chunk. Do not
+  // label that bookkeeping delay as new provider activity. Result-only adapters
+  // still have an observed response when their result first arrives.
+  if (!state.terminalEventEmitted && state.terminalReason === undefined) {
+    state.lastProviderActivityAtMs = Date.now();
+  }
   state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
   observeModelCallTerminalMessage(state, result);
   if (state.contentCapture?.outputMessages && state.outputMessages === undefined) {
@@ -290,6 +296,9 @@ function observeResponseChunk(
   startedAt: number,
   chunk: unknown,
 ): void {
+  if (!state.terminalEventEmitted) {
+    state.lastProviderActivityAtMs = Date.now();
+  }
   state.timeToFirstByteMs ??= Math.max(0, Date.now() - startedAt);
   observeOutputMessageContent(state, chunk);
   const bytes = responseStreamChunkByteLength(chunk);
@@ -298,33 +307,8 @@ function observeResponseChunk(
   }
 }
 
-function modelCallSizeTimingFields(state: ModelCallObservationState): ModelCallSizeTimingFields {
-  return {
-    ...(state.requestPayloadBytes !== undefined
-      ? { requestPayloadBytes: state.requestPayloadBytes }
-      : {}),
-    ...(state.responseStreamBytes > 0 ? { responseStreamBytes: state.responseStreamBytes } : {}),
-    ...(state.timeToFirstByteMs !== undefined
-      ? { timeToFirstByteMs: state.timeToFirstByteMs }
-      : {}),
-  };
-}
-
-function modelCallCompletedContent(state: ModelCallObservationState) {
-  if (!state.modelContent && !state.outputMessages) {
-    return undefined;
-  }
-  return {
-    ...state.modelContent,
-    ...(state.outputMessages ? { outputMessages: state.outputMessages } : {}),
-  };
-}
-
-function modelCallUsageField(state: ModelCallObservationState) {
-  return state.usage ? { usage: state.usage } : {};
-}
-
 export function createModelObserver(params: {
+  config?: OpenClawConfig;
   streamContext: unknown;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   suppressPluginHooks?: boolean;
@@ -340,13 +324,16 @@ export function createModelObserver(params: {
     contentCapture: params.contentCapture,
     suppressPluginHooks: params.suppressPluginHooks,
   };
-  const reportStreamProgress = createModelCallStreamProgressReporter();
+  const reportStreamProgress = createModelCallStreamProgressReporter({ config: params.config });
   return {
     state,
     promptStats,
     modelContent,
     assignRequestPayloadBytes(payload) {
-      assignRequestPayloadBytes(state, payload);
+      const bytes = utf8JsonByteLength(payload);
+      if (bytes !== undefined) {
+        state.requestPayloadBytes = bytes;
+      }
     },
     observeResponseChunk(startedAt, chunk) {
       observeResponseChunk(state, startedAt, chunk);
@@ -358,16 +345,34 @@ export function createModelObserver(params: {
       maybeEmitModelCallSemanticProgress(eventBase, state, result);
     },
     maybeEmitStreamProgress(eventBase) {
-      reportStreamProgress(eventBase);
+      reportStreamProgress({
+        ...eventBase,
+        callId: state.terminalEventEmitted ? undefined : eventBase.callId,
+      });
     },
     sizeTimingFields() {
-      return modelCallSizeTimingFields(state);
+      return {
+        ...(state.requestPayloadBytes !== undefined
+          ? { requestPayloadBytes: state.requestPayloadBytes }
+          : {}),
+        ...(state.responseStreamBytes > 0
+          ? { responseStreamBytes: state.responseStreamBytes }
+          : {}),
+        ...(state.timeToFirstByteMs !== undefined
+          ? { timeToFirstByteMs: state.timeToFirstByteMs }
+          : {}),
+      };
     },
     completedContent() {
-      return modelCallCompletedContent(state);
+      return state.modelContent || state.outputMessages
+        ? {
+            ...state.modelContent,
+            ...(state.outputMessages ? { outputMessages: state.outputMessages } : {}),
+          }
+        : undefined;
     },
     usageField() {
-      return modelCallUsageField(state);
+      return state.usage ? { usage: state.usage } : {};
     },
   };
 }

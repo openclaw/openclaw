@@ -9,7 +9,7 @@ import {
   type JournalEntry,
   type Mountable,
 } from "@copilotkit/aimock";
-import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
+import { resolveQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
 
 type AimockRequestSnapshot = {
@@ -157,23 +157,19 @@ function resolveProviderVariant(model: string): AimockRequestSnapshot["providerV
   return "unknown";
 }
 
-function extractPlannedToolName(entry: Pick<JournalEntry, "response">) {
+function extractToolFacts(entry: Pick<JournalEntry, "response" | "body">): AimockToolFacts {
   const response = entry.response.fixture?.response as
-    | { toolCalls?: Array<{ name?: unknown }> }
+    | {
+        toolCalls?: Array<{ name?: unknown; id?: unknown; callId?: unknown; toolCallId?: unknown }>;
+      }
     | undefined;
-  const name = response?.toolCalls?.[0]?.name;
-  return typeof name === "string" && name.length > 0 ? name : undefined;
-}
-
-function extractPlannedToolCallId(entry: Pick<JournalEntry, "response">) {
-  const response = entry.response.fixture?.response as
-    | { toolCalls?: Array<{ id?: unknown; callId?: unknown; toolCallId?: unknown }> }
-    | undefined;
-  const candidate =
-    response?.toolCalls?.[0]?.id ??
-    response?.toolCalls?.[0]?.callId ??
-    response?.toolCalls?.[0]?.toolCallId;
-  return typeof candidate === "string" && candidate.length > 0 ? candidate : undefined;
+  const call = response?.toolCalls?.[0];
+  const callId = call?.id ?? call?.callId ?? call?.toolCallId;
+  return {
+    plannedToolName: typeof call?.name === "string" && call.name.length > 0 ? call.name : undefined,
+    plannedToolCallId: typeof callId === "string" && callId.length > 0 ? callId : undefined,
+    toolOutputCallId: extractToolOutputCallId(entry.body) || undefined,
+  };
 }
 
 function extractRequestFacts(
@@ -257,11 +253,7 @@ function createDebugMount(): Mountable {
       // AIMock evicts its request journal FIFO. Assign cursors at insertion time
       // so the debug boundary remains monotonic after retained entries rotate.
       journal.add = (entry) => {
-        const tools: AimockToolFacts = {
-          plannedToolName: extractPlannedToolName(entry),
-          plannedToolCallId: extractPlannedToolCallId(entry),
-          toolOutputCallId: extractToolOutputCallId(entry.body) || undefined,
-        };
+        const tools = extractToolFacts(entry);
         const recorded = addJournalEntry(entry);
         // Upstream keeps <=64 KiB bodies intact; only discarded bodies need an
         // extra bounded projection. Weak entry ownership follows eviction/reset.
@@ -325,28 +317,13 @@ function createDebugMount(): Mountable {
         const url = new URL(req.url ?? "/", "http://127.0.0.1");
         const afterText = url.searchParams.get("after");
         if (afterText !== null) {
-          const after = parseQaDebugRequestCursor(afterText);
-          if (after === null) {
-            writeJson(res, 400, { error: "after must be a non-negative safe integer" });
-            return true;
-          }
-          const latestCursor = nextRequestCursor - 1;
-          const oldestCursor = selected[0]?.cursor ?? nextRequestCursor;
-          if (after > latestCursor) {
-            writeJson(res, 409, {
-              error: "request cursor is ahead of the latest recorded request",
-              after,
-              latestCursor,
-            });
-            return true;
-          }
-          if (after < oldestCursor - 1) {
-            writeJson(res, 409, {
-              error: "request cursor expired",
-              after,
-              oldestCursor,
-              latestCursor,
-            });
+          const after = resolveQaDebugRequestCursor(
+            afterText,
+            selected[0]?.cursor ?? nextRequestCursor,
+            nextRequestCursor - 1,
+          );
+          if (typeof after !== "number") {
+            writeJson(res, after.status, after.body);
             return true;
           }
           selected = selected.filter((request) => request.cursor > after);

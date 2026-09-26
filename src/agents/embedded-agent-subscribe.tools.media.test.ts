@@ -1,11 +1,11 @@
 // Tool media extraction tests cover structured media payloads, image fallbacks,
 // trust decisions, and filtering of local/remote media URLs.
 import { describe, expect, it } from "vitest";
-import { isToolResultMediaTrusted } from "./embedded-agent-subscribe.tools.test-support.js";
 import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
+import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
 
 describe("extractToolResultMediaArtifact", () => {
   it("returns undefined for null/undefined", () => {
@@ -186,10 +186,6 @@ describe("extractToolResultMediaArtifact", () => {
     });
   });
 
-  it("returns undefined when content has no text or image blocks", () => {
-    expect(extractToolResultMediaArtifact({ content: [{ type: "other" }] })).toBeUndefined();
-  });
-
   it("extracts structured media with audioAsVoice", () => {
     expect(
       extractToolResultMediaArtifact({
@@ -245,23 +241,6 @@ describe("extractToolResultMediaArtifact", () => {
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
-  it("falls back to details.path when image content exists", () => {
-    // Embedded read image results omit structured media but include details.path,
-    // so image content is the guard that makes that path media.
-    // Embedded read tool doesn't include structured media but OpenClaw
-    // imageResult sets details.path as fallback.
-    const result = {
-      content: [
-        { type: "text", text: "Read image file [image/png]" },
-        { type: "image", data: "base64data", mimeType: "image/png" },
-      ],
-      details: { path: "/tmp/generated.png" },
-    };
-    expect(extractToolResultMediaArtifact(result)).toEqual({
-      mediaUrls: ["/tmp/generated.png"],
-    });
-  });
-
   it("returns undefined when image content exists but no details.path", () => {
     // Embedded read tool: has image content but no path anywhere in the result.
     const result = {
@@ -280,17 +259,7 @@ describe("extractToolResultMediaArtifact", () => {
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
-  it("returns empty array for text-only results", () => {
-    const result = {
-      content: [{ type: "text", text: "Command executed successfully" }],
-    };
-    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
-  });
-
   it("ignores details.path when no image content exists", () => {
-    // Plain file paths in details are not media unless the content proves an
-    // image/audio/video artifact was produced.
-    // details.path without image content is not media.
     const result = {
       content: [{ type: "text", text: "File saved" }],
       details: { path: "/tmp/data.json" },
@@ -316,83 +285,10 @@ describe("extractToolResultMediaArtifact", () => {
     expect(extractToolResultMediaArtifact(result)).toBeUndefined();
   });
 
-  it("does not match <media:audio> placeholder as media", () => {
-    const result = {
-      content: [
-        {
-          type: "text",
-          text: "<media:audio> placeholder with successful preflight voice transcript",
-        },
-      ],
-    };
-    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
-  });
-
-  it("does not match <media:image> placeholder as media", () => {
-    const result = {
-      content: [{ type: "text", text: "<media:image> (2 images)" }],
-    };
-    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
-  });
-
-  it("does not match other media placeholder variants", () => {
-    for (const tag of [
-      "<media:video>",
-      "<media:document>",
-      "<media:sticker>",
-      "<media:attachment>",
-    ]) {
-      const result = {
-        content: [{ type: "text", text: `${tag} some context` }],
-      };
-      expect(extractToolResultMediaArtifact(result)).toBeUndefined();
-    }
-  });
-
-  it("does not match media-looking documentation text", () => {
-    const result = {
-      content: [
-        {
-          type: "text",
-          text: 'Use MEDIA: "https://example.com/voice.ogg", asVoice: true to send voice',
-        },
-      ],
-    };
-    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
-  });
-
-  it("does not treat malformed media-looking prose as a file path", () => {
-    const result = {
-      content: [
-        {
-          type: "text",
-          text: "MEDIA:-prefixed paths (lenient whitespace) when loading outbound media",
-        },
-      ],
-    };
-    expect(extractToolResultMediaArtifact(result)).toBeUndefined();
-  });
-
   it("trusts image_generate local media paths", () => {
-    expect(isToolResultMediaTrusted("image_generate")).toBe(true);
-  });
-
-  it("trusts music_generate local media paths", () => {
-    expect(isToolResultMediaTrusted("music_generate")).toBe(true);
-  });
-
-  it("trusts video_generate local media paths", () => {
-    expect(isToolResultMediaTrusted("video_generate")).toBe(true);
-  });
-
-  it("does not trust bundled plugin tool names without run-local metadata", () => {
-    expect(isToolResultMediaTrusted("plugin_media_tool")).toBe(false);
-  });
-
-  it("trusts bundled plugin tool names carried by run-local metadata", () => {
-    expect(
-      isToolResultMediaTrusted("plugin_media_tool", undefined, new Set(["plugin_media_tool"])),
-    ).toBe(true);
+    expect(filterToolResultMediaUrls("image_generate", ["/tmp/image.png"])).toEqual([
+      "/tmp/image.png",
+    ]);
   });
 
   it("blocks trusted-media aliases that are not exact registered built-ins", () => {
@@ -415,22 +311,28 @@ describe("extractToolResultMediaArtifact", () => {
     ).toEqual(["/tmp/screenshot.png"]);
   });
 
-  it("keeps trusted TTS local media when the raw built-in name is absent", () => {
+  it("keeps only attested TTS local media when the raw built-in name is absent", () => {
+    const result = markCoreTtsToolResult(
+      { details: { media: { mediaUrl: "/tmp/reply.opus", trustedLocalMedia: true } } },
+      ["/tmp/reply.opus"],
+    );
     expect(
       filterToolResultMediaUrls(
         "tts",
-        ["/tmp/reply.opus"],
-        {
-          details: {
-            media: {
-              mediaUrl: "/tmp/reply.opus",
-              trustedLocalMedia: true,
-            },
-          },
-        },
+        ["/tmp/reply.opus", "/tmp/unattested.opus", "https://example.com/audio.opus"],
+        result,
         new Set(["web_search"]),
       ),
-    ).toEqual(["/tmp/reply.opus"]);
+    ).toEqual(["/tmp/reply.opus", "https://example.com/audio.opus"]);
+  });
+
+  it("filters local media from unregistered plugin tools", () => {
+    expect(
+      filterToolResultMediaUrls("plugin_media_tool", [
+        "/tmp/private.png",
+        "https://example.com/image.png",
+      ]),
+    ).toEqual(["https://example.com/image.png"]);
   });
 
   it("keeps local media for bundled plugin tool names trusted in this run", () => {

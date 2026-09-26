@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import {
   parseStrictNonNegativeInteger,
+  resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -22,38 +23,12 @@ import {
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import type { SignalRpcOptions } from "./client-types.js";
+import type { SignalReceivePayload } from "./monitor/event-handler.types.js";
 import { WebSocket } from "./ws-runtime.js";
 
-type ContainerRpcOptions = {
-  baseUrl: string;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
+type ContainerRpcOptions = SignalRpcOptions & {
   maxAttachmentBytes?: number;
-};
-
-type ContainerWebSocketMessage = {
-  envelope?: {
-    syncMessage?: unknown;
-    dataMessage?: {
-      message?: string;
-      groupInfo?: { groupId?: string; groupName?: string };
-      attachments?: Array<{
-        id?: string;
-        contentType?: string;
-        filename?: string;
-        size?: number;
-      }>;
-      quote?: { text?: string };
-      reaction?: unknown;
-    };
-    editMessage?: { dataMessage?: unknown };
-    reactionMessage?: unknown;
-    sourceNumber?: string;
-    sourceUuid?: string;
-    sourceName?: string;
-    timestamp?: number;
-  };
-  exception?: { message?: string };
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -344,6 +319,7 @@ async function containerRestRequest<T = unknown>(
   }
 
   return await withSignalRestDeadline(timeoutMs, async ({ signal, timeoutMs: bodyTimeoutMs }) => {
+    opts.assertDirectAdapterHandoff?.();
     const res = await fetchImpl(url, { ...init, signal });
     if (res.status === 204) {
       return undefined as T;
@@ -429,7 +405,7 @@ export async function streamContainerEvents(params: {
   account?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
-  onEvent: (event: ContainerWebSocketMessage) => unknown;
+  onEvent: (event: SignalReceivePayload) => unknown;
   onStreamOpen?: () => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
 }): Promise<void> {
@@ -476,7 +452,10 @@ export async function streamContainerEvents(params: {
     };
 
     try {
-      ws = new WebSocket(wsUrl, { maxPayload: WS_MAX_PAYLOAD, handshakeTimeout: WS_HANDSHAKE_MS });
+      ws = new WebSocket(wsUrl, {
+        maxPayload: WS_MAX_PAYLOAD,
+        handshakeTimeout: resolvePositiveTimerTimeoutMs(params.timeoutMs, WS_HANDSHAKE_MS),
+      });
     } catch (err) {
       logError(`[signal-ws] failed to create WebSocket: ${coerceErrorMessage(err)}`);
       reject(toErrorObject(err, "Non-Error rejection"));
@@ -494,7 +473,7 @@ export async function streamContainerEvents(params: {
       }
       try {
         const text = data.toString();
-        const envelope = JSON.parse(text) as ContainerWebSocketMessage;
+        const envelope = JSON.parse(text) as SignalReceivePayload;
         if (envelope) {
           // WebSocket callbacks are synchronous. Chain async durable appends so
           // transport delivery order and receive-handler failures are preserved.
@@ -642,151 +621,6 @@ function parseContainerSendTimestamp(raw: unknown): number | undefined {
   return timestamp;
 }
 
-function normalizeContainerQuoteTimestamp(raw: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(raw) ?? undefined;
-}
-
-function normalizeContainerQuoteText(raw: unknown): string | undefined {
-  return typeof raw === "string" ? raw : undefined;
-}
-
-/**
- * Send message via bbernhard container REST API.
- */
-async function containerSendMessage(params: {
-  baseUrl: string;
-  account: string;
-  recipients: string[];
-  message: string;
-  textStyles?: Array<{ start: number; length: number; style: string }>;
-  attachments?: string[];
-  maxAttachmentBytes?: number;
-  quoteTimestamp?: number;
-  quoteAuthor?: string;
-  quoteMessage?: string;
-  timeoutMs?: number;
-}): Promise<{ timestamp?: number }> {
-  const payload: Record<string, unknown> = {
-    message: params.message,
-    number: params.account,
-    recipients: params.recipients,
-  };
-
-  if (params.textStyles && params.textStyles.length > 0) {
-    payload.message = renderContainerStyledText(params.message, params.textStyles);
-    payload["text_mode"] = "styled";
-  }
-
-  if (params.attachments && params.attachments.length > 0) {
-    // Container API only accepts base64-encoded attachments, not file paths.
-    const configuredMaxBytes = params.maxAttachmentBytes;
-    const maxAttachmentBytes =
-      typeof configuredMaxBytes === "number" &&
-      Number.isFinite(configuredMaxBytes) &&
-      configuredMaxBytes >= 0
-        ? Math.floor(configuredMaxBytes)
-        : DEFAULT_SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES;
-    payload.base64_attachments = await filesToBase64DataUris(
-      params.attachments,
-      maxAttachmentBytes,
-    );
-  }
-  if (params.quoteTimestamp !== undefined && params.quoteAuthor) {
-    payload.quote_timestamp = params.quoteTimestamp;
-    payload.quote_author = params.quoteAuthor;
-    payload.quote_message = params.quoteMessage ?? "";
-  }
-
-  const result = await containerRestRequest<{ timestamp?: unknown }>(
-    "/v2/send",
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    "POST",
-    payload,
-  );
-
-  const timestamp = parseContainerSendTimestamp(result?.timestamp);
-  return timestamp === undefined ? {} : { timestamp };
-}
-
-/**
- * Send typing indicator via bbernhard container REST API.
- */
-async function containerSendTyping(params: {
-  baseUrl: string;
-  account: string;
-  recipient: string;
-  stop?: boolean;
-  timeoutMs?: number;
-}): Promise<boolean> {
-  const method = params.stop ? "DELETE" : "PUT";
-  await containerRestRequest(
-    `/v1/typing-indicator/${encodeURIComponent(params.account)}`,
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    method,
-    { recipient: params.recipient },
-  );
-  return true;
-}
-
-/**
- * Send read receipt via bbernhard container REST API.
- */
-async function containerSendReceipt(params: {
-  baseUrl: string;
-  account: string;
-  recipient: string;
-  timestamp: number;
-  type?: "read" | "viewed";
-  timeoutMs?: number;
-}): Promise<boolean> {
-  await containerRestRequest(
-    `/v1/receipts/${encodeURIComponent(params.account)}`,
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    "POST",
-    {
-      recipient: params.recipient,
-      timestamp: params.timestamp,
-      receipt_type: params.type ?? "read",
-    },
-  );
-  return true;
-}
-
-/**
- * Add or remove a message reaction via the bbernhard container REST API.
- */
-async function containerSendReaction(params: {
-  baseUrl: string;
-  account: string;
-  recipient: string;
-  emoji: string;
-  targetAuthor: string;
-  targetTimestamp: number;
-  groupId?: string;
-  timeoutMs?: number;
-  remove?: boolean;
-}): Promise<{ timestamp?: number }> {
-  const payload: Record<string, unknown> = {
-    recipient: params.recipient,
-    reaction: params.emoji,
-    target_author: params.targetAuthor,
-    timestamp: params.targetTimestamp,
-  };
-
-  if (params.groupId) {
-    payload.group_id = params.groupId;
-  }
-
-  const result = await containerRestRequest<{ timestamp?: number }>(
-    `/v1/reactions/${encodeURIComponent(params.account)}`,
-    { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
-    params.remove ? "DELETE" : "POST",
-    payload,
-  );
-
-  return result ?? {};
-}
-
 /**
  * Strip the "uuid:" prefix that native signal-cli accepts but the container API rejects.
  */
@@ -841,24 +675,49 @@ export async function containerRpcRequest<T = unknown>(
         return [{ start: Number(start), length: Number(length), style }];
       });
 
-      const quoteTimestamp = normalizeContainerQuoteTimestamp(
+      const message = (p.message as string) ?? "";
+      const payload: Record<string, unknown> = {
+        message,
+        number: (p.account as string) ?? "",
+        recipients: finalRecipients,
+      };
+      if (textStyles?.length) {
+        payload.message = renderContainerStyledText(message, textStyles);
+        payload.text_mode = "styled";
+      }
+      const attachments = p.attachments as string[] | undefined;
+      if (attachments?.length) {
+        // Container API only accepts base64-encoded attachments, not file paths.
+        const configuredMaxBytes = opts.maxAttachmentBytes;
+        const maxAttachmentBytes =
+          typeof configuredMaxBytes === "number" &&
+          Number.isFinite(configuredMaxBytes) &&
+          configuredMaxBytes >= 0
+            ? Math.floor(configuredMaxBytes)
+            : DEFAULT_SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES;
+        payload.base64_attachments = await filesToBase64DataUris(attachments, maxAttachmentBytes);
+      }
+      const quoteTimestamp = parseStrictNonNegativeInteger(
         p.quoteTimestamp ?? p["quote-timestamp"],
       );
-      const quoteAuthor = normalizeContainerQuoteText(p.quoteAuthor ?? p["quote-author"]);
-      const result = await containerSendMessage({
-        baseUrl: opts.baseUrl,
-        account: (p.account as string) ?? "",
-        recipients: finalRecipients,
-        message: (p.message as string) ?? "",
-        textStyles,
-        attachments: p.attachments as string[] | undefined,
-        maxAttachmentBytes: opts.maxAttachmentBytes,
-        quoteTimestamp,
-        quoteAuthor: quoteAuthor ? stripUuidPrefix(quoteAuthor) : undefined,
-        quoteMessage: normalizeContainerQuoteText(p.quoteMessage ?? p["quote-message"]),
-        timeoutMs: opts.timeoutMs,
-      });
-      return result as T;
+      const quoteAuthor = p.quoteAuthor ?? p["quote-author"];
+      if (quoteTimestamp !== undefined && typeof quoteAuthor === "string" && quoteAuthor) {
+        const author = stripUuidPrefix(quoteAuthor);
+        if (author) {
+          const quoteMessage = p.quoteMessage ?? p["quote-message"];
+          payload.quote_timestamp = quoteTimestamp;
+          payload.quote_author = author;
+          payload.quote_message = typeof quoteMessage === "string" ? quoteMessage : "";
+        }
+      }
+      const result = await containerRestRequest<{ timestamp?: unknown }>(
+        "/v2/send",
+        opts,
+        "POST",
+        payload,
+      );
+      const timestamp = parseContainerSendTimestamp(result?.timestamp);
+      return (timestamp === undefined ? {} : { timestamp }) as T;
     }
 
     case "sendTyping": {
@@ -866,48 +725,47 @@ export async function containerRpcRequest<T = unknown>(
         (p.recipient as string[] | undefined)?.[0] ??
           ((p.groupId as string | undefined) ? formatGroupIdForContainer(p.groupId as string) : ""),
       );
-      await containerSendTyping({
-        baseUrl: opts.baseUrl,
-        account: (p.account as string) ?? "",
-        recipient,
-        stop: p.stop as boolean | undefined,
-        timeoutMs: opts.timeoutMs,
-      });
+      await containerRestRequest(
+        `/v1/typing-indicator/${encodeURIComponent((p.account as string) ?? "")}`,
+        opts,
+        p.stop ? "DELETE" : "PUT",
+        { recipient },
+      );
       return undefined as T;
     }
 
     case "sendReceipt": {
-      const recipient = stripUuidPrefix((p.recipient as string[] | undefined)?.[0] ?? "");
-      await containerSendReceipt({
-        baseUrl: opts.baseUrl,
-        account: (p.account as string) ?? "",
-        recipient,
-        timestamp: p.targetTimestamp as number,
-        type: p.type as "read" | "viewed" | undefined,
-        timeoutMs: opts.timeoutMs,
-      });
+      await containerRestRequest(
+        `/v1/receipts/${encodeURIComponent((p.account as string) ?? "")}`,
+        opts,
+        "POST",
+        {
+          recipient: stripUuidPrefix((p.recipient as string[] | undefined)?.[0] ?? ""),
+          timestamp: p.targetTimestamp,
+          receipt_type: p.type ?? "read",
+        },
+      );
       return undefined as T;
     }
 
     case "sendReaction": {
       const recipient = stripUuidPrefix((p.recipients as string[] | undefined)?.[0] ?? "");
-      const groupId = (p.groupIds as string[] | undefined)?.[0] ?? undefined;
+      const groupId = (p.groupIds as string[] | undefined)?.[0];
       const formattedGroupId = groupId ? formatGroupIdForContainer(groupId) : undefined;
-      // Container API uses `recipient` for both DMs and groups.
-      // For groups, pass the formatted group ID as recipient.
-      const effectiveRecipient = formattedGroupId || recipient || "";
-      const reactionParams = {
-        baseUrl: opts.baseUrl,
-        account: (p.account as string) ?? "",
-        recipient: effectiveRecipient,
-        emoji: (p.emoji as string) ?? "",
-        targetAuthor: stripUuidPrefix((p.targetAuthor as string) ?? recipient),
-        targetTimestamp: p.targetTimestamp as number,
-        groupId: formattedGroupId,
-        timeoutMs: opts.timeoutMs,
-        remove: Boolean(p.remove),
-      };
-      return (await containerSendReaction(reactionParams)) as T;
+      const result = await containerRestRequest<{ timestamp?: number }>(
+        `/v1/reactions/${encodeURIComponent((p.account as string) ?? "")}`,
+        opts,
+        p.remove ? "DELETE" : "POST",
+        {
+          // Container API uses recipient for both DMs and groups.
+          recipient: formattedGroupId || recipient || "",
+          reaction: (p.emoji as string) ?? "",
+          target_author: stripUuidPrefix((p.targetAuthor as string) ?? recipient),
+          timestamp: p.targetTimestamp,
+          ...(formattedGroupId ? { group_id: formattedGroupId } : {}),
+        },
+      );
+      return (result ?? {}) as T;
     }
 
     case "getAttachment": {
@@ -936,4 +794,3 @@ export async function containerRpcRequest<T = unknown>(
       throw new Error(`Unsupported container RPC method: ${method}`);
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

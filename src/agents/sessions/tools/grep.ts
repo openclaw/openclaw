@@ -6,8 +6,8 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { waitForCommandSpawn } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -25,6 +25,7 @@ import {
 } from "./render-utils.js";
 import type { GrepToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { grepSchema } from "./tool-schemas.js";
 import {
   DEFAULT_MAX_BYTES,
   formatSize,
@@ -33,23 +34,6 @@ import {
   truncateLine,
 } from "./truncate.js";
 
-const grepSchema = Type.Object({
-  pattern: Type.String({ description: "Regex/literal pattern." }),
-  path: Type.Optional(Type.String({ description: "File/dir; default cwd." })),
-  glob: Type.Optional(Type.String({ description: "File glob, e.g. *.ts." })),
-  ignoreCase: Type.Optional(Type.Boolean({ description: "Ignore case; default false." })),
-  literal: Type.Optional(
-    Type.Boolean({
-      description: "Literal, not regex; default false.",
-    }),
-  ),
-  context: Type.Optional(
-    Type.Number({
-      description: "Context lines each side; default 0.",
-    }),
-  ),
-  limit: Type.Optional(Type.Number({ description: "Max matches; default 100." })),
-});
 const DEFAULT_LIMIT = 100;
 const GREP_JSON_RECORD_MAX_BYTES = 1024 * 1024;
 const GREP_JSON_CARRIAGE_RETURN = Buffer.from([0x0d]);
@@ -265,8 +249,15 @@ export function createGrepToolDefinition(
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
-            releaseChildProcessOutputAfterExit(spawnedChild.nodeChildProcess);
             child = spawnedChild;
+            if (spawnedChild.pid === undefined) {
+              await waitForCommandSpawn(spawnedChild);
+            }
+            if (settled) {
+              stopChild();
+              return;
+            }
+            releaseChildProcessOutputAfterExit(spawnedChild.nodeChildProcess);
             let stderr = "";
             let stderrDroppedBytes = 0;
             let matchCount = 0;

@@ -1,10 +1,8 @@
-// Session group catalog and sidebar section order. Split out of
-// `session-organizer-operations.runtime.ts` to keep that module under the
-// max-lines ceiling. These operations write the group catalog directly and
-// never touch session rows, so they carry no `patchSession` dependency — that
-// one-way edge is what keeps the two modules free of an import cycle.
+// Catalog operations never patch session rows; the one-way dependency from
+// session-organizer-operations.runtime.ts keeps group assignment cycle-free.
 import { t } from "../i18n/index.ts";
 import { moveSessionSection, normalizeSessionSectionOrder } from "../lib/sessions/grouping.ts";
+import type { SessionGroupMutationResult } from "../lib/sessions/session-capability.ts";
 import { showToast } from "../lib/toast.ts";
 import type {
   SidebarSessionMutationResult,
@@ -30,31 +28,9 @@ export async function rememberSessionGroup(
   if (groups.includes(name)) {
     return "completed";
   }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return "stale";
-  }
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.groups.put",
-      requiredScope: "operator.write",
-    })
-  ) {
-    return "failed";
-  }
-  try {
-    const written = await scope.sessions.groupsPut([...groups, name]);
-    // The catalog owns the authoritative stale signal; the mutation scope adds
-    // its own. Either one retiring means no confirmed entry to assign against.
-    return written === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope)
-      ? "completed"
-      : "stale";
-  } catch (error) {
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return "stale";
-    }
-    host.sessionData.publishSessionMutationError(scope, error);
-    return "failed";
-  }
+  return writeSessionGroup(host, scope, "sessions.groups.put", () =>
+    scope.sessions.groupsPut([...groups, name]),
+  );
 }
 
 export async function renameSessionGroup(
@@ -63,24 +39,11 @@ export async function renameSessionGroup(
   next: string,
   scope: SidebarSessionMutationScope,
 ): Promise<boolean> {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return false;
-  }
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.groups.rename",
-      requiredScope: "operator.write",
-    })
-  ) {
-    return false;
-  }
-  try {
-    const outcome = await scope.sessions.groupsRename(group, next);
-    return outcome === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope);
-  } catch (error) {
-    host.sessionData.publishSessionMutationError(scope, error);
-    return false;
-  }
+  return (
+    (await writeSessionGroup(host, scope, "sessions.groups.rename", () =>
+      scope.sessions.groupsRename(group, next),
+    )) === "completed"
+  );
 }
 
 export async function deleteSessionGroup(
@@ -134,19 +97,26 @@ export async function updateSessionGroupDefaults(
   defaults: { cwd: string | null; worktree: boolean },
   scope: SidebarSessionMutationScope,
 ): Promise<SidebarSessionMutationResult> {
+  return writeSessionGroup(host, scope, "sessions.groups.update", () =>
+    scope.sessions.groupsUpdate(group, defaults),
+  );
+}
+
+async function writeSessionGroup(
+  host: SessionActionHost,
+  scope: SidebarSessionMutationScope,
+  method: "sessions.groups.put" | "sessions.groups.rename" | "sessions.groups.update",
+  write: () => Promise<SessionGroupMutationResult>,
+): Promise<SidebarSessionMutationResult> {
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
   }
-  if (
-    !requireSessionMutationAccess(host, scope, {
-      method: "sessions.groups.update",
-      requiredScope: "operator.write",
-    })
-  ) {
+  if (!requireSessionMutationAccess(host, scope, { method, requiredScope: "operator.write" })) {
     return "failed";
   }
   try {
-    const outcome = await scope.sessions.groupsUpdate(group, defaults);
+    const outcome = await write();
+    // The catalog and this caller each own a stale signal; neither can confirm the other's write.
     return outcome === "completed" && host.sessionData.isSessionMutationScopeCurrent(scope)
       ? "completed"
       : "stale";

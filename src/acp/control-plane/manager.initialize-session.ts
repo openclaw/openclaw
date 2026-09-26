@@ -4,12 +4,14 @@ import {
   mergeSessionIdentity,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
-import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
+import {
+  closeSupersededRuntimeHandle,
+  createSupersededActorError,
+} from "./manager.runtime-handle-ensure.js";
 import {
   assertAcpRuntimeOwnerSupport,
   persistedAcpRuntimeHandle,
@@ -35,6 +37,7 @@ export async function runManagerInitializeSession(params: {
   deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend" | "loadSessionEntry">;
   runtimeHandles: ManagerRuntimeHandleCache;
   writeSessionMeta: WriteManagerSessionMeta;
+  isCurrentActor?: () => boolean;
 }): Promise<{
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
@@ -42,6 +45,10 @@ export async function runManagerInitializeSession(params: {
   sessionEntry: SessionEntry;
 }> {
   const { input, sessionKey, agentId } = params;
+  const isCurrentActor = params.isCurrentActor ?? (() => true);
+  if (!isCurrentActor()) {
+    throw createSupersededActorError(sessionKey);
+  }
   const backend = params.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
   const runtime = backend.runtime;
   assertAcpRuntimeOwnerSupport(runtime, params);
@@ -70,12 +77,19 @@ export async function runManagerInitializeSession(params: {
         ...(requestedModel ? { model: requestedModel } : {}),
         ...(requestedModel && input.modelExplicit ? { modelExplicit: true } : {}),
         ...(requestedThinking ? { thinking: requestedThinking } : {}),
+        ...(requestedThinking && input.thinkingExplicit !== undefined
+          ? { thinkingExplicit: input.thinkingExplicit }
+          : {}),
         cwd: requestedCwd,
       }),
     fallbackCode: "ACP_SESSION_INIT_FAILED",
     fallbackMessage: "Could not initialize ACP session runtime.",
   });
   const handle = { ...ensured, agentId, sessionKey };
+  if (!isCurrentActor()) {
+    await closeSupersededRuntimeHandle({ runtime, handle, sessionKey });
+    throw createSupersededActorError(sessionKey);
+  }
   const effectiveCwd = normalizeText(handle.cwd) ?? requestedCwd;
   const effectiveRuntimeOptions = normalizeRuntimeOptions({
     ...initialRuntimeOptions,
@@ -84,6 +98,11 @@ export async function runManagerInitializeSession(params: {
         ? handle.appliedModel.model
         : undefined
       : requestedModel,
+    thinking: handle.appliedThinking
+      ? handle.appliedThinking.kind === "applied"
+        ? handle.appliedThinking.thinking
+        : undefined
+      : requestedThinking,
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
   });
 
@@ -116,21 +135,34 @@ export async function runManagerInitializeSession(params: {
     lastActivityAt: Date.now(),
   };
 
-  const persisted = await persistInitializedSessionMeta({
-    cfg: input.cfg,
-    sessionKey,
-    agentId,
-    meta,
-    runtime,
-    handle,
-    writeSessionMeta: params.writeSessionMeta,
-    assertCommitAllowed: input.assertActive,
-  });
-  if (!persisted?.acp) {
-    throw new AcpRuntimeError(
-      "ACP_SESSION_INIT_FAILED",
-      `Could not persist ACP metadata for ${sessionKey}.`,
-    );
+  let persisted: SessionEntry | null;
+  try {
+    persisted = await params.writeSessionMeta({
+      cfg: input.cfg,
+      sessionKey,
+      agentId,
+      mutate: () => meta,
+      isCurrentActor,
+      failOnError: true,
+      assertCommitAllowed: input.assertActive,
+    });
+    if (!persisted?.acp) {
+      throw new AcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        `Could not persist ACP metadata for ${sessionKey}.`,
+      );
+    }
+  } catch (error) {
+    await runtime.close({ handle, reason: "init-meta-failed" }).catch((closeError: unknown) => {
+      logVerbose(
+        `acp-manager: cleanup close failed after metadata write error for ${sessionKey}: ${String(closeError)}`,
+      );
+    });
+    throw error;
+  }
+  if (!isCurrentActor()) {
+    await closeSupersededRuntimeHandle({ runtime, handle, sessionKey });
+    throw createSupersededActorError(sessionKey);
   }
   params.runtimeHandles.set(params, {
     runtime,
@@ -139,7 +171,6 @@ export async function runManagerInitializeSession(params: {
     agent,
     mode: input.mode,
     cwd: effectiveCwd,
-    configSignature: resolveRuntimeConfigCacheKey(input.cfg),
   });
   return {
     runtime,
@@ -147,53 +178,4 @@ export async function runManagerInitializeSession(params: {
     meta,
     sessionEntry: persisted,
   };
-}
-
-async function persistInitializedSessionMeta(params: {
-  assertCommitAllowed?: () => void;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-  meta: SessionAcpMeta;
-  runtime: AcpRuntime;
-  handle: AcpRuntimeHandle;
-  writeSessionMeta: WriteManagerSessionMeta;
-}): Promise<SessionEntry | null> {
-  try {
-    const persisted = await params.writeSessionMeta({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      mutate: () => params.meta,
-      failOnError: true,
-      assertCommitAllowed: params.assertCommitAllowed,
-    });
-    if (persisted?.acp) {
-      return persisted;
-    }
-  } catch (error) {
-    await closeRuntimeAfterInitMetaFailure(params);
-    throw error;
-  }
-
-  await closeRuntimeAfterInitMetaFailure(params);
-  return null;
-}
-
-async function closeRuntimeAfterInitMetaFailure(params: {
-  sessionKey: string;
-  agentId: string;
-  runtime: AcpRuntime;
-  handle: AcpRuntimeHandle;
-}): Promise<void> {
-  await params.runtime
-    .close({
-      handle: params.handle,
-      reason: "init-meta-failed",
-    })
-    .catch((closeError: unknown) => {
-      logVerbose(
-        `acp-manager: cleanup close failed after metadata write error for ${params.sessionKey}: ${String(closeError)}`,
-      );
-    });
 }

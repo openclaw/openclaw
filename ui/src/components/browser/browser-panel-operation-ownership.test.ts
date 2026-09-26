@@ -27,10 +27,6 @@ describe("BrowserPanelOperationOwnership", () => {
 
     ownership.forgetNavigation(client, "tab-a");
     expect(ownership.hasUnreconciledNavigation(client, "tab-a")).toBe(false);
-
-    ownership.markNavigationCommitted(client, "tab-a");
-    ownership.markNavigationReconciled(client, "tab-a");
-    expect(ownership.hasUnreconciledNavigation(client, "tab-a")).toBe(false);
   });
 
   it("reconciles captured metadata without replacing an unchanged tab list", () => {

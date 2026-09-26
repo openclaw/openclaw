@@ -1,6 +1,7 @@
 import "./server-context.chrome-test-harness.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { isChromeReachable, launchOpenClawChrome, stopOpenClawChrome } from "./chrome.js";
 import { resolveBrowserConfig } from "./config.js";
 import { createBrowserRouteContext, type BrowserServerState } from "./server-context.js";
@@ -16,14 +17,6 @@ vi.mock("./pw-ai-module.js", () => ({
   getLoadedPwAiModule: () => null,
   getPwAiModule: async () => null,
 }));
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 describe("browser inherited launch settings reload", () => {
   beforeEach(() => {
@@ -143,8 +136,8 @@ describe("browser inherited launch settings reload", () => {
     vi.mocked(stopOpenClawChrome).mockImplementation(async () => {
       managedReachable = false;
     });
-    const started = deferred();
-    const release = deferred();
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
     const stale = mockLaunchedChrome(vi.mocked(launchOpenClawChrome), 201);
     const replacement = mockLaunchedChrome(vi.mocked(launchOpenClawChrome), 202);
     vi.mocked(launchOpenClawChrome)

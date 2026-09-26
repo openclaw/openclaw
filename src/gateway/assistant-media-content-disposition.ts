@@ -1,4 +1,12 @@
+import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { kindFromMime } from "@openclaw/media-core/mime";
+
+export function resolveAssistantMediaFilename(
+  fallback: string,
+  filenameHint: string | null,
+): string {
+  return basenameFromAnyPath(filenameHint ?? "") || fallback;
+}
 
 export function buildAssistantMediaContentDisposition(filename: string, mime?: string): string {
   // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.
@@ -14,6 +22,14 @@ export function buildAssistantMediaContentDisposition(filename: string, mime?: s
   const kind = kindFromMime(mime);
   const inline = kind === "image" || kind === "audio" || kind === "video";
   return `${inline ? "inline" : "attachment"}; filename="${fallback}"; filename*=UTF-8''${extended}`;
+}
+
+export function buildManagedMediaContentDisposition(
+  value: string | null,
+  contentType: string,
+): string {
+  const fallback = contentType.startsWith("image/") ? "generated-image" : "generated-media";
+  return buildAssistantMediaContentDisposition(value?.trim() || fallback, contentType);
 }
 
 function toWellFormedFilename(value: string): string {

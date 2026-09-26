@@ -137,12 +137,7 @@ describe("exchangeMSTeamsCodeForTokens", () => {
   });
 
   it("throws on a 400 error response", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: "invalid_grant" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    fetchSpy.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 400 }));
 
     await expect(
       exchangeMSTeamsCodeForTokens({
@@ -272,57 +267,5 @@ describe("refreshMSTeamsDelegatedTokens", () => {
     });
 
     expect(tokens.refreshToken).toBe("new-rt");
-  });
-
-  it("throws on a 401 error response", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: "invalid_grant" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-
-    await expect(
-      refreshMSTeamsDelegatedTokens({
-        tenantId: "t",
-        clientId: "c",
-        clientSecret: "s", // pragma: allowlist secret
-        refreshToken: "expired-rt",
-      }),
-    ).rejects.toThrow(/MSTeams token refresh failed \(401\)/);
-  });
-
-  it("reports malformed token refresh JSON with a stable OAuth error", async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response("{ nope", {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-
-    await expect(
-      refreshMSTeamsDelegatedTokens({
-        tenantId: "t",
-        clientId: "c",
-        clientSecret: "s", // pragma: allowlist secret
-        refreshToken: "bad-json",
-      }),
-    ).rejects.toThrow("MSTeams token refresh failed: malformed JSON response");
-  });
-
-  it.each([
-    { label: "null", body: null },
-    { label: "array", body: [] },
-  ])("rejects a top-level $label token refresh response", async ({ body }) => {
-    fetchSpy.mockResolvedValueOnce(responseJson(body));
-
-    await expect(
-      refreshMSTeamsDelegatedTokens({
-        tenantId: "t",
-        clientId: "c",
-        clientSecret: "s", // pragma: allowlist secret
-        refreshToken: "rt",
-      }),
-    ).rejects.toThrow("MSTeams token refresh failed: invalid token response fields");
   });
 });

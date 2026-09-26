@@ -1,18 +1,17 @@
 import type fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { snapshotConfigAuditProcessInfo, type ConfigObserveAuditRecord } from "./io.audit.js";
 import type {
   ConfigHealthEntry,
   ConfigHealthFingerprint,
   ConfigHealthState,
-} from "./io.health-state.js";
+} from "./io.health-state.types.js";
 import {
   hashConfigRaw,
   hasConfigMeta,
   parseConfigJson5,
   resolveGatewayMode,
 } from "./io.read-helpers.js";
-import type { NormalizedConfigIoDeps } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import { resolveConfigStatMetadata } from "./io.write-safety.js";
 
 type ConfigFingerprintDeps = Pick<NormalizedConfigIoDeps, "fs" | "json5">;
@@ -23,17 +22,6 @@ export function readConfigHealthEntry(
 ): ConfigHealthEntry {
   const entry = state.entries?.[configPath];
   return isRecord(entry) ? entry : {};
-}
-
-export function updateConfigHealthEntry(
-  state: ConfigHealthState,
-  configPath: string,
-  entry: ConfigHealthEntry,
-): ConfigHealthState {
-  return {
-    ...state,
-    entries: { ...state.entries, [configPath]: entry },
-  };
 }
 
 export function createConfigHealthFingerprint(params: {
@@ -100,68 +88,15 @@ export function readConfigFingerprintForPathSync(
   }
 }
 
-export function createConfigObserveAuditRecord(params: {
-  configPath: string;
-  valid: boolean;
-  current: ConfigHealthFingerprint;
-  suspicious: string[];
-  lastKnownGood: ConfigHealthFingerprint | undefined;
-  backup: ConfigHealthFingerprint | null | undefined;
-  clobberedPath?: string | null;
-  restoredFromBackup?: boolean;
-  restoredBackupPath?: string | null;
-  restoreErrorCode?: string | null;
-  restoreErrorMessage?: string | null;
-}): ConfigObserveAuditRecord {
-  const { current, lastKnownGood, backup } = params;
+export function extractRestoreErrorDetails(error: unknown): {
+  code: string | null;
+  message: string | null;
+} {
+  if (!error || typeof error !== "object") {
+    return { code: null, message: typeof error === "string" ? error : null };
+  }
   return {
-    ts: current.observedAt,
-    source: "config-io",
-    event: "config.observe",
-    phase: "read",
-    configPath: params.configPath,
-    ...snapshotConfigAuditProcessInfo(),
-    exists: true,
-    valid: params.valid,
-    hash: current.hash,
-    bytes: current.bytes,
-    mtimeMs: current.mtimeMs,
-    ctimeMs: current.ctimeMs,
-    dev: current.dev,
-    ino: current.ino,
-    mode: current.mode,
-    nlink: current.nlink,
-    uid: current.uid,
-    gid: current.gid,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    suspicious: params.suspicious,
-    lastKnownGoodHash: lastKnownGood?.hash ?? null,
-    lastKnownGoodBytes: lastKnownGood?.bytes ?? null,
-    lastKnownGoodMtimeMs: lastKnownGood?.mtimeMs ?? null,
-    lastKnownGoodCtimeMs: lastKnownGood?.ctimeMs ?? null,
-    lastKnownGoodDev: lastKnownGood?.dev ?? null,
-    lastKnownGoodIno: lastKnownGood?.ino ?? null,
-    lastKnownGoodMode: lastKnownGood?.mode ?? null,
-    lastKnownGoodNlink: lastKnownGood?.nlink ?? null,
-    lastKnownGoodUid: lastKnownGood?.uid ?? null,
-    lastKnownGoodGid: lastKnownGood?.gid ?? null,
-    lastKnownGoodGatewayMode: lastKnownGood?.gatewayMode ?? null,
-    backupHash: backup?.hash ?? null,
-    backupBytes: backup?.bytes ?? null,
-    backupMtimeMs: backup?.mtimeMs ?? null,
-    backupCtimeMs: backup?.ctimeMs ?? null,
-    backupDev: backup?.dev ?? null,
-    backupIno: backup?.ino ?? null,
-    backupMode: backup?.mode ?? null,
-    backupNlink: backup?.nlink ?? null,
-    backupUid: backup?.uid ?? null,
-    backupGid: backup?.gid ?? null,
-    backupGatewayMode: backup?.gatewayMode ?? null,
-    clobberedPath: params.clobberedPath ?? null,
-    restoredFromBackup: params.restoredFromBackup ?? false,
-    restoredBackupPath: params.restoredBackupPath ?? null,
-    restoreErrorCode: params.restoreErrorCode ?? null,
-    restoreErrorMessage: params.restoreErrorMessage ?? null,
+    code: "code" in error && typeof error.code === "string" ? error.code : null,
+    message: "message" in error && typeof error.message === "string" ? error.message : null,
   };
 }

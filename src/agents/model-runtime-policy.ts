@@ -4,15 +4,24 @@
  * Agent execution uses this to choose a model/provider-specific runtime policy
  * from agent entries, model catalog config, provider config, or QA overrides.
  */
-import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
+  parseModelCatalogRef,
+  type ProviderModelRef,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { AgentRuntimePolicyConfig } from "../config/types.agents-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentEntry } from "./agent-scope-config.js";
+import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
+import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import { resolveAgentEntry, resolveNativeModelPrimary } from "./agent-scope-config.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 
 /** A stored-row owner is already selected; request hints still require normal admission. */
 export type AgentRuntimePolicyScope = { sessionKey?: string } & (
@@ -60,27 +69,6 @@ type AgentModelRuntimePolicyResolution = ResolvedModelRuntimePolicy & {
 
 function hasRuntimePolicy(value: AgentRuntimePolicyConfig | undefined): boolean {
   return Boolean(value?.id?.trim());
-}
-
-function resolveProviderConfig(
-  config: OpenClawConfig | undefined,
-  provider: string | undefined,
-): ModelProviderConfig | undefined {
-  if (!config?.models?.providers || !provider?.trim()) {
-    return undefined;
-  }
-  const providers = config.models.providers;
-  const direct = providers[provider];
-  if (direct) {
-    return direct;
-  }
-  const normalizedProvider = normalizeProviderId(provider);
-  for (const [candidateProvider, providerConfig] of Object.entries(providers)) {
-    if (normalizeProviderId(candidateProvider) === normalizedProvider) {
-      return providerConfig;
-    }
-  }
-  return undefined;
 }
 
 function normalizeModelIdForProvider(
@@ -139,11 +127,11 @@ function resolvePolicyMatch(
 }
 
 function modelEntryMatchKind(params: {
-  entry: Pick<ModelDefinitionConfig, "id">;
+  entryId: string;
   provider: string | undefined;
   modelId: string;
 }): ModelEntryMatchKind {
-  const entryId = params.entry.id.trim();
+  const entryId = params.entryId.trim();
   if (entryId === params.modelId) {
     return "exact";
   }
@@ -185,15 +173,21 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   const callerProvider = normalizeProviderId(params.provider ?? "");
   for (const models of modelMaps) {
     const scopeMatches: AgentModelRuntimePolicyMatch[] = [];
-    for (const [key, entry] of Object.entries(models ?? {})) {
+    if (!models) {
+      continue;
+    }
+    for (const key of Object.keys(models)) {
+      const policy = models[key]?.agentRuntime;
+      if (!policy || !hasRuntimePolicy(policy)) {
+        continue;
+      }
       const matches =
         modelEntryMatchKind({
-          entry: { id: key },
+          entryId: key,
           provider: params.provider,
           modelId: modelId ?? "",
         }) === params.matchKind;
-      const policy = entry?.agentRuntime;
-      if (!matches || !policy || !hasRuntimePolicy(policy)) {
+      if (!matches) {
         continue;
       }
       scopeMatches.push({ provider: parseModelCatalogRef(key)?.provider ?? "", policy });
@@ -218,7 +212,8 @@ function resolveModelConfig(params: {
     return undefined;
   }
   return params.providerConfig.models.find(
-    (entry) => modelEntryMatchKind({ entry, provider: params.provider, modelId }) === "exact",
+    (entry) =>
+      modelEntryMatchKind({ entryId: entry.id, provider: params.provider, modelId }) === "exact",
   );
 }
 
@@ -258,7 +253,9 @@ export function resolveModelRuntimePolicy(
   if (agentModelPolicy.policy) {
     return agentModelPolicy;
   }
-  const providerConfig = resolveProviderConfig(params.config, effectiveProvider);
+  const providerConfig = effectiveProvider
+    ? resolveMergedModelProviderConfig(params.config, effectiveProvider)
+    : undefined;
   const modelConfig = resolveModelConfig({
     providerConfig,
     provider: effectiveProvider,
@@ -288,4 +285,86 @@ export function resolveModelRuntimePolicy(
     };
   }
   return {};
+}
+
+/** Projects authored routing intent without changing harness compatibility or selection. */
+export function resolveModelRouteIntent(
+  params: Parameters<typeof resolveModelRuntimePolicy>[0] & {
+    runtimePolicy?: ReturnType<typeof resolveModelRuntimePolicy>;
+    primaryModel?: ProviderModelRef;
+    resolveProfileAuthMode?: (profileId: string) => string | undefined;
+    resolveProfileAuthFlow?: (profileId: string) => string | undefined;
+  },
+): ProviderResolveModelRoutesContext["routeIntent"] {
+  const selected = splitTrailingAuthProfile(params.modelId ?? "");
+  const provider = resolveEffectiveProvider(params.provider, selected.model);
+  const configured =
+    params.runtimePolicy ?? resolveModelRuntimePolicy({ ...params, modelId: selected.model });
+  const runtimeId = normalizeOptionalAgentRuntimeId(configured.policy?.id);
+  const selectedRequirement =
+    selected.profile && provider
+      ? resolveProviderModelAuthPolicy({
+          provider,
+          mode:
+            params.config?.auth?.profiles?.[selected.profile]?.mode ??
+            params.resolveProfileAuthMode?.(selected.profile),
+          authFlow: params.resolveProfileAuthFlow?.(selected.profile),
+        }).authRequirement
+      : undefined;
+  if (selectedRequirement) {
+    return {
+      ...(runtimeId && !isDefaultAgentRuntimeId(runtimeId) ? { runtimeId } : {}),
+      authRequirement: selectedRequirement,
+      source: "explicit",
+    };
+  }
+  if (runtimeId && !isDefaultAgentRuntimeId(runtimeId)) {
+    return { runtimeId, source: "explicit" };
+  }
+  if (!params.config) {
+    return undefined;
+  }
+  const agentId = resolveAgentRuntimePolicyAgentId(params);
+  const primary = agentId
+    ? resolveNativeModelPrimary(params.config, agentId)
+    : resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
+  const primarySelection = primary ? splitTrailingAuthProfile(primary) : undefined;
+  const primaryRef = params.primaryModel
+    ? {
+        provider: params.primaryModel.provider,
+        modelId: splitTrailingAuthProfile(params.primaryModel.model).model,
+      }
+    : primarySelection
+      ? parseModelCatalogRef(primarySelection.model)
+      : null;
+  if (!primaryRef || primaryRef.provider !== provider) {
+    return undefined;
+  }
+  const inheritedPolicy = resolveModelRuntimePolicy({
+    ...params,
+    provider: primaryRef.provider,
+    modelId: primaryRef.modelId,
+  });
+  const inheritedRuntimeId = normalizeOptionalAgentRuntimeId(inheritedPolicy.policy?.id);
+  const primaryRequirement = primarySelection?.profile
+    ? resolveProviderModelAuthPolicy({
+        provider: primaryRef.provider,
+        mode:
+          params.config.auth?.profiles?.[primarySelection.profile]?.mode ??
+          params.resolveProfileAuthMode?.(primarySelection.profile),
+        authFlow: params.resolveProfileAuthFlow?.(primarySelection.profile),
+      }).authRequirement
+    : undefined;
+  if (primaryRequirement) {
+    return {
+      ...(inheritedRuntimeId && !isDefaultAgentRuntimeId(inheritedRuntimeId)
+        ? { runtimeId: inheritedRuntimeId }
+        : {}),
+      authRequirement: primaryRequirement,
+      source: "inherited",
+    };
+  }
+  return inheritedRuntimeId && !isDefaultAgentRuntimeId(inheritedRuntimeId)
+    ? { runtimeId: inheritedRuntimeId, source: "inherited" }
+    : undefined;
 }

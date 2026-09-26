@@ -9,16 +9,9 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
+import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 
 registerSkillLibraryEnglish();
-
-function base64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let start = 0; start < bytes.length; start += 8192) {
-    binary += String.fromCharCode(...bytes.subarray(start, start + 8192));
-  }
-  return btoa(binary);
-}
 
 export function libraryFileText(file: SkillLibraryFile): string | null {
   if (file.encoding !== "base64") {
@@ -53,7 +46,7 @@ export async function readLibraryFiles(
     if (path === "SKILL.md") {
       content = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     } else {
-      files.push({ path, content: base64(bytes), encoding: "base64" });
+      files.push({ path, content: bytesToBase64(bytes), encoding: "base64" });
     }
   }
   if (content === undefined) {
@@ -92,7 +85,7 @@ export async function uploadLibraryArchive(
       action: "chunk",
       uploadId: begin.uploadId,
       offset,
-      data: base64(bytes.subarray(offset, end)),
+      data: bytesToBase64(bytes.subarray(offset, end)),
     });
     if (!("offset" in result) || result.offset !== end) {
       throw new Error(t("skillLibrary.uploadFailed"));

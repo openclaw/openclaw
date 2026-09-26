@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveRememberAcrossConversations } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   normalizePluginsConfig,
   resolvePluginConfigObject,
@@ -39,10 +38,7 @@ async function isSessionActiveMemoryDisabled(params: {
     const store = openActiveMemoryToggleStore(params.api);
     const key = activeMemoryToggleKey(sessionKey);
     const stored = await store.lookup(key);
-    if (stored?.disabled === true) {
-      return true;
-    }
-    return false;
+    return stored?.disabled === true;
   } catch (error) {
     params.api.logger.debug?.(
       `active-memory: failed to read session toggle (${error instanceof Error ? error.message : String(error)})`,
@@ -127,10 +123,6 @@ function isActiveMemoryPluginEnabled(cfg: OpenClawConfig): boolean {
   return plugins.entries["active-memory"]?.enabled !== false;
 }
 
-function shouldRememberAcrossConversations(cfg: OpenClawConfig, agentId: string): boolean {
-  return resolveRememberAcrossConversations(cfg, agentId);
-}
-
 function updateActiveMemoryGlobalEnabledInConfig(
   cfg: OpenClawConfig,
   enabled: boolean,
@@ -173,13 +165,7 @@ function isEnabledForAgent(
   config: ResolvedActiveRecallPluginConfig,
   agentId: string | undefined,
 ): boolean {
-  if (!config.enabled) {
-    return false;
-  }
-  if (!agentId) {
-    return false;
-  }
-  return config.agents.includes(agentId);
+  return Boolean(config.enabled && agentId && config.agents.includes(agentId));
 }
 
 function isAgentHarnessSessionKey(sessionKey: string): boolean {
@@ -222,16 +208,18 @@ function isEligibleInteractiveSession(ctx: {
   sessionId?: string;
   messageProvider?: string;
   channelId?: string;
+  inputProvenance?: { kind?: string };
 }): boolean {
   if (ctx.trigger !== "user") {
     return false;
   }
-  // Exclude only canonical dreaming-narrative session keys (bare or agent-prefixed).
-  // Canonical forms: "dreaming-narrative-<phase>-<hash>" or
-  // "agent:<agentId>:dreaming-narrative-<phase>-<hash>".
-  // A colon-delimited match would also exclude real chat session ids whose peer id
-  // begins with a phased dreaming-narrative phrase (e.g.
-  // "agent:main:feishu:group:dreaming-narrative-light-room").
+  // Inter-session deliveries retain the user trigger. Their typed origin keeps
+  // them out of human-message recall.
+  if (ctx.inputProvenance?.kind === "inter_session") {
+    return false;
+  }
+  // Match only bare or agent-prefixed narrative keys, not chat peer ids such as
+  // "agent:main:feishu:group:dreaming-narrative-light-room".
   const sessionKey = ctx.sessionKey ?? "";
   if (
     /^dreaming-narrative-(light|rem|deep)-/i.test(sessionKey) ||
@@ -318,25 +306,8 @@ function isPrivateRecallDestination(ctx: {
   return chatType === "direct" || chatType === "explicit";
 }
 
-/**
- * Best-effort extraction of the conversation id (peer id) embedded in an
- * agent-scoped session key, using shared session-key utilities so we
- * stay aligned with the canonical key shapes produced by
- * `buildAgentPeerSessionKey` / `resolveThreadSessionKeys`.
- *
- * Supported shapes (after stripping the optional `:thread:<id>` suffix):
- *   - agent:<agentId>:direct:<peerId>                         (dmScope=per-peer)
- *   - agent:<agentId>:<channel>:direct:<peerId>               (dmScope=per-channel-peer)
- *   - agent:<agentId>:<channel>:<accountId>:direct:<peerId>   (dmScope=per-account-channel-peer)
- *   - agent:<agentId>:<channel>:group:<peerId>                (group)
- *   - agent:<agentId>:<channel>:channel:<peerId>              (channel)
- *
- * The legacy `dm` token is also accepted for backwards compatibility.
- *
- * Returns undefined for sessions that do not embed a peer id (for
- * example dmScope=main `agent:<agentId>:<mainKey>` sessions, or any
- * non-canonical session key shape).
- */
+// Canonical peer keys end with <chatType>:<peerId...>, after optional channel
+// and account prefixes. Main sessions have no embedded peer; legacy dm is accepted.
 function resolveConversationId(ctx: {
   sessionKey?: string;
   messageProvider?: string;
@@ -345,10 +316,7 @@ function resolveConversationId(ctx: {
   if (!rawSessionKey) {
     return undefined;
   }
-  // Strip generic `:thread:<id>` suffix first so threaded sessions match
-  // the same conversation id as their non-threaded parent. Provider-
-  // specific topic ids (e.g. Telegram/Feishu) that are baked into the
-  // peer id by the channel adapter are preserved.
+  // Strip generic threads while retaining provider-specific topics inside the peer id.
   const { baseSessionKey } = parseThreadSessionSuffix(rawSessionKey);
   const baseKey = (baseSessionKey ?? rawSessionKey).trim();
   if (!baseKey) {
@@ -359,14 +327,6 @@ function resolveConversationId(ctx: {
     return undefined;
   }
   const restParts = parsed.rest.split(":").filter(Boolean);
-  if (restParts.length < 2) {
-    // `agent:<agentId>:<mainKey>` (dmScope=main) lands here — there is
-    // no embedded peer id to filter against.
-    return undefined;
-  }
-  // Walk left-to-right until we hit the first chat-type marker. Every
-  // canonical peer key terminates with `<chatType>:<peerId...>`, so the
-  // tail after the first marker is the conversation id we want.
   for (let index = 0; index < restParts.length - 1; index += 1) {
     const token = restParts[index];
     if (token === "direct" || token === "dm" || token === "group" || token === "channel") {
@@ -380,16 +340,6 @@ function resolveConversationId(ctx: {
   return undefined;
 }
 
-/**
- * Apply allowedChatIds / deniedChatIds filters after the chat type check
- * has already passed. Empty allowedChatIds means "no allowlist" and this
- * function returns true for any conversation. Empty deniedChatIds is also
- * a no-op.
- *
- * When allowedChatIds is non-empty but the session key does not expose a
- * conversation id (e.g. webchat default session), the session is skipped
- * to avoid accidentally running against an unknown conversation.
- */
 function isAllowedChatId(
   config: ResolvedActiveRecallPluginConfig,
   ctx: {
@@ -407,13 +357,8 @@ function isAllowedChatId(
   // the trusted hook chat id so allow/deny lists still apply.
   const conversationId =
     (resolveConversationId(ctx) ?? ctx.channelId?.trim())?.toLowerCase() || undefined;
-  if (hasAllowlist) {
-    if (!conversationId) {
-      return false;
-    }
-    if (!config.allowedChatIds.includes(conversationId)) {
-      return false;
-    }
+  if (hasAllowlist && (!conversationId || !config.allowedChatIds.includes(conversationId))) {
+    return false;
   }
   if (hasDenylist && conversationId && config.deniedChatIds.includes(conversationId)) {
     return false;
@@ -436,6 +381,5 @@ export {
   resolveCommandSessionKey,
   setSessionActiveMemoryDisabled,
   shouldSkipActiveMemoryForHarnessSession,
-  shouldRememberAcrossConversations,
   updateActiveMemoryGlobalEnabledInConfig,
 };

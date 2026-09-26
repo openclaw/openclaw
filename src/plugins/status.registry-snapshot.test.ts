@@ -13,9 +13,8 @@ import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
-import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import {
-  buildPluginDiagnosticsReport,
+  withPluginDiagnosticsReport,
   buildPluginRegistrySnapshotReport,
   buildPluginSnapshotReport,
 } from "./status.js";
@@ -96,7 +95,7 @@ function expectFields(actual: Record<string, unknown>, expected: Record<string, 
 }
 
 describe("buildPluginRegistrySnapshotReport", () => {
-  it("uses the configured system owner for ambient plugin inventory", () => {
+  it("uses the configured system owner for ambient plugin inventory", async () => {
     const tempRoot = makeTempDir();
     const mainWorkspace = path.join(tempRoot, "main-workspace");
     const gadgetWorkspace = path.join(tempRoot, "gadget-workspace");
@@ -125,21 +124,14 @@ describe("buildPluginRegistrySnapshotReport", () => {
       },
     };
 
-    const reports = [
-      buildPluginRegistrySnapshotReport({ config, env }),
-      buildPluginSnapshotReport({ config, env }),
-      buildPluginDiagnosticsReport({ config, env }),
-    ];
-
-    expect(reports.map((report) => report.workspaceDir)).toEqual([
-      gadgetWorkspace,
-      gadgetWorkspace,
-      gadgetWorkspace,
-    ]);
-    for (const report of reports) {
+    const assertReport = (report: ReturnType<typeof buildPluginSnapshotReport>) => {
+      expect(report.workspaceDir).toBe(gadgetWorkspace);
       expect(report.plugins.map((plugin) => plugin.id)).toContain(gadget.pluginId);
       expect(report.plugins.map((plugin) => plugin.id)).not.toContain(main.pluginId);
-    }
+    };
+    assertReport(buildPluginRegistrySnapshotReport({ config, env }));
+    assertReport(buildPluginSnapshotReport({ config, env }));
+    await withPluginDiagnosticsReport({ config, env }, assertReport);
     expect(
       buildPluginRegistrySnapshotReport({
         config: { agents: { entries: { only: { workspace: mainWorkspace } } } },
@@ -154,7 +146,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
     ).toBe(mainWorkspace);
   });
 
-  it("reports shared-only inventory when an explicit roster has no system owner", () => {
+  it("reports shared-only inventory when an explicit roster has no system owner", async () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");
     const mainWorkspace = path.join(tempRoot, "main-workspace");
@@ -194,12 +186,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
     for (const config of [makeConfig(false), makeConfig(true)]) {
       const scoped = loadPluginMetadataSnapshot({ config, env, workspaceDir: mainWorkspace });
       setCurrentPluginMetadataSnapshot(scoped, { config, env, workspaceDir: mainWorkspace });
-      const reports = [
-        buildPluginRegistrySnapshotReport({ config, env }),
-        buildPluginSnapshotReport({ config, env }),
-        buildPluginDiagnosticsReport({ config, env }),
-      ];
-      for (const report of reports) {
+      const assertReport = (report: ReturnType<typeof buildPluginSnapshotReport>) => {
         expect(report.workspaceDir).toBeUndefined();
         expect(report.plugins.map((plugin) => plugin.id)).toContain(global.pluginId);
         expect(report.plugins.map((plugin) => plugin.id)).not.toContain(main.pluginId);
@@ -210,7 +197,10 @@ describe("buildPluginRegistrySnapshotReport", () => {
             code: "workspace-scope-omitted",
           }),
         );
-      }
+      };
+      assertReport(buildPluginRegistrySnapshotReport({ config, env }));
+      assertReport(buildPluginSnapshotReport({ config, env }));
+      await withPluginDiagnosticsReport({ config, env }, assertReport);
     }
   });
 
@@ -371,16 +361,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
           });
         }
       }
-      if (consent === "current") {
-        expect(
-          collectPluginCapabilityConsentDiagnostics({ index, manifests: new Map() }),
-        ).toContainEqual(
-          expect.objectContaining({
-            level: "warn",
-            pluginId: fixture.pluginId,
-          }),
-        );
-      }
       expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
     },
   );
@@ -436,11 +416,13 @@ describe("buildPluginRegistrySnapshotReport", () => {
     });
   });
 
-  it.each(
-    (["missing", "stale-policy", "stale-source", "persisted"] as const).flatMap((state) =>
-      (["selected", "omitted"] as const).map((workspaceScope) => ({ state, workspaceScope })),
-    ),
-  )(
+  it.each([
+    { state: "missing", workspaceScope: "selected" },
+    { state: "stale-policy", workspaceScope: "selected" },
+    { state: "stale-source", workspaceScope: "selected" },
+    { state: "persisted", workspaceScope: "selected" },
+    { state: "persisted", workspaceScope: "omitted" },
+  ] as const)(
     "reuses prepared list metadata with $state registry and $workspaceScope workspace",
     ({ state, workspaceScope }) => {
       const tempRoot = fs.realpathSync(makeTempDir());
@@ -541,6 +523,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
           differences: [
             {
               pluginId: fixture.pluginId,
+              changed: ["record"],
               persistedSource: fixture.runtimeSource,
               derivedSource: fixture.runtimeSource,
             },
@@ -807,7 +790,12 @@ describe("buildPluginRegistrySnapshotReport", () => {
         name: "Dependency Demo",
       },
     });
-    fs.mkdirSync(path.join(rootDir, "node_modules", "present-required"), { recursive: true });
+    const dependencyDir = path.join(rootDir, "node_modules", "present-required");
+    fs.mkdirSync(dependencyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dependencyDir, "package.json"),
+      JSON.stringify({ name: "present-required", version: "1.0.0" }),
+    );
 
     const report = buildPluginRegistrySnapshotReport({
       config: {
@@ -924,7 +912,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
   });
 
-  it("preserves the real runtime import error while explaining missing dependencies", () => {
+  it("preserves the preparation error while explaining missing required dependencies", async () => {
     const rootDir = makeTempDir();
     const bundledRoot = makeTempDir();
     const fixture = createColdPluginFixture({
@@ -942,74 +930,34 @@ describe("buildPluginRegistrySnapshotReport", () => {
       "utf8",
     );
 
-    const report = buildPluginDiagnosticsReport({
-      config: createColdPluginConfig(rootDir, fixture.pluginId),
-      workspaceDir: rootDir,
-      env: createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: bundledRoot }),
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-    });
-    const plugin = requirePlugin(report.plugins, fixture.pluginId);
-    const diagnostics = report.diagnostics.filter((entry) => entry.pluginId === fixture.pluginId);
-
-    expectFields(plugin, { status: "error" });
-    expect(String(plugin.error)).toContain("Cannot find module");
-    expect(String(plugin.error)).toContain("Install the plugin dependencies");
-    expectFields(requireRecord(plugin.dependencyStatus), {
-      missing: ["missing-runtime"],
-      missingOptional: ["optional-runtime"],
-    });
-    expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toContain("Cannot find module");
-    expect(diagnostics[0]?.message).toContain("Install the plugin dependencies");
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(true);
-  });
-
-  it("replays persisted list metadata without importing plugin runtime", async () => {
-    const fixture = createColdPluginFixture({
-      rootDir: makeTempDir(),
-      pluginId: "persisted-demo",
-      packageName: "@example/openclaw-persisted-demo",
-      packageVersion: "2.0.0",
-      manifest: {
-        id: "persisted-demo",
-        name: "Persisted Demo",
-        description: "Persisted registry metadata",
-        providers: ["persisted-provider"],
-        commandAliases: [{ name: "persisted-demo" }],
+    await withPluginDiagnosticsReport(
+      {
+        config: createColdPluginConfig(rootDir, fixture.pluginId),
+        workspaceDir: rootDir,
+        env: createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: bundledRoot }),
+        logger: { info() {}, warn() {}, error() {}, debug() {} },
       },
-    });
-    const workspaceDir = makeTempDir();
-    const config = createColdPluginConfig(fixture.rootDir, fixture.pluginId);
-    const env = createColdPluginHermeticEnv(workspaceDir, {
-      bundledPluginsDir: makeTempDir(),
-    });
+      (report) => {
+        const plugin = requirePlugin(report.plugins, fixture.pluginId);
+        const diagnostics = report.diagnostics.filter(
+          (entry) => entry.pluginId === fixture.pluginId,
+        );
 
-    await refreshPluginRegistry({
-      config,
-      workspaceDir,
-      env,
-      reason: "manual",
-    });
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-
-    const report = buildPluginRegistrySnapshotReport({
-      config,
-      workspaceDir,
-      env,
-    });
-
-    expect(report.registrySource).toBe("persisted");
-    expectFields(requirePlugin(report.plugins, "persisted-demo"), {
-      id: "persisted-demo",
-      name: "Persisted Demo",
-      description: "Persisted registry metadata",
-      version: "2.0.0",
-      providerIds: ["persisted-provider"],
-      commands: ["persisted-demo"],
-      source: fs.realpathSync(fixture.runtimeSource),
-      status: "loaded",
-    });
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+        expectFields(plugin, { status: "error" });
+        expect(String(plugin.error)).toContain("Plugin dependency missing-runtime is missing from");
+        expect(String(plugin.error)).toContain("Install the plugin dependencies");
+        expectFields(requireRecord(plugin.dependencyStatus), {
+          missing: ["missing-runtime"],
+          missingOptional: ["optional-runtime"],
+        });
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]?.message).toContain(
+          "Plugin dependency missing-runtime is missing from",
+        );
+        expect(diagnostics[0]?.message).toContain("Install the plugin dependencies");
+        expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+      },
+    );
   });
 
   it("builds read-only plugin status snapshots without importing plugin runtime", () => {

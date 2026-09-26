@@ -1,9 +1,13 @@
 import { z } from "zod";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ensureMeetingAudioBackend, resolveMeetingAudioRuntimeForFormat } from "./audio-backend.js";
-import { createMeetingChromeTransport } from "./chrome-transport.js";
+import {
+  createMeetingChromeTransport,
+  createMeetingChromeTransportWithExternalAudio,
+} from "./chrome-transport.js";
 import { createMeetingConfiguredNodeHost } from "./configured-node-host.js";
 import { isMeetingRealtimeRouteReady, isMeetingTalkBackMode } from "./meeting-modes.js";
+import { normalizeMeetingObservationProvenance } from "./observation-provenance.js";
 import type {
   MeetingBrowserAdapter,
   MeetingBrowserLeaveStep,
@@ -25,7 +29,11 @@ import {
 import { createMeetingRuntimeFacade } from "./runtime-facade.js";
 import { createMeetingRuntimeProbes, resolveMeetingProbeTimeoutMs } from "./runtime-probes.js";
 import { createMeetingRuntimeSetup } from "./runtime-setup.js";
-import type { MeetingBrowserHealth, MeetingTranscriptSnapshot } from "./session-types.js";
+import type {
+  MeetingBrowserHealth,
+  MeetingTranscriptLine,
+  MeetingTranscriptSnapshot,
+} from "./session-types.js";
 import { createMeetingStatusCallSource } from "./status-call-source.js";
 import { createMeetingStatusPreludeSource } from "./status-prejoin-source.js";
 
@@ -113,17 +121,39 @@ const optionalBrowserString = z.string().optional().catch(undefined);
 const optionalBrowserBoolean = z.boolean().optional().catch(undefined);
 const optionalBrowserNumber = z.number().optional().catch(undefined);
 const invalidBrowserArrayItemSchema = z.unknown().transform(() => null);
+const meetingCaptionSourceSchema = z.object({
+  id: z.string().min(1).max(512),
+  epoch: z.string().min(1).max(512),
+  revision: z.string().min(1).max(128),
+  finalized: z.boolean(),
+  ownEcho: z.boolean().optional(),
+});
 const meetingTranscriptLineSchema = z
   .object({
     at: optionalBrowserString,
     speaker: optionalBrowserString,
     text: z.string().refine((value) => value.trim().length > 0),
+    provenance: z.unknown().optional(),
   })
-  .transform(({ at, speaker, text }) => ({
+  .transform(({ at, speaker, text, provenance }) => ({
     ...(at !== undefined ? { at } : {}),
     ...(speaker !== undefined ? { speaker } : {}),
     text,
+    ...(provenance !== undefined ? { provenance } : {}),
   }));
+
+const meetingTranscriptLinesSchema = z
+  .array(z.union([meetingTranscriptLineSchema, invalidBrowserArrayItemSchema]))
+  .transform((lines) => lines.filter((line) => line !== null));
+
+const meetingCaptionLinesSchema = z
+  .array(
+    z.union([
+      meetingTranscriptLineSchema.and(z.object({ source: z.unknown().optional() })),
+      invalidBrowserArrayItemSchema,
+    ]),
+  )
+  .transform((lines) => lines.filter((line) => line !== null));
 
 const meetingBrowserStatusSchema = z.looseObject({
   inCall: optionalBrowserBoolean,
@@ -137,11 +167,7 @@ const meetingBrowserStatusSchema = z.looseObject({
   lastCaptionAt: optionalBrowserString,
   lastCaptionSpeaker: optionalBrowserString,
   lastCaptionText: optionalBrowserString,
-  recentTranscript: z
-    .array(z.union([meetingTranscriptLineSchema, invalidBrowserArrayItemSchema]))
-    .transform((lines) => lines.filter((line) => line !== null))
-    .optional()
-    .catch(undefined),
+  recentTranscript: meetingTranscriptLinesSchema.optional().catch(undefined),
   audioInputRouted: optionalBrowserBoolean,
   audioInputDeviceLabel: optionalBrowserString,
   audioInputRouteError: optionalBrowserString,
@@ -161,6 +187,7 @@ const meetingBrowserStatusSchema = z.looseObject({
 
 function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
   result: unknown,
+  adapterId: string,
   options: MeetingPlatformAdapterOptions<
     never,
     string,
@@ -190,7 +217,18 @@ function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
     lastCaptionAt: parsed.lastCaptionAt,
     lastCaptionSpeaker: parsed.lastCaptionSpeaker,
     lastCaptionText: parsed.lastCaptionText,
-    recentTranscript: parsed.recentTranscript,
+    recentTranscript: parsed.recentTranscript?.map((line) => ({
+      ...line,
+      ...(line.provenance !== undefined
+        ? {
+            provenance: normalizeMeetingObservationProvenance(line.provenance, {
+              observer: adapterId,
+              observedAt: line.at,
+              speaker: line.speaker,
+            }),
+          }
+        : {}),
+    })),
     audioInputRouted: parsed.audioInputRouted,
     audioInputDeviceLabel: parsed.audioInputDeviceLabel,
     audioInputRouteError: parsed.audioInputRouteError,
@@ -236,6 +274,7 @@ function parseMeetingLeaveResult(result: unknown): MeetingBrowserLeaveStep {
 
 function parseMeetingTranscript<Transcript extends MeetingTranscriptSnapshot>(
   result: unknown,
+  adapterId: string,
   options: MeetingPlatformAdapterOptions<
     never,
     string,
@@ -260,6 +299,7 @@ function parseMeetingTranscript<Transcript extends MeetingTranscriptSnapshot>(
     droppedLines?: unknown;
     epoch?: unknown;
     lines?: unknown;
+    pendingLines?: unknown;
     sessionMatched?: unknown;
     urlMatched?: unknown;
   };
@@ -267,28 +307,42 @@ function parseMeetingTranscript<Transcript extends MeetingTranscriptSnapshot>(
     typeof payload.droppedLines === "number" && Number.isSafeInteger(payload.droppedLines)
       ? Math.max(0, payload.droppedLines)
       : 0;
-  const lines = Array.isArray(payload.lines)
-    ? payload.lines.flatMap((value) => {
-        if (!value || typeof value !== "object") {
-          return [];
+  const parseLines = (values: unknown): MeetingTranscriptLine[] =>
+    meetingCaptionLinesSchema
+      .catch([])
+      .parse(values)
+      .map((line) => {
+        const source = meetingCaptionSourceSchema.safeParse(line.source);
+        const identity =
+          source.success && source.data.epoch === payload.epoch ? source.data : undefined;
+        // Legacy rows keep their shape; observation facts do not grant action authority.
+        const transcriptLine: MeetingTranscriptLine = { text: line.text };
+        if (line.at !== undefined) {
+          transcriptLine.at = line.at;
         }
-        const line = value as { at?: unknown; speaker?: unknown; text?: unknown };
-        if (typeof line.text !== "string" || !line.text.trim()) {
-          return [];
+        if (line.speaker !== undefined) {
+          transcriptLine.speaker = line.speaker;
         }
-        return [
-          {
-            ...(typeof line.at === "string" ? { at: line.at } : {}),
-            ...(typeof line.speaker === "string" ? { speaker: line.speaker } : {}),
-            text: line.text,
-          },
-        ];
-      })
-    : [];
+        if (line.provenance !== undefined || line.source !== undefined) {
+          transcriptLine.provenance = normalizeMeetingObservationProvenance(line.provenance, {
+            observer: adapterId,
+            epoch: payload.epoch,
+            observedAt: line.at,
+            speaker: line.speaker,
+          });
+        }
+        if (identity) {
+          transcriptLine.source = identity;
+        }
+        return transcriptLine;
+      });
   return {
     droppedLines,
     ...(typeof payload.epoch === "string" ? { epoch: payload.epoch } : {}),
-    lines,
+    lines: parseLines(payload.lines),
+    ...(Array.isArray(payload.pendingLines)
+      ? { pendingLines: parseLines(payload.pendingLines) }
+      : {}),
     ...(typeof payload.urlMatched === "boolean" ? { urlMatched: payload.urlMatched } : {}),
     ...(typeof payload.sessionMatched === "boolean"
       ? { sessionMatched: payload.sessionMatched }
@@ -332,7 +386,7 @@ function createMeetingPlatformAdapter<
     ...platform,
     browser: {
       ...browser,
-      parseStatus: (result) => parseMeetingBrowserStatus(result, parsing),
+      parseStatus: (result) => parseMeetingBrowserStatus(result, options.id, parsing),
       classifyManualAction: (health) => {
         if (!health.manualAction) {
           return undefined;
@@ -346,7 +400,7 @@ function createMeetingPlatformAdapter<
       parseLeaveResult: parseMeetingLeaveResult,
       captions: {
         ...browser.captions,
-        parseTranscript: (result) => parseMeetingTranscript(result, parsing),
+        parseTranscript: (result) => parseMeetingTranscript(result, options.id, parsing),
       },
       permissionNotes:
         browser.permissionNotes ??
@@ -383,6 +437,7 @@ function createMeetingPlatformAdapter<
 export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
   createChromeTransport: createMeetingChromeTransport,
+  createChromeTransportWithExternalAudio: createMeetingChromeTransportWithExternalAudio,
   createChromeRuntimeBindings: createMeetingChromeRuntimeBindings,
   createPluginChromeTransport: createMeetingPluginChromeTransport,
   createPluginConfigSchema: createMeetingPluginConfigSchema,

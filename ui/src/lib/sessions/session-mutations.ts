@@ -4,258 +4,83 @@ import type {
   SessionsAssignOwnerResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import {
   requestSessionCreate,
   resolveSessionCreateParams,
   type SessionCreateParams,
-  type SessionCreateOutcome,
 } from "./create.ts";
 import type { SessionPatch, SessionPatchOptions, SessionPatchResult } from "./patch.ts";
-import { createSessionArchiveState } from "./session-archive-state.ts";
+import { projectSessionResultRows } from "./reconcile.ts";
+import { createSessionArchiveState, projectSessionArchiveFields } from "./session-archive-state.ts";
 import type {
   SessionCapability,
-  SessionConnectionOwner,
-  SessionConnectionScope,
   SessionCreateReconciliation,
+  SessionRefreshOutcome,
   SessionResetOptions,
   SessionResetResult,
-  SessionState,
 } from "./session-capability.ts";
-import { areUiSessionKeysEquivalent } from "./session-key.ts";
+import { createSessionModelOverrides } from "./session-model-overrides.ts";
+import {
+  createSessionMutationRefresh,
+  isRejectedSessionMutation,
+} from "./session-mutation-refresh.ts";
+import type { SessionMutationsHost } from "./session-mutations-host.ts";
+import { projectSessionPatchRowFields } from "./session-patch-row-facts.ts";
+import {
+  capturePendingRowReplacement,
+  createOptimisticRowField,
+  createOptimisticPinPatches,
+  createOptimisticSettingsPatches,
+  resolvePendingConversation,
+  resolvePendingRowTarget,
+  resolvePredecessorRowTarget,
+  pendingRowIdentity,
+  type SessionPinFields,
+} from "./session-pending-rows.ts";
 import type { SessionPermissionClaim } from "./session-permission-projection.ts";
-import { requestSessionPatch, requestSessionReset } from "./session-requests.ts";
-import type { SessionRefreshOutcome } from "./session-roster-refresh.ts";
-
-/** The Gateway's single pin fact: `pinned` is a projection of `pinnedAt`. */
-type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
-/** `canonical` is what the Gateway confirmed; `previous` is the value the intent replaced. */
-type PendingRowPatch<T> = { token: symbol; previous: T; next: T; canonical: T };
-
-type SessionMutationsHost = {
-  connection: SessionConnectionOwner;
-  readState: () => SessionState;
-  publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
-  refreshReplacement: SessionCapability["refreshReplacement"];
-  refreshReplacementResult: (
-    agentId?: string | null,
-    isErrorCurrent?: () => boolean,
-  ) => Promise<SessionRefreshOutcome>;
-  publishedRow: (key: string) => GatewaySessionRow | undefined;
-  redecorateLists: () => void;
-  notifyCreated: (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => void;
-  clearThink: (key: string, agentId?: string | null) => void;
-  claimPermissionProjection: (
-    key: string,
-    agentId?: string | null,
-    expectedSessionId?: string,
-  ) => SessionPermissionClaim;
-  retirePullRequestSummary: (key: string) => void;
-};
-
-function createOptimisticRowPatches<T>(
-  host: Pick<SessionMutationsHost, "publishedRow" | "redecorateLists">,
-  fields: {
-    read: (row: GatewaySessionRow | undefined) => T;
-    write: (row: GatewaySessionRow, next: T) => GatewaySessionRow;
-  },
-) {
-  const pending = new Map<string, PendingRowPatch<T>>();
-  return {
-    start(key: string, next: T): symbol {
-      const token = Symbol("session-row-patch");
-      const current = pending.get(key);
-      pending.set(key, {
-        token,
-        previous: current ? current.previous : fields.read(host.publishedRow(key)),
-        next,
-        canonical: next,
-      });
-      host.redecorateLists();
-      return token;
-    },
-    confirm(key: string, token: symbol, confirmed: T): void {
-      const current = pending.get(key);
-      if (!current) {
-        return;
-      }
-      if (current.token === token) {
-        current.canonical = confirmed;
-      } else {
-        current.previous = confirmed;
-      }
-    },
-    settle(key: string, token: symbol, completed: boolean, connectionCurrent: boolean): void {
-      const current = pending.get(key);
-      if (!current || current.token !== token) {
-        return;
-      }
-      if (connectionCurrent) {
-        // Decoration writes the intent into the published snapshot, so releasing
-        // it cannot restore a value it overwrote. Project the settled truth once
-        // more first, or a canonical row that disagrees with the optimistic
-        // value stays hidden until an unrelated update arrives.
-        current.next = completed ? current.canonical : current.previous;
-        host.redecorateLists();
-      }
-      pending.delete(key);
-    },
-    apply(result: SessionsListResult | null): SessionsListResult | null {
-      if (!result || pending.size === 0) {
-        return result;
-      }
-      let changed = false;
-      const sessions = result.sessions.map((row) => {
-        const patch = pending.get(row.key);
-        if (!patch) {
-          return row;
-        }
-        const next = fields.write(row, patch.next);
-        changed ||= next !== row;
-        return next;
-      });
-      return changed ? { ...result, sessions } : result;
-    },
-    clear: () => pending.clear(),
-  };
-}
+import {
+  requestSessionPatch,
+  requestSessionPatchMany,
+  requestSessionReset,
+} from "./session-requests.ts";
+import { createSessionRowLocalPatch } from "./session-row-local-patch.ts";
 
 export function createSessionMutations(host: SessionMutationsHost) {
-  const pendingModelPatches = new Map<
-    string,
-    {
-      token: symbol;
-      previous: { value: string | null | undefined; created: boolean };
-      revision: number;
-    }
-  >();
-  const archiveState = createSessionArchiveState(host.publishedRow, () =>
-    host.publish({ ...host.readState() }),
+  const modelOverrides = createSessionModelOverrides(host);
+  const archiveState = createSessionArchiveState(
+    host.publishedRow,
+    () => host.publish({ ...host.readState() }),
+    host.archiveFields,
   );
   const preparedWorkSessionKeys = new Set<string>();
-  const pendingCreatedModelOverrides = new Set<string>();
+  const patchRowLocal = createSessionRowLocalPatch(host);
 
-  const setModelOverride = (key: string, value: string | null | undefined, created = false) => {
-    const normalizedKey = key.trim();
-    if (!normalizedKey) {
-      return;
+  const optimisticPins = createOptimisticPinPatches(host);
+  const optimisticCategories = createOptimisticRowField(host, "category");
+  const optimisticUnread = createOptimisticRowField(host, "unread");
+  const settingsPatches = createOptimisticSettingsPatches(host);
+  const rowPatches = [
+    optimisticPins,
+    optimisticUnread,
+    optimisticCategories,
+    ...settingsPatches.owners,
+  ];
+  const hasPendingRowPatches = () => rowPatches.some((owner) => owner.hasPending());
+  const applyPendingRow = (
+    row: GatewaySessionRow,
+    sourceAgentId?: string | null,
+  ): GatewaySessionRow => {
+    if (!hasPendingRowPatches()) {
+      return row;
     }
-    // Register before publishing: a synchronous subscriber may claim the same value.
-    if (created) {
-      pendingCreatedModelOverrides.add(normalizedKey);
-    } else {
-      pendingCreatedModelOverrides.delete(normalizedKey);
-    }
-    // Equal-value writes still transfer ownership while a patch is pending.
-    const pendingModelPatch = pendingModelPatches.get(normalizedKey);
-    if (pendingModelPatch) {
-      pendingModelPatch.revision += 1;
-    }
-    const state = host.readState();
-    const modelOverrides = { ...state.modelOverrides };
-    if (value === undefined) {
-      if (!Object.hasOwn(state.modelOverrides, normalizedKey)) {
-        return;
-      }
-      delete modelOverrides[normalizedKey];
-    } else {
-      const normalizedValue = value === null ? null : value.trim();
-      if (
-        modelOverrides[normalizedKey] === normalizedValue &&
-        Object.hasOwn(modelOverrides, normalizedKey)
-      ) {
-        return;
-      }
-      modelOverrides[normalizedKey] = normalizedValue;
-    }
-    host.publish({ ...state, modelOverrides });
+    // Field projections preserve identity and publish only after the row is complete.
+    const identity = pendingRowIdentity(host.snapshot(), row, sourceAgentId);
+    return rowPatches.reduce((current, owner) => owner.applyRow(current, identity), row);
   };
 
-  const patchRowLocal = (
-    key: string,
-    patch: Partial<GatewaySessionRow>,
-    expectedSessionId?: string,
-  ) => {
-    const state = host.readState();
-    const normalizedKey = key.trim();
-    if (!state.result || !normalizedKey) {
-      return;
-    }
-    let changed = false;
-    const sessions = state.result.sessions.map((row) => {
-      if (
-        !areUiSessionKeysEquivalent(row.key, normalizedKey) ||
-        (expectedSessionId !== undefined && row.sessionId !== expectedSessionId)
-      ) {
-        return row;
-      }
-      changed = true;
-      return { ...row, ...patch };
-    });
-    if (changed) {
-      host.publish({ ...state, result: { ...state.result, sessions } });
-    }
-  };
-
-  // The Gateway derives `pinned` from `pinnedAt` and both row comparators order
-  // by `pinnedAt` inside each pin group, so an optimistic write has to move the
-  // pair or the row lands in a slot the Gateway would never produce.
-  const pinRowFields = (pinned: boolean, pinnedAt: number | undefined): SessionPinFields =>
-    pinned
-      ? { pinned: true, pinnedAt: pinnedAt ?? Date.now() }
-      : { pinned: false, pinnedAt: undefined };
-
-  const optimisticPins = createOptimisticRowPatches(host, {
-    read: (row) => pinRowFields(row?.pinned === true, row?.pinnedAt),
-    // Once the Gateway agrees on `pinned`, its own timestamp wins again.
-    write: (row, next) => ((row.pinned === true) === next.pinned ? row : { ...row, ...next }),
-  });
-  const optimisticUnread = createOptimisticRowPatches(host, {
-    read: (row) => row?.unread,
-    write: (row, unread) => (row.unread === unread ? row : { ...row, unread }),
-  });
-
-  const retireModelOverride = (key: string) => {
-    const normalizedKey = key.trim();
-    if (!normalizedKey) {
-      return;
-    }
-    pendingModelPatches.delete(normalizedKey);
-    setModelOverride(normalizedKey, undefined);
-  };
-
-  const reconcileConfirmedPreviousConnection = async (
-    scope: SessionConnectionScope,
-    agentId?: string | null,
-  ): Promise<boolean> => {
-    const replacement = host.connection.capture();
-    if (!replacement || replacement.client !== scope.client) {
-      return false;
-    }
-    let refreshError: string | undefined;
-    try {
-      await host.refreshReplacement(agentId);
-      refreshError = host.readState().error ?? undefined;
-    } catch (error) {
-      refreshError = formatUiError(error);
-    }
-    if (!host.connection.isCurrent(replacement)) {
-      return false;
-    }
-    host.publish(
-      {
-        ...host.readState(),
-        error: refreshError
-          ? t("connection.sessionOperationCompletedPreviousConnectionWithRefreshError", {
-              error: refreshError,
-            })
-          : t("connection.sessionOperationCompletedPreviousConnection"),
-      },
-      "operation",
-    );
-    return true;
-  };
+  const { reconcileConfirmedPreviousConnection, refreshCategory, reportUncertainCategory } =
+    createSessionMutationRefresh(host);
 
   const createResult = async (
     params: SessionCreateParams = {},
@@ -281,11 +106,11 @@ export function createSessionMutations(host: SessionMutationsHost) {
         preparedWorkSessionKeys.add(result.key.trim());
       }
       if (requestParams.model?.trim()) {
-        setModelOverride(result.key, requestParams.model, true);
+        modelOverrides.set(result.key, requestParams.model, true);
       } else if (preparedWorkSessionKeys.has(result.key)) {
         host.publish({ ...host.readState() });
       }
-      const reconciliation = host.refreshReplacement(params.agentId);
+      const reconciliation = host.reconcileMutation(params.agentId);
       if (options.reconciliation === "background") {
         void reconciliation.catch((error: unknown) => {
           if (host.connection.isCurrent(scope)) {
@@ -322,155 +147,153 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return null;
     }
     const managesModelOverride = Object.hasOwn(patchParams, "model");
+    const canDispatchSettings = () =>
+      !settingsTargetWasReplaced() && options.canDispatch?.() !== false;
+    const startSettingsPatch = settingsPatches.prepare(patchParams, canDispatchSettings);
+    const hasSettingsPatch = managesModelOverride || startSettingsPatch !== null;
     const normalizedKey = key.trim();
-    const archivedPresentationRow =
-      patchParams.archived === true ? host.publishedRow(normalizedKey) : undefined;
-    let modelPatchStarted = false;
-    let modelPatchRevision = 0;
-    const modelPatchToken = Symbol("session-model-patch");
+    const patchSnapshot = host.snapshot();
+    const pendingConversation =
+      hasSettingsPatch ||
+      patchParams.category !== undefined ||
+      patchParams.pinned !== undefined ||
+      patchParams.unread === false ||
+      patchParams.archived !== undefined ||
+      patchParams.boardFace !== undefined ||
+      patchParams.boardPresentation !== undefined
+        ? resolvePendingConversation(patchSnapshot, normalizedKey, options.agentId)
+        : null;
+    let pendingTarget = resolvePendingRowTarget(
+      host,
+      patchSnapshot,
+      pendingConversation,
+      options.expectedSessionId,
+    );
+    const managesThinkingClaim = Object.hasOwn(patchParams, "thinkingLevel");
+    let resumeThinkingClaim = managesThinkingClaim
+      ? host.suspendThink(normalizedKey, options.agentId)
+      : undefined;
+    const settingsTargetWasReplaced = capturePendingRowReplacement(
+      host,
+      patchSnapshot,
+      hasSettingsPatch ? pendingConversation : null,
+      () => pendingTarget,
+    );
+    const settingsPatchTarget = pendingTarget ?? pendingConversation;
+    const settingsPatchClaims = [
+      [settingsPatchTarget, startSettingsPatch?.(settingsPatchTarget) ?? []] as const,
+    ];
+    let rowPatchConfirmed = false;
+    let writeConfirmed = false;
     let permissionProjection: SessionPermissionClaim | undefined;
     const ownsModelOverride = () => options.ownsModelOverride?.() !== false;
-    const startModelPatch = () => {
-      if (!managesModelOverride || modelPatchStarted || !ownsModelOverride()) {
-        return;
-      }
-      const pendingModelPatch = pendingModelPatches.get(normalizedKey);
-      modelPatchStarted = true;
-      pendingModelPatches.set(normalizedKey, {
-        token: modelPatchToken,
-        previous: pendingModelPatch?.previous ?? {
-          value: host.readState().modelOverrides[normalizedKey],
-          created: pendingCreatedModelOverrides.has(normalizedKey),
-        },
-        revision: 0,
-      });
-      setModelOverride(key, patchParams.model);
-      modelPatchRevision = pendingModelPatches.get(normalizedKey)?.revision ?? 0;
-    };
+    const modelPatch = modelOverrides.preparePatch(key, patchParams, options, scope);
     const nextPinned = patchParams.pinned === true;
     let pinPatchToken: symbol | null = null;
-    // Sidebar rows read `pinned` straight off the snapshot, so a pin/unpin has
-    // no visible outcome until this flip; the Gateway patch and its list
-    // refresh confirm it afterwards.
-    const startPinPatch = () => {
-      if (patchParams.pinned === undefined || pinPatchToken) {
-        return;
-      }
-      const row = host.publishedRow(normalizedKey);
-      pinPatchToken = optimisticPins.start(normalizedKey, pinRowFields(nextPinned, row?.pinnedAt));
-    };
     let unreadPatchToken: symbol | null = null;
-    const startUnreadPatch = () => {
+    let categoryPatchToken: symbol | null = null;
+    const startOptimisticPatch = () => {
+      if (patchParams.category !== undefined && !categoryPatchToken && pendingTarget) {
+        categoryPatchToken = optimisticCategories.prepare(
+          () => patchParams.category?.trim() || undefined,
+        )(pendingTarget);
+      }
+      modelPatch.start();
+      // Sidebar rows read `pinned` straight off the snapshot, so a pin/unpin has
+      // no visible outcome until this flip; the Gateway patch and its list
+      // refresh confirm it afterwards.
+      if (patchParams.pinned !== undefined && !pinPatchToken && pendingTarget) {
+        pinPatchToken = optimisticPins.start(pendingTarget, nextPinned);
+      }
       // Mark-unread needs the Gateway-issued marker before an active pane can
       // distinguish the explicit reminder from new activity. Reads are safe
       // to project immediately because their observed marker remains attached.
-      if (patchParams.unread !== false || unreadPatchToken) {
-        return;
+      if (patchParams.unread === false && !unreadPatchToken && pendingTarget) {
+        unreadPatchToken = optimisticUnread.prepare(() => false)(pendingTarget);
       }
-      unreadPatchToken = optimisticUnread.start(normalizedKey, false);
-    };
-    const startOptimisticPatch = () => {
-      startModelPatch();
-      startPinPatch();
-      startUnreadPatch();
     };
     if (!options.waitFor) {
       startOptimisticPatch();
     }
-    const settleModelOverride = (completed: boolean) => {
-      const pendingModelPatch = pendingModelPatches.get(normalizedKey);
-      if (modelPatchStarted && pendingModelPatch?.token === modelPatchToken) {
-        pendingModelPatches.delete(normalizedKey);
-        // Success and rollback may settle only this operation's untouched claim.
-        if (pendingModelPatch.revision !== modelPatchRevision) {
-          return;
+    const settleOptimisticPatch = (completed: boolean) => {
+      modelPatch.settle(completed);
+      if (managesThinkingClaim) {
+        if (completed) {
+          host.clearThink(normalizedKey, options.agentId);
+        } else {
+          resumeThinkingClaim?.();
         }
-        if (host.connection.isCurrent(scope) && ownsModelOverride()) {
-          if (completed && !options.deferListRefresh) {
-            // The refreshed row already carries the Gateway-confirmed selection.
-            // Keeping an overlay would hide subsequent external model changes.
-            setModelOverride(key, undefined);
-          } else {
-            const previous = pendingModelPatch.previous;
-            // A failed patch restores a create preview only until its canonical row arrives.
-            const created =
-              !completed &&
-              previous.created &&
-              host.publishedRow(normalizedKey)?.modelOverrideSource === undefined;
-            setModelOverride(
-              key,
-              completed
-                ? patchParams.model
-                : previous.created && !created
-                  ? undefined
-                  : previous.value,
-              created,
+        resumeThinkingClaim = undefined;
+      }
+      for (const [target, tokens] of [
+        [
+          pendingTarget,
+          [
+            [optimisticPins, pinPatchToken],
+            [optimisticUnread, unreadPatchToken],
+            [optimisticCategories, categoryPatchToken],
+          ],
+        ],
+        ...settingsPatchClaims,
+      ] as const) {
+        if (!target) {
+          continue;
+        }
+        for (const [owner, token] of tokens) {
+          if (token) {
+            owner.settle(
+              target,
+              token,
+              completed && rowPatchConfirmed,
+              host.connection.isCurrent(scope),
             );
           }
-        } else {
-          // The shared key now belongs to another agent/connection. Remove only
-          // this operation's untouched optimistic value; preserve newer claims.
-          setModelOverride(key, undefined);
         }
       }
     };
-    // The Gateway has committed by the time this runs, so a newer intent's
-    // rollback baseline moves here rather than after the list refresh, which
-    // can fail and would leave that intent rolling back to a pre-patch value.
-    // The Gateway stamps `pinnedAt` with its own clock, so the baseline is a
-    // round trip off — accurate enough to order a row it just pinned.
-    const confirmPinPatch = () => {
-      if (pinPatchToken) {
-        optimisticPins.confirm(normalizedKey, pinPatchToken, pinRowFields(nextPinned, undefined));
+    const adoptPredecessorReceipt = () => {
+      if (!host.connection.isCurrent(scope) || !hasSettingsPatch) {
+        return;
+      }
+      const target = resolvePredecessorRowTarget(
+        patchSnapshot,
+        pendingConversation,
+        pendingTarget,
+        options,
+      );
+      if (target) {
+        pendingTarget = target;
+        if (canDispatchSettings()) {
+          // The ACK can identify a row before any roster can bind its preview.
+          settingsPatchClaims.push([pendingTarget, startSettingsPatch?.(pendingTarget) ?? []]);
+        }
       }
     };
-    const settlePinPatch = (completed: boolean) => {
-      if (pinPatchToken) {
-        optimisticPins.settle(
-          normalizedKey,
-          pinPatchToken,
-          completed,
-          host.connection.isCurrent(scope),
-        );
-      }
-    };
-    // A conditional read acknowledgement settles successfully without applying
-    // when a newer manual mark-unread owns the row: the Gateway returns that
-    // entry with its marker intact and broadcasts no change. A present marker
-    // is unread by definition, so it is the value this intent settles to.
-    const confirmUnreadPatch = (entry: SessionPatchResult["entry"] | undefined) => {
-      if (unreadPatchToken) {
-        optimisticUnread.confirm(
-          normalizedKey,
-          unreadPatchToken,
-          entry?.markedUnreadAt !== undefined,
-        );
-      }
-    };
-    const settleUnreadPatch = (completed: boolean) => {
-      if (unreadPatchToken) {
-        optimisticUnread.settle(
-          normalizedKey,
-          unreadPatchToken,
-          completed,
-          host.connection.isCurrent(scope),
-        );
-      }
-    };
-    const settleOptimisticPatch = (completed: boolean) => {
-      settleModelOverride(completed);
-      settlePinPatch(completed);
-      settleUnreadPatch(completed);
-    };
+    let unsubscribeReceipt: (() => void) | undefined;
     try {
       if (options.waitFor) {
+        unsubscribeReceipt = options.predecessorReceipt?.subscribe(adoptPredecessorReceipt);
+        adoptPredecessorReceipt();
         await options.waitFor;
         if (!host.connection.isCurrent(scope)) {
           settleOptimisticPatch(false);
           return null;
         }
+        adoptPredecessorReceipt();
+        if (settingsTargetWasReplaced()) {
+          settleOptimisticPatch(false);
+          return null;
+        }
+      }
+      if (options.canDispatch?.() === false) {
+        settleOptimisticPatch(false);
+        return null;
       }
       startOptimisticPatch();
+      if (!host.connection.isCurrent(scope) || !canDispatchSettings()) {
+        settleOptimisticPatch(false);
+        return null;
+      }
       if (Object.hasOwn(patchParams, "permissionMode")) {
         permissionProjection = host.claimPermissionProjection(
           key,
@@ -478,13 +301,38 @@ export function createSessionMutations(host: SessionMutationsHost) {
           options.expectedSessionId,
         );
       }
-      const result = await requestSessionPatch(scope.client, key, patchParams, options);
+      const confirmFields = pendingTarget ? host.capturePatchFields(pendingTarget) : undefined;
+      const result = await requestSessionPatch(
+        scope.client,
+        key,
+        patchParams,
+        hasSettingsPatch && pendingTarget
+          ? { ...options, expectedSessionId: pendingTarget.sessionId }
+          : options,
+      );
+      writeConfirmed = true;
       if (!host.connection.isCurrent(scope)) {
         settleOptimisticPatch(false);
         return (await reconcileConfirmedPreviousConnection(scope, options.agentId)) ? result : null;
       }
-      if (Object.hasOwn(patchParams, "thinkingLevel")) {
-        host.clearThink(normalizedKey, options.agentId);
+      options.onConfirmed?.(result);
+      rowPatchConfirmed =
+        pendingTarget !== null &&
+        result.entry.sessionId === pendingTarget.sessionId &&
+        resolvePendingConversation(patchSnapshot, result.key, pendingTarget.agentId)?.identity ===
+          pendingTarget.identity;
+      if (pendingTarget && rowPatchConfirmed && confirmFields) {
+        const readCutoff = host.readRevision();
+        for (const fields of projectSessionPatchRowFields(patchParams, result)) {
+          confirmFields({
+            key: pendingTarget.key,
+            agentId: pendingTarget.agentId,
+            sessionId: pendingTarget.sessionId,
+            updatedAt: result.entry.updatedAt ?? null,
+            readCutoff,
+            fields,
+          });
+        }
       }
       if (permissionProjection) {
         const confirmation = permissionProjection.confirm({
@@ -498,7 +346,8 @@ export function createSessionMutations(host: SessionMutationsHost) {
         }
         // The successful RPC is the first durable acknowledgement; events may
         // drop and the follow-up list may fail, so record its fenced fact now.
-        if (confirmation === "confirmed") {
+        const confirmedTarget = resolvePendingConversation(patchSnapshot, key, options.agentId);
+        if (confirmation === "confirmed" && confirmedTarget && result.entry?.sessionId) {
           patchRowLocal(
             key,
             {
@@ -507,58 +356,33 @@ export function createSessionMutations(host: SessionMutationsHost) {
                 ? {}
                 : { updatedAt: result.entry.updatedAt }),
             },
-            result.entry?.sessionId,
+            { agentId: confirmedTarget.agentId, sessionId: result.entry.sessionId },
           );
         }
       }
-      if (archivedPresentationRow) {
-        const archivedAt = result.entry?.archivedAt ?? Date.now();
-        const archivedSessionId = result.entry?.sessionId ?? archivedPresentationRow.sessionId;
-        archiveState.observe(normalizedKey, true, {
-          ...archivedPresentationRow,
-          archivedAt,
-          archiveReason: result.entry?.archiveReason,
-          sessionId: archivedSessionId,
-        });
-        const state = host.readState();
-        if (state.result) {
-          const archivedRow = {
-            ...archivedPresentationRow,
-            archived: true,
-            archivedAt,
-            archiveReason: result.entry?.archiveReason,
-            updatedAt: result.entry?.updatedAt ?? archivedPresentationRow.updatedAt,
-            pinned: false,
-            pinnedAt: undefined,
-          };
-          const existingIndex = state.result.sessions.findIndex((row) => row.key === normalizedKey);
-          const sessions = [...state.result.sessions];
-          if (existingIndex === -1) {
-            sessions.push(archivedRow);
-          } else {
-            sessions[existingIndex] = archivedRow;
-          }
-          host.publish({
-            ...state,
-            result: { ...state.result, count: sessions.length, sessions },
-          });
+      // Placement is settled by its durable receipt, not a roster round trip.
+      // The existing refresh owner still reconciles membership in the background.
+      if (
+        patchParams.category !== undefined &&
+        Object.keys(patchParams).every((name) => name === "category" || name === "pinned")
+      ) {
+        settleOptimisticPatch(true);
+        if (!options.deferListRefresh) {
+          refreshCategory(scope, options.agentId);
         }
-      } else if (patchParams.archived === false) {
-        archiveState.clear(normalizedKey);
+        return result;
       }
-      confirmPinPatch();
-      confirmUnreadPatch(result?.entry);
       // Commit and list reconciliation are separate outcomes. Callers must not
       // turn a failed refresh into an apparent rollback of the committed patch.
       let refreshOutcome: SessionRefreshOutcome = { status: "refreshed" };
       if (!options.deferListRefresh) {
         if (Object.hasOwn(patchParams, "permissionMode")) {
-          refreshOutcome = await host.refreshReplacementResult(
+          refreshOutcome = await host.reconcileMutation(
             options.agentId,
             permissionProjection?.isCurrent,
           );
         } else {
-          await host.refreshReplacement(options.agentId);
+          await host.reconcileMutation(options.agentId);
         }
         if (!host.connection.isCurrent(scope)) {
           settleOptimisticPatch(false);
@@ -576,15 +400,98 @@ export function createSessionMutations(host: SessionMutationsHost) {
         ? { ...result, listRefreshError: refreshOutcome.error }
         : result;
     } catch (error) {
-      settleOptimisticPatch(false);
+      // Transport loss is not evidence of rollback. Release the tentative value
+      // without restoring its predecessor, then reconcile the original owner.
+      const uncertainCategory =
+        patchParams.category !== undefined && !writeConfirmed && !isRejectedSessionMutation(error);
+      if (uncertainCategory && categoryPatchToken && pendingTarget) {
+        optimisticCategories.settle(pendingTarget, categoryPatchToken, false, false);
+        categoryPatchToken = null;
+        if (pinPatchToken) {
+          optimisticPins.settle(pendingTarget, pinPatchToken, false, false);
+          pinPatchToken = null;
+        }
+      }
+      try {
+        if (
+          !writeConfirmed &&
+          host.connection.isCurrent(scope) &&
+          !settingsTargetWasReplaced() &&
+          settingsPatchClaims.some(
+            ([target, tokens]) =>
+              target && tokens.some(([owner, token]) => token && owner.owns(target, token)),
+          )
+        ) {
+          options.onRejected?.(error);
+        }
+      } finally {
+        settleOptimisticPatch(writeConfirmed);
+      }
       if (!host.connection.isCurrent(scope)) {
         return null;
       }
-      if (ownsModelOverride()) {
+      if (uncertainCategory) {
+        throw reportUncertainCategory(error, options.agentId);
+      }
+      if (ownsModelOverride() && !settingsTargetWasReplaced()) {
         host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
       }
       throw error;
+    } finally {
+      unsubscribeReceipt?.();
     }
+  };
+
+  const patchMany: SessionCapability["patchMany"] = async (targets, patchParams) => {
+    const scope = host.connection.capture();
+    if (!scope) {
+      return null;
+    }
+    const { archived, pinned } = patchParams;
+    // Batch outcomes confirm pin intent without returning the Gateway's pin timestamp.
+    const pin: SessionPinFields | { pinned: true } | undefined =
+      pinned === true
+        ? { pinned: true }
+        : pinned === false
+          ? { pinned: false, pinnedAt: undefined }
+          : undefined;
+    const fields =
+      archived === undefined
+        ? pin
+        : { ...projectSessionArchiveFields(archived), ...(archived ? undefined : pin) };
+    const snapshot = host.snapshot();
+    const confirmations = fields
+      ? targets.map((target) => {
+          const identity = resolvePendingConversation(snapshot, target.key, target.agentId);
+          const sessionId = target.expectedSessionId?.trim();
+          if (!identity || !sessionId) {
+            return null;
+          }
+          const owned = { ...identity, sessionId };
+          return { owned, confirm: host.capturePatchFields(owned) };
+        })
+      : [];
+    const result = await requestSessionPatchMany(scope.client, { targets, patch: patchParams });
+    if (!host.connection.isCurrent(scope)) {
+      return result;
+    }
+    if (fields) {
+      const readCutoff = host.readRevision();
+      result.outcomes.forEach((outcome, index) => {
+        const confirmation = confirmations[index];
+        if (outcome.ok && confirmation) {
+          confirmation.confirm({
+            key: confirmation.owned.key,
+            agentId: confirmation.owned.agentId,
+            sessionId: confirmation.owned.sessionId,
+            updatedAt: null,
+            readCutoff,
+            fields,
+          });
+        }
+      });
+    }
+    return result;
   };
 
   const reset = async (
@@ -616,6 +523,18 @@ export function createSessionMutations(host: SessionMutationsHost) {
     if (!scope) {
       return null;
     }
+    const snapshot = host.snapshot();
+    const conversation = resolvePendingConversation(snapshot, key, options.agentId);
+    const row =
+      conversation &&
+      host.findRow(
+        (candidate, agentId) =>
+          pendingRowIdentity(snapshot, candidate, agentId) === conversation.identity,
+      );
+    const target =
+      conversation && row?.sessionId
+        ? { agentId: conversation.agentId, sessionId: row.sessionId }
+        : undefined;
     try {
       const result = await scope.client.request<SessionsAssignOwnerResult>("sessions.assignOwner", {
         key,
@@ -625,7 +544,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!host.connection.isCurrent(scope)) {
         return null;
       }
-      patchRowLocal(result.key, { owner: result.owner });
+      if (target) {
+        patchRowLocal(result.key, { owner: result.owner }, target);
+      }
       return result.owner;
     } catch (error) {
       if (host.connection.isCurrent(scope)) {
@@ -633,6 +554,15 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       return null;
     }
+  };
+
+  const dispose = () => {
+    modelOverrides.clear();
+    for (const owner of rowPatches) {
+      owner.clear();
+    }
+    archiveState.clearAll();
+    preparedWorkSessionKeys.clear();
   };
 
   return {
@@ -643,55 +573,71 @@ export function createSessionMutations(host: SessionMutationsHost) {
       host.retirePullRequestSummary(key);
       archiveState.clear(key);
       preparedWorkSessionKeys.delete(key.trim());
-      setModelOverride(key, undefined);
+      modelOverrides.set(key, undefined);
     },
     patch,
+    settingsPreview(this: void, key: string, agentId?: string) {
+      const conversation = resolvePendingConversation(host.snapshot(), key, agentId);
+      return conversation ? settingsPatches.read(conversation.identity) : undefined;
+    },
+    patchMany,
     assignOwner,
     patchRowLocal,
     /**
      * Re-asserts in-flight row intents over Gateway events and list refreshes,
      * which carry the pre-mutation value until the patch lands.
      */
-    applyPendingRows(result: SessionsListResult | null): SessionsListResult | null {
-      return optimisticUnread.apply(optimisticPins.apply(result));
+    applyPendingRow,
+    observePendingFields(
+      row: GatewaySessionRow,
+      names: readonly string[],
+      sourceAgentId?: string | null,
+    ) {
+      if (!hasPendingRowPatches()) {
+        return;
+      }
+      const identity = pendingRowIdentity(host.snapshot(), row, sourceAgentId);
+      for (const owner of rowPatches) {
+        owner.observe(row, names, identity);
+      }
+    },
+    applyPendingRows(
+      result: SessionsListResult | null,
+      sourceAgentId?: string | null,
+    ): SessionsListResult | null {
+      if (!result || !hasPendingRowPatches()) {
+        return result;
+      }
+      return projectSessionResultRows(
+        result,
+        result.sessions.map((row) => applyPendingRow(row, sourceAgentId)),
+      );
     },
     applyConfirmedArchives: archiveState.apply,
+    applyConfirmedArchiveRow: archiveState.applyRow,
     observeArchiveState: archiveState.observe,
+    confirmArchiveState: archiveState.confirm,
     reset,
-    retireModelOverride,
+    retireModelOverride: modelOverrides.retire,
     archiveVisibility: archiveState.visibility,
-    setArchivePending: archiveState.setPending,
+    beginArchive: archiveState.beginPending,
     isPreparedWorkSession: (key: string) => preparedWorkSessionKeys.has(key.trim()),
     settlePrepared(result: SessionsListResult | null) {
       for (const row of result?.sessions ?? []) {
-        if (row.modelOverrideSource !== undefined && pendingCreatedModelOverrides.has(row.key)) {
-          setModelOverride(row.key, undefined);
-        }
+        modelOverrides.settleCreated(row);
         if (row.worktree || row.execNode) {
           preparedWorkSessionKeys.delete(row.key);
         }
       }
     },
     retireConnection() {
-      pendingCreatedModelOverrides.clear();
-      pendingModelPatches.clear();
+      dispose();
       // Row intents live inside `result`, which the replacement connection
       // rehydrates wholesale; only the model-override side map outlives that
       // replacement, so it is the one that needs an explicit rollback below.
-      optimisticPins.clear();
-      optimisticUnread.clear();
-      archiveState.clearAll();
-      preparedWorkSessionKeys.clear();
       const state = host.readState();
       host.publish({ ...state, modelOverrides: {} });
     },
-    dispose() {
-      pendingCreatedModelOverrides.clear();
-      pendingModelPatches.clear();
-      optimisticPins.clear();
-      optimisticUnread.clear();
-      archiveState.clearAll();
-      preparedWorkSessionKeys.clear();
-    },
+    dispose,
   };
 }

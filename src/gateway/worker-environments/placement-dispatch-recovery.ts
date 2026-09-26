@@ -1,4 +1,6 @@
-import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { supportsCurrentWorkerLaunch } from "./admission.js";
 import {
   isCurrentActiveWorkerEnvironment,
   isUnavailableEnvironment,
@@ -10,6 +12,14 @@ import {
   recoverPendingWorkspaceResults,
   type PlacementRecoveryDeps,
 } from "./placement-dispatch-pending-results.js";
+import {
+  projectWorkerSessionTurnClaim,
+  serializeWorkerSessionTurnClaim,
+} from "./placement-record.js";
+import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
+import { boundedWorkerError } from "./worker-error.js";
+
+const log = createSubsystemLogger("gateway/worker-placement");
 
 function activePlacementExecutionError(
   placement: WorkerActiveDispatchPlacement,
@@ -47,24 +57,74 @@ function blockingWorkspaceJournalSessions(
 
 export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const { environments, failure, placements } = deps;
+  const interruptedClaims = new Set(
+    placements.list().flatMap((placement) => {
+      const claim = projectWorkerSessionTurnClaim(placement);
+      return claim ? [serializeWorkerSessionTurnClaim(claim)] : [];
+    }),
+  );
   // Orphan Git refs carry no live authority. Scan them once in the tracked full
   // post-start sweep, never on readiness or targeted turn recovery.
   let orphanCleanupPending = false;
 
   const reconcileActivePlacement = async (
-    placement: WorkerActiveDispatchPlacement,
+    initialPlacement: WorkerActiveDispatchPlacement,
     mode: "restart" | "runtime",
   ): Promise<void> => {
-    // Turn claims belong to the previous Gateway lifecycle and cannot prove live authority
-    // after restart, so fence the whole placement before attempting to adopt it.
-    if (mode === "restart" && placement.turnClaim) {
-      const error = new Error(
-        "Active worker turn claim cannot be proven live after gateway restart",
-      );
-      await failure.failActive(placement, error, { forceClaimFence: true });
-      return;
+    let placement = initialPlacement;
+    let environment = environments.get(placement.environmentId);
+    // Retire the old turn, not its machine. The node stop acknowledgement fences the
+    // physical worker; the replacement turn receives a fresh claim on the same workspace.
+    const claim = projectWorkerSessionTurnClaim(placement);
+    const interrupted = claim && interruptedClaims.has(serializeWorkerSessionTurnClaim(claim));
+    if ((mode === "restart" || interrupted) && placement.turnClaim) {
+      if (
+        claim &&
+        interrupted &&
+        environment?.nodeDeviceId &&
+        isCurrentActiveWorkerEnvironment(placement, environment) &&
+        !placements.getPlacementMove(placement.sessionId)
+      ) {
+        try {
+          await environments.stopTunnel(placement.environmentId, placement.activeOwnerEpoch);
+          await placements.closeWorkerTurnToolState(claim);
+          const current = placements.get(placement.sessionId);
+          const currentEnvironment = environments.get(placement.environmentId);
+          if (
+            current?.state !== "active" ||
+            current.generation !== placement.generation ||
+            currentEnvironment?.nodeDeviceId !== environment.nodeDeviceId ||
+            !isCurrentActiveWorkerEnvironment(current, currentEnvironment) ||
+            placements.getPlacementMove(placement.sessionId)
+          ) {
+            throw new Error("Interrupted worker owner changed while stopping");
+          }
+          const released = await placements.releaseTurn(claim, () => {
+            const releaseEnvironment = environments.get(placement.environmentId);
+            if (!isCurrentActiveWorkerEnvironment(placement, releaseEnvironment)) {
+              throw new Error("Interrupted worker owner changed before release");
+            }
+          });
+          if (released.state !== "active") {
+            throw new Error("Interrupted worker placement changed during recovery");
+          }
+          interruptedClaims.delete(serializeWorkerSessionTurnClaim(claim));
+          placement = released;
+          environment = environments.get(placement.environmentId);
+        } catch (error) {
+          log.warn(
+            `Interrupted cloud worker is waiting for recovery: ${boundedWorkerError(error)}`,
+          );
+          return;
+        }
+      } else {
+        const error = new Error(
+          "Active worker turn claim cannot be proven live after gateway restart",
+        );
+        await failure.failActive(placement, error, { forceClaimFence: true });
+        return;
+      }
     }
-    const environment = environments.get(placement.environmentId);
     const disappearance = workerDisappearanceError(environment);
     if (disappearance || (environment && isUnavailableEnvironment(environment))) {
       await failure.reclaimActive(
@@ -109,17 +169,32 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         ownerEpoch: environment.ownerEpoch,
       });
     } catch (error) {
+      if (error instanceof WorkerRuntimeRefreshPendingError) {
+        // The provider still owns this machine. A failed runtime update closes
+        // execution until retry; it is not evidence that the lease must be reclaimed.
+        return;
+      }
       await failure.failActive(placement, error);
     }
   };
 
   const reconcile = async (mode?: "startup"): Promise<void> => {
     if (mode === "startup") {
-      // Readiness fences live owners; unowned teardown remains in the service-owned sweep.
-      for (const { environmentId, state } of placements.listForReconcile()) {
-        if (environmentId && state !== "failed" && state !== "reclaimed") {
-          await environments.reconcileEnvironment(environmentId);
-        }
+      // Drain the bounded environment pass before recovering placement authority or results.
+      // Unowned teardown remains in the service-owned sweep.
+      const reconciled = await runTasksWithConcurrency({
+        tasks: placements
+          .listForReconcile()
+          .flatMap(({ environmentId, state }) =>
+            environmentId && state !== "failed" && state !== "reclaimed"
+              ? [() => environments.reconcileEnvironment(environmentId)]
+              : [],
+          ),
+        limit: 8,
+        errorMode: "stop",
+      });
+      if (reconciled.hasError) {
+        throw reconciled.firstError;
       }
     } else {
       await environments.reconcileOnce();
@@ -152,7 +227,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             exactEnvironment.state === "provisioning" ||
             exactEnvironment.state === "bootstrapping" ||
             ((exactEnvironment.state === "ready" || exactEnvironment.state === "idle") &&
-              supportsWorkerExecutionContextLaunch(exactEnvironment.bootstrapReceipt)))
+              supportsCurrentWorkerLaunch(exactEnvironment.bootstrapReceipt)))
         ) {
           // Transient provider or node-enrollment failure retains its exact durable operation.
           continue;

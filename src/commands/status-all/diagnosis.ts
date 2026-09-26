@@ -27,6 +27,7 @@ import {
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
+import type { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
 import { formatDeliveryQueueHealthLine } from "../health-format.js";
 import type {
   resolveStatusGatewayHealthSafe,
@@ -51,18 +52,6 @@ type ConfigSnapshotLike = {
 };
 
 type PortUsageLike = Pick<PortUsage, "listeners" | "port" | "status" | "hints">;
-
-type TailscaleStatusLike = {
-  backendState: string | null;
-  dnsName: string | null;
-  ips: string[];
-  error: string | null;
-};
-
-type SkillStatusLike = {
-  workspaceDir: string;
-  skills: Array<{ eligible: boolean; missing: Record<string, unknown[]> }>;
-};
 
 type ChannelIssueLike = {
   channel: string;
@@ -159,9 +148,9 @@ export async function appendStatusAllDiagnosis(params: {
   port: number;
   portUsage: PortUsageLike | null;
   tailscaleMode: string;
-  tailscale: TailscaleStatusLike;
+  tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
-  skillStatus: SkillStatusLike | null;
+  skillReadiness: ReturnType<typeof buildWorkspaceSkillReadiness> | null;
   pluginCompatibility: PluginCompatibilityNotice[];
   channelsStatus: unknown;
   channelIssues: ChannelIssueLike[];
@@ -169,6 +158,7 @@ export async function appendStatusAllDiagnosis(params: {
   exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
   agentStatus?: AgentStatusLike;
   gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
   health: Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>> | null | undefined;
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
@@ -292,35 +282,18 @@ export async function appendStatusAllDiagnosis(params: {
     }
   }
 
-  {
-    const backend = params.tailscale.backendState ?? "unknown";
-    const okBackend = backend === "Running";
-    const hasDns = Boolean(params.tailscale.dnsName);
-    const label =
-      params.tailscaleMode === "off"
-        ? `Tailscale exposure: off · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`
-        : `Tailscale exposure: ${params.tailscaleMode} · daemon ${backend}${params.tailscale.dnsName ? ` · ${params.tailscale.dnsName}` : ""}`;
-    emitCheck(label, params.tailscaleMode === "off" || (okBackend && hasDns) ? "ok" : "warn");
-    if (params.tailscale.error) {
-      lines.push(`  ${muted(`error: ${params.tailscale.error}`)}`);
-    }
-    if (params.tailscale.ips.length > 0) {
-      lines.push(
-        `  ${muted(`ips: ${params.tailscale.ips.slice(0, 3).join(", ")}${params.tailscale.ips.length > 3 ? "…" : ""}`)}`,
-      );
-    }
-    if (params.tailscaleHttpsUrl) {
-      lines.push(`  ${muted(`https: ${params.tailscaleHttpsUrl}`)}`);
-    }
+  emitCheck(
+    `Tailscale exposure: ${params.tailscaleMode} · daemon unknown${params.tailscaleDns ? ` · ${params.tailscaleDns}` : ""}`,
+    params.tailscaleMode === "off" ? "ok" : "warn",
+  );
+  if (params.tailscaleHttpsUrl) {
+    lines.push(`  ${muted(`https: ${params.tailscaleHttpsUrl}`)}`);
   }
 
-  if (params.skillStatus) {
-    const eligible = params.skillStatus.skills.filter((s) => s.eligible).length;
-    const missing = params.skillStatus.skills.filter(
-      (s) => s.eligible && Object.values(s.missing).some((arr) => arr.length),
-    ).length;
+  if (params.skillReadiness) {
+    const { eligible, missing, workspaceDir } = params.skillReadiness;
     emitCheck(
-      `Skills: ${eligible} eligible · ${missing} missing · ${params.skillStatus.workspaceDir}`,
+      `Skills: ${eligible} eligible · ${missing} missing · ${workspaceDir}`,
       missing === 0 ? "ok" : "warn",
     );
   }
@@ -494,6 +467,11 @@ export async function appendStatusAllDiagnosis(params: {
   } else if (params.nodeOnlyGateway) {
     emitCheck(
       `Channel issues skipped (node-only mode; query ${params.nodeOnlyGateway.gatewayTarget})`,
+      "ok",
+    );
+  } else if (params.gatewayStartupPhase) {
+    emitCheck(
+      `Channel issues skipped (gateway still starting (phase ${params.gatewayStartupPhase}))`,
       "ok",
     );
   } else {

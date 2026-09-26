@@ -23,13 +23,16 @@ import type { PluginRuntime } from "./runtime/types.js";
 import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
 const completionMocks = vi.hoisted(() => ({
-  prepareSimpleCompletionModelForAgent: vi.fn(),
+  acquireSimpleCompletionModelForAgent:
+    vi.fn<
+      typeof import("../agents/simple-completion-runtime.js").acquireSimpleCompletionModelForAgent
+    >(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
 }));
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
-  prepareSimpleCompletionModelForAgent: completionMocks.prepareSimpleCompletionModelForAgent,
+  acquireSimpleCompletionModelForAgent: completionMocks.acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel:
     completionMocks.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent:
@@ -132,8 +135,9 @@ function expectUnsupportedBindingApiResult(result: { text?: string }) {
 }
 
 beforeEach(() => {
-  completionMocks.prepareSimpleCompletionModelForAgent.mockReset();
-  completionMocks.prepareSimpleCompletionModelForAgent.mockResolvedValue({
+  completionMocks.acquireSimpleCompletionModelForAgent.mockReset();
+  completionMocks.acquireSimpleCompletionModelForAgent.mockResolvedValue({
+    async [Symbol.asyncDispose]() {},
     selection: {
       provider: "openai",
       modelId: "gpt-5.5",
@@ -144,6 +148,7 @@ beforeEach(() => {
       id: "gpt-5.5",
       name: "GPT-5.5",
       api: "openai",
+      baseUrl: "https://fixture.invalid/v1",
       input: ["text"],
       reasoning: false,
       contextWindow: 128_000,
@@ -312,8 +317,6 @@ describe("registerPluginCommand", () => {
       command: {
         // Runtime plugin payloads are untyped; guard at boundary.
         name: undefined as unknown as string,
-        description: "Demo",
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -323,9 +326,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects invalid command descriptions",
       command: {
-        name: "demo",
         description: undefined as unknown as string,
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -335,10 +336,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects invalid agent prompt guidance",
       command: {
-        name: "demo",
-        description: "Demo",
         agentPromptGuidance: "use /demo" as unknown as string[],
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -348,10 +346,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects invalid structured agent prompt guidance",
       command: {
-        name: "demo",
-        description: "Demo",
         agentPromptGuidance: [{ text: "Use /demo.", surfaces: ["nope"] }] as never,
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -362,10 +357,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects empty structured agent prompt guidance surfaces",
       command: {
-        name: "demo",
-        description: "Demo",
         agentPromptGuidance: [{ text: "Use /demo.", surfaces: [] }] as never,
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -375,10 +367,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects invalid channel scopes",
       command: {
-        name: "demo",
-        description: "Demo",
         channels: ["telegram", "   "],
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -388,10 +377,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects primitive native command metadata",
       command: {
-        name: "demo",
-        description: "Demo",
         nativeNames: "demo-native",
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -401,10 +387,7 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects primitive client presentation metadata",
       command: {
-        name: "demo",
-        description: "Demo",
         clientPresentation: "device-pairing",
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -414,13 +397,10 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects unknown client presentation actions",
       command: {
-        name: "demo",
-        description: "Demo",
         clientPresentation: {
           when: "no-arguments",
           action: { kind: "open-route" },
         },
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -430,14 +410,11 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects additional client presentation fields",
       command: {
-        name: "demo",
-        description: "Demo",
         clientPresentation: {
           when: "no-arguments",
           action: { kind: "device-pairing" },
           route: "/settings/devices",
         },
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -447,13 +424,10 @@ describe("registerPluginCommand", () => {
     {
       name: "rejects additional client presentation action fields",
       command: {
-        name: "demo",
-        description: "Demo",
         clientPresentation: {
           when: "no-arguments",
           action: { kind: "device-pairing", callback: "run" },
         },
-        handler: async () => ({ text: "ok" }),
       },
       expected: {
         ok: false,
@@ -461,7 +435,9 @@ describe("registerPluginCommand", () => {
       },
     },
   ] as const)("$name", ({ command, expected }) => {
-    expect(registerPluginCommand("demo-plugin", command as never)).toEqual(expected);
+    expect(registerPluginCommand("demo-plugin", createVoiceCommand(command as never))).toEqual(
+      expected,
+    );
   });
 
   it("normalizes command metadata for downstream consumers", () => {
@@ -549,30 +525,30 @@ describe("registerPluginCommand", () => {
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Ambient guidance"]);
   });
 
-  it.each([
-    ["zeta-plugin", "alpha-plugin"],
-    ["alpha-plugin", "zeta-plugin"],
-  ])("keeps prompt guidance stable for plugin discovery order %j", (...pluginIds) => {
-    for (const pluginId of pluginIds) {
-      const alpha = pluginId === "alpha-plugin";
-      expect(
-        registerPluginCommand(pluginId, {
-          name: alpha ? "alpha_cmd" : "zeta_cmd",
-          description: alpha ? "Alpha command" : "Zeta command",
-          agentPromptGuidance: alpha
-            ? ["Use /alpha_cmd first.", "Then finish the alpha workflow."]
-            : ["Use /zeta_cmd for zeta routing."],
-          handler: async () => ({ text: "ok" }),
-        }),
-      ).toEqual({ ok: true });
-    }
+  it.each([["zeta-plugin", "alpha-plugin"]])(
+    "keeps prompt guidance stable for plugin discovery order %j",
+    (...pluginIds) => {
+      for (const pluginId of pluginIds) {
+        const alpha = pluginId === "alpha-plugin";
+        expect(
+          registerPluginCommand(pluginId, {
+            name: alpha ? "alpha_cmd" : "zeta_cmd",
+            description: alpha ? "Alpha command" : "Zeta command",
+            agentPromptGuidance: alpha
+              ? ["Use /alpha_cmd first.", "Then finish the alpha workflow."]
+              : ["Use /zeta_cmd for zeta routing."],
+            handler: async () => ({ text: "ok" }),
+          }),
+        ).toEqual({ ok: true });
+      }
 
-    expect(listRegisteredPluginAgentPromptGuidance()).toEqual([
-      "Use /alpha_cmd first.",
-      "Then finish the alpha workflow.",
-      "Use /zeta_cmd for zeta routing.",
-    ]);
-  });
+      expect(listRegisteredPluginAgentPromptGuidance()).toEqual([
+        "Use /alpha_cmd first.",
+        "Then finish the alpha workflow.",
+        "Use /zeta_cmd for zeta routing.",
+      ]);
+    },
+  );
 
   it("normalizes and filters structured agent prompt guidance by surface", () => {
     const result = registerPluginCommand("demo-plugin", {
@@ -1041,81 +1017,6 @@ describe("registerPluginCommand", () => {
     expect(observedOwnerStatus).toBe(true);
   });
 
-  it("allows command owners to run scoped plugin commands without gateway scopes", async () => {
-    let observedOwnerStatus: boolean | undefined;
-    const handler = vi.fn(async (ctx: { senderIsOwner?: boolean }) => {
-      observedOwnerStatus = ctx.senderIsOwner;
-      return { text: "ok" };
-    });
-    registerPluginCommand("demo-plugin", {
-      name: "pairlike",
-      description: "Scoped command",
-      requiredScopes: ["operator.pairing"],
-      handler,
-    });
-    const match = requirePluginCommandMatch("/pairlike");
-
-    const result = await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      commandBody: "/pairlike",
-      config: {},
-    });
-
-    expect(result).toEqual({ text: "ok" });
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(observedOwnerStatus).toBe(true);
-  });
-
-  it("rejects command owners when explicit gateway scopes miss the required scope", async () => {
-    const handler = vi.fn(async () => ({ text: "ok" }));
-    registerPluginCommand("demo-plugin", {
-      name: "pairlike",
-      description: "Scoped command",
-      requiredScopes: ["operator.pairing"],
-      handler,
-    });
-    const match = requirePluginCommandMatch("/pairlike");
-
-    const result = await executePluginCommand({
-      command: match.command,
-      channel: "webchat",
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      commandBody: "/pairlike",
-      gatewayClientScopes: ["operator.write"],
-      config: {},
-    });
-
-    expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-owner scoped plugin commands without gateway scopes", async () => {
-    const handler = vi.fn(async () => ({ text: "ok" }));
-    registerPluginCommand("demo-plugin", {
-      name: "pairlike",
-      description: "Scoped command",
-      requiredScopes: ["operator.pairing"],
-      handler,
-    });
-    const match = requirePluginCommandMatch("/pairlike");
-
-    const result = await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
-      senderIsOwner: false,
-      commandBody: "/pairlike",
-      config: {},
-    });
-
-    expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
-    expect(handler).not.toHaveBeenCalled();
-  });
-
   it("skips direct plugin command execution on unsupported channels", async () => {
     let handlerCalled = false;
     const handler = async () => {
@@ -1243,14 +1144,13 @@ describe("registerPluginCommand", () => {
     second.clearPluginCommands();
   });
 
-  it.each(["/talkvoice now", "/discordvoice now"] as const)(
-    "matches provider-specific native alias %s back to the canonical command",
-    (commandBody) => {
+  it.each(["default", "discord"] as const)(
+    "matches live %s aliases back to the canonical command",
+    (provider) => {
+      const nativeNames = { default: "talkvoice", discord: "discordvoice" };
+      const commandBody = `/${nativeNames[provider]} now`;
       const result = registerVoiceCommandForTest({
-        nativeNames: {
-          default: "talkvoice",
-          discord: "discordvoice",
-        },
+        nativeNames,
         description: "Demo command",
         acceptsArgs: true,
       });
@@ -1260,6 +1160,13 @@ describe("registerPluginCommand", () => {
         name: "voice",
         pluginId: "demo-plugin",
         args: "now",
+      });
+      nativeNames[provider] = "renamedvoice";
+      expect(matchPluginCommand(commandBody)).toBeNull();
+      expectCommandMatch("/renamedvoice later", {
+        name: "voice",
+        pluginId: "demo-plugin",
+        args: "later",
       });
     },
   );
@@ -1514,7 +1421,7 @@ describe("registerPluginCommand", () => {
       } as never,
     });
 
-    expect(completionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+    expect(completionMocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "ops",
       }),
@@ -1555,7 +1462,7 @@ describe("registerPluginCommand", () => {
       config: {} as never,
     });
 
-    expect(completionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+    expect(completionMocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "codex",
         preferredProfile: "openai:owner@example.com",

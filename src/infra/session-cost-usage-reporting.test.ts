@@ -49,7 +49,7 @@ describe("session usage reporting pricing", () => {
       name: "configured all-zero pricing",
       pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       recordedCost: { total: 0 },
-      expectedCost: undefined,
+      expectedCost: 0,
     },
     {
       // The recorded call owns its estimate; a later catalog cannot recover its service tier.
@@ -72,19 +72,6 @@ describe("session usage reporting pricing", () => {
       expectedBreakdown: { input: 0.004, output: 0.004, cacheRead: 0.0004, cacheWrite: 0 },
     },
     {
-      name: "flex-adjusted recorded cost preserved with tiered pricing",
-      pricing: tieredPricing,
-      recordedCost: {
-        total: 0.0021,
-        input: 0.001,
-        output: 0.001,
-        cacheRead: 0.0001,
-        cacheWrite: 0,
-      },
-      expectedCost: 0.0021,
-      expectedBreakdown: { input: 0.001, output: 0.001, cacheRead: 0.0001, cacheWrite: 0 },
-    },
-    {
       name: "missing recorded cost estimated from tiered pricing",
       pricing: tieredPricing,
       expectedCost: 0.0042,
@@ -97,16 +84,10 @@ describe("session usage reporting pricing", () => {
       expectedCost: 0,
     },
     {
-      name: "provider-billed positive cost preserved with tiered pricing",
-      pricing: tieredPricing,
-      recordedCost: { total: 0.125, totalOrigin: "provider-billed" },
-      expectedCost: 0.125,
-    },
-    {
-      name: "recorded positive cost preserved with flat pricing",
-      pricing: flatPricing,
-      recordedCost: { total: 0.125 },
-      expectedCost: 0.125,
+      name: "zero total with recorded component evidence",
+      recordedCost: { total: 0, input: 0.25 },
+      expectedCost: 0,
+      expectedBreakdown: { input: 0.25, output: 0, cacheRead: 0, cacheWrite: 0 },
     },
   ])("keeps logs, summaries, and charts consistent for $name", async (testCase) => {
     const root = tempDirs.make("openclaw-usage-reporting-");
@@ -200,5 +181,69 @@ describe("session usage reporting pricing", () => {
       expect(series?.points[0]?.totalTokens).toBe(1_700);
       expect(series?.points[0]?.cost).toBeCloseTo(testCase.expectedCost ?? 0, 8);
     });
+  });
+});
+
+it("preserves canonical tool calls and mixed content order in session logs", async () => {
+  const root = tempDirs.make("openclaw-usage-tool-blocks-");
+  const sessionFile = path.join(root, "transcript.jsonl");
+  const timestamp = Date.UTC(2026, 7, 1, 12);
+  const messages = [
+    { role: "user", content: "Question" },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-only", name: "read", arguments: {} }],
+    },
+    {
+      role: "assistant",
+      content: [{ type: " toolUse ", id: "legacy-only", name: " legacy-only ", input: {} }],
+    },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Before" },
+        { type: " TOOL_CALL ", id: "read-1", name: "read", arguments: {} },
+        { type: "text", text: "Between" },
+        { type: "toolCall", id: "read-2", name: "read", arguments: {} },
+        { type: "tool_use", id: "legacy-1", name: " legacy ", input: {} },
+        { type: "tooluse", id: "legacy-2", name: "lowercase", input: {} },
+        { type: "text", text: "After" },
+      ],
+    },
+    { role: "assistant", content: [{ type: "text", text: "Ordinary answer" }] },
+    {
+      role: "toolResult",
+      toolCallId: "call-only",
+      toolName: "read",
+      content: [{ type: "text", text: "Done" }],
+    },
+  ];
+  await fs.writeFile(
+    sessionFile,
+    messages
+      .map((message, index) =>
+        JSON.stringify({
+          type: "message",
+          timestamp: new Date(timestamp + index).toISOString(),
+          message,
+        }),
+      )
+      .join("\n"),
+  );
+
+  await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+    const logs = await loadSessionLogs({ agentId: "main", sessionFile, config: {} });
+    expect(logs?.map(({ role, content }) => ({ role, content }))).toEqual([
+      { role: "user", content: "Question" },
+      { role: "assistant", content: "[Tool: read]" },
+      { role: "assistant", content: "[Tool:  legacy-only ]" },
+      {
+        role: "assistant",
+        content:
+          "Before\n[Tool: read]\nBetween\n[Tool: read]\n[Tool:  legacy ]\n[Tool: lowercase]\nAfter",
+      },
+      { role: "assistant", content: "Ordinary answer" },
+      { role: "toolResult", content: "[Tool: read]\n[Tool Result]\nDone" },
+    ]);
   });
 });

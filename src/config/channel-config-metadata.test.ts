@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
-import { collectChannelSchemaMetadataWithOwnership } from "./channel-config-metadata.js";
+import {
+  collectChannelDmPolicyMetadata,
+  collectChannelSchemaMetadataWithOwnership,
+} from "./channel-config-metadata.js";
 
 function createChannelSchemaRegistry(
   channelId: string,
@@ -103,12 +106,10 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
   );
 
   // Non-bundled channel schemas are cloned and recursively walked here, before any validator
-  // runs, so this producer is where a deeply nested manifest has to be contained; otherwise
-  // config validation dies with a raw RangeError instead of reporting an issue. "feishu" takes
-  // only the core-owned normalization; "qqbot" additionally hits the official-channel secret
-  // widening, which clones the schema a second time.
+  // runs. This producer owns the fixed traversal limit so runtime stack size cannot change
+  // whether normalization mutates the surfaced schema.
   it.each(["feishu", "qqbot"])(
-    "surfaces a deeply nested %s schema instead of overflowing the stack",
+    "surfaces the raw deeply nested %s schema after bounded traversal",
     (channelId) => {
       let schema: Record<string, unknown> = { type: "object" };
       for (let depth = 0; depth < 3_000; depth++) {
@@ -119,9 +120,8 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
         createChannelSchemaRegistry(channelId, schema),
       );
 
-      expect(entries).toContainEqual(
-        expect.objectContaining({ id: channelId, configSchema: schema }),
-      );
+      expect(entries[0]).toMatchObject({ id: channelId });
+      expect(entries[0]?.configSchema).toBe(schema);
     },
   );
 
@@ -135,6 +135,90 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
       collectChannelSchemaMetadataWithOwnership(
         createChannelSchemaRegistry("qqbot", schema, "bundled"),
       ),
-    ).toThrow();
+    ).toThrow("channel config schema exceeds maximum traversal depth of 256");
+  });
+});
+
+describe("collectChannelDmPolicyMetadata", () => {
+  it.each([
+    { name: "missing official capability", declared: undefined, expected: false },
+    { name: "explicit required wildcard", declared: true, expected: true },
+    { name: "explicit wildcard exemption", declared: false, expected: false },
+    { name: "different plugin ID", pluginId: "lookalike-qqbot", expected: undefined },
+    { name: "different package", packageName: "community-qqbot", expected: undefined },
+    { name: "legacy package", packageName: "@openclaw/qqbot", expected: undefined },
+    { name: "different package channel", packageChannelId: "other-chat", expected: undefined },
+    {
+      name: "explicit community capability",
+      pluginId: "community-chat",
+      packageName: "community-chat",
+      declared: false,
+      expected: false,
+    },
+  ])(
+    "resolves $name",
+    ({
+      pluginId = "openclaw-qqbot",
+      packageName = "@tencent-connect/openclaw-qqbot",
+      packageChannelId = "qqbot",
+      declared,
+      expected,
+    }) => {
+      const registry = {
+        diagnostics: [],
+        plugins: [
+          createPluginManifestRecordFixture({
+            id: pluginId,
+            channels: ["qqbot", "unrelated-chat"],
+            packageName,
+            packageChannel: {
+              id: packageChannelId,
+              ...(declared === undefined
+                ? {}
+                : { doctorCapabilities: { openDmRequiresAllowFromWildcard: declared } }),
+            },
+          }),
+        ],
+      };
+
+      const metadata = collectChannelDmPolicyMetadata(registry);
+      expect(metadata.get("qqbot")?.openDmRequiresAllowFromWildcard).toBe(expected);
+      expect(metadata.get("unrelated-chat")).toEqual({ id: "unrelated-chat" });
+    },
+  );
+
+  it("retains closest-origin nested metadata when no channel owner is selected", () => {
+    const registry = {
+      diagnostics: [],
+      plugins: [
+        createPluginManifestRecordFixture({
+          id: "local-chat",
+          origin: "config",
+          channels: ["proofchat"],
+          packageChannel: {
+            id: "proofchat",
+            doctorCapabilities: {
+              dmAllowFromMode: "nestedOnly",
+              openDmRequiresAllowFromWildcard: false,
+            },
+          },
+        }),
+        createPluginManifestRecordFixture({
+          id: "global-chat",
+          origin: "global",
+          channels: ["proofchat"],
+          packageChannel: {
+            id: "proofchat",
+            doctorCapabilities: { openDmRequiresAllowFromWildcard: true },
+          },
+        }),
+      ],
+    };
+
+    expect(collectChannelDmPolicyMetadata(registry, new Set<string>()).get("proofchat")).toEqual({
+      id: "proofchat",
+      dmAllowFromMode: "nestedOnly",
+      openDmRequiresAllowFromWildcard: false,
+    });
   });
 });

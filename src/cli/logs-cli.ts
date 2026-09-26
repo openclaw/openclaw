@@ -16,7 +16,6 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { readConnectPairingRequiredMessage } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
 import { createSafeStreamWriter } from "../../packages/terminal-core/src/stream-writer.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
@@ -38,6 +37,7 @@ import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
+import { formatDocsHelp } from "./help-format.js";
 
 type LogsTailPayload = {
   file?: string;
@@ -76,19 +76,6 @@ type GatewayRecoveryState =
       abortController: AbortController;
     }
   | { kind: "settled"; result: GatewayRecoveryResult };
-
-type LogSourceIdentity = {
-  file?: string;
-  source?: string;
-  sourceKind?: LogsTailPayload["sourceKind"];
-  servicePid?: number;
-  serviceUnit?: string;
-  localFallback?: boolean;
-};
-
-async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
-  return await import("./logs-cli.runtime.js");
-}
 
 type LogsCliOptions = GatewayRpcOpts & {
   limit?: string;
@@ -136,15 +123,14 @@ function buildLogSourceIdentity(payload: LogsTailPayload): string | undefined {
   if (!sourceKind && !payload.file && !payload.source) {
     return undefined;
   }
-  const identity: LogSourceIdentity = {
+  return JSON.stringify({
     file: payload.file,
     source: payload.source,
     sourceKind,
     servicePid: payload.service?.pid,
     serviceUnit: payload.service?.unit,
     localFallback: payload.localFallback === true ? true : undefined,
-  };
-  return JSON.stringify(identity);
+  });
 }
 
 function buildLogMetaRecord(payload: LogsTailPayload): Record<string, unknown> {
@@ -278,7 +264,7 @@ async function readSystemdJournalFallback(params: {
   if (process.platform !== "linux") {
     return null;
   }
-  const runtime = await loadLogsCliRuntime();
+  const runtime = await import("./logs-cli.runtime.js");
   const service = await runtime.readSystemdServiceRuntime(process.env);
   if (service.status !== "running" || typeof service.pid !== "number") {
     return null;
@@ -299,7 +285,8 @@ async function readSystemdJournalFallback(params: {
   if (typeof params.cursor === "string" && params.cursor.trim().length > 0) {
     args.push(`--after-cursor=${params.cursor}`);
   } else if (params.since) {
-    args.push(`--since=${params.since}`);
+    // journalctl requires its own timestamp syntax, not the ISO poll timestamp.
+    args.push(`--since=${params.since.replace("T", " ").replace("Z", " UTC")}`);
   } else {
     args.push("-n", String(limit));
   }
@@ -419,7 +406,7 @@ function formatLogLine(
   if (!parsed) {
     return raw;
   }
-  const label = parsed.subsystem ?? parsed.module ?? "";
+  const label = parsed.subsystem ?? parsed.module ?? parsed.plugin ?? "";
   const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain", opts.localTime);
   const level = parsed.level ?? "";
   const levelLabel = level.padEnd(5).trim();
@@ -431,22 +418,16 @@ function formatLogLine(
 
   const timeLabel = colorize(opts.rich, theme.muted, time);
   const labelValue = colorize(opts.rich, theme.accent, label);
-  const levelValue =
+  const levelStyle =
     level === "error" || level === "fatal"
-      ? colorize(opts.rich, theme.error, levelLabel)
+      ? theme.error
       : level === "warn"
-        ? colorize(opts.rich, theme.warn, levelLabel)
+        ? theme.warn
         : level === "debug" || level === "trace"
-          ? colorize(opts.rich, theme.muted, levelLabel)
-          : colorize(opts.rich, theme.info, levelLabel);
-  const messageValue =
-    level === "error" || level === "fatal"
-      ? colorize(opts.rich, theme.error, message)
-      : level === "warn"
-        ? colorize(opts.rich, theme.warn, message)
-        : level === "debug" || level === "trace"
-          ? colorize(opts.rich, theme.muted, message)
-          : colorize(opts.rich, theme.info, message);
+          ? theme.muted
+          : theme.info;
+  const levelValue = colorize(opts.rich, levelStyle, levelLabel);
+  const messageValue = colorize(opts.rich, levelStyle, message);
 
   const head = [timeLabel, levelValue, labelValue].filter(Boolean).join(" ");
   return [head, messageValue].filter(Boolean).join(" ").trim();
@@ -527,11 +508,7 @@ export function registerLogsCli(program: Command) {
     .option("--no-color", "Disable ANSI colors")
     .option("--local-time", "Display timestamps in local timezone (default)", false)
     .option("--utc", "Display timestamps in UTC", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/logs", "docs.openclaw.ai/cli/logs")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/logs"));
 
   addGatewayClientOptions(logs);
 
@@ -573,8 +550,10 @@ export function registerLogsCli(program: Command) {
     let first = true;
     let lastSourceIdentity: string | undefined;
     const jsonMode = Boolean(opts.json);
+    const emitNotice = (message: string) =>
+      jsonMode ? emitJsonLine({ type: "notice", message }) : errorLine(message);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
-    const rich = isRich() && opts.color !== false;
+    const rich = isRich() && opts.color !== false && !opts.plain;
     const localTime = !opts.utc;
 
     const startGatewayRecoveryProbe = () => {
@@ -711,31 +690,7 @@ export function registerLogsCli(program: Command) {
         }
         for (const line of lines) {
           const parsed = parseLogLine(line);
-          if (parsed) {
-            if (!emitJsonLine({ type: "log", ...parsed })) {
-              return;
-            }
-          } else if (!emitJsonLine({ type: "raw", raw: line })) {
-            return;
-          }
-        }
-        if (payload.truncated) {
-          if (
-            !emitJsonLine({
-              type: "notice",
-              message: "Log tail truncated (increase --limit or --max-bytes).",
-            })
-          ) {
-            return;
-          }
-        }
-        if (payload.reset) {
-          if (
-            !emitJsonLine({
-              type: "notice",
-              message: formatLogResetNotice(payload.skippedBytes),
-            })
-          ) {
+          if (!emitJsonLine(parsed ? { type: "log", ...parsed } : { type: "raw", raw: line })) {
             return;
           }
         }
@@ -782,16 +737,15 @@ export function registerLogsCli(program: Command) {
             return;
           }
         }
-        if (payload.truncated) {
-          if (!errorLine("Log tail truncated (increase --limit or --max-bytes).")) {
-            return;
-          }
-        }
-        if (payload.reset) {
-          if (!errorLine(formatLogResetNotice(payload.skippedBytes))) {
-            return;
-          }
-        }
+      }
+      if (
+        payload.truncated &&
+        !emitNotice("Log tail truncated (increase --limit or --max-bytes).")
+      ) {
+        return;
+      }
+      if (payload.reset && !emitNotice(formatLogResetNotice(payload.skippedBytes))) {
+        return;
       }
       if (payload.sourceKind === "journal") {
         // The journal is an at-least-once bridge: retain its cursor, leave the

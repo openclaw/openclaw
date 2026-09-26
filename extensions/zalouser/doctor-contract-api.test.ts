@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -17,7 +17,10 @@ import {
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { setZalouserRuntime } from "./src/runtime.js";
@@ -66,6 +69,7 @@ describe("zalouser doctor state migration", () => {
     // resetPluginStateStoreForTests only releases plugin state plus shared state, so the
     // cached agent handles must be closed here or Windows fails the removal with EBUSY.
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -131,13 +135,13 @@ describe("zalouser doctor state migration", () => {
       }),
     );
     const runtime = createPluginRuntimeMock();
-    runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-      createPluginStateSyncKeyedStoreForTests<T>("zalouser", {
+    runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("zalouser", {
         ...options,
         env: options.env ?? env,
       });
     setZalouserRuntime(runtime);
-    clearStoredZaloCredentials(profile, env);
+    await clearStoredZaloCredentials(profile, env);
     const context = createDoctorContext(env);
     const params = {
       config: {},

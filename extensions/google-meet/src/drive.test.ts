@@ -66,12 +66,4 @@ describe("exportGoogleDriveDocumentText bound", () => {
 
     expect(release).toHaveBeenCalledTimes(1);
   });
-
-  it("negative-control: bare response.text() buffers the full oversized body (no protection)", async () => {
-    const OVER_CAP = 17 * 1024 * 1024; // 17 MiB
-    const response = makeStreamResponse(OVER_CAP);
-    // Calling response.text() directly buffers everything without throwing.
-    const text = await response.text();
-    expect(text.length).toBeGreaterThan(16 * 1024 * 1024);
-  });
 });

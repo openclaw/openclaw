@@ -5,10 +5,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { waitForFile } from "../../../test/helpers/process-wait.js";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
+import { agentProcessTestEntrypoints } from "../process-runtime.test-support.js";
 import { SettingsManager } from "./settings-manager.js";
 import { FileSettingsStorage } from "./settings-storage.js";
 
 const fixtures = createFixtureLifetime();
+const storageUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.settingsStorage);
 afterEach(async () => {
   vi.restoreAllMocks();
   syncBuiltinESMExports();
@@ -90,8 +97,7 @@ describe("FileSettingsStorage", () => {
       const agentDir = join(root, "agent");
       const result = await runNodeScript(
         [
-          "--import",
-          new URL("../../../scripts/tsx.mjs", import.meta.url).href,
+          ...resolveRuntimeWorkerArgv(storageUrl, resolveTestNodeExecPath()).slice(0, -1),
           "--input-type=module",
           "--eval",
           String.raw`
@@ -103,7 +109,7 @@ describe("FileSettingsStorage", () => {
               new FileSettingsStorage(root, agentDir).withLock("global", () => "{}");
               console.log(statSync(join(agentDir, "settings.json")).mode & 0o777);
             `,
-          new URL("./settings-storage.ts", import.meta.url).href,
+          storageUrl.href,
           root,
           agentDir,
         ],
@@ -187,8 +193,7 @@ describe("FileSettingsStorage", () => {
         const writer = fixtures.track(
           runNodeScript(
             [
-              "--import",
-              new URL("../../../scripts/tsx.mjs", import.meta.url).href,
+              ...resolveRuntimeWorkerArgv(storageUrl, resolveTestNodeExecPath()).slice(0, -1),
               "--input-type=module",
               "--eval",
               String.raw`
@@ -208,7 +213,7 @@ describe("FileSettingsStorage", () => {
                 });
                 writeFileSync(committedPath, "committed");
               `,
-              new URL("./settings-storage.ts", import.meta.url).href,
+              storageUrl.href,
               root,
               agentDir,
               scope,
@@ -323,9 +328,10 @@ describe("FileSettingsStorage", () => {
     expect(existsSync(settingsPath)).toBe(false);
   });
 
-  it.each(["global", "project"] as const)(
+  it.for(["global", "project"] as const)(
     "preserves independent concurrent first writes to %s settings",
-    (scope) =>
+    { timeout: 20_000 },
+    (scope, { signal }) =>
       fixtures.run(async () => {
         const root = fixtures.createTempDir("openclaw-settings-concurrent-create-");
         const agentDir = join(root, "agent");
@@ -333,34 +339,55 @@ describe("FileSettingsStorage", () => {
         const settingsPath = join(settingsDir, "settings.json");
         const firstEntered = join(root, "first-entered");
         const contenderReady = join(root, "contender-ready");
+        const releaseFirst = join(root, "release-first");
+        const releaseContender = join(root, "release-contender");
         const abort = new AbortController();
+        const writerSignal = AbortSignal.any([signal, abort.signal]);
         const writers: ReturnType<typeof runNodeScript>[] = [];
         const startWriter = (field: string) => {
           const writer = fixtures.track(
             runNodeScript(
               [
-                "--import",
-                new URL("../../../scripts/tsx.mjs", import.meta.url).href,
+                ...resolveRuntimeWorkerArgv(storageUrl, resolveTestNodeExecPath()).slice(0, -1),
                 "--input-type=module",
                 "--eval",
                 String.raw`
-                  import { existsSync, writeFileSync } from "node:fs";
-                  const [moduleUrl, root, agentDir, scope, settingsPath, firstEntered, contenderReady, field] = process.argv.slice(1);
+                  import fs, { existsSync, writeFileSync } from "node:fs";
+                  const [moduleUrl, root, agentDir, scope, settingsPath, firstEntered, contenderReady, releaseFirst, releaseContender, field] = process.argv.slice(1);
                   const { FileSettingsStorage } = await import(moduleUrl);
-                  if (field === "theme" && existsSync(settingsPath + ".lock")) {
-                    writeFileSync(contenderReady, "waiting for lock");
+                  if (field === "theme") {
+                    const openSync = fs.openSync;
+                    let signaledContention = false;
+                    fs.openSync = (...args) => {
+                      try {
+                        return openSync(...args);
+                      } catch (error) {
+                        if (
+                          !signaledContention &&
+                          args[0] === settingsPath + ".lock" &&
+                          error?.code === "EEXIST"
+                        ) {
+                          signaledContention = true;
+                          writeFileSync(contenderReady, "contended");
+                          // Keep parent scheduling outside the real lock's bounded retry loop.
+                          const pause = new Int32Array(new SharedArrayBuffer(4));
+                          while (!existsSync(releaseContender)) {
+                            Atomics.wait(pause, 0, 0, 2);
+                          }
+                        }
+                        throw error;
+                      }
+                    };
                   }
                   new FileSettingsStorage(root, agentDir).withLock(scope, (current) => {
                     if (field === "defaultModel") {
                       writeFileSync(firstEntered, "ready");
-                      const deadline = Date.now() + 5_000;
                       const pause = new Int32Array(new SharedArrayBuffer(4));
-                      while (!existsSync(contenderReady)) {
-                        if (Date.now() >= deadline) throw new Error("contender did not reach settings");
+                      while (!existsSync(releaseFirst)) {
                         Atomics.wait(pause, 0, 0, 2);
                       }
-                    } else {
-                      writeFileSync(contenderReady, "entered callback");
+                    } else if (!existsSync(releaseFirst)) {
+                      throw new Error("contender entered settings before the first writer was released");
                     }
                     return JSON.stringify({
                       ...(current ? JSON.parse(current) : {}),
@@ -368,18 +395,21 @@ describe("FileSettingsStorage", () => {
                     });
                   });
                 `,
-                new URL("./settings-storage.ts", import.meta.url).href,
+                storageUrl.href,
                 root,
                 agentDir,
                 scope,
                 settingsPath,
                 firstEntered,
                 contenderReady,
+                releaseFirst,
+                releaseContender,
                 field,
               ],
               process.env,
-              10_000,
-              { signal: abort.signal, requireProcessTreeExit: true },
+              // The test deadline owns both children, including time spent waiting for contention.
+              undefined,
+              { signal: writerSignal, requireProcessTreeExit: true },
             ),
           );
           writers.push(writer);
@@ -394,8 +424,20 @@ describe("FileSettingsStorage", () => {
               throw new Error(`first writer exited before contention: ${result.stderr}`);
             }),
           ]);
-          // Let the contender either observe the lock or enter the broken unlocked callback.
-          void startWriter("theme");
+          const contender = startWriter("theme");
+          await Promise.race([
+            waitForFile(contenderReady, 10_000),
+            contender.then((result) => {
+              throw new Error(`contender exited before reaching the lock: ${result.stderr}`);
+            }),
+          ]);
+          expect(existsSync(firstEntered)).toBe(true);
+          expect(existsSync(`${settingsPath}.lock`)).toBe(true);
+          expect(existsSync(settingsPath)).toBe(false);
+          fs.writeFileSync(releaseFirst, "continue");
+          const firstResult = await first;
+          expect(firstResult, firstResult.stderr).toMatchObject({ error: undefined, status: 0 });
+          fs.writeFileSync(releaseContender, "continue");
           for (const result of await Promise.all(writers)) {
             expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
           }
@@ -409,6 +451,5 @@ describe("FileSettingsStorage", () => {
           await Promise.all(writers);
         }
       }),
-    20_000,
   );
 });

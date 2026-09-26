@@ -103,6 +103,7 @@ vi.mock("openai/resources/responses/ws.js", () => ({
   },
 }));
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { ResponsesContinuationRequest } from "./openai-responses-continuation.js";
@@ -405,14 +406,7 @@ describe("Responses WebSocket steering handoff", () => {
     expect(firstAnswer.stopReason).not.toBe("error");
     context.messages.push(
       firstAnswer,
-      {
-        role: "toolResult",
-        toolCallId: "call_1|fc_1",
-        toolName: "lookup",
-        content: [{ type: "text", text: "found" }],
-        isError: false,
-        timestamp: 1,
-      },
+      makeTextToolResult("call_1|fc_1", "lookup", "found", false, 1),
       steeringUser,
     );
     socket.emit({ type: "response.created", response: { id: "resp_2" } });
@@ -660,25 +654,27 @@ describe("Responses WebSocket steering handoff", () => {
     expect(creates.flatMap((request) => request.input)).toEqual([initialUser, toolResult]);
   });
 
-  it.each(
-    [
-      {
-        name: "instructions and tools",
-        settings: {
-          instructions: "Summarize the lookup result",
-          tools: [{ type: "function", name: "summarize", parameters: { type: "object" } }],
-        },
+  it.each([
+    {
+      name: "instructions and tools",
+      historicalUpdate: false,
+      settings: {
+        instructions: "Summarize the lookup result",
+        tools: [{ type: "function", name: "summarize", parameters: { type: "object" } }],
       },
-      { name: "output limit", settings: { max_output_tokens: 512 } },
-      { name: "reasoning effort", settings: { reasoning: { effort: "high" } } },
-      {
-        name: "reasoning summary",
-        settings: { reasoning: { effort: "low", summary: "detailed" } },
-      },
-    ].flatMap((entry) =>
-      [false, true].map((historicalUpdate) => Object.assign({}, entry, { historicalUpdate })),
-    ),
-  )(
+    },
+    { name: "output limit", historicalUpdate: true, settings: { max_output_tokens: 512 } },
+    {
+      name: "reasoning effort",
+      historicalUpdate: true,
+      settings: { reasoning: { effort: "high" } },
+    },
+    {
+      name: "reasoning summary",
+      historicalUpdate: true,
+      settings: { reasoning: { effort: "low", summary: "detailed" } },
+    },
+  ])(
     "returns required input with current $name (historical update: $historicalUpdate)",
     async ({ settings, historicalUpdate }) => {
       const harness = await startRequiredInput(historicalUpdate);
@@ -734,20 +730,25 @@ describe("Responses WebSocket steering handoff", () => {
     expect(harness.socket.requests.at(-1)).not.toHaveProperty("reasoning");
   });
 
-  it.each(
-    [
-      { name: "another model", settings: { model: "gpt-5.6-luna" } },
-      { name: "pro mode", settings: { reasoning: { mode: "pro", effort: "high" } } },
-      { name: "multi-agent mode", settings: { multi_agent: { enabled: true } } },
-      { name: "automatic truncation", settings: { truncation: "auto" } },
-      {
-        name: "automatic compaction",
-        settings: { context_management: [{ type: "compaction", compact_threshold: 1000 }] },
-      },
-    ].flatMap((entry) =>
-      [false, true].map((includeControl) => Object.assign({}, entry, { includeControl })),
-    ),
-  )(
+  it.each([
+    { name: "another model", includeControl: false, settings: { model: "gpt-5.6-luna" } },
+    {
+      name: "pro mode",
+      includeControl: true,
+      settings: { reasoning: { mode: "pro", effort: "high" } },
+    },
+    {
+      name: "multi-agent mode",
+      includeControl: true,
+      settings: { multi_agent: { enabled: true } },
+    },
+    { name: "automatic truncation", includeControl: true, settings: { truncation: "auto" } },
+    {
+      name: "automatic compaction",
+      includeControl: true,
+      settings: { context_management: [{ type: "compaction", compact_threshold: 1000 }] },
+    },
+  ])(
     "rejects required-input history with configuration updates in $name (control present: $includeControl)",
     async ({ settings, includeControl }) => {
       const harness = await startRequiredInput(true);

@@ -5,7 +5,7 @@ import type { Model } from "../../llm/types.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
-import { DEFAULT_PROVIDER_RUNTIME_HOOKS, normalizeResolvedModel } from "./model.provider-hooks.js";
+import { normalizeResolvedModel, resolveRuntimeHooks } from "./model.provider-hooks.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: () => undefined,
@@ -45,6 +45,25 @@ function toolSearchEnabled(resolvedModel: Model, config: OpenClawConfig = {}): b
   }).toolSearchControlsEnabled;
 }
 
+it("preserves hook selection precedence and stable default tables", () => {
+  const defaults = resolveRuntimeHooks();
+  const target = resolveRuntimeHooks({ skipAgentDiscovery: true });
+  const skipped = resolveRuntimeHooks({ skipProviderRuntimeHooks: true });
+  const explicit = { ...defaults };
+
+  expect(resolveRuntimeHooks()).toBe(defaults);
+  expect(resolveRuntimeHooks({ skipAgentDiscovery: true })).toBe(target);
+  expect(target).not.toBe(defaults);
+  expect(resolveRuntimeHooks({ runtimeHooks: explicit, skipAgentDiscovery: true })).toBe(explicit);
+  expect(
+    resolveRuntimeHooks({
+      runtimeHooks: explicit,
+      skipAgentDiscovery: true,
+      skipProviderRuntimeHooks: true,
+    }),
+  ).toBe(skipped);
+});
+
 describe("resolved model Tool Search policy", () => {
   beforeAll(() => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
@@ -56,13 +75,12 @@ describe("resolved model Tool Search policy", () => {
   });
 
   it.each([
-    { provider: "ollama", api: "ollama", id: "qwen3.5:4b", expected: true },
-    { provider: "custom-host", api: "ollama", id: "qwen3.5:4b", expected: true },
-    { provider: "custom-host", api: "ollama", id: "server-alias", expected: true },
-    { provider: "lmstudio", api: "openai-completions", id: "small-model", expected: true },
+    { provider: "ollama", api: "ollama", id: "qwen3.5:4b", expected: "tools" },
+    { provider: "custom-host", api: "ollama", id: "server-alias", expected: "tools" },
+    { provider: "lmstudio", api: "openai-completions", id: "small-model", expected: "tools" },
     { provider: "ollama-cloud", api: "ollama", id: "cloud-model", expected: false },
     { provider: "custom-host", api: "ollama", id: "model:cloud", expected: false },
-    { provider: "custom-host", api: "openai-responses", id: "hosted-model", expected: false },
+    { provider: "custom-host", api: "openai-responses", id: "hosted-model", expected: undefined },
   ] as const)("prepares $provider/$id using its $api policy", ({ expected, ...route }) => {
     const config: OpenClawConfig = {
       agents: { defaults: { experimental: { localModelLean: false } } },
@@ -72,20 +90,24 @@ describe("resolved model Tool Search policy", () => {
       model: model(route),
       cfg: config,
     });
-    expect(toolSearchEnabled(resolved, config)).toBe(expected);
+    expect(resolved).toHaveProperty("toolSearchMode", expected);
+    // Provider preference is separate from the ordinary enabled Tool Search default.
+    expect(toolSearchEnabled(resolved, config)).toBe(true);
+    expect(toolSearchEnabled(resolved, { ...config, tools: { toolSearch: false } })).toBe(false);
     expect(config.tools).toBeUndefined();
   });
 
   it("uses the final transport and clears a previous attempt's preference", () => {
     const original = model();
     const local = normalizeResolvedModel({ provider: original.provider, model: original });
+    expect(local).toHaveProperty("toolSearchMode", "tools");
     expect(toolSearchEnabled(local)).toBe(true);
 
     const hosted = normalizeResolvedModel({
       provider: original.provider,
       model: local,
       runtimeHooks: {
-        ...DEFAULT_PROVIDER_RUNTIME_HOOKS,
+        ...resolveRuntimeHooks(),
         normalizeProviderTransportWithPlugin: () => ({
           api: "openai-responses",
           baseUrl: "https://hosted.example/v1",
@@ -93,13 +115,19 @@ describe("resolved model Tool Search policy", () => {
       },
     });
     expect(hosted.baseUrl).toBe("https://hosted.example/v1");
-    expect(toolSearchEnabled(hosted)).toBe(false);
+    expect(hosted).toHaveProperty("toolSearchMode", undefined);
+    expect(toolSearchEnabled(hosted)).toBe(true);
+    expect(local).toHaveProperty("toolSearchMode", "tools");
     expect(toolSearchEnabled(local)).toBe(true);
   });
 
   it.each([
-    { finalBaseUrl: "http://managed.example:8080/v1/", api: "openai-completions", expected: true },
-    { finalBaseUrl: "https://hosted.example/v1", api: "openai-completions", expected: false },
+    {
+      finalBaseUrl: "http://managed.example:8080/v1/",
+      api: "openai-completions",
+      expected: "tools",
+    },
+    { finalBaseUrl: "https://hosted.example/v1", api: "openai-completions", expected: undefined },
     { finalBaseUrl: "https://ollama.com/v1", api: "ollama", expected: false },
   ] as const)(
     "limits managed inference defaults to $finalBaseUrl",
@@ -121,7 +149,8 @@ describe("resolved model Tool Search policy", () => {
         model: model({ api, baseUrl: finalBaseUrl }),
         cfg,
       });
-      expect(toolSearchEnabled(resolved, cfg)).toBe(expected);
+      expect(resolved).toHaveProperty("toolSearchMode", expected);
+      expect(toolSearchEnabled(resolved, cfg)).toBe(true);
       expect(cfg.tools).toBeUndefined();
     },
   );

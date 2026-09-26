@@ -3,6 +3,9 @@ package ai.openclaw.wear
 import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
+import ai.openclaw.wear.shared.WearReplyText
+import ai.openclaw.wear.shared.WearReplyTextPage
+import ai.openclaw.wear.shared.WearReplyTextStatus
 import ai.openclaw.wear.shared.WearRpcMethod
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -25,6 +28,7 @@ internal data class WearProxyStatus(
   val eventSequence: Long?,
   val phoneNodeId: String,
   val eventStreamId: String? = null,
+  val failure: WearConversationFailure? = null,
 )
 
 internal enum class WearAgentPulseTaskState {
@@ -131,6 +135,7 @@ internal data class WearModelList(
   val eventSequence: Long?,
   val phoneNodeId: String,
   val eventStreamId: String? = null,
+  val refreshFailed: Boolean = false,
 )
 
 internal data class WearModelSelection(
@@ -145,7 +150,22 @@ internal data class WearChatMessage(
   val role: String,
   val text: String,
   val timestamp: Long?,
+  val idempotencyKey: String? = null,
+  val entryId: String? = null,
+  val textTruncated: Boolean? = null,
 )
+
+// These exact keys belong to terminal transcript writers. CLI keys can also
+// identify yielded progress, so neither prefixes nor arbitrary suffixes prove completion.
+internal fun WearChatMessage.replyOutcomeForRun(runId: String): WearReplyOutcome? {
+  if (role != "assistant") return null
+  return when (idempotencyKey) {
+    runId, "$runId:settled-finalization-fallback" -> WearReplyOutcome.Final
+    "$runId:assistant" -> WearReplyOutcome.Aborted
+    "$runId:terminal-error" -> WearReplyOutcome.Error
+    else -> null
+  }
+}
 
 internal data class WearTranscript(
   val sessionKey: String,
@@ -180,25 +200,103 @@ internal class WearSendAttemptTracker(
   private val newId: () -> String = { UUID.randomUUID().toString() },
 ) {
   private var ambiguousAttempt: WearSendAttempt? = null
+  private var latestAttempt: WearSendAttempt? = null
+  private var retryingUncertainDelivery = false
 
   fun begin(
     sessionKey: String,
     message: String,
     phoneNodeId: String,
   ): WearSendAttempt {
+    val retry = ambiguousAttempt?.takeIf { it.sessionKey == sessionKey && it.message == message && it.phoneNodeId == phoneNodeId }
+    return own(retry?.copy() ?: WearSendAttempt(sessionKey, message, "wear-${newId()}", phoneNodeId))
+  }
+
+  fun retry(
+    runId: String,
+    sessionKey: String,
+    message: String,
+    phoneNodeId: String,
+  ): WearSendAttempt? =
     ambiguousAttempt
-      ?.takeIf { it.sessionKey == sessionKey && it.message == message && it.phoneNodeId == phoneNodeId }
-      ?.let { return it }
+      ?.takeIf {
+        it.idempotencyKey == runId && it.sessionKey == sessionKey && it.message == message && it.phoneNodeId == phoneNodeId
+      }?.copy()
+      ?.let(::own)
+
+  private fun own(attempt: WearSendAttempt): WearSendAttempt {
+    // Retries reuse the logical key, never the authority of an older invocation.
+    retryingUncertainDelivery = ambiguousAttempt == attempt
     ambiguousAttempt = null
-    return WearSendAttempt(sessionKey, message, "wear-${newId()}", phoneNodeId)
+    latestAttempt = attempt
+    return attempt
+  }
+
+  fun isCurrent(attempt: WearSendAttempt): Boolean = latestAttempt === attempt
+
+  fun isAmbiguous(attempt: WearSendAttempt): Boolean = isCurrent(attempt) && ambiguousAttempt === attempt
+
+  fun reset() {
+    ambiguousAttempt = null
+    latestAttempt = null
+    retryingUncertainDelivery = false
+  }
+
+  fun retainForTarget(
+    sessionKey: String?,
+    phoneNodeId: String?,
+  ) {
+    val current = latestAttempt ?: return
+    if (current.sessionKey != sessionKey || current.phoneNodeId != phoneNodeId) reset()
+  }
+
+  fun markDisconnected(phoneNodeId: String?) {
+    val current = latestAttempt ?: return
+    if (phoneNodeId != null && current.phoneNodeId != phoneNodeId) {
+      reset()
+    } else {
+      // Delivery is uncertain, but callbacks from the disconnected invocation are retired.
+      latestAttempt = current.copy()
+      ambiguousAttempt = latestAttempt
+    }
   }
 
   fun markAmbiguous(attempt: WearSendAttempt) {
-    ambiguousAttempt = attempt
+    if (isCurrent(attempt)) ambiguousAttempt = attempt
   }
 
   fun markSucceeded(attempt: WearSendAttempt) {
-    if (ambiguousAttempt == attempt) ambiguousAttempt = null
+    if (isCurrent(attempt)) ambiguousAttempt = null
+  }
+
+  fun retireRejected(
+    attempt: WearSendAttempt,
+    code: String,
+  ): Boolean {
+    if (!isCurrent(attempt) || retryingUncertainDelivery) return false
+    if (code != "invalid_request" && code != "INVALID_REQUEST") return false
+    // Phone validation and Gateway pre-admission can definitively reject this
+    // invocation. Policy runs before deduplication, so neither disproves an
+    // earlier uncertain delivery of the same logical send.
+    reset()
+    return true
+  }
+
+  fun retire(
+    sessionKey: String,
+    phoneNodeId: String,
+    runId: String?,
+  ): Boolean {
+    val current = latestAttempt ?: return false
+    if (current.sessionKey != sessionKey || current.phoneNodeId != phoneNodeId || current.idempotencyKey != runId) return false
+    reset()
+    return true
+  }
+
+  fun reconcileTerminalHistory(transcript: WearTranscript): Boolean {
+    val current = latestAttempt ?: return false
+    if (transcript.messages.none { it.replyOutcomeForRun(current.idempotencyKey) != null }) return false
+    return retire(transcript.sessionKey, transcript.phoneNodeId, current.idempotencyKey)
   }
 }
 
@@ -207,17 +305,7 @@ internal class WearGatewayRepository(
 ) {
   suspend fun status(expectedNodeId: String? = null): WearProxyStatus {
     val response = requester.request(WearRpcMethod.ProxyStatus, buildJsonObject {}, expectedNodeId)
-    val result = response.payload.asObject("proxy.status")
-    return WearProxyStatus(
-      connected = result.boolean("connected") ?: false,
-      activeAgentId = result.string("activeAgentId"),
-      activeSessionKey = result.string("activeSessionKey"),
-      selectedModelRef = result.string("selectedModelRef"),
-      capabilities = result.proxyCapabilities(),
-      eventStreamId = response.eventStreamId,
-      eventSequence = response.eventSequence,
-      phoneNodeId = response.sourceNodeId,
-    )
+    return response.toProxyStatus("proxy.status")
   }
 
   suspend fun agentPulse(
@@ -287,14 +375,17 @@ internal class WearGatewayRepository(
   suspend fun models(
     expectedNodeId: String,
     capabilities: Set<WearProxyCapability>,
+    sessionKey: String,
     selectedModelRef: String? = null,
     query: String? = null,
   ): WearModelList {
     capabilities.require(WearProxyCapability.ModelControls)
+    capabilities.require(WearProxyCapability.SessionScopedModelCatalog)
     val response =
       requester.request(
         WearRpcMethod.ModelsList,
         buildJsonObject {
+          put("sessionKey", sessionKey)
           selectedModelRef?.let { put("selectedModelRef", it) }
           if (WearProxyCapability.ModelCatalogSearch in capabilities) {
             query?.takeIf(String::isNotBlank)?.let { put("query", it) }
@@ -309,6 +400,7 @@ internal class WearGatewayRepository(
         (result["models"] as? JsonArray)
           .orEmpty()
           .mapNotNull(::parseModel),
+      refreshFailed = result.boolean("refreshFailed") ?: false,
       eventStreamId = response.eventStreamId,
       eventSequence = response.eventSequence,
       phoneNodeId = response.sourceNodeId,
@@ -359,17 +451,7 @@ internal class WearGatewayRepository(
         phoneNodeId,
         requirePreferredNode = true,
       )
-    val result = response.payload.asObject(if (enabled) "gateway.connect" else "gateway.disconnect")
-    return WearProxyStatus(
-      connected = result.boolean("connected") ?: false,
-      activeAgentId = result.string("activeAgentId"),
-      activeSessionKey = result.string("activeSessionKey"),
-      selectedModelRef = result.string("selectedModelRef"),
-      capabilities = result.proxyCapabilities(),
-      eventStreamId = response.eventStreamId,
-      eventSequence = response.eventSequence,
-      phoneNodeId = response.sourceNodeId,
-    )
+    return response.toProxyStatus(if (enabled) "gateway.connect" else "gateway.disconnect")
   }
 
   suspend fun sessions(
@@ -412,6 +494,43 @@ internal class WearGatewayRepository(
     )
   }
 
+  suspend fun replyText(
+    target: WearReplyTarget,
+    offset: Int,
+    revision: String?,
+  ): WearReplyTextPage {
+    val response =
+      requester.request(
+        WearRpcMethod.ReplyText,
+        buildJsonObject {
+          put("source", if (target.attemptId == null) "chat" else "talk")
+          put("sessionKey", target.sessionKey)
+          target.agentId?.let { put("agentId", it) }
+          put("entryId", target.entryId)
+          target.attemptId?.let { put("attemptId", it) }
+          put("offset", offset)
+          revision?.let { put("revision", it) }
+        },
+        target.phoneNodeId,
+        requirePreferredNode = true,
+      )
+    if (response.sourceNodeId != target.phoneNodeId) return WearReplyTextPage(WearReplyTextStatus.Changed)
+    val page = WearReplyText.decode(response.payload)
+    val nextOffset = page.nextOffset
+    if (page.status == WearReplyTextStatus.Ready &&
+      (
+        page.offset != offset || page.text.length > WearReplyText.PAGE_LENGTH || page.revision.isNullOrBlank() ||
+          (revision != null && page.revision != revision) || page.totalLength !in offset..WearReplyText.MAX_TEXT_LENGTH ||
+          page.offset + page.text.length > page.totalLength ||
+          (nextOffset != null && (nextOffset != offset + page.text.length || nextOffset <= offset || nextOffset >= page.totalLength)) ||
+          (page.nextOffset == null && offset + page.text.length != page.totalLength)
+      )
+    ) {
+      return WearReplyTextPage(WearReplyTextStatus.Failed)
+    }
+    return page
+  }
+
   suspend fun history(
     sessionKey: String,
     expectedNodeId: String,
@@ -441,36 +560,44 @@ internal class WearGatewayRepository(
     )
   }
 
+  // True only for an explicit runless control completion, not ordinary send acceptance.
   suspend fun send(
     attempt: WearSendAttempt,
     requirePreferredPhone: Boolean = false,
-  ) {
-    requester.request(
-      WearRpcMethod.ChatSend,
-      buildJsonObject {
-        put("sessionKey", attempt.sessionKey)
-        put("message", attempt.message)
-        put("idempotencyKey", attempt.idempotencyKey)
-      },
-      attempt.phoneNodeId,
-      requirePreferredNode = requirePreferredPhone,
-    )
+  ): Boolean {
+    val response =
+      requester.request(
+        WearRpcMethod.ChatSend,
+        buildJsonObject {
+          put("sessionKey", attempt.sessionKey)
+          put("message", attempt.message)
+          put("idempotencyKey", attempt.idempotencyKey)
+        },
+        attempt.phoneNodeId,
+        requirePreferredNode = requirePreferredPhone,
+      )
+    val ack = response.payload as? JsonObject ?: return false
+    // Phone projectAck forwards the stop result as {aborted: false/true}; it
+    // omits Gateway ok/runIds. Missing runId alone (including legacy {}) is not proof.
+    return "runId" !in ack && "status" !in ack && ack.boolean("aborted") != null
   }
 
   suspend fun abort(
     sessionKey: String,
     runId: String?,
     phoneNodeId: String,
-  ) {
-    requester.request(
-      WearRpcMethod.ChatAbort,
-      buildJsonObject {
-        put("sessionKey", sessionKey)
-        runId?.let { put("runId", it) }
-      },
-      phoneNodeId,
-      requirePreferredNode = true,
-    )
+  ): Boolean {
+    val response =
+      requester.request(
+        WearRpcMethod.ChatAbort,
+        buildJsonObject {
+          put("sessionKey", sessionKey)
+          runId?.let { put("runId", it) }
+        },
+        phoneNodeId,
+        requirePreferredNode = true,
+      )
+    return response.payload.asObject("chat.abort").boolean("aborted") == true
   }
 
   suspend fun startRealtimeTalk(
@@ -508,6 +635,21 @@ internal class WearGatewayRepository(
       )
     return WearRealtimeTalkCodec.decode(response.payload)
   }
+}
+
+private fun WearRpcResult.toProxyStatus(method: String): WearProxyStatus {
+  val result = payload.asObject(method)
+  return WearProxyStatus(
+    connected = result.boolean("connected") ?: false,
+    failure = wearConversationFailureForConnection(result),
+    activeAgentId = result.string("activeAgentId"),
+    activeSessionKey = result.string("activeSessionKey"),
+    selectedModelRef = result.string("selectedModelRef"),
+    capabilities = result.proxyCapabilities(),
+    eventStreamId = eventStreamId,
+    eventSequence = eventSequence,
+    phoneNodeId = sourceNodeId,
+  )
 }
 
 internal fun parseWearChatEvent(payload: JsonElement?): WearChatEvent? {
@@ -680,6 +822,9 @@ internal fun parseChatMessage(element: JsonElement?): WearChatMessage? {
     role = role,
     text = text,
     timestamp = source.long("timestamp"),
+    idempotencyKey = source.string("idempotencyKey"),
+    entryId = source.string("entryId"),
+    textTruncated = source.boolean("textTruncated"),
   )
 }
 

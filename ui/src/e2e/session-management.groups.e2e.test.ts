@@ -1,7 +1,9 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { CronJobsListResult } from "../api/types.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   actionOpacity,
@@ -51,6 +53,9 @@ suite.define(() => {
       const header = group.locator(":scope > .sidebar-recent-sessions__head");
       const label = header.locator(".sidebar-recent-sessions__label-text");
       await group.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => label.evaluate((element) => getComputedStyle(element).maskImage))
+        .toContain("linear-gradient");
       await captureUiProof(suite, page, "sidebar-group-title-resting.png");
 
       const resting = await label.evaluate((element) => {
@@ -60,26 +65,28 @@ suite.define(() => {
           height: element.getBoundingClientRect().height,
           lineHeight: Number.parseFloat(style.lineHeight),
           scrollWidth: element.scrollWidth,
-          textOverflow: style.textOverflow,
+          maskImage: style.maskImage,
           whiteSpace: style.whiteSpace,
         };
       });
       expect(resting.whiteSpace).toBe("nowrap");
-      expect(resting.textOverflow).toBe("ellipsis");
+      expect(resting.maskImage).toContain("linear-gradient");
       expect(resting.height).toBeLessThanOrEqual(resting.lineHeight + 1);
       expect(resting.scrollWidth).toBeGreaterThan(resting.clientWidth);
 
-      await label.hover();
-      await expect
-        .poll(() => label.getAttribute("class"), { timeout: 3_000 })
-        .toContain("hover-marquee--scrolling");
-      await expect
-        .poll(() =>
-          label.evaluate((element) =>
-            Number.parseFloat(getComputedStyle(element).getPropertyValue("text-indent")),
-          ),
-        )
-        .toBeLessThan(-1);
+      const text = label.locator(".hover-marquee__text");
+      const offset = () =>
+        text.evaluate((element) => {
+          const transform = getComputedStyle(element).transform;
+          return transform === "none" ? 0 : new DOMMatrixReadOnly(transform).m41;
+        });
+      await header.hover();
+      await expect.poll(offset).toBeLessThan(-2);
+      const firstOffset = await offset();
+      await expect.poll(offset).toBeLessThan(firstOffset - 5);
+      expect(await label.evaluate((element) => getComputedStyle(element).maskImage)).toContain(
+        "linear-gradient",
+      );
       await captureUiProof(suite, page, "sidebar-group-title-hovered.png");
     } finally {
       await context.close();
@@ -138,7 +145,7 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:rename-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Rename…" }).click();
       const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
       await dialog.getByRole("textbox", { name: "Rename session" }).fill("Rejected rename");
@@ -191,7 +198,7 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:rename-me"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await page.getByRole("menuitem", { name: "Rename…" }).click();
 
       await page.getByRole("dialog", { name: "Rename session" }).waitFor({ state: "visible" });
@@ -235,26 +242,37 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
+    const automationPage: CronJobsListResult = {
+      jobs: [
+        {
+          id: "nightly-invoices",
+          name: "Nightly invoices",
+          enabled: true,
+          createdAtMs: baseTime,
+          updatedAtMs: baseTime,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Prepare customer invoices." },
+          state: {},
+        },
+      ],
+      snapshotRevision: "1",
+      total: 1,
+      limit: 50,
+      offset: 0,
+      nextOffset: null,
+      hasMore: false,
+    };
     const page = await context.newPage();
     await page.clock.install();
     const gateway = await installMockGateway(page, {
       featureMethods: [...defaultControlUiFeatureMethods, "cron.list"],
       methodResponses: {
-        "cron.list": {
-          jobs: [
-            {
-              id: "nightly-invoices",
-              name: "Nightly invoices",
-              description: "Reconciles customer billing",
-            },
-          ],
-          snapshotRevision: "1",
-          total: 1,
-          limit: 200,
-          offset: 0,
-          nextOffset: null,
-          hasMore: false,
-        },
+        "cron.list": cronListResponseFixture([
+          { match: { limit: 200 }, response: { ...automationPage, limit: 200 } },
+          { response: automationPage },
+        ]),
         "sessions.list": {
           cases: [
             {
@@ -352,7 +370,7 @@ suite.define(() => {
       // Active rows can archive through the Gateway's stop-and-drain lifecycle,
       // while Delete keeps its separate active-run guard.
       await sidebarMigration.hover();
-      await sidebarMigration.getByRole("button", { name: "Open session menu" }).click();
+      await sidebarMigration.click({ button: "right" });
       await expect
         .poll(() => page.getByRole("menuitem", { name: "Archive session" }).isDisabled())
         .toBe(false);
@@ -361,7 +379,7 @@ suite.define(() => {
         .toBe(true);
       await page.keyboard.press("Escape");
       await sidebarResearch.hover();
-      await sidebarResearch.getByRole("button", { name: "Open session menu" }).click();
+      await sidebarResearch.click({ button: "right" });
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Archive session" }));
       const archivePatch = await waitForPatch(
         gateway,
@@ -391,13 +409,13 @@ suite.define(() => {
         .toBe(true);
 
       // The same palette lazily loads small non-session catalogs once and
-      // matches both item names and descriptions without involving FTS.
+      // matches compact automation names without involving FTS.
       const cronRequestsBeforePalette = (await gateway.getRequests("cron.list")).length;
       const transcriptRequestsBeforePalette = (await gateway.getRequests("sessions.search")).length;
       await page.getByRole("button", { name: "Open command palette" }).click();
       const paletteInput = page.locator(".cmd-palette__input");
       await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
-      await paletteInput.fill("reconciles customer billing");
+      await paletteInput.fill("nightly invoices");
       await page.clock.runFor(50);
       const automationOption = page.getByRole("option", { name: /Nightly invoices/u });
       await automationOption.waitFor({ state: "visible", timeout: 10_000 });
@@ -419,8 +437,16 @@ suite.define(() => {
       const transcriptRequests = await gateway.getRequests("sessions.search");
       expect(transcriptRequests).toHaveLength(transcriptRequestsBeforePalette + 2);
       expect(requireRecord(transcriptRequests.at(-1)?.params)).toMatchObject({
-        agentId: "main",
         query: "view-only handshake",
+        limit: 25,
+        scope: {
+          includeGlobal: false,
+          includeUnknown: false,
+          configuredAgentsOnly: true,
+          excludeSubagents: true,
+          excludeCron: true,
+          excludeSystem: true,
+        },
       });
       await captureUiProof(suite, page, "command-palette-session-search.png");
       await paletteOption.click();
@@ -834,7 +860,7 @@ suite.define(() => {
         '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
       );
       await sessionTen.hover();
-      await sessionTen.getByRole("button", { name: "Open session menu" }).click();
+      await sessionTen.click({ button: "right" });
       await openSessionMenuSubmenu(page, "Move to group");
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
       await submitInputDialog(page, "Gamma");
@@ -884,7 +910,9 @@ suite.define(() => {
         .toBe(10);
 
       const alpha = page.locator('[data-session-section="category:Alpha"]');
-      const alphaToggle = alpha.getByRole("button", { name: "Alpha", exact: true });
+      const alphaToggle = alpha
+        .getByRole("button", { name: "Alpha", exact: true })
+        .and(alpha.locator(".sidebar-session-group-toggle"));
       await alphaToggle.click();
       await expect.poll(() => alpha.locator(".sidebar-recent-session").count()).toBe(0);
       await captureUiProof(suite, page, "sidebar-session-group-collapsed.png");

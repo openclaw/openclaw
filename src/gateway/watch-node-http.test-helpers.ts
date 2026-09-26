@@ -2,7 +2,6 @@ import {
   createServer,
   request as httpRequest,
   type ClientRequest,
-  type Server,
   type ServerResponse,
 } from "node:http";
 import { expect, vi } from "vitest";
@@ -26,7 +25,7 @@ import { createWatchNodeHttpRuntime } from "./watch-node-http.js";
 
 export async function startWatchNodeHttpRuntime(
   baseDir: string,
-  servers: Server[],
+  cleanups: Array<() => Promise<void>>,
   options?: {
     rateLimiter?: AuthRateLimiter;
     abortConnectResponse?: boolean;
@@ -64,6 +63,7 @@ export async function startWatchNodeHttpRuntime(
   const connectHandled = new Promise<void>((resolve) => {
     resolveConnectHandled = resolve;
   });
+  const requests: Array<Promise<PromiseSettledResult<void>[]>> = [];
   const server = createServer((req, res) => {
     const isConnect = req.url === "/api/nodes/watch/connect";
     if (isConnect && options?.onConnectResponseStart) {
@@ -79,24 +79,39 @@ export async function startWatchNodeHttpRuntime(
         return res;
       }) as typeof res.end;
     }
-    void runtime
-      .handleRequest(req, res)
-      .then((handled) => {
-        if (!handled && !res.writableEnded) {
-          res.statusCode = 404;
-          res.end();
-        }
-        if (req.url === "/api/nodes/watch/poll" && !res.writableEnded) {
-          options?.onPollReady?.(res);
-        }
-      })
-      .finally(() => {
-        if (isConnect) {
-          resolveConnectHandled();
-        }
-      });
+    requests.push(
+      Promise.allSettled([
+        runtime
+          .handleRequest(req, res)
+          .then((handled) => {
+            if (!handled && !res.writableEnded) {
+              res.statusCode = 404;
+              res.end();
+            }
+            if (req.url === "/api/nodes/watch/poll" && !res.writableEnded) {
+              options?.onPollReady?.(res);
+            }
+          })
+          .finally(() => {
+            if (isConnect) {
+              resolveConnectHandled();
+            }
+          }),
+      ]),
+    );
   });
-  servers.push(server);
+  cleanups.push(async () => {
+    runtime.close();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+    const results = (await Promise.all(requests)).flat();
+    for (const result of results) {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+    }
+  });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });

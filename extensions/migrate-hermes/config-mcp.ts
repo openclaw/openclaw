@@ -1,5 +1,6 @@
 // Hermes MCP config mapping and manual follow-up planning.
 import { createMigrationManualItem } from "openclaw/plugin-sdk/migration";
+import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asBoolean,
@@ -8,7 +9,6 @@ import {
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mcpValueHasEnvReferences, resolveMcpEnvReferences } from "./config-env.js";
-import { readPositiveNumber } from "./config-provider-contract.js";
 import { sanitizeName } from "./helpers.js";
 
 const MCP_RESOURCE_UTILITY_TOOLS = ["resources_list", "resources_read"] as const;

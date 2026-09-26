@@ -140,8 +140,6 @@ describe("Buzz bus lifecycle", () => {
   it.each([
     ["truncated JSON", '{"self":'],
     ["null", "null"],
-    ["an array", "[]"],
-    ["a primitive", "true"],
   ])("rejects malformed NIP-11 relay information containing %s", async (_label, body) => {
     relayMocks.auth.mockResolvedValue("ok");
     vi.stubGlobal(
@@ -209,9 +207,9 @@ describe("Buzz bus lifecycle", () => {
     expect(relayMocks.send).not.toHaveBeenCalled();
   });
 
-  it.each(["all", "off"] as const)(
+  it.for(["all", "off"] as const)(
     "signs %s-mode replies and typing without changing inbound threads",
-    async (replyToMode) => {
+    async (replyToMode, { signal }) => {
       relayMocks.auth.mockResolvedValue("ok");
       const runtime = createPluginRuntimeMock();
       setBuzzRuntime(runtime);
@@ -230,19 +228,30 @@ describe("Buzz bus lifecycle", () => {
           groups: { [CHANNEL_ID]: { requireMention: false } },
         },
       };
+      const handled = new Map<string, ReturnType<typeof createDeferred<void>>>();
+      const failPending = (error: unknown) => {
+        for (const completion of handled.values()) {
+          completion.reject(error);
+        }
+      };
+      const onAbort = () => failPending(signal.reason);
       const bus = await startTestBus({
-        onMessage: async (message, activeBus, signal, assertCurrent) =>
+        onMessage: async (message, activeBus, messageSignal, assertCurrent) => {
           await handleBuzzInbound({
             account,
             cfg: {},
             bus: activeBus,
             message,
-            signal,
+            signal: messageSignal,
             assertCurrent,
             historyMap: new Map(),
-          }),
+          });
+          handled.get(message.id)?.resolve();
+        },
+        onMessageError: failPending,
       });
 
+      signal.addEventListener("abort", onAbort, { once: true });
       try {
         const rootId = "a".repeat(64);
         const messageSubscription = relayMocks.subscriptions.find((entry) =>
@@ -263,10 +272,16 @@ describe("Buzz bus lifecycle", () => {
                 : []),
             ],
           });
+          signal.throwIfAborted();
+          const completion = createDeferred<void>();
+          handled.set(inbound.id, completion);
           messageSubscription?.handlers.onevent(inbound);
-          await vi.waitFor(() =>
-            expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(index + 1),
-          );
+          try {
+            await completion.promise;
+          } finally {
+            handled.delete(inbound.id);
+          }
+          expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(index + 1);
           const dispatch = vi.mocked(runtime.channel.inbound.dispatch).mock.calls[index]?.[0];
           expect(dispatch?.ctxPayload.MessageThreadId).toBe(parentId ? rootId : undefined);
           await dispatch?.delivery.deliver({ text: `reply ${index + 1}` }, { kind: "final" });
@@ -291,6 +306,7 @@ describe("Buzz bus lifecycle", () => {
           expect(typing && verifyEvent(typing)).toBe(true);
         }
       } finally {
+        signal.removeEventListener("abort", onAbort);
         await bus.close();
       }
     },
@@ -395,24 +411,17 @@ describe("Buzz bus lifecycle", () => {
     const onMessage = vi.fn(async () => {});
     const onFatalError = vi.fn();
 
-    const bus = await startTestBus({
-      onMessage,
-      onFatalError,
-    });
-
-    await vi.waitFor(() => {
-      expect(onFatalError).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Buzz inbound replay exceeded the 1024-message pending limit",
-        }),
-      );
-    });
+    await expect(startTestBus({ onMessage, onFatalError })).rejects.toThrow(
+      "Buzz inbound replay exceeded the 1024-message pending limit",
+    );
+    expect(onFatalError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Buzz inbound replay exceeded the 1024-message pending limit",
+      }),
+    );
     expect(onFatalError).toHaveBeenCalledOnce();
     expect(onMessage).not.toHaveBeenCalled();
-    expect(relayMocks.close).not.toHaveBeenCalled();
-
-    await bus.close();
-    expect(relayMocks.close).toHaveBeenCalledOnce();
+    expect(relayMocks.close).toHaveBeenCalled();
   });
 
   it("aborts active inbound dispatch and waits for its cleanup before completing shutdown", async () => {

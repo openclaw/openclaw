@@ -13,6 +13,7 @@ import {
   type GhConfigDiscoveryInput,
 } from "../skills/lifecycle/gh-config-discovery.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { shouldAutoApproveDoctorFix } from "./doctor-repair-mode.js";
 import {
   collectUnavailableAgentSkills,
   disableUnavailableSkillsInConfig,
@@ -99,22 +100,20 @@ export async function maybeRepairSkillReadiness(params: {
         config: params.cfg,
         agentId,
       });
-      return { agentId, report, unavailable: collectUnavailableAgentSkills(report) };
+      return { agentId, skills: report.skills, unavailable: collectUnavailableAgentSkills(report) };
     };
     return params.runWithPluginMetadataSnapshot
       ? params.runWithPluginMetadataSnapshot({ config: params.cfg, workspaceDir }, buildReport)
       : buildReport();
   });
-  const fleetUnavailable = collectFleetUnavailableSkills(
-    reports.map(({ report, unavailable: unavailableForAgent }) => ({
-      skills: report.skills,
-      unavailable: unavailableForAgent,
-    })),
-  );
+  const fleetUnavailable = collectFleetUnavailableSkills(reports);
   const globallyUnavailableKeys = new Set(fleetUnavailable.map((skill) => skill.skillKey));
-  for (const { agentId, report, unavailable: unavailableForAgent } of reports) {
+  const willRepair = shouldAutoApproveDoctorFix(params.prompter.repairMode, {
+    blockDuringUpdate: true,
+  });
+  for (const { agentId, skills, unavailable: unavailableForAgent } of reports) {
     const prefix = agentIds.length > 1 ? `Agent "${agentId}":\n` : "";
-    const githubHint = describeGhConfigDirHint(report.skills);
+    const githubHint = describeGhConfigDirHint(skills);
     if (githubHint.length > 0) {
       note(`${prefix}${githubHint.join("\n")}`, "GitHub CLI");
     }
@@ -123,7 +122,7 @@ export async function maybeRepairSkillReadiness(params: {
         globallyUnavailableKeys.has(skill.skillKey),
       );
       note(
-        `${prefix}${formatUnavailableSkillDoctorLines(unavailableForAgent, includesGlobalCandidate).join("\n")}`,
+        `${prefix}${formatUnavailableSkillDoctorLines(unavailableForAgent, includesGlobalCandidate && !willRepair).join("\n")}`,
         "Skills",
       );
     }

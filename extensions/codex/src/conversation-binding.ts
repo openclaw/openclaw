@@ -14,8 +14,8 @@ import { normalizeCodexAppServerBindingModelProvider } from "./app-server/auth-p
 import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
-  type CodexAppServerLiveThreadOwnership,
 } from "./app-server/client-runtime.js";
+import type { CodexAppServerLiveThreadOwnership } from "./app-server/client-thread-owner.js";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerOverloadError,
@@ -58,7 +58,7 @@ import type { CodexAppServerConversationBindingData } from "./conversation-bindi
 import {
   assertNativeConversationApprovalPolicySupported,
   buildCodexConversationAgentLookup,
-  buildConversationThreadRequest,
+  buildConversationThreadRequestForClient,
   CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
   prepareCodexConversationBinding,
   resolveConversationAppServerRuntime,
@@ -205,17 +205,24 @@ async function runBoundTurn(params: {
             await withLeasedCodexAppServerClientStartSelectionRetry({
               lease: clientLease,
               options: clientOptions,
-              run: async (requestClient, requestOptions) =>
-                await requestClient.request(
+              run: async (requestClient, requestOptions) => {
+                const threadRequest = await buildConversationThreadRequestForClient(
+                  requestClient,
+                  threadRequestRuntime,
+                  serviceTier,
+                  requestOptions,
+                );
+                return await requestClient.request(
                   "thread/start",
                   {
-                    ...buildConversationThreadRequest(threadRequestRuntime, serviceTier),
+                    ...threadRequest,
                     developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
                     experimentalRawEvents: true,
                     ...(params.incognito ? { ephemeral: true } : {}),
                   },
                   requestOptions(),
-                ),
+                );
+              },
               onClientChange: (nextClient) => {
                 client = nextClient;
               },
@@ -249,7 +256,9 @@ async function runBoundTurn(params: {
             }
             liveThreadOwnership = undefined;
           } else if (binding.threadId !== threadId) {
-            await releaseCodexAppServerBindingSubscription(binding);
+            await releaseCodexAppServerBindingSubscription(binding, {
+              retainedClientId: client.getInstanceId(),
+            });
           }
           const committed = await params.bindingStore.mutate(identity, {
             kind: "set",
@@ -287,8 +296,14 @@ async function runBoundTurn(params: {
           const response = await withLeasedCodexAppServerClientStartSelectionRetry({
             lease: clientLease,
             options: clientOptions,
-            run: async (requestClient, requestOptions) =>
-              await resumeCodexAppServerThread({
+            run: async (requestClient, requestOptions) => {
+              const threadRequest = await buildConversationThreadRequestForClient(
+                requestClient,
+                threadRequestRuntime,
+                serviceTier,
+                requestOptions,
+              );
+              return await resumeCodexAppServerThread({
                 client: requestClient,
                 onSubscriptionReleased: () => {
                   isolatedSubscriptionClient = requestClient;
@@ -299,11 +314,12 @@ async function runBoundTurn(params: {
                 },
                 request: {
                   threadId,
-                  ...buildConversationThreadRequest(threadRequestRuntime, serviceTier),
+                  ...threadRequest,
                 },
                 requestResume: (request) =>
                   requestClient.request("thread/resume", request, requestOptions()),
-              }),
+              });
+            },
             onClientChange: (nextClient) => {
               client = nextClient;
             },
@@ -319,7 +335,9 @@ async function runBoundTurn(params: {
           ) {
             // Keep the old physical owner authoritative until unsubscribe succeeds;
             // failed migration then rolls back only the newly resumed connection.
-            await releaseCodexAppServerBindingSubscription(binding);
+            await releaseCodexAppServerBindingSubscription(binding, {
+              retainedClientId: client.getInstanceId(),
+            });
           }
           const committed = await params.bindingStore.mutate(identity, {
             kind: "patch",
@@ -375,6 +393,7 @@ async function runBoundTurn(params: {
         activeTurnCleanup = trackCodexConversationActiveTurn({
           identity,
           client,
+          requestTimeoutMs: runtime.requestTimeoutMs,
           threadId,
           turnId: activeTurnId,
         });
@@ -502,17 +521,9 @@ async function runBoundTurn(params: {
   });
 }
 
-export async function runBoundTurnWithMissingThreadRecovery(params: {
-  bindingStore: CodexAppServerBindingStore;
-  data: CodexAppServerConversationBindingData;
-  prompt: string;
-  event: PluginHookInboundClaimEvent;
-  pluginConfig?: unknown;
-  config?: CodexConversationConfig;
-  sessionKey?: string;
-  incognito: boolean;
-  timeoutMs?: number;
-}): Promise<BoundTurnResult> {
+export async function runBoundTurnWithMissingThreadRecovery(
+  params: Parameters<typeof runBoundTurn>[0],
+): Promise<BoundTurnResult> {
   await prepareCodexConversationBinding(params);
   try {
     return await runBoundTurn(params);

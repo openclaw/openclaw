@@ -23,7 +23,10 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { getPluginCache } from "../../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
+import {
+  resolveNormalizedAccountEntry,
+  type ChannelAccountKeyPolicy,
+} from "../../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -152,14 +155,8 @@ function getChannelConfigRecord(cfg: OpenClawConfig, channelId: string): Record<
   if (!isSafeManifestChannelId(channelId)) {
     return {};
   }
-  const channels = cfg.channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return {};
-  }
-  const entry = readOwnRecordValue(channels as Record<string, unknown>, channelId);
-  return entry && typeof entry === "object" && !Array.isArray(entry)
-    ? (entry as Record<string, unknown>)
-    : {};
+  const channels = asOptionalRecord(cfg.channels);
+  return (channels && asOptionalRecord(readOwnRecordValue(channels, channelId))) ?? {};
 }
 
 function normalizeManifestAccountConfigKey(accountId: string): string {
@@ -194,6 +191,7 @@ function resolveManifestChannelDefaultAccountId(cfg: OpenClawConfig, channelId: 
 function resolveManifestChannelAccount(params: {
   cfg: OpenClawConfig;
   channelId: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   accountId?: string | null;
 }): ReturnType<ManifestChannelPlugin["config"]["resolveAccount"]> {
   const channelConfig = getChannelConfigRecord(params.cfg, params.channelId);
@@ -202,7 +200,12 @@ function resolveManifestChannelAccount(params: {
   const config =
     asOptionalRecord(
       accounts
-        ? resolveNormalizedAccountEntry(accounts, accountId, normalizeManifestAccountConfigKey)
+        ? resolveNormalizedAccountEntry(
+            accounts,
+            accountId,
+            normalizeManifestAccountConfigKey,
+            params.accountKeyPolicy,
+          )
         : undefined,
     ) ?? channelConfig;
   return {
@@ -237,28 +240,26 @@ function createManifestChannelPlugin(params: {
   if (!isSafeManifestChannelId(params.channelId)) {
     return undefined;
   }
+  // Package presentation describes one channel, even when the plugin owns several.
+  const packageChannel =
+    params.record.packageChannel?.id === params.channelId
+      ? params.record.packageChannel
+      : undefined;
   const catalogMeta =
     params.record.channelCatalogMeta?.id === params.channelId
       ? params.record.channelCatalogMeta
       : undefined;
-  const channelConfigValue = params.record.channelConfigs
-    ? readOwnRecordValue(params.record.channelConfigs as Record<string, unknown>, params.channelId)
-    : undefined;
-  if (
-    !catalogMeta &&
-    (!channelConfigValue ||
-      typeof channelConfigValue !== "object" ||
-      Array.isArray(channelConfigValue)) &&
-    !params.record.channels.includes(params.channelId)
-  ) {
+  const channelConfig = asOptionalRecord(
+    params.record.channelConfigs
+      ? readOwnRecordValue(
+          params.record.channelConfigs as Record<string, unknown>,
+          params.channelId,
+        )
+      : undefined,
+  ) as ManifestChannelConfigRecord | undefined;
+  if (!catalogMeta && !channelConfig && !params.record.channels.includes(params.channelId)) {
     return undefined;
   }
-  const channelConfig =
-    channelConfigValue &&
-    typeof channelConfigValue === "object" &&
-    !Array.isArray(channelConfigValue)
-      ? (channelConfigValue as ManifestChannelConfigRecord)
-      : undefined;
   const label =
     normalizeManifestText(
       channelConfig?.label ?? catalogMeta?.label,
@@ -268,6 +269,8 @@ function createManifestChannelPlugin(params: {
     channelConfig?.description ?? catalogMeta?.blurb,
     params.record.description || "",
   );
+  const detailLabel = normalizeManifestText(packageChannel?.detailLabel, "");
+  const systemImage = normalizeManifestText(packageChannel?.systemImage, "");
   const commands = normalizeChannelCommandDefaults(
     channelConfig?.commands ?? catalogMeta?.commands,
   );
@@ -276,7 +279,9 @@ function createManifestChannelPlugin(params: {
     meta: {
       id: params.channelId,
       label,
-      selectionLabel: label,
+      selectionLabel: normalizeManifestText(packageChannel?.selectionLabel, label) || label,
+      ...(detailLabel ? { detailLabel } : {}),
+      ...(systemImage ? { systemImage } : {}),
       docsPath: `/channels/${encodeURIComponent(params.channelId)}`,
       blurb,
       ...(channelConfig?.preferOver?.length
@@ -300,7 +305,12 @@ function createManifestChannelPlugin(params: {
       listAccountIds: (cfg) => listManifestChannelAccountIds(cfg, params.channelId),
       defaultAccountId: (cfg) => resolveManifestChannelDefaultAccountId(cfg, params.channelId),
       resolveAccount: (cfg, accountId) =>
-        resolveManifestChannelAccount({ cfg, channelId: params.channelId, accountId }),
+        resolveManifestChannelAccount({
+          cfg,
+          channelId: params.channelId,
+          accountId,
+          accountKeyPolicy: params.record.channelAccountKeyPolicies?.[params.channelId],
+        }),
       isEnabled: (account, cfg) =>
         getChannelConfigRecord(cfg, params.channelId).enabled !== false &&
         account.config.enabled !== false,
@@ -341,6 +351,9 @@ function rebindChannelPluginConfig(
     ...config,
     listAccountIds: (cfg) => config.listAccountIds(rebind(cfg)),
     resolveAccount: (cfg, accountId) => config.resolveAccount(rebind(cfg), accountId),
+    resolveAccountAsync: config.resolveAccountAsync
+      ? (cfg, accountId) => config.resolveAccountAsync!(rebind(cfg), accountId)
+      : undefined,
     inspectAccount: config.inspectAccount
       ? (cfg, accountId) => config.inspectAccount?.(rebind(cfg), accountId)
       : undefined,
@@ -395,6 +408,9 @@ function rebindChannelPluginConfig(
       : undefined,
     hasConfiguredState: config.hasConfiguredState
       ? (params) => config.hasConfiguredState?.({ ...params, cfg: rebind(params.cfg) }) ?? false
+      : undefined,
+    hasConfiguredStateAsync: config.hasConfiguredStateAsync
+      ? (params) => config.hasConfiguredStateAsync!({ ...params, cfg: rebind(params.cfg) })
       : undefined,
     hasPersistedAuthState: config.hasPersistedAuthState
       ? (params) => config.hasPersistedAuthState?.({ ...params, cfg: rebind(params.cfg) }) ?? false

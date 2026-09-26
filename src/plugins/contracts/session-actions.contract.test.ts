@@ -24,7 +24,12 @@ import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.
 import type { PluginSessionActionContext } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  setActivePluginRegistry,
+  stageActivePluginRegistry,
+} from "../runtime.js";
 import { createPluginRecord } from "../status.test-fixtures.js";
 import type { OpenClawPluginApi } from "../types.js";
 
@@ -965,7 +970,7 @@ describe("plugin session actions", () => {
     expect(observed).toEqual([]);
   });
 
-  it("allows reactivated cached registries to emit agent events again", () => {
+  it("keeps agent event delivery after a staged registry rollback", () => {
     const observed: unknown[] = [];
     const unsubscribe = onAgentEvent((event) => observed.push(event));
     const { config, registry } = createPluginRegistryFixture();
@@ -984,8 +989,9 @@ describe("plugin session actions", () => {
     });
 
     setActivePluginRegistry(registry.registry);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    setActivePluginRegistry(registry.registry);
+    const snapshot = captureActivePluginRegistrySnapshot();
+    stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
+    rollbackStagedPluginRegistry(snapshot);
 
     try {
       expect(

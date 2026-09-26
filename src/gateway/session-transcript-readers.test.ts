@@ -1,49 +1,45 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   persistSessionTranscriptTurn,
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
-import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
+  readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
+  readSessionMessagesAroundIdWithStatsAsync,
   readSessionMessagesPageWithStatsAsync,
-  readLatestSessionUsageFromTranscriptAsync,
   visitSessionMessagesAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+import { readLatestSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 
 describe("session transcript reader facade", () => {
   let tempDir: string;
   let storePath: string;
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let state: OpenClawTestState;
 
-  beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    tempDir = tempDirs.make("openclaw-transcript-readers-");
+  beforeEach(async () => {
+    state = await createOpenClawTestState({
+      prefix: "openclaw-transcript-readers-",
+      layout: "state-only",
+    });
+    tempDir = state.stateDir;
     storePath = path.join(tempDir, "sessions.json");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
   });
 
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    envSnapshot.restore();
+  afterEach(async () => {
+    await state.cleanup();
   });
 
   async function writeTranscript(
@@ -96,7 +92,10 @@ describe("session transcript reader facade", () => {
 
     await expect(
       readSessionMessagesAsync(scope, { mode: "full", reason: "facade active branch test" }),
-    ).resolves.toMatchObject([{ content: "root prompt" }, { content: "active answer" }]);
+    ).resolves.toMatchObject([
+      { content: "root prompt", __openclaw: { id: "root", seq: 1 } },
+      { content: "active answer", __openclaw: { id: "active", seq: 2 } },
+    ]);
     const visited: Array<{ message: unknown; seq: number }> = [];
     await expect(
       visitSessionMessagesAsync(scope, (message, seq) => visited.push({ message, seq })),
@@ -259,6 +258,19 @@ describe("session transcript reader facade", () => {
       line("retained archive"),
     );
 
+    for (const allowResetArchiveFallback of [false, undefined]) {
+      await expect(
+        readSessionMessagesPageWithStatsAsync(scope, {
+          offset: 0,
+          maxMessages: 1,
+          allowResetArchiveFallback,
+        }),
+      ).rejects.toMatchObject({
+        name: "SessionTranscriptStorageUnavailableError",
+        reason: "database-missing",
+      });
+    }
+
     await expect(
       readSessionMessagesAsync(scope, {
         mode: "full",
@@ -266,6 +278,19 @@ describe("session transcript reader facade", () => {
         allowResetArchiveFallback: true,
       }),
     ).resolves.toMatchObject([{ content: "retained archive" }]);
+    await expect(
+      readRecentSessionMessagesWithStatsAsync(scope, {
+        maxMessages: 1,
+        allowResetArchiveFallback: true,
+      }),
+    ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
+    await expect(
+      readSessionMessagesPageWithStatsAsync(scope, {
+        offset: 0,
+        maxMessages: 1,
+        allowResetArchiveFallback: true,
+      }),
+    ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
   });
 
   test("does not fall back to stored custom transcript paths after SQLite migration", async () => {
@@ -501,54 +526,6 @@ describe("session transcript reader facade", () => {
       visitSessionMessagesAsync(scope, (message) => visited.push(message)),
     ).rejects.toBeInstanceOf(SessionTranscriptProjectionUnavailableError);
     expect(visited).toEqual([]);
-    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
-  });
-
-  test("projects SQLite transcript reads to the active branch", async () => {
-    const sessionId = "reader-sqlite-branch";
-    const scope = {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath,
-    };
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        {
-          eventId: "root",
-          parentId: null,
-          message: { role: "user", content: "branch prompt" },
-        },
-        {
-          eventId: "inactive",
-          parentId: "root",
-          message: { role: "assistant", content: "stale branch" },
-        },
-        {
-          eventId: "active",
-          parentId: "root",
-          message: { role: "assistant", content: "active branch" },
-        },
-      ],
-      touchSessionEntry: false,
-    });
-    await waitForSessionTranscriptIndexReconcile({
-      agentId: "main",
-      path: path.join(tempDir, "openclaw-agent.sqlite"),
-    });
-
-    const messages = await readSessionMessagesAsync(scope, {
-      mode: "full",
-      reason: "sqlite branch facade test",
-    });
-
-    expect(messages).toMatchObject([{ content: "branch prompt" }, { content: "active branch" }]);
-    expect(
-      messages.map((message) => (message as { __openclaw?: { id?: string } })["__openclaw"]?.id),
-    ).toEqual(["root", "active"]);
-    expect(
-      messages.map((message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq),
-    ).toEqual([1, 2]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });
 

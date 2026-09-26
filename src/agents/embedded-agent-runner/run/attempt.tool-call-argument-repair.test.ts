@@ -1,41 +1,17 @@
 // Coverage for repairing malformed streamed tool-call arguments.
 import { describe, expect, it } from "vitest";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { createFakeStream, type FakeWrappedStream } from "./attempt-stream.test-helpers.js";
 import {
   shouldRepairMalformedToolCallArguments,
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
-
-type FakeWrappedStream = {
-  result: () => Promise<unknown>;
-  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
-};
 
 type FakeStreamFn = (
   model: never,
   context: never,
   options: never,
 ) => FakeWrappedStream | Promise<FakeWrappedStream>;
-
-function createFakeStream(params: {
-  events: unknown[];
-  resultMessage: unknown;
-}): FakeWrappedStream {
-  // Minimal fake stream lets repair tests assert both streamed events and final
-  // result mutation.
-  return {
-    async result() {
-      return params.resultMessage;
-    },
-    [Symbol.asyncIterator]() {
-      return (async function* () {
-        for (const event of params.events) {
-          yield event;
-        }
-      })();
-    },
-  };
-}
 
 async function invokeProviderStream(params: {
   provider: string;

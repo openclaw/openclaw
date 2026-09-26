@@ -1,13 +1,12 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import {
-  createGatewayKernel,
-  gatewayKernelLogs,
-  resetPreparedModelCatalogForTestCore,
-} from "./server-kernel.js";
+import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
-import { rethrowGatewayStartupError, runGatewayShutdownSteps } from "./server-shutdown.js";
+import { rethrowGatewayStartupError, runGatewayCloseSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 
@@ -19,17 +18,31 @@ const { log, logTailscale, logChannels, logHealth, logCron, logReload, logHooks,
   gatewayKernelLogs;
 const POST_READY_WORK_START_DELAY_MS = 500;
 
-export { resetPreparedModelCatalogForTestCore };
-
 export async function startGatewayServerCore(
   port = 18789,
   opts: GatewayServerOptions = {},
+): Promise<GatewayServer> {
+  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  return await sdkResourceHost.run(() =>
+    startGatewayServerWithSdkHost(port, opts, sdkResourceHost),
+  );
+}
+
+async function startGatewayServerWithSdkHost(
+  port: number,
+  opts: GatewayServerOptions,
+  sdkResourceHost: LegacyPluginSdkResourceHost,
 ): Promise<GatewayServer> {
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;
   });
-  const gatewayKernel = await createGatewayKernel(port, opts, { deferEarlyRuntime: true });
+  const gatewayKernel = await createGatewayKernel(port, opts, {
+    deferEarlyRuntime: true,
+    sdkResourceHost,
+  });
+  // A Gateway restart must refresh restored skill catalogs, even in the same process.
+  bumpSkillsSnapshotVersion({ reason: "manual" });
   if (!gatewayKernel.minimalTestGateway) {
     // Start the Keychain read early so it overlaps bootstrap; post-attach awaits the
     // shared promise before plugins can use TLS.
@@ -40,17 +53,13 @@ export async function startGatewayServerCore(
     beginClosePrelude,
     closeOnStartupFailure,
     prepareClose,
-    sealAndJoinRegisteredSidecarStops,
-    runClosePrelude,
-    stopRegisteredGatewayLifetimeSidecars,
-    stopRegisteredPostReadySidecars,
-    stopConnectionDependentSidecars,
     terminalSessions,
     shutdownRuntime,
   } = gatewayKernel;
   try {
     const transport = await createGatewayHttpTransport({
       ...gatewayKernel.createHttpTransportOptions(),
+      updateCanary: opts.updateCanary,
       ...(!gatewayKernel.minimalTestGateway && gatewayKernel.tailscaleMode !== "off"
         ? {
             prepareManagedTailscaleIngress: async (backend) => {
@@ -92,10 +101,19 @@ export async function startGatewayServerCore(
     releasePostReadyWork();
     return await rethrowGatewayStartupError(err, closeOnStartupFailure);
   }
-  // The public server is fully initialized now. Leave a short I/O window before
-  // background prewarms and cleanup imports compete for the startup CPU.
-  const postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
-  postReadyWorkTimer.unref?.();
+  let postReadyWorkTimer: ReturnType<typeof setTimeout> | undefined;
+  void startupSettled.then(
+    () => {
+      if (gatewayKernel.lifecycle.closePreludeStarted) {
+        return;
+      }
+      // Deferred sidecars must finish before the I/O window for background work begins.
+      postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
+      postReadyWorkTimer.unref?.();
+    },
+    // The caller owns deferred startup failure; close releases the background waiters.
+    () => {},
+  );
 
   let closePromise: Promise<void> | undefined;
 
@@ -104,49 +122,35 @@ export async function startGatewayServerCore(
     getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
     close: (optsLocal) => {
       if (!closePromise) {
-        const prelude = beginClosePrelude(optsLocal);
-        clearTimeout(postReadyWorkTimer);
-        releasePostReadyWork();
-        closePromise = (async () => {
-          await prelude;
-          const close = await prepareClose(optsLocal);
-          await runGatewayShutdownSteps({
-            steps: [
-              {
-                name: "connection-dependent sidecars",
-                run: stopConnectionDependentSidecars,
-                required: true,
+        closePromise = sdkResourceHost
+          .run(async () => {
+            const prelude = beginClosePrelude(optsLocal);
+            clearTimeout(postReadyWorkTimer);
+            releasePostReadyWork();
+            await prelude;
+            const close = await prepareClose(optsLocal);
+            await runGatewayCloseSteps({
+              owner: gatewayKernel,
+              close,
+              disposeTerminalSessions: () => terminalSessions.disposeAll(),
+              runStopHooks: async () => {
+                await shutdownRuntime.runGlobalGatewayStopSafely({
+                  registry: gatewayKernel.pluginRuntime.registry,
+                  event: { reason: optsLocal?.reason ?? "gateway stopping" },
+                  ctx: { port },
+                  onError: (error) =>
+                    log.warn(`gateway_stop hook failed: ${formatErrorMessage(error)}`),
+                });
               },
-              {
-                name: "received connection work",
-                run: () => gatewayKernel.connectionWork.drain(),
-                required: true,
-              },
-              { name: "terminal sessions", run: () => terminalSessions.disposeAll() },
-              { name: "gateway lifetime sidecars", run: stopRegisteredGatewayLifetimeSidecars },
-              { name: "post-ready sidecars", run: stopRegisteredPostReadySidecars },
-              {
-                name: "gateway_stop plugin hooks",
-                run: async () => {
-                  await shutdownRuntime.runGlobalGatewayStopSafely({
-                    event: { reason: optsLocal?.reason ?? "gateway stopping" },
-                    ctx: { port },
-                    onError: (error) =>
-                      log.warn(`gateway_stop hook failed: ${formatErrorMessage(error)}`),
-                  });
-                },
-              },
-              { name: "gateway close prelude", run: runClosePrelude },
-              {
-                name: "late sidecar cleanup",
-                run: sealAndJoinRegisteredSidecarStops,
-                required: true,
-              },
-              { name: "gateway close", run: close },
-            ],
-            onError: (message) => log.error(message),
+              onError: (message) => log.error(message),
+            });
+          })
+          .catch((error: unknown) => {
+            if (hasRetainedPluginRuntimeCloseError(error)) {
+              closePromise = undefined;
+            }
+            throw error;
           });
-        })();
       }
       return closePromise;
     },

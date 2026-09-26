@@ -1,10 +1,12 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
+import { resolveAgentPluginBundleResponse } from "./lib/agent-plugin-bundle-response.mjs";
 import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
+import { readMockUserText, summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -13,6 +15,7 @@ import {
   writeJson,
   writeSse,
 } from "./lib/mock-openai-http.mjs";
+import { createTelegramBindingScenario } from "./lib/telegram-binding-scenario.mjs";
 
 const port =
   process.env.MOCK_PORT?.trim() === "0"
@@ -27,6 +30,13 @@ const requestLog = process.env.MOCK_REQUEST_LOG;
 // tail of the log, so entries must carry their own position. The server starts
 // once per run, so the counter spans the whole session.
 let requestLogSeq = 0;
+// Fixed producer counters exclude health/catalog reads. Ingress includes rejected
+// bodies; selections are later events, not response completion or the same cohort.
+const requests = {
+  id: randomUUID(),
+  ingress: { responses: 0, chatCompletions: 0, embeddings: 0, other: 0 },
+  selections: { model: 0, global: 0, automaticTool: 0, automaticText: 0 },
+};
 const initialResponseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
   ? readPositiveIntEnv("MOCK_RESPONSE_CHUNK_DELAY_MS", undefined)
   : 0;
@@ -38,6 +48,7 @@ const LEGACY_MEDIA_PATTERN =
 const MEDIA_DATA_URL_PATTERN =
   /^data:([a-z][a-z0-9.+-]*\/[a-z0-9.+-]+)(?:;[^,]*)*;base64,([\s\S]*)$/iu;
 let scriptState;
+const telegramBindingScenario = createTelegramBindingScenario();
 
 function parseMediaDataUrl(value) {
   if (typeof value !== "string") {
@@ -214,6 +225,26 @@ function readResponseControl() {
   if (value.hold !== undefined && typeof value.hold !== "boolean") {
     throw new Error("mock response control hold is invalid");
   }
+  if (value.models !== undefined) {
+    if (
+      !value.models ||
+      typeof value.models !== "object" ||
+      Array.isArray(value.models) ||
+      Object.keys(value.models).length === 0 ||
+      Object.keys(value).some((key) => key !== "models" && key !== "hold")
+    ) {
+      throw new Error("mock response control models must be an exclusive nonempty map");
+    }
+    return {
+      hold: value.hold ?? false,
+      models: Object.fromEntries(
+        Object.entries(value.models).map(([model, entry]) => [
+          model,
+          readResponseEntry(entry, `mock response control models[${JSON.stringify(model)}]`),
+        ]),
+      ),
+    };
+  }
   if (value.responses !== undefined) {
     if (!Array.isArray(value.responses) || value.responses.length === 0) {
       throw new Error("mock response control responses are invalid");
@@ -241,6 +272,9 @@ function readResponseControl() {
 
 function selectCurrentResponse() {
   const control = readResponseControl();
+  if (control.models) {
+    return { models: control.models };
+  }
   if (!control.responses) {
     return { response: control.response };
   }
@@ -496,18 +530,31 @@ function preambleThenToolCallEvents(preamble, name, args) {
   ];
 }
 
-/** Two-turn draft scenario: preamble + shell call, then a final answer. */
+function hasCurrentTurnToolOutput(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "user") {
+      return false;
+    }
+    if (message?.role === "tool" || message?.type === "function_call_output") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Draft scenario: preamble + shell call, then a final answer for each user turn. */
 function progressDraftEvents(body, bodyText) {
   const allText = collectText(body).join("\n");
   if (!allText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
     return null;
   }
-  if (!collectFunctionCallOutputText(body)) {
+  if (!hasCurrentTurnToolOutput(Array.isArray(body.input) ? body.input : [])) {
     if (!hasDeclaredTool(bodyText, "exec")) {
       return null;
     }
     return preambleThenToolCallEvents("Checking the workspace before answering.", "exec", {
-      command: "sleep 3 && echo openclaw-draft-proof",
+      command: "sleep 2 && echo openclaw-draft-proof",
     });
   }
   return responseEvents("OPENCLAW_E2E_DRAFTPROOF");
@@ -726,8 +773,10 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
   if (!/mcp code mode api file qa check/i.test(allText)) {
     return null;
   }
-  const toolOutput = collectFunctionCallOutputText(body);
-  if (!toolOutput) {
+  const input = Array.isArray(body?.input) ? body.input : [];
+  const latestOutput = input.findLast((item) => item?.type === "function_call_output");
+  const toolOutput = stringifyFunctionCallOutput(latestOutput?.output) ?? "";
+  if (!latestOutput) {
     if (!hasDeclaredTool(bodyText, "exec")) {
       return null;
     }
@@ -736,7 +785,7 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
         ? "ALL_TOOLS.some((tool) => tool.source === 'mcp')"
         : "catalog.all().some((tool) => tool.source === 'mcp')";
     return toolCallEvents("exec", {
-      language: "javascript",
+      title: "Read the MCP fixture note",
       code: [
         'const files = await API.list("mcp");',
         'const root = await API.read("mcp/index.d.ts");',
@@ -753,9 +802,23 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
       ].join("\n"),
     });
   }
+  let toolJson;
+  try {
+    toolJson = JSON.parse(toolOutput);
+  } catch {
+    // Non-JSON output still follows the fixture's failure checks below.
+  }
   if (
-    !/MCP_CODE_MODE_FILE_TOOL_RESULT/.test(toolOutput) ||
-    !/fixture-note-alpha/.test(toolOutput)
+    toolJson?.status === "waiting" &&
+    typeof toolJson.runId === "string" &&
+    toolJson.runId.length > 0 &&
+    hasDeclaredTool(bodyText, "wait")
+  ) {
+    return toolCallEvents("wait", { runId: toolJson.runId });
+  }
+  if (
+    !toolOutput.includes("MCP_CODE_MODE_FILE_TOOL_RESULT") ||
+    !toolOutput.includes("fixture-note-alpha")
   ) {
     return responseEvents(
       "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
@@ -783,29 +846,41 @@ function mcpAppConformanceEvents(body, bodyText) {
     : responseEvents("MCP_APP_CONFORMANCE_FAIL");
 }
 
-function agentPluginBundleEvents(body, bodyText) {
-  const allText = collectText(body).join("\n");
-  if (!/agent plugin bundle qa check/i.test(allText)) {
+function agentPluginBundleEvents(body, inferenceFacts) {
+  if (inferenceFacts?.purpose === "activity-recap") {
     return null;
   }
-  const toolOutput = collectFunctionCallOutputText(body);
-  if (!toolOutput) {
-    return hasDeclaredTool(bodyText, "weather-probe__weather_probe")
-      ? toolCallEvents("weather-probe__weather_probe", {})
-      : responseEvents("AGENT_BUNDLE_MCP_FAIL tool-not-declared");
+  const input = Array.isArray(body?.input) ? body.input : [];
+  const userText = input.map(readMockUserText).findLast((text) => text !== undefined) ?? "";
+  if (!/agent plugin bundle qa check/i.test(userText)) {
+    return null;
   }
-  return toolOutput.includes("probe ok") &&
-    toolOutput.includes("PLUGIN_ROOT=") &&
-    toolOutput.includes("PLUGIN_DATA=")
-    ? responseEvents("AGENT_BUNDLE_MCP_OK")
-    : responseEvents("AGENT_BUNDLE_MCP_FAIL unexpected-tool-output");
+  const response = resolveAgentPluginBundleResponse(body);
+  return response.tool
+    ? toolCallEvents(response.tool.name, response.tool.args)
+    : responseEvents(response.text);
+}
+
+function telegramBindingEvents(body) {
+  const response = telegramBindingScenario(body);
+  if (!response) {
+    return null;
+  }
+  return response.spawn
+    ? toolCallEvents("sessions_spawn", response.spawn)
+    : responseEvents(response.text);
+}
+
+function countAutomaticSelection(events) {
+  const tool = events.some((event) => event.item?.type === "function_call");
+  requests.selections[tool ? "automaticTool" : "automaticText"] += 1;
 }
 
 const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (req.method === "GET" && url.pathname === "/health") {
-      writeJson(res, 200, { ok: true });
+      writeJson(res, 200, { ok: true, requests });
       return;
     }
     if (req.method === "GET" && url.pathname === "/v1/models") {
@@ -816,12 +891,21 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    const scriptedRoute =
-      req.method === "POST" &&
-      (url.pathname === "/v1/responses" || url.pathname === "/v1/chat/completions");
+    const route =
+      req.method !== "POST"
+        ? "other"
+        : url.pathname === "/v1/responses"
+          ? "responses"
+          : url.pathname === "/v1/chat/completions"
+            ? "chatCompletions"
+            : url.pathname === "/v1/embeddings"
+              ? "embeddings"
+              : "other";
+    requests.ingress[route] += 1;
+    const scriptedRoute = route === "responses" || route === "chatCompletions";
     // Reserve before body reads or hold waits so concurrent turns consume the script
     // in arrival order. The explicit version survives hold-only control rewrites.
-    const selectedResponse = responseControl && scriptedRoute ? selectCurrentResponse() : undefined;
+    const controlSelection = responseControl && scriptedRoute ? selectCurrentResponse() : undefined;
 
     let bodyText;
     try {
@@ -844,6 +928,14 @@ const server = http.createServer((req, res) => {
       // marker instead of the text.
       requestLogBody = `[unparseable request body redacted: ${Buffer.byteLength(bodyText)} bytes]`;
     }
+    // A model map does not reserve global script slots or override unmatched
+    // automatic scenarios. Capture the map at arrival, select after parsing.
+    const selectedResponse = controlSelection?.models
+      ? typeof body?.model === "string" && Object.hasOwn(controlSelection.models, body.model)
+        ? { response: controlSelection.models[body.model] }
+        : undefined
+      : controlSelection;
+    const inferenceFacts = scriptedRoute ? summarizeMockInferenceRequest(body) : undefined;
     if (
       writeRequestLogEntryOrFail(res, {
         requestLog,
@@ -851,8 +943,10 @@ const server = http.createServer((req, res) => {
           seq: (requestLogSeq += 1),
           method: req.method,
           path: url.pathname,
+          requestBytes: Buffer.byteLength(bodyText),
           body: boundedRequestLogBody(requestLogBody, requestLogBody),
           ...summarizeRequestContent(body),
+          ...(inferenceFacts ? { inferenceFacts } : {}),
           ...(selectedResponse?.scriptEntry ? { scriptEntry: selectedResponse.scriptEntry } : {}),
         },
       })
@@ -860,6 +954,7 @@ const server = http.createServer((req, res) => {
       return;
     }
     if (selectedResponse) {
+      requests.selections[controlSelection.models ? "model" : "global"] += 1;
       await waitForResponseRelease();
       if (selectedResponse.response.fail) {
         writeInjectedFailure(res, selectedResponse.response.fail);
@@ -867,35 +962,29 @@ const server = http.createServer((req, res) => {
       }
     }
 
-    if (req.method === "POST" && url.pathname === "/v1/responses") {
-      if (!responseControl) {
-        const agentBundleEvents = agentPluginBundleEvents(body, bodyText);
-        if (agentBundleEvents) {
-          writeResponsesEvents(res, body.stream, agentBundleEvents);
-          return;
-        }
-        const appEvents = mcpAppConformanceEvents(body, bodyText);
-        if (appEvents) {
-          writeResponsesEvents(res, body.stream, appEvents);
-          return;
-        }
-        const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
-        if (codeModeEvents) {
-          writeResponsesEvents(res, body.stream, codeModeEvents);
-          return;
-        }
-        const draftEvents = progressDraftEvents(body, bodyText);
-        if (draftEvents) {
-          writeResponsesEvents(res, body.stream, draftEvents);
+    if (route === "responses") {
+      if (!selectedResponse) {
+        const events =
+          agentPluginBundleEvents(body, inferenceFacts) ??
+          mcpAppConformanceEvents(body, bodyText) ??
+          mcpCodeModeApiFileEvents(body, bodyText) ??
+          progressDraftEvents(body, bodyText) ??
+          telegramBindingEvents(body);
+        if (events) {
+          countAutomaticSelection(events);
+          writeResponsesEvents(res, body.stream, events);
           return;
         }
       }
-      const response = selectedResponse?.response ?? selectCurrentResponse().response;
+      const response = selectedResponse?.response ?? { chunkDelayMs: initialResponseChunkDelayMs };
+      if (!selectedResponse) {
+        requests.selections.automaticText += 1;
+      }
       if (response.events) {
         writeResponsesEvents(res, body.stream, response.events);
         return;
       }
-      const responseText = responseControl ? response.text : resolveResponseText(bodyText);
+      const responseText = selectedResponse ? response.text : resolveResponseText(bodyText);
       if (body.stream === false) {
         writeJson(res, 200, {
           id: "resp_e2e",
@@ -918,37 +1007,43 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
+    if (route === "chatCompletions") {
       // Progress-draft proof needs assistant content followed by a tool call in
       // one streamed turn: the completions transport tags that leading text as
       // commentary, which channels render as the draft status headline.
-      if (!responseControl && bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
+      if (!selectedResponse && bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
         const messages = Array.isArray(body.messages) ? body.messages : [];
-        const toolTurnDone = messages.some((message) => message?.role === "tool");
+        const toolTurnDone = hasCurrentTurnToolOutput(messages);
         if (!toolTurnDone) {
+          requests.selections.automaticTool += 1;
           writeChatCompletionPreambleToolCall(
             res,
             body.stream !== false,
             "Checking the workspace before answering.",
             "exec",
-            { command: "sleep 3 && echo openclaw-draft-proof" },
+            { command: "sleep 2 && echo openclaw-draft-proof" },
           );
           return;
         }
         // Hold the final answer so the turn outlives the progress-draft start
         // gate. Without this the whole turn finishes in well under a second and
         // no draft is created, which is correct behavior but proves nothing.
+        requests.selections.automaticText += 1;
         await delay(readPositiveIntEnv("MOCK_DRAFTPROOF_FINAL_DELAY_MS", 6000));
         writeChatCompletion(res, body.stream !== false, "OPENCLAW_E2E_DRAFTPROOF");
         return;
       }
-      const response = selectedResponse?.response ?? selectCurrentResponse().response;
-      const responseText = responseControl ? response.text : resolveResponseText(bodyText);
+      if (!selectedResponse) {
+        requests.selections.automaticText += 1;
+      }
+      const responseText = selectedResponse
+        ? selectedResponse.response.text
+        : resolveResponseText(bodyText);
       writeChatCompletion(res, body.stream !== false, responseText);
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/v1/embeddings") {
+    if (route === "embeddings") {
       const input = Array.isArray(body.input) ? body.input : [body.input ?? ""];
       writeJson(res, 200, {
         object: "list",

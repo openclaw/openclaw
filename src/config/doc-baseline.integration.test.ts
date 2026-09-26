@@ -1,6 +1,7 @@
 // Verifies generated config documentation baselines against source metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
@@ -88,13 +89,14 @@ describe("config doc baseline integration", () => {
     expect(twilioToken.sensitive).toBe(true);
   });
 
-  it("preserves help text and tags from merged schema hints", async () => {
+  it("preserves authored help and security metadata without inferred tags", async () => {
     const byPath = await getSharedByPath();
     const tokenEntry = byPath.get("gateway.auth.token");
 
-    expect(tokenEntry?.help).toContain("gateway access");
-    expect(tokenEntry?.tags).toContain("auth");
-    expect(tokenEntry?.tags).toContain("security");
+    expect(tokenEntry?.help).toContain("Shared secret selected by gateway.auth.mode=token");
+    expect(tokenEntry?.help).toContain("either auth.token or auth.password");
+    expect(tokenEntry?.tags).toEqual([]);
+    expect(requireEntry(byPath, "mcp.servers.*.url").tags).toContain(SENSITIVE_URL_HINT_TAG);
   });
 
   it("omits legacy hooks.internal.handlers from the generated baseline", async () => {

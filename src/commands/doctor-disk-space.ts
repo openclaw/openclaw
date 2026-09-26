@@ -2,7 +2,6 @@
 import os from "node:os";
 import { expectDefined, formatByteSize } from "@openclaw/normalization-core";
 import { note } from "../../packages/terminal-core/src/note.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { tryReadDiskSpace } from "../infra/disk-space.js";
@@ -19,12 +18,7 @@ const CRITICAL_BYTES = 100 * 1024 * 1024;
 // operators can free space before it becomes critical.
 const WARNING_BYTES = 500 * 1024 * 1024;
 
-/**
- * Format a byte count into a human-readable string (B / KB / MB / GB).
- * Uses Math.floor for MB/KB values to avoid rounding up past a decision
- * threshold (e.g. 99.6 MB should display as "99 MB", not "100 MB").
- * Exported for testing.
- */
+/** Floor MB/KB values so display rounding never crosses a warning threshold. */
 export function formatBytes(bytes: number): string {
   if (bytes < 0 || !Number.isFinite(bytes)) {
     return "unknown";
@@ -38,9 +32,6 @@ export function formatBytes(bytes: number): string {
   });
 }
 
-/**
- * Build warning lines based on available disk space.
- */
 function buildDiskSpaceWarnings(params: {
   availableBytes: number;
   displayStateDir: string;
@@ -96,13 +87,10 @@ function collectDiskSpaceWarnings(params: {
 }
 
 /** Collects read-only structured findings for low disk space around the state directory. */
-export function collectDiskSpaceHealthFindings(
-  _cfg: OpenClawConfig, // reserved for API consistency with other Doctor contributions
-  deps?: {
-    env?: NodeJS.ProcessEnv;
-    readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
-  },
-): readonly HealthFinding[] {
+export function collectDiskSpaceHealthFindings(deps?: {
+  env?: NodeJS.ProcessEnv;
+  readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
+}): readonly HealthFinding[] {
   const result = collectDiskSpaceWarnings({
     env: deps?.env,
     readDiskSpace: deps?.readDiskSpace,
@@ -126,26 +114,10 @@ export function collectDiskSpaceHealthFindings(
   ];
 }
 
-/**
- * Doctor health contribution: check free disk space on the partition that
- * holds the state directory and warn when it drops below safe thresholds.
- *
- * This catches a common operational failure mode where OpenClaw silently
- * fails to write config, sessions, or logs because the disk is full.
- *
- * Disk-space probing (statfs + nearest-existing-ancestor resolution) is
- * delegated to the shared src/infra/disk-space.ts helper so this Doctor
- * check and the install/update diagnostics stay on one implementation.
- * The two-tier warning/critical thresholds and Doctor-facing formatting
- * are specific to this health contribution.
- */
-export function noteDiskSpace(
-  _cfg: OpenClawConfig, // reserved for API consistency with other Doctor contributions
-  deps?: {
-    env?: NodeJS.ProcessEnv;
-    readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
-  },
-): void {
+export function noteDiskSpace(deps?: {
+  env?: NodeJS.ProcessEnv;
+  readDiskSpace?: (targetPath: string) => { availableBytes: number } | null;
+}): void {
   const result = collectDiskSpaceWarnings({
     env: deps?.env,
     readDiskSpace: deps?.readDiskSpace,

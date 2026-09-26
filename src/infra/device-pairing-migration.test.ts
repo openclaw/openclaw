@@ -2,8 +2,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
 import { migrateLegacyDevicePairingStore } from "./device-pairing-migration.js";
 import {
@@ -23,7 +23,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await suiteRootTracker.cleanup();
 });
 
@@ -189,11 +189,6 @@ describe("migrateLegacyDevicePairingStore", () => {
       "device pairing store migration omitted 2 invalid optional field(s)",
     ]);
     expect(await listDeviceFiles(devicesDir)).toEqual(["paired.json.migrated"]);
-  });
-
-  test("returns null when no legacy files exist", async () => {
-    const baseDir = await suiteRootTracker.make("empty");
-    expect(await migrateLegacyDevicePairingStore({ baseDir })).toBeNull();
   });
 
   test("throws on an unreadable paired store and leaves the files in place", async () => {

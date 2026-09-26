@@ -11,20 +11,19 @@ import {
 } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Container, Text } from "@earendil-works/pi-tui";
-import { structuredPatch } from "diff";
-import { Type } from "typebox";
 import { isMissingPathError } from "../../../infra/errors.js";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { textResult } from "../../tools/common.js";
+import { textResult } from "../../tools/tool-results.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { generateDiffString, generateUnifiedPatch } from "./edit-diff.js";
+import { WRITE_DIFF_MAX_BYTES } from "./file-diff.js";
 import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
+import { planFileWriteDiff } from "./file-tool-planning.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
 import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
@@ -38,41 +37,8 @@ import {
 } from "./render-utils.js";
 import type { WriteToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { writeSchema, WriteToolOutputSchema } from "./tool-schemas.js";
 
-const writeSchema = Type.Object({
-  path: Type.String({
-    description: "File path; relative/absolute.",
-  }),
-  content: Type.String({ description: "File content." }),
-});
-
-const WriteToolOutputSchema = Type.Union([
-  Type.Object({ changed: Type.Literal(false) }, { additionalProperties: false }),
-  Type.Object(
-    {
-      changed: Type.Literal(true),
-      created: Type.Literal(true),
-      diff: Type.String(),
-      patch: Type.String(),
-      firstChangedLine: Type.Optional(Type.Integer({ minimum: 1 })),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      changed: Type.Literal(true),
-      created: Type.Literal(false),
-      diff: Type.String(),
-      patch: Type.String(),
-      firstChangedLine: Type.Optional(Type.Integer({ minimum: 1 })),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    { changed: Type.Literal(true), created: Type.Optional(Type.Boolean()) },
-    { additionalProperties: false },
-  ),
-]);
 /**
  * Pluggable operations for the write tool.
  * Override these to delegate file writing to remote systems (for example SSH).
@@ -122,28 +88,6 @@ type WriteToolPrecheck = {
   beforeText?: string;
   readAttempted?: boolean;
 };
-
-const WRITE_PRECHECK_READ_LIMIT_BYTES = 1024 * 1024;
-const WRITE_DIFF_MAX_COMBINED_LINES = 20_000;
-const WRITE_DIFF_MAX_EDIT_LENGTH = 2_000;
-
-// Myers cost is quadratic in edit distance, not input size; probe with the
-// library's bounded abort before committing to synchronous diff generation.
-function withinWriteDiffBudget(oldContent: string, newContent: string): boolean {
-  const probe = structuredPatch("", "", oldContent, newContent, undefined, undefined, {
-    context: 0,
-    maxEditLength: WRITE_DIFF_MAX_EDIT_LENGTH,
-  });
-  return probe !== undefined;
-}
-
-function countNewlines(text: string): number {
-  let count = 0;
-  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
-    count += 1;
-  }
-  return count;
-}
 
 type WriteHighlightCache = {
   rawPath: string | null;
@@ -340,7 +284,7 @@ async function readOriginalWriteState(
   if (stat.size !== Buffer.byteLength(content, "utf8")) {
     return { state: "different", beforeStat: stat };
   }
-  if (!ops.readFile || stat.size > WRITE_PRECHECK_READ_LIMIT_BYTES) {
+  if (stat.size > WRITE_DIFF_MAX_BYTES) {
     return { state: "unknown", beforeStat: stat };
   }
 
@@ -350,7 +294,7 @@ async function readOriginalWriteState(
       ? originalContent
       : Buffer.from(originalContent, "utf8");
     const originalText = originalBytes.toString("utf8");
-    if (Buffer.byteLength(originalText, "utf8") > WRITE_PRECHECK_READ_LIMIT_BYTES) {
+    if (Buffer.byteLength(originalText, "utf8") > WRITE_DIFF_MAX_BYTES) {
       return { state: "unknown", beforeStat: stat, readAttempted: true };
     }
     return {
@@ -371,84 +315,37 @@ async function resolveWriteDetails(params: {
   ops: WriteOperations;
   path: string;
   precheck: WriteToolPrecheck;
+  signal?: AbortSignal;
 }): Promise<WriteToolDetails> {
-  if (Buffer.byteLength(params.content, "utf8") > WRITE_PRECHECK_READ_LIMIT_BYTES) {
+  if (Buffer.byteLength(params.content, "utf8") > WRITE_DIFF_MAX_BYTES) {
     // Keep diff work bounded; a partial patch would misrepresent the write.
     if (params.precheck.beforeStat === null) {
       return { changed: true, created: true };
     }
     return params.precheck.beforeStat ? { changed: true, created: false } : { changed: true };
   }
-  if (params.precheck.beforeStat === null) {
-    // Same line budget as overwrites: a created file's numbered diff is pure
-    // duplication of the content and must not balloon the result payload.
-    if (countNewlines(params.content) > WRITE_DIFF_MAX_COMBINED_LINES) {
-      return { changed: true, created: true };
-    }
-    const diffResult = generateDiffString("", params.content);
-    return {
-      changed: true,
-      created: true,
-      diff: diffResult.diff,
-      patch: generateUnifiedPatch(params.path, "", params.content),
-      ...(diffResult.firstChangedLine === undefined
-        ? {}
-        : { firstChangedLine: diffResult.firstChangedLine }),
-    };
-  }
-
   const beforeStat = params.precheck.beforeStat;
   let beforeText = params.precheck.beforeText;
   if (
     beforeText === undefined &&
     !params.precheck.readAttempted &&
     beforeStat?.type === "file" &&
-    beforeStat.size <= WRITE_PRECHECK_READ_LIMIT_BYTES &&
-    params.ops.readFile
+    beforeStat.size <= WRITE_DIFF_MAX_BYTES
   ) {
     const originalContent = await params.ops.readFile(params.absolutePath).catch(() => undefined);
     const candidate = Buffer.isBuffer(originalContent)
       ? originalContent.toString("utf8")
       : originalContent;
-    if (
-      candidate !== undefined &&
-      Buffer.byteLength(candidate, "utf8") <= WRITE_PRECHECK_READ_LIMIT_BYTES
-    ) {
+    if (candidate !== undefined && Buffer.byteLength(candidate, "utf8") <= WRITE_DIFF_MAX_BYTES) {
       beforeText = candidate;
     }
   }
-  // Lossy UTF-8 decoding would publish garbage as authoritative removals.
-  if (beforeText !== undefined && (beforeText.includes("\uFFFD") || beforeText.includes("\0"))) {
-    beforeText = undefined;
-  }
-  // Bound Myers-diff work: cost scales with line tokens and edit distance, so
-  // cap combined bytes AND lines before running the synchronous generator.
-  if (
-    beforeText !== undefined &&
-    (Buffer.byteLength(beforeText, "utf8") + Buffer.byteLength(params.content, "utf8") >
-      WRITE_PRECHECK_READ_LIMIT_BYTES ||
-      countNewlines(beforeText) + countNewlines(params.content) > WRITE_DIFF_MAX_COMBINED_LINES)
-  ) {
-    beforeText = undefined;
-  }
-  if (beforeText !== undefined && !withinWriteDiffBudget(beforeText, params.content)) {
-    beforeText = undefined;
-  }
-  if (beforeText !== undefined) {
-    const diffResult = generateDiffString(beforeText, params.content);
-    return {
-      changed: true,
-      created: false,
-      diff: diffResult.diff,
-      patch: generateUnifiedPatch(params.path, beforeText, params.content),
-      ...(diffResult.firstChangedLine === undefined
-        ? {}
-        : { firstChangedLine: diffResult.firstChangedLine }),
-    };
-  }
-
-  // Without confirmed existence, neither removals nor overwrite status can be asserted.
-  return beforeStat ? { changed: true, created: false } : { changed: true };
+  const created = beforeStat === null ? true : beforeStat ? false : undefined;
+  const receipt = await planFileWriteDiff(
+    { path: params.path, content: params.content, beforeText, created },
+    params.signal,
+  );
+  return { changed: true, ...(created === undefined ? {} : { created }), ...receipt };
 }
 
 async function didWriteMetadataChange(
@@ -456,7 +353,7 @@ async function didWriteMetadataChange(
   beforeStat: PersistedFileStat | null | undefined,
   ops: WriteOperations,
 ): Promise<boolean> {
-  if (!beforeStat || !ops.statFile) {
+  if (!beforeStat) {
     return false;
   }
   const afterStat = await ops.statFile(absolutePath).catch(() => null);
@@ -554,7 +451,18 @@ export function createWriteToolDefinition(
             changed: false,
           } satisfies WriteToolDetails);
         }
-        const details = await resolveWriteDetails({ absolutePath, content, ops, path, precheck });
+        const details = await resolveWriteDetails({
+          absolutePath,
+          content,
+          ops,
+          path,
+          precheck,
+          signal,
+        });
+        assertCurrent();
+        if (signal?.aborted) {
+          throw new Error("Operation aborted");
+        }
         try {
           assertCurrent();
           await ops.mkdir(dir);

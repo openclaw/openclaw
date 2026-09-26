@@ -7,12 +7,17 @@ import {
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createInterleavedResponsesToolEvents,
+  createResponsesDoneArgumentEvents,
+} from "../../test/helpers/openai-responses-events.js";
+import {
   classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
 } from "./embedded-agent-helpers.js";
 import {
   type CapturedStreamEvent,
   makeCompletionsModel,
+  makeResponsesModel,
   createResponsesAssistantOutput,
   createAzureResponsesModel,
   streamChunks,
@@ -25,32 +30,6 @@ import { testing } from "./openai-transport-stream.test-support.js";
 const COLD_RUNNER_HTTP_TEST_TIMEOUT_MS = 300_000;
 
 describe("openai transport stream", () => {
-  it("passes provider request timeouts to OpenAI SDK clients", () => {
-    const requestTimeoutMs = 900_000;
-
-    const responsesModel = {
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      api: "openai-responses",
-      provider: "custom-openai",
-      baseUrl: "https://api.example.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 8192,
-      requestTimeoutMs,
-    } satisfies Model<"openai-responses"> & { requestTimeoutMs: number };
-    const azureModel = {
-      ...responsesModel,
-      api: "azure-openai-responses",
-      provider: "azure-openai",
-      baseUrl: "https://example.openai.azure.com/openai/deployments/gpt-5.4",
-    } satisfies Model<"azure-openai-responses"> & { requestTimeoutMs: number };
-    expect(testing.buildOpenAISdkClientOptions(responsesModel).timeout).toBe(requestTimeoutMs);
-    expect(testing.buildOpenAISdkClientOptions(azureModel).timeout).toBe(requestTimeoutMs);
-  });
-
   it.each([
     {
       api: "openai-responses" as const,
@@ -155,18 +134,15 @@ describe("openai transport stream", () => {
         throw new Error("Missing loopback server address");
       }
       const onResponse = vi.fn();
-      const model = {
+      const model = makeResponsesModel({
         id: "gpt-status",
         name: "GPT Status",
-        api: "openai-responses",
         provider: "custom-openai",
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
         reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128_000,
         maxTokens: 4_096,
-      } satisfies Model<"openai-responses">;
+      }) satisfies Model<"openai-responses">;
 
       const stream = await createOpenAIResponsesTransportStreamFn()(
         model,
@@ -542,72 +518,7 @@ describe("openai transport stream", () => {
 
     await testing.processResponsesStream(
       streamChunks([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          sequence_number: 1,
-          item: {
-            type: "function_call",
-            id: "fc_click",
-            call_id: "call_click",
-            name: "computer",
-            arguments: "",
-            status: "in_progress",
-          },
-        },
-        {
-          type: "response.output_item.added",
-          output_index: 1,
-          sequence_number: 2,
-          item: {
-            type: "function_call",
-            id: "fc_type",
-            call_id: "call_type",
-            name: "computer",
-            arguments: "",
-            status: "in_progress",
-          },
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          output_index: 1,
-          item_id: "fc_type",
-          sequence_number: 3,
-          delta: '{"action":"type","text":"hello"}',
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          output_index: 0,
-          item_id: "fc_click",
-          sequence_number: 4,
-          delta: '{"action":"left_click","coordinate":[10,20]}',
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          sequence_number: 5,
-          item: {
-            type: "function_call",
-            id: "fc_click",
-            call_id: "call_click",
-            name: "computer",
-            arguments: '{"action":"left_click","coordinate":[10,20]}',
-            status: "completed",
-          },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 1,
-          sequence_number: 6,
-          item: {
-            type: "function_call",
-            id: "fc_type",
-            call_id: "call_type",
-            name: "computer",
-            arguments: '{"action":"type","text":"hello"}',
-            status: "completed",
-          },
-        },
+        ...createInterleavedResponsesToolEvents(),
         {
           type: "response.completed",
           response: { id: "resp_interleaved_calls", status: "completed" },
@@ -653,67 +564,8 @@ describe("openai transport stream", () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
     const events: CapturedStreamEvent[] = [];
-    const firstItem = {
-      type: "function_call",
-      id: "fc_recovered_first",
-      call_id: "call_recovered_first",
-      name: "read",
-    };
-    const secondItem = {
-      type: "function_call",
-      id: "fc_recovered_second",
-      call_id: "call_recovered_second",
-      name: "write",
-    };
-
     await testing.processResponsesStream(
-      streamChunks([
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { ...firstItem, arguments: "" },
-        },
-        {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: { ...secondItem, arguments: "" },
-        },
-        { type: "response.function_call_arguments.delta", delta: '{"ambiguous":true}' },
-        {
-          type: "response.function_call_arguments.done",
-          output_index: 0,
-          item_id: firstItem.id,
-          arguments: '{"path":"README.md"}',
-        },
-        {
-          type: "response.function_call_arguments.done",
-          output_index: 1,
-          item_id: secondItem.id,
-          arguments: '{"path":"README.md","text":"ok"}',
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: {
-            type: "function_call",
-            id: firstItem.id,
-            call_id: firstItem.call_id,
-          },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: 1,
-          item: {
-            type: "function_call",
-            id: secondItem.id,
-            call_id: secondItem.call_id,
-          },
-        },
-        {
-          type: "response.completed",
-          response: { id: "resp_recovered_parallel", status: "completed" },
-        },
-      ]),
+      streamChunks(createResponsesDoneArgumentEvents()),
       output,
       { push: (event) => events.push(event as CapturedStreamEvent) },
       model,

@@ -18,6 +18,7 @@ import {
 } from "../../../plugins/test-helpers/fs-fixtures.js";
 import * as stateDbReadOnly from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
+import { expectObjectFields } from "../../../test-utils/mock-call-assertions.js";
 import { migratePluginRegistryForDoctor } from "./plugin-registry-migration.js";
 const tempDirs: string[] = [];
 
@@ -91,12 +92,6 @@ function createCurrentIndex(): InstalledPluginIndex {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
 function expectSha256(value: unknown) {
   expect(typeof value).toBe("string");
   expect(value).toMatch(/^[a-f0-9]{64}$/u);
@@ -205,11 +200,11 @@ describe("doctor plugin registry migration", () => {
       readConfig,
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "skip-existing",
       migrated: false,
     });
-    expectRecordFields(requireRecord(result.preflight, "migration preflight"), {
+    expectObjectFields(requireRecord(result.preflight, "migration preflight"), {
       action: "skip-existing",
       filePath,
     });
@@ -228,14 +223,14 @@ describe("doctor plugin registry migration", () => {
       readConfig: async () => ({}),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     expect(result.preflight.action).toBe("migrate");
 
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
     expect(persisted?.migrationVersion).toBe(1);
-    expectRecordFields(requirePlugin(persisted, "demo") as unknown as Record<string, unknown>, {
+    expectObjectFields(requirePlugin(persisted, "demo"), {
       pluginId: "demo",
     });
   });
@@ -321,7 +316,7 @@ describe("doctor plugin registry migration", () => {
       }),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);
@@ -355,7 +350,7 @@ describe("doctor plugin registry migration", () => {
       readConfig: async () => ({}),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);
@@ -432,7 +427,7 @@ describe("doctor plugin registry migration", () => {
       readConfig: async () => ({}),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);
@@ -455,7 +450,7 @@ describe("doctor plugin registry migration", () => {
       readConfig,
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "dry-run",
       migrated: false,
     });
@@ -476,7 +471,7 @@ describe("doctor plugin registry migration", () => {
       config: {},
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
       migrated: true,
     });
@@ -513,7 +508,7 @@ describe("doctor plugin registry migration", () => {
       }),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);
@@ -556,7 +551,7 @@ describe("doctor plugin registry migration", () => {
       }),
       env: hermeticEnv(),
     });
-    expectRecordFields(requireRecord(result, "migration result"), {
+    expectObjectFields(requireRecord(result, "migration result"), {
       status: "migrated",
     });
     const current = requireMigratedIndex(result);

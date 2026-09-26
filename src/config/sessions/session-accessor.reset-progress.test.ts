@@ -1,6 +1,7 @@
 /** A fresh conversation must not inherit the prior task's progress card. */
 import path from "node:path";
 import { expect, it } from "vitest";
+import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import {
   readSessionProgressCard,
@@ -22,19 +23,16 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 it.each(
   (["single", "batched"] as const).flatMap((writer) =>
     (["clear", "preserve-tail"] as const).flatMap((context) =>
-      (["markdown", "plan"] as const).flatMap((content) =>
-        (context === "clear" ? [false, true] : [false]).map((rollback) => ({
-          writer,
-          context,
-          content,
-          rollback,
-        })),
-      ),
+      (context === "clear" ? [false, true] : [false]).map((rollback) => ({
+        writer,
+        context,
+        rollback,
+      })),
     ),
   ),
 )(
-  "$writer $context reset owns the $content card lifetime (rollback=$rollback)",
-  async ({ writer, context, content, rollback }) => {
+  "$writer $context reset owns the card lifetime (rollback=$rollback)",
+  async ({ writer, context, rollback }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:reset-progress";
       const sessionId = "same-reset-session";
@@ -53,19 +51,18 @@ it.each(
       const boards = new SqliteBoardStore({
         resolveSession: () => ({ agentId: "main", path: database.path, sessionKey }),
       });
-      boards.putWidget({
+      await boards.putWidget({
         sessionKey,
         name: "retained-widget",
         content: { kind: "html", html: "<p>Keep this dashboard</p>" },
       });
-      const boardBefore = boards.getSnapshot({ sessionKey });
+      const boardBefore = await boards.getSnapshot({ sessionKey });
       const historyBefore = await loadTranscriptEvents(scope);
       const entryBefore = loadSessionEntry(scope);
-      const input =
-        content === "markdown"
-          ? { markdown: "Previous task" }
-          : { steps: [{ step: "Previous task", status: "in_progress" as const }] };
-      writeSessionProgressCard(database.db, sessionKey, input);
+      writeSessionProgressCard(database.db, sessionKey, {
+        markdown: "Previous task",
+        steps: [{ step: "Previous task", status: "in_progress" }],
+      });
       const before = readSessionProgressCard(database.db, sessionKey);
       const invalidations: Array<{ agentId?: string; sessionKey: string; inTransaction: boolean }> =
         [];
@@ -122,8 +119,8 @@ it.each(
       expect(readSessionProgressCard(database.path, sessionKey)).toEqual(
         context === "clear" && !rollback ? null : before,
       );
-      expect(boards.getSnapshot({ sessionKey })).toEqual(boardBefore);
-      expect(boards.readWidgetHtml({ sessionKey }, "retained-widget")?.html).toBe(
+      expect(await boards.getSnapshot({ sessionKey })).toEqual(boardBefore);
+      expect((await readBoardHtml(boards, { sessionKey }, "retained-widget"))?.html).toBe(
         "<p>Keep this dashboard</p>",
       );
       if (context === "clear" && !rollback) {

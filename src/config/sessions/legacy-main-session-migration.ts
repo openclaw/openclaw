@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, tryResolveSoleAgentId } from "../../agents/agent-scope-config.js";
 import {
@@ -9,18 +10,19 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
-import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db-registry.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
-  readClaimsFromStore,
+  inspectSessionStorePath,
+  readClaimsFromStores,
   storeHasLegacyAgentSessionKey,
 } from "./legacy-main-session-key-scan.js";
+import { claimsMatch, restoreColdSessionClaims } from "./legacy-main-session-migration-claims.js";
 import {
-  claimsMatch,
   processIdenticalClaims,
   repairDivergentClaims,
   samePhysicalStore,
@@ -33,7 +35,7 @@ import type {
   PhysicalStore,
   SessionClaim,
 } from "./legacy-main-session-migration.contract.js";
-import { resolveSessionStorePathCore } from "./paths.js";
+import { resolveSessionArtifactDirectory, resolveSessionStorePathCore } from "./paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import {
   resolveAllAgentSessionStoreCandidateTargetsSync,
@@ -86,41 +88,9 @@ function addPhysicalStore(stores: PhysicalStore[], candidate: PhysicalStore): vo
   }
 }
 
-function inspectPath(pathname: string): "missing" | "present" {
-  let entry: fs.Stats;
-  try {
-    entry = fs.lstatSync(pathname);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return "missing";
-    }
-    throw error;
-  }
-  const target = entry.isSymbolicLink() ? fs.statSync(pathname) : entry;
-  if (!target.isFile()) {
-    throw new Error(`session store is not a regular file: ${pathname}`);
-  }
-  return "present";
-}
-
 function resolveMissingPhysicalPath(pathname: string): string {
-  let current = path.resolve(pathname);
-  const suffix: string[] = [];
-  while (true) {
-    try {
-      return path.join(fs.realpathSync.native(current), ...suffix);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return path.resolve(current, ...suffix);
-      }
-      suffix.unshift(path.basename(current));
-      current = parent;
-    }
-  }
+  const prefix = resolvePathPrefixSync(path.resolve(pathname));
+  return path.join(prefix.existingPath, ...prefix.unresolvedSegments);
 }
 
 function resolvePhysicalPathIdentity(pathname: string): string {
@@ -177,7 +147,10 @@ function resolvePhysicalStores(params: {
   const unreadable: LegacyMainSessionMigrationOutcome[] = [];
   for (const target of logicalTargets) {
     try {
-      if (!target.storePath.endsWith(".sqlite") && inspectPath(target.storePath) === "present") {
+      if (
+        !target.storePath.endsWith(".sqlite") &&
+        inspectSessionStorePath(target.storePath) === "present"
+      ) {
         jsonPaths.add(path.resolve(target.storePath));
       }
       const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
@@ -385,7 +358,7 @@ async function migrateLegacyMainSessionKeysInternal(
           resolved.jsonPaths.length > 0 ||
           resolved.stores.some(
             (store) =>
-              inspectPath(store.path) === "present" &&
+              inspectSessionStorePath(store.path) === "present" &&
               storeHasLegacyAgentSessionKey({ env, legacyAgentId, store }),
           );
       } catch {
@@ -410,7 +383,7 @@ async function migrateLegacyMainSessionKeysInternal(
       outcomes: [{ kind: "not-armed", detail: arming.reason }],
       warnings: unresolved
         ? [
-            `session: legacy ${legacyAgentId} rows have no unambiguous configured owner; preserve them and run openclaw doctor after assigning agents.defaults.sessionStore.agentId`,
+            `session: legacy ${legacyAgentId} rows have no unambiguous configured owner; preserve them and run openclaw doctor --fix after assigning agents.defaults.sessionStore.agentId`,
           ]
         : [],
     };
@@ -434,7 +407,7 @@ async function migrateLegacyMainSessionKeysInternal(
   const warnings = [...base.warnings];
   for (const unreadable of resolved.unreadable) {
     warnings.push(
-      `session: could not inspect ${unreadable.paths?.[0] ?? "session store"}: ${unreadable.detail ?? "unknown error"}`,
+      `session: could not inspect ${unreadable.paths?.[0] ?? "session store"}: ${unreadable.detail ?? "unknown error"}; run openclaw doctor --fix`,
     );
   }
   for (const pathname of resolved.jsonPaths) {
@@ -469,35 +442,35 @@ async function migrateLegacyMainSessionKeysInternal(
         ledgerComplete: false,
         ownerAgentId,
         outcomes: [{ kind: "store-unreadable", detail: String(error) }],
-        warnings: [`session: could not read the legacy-main migration ledger: ${String(error)}`],
+        warnings: [
+          `session: could not read the legacy-main migration ledger: ${String(error)}; run openclaw doctor --fix`,
+        ],
       };
     }
   }
 
-  const allLegacy: SessionClaim[] = [];
-  const allCanonical: SessionClaim[] = [];
-  for (const store of resolved.stores) {
-    try {
-      if (inspectPath(store.path) === "missing") {
-        continue;
-      }
-      const claims = readClaimsFromStore({ env, legacyAgentId, ownerAgentId, store });
-      allLegacy.push(...claims.legacy);
-      allCanonical.push(...claims.canonical);
-    } catch (error) {
+  const { legacy: allLegacy, canonical: allCanonical } = readClaimsFromStores({
+    env,
+    legacyAgentId,
+    ownerAgentId,
+    stores: resolved.stores,
+    onUnreadable: (store, error) => {
       if (params.mode === "doctor-fix") {
         throw new Error(`cannot read legacy session store ${store.path}: ${String(error)}`, {
           cause: error,
         });
       }
       outcomes.push({ kind: "store-unreadable", detail: String(error), paths: [store.path] });
-      warnings.push(`session: could not inspect ${store.path}: ${String(error)}`);
-    }
+      warnings.push(
+        `session: could not inspect ${store.path}: ${String(error)}; run openclaw doctor --fix`,
+      );
+    },
+  });
+  if (params.mode === "detect" && allLegacy.length > 0) {
+    warnings.push(
+      `session: ${allLegacy.length} retained legacy ${legacyAgentId} session claim(s) require Doctor repair; run openclaw doctor --fix`,
+    );
   }
-  const inspectionBlocked = outcomes.some(
-    (outcome) => outcome.kind === "legacy-json-store" || outcome.kind === "store-unreadable",
-  );
-  const operationMode = params.mode === "automatic" && inspectionBlocked ? "detect" : params.mode;
 
   const destinationLogical = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: ownerAgentId,
@@ -515,6 +488,12 @@ async function migrateLegacyMainSessionKeysInternal(
     ownerStorePath: destinationLogical,
     path: destinationResolved.path,
   };
+  const destinationArchiveDirectory =
+    params.mode !== "doctor-fix"
+      ? undefined
+      : resolveMissingPhysicalPath(
+          path.join(resolveSessionArtifactDirectory(destinationResolved.path), "cold"),
+        );
 
   const byCanonical = new Map<string, SessionClaim[]>();
   for (const claim of allLegacy) {
@@ -524,6 +503,19 @@ async function migrateLegacyMainSessionKeysInternal(
   }
   for (const [canonicalKey, aliases] of byCanonical) {
     const canonicalClaims = allCanonical.filter((claim) => claim.key === canonicalKey);
+    if (
+      params.mode === "doctor-fix" &&
+      [...aliases, ...canonicalClaims].some(
+        (claim) =>
+          !samePhysicalStore(claim.store, destination) ||
+          resolveMissingPhysicalPath(
+            path.join(resolveSessionArtifactDirectory(claim.store.path), "cold"),
+          ) !== destinationArchiveDirectory,
+      )
+    ) {
+      await restoreColdSessionClaims(aliases, env, params.beforePersistentApply);
+      await restoreColdSessionClaims(canonicalClaims, env, params.beforePersistentApply);
+    }
     const destinationCanonical = canonicalClaims.find((claim) =>
       samePhysicalStore(claim.store, destination),
     );
@@ -602,7 +594,7 @@ async function migrateLegacyMainSessionKeysInternal(
       canonicalKey,
       destination,
       env,
-      mode: operationMode,
+      mode: params.mode,
     });
     outcomes.push(outcome);
     if (outcome.kind === "divergent-aliases" || outcome.kind === "divergent-canonical") {
@@ -622,7 +614,7 @@ async function migrateLegacyMainSessionKeysInternal(
   );
   const complete = !blocking;
   const changes =
-    operationMode === "detect"
+    params.mode !== "doctor-fix"
       ? []
       : outcomes.flatMap((outcome) =>
           outcome.kind === "migrated-in-place" ||
@@ -635,7 +627,7 @@ async function migrateLegacyMainSessionKeysInternal(
                 ]
               : [],
         );
-  if (complete && params.mode !== "detect") {
+  if (complete && params.mode === "doctor-fix") {
     writeLedger({
       beforePersistentApply: params.beforePersistentApply,
       env,
@@ -650,7 +642,8 @@ async function migrateLegacyMainSessionKeysInternal(
     changes,
     complete,
     ledgerComplete:
-      complete && (params.mode !== "detect" || (matchingCompletedLedger && allLegacy.length === 0)),
+      complete &&
+      (params.mode === "doctor-fix" || (matchingCompletedLedger && allLegacy.length === 0)),
     legacyAgentId,
     mainKey,
     outcomes,
@@ -689,7 +682,9 @@ export async function migrateLegacyMainSessionKeys(params: {
       mainKey,
       outcomes: [{ kind: "store-unreadable", detail: String(error) }],
       ...(arming.armed ? { ownerAgentId: arming.ownerAgentId } : {}),
-      warnings: [`session: legacy-main session migration deferred: ${String(error)}`],
+      warnings: [
+        `session: legacy-main session migration deferred: ${String(error)}; run openclaw doctor --fix`,
+      ],
     };
   }
 }

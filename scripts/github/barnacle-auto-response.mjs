@@ -26,7 +26,7 @@ const rules = [
     label: "r: support",
     close: true,
     message:
-      "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
+      "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq-first-run#i-am-stuck-fastest-way-to-get-unstuck.",
   },
   {
     label: "r: false-positive",
@@ -524,9 +524,7 @@ export function classifyPullRequestCandidateLabels(pullRequest, files) {
       text,
     );
   const discoverabilityDocs = filenames.some((filename) =>
-    /^(README(?:\.[^.]+)?\.md|docs\/plugins\/community\.md|docs\/start\/showcase\.md)$/i.test(
-      filename,
-    ),
+    /^(README(?:\.[^.]+)?\.md|docs\/plugins\/community\.md)$/i.test(filename),
   );
   if (docsOnly && !linkedReference && (blankTemplate || docsSignal)) {
     labelsToAdd.push(candidateLabels.lowSignalDocs);

@@ -116,11 +116,11 @@ export function createStandaloneMockIsolationPlugins(): Plugin[] {
               "media-src 'self' blob: data:",
               "font-src 'self' data:",
               "frame-src 'self' blob: data:",
-              "worker-src 'none'",
+              "worker-src 'self'",
               "object-src 'none'",
               "base-uri 'none'",
               "form-action 'none'",
-              "sandbox allow-scripts allow-same-origin allow-downloads",
+              "sandbox allow-scripts allow-same-origin allow-downloads allow-forms",
             ].join("; "),
           );
           res.setHeader("X-DNS-Prefetch-Control", "off");

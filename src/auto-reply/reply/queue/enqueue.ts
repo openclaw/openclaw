@@ -13,14 +13,16 @@ import {
   shouldSkipQueueItem,
 } from "../../../utils/queue-helpers.js";
 import {
-  clearFollowupDrainCallback,
   createOverflowSummaryRetrySource,
+  resolveFollowupDeliveryContextKey,
+} from "./delivery-context.js";
+import {
+  clearFollowupDrainCallback,
   dropAbortedFollowups,
   kickFollowupDrainIfIdle,
   rememberFollowupDrainCallback,
-  resolveFollowupDeliveryContextKey,
-  resolveFollowupReplyAnchor,
 } from "./drain.js";
+import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./lifecycle.js";
 import {
   peekRecentQueueMessageId,
   recordRecentQueueMessageId,
@@ -33,29 +35,13 @@ import {
   trimSummaryElisionsToCap,
 } from "./state.js";
 import {
-  completeFollowupRunLifecycle,
   isFollowupRunAborted,
-  markFollowupRunEnqueued,
   resolveFollowupAbortSignal,
   type EnqueueFollowupRunOptions,
   type FollowupRun,
   type QueueDedupeMode,
   type QueueSettings,
 } from "./types.js";
-
-function followupRouteIdentityKey(run: FollowupRun): string {
-  return JSON.stringify([
-    channelRouteDedupeKey({
-      channel: run.originatingChannel,
-      to: run.originatingTo,
-      accountId: run.originatingAccountId,
-      threadId: run.originatingThreadId,
-    }),
-    resolveFollowupReplyAnchor(run) ?? "",
-    run.originatingReplyToMode ?? "",
-    normalizeChatType(run.originatingChatType) ?? "",
-  ]);
-}
 
 function followupMessageRouteIdentityKey(run: FollowupRun): string {
   return JSON.stringify([
@@ -79,11 +65,7 @@ function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | u
   return JSON.stringify(["queue", queueKey, followupMessageRouteIdentityKey(run), messageId]);
 }
 
-function isRunAlreadyQueued(
-  run: FollowupRun,
-  items: FollowupRun[],
-  allowPromptFallback = false,
-): boolean {
+function isRunAlreadyQueued(run: FollowupRun, items: FollowupRun[]): boolean {
   const messageId = normalizeOptionalString(run.messageId);
   if (messageId) {
     const messageRouteKey = followupMessageRouteIdentityKey(run);
@@ -93,13 +75,7 @@ function isRunAlreadyQueued(
         followupMessageRouteIdentityKey(item) === messageRouteKey,
     );
   }
-  if (!allowPromptFallback) {
-    return false;
-  }
-  const routeKey = followupRouteIdentityKey(run);
-  return items.some(
-    (item) => item.prompt === run.prompt && followupRouteIdentityKey(item) === routeKey,
-  );
+  return false;
 }
 
 function appendQueueItem(params: {
@@ -122,7 +98,10 @@ function appendQueueItem(params: {
   if (runFollowup) {
     rememberFollowupDrainCallback(params.key, runFollowup);
   }
-  const signal = params.run.abortSignal;
+  const signal = resolveFollowupAbortSignal({
+    abortSignal: params.run.abortSignal,
+    operatorAuthority: params.run.operatorAuthority,
+  });
   const lifecycle = params.run.turnAdoptionLifecycle;
   if (signal && lifecycle && runFollowup) {
     const onAbort = () => {
@@ -176,40 +155,22 @@ export function enqueueFollowupRun(
   }
   const queue = getFollowupQueue(key, settings);
 
-  const dedupe =
-    dedupeMode === "none"
-      ? undefined
-      : (item: FollowupRun, items: FollowupRun[]) =>
-          isRunAlreadyQueued(item, items, dedupeMode === "prompt");
+  const dedupe = dedupeMode === "none" ? undefined : isRunAlreadyQueued;
 
   // Deduplicate: skip if the same message is already queued.
   if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
     return false;
   }
-  if (options.steerCandidate) {
+  // Preserve later prompts while an older steer decides between same-turn
+  // delivery and fallback; overflow resumes when the gate resolves.
+  if (options.steerCandidate || queue.items.some((item) => item.steerPending)) {
     if (!markFollowupRunEnqueued(run)) {
       return false;
     }
-    const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
-    run.steerPending = { phase: "waiting", predecessor: queue.steerAcceptanceTail, settle };
-    queue.steerAcceptanceTail = acceptance;
-    appendQueueItem({
-      key,
-      queue,
-      run,
-      recentMessageIdKey,
-      runFollowup,
-      restartIfIdle,
-      front: options.position === "front",
-    });
-    return true;
-  }
-  // A later normal/interrupt prompt cannot be dropped while an older steer is
-  // deciding between same-turn delivery and fallback. Append it behind the
-  // anchor; ordinary overflow policy resumes as soon as the gate resolves.
-  if (queue.items.some((item) => item.steerPending)) {
-    if (!markFollowupRunEnqueued(run)) {
-      return false;
+    if (options.steerCandidate) {
+      const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
+      run.steerPending = { phase: "waiting", predecessor: queue.steerAcceptanceTail, settle };
+      queue.steerAcceptanceTail = acceptance;
     }
     appendQueueItem({
       key,
@@ -218,19 +179,14 @@ export function enqueueFollowupRun(
       recentMessageIdKey,
       runFollowup,
       restartIfIdle,
-      front: false,
+      front: options.steerCandidate === true && options.position === "front",
     });
     return true;
   }
   // drop:new rejects this source without mutating the existing queue. Do not
   // publish an external queued identity for work that will never be admitted.
   const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
-  if (
-    !options.steerCandidate &&
-    queue.dropPolicy === "new" &&
-    queue.cap > 0 &&
-    pendingCount >= queue.cap
-  ) {
+  if (queue.dropPolicy === "new" && queue.cap > 0 && pendingCount >= queue.cap) {
     run.onQueueDisposition?.("queue-cap-new");
     completeFollowupRunLifecycle(run);
     return false;
@@ -277,17 +233,13 @@ export function enqueueFollowupRun(
         }
         const contextKey = resolveFollowupDeliveryContextKey(item);
         const lastElision = queue.summaryElisions.at(-1);
+        const compactSource = createOverflowSummaryRetrySource(item);
         if (lastElision?.contextKey === contextKey) {
-          const compactSource = createOverflowSummaryRetrySource(item);
           lastElision.count += 1;
           lastElision.sources.push(compactSource);
           lastElision.summaryLines.push(summaryLine);
           lastElision.sourceRefs.set(item, compactSource);
-          if (queue.activeSummarySources.has(item)) {
-            queue.activeSummarySources.add(compactSource);
-          }
         } else {
-          const compactSource = createOverflowSummaryRetrySource(item);
           queue.summaryElisions.push({
             contextKey,
             count: 1,
@@ -295,9 +247,9 @@ export function enqueueFollowupRun(
             summaryLines: [summaryLine],
             sourceRefs: new WeakMap([[item, compactSource]]),
           });
-          if (queue.activeSummarySources.has(item)) {
-            queue.activeSummarySources.add(compactSource);
-          }
+        }
+        if (queue.activeSummarySources.has(item)) {
+          queue.activeSummarySources.add(compactSource);
         }
         trimSummaryElisionsToCap(queue);
       }

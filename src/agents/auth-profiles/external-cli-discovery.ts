@@ -5,10 +5,7 @@
  */
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  resolveExternalCliAuthScopeFromConfig,
-  type ExternalCliAuthScope,
-} from "./external-cli-scope.js";
+import { resolveExternalCliAuthScopeFromConfig } from "./external-cli-scope.js";
 
 /** External CLI auth discovery mode used while loading auth profile stores. */
 export type ExternalCliAuthDiscovery =
@@ -49,10 +46,6 @@ type ProviderSetDiscoveryParams = {
   allowKeychainPrompt?: false;
 };
 
-function normalizeStringList(values: Iterable<string | undefined>): string[] {
-  return normalizeTrimmedStringList([...values]);
-}
-
 /** Disables external CLI auth discovery. */
 function externalCliDiscoveryNone(params?: { config?: OpenClawConfig }): ExternalCliAuthDiscovery {
   return {
@@ -84,7 +77,7 @@ export function externalCliDiscoveryScoped(params: {
 export function externalCliDiscoveryForProviderAuth(
   params: ProviderAuthDiscoveryParams,
 ): ExternalCliAuthDiscovery {
-  const profileIds = normalizeStringList([params.profileId, params.preferredProfile]);
+  const profileIds = normalizeTrimmedStringList([params.profileId, params.preferredProfile]);
   return externalCliDiscoveryScoped({
     config: params.cfg,
     allowKeychainPrompt: params.allowKeychainPrompt ?? false,
@@ -98,18 +91,21 @@ export function externalCliDiscoveryForConfigStatus(
   params: ConfigStatusDiscoveryParams,
 ): ExternalCliAuthDiscovery {
   const scope = resolveExternalCliAuthScopeFromConfig(params.cfg);
-  return externalCliDiscoveryFromScope({
-    cfg: params.cfg,
-    scope,
-    allowKeychainPrompt: params.allowKeychainPrompt ?? false,
-  });
+  return scope
+    ? externalCliDiscoveryScoped({
+        config: params.cfg,
+        allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+        providerIds: scope.providerIds,
+        profileIds: scope.profileIds,
+      })
+    : externalCliDiscoveryNone({ config: params.cfg });
 }
 
 /** Builds external CLI discovery options for a provider set. */
 export function externalCliDiscoveryForProviders(
   params: ProviderSetDiscoveryParams,
 ): ExternalCliAuthDiscovery {
-  const providers = normalizeStringList(params.providers);
+  const providers = normalizeTrimmedStringList([...params.providers]);
   if (providers.length === 0) {
     return externalCliDiscoveryNone({ config: params.cfg });
   }
@@ -117,21 +113,5 @@ export function externalCliDiscoveryForProviders(
     config: params.cfg,
     allowKeychainPrompt: params.allowKeychainPrompt ?? false,
     providerIds: providers,
-  });
-}
-
-function externalCliDiscoveryFromScope(params: {
-  cfg: OpenClawConfig;
-  scope: ExternalCliAuthScope | undefined;
-  allowKeychainPrompt: false;
-}): ExternalCliAuthDiscovery {
-  if (!params.scope) {
-    return externalCliDiscoveryNone({ config: params.cfg });
-  }
-  return externalCliDiscoveryScoped({
-    config: params.cfg,
-    allowKeychainPrompt: params.allowKeychainPrompt,
-    providerIds: params.scope.providerIds,
-    profileIds: params.scope.profileIds,
   });
 }

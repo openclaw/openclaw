@@ -159,4 +159,6 @@ This page is an index. Each section below moved to a child page, and every ancho
 - [Automation](/automation) — all automation mechanisms at a glance
 - [Background Tasks](/automation/tasks) — task ledger for automation runs
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
+- [Standing intents](/concepts/standing-intents) — event-triggered work instead of a schedule
+- [Standing orders](/automation/standing-orders) — the operating authority a scheduled run acts under
 - [Timezone](/concepts/timezone) — timezone configuration

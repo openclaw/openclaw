@@ -1,15 +1,17 @@
-// Command secret gateway tests cover secret resolution for gateway-backed CLI commands.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveConfigForRead } from "../config/io.read-helpers.js";
+import { coerceConfig, resolveConfigForRead } from "../config/io.read-helpers.js";
 import {
   getAuthoredConfigSecretRef,
   setConfigResolutionFacts,
 } from "../config/resolution-facts.js";
+import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
+import { analyzeCommandSecretAssignmentsFromSnapshot } from "../secrets/command-config.js";
 import { collectConfigAssignments as collectRuntimeConfigAssignments } from "../secrets/runtime-config-collectors.js";
+import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -19,7 +21,6 @@ import {
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
 } from "../test-utils/talk-test-provider.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
-import { testing as commandSecretGatewayTesting } from "./command-secret-gateway.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -48,9 +49,21 @@ vi.mock("../utils/message-channel.js", () => ({
   GATEWAY_CLIENT_NAMES: { CLI: "cli" },
 }));
 
+vi.mock("../secrets/command-config.js", { spy: true });
+vi.mock("../secrets/runtime-config-collectors.js", { spy: true });
+vi.mock("../secrets/target-registry-query.js", { spy: true });
+vi.mock("../plugins/plugin-registry-contributions.js", { spy: true });
+
+function resetCommandSecretMocks(): void {
+  vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockReset();
+  vi.mocked(collectRuntimeConfigAssignments).mockReset();
+  vi.mocked(discoverConfigSecretTargetsByIds).mockReset();
+  vi.mocked(resolveManifestContractOwnerPluginId).mockReset();
+}
+
 beforeEach(() => {
   callGateway.mockReset();
-  commandSecretGatewayTesting.resetDepsForTest();
+  resetCommandSecretMocks();
 });
 
 afterEach(async () => {
@@ -172,17 +185,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   function setSingleSecretTargetDeps(params: {
     path: string;
     pathSegments: readonly string[];
-    collectConfigAssignments?: NonNullable<
-      Parameters<typeof commandSecretGatewayTesting.setDepsForTest>[0]["collectConfigAssignments"]
-    >;
-    resolveManifestContractOwnerPluginId?: NonNullable<
-      Parameters<
-        typeof commandSecretGatewayTesting.setDepsForTest
-      >[0]["resolveManifestContractOwnerPluginId"]
-    >;
+    collectConfigAssignments?: typeof collectRuntimeConfigAssignments;
+    resolveManifestContractOwnerPluginId?: typeof resolveManifestContractOwnerPluginId;
   }): () => void {
-    const deps: Parameters<typeof commandSecretGatewayTesting.setDepsForTest>[0] = {
-      analyzeCommandSecretAssignmentsFromSnapshot: ({ inactiveRefPaths, resolvedConfig }) => {
+    vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockImplementation(
+      ({ inactiveRefPaths, resolvedConfig }) => {
         const value = readPath(resolvedConfig, params.pathSegments);
         const resolved = typeof value === "string" && value.length > 0;
         const inactive = Boolean(inactiveRefPaths?.has(params.path));
@@ -216,12 +223,15 @@ describe("resolveCommandSecretRefsViaGateway", () => {
                 ],
         } as never;
       },
-      collectConfigAssignments:
-        params.collectConfigAssignments ??
+    );
+    vi.mocked(collectRuntimeConfigAssignments).mockImplementation(
+      params.collectConfigAssignments ??
         (({ context }) => {
           context.assignments.push({ path: params.path } as never);
         }),
-      discoverConfigSecretTargetsByIds: (config) =>
+    );
+    vi.mocked(discoverConfigSecretTargetsByIds).mockImplementation(
+      (config) =>
         [
           {
             entry: { expectedResolvedValue: "string" },
@@ -230,11 +240,55 @@ describe("resolveCommandSecretRefsViaGateway", () => {
             value: readPath(config, params.pathSegments),
           },
         ] as never,
-    };
+    );
     if (params.resolveManifestContractOwnerPluginId) {
-      deps.resolveManifestContractOwnerPluginId = params.resolveManifestContractOwnerPluginId;
+      vi.mocked(resolveManifestContractOwnerPluginId).mockImplementation(
+        params.resolveManifestContractOwnerPluginId,
+      );
     }
-    return commandSecretGatewayTesting.setDepsForTest(deps);
+    return resetCommandSecretMocks;
+  }
+
+  function setDiscordAccountTargetDeps(): () => void {
+    vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockImplementation(
+      () =>
+        ({
+          assignments: [
+            {
+              path: "channels.discord.accounts.ops.token",
+              pathSegments: ["channels", "discord", "accounts", "ops", "token"],
+              value: "ops-token",
+            },
+          ],
+          diagnostics: [],
+          inactive: [],
+          unresolved: [],
+        }) as never,
+    );
+    vi.mocked(collectRuntimeConfigAssignments).mockImplementation(({ context }) => {
+      context.assignments.push(
+        { path: "channels.discord.accounts.ops.token" } as never,
+        { path: "channels.discord.accounts.chat.token" } as never,
+      );
+    });
+    vi.mocked(discoverConfigSecretTargetsByIds).mockImplementation(
+      () =>
+        [
+          {
+            entry: { expectedResolvedValue: "string" },
+            path: "channels.discord.accounts.ops.token",
+            pathSegments: ["channels", "discord", "accounts", "ops", "token"],
+            value: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" },
+          },
+          {
+            entry: { expectedResolvedValue: "string" },
+            path: "channels.discord.accounts.chat.token",
+            pathSegments: ["channels", "discord", "accounts", "chat", "token"],
+            value: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" },
+          },
+        ] as never,
+    );
+    return resetCommandSecretMocks;
   }
 
   function setFirecrawlWebSearchTargetDeps(): () => void {
@@ -375,6 +429,87 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     },
   );
 
+  describe.each([
+    {
+      name: "dotted object key",
+      config: { talk: { providers: { "acme.speech": { apiKey: "${SOURCE_KEY}" } } } },
+      targetPath: 'talk.providers["acme.speech"].apiKey',
+      pathSegments: ["talk", "providers", "acme.speech", "apiKey"],
+      targetId: "talk.providers.*.apiKey",
+      fixtureTarget: false,
+    },
+    {
+      name: "numeric object key",
+      config: { talk: { providers: { "0": { apiKey: "${SOURCE_KEY}" } } } },
+      targetPath: 'talk.providers["0"].apiKey',
+      pathSegments: ["talk", "providers", "0", "apiKey"],
+      targetId: "talk.providers.*.apiKey",
+      fixtureTarget: false,
+    },
+    {
+      name: "array index",
+      config: {
+        plugins: { entries: { fixture: { config: { tokens: ["${SOURCE_KEY}"] } } } },
+      },
+      targetPath: "plugins.entries.fixture.config.tokens[0]",
+      pathSegments: ["plugins", "entries", "fixture", "config", "tokens", "0"],
+      targetId: "plugins.entries.fixture.config.tokens.*",
+      fixtureTarget: true,
+    },
+  ])(
+    "gateway assignment for $name",
+    ({ config: input, targetPath, pathSegments, targetId, fixtureTarget }) => {
+      it.each(["canonical", "omitted", "display-only"])(
+        "applies and clears only the actual target when path is %s",
+        async (pathMode) => {
+          const read = resolveConfigForRead(input, {});
+          const config = coerceConfig(read.resolvedConfigRaw);
+          setConfigResolutionFacts(config, read.resolutionFacts);
+          const restoreDeps = fixtureTarget
+            ? setSingleSecretTargetDeps({ path: targetPath, pathSegments })
+            : undefined;
+          const resolvedLiteral = "${MATERIALIZED_LITERAL}";
+          callGateway.mockResolvedValueOnce({
+            assignments: [
+              {
+                ...(pathMode === "omitted"
+                  ? {}
+                  : { path: pathMode === "canonical" ? targetPath : "display-only" }),
+                pathSegments,
+                value: resolvedLiteral,
+              },
+            ],
+          });
+          const request = {
+            commandName: "memory status",
+            targetIds: new Set([targetId]),
+            allowedPaths: new Set([targetPath]),
+          };
+
+          try {
+            const result = await resolveCommandSecretRefsViaGateway({ ...request, config });
+
+            expect(readPath(result.resolvedConfig, pathSegments)).toBe(resolvedLiteral);
+            expect(getAuthoredConfigSecretRef(config, targetPath)?.id).toBe("SOURCE_KEY");
+            expect(getAuthoredConfigSecretRef(result.resolvedConfig, targetPath)).toBeNull();
+            expect(result.hadUnresolvedTargets).toBe(false);
+            expect(result.targetStatesByPath).toEqual({ [targetPath]: "resolved_gateway" });
+
+            const next = await resolveCommandSecretRefsViaGateway({
+              ...request,
+              config: result.resolvedConfig,
+            });
+            expect(readPath(next.resolvedConfig, pathSegments)).toBe(resolvedLiteral);
+            expect(next.hadUnresolvedTargets).toBe(false);
+            expect(callGateway).toHaveBeenCalledOnce();
+          } finally {
+            restoreDeps?.();
+          }
+        },
+      );
+    },
+  );
+
   it("uses the explicit agent owner during channels resolve secret preflight", async () => {
     const channelPath = "channels.telegram.botToken";
     const channelPathSegments = ["channels", "telegram", "botToken"];
@@ -403,10 +538,13 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         },
       },
     } as unknown as OpenClawConfig;
+    const { collectConfigAssignments } = await vi.importActual<
+      typeof import("../secrets/runtime-config-collectors.js")
+    >("../secrets/runtime-config-collectors.js");
     const restoreDeps = setSingleSecretTargetDeps({
       path: channelPath,
       pathSegments: channelPathSegments,
-      collectConfigAssignments: (params) => collectRuntimeConfigAssignments(params),
+      collectConfigAssignments,
     });
     callGateway.mockResolvedValueOnce({
       assignments: [
@@ -436,42 +574,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   });
 
   it("enforces unresolved checks only for allowed paths when provided", async () => {
-    const restoreDeps = commandSecretGatewayTesting.setDepsForTest({
-      analyzeCommandSecretAssignmentsFromSnapshot: () =>
-        ({
-          assignments: [
-            {
-              path: "channels.discord.accounts.ops.token",
-              pathSegments: ["channels", "discord", "accounts", "ops", "token"],
-              value: "ops-token",
-            },
-          ],
-          diagnostics: [],
-          inactive: [],
-          unresolved: [],
-        }) as never,
-      collectConfigAssignments: ({ context }) => {
-        context.assignments.push(
-          { path: "channels.discord.accounts.ops.token" } as never,
-          { path: "channels.discord.accounts.chat.token" } as never,
-        );
-      },
-      discoverConfigSecretTargetsByIds: () =>
-        [
-          {
-            entry: { expectedResolvedValue: "string" },
-            path: "channels.discord.accounts.ops.token",
-            pathSegments: ["channels", "discord", "accounts", "ops", "token"],
-            value: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" },
-          },
-          {
-            entry: { expectedResolvedValue: "string" },
-            path: "channels.discord.accounts.chat.token",
-            pathSegments: ["channels", "discord", "accounts", "chat", "token"],
-            value: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" },
-          },
-        ] as never,
-    });
+    const restoreDeps = setDiscordAccountTargetDeps();
     callGateway.mockResolvedValueOnce({
       assignments: [
         {
@@ -534,42 +637,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   });
 
   it("retries old gateways without allowed paths and still filters scoped results", async () => {
-    const restoreDeps = commandSecretGatewayTesting.setDepsForTest({
-      analyzeCommandSecretAssignmentsFromSnapshot: () =>
-        ({
-          assignments: [
-            {
-              path: "channels.discord.accounts.ops.token",
-              pathSegments: ["channels", "discord", "accounts", "ops", "token"],
-              value: "ops-token",
-            },
-          ],
-          diagnostics: [],
-          inactive: [],
-          unresolved: [],
-        }) as never,
-      collectConfigAssignments: ({ context }) => {
-        context.assignments.push(
-          { path: "channels.discord.accounts.ops.token" } as never,
-          { path: "channels.discord.accounts.chat.token" } as never,
-        );
-      },
-      discoverConfigSecretTargetsByIds: () =>
-        [
-          {
-            entry: { expectedResolvedValue: "string" },
-            path: "channels.discord.accounts.ops.token",
-            pathSegments: ["channels", "discord", "accounts", "ops", "token"],
-            value: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" },
-          },
-          {
-            entry: { expectedResolvedValue: "string" },
-            path: "channels.discord.accounts.chat.token",
-            pathSegments: ["channels", "discord", "accounts", "chat", "token"],
-            value: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" },
-          },
-        ] as never,
-    });
+    const restoreDeps = setDiscordAccountTargetDeps();
     callGateway
       .mockRejectedValueOnce(
         new Error("secrets.resolve invalid request: invalid secrets.resolve params"),
@@ -1128,55 +1196,51 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 
-  it("marks web SecretRefs inactive when the web surface is disabled during local fallback", async () => {
-    const restoreDeps = setGoogleWebSearchTargetDeps();
-    try {
-      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-      const result = await resolveCommandSecretRefsViaGateway({
-        config: {
-          tools: {
-            web: {
-              search: {
-                enabled: false,
-                provider: "gemini",
-              },
-            },
-          },
-          plugins: {
-            entries: {
-              google: {
-                config: {
-                  webSearch: {
-                    apiKey: {
-                      source: "env",
-                      provider: "default",
-                      id: "WEB_SEARCH_DISABLED_KEY",
+  it.each([
+    { kind: "search", credentialKind: "webSearch", pluginId: "google", disabled: true },
+    { kind: "fetch", credentialKind: "webFetch", pluginId: "firecrawl", disabled: true },
+    { kind: "search", credentialKind: "webSearch", pluginId: "google", disabled: false },
+    { kind: "fetch", credentialKind: "webFetch", pluginId: "firecrawl", disabled: false },
+  ] as const)(
+    "marks web $kind refs inactive for disabled=$disabled or another selected provider",
+    async ({ kind, credentialKind, pluginId, disabled }) => {
+      const targetPath = `plugins.entries.${pluginId}.config.${credentialKind}.apiKey`;
+      const restoreDeps = setSingleSecretTargetDeps({
+        path: targetPath,
+        pathSegments: ["plugins", "entries", pluginId, "config", credentialKind, "apiKey"],
+        resolveManifestContractOwnerPluginId: () => "other-plugin",
+      });
+      try {
+        callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+        const result = await resolveCommandSecretRefsViaGateway({
+          config: {
+            tools: { web: { [kind]: { enabled: !disabled, provider: "other-provider" } } },
+            plugins: {
+              entries: {
+                [pluginId]: {
+                  config: {
+                    [credentialKind]: {
+                      apiKey: { source: "env", provider: "default", id: "WEB_INACTIVE_KEY" },
                     },
                   },
                 },
               },
             },
           },
-        } as OpenClawConfig,
-        commandName: "agent",
-        targetIds: new Set(["plugins.entries.google.config.webSearch.apiKey"]),
-      });
+          commandName: "agent",
+          targetIds: new Set([targetPath]),
+        });
 
-      expect(result.hadUnresolvedTargets).toBe(false);
-      expect(result.targetStatesByPath["plugins.entries.google.config.webSearch.apiKey"]).toBe(
-        "inactive_surface",
-      );
-      expect(
-        result.diagnostics.some((entry) =>
-          entry.includes(
-            "plugins.entries.google.config.webSearch.apiKey: tools.web.search is disabled.",
-          ),
-        ),
-      ).toBe(true);
-    } finally {
-      restoreDeps();
-    }
-  });
+        expect(result.hadUnresolvedTargets).toBe(false);
+        expect(result.targetStatesByPath[targetPath]).toBe("inactive_surface");
+        expect(result.diagnostics).toContain(
+          `${targetPath}: tools.web.${kind}${disabled ? " is disabled." : '.provider is "other-provider".'}`,
+        );
+      } finally {
+        restoreDeps();
+      }
+    },
+  );
 
   it("returns a version-skew hint when gateway does not support secrets.resolve", async () => {
     const envKey = "TALK_API_KEY_UNSUPPORTED";

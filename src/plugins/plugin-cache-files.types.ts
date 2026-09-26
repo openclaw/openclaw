@@ -3,7 +3,7 @@ import type { RootFileOpenFailure } from "../infra/boundary-file-read.js";
 import type { PluginDiagnosticCode, PluginManifest } from "./manifest-types.js";
 
 export type CachedPluginManifestResult =
-  | { ok: true; manifest: PluginManifest; manifestPath: string }
+  | { ok: true; manifest: PluginManifest; manifestPath: string; warnings?: string[] }
   | { ok: false; error: string; manifestPath: string; diagnosticCode?: PluginDiagnosticCode };
 
 export type PluginJsonCacheResult = { ok: true; value: unknown } | { ok: false; error: unknown };
@@ -32,6 +32,7 @@ export type PluginPathCacheEntry = {
   realpath?: string | null;
   nativeRealpath?: string | null;
   stat?: fs.Stats | null;
+  statError?: unknown;
   lstat?: fs.Stats | null;
 };
 

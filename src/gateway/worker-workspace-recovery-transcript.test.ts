@@ -1,23 +1,26 @@
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   loadTranscriptEvents,
+  loadSessionEntryReadOnly,
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  REQUEST,
-  type DispatchStage,
-} from "./worker-environments/placement-dispatch-test-fixtures.js";
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import {
@@ -40,6 +43,34 @@ afterEach(() => {
 
 function loadSessionRuntime() {
   return import("./session-utils.js");
+}
+
+async function createHandlers(identity = IDENTITY) {
+  const runtime = await loadSessionRuntime();
+  const target = runtime.resolveGatewaySessionStoreTargetWithStore({
+    cfg: getRuntimeConfig(),
+    key: identity.sessionKey,
+    agentId: identity.agentId,
+    clone: false,
+    exactRead: true,
+  });
+  const entry = loadSessionEntryReadOnly({
+    ...identity,
+    storePath: target.readSource?.path ?? target.storePath,
+    defaultAgentId: target.readSource?.agentId,
+  });
+  return createWorkerWorkspaceConflictTranscriptHandlers(
+    {
+      ...captureSessionTranscriptTargetBinding({
+        ...identity,
+        storePath: target.readSource?.path ?? target.storePath,
+      }),
+      defaultAgentId: target.readSource?.agentId,
+      expectedLifecycleRevision: entry?.lifecycleRevision,
+      expectedWriterRunId: entry?.activeWriterRunId,
+    },
+    () => {},
+  );
 }
 
 async function readRecoveryEvents(identity = IDENTITY) {
@@ -98,18 +129,18 @@ describe("worker workspace recovery transcript reporting", () => {
                 targetId: navigation === "opaque" ? "opaque" : "conflict",
               },
         ]);
-        const handlers = createWorkerWorkspaceConflictTranscriptHandlers(loadSessionRuntime);
-        expect(await handlers.resolveWorkspaceResultConflict(IDENTITY)).toEqual(
+        const handlers = await createHandlers();
+        expect(await handlers.resolveConflict()).toEqual(
           navigation === "reset" ? { kind: "absent" } : { kind: "conflict", conflict },
         );
-        await handlers.reportWorkspaceResultConflict({ ...IDENTITY, ...conflict });
-        expect(await handlers.resolveWorkspaceResultConflict(IDENTITY)).toEqual({
+        await handlers.reportConflict(conflict);
+        expect(await handlers.resolveConflict()).toEqual({
           kind: "conflict",
           conflict,
         });
-        await handlers.reportWorkspaceResultConflict({ ...IDENTITY, cleared: true });
-        await handlers.reportWorkspaceResultConflict({ ...IDENTITY, cleared: true });
-        expect(await handlers.resolveWorkspaceResultConflict(IDENTITY)).toEqual({ kind: "absent" });
+        await handlers.reportConflict({ cleared: true });
+        await handlers.reportConflict({ cleared: true });
+        expect(await handlers.resolveConflict()).toEqual({ kind: "absent" });
         const reports = (await loadTranscriptEvents(IDENTITY)).filter(
           (event) => isRecord(event) && event.type === "custom_message",
         );
@@ -145,8 +176,8 @@ describe("worker workspace recovery transcript reporting", () => {
             },
           },
         ]);
-        const handlers = createWorkerWorkspaceConflictTranscriptHandlers(loadSessionRuntime);
-        expect(await handlers.resolveWorkspaceResultConflict(IDENTITY)).toEqual({
+        const handlers = await createHandlers();
+        expect(await handlers.resolveConflict()).toEqual({
           kind: "unknown",
           reason: "malformed-report",
         });
@@ -164,8 +195,8 @@ describe("worker workspace recovery transcript reporting", () => {
             updatedAt: 1,
           });
         }
-        const handlers = createWorkerWorkspaceConflictTranscriptHandlers(loadSessionRuntime);
-        expect(await handlers.resolveWorkspaceResultConflict(IDENTITY)).toEqual({
+        const handlers = await createHandlers();
+        expect(await handlers.resolveConflict()).toEqual({
           kind: "unknown",
           reason: "session-unavailable",
         });
@@ -186,18 +217,18 @@ describe("worker workspace recovery transcript reporting", () => {
         ).code,
       ).toBe(0);
       const placements = createWorkerSessionPlacementStore();
-      const harnessOptions: { failAt?: DispatchStage; workspacePath: string } = {
-        failAt: "workspace",
+      const harnessOptions: { reconcileFails: boolean; workspacePath: string } = {
+        reconcileFails: true,
         workspacePath,
       };
-      const harness = createHarness(placements, harnessOptions);
-      const active = harness.placements.seedActive(2);
+      const harness = createHarness(openOpenClawStateDatabase(), placements, harnessOptions);
+      const active = await harness.placements.seedActive(2);
       if (active.state !== "active") {
         throw new Error("expected active worker placement");
       }
       harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
       harness.markEnvironmentNodeDeviceId("workspace-recovery-worker-node");
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...REQUEST,
         claimId: "workspace-recovery-claim",
         runId: "workspace-recovery-run",
@@ -209,10 +240,9 @@ describe("worker workspace recovery transcript reporting", () => {
       });
       placements.markWorkspaceResultPending(claim);
       placements.handoffWorkspaceResultRecovery(claim);
-      const { reportWorkspaceResultRecoveryFailure } =
-        createWorkerWorkspaceConflictTranscriptHandlers(loadSessionRuntime);
-      harness.reportWorkspaceResultRecoveryFailure.mockImplementation(
-        reportWorkspaceResultRecoveryFailure,
+      const { reportFailure } = await createHandlers(REQUEST);
+      harness.reportWorkspaceResultRecoveryFailure.mockImplementation(({ error }) =>
+        reportFailure(error),
       );
 
       await harness.service.reconcile();
@@ -229,12 +259,12 @@ describe("worker workspace recovery transcript reporting", () => {
       expect(await readRecoveryEvents(REQUEST)).toMatchObject([
         {
           customType: WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
-          content: expect.stringContaining("workspace failed"),
+          content: expect.stringContaining("workspace conflict"),
           display: true,
         },
       ]);
 
-      harnessOptions.failAt = undefined;
+      harnessOptions.reconcileFails = false;
       await harness.service.reconcile();
       await harness.service.reconcile();
 
@@ -249,8 +279,7 @@ describe("worker workspace recovery transcript reporting", () => {
   it("persists bounded recovery failures and deduplicates identical consecutive attempts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntryCore(IDENTITY, { sessionId: IDENTITY.sessionId, updatedAt: 1 });
-      const { reportWorkspaceResultRecoveryFailure } =
-        createWorkerWorkspaceConflictTranscriptHandlers(loadSessionRuntime);
+      const { reportFailure } = await createHandlers();
       const secret = [
         String.fromCharCode(115, 107),
         "proj",
@@ -259,8 +288,8 @@ describe("worker workspace recovery transcript reporting", () => {
       ].join("-");
       const firstError = `snapshot rejected token=${secret} ${"detail ".repeat(200)}`;
 
-      await reportWorkspaceResultRecoveryFailure({ ...IDENTITY, error: firstError });
-      await reportWorkspaceResultRecoveryFailure({ ...IDENTITY, error: firstError });
+      await reportFailure(firstError);
+      await reportFailure(firstError);
 
       const firstEvents = await readRecoveryEvents();
       expect(firstEvents).toHaveLength(1);
@@ -274,10 +303,7 @@ describe("worker workspace recovery transcript reporting", () => {
       expect(JSON.stringify(firstEvents[0])).not.toContain(secret);
       expect(String(firstEvents[0]?.content).length).toBeLessThanOrEqual(1_024);
 
-      await reportWorkspaceResultRecoveryFailure({
-        ...IDENTITY,
-        error: "snapshot verification failed",
-      });
+      await reportFailure("snapshot verification failed");
 
       expect(await readRecoveryEvents()).toMatchObject([
         { customType: WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE },
@@ -292,16 +318,15 @@ describe("worker workspace recovery transcript reporting", () => {
   it("rejects a rebound session identity without touching its replacement transcript", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntryCore(IDENTITY, { sessionId: IDENTITY.sessionId, updatedAt: 1 });
-      const { reportWorkspaceResultRecoveryFailure } =
-        createWorkerWorkspaceConflictTranscriptHandlers(loadSessionRuntime);
+      const { reportFailure } = await createHandlers();
       await upsertSessionEntryCore(IDENTITY, {
         sessionId: "replacement-workspace-session",
         updatedAt: 2,
       });
 
-      await expect(
-        reportWorkspaceResultRecoveryFailure({ ...IDENTITY, error: "stale worker recovery" }),
-      ).rejects.toThrow("workspace recovery lost session");
+      await expect(reportFailure("stale worker recovery")).rejects.toThrow(
+        "workspace recovery lost session",
+      );
 
       expect(
         await readRecoveryEvents({ ...IDENTITY, sessionId: "replacement-workspace-session" }),
@@ -318,20 +343,20 @@ describe("worker workspace recovery transcript reporting", () => {
           updatedAt: 1,
           activeWriterRunId: "report-writer",
         });
-        const { reportWorkspaceResultRecoveryFailure } =
-          createWorkerWorkspaceConflictTranscriptHandlers(loadSessionRuntime);
+        const { reportFailure } = await createHandlers();
         let releaseWriter!: () => void;
-        let signalWriterHeld!: () => void;
-        const writerHeld = new Promise<void>((resolve) => {
-          signalWriterHeld = resolve;
-        });
+        const { promise: writerHeld, resolve: signalWriterHeld } = createDeferred();
         const release = new Promise<void>((resolve) => {
           releaseWriter = resolve;
         });
-        const blocker = runExclusiveSqliteSessionWrite({ agentId: IDENTITY.agentId }, async () => {
-          signalWriterHeld();
-          await release;
-        });
+        const blocker = runExclusiveSqliteSessionWrite(
+          { agentId: IDENTITY.agentId },
+          async () => {
+            signalWriterHeld();
+            await release;
+          },
+          "session.transcript.batch",
+        );
         await writerHeld;
 
         const rebound = upsertSessionEntryCore(IDENTITY, {
@@ -340,11 +365,7 @@ describe("worker workspace recovery transcript reporting", () => {
           activeWriterRunId: "replacement-writer",
           updatedAt: 2,
         });
-        const report = () =>
-          reportWorkspaceResultRecoveryFailure({
-            ...IDENTITY,
-            error: "queued stale recovery",
-          });
+        const report = () => reportFailure("queued stale recovery");
         const reporting = (
           reboundKind === "session"
             ? report()
@@ -378,11 +399,7 @@ describe("worker workspace recovery transcript reporting", () => {
 
         await expect(reporting).resolves.toEqual(
           expect.objectContaining({
-            message: expect.stringContaining(
-              reboundKind === "session"
-                ? "workspace recovery lost session"
-                : "session writer claim changed",
-            ),
+            message: expect.stringContaining("session writer claim changed"),
           }),
         );
         expect(await readRecoveryEvents()).toEqual([]);

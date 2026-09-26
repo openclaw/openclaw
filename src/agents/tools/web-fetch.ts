@@ -3,7 +3,10 @@
  *
  * Fetches HTTP(S) content through SSRF guards, provider config, caching, and bounded extraction.
  */
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  resolveIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -23,7 +26,7 @@ import {
   wrapExternalContent,
   wrapWebContent,
 } from "../../security/external-content.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { isRecord } from "../../utils.js";
 import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
@@ -165,45 +168,11 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
 type ResolveWebFetchDefinition =
   (typeof import("../../web-fetch/runtime.js"))["resolveWebFetchDefinition"];
 type WebFetchProviderFallback = ReturnType<ResolveWebFetchDefinition>;
-type WebFetchRuntimeModule = Pick<
-  typeof import("../../web-fetch/runtime.js"),
-  "resolveWebFetchDefinition"
->;
-type WebGuardedFetchModule = Pick<
-  typeof import("./web-guarded-fetch.js"),
-  "fetchWithWebToolsNetworkGuard"
->;
-
-const webFetchRuntimeLoader = createLazyImportLoader<WebFetchRuntimeModule>(
-  () => import("../../web-fetch/runtime.js"),
-);
-const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
-  () => import("./web-guarded-fetch.js"),
-);
-
-async function loadWebFetchRuntime(): Promise<WebFetchRuntimeModule> {
-  return await webFetchRuntimeLoader.load();
-}
-
-async function loadWebGuardedFetch(): Promise<
-  WebGuardedFetchModule["fetchWithWebToolsNetworkGuard"]
-> {
-  return (await webGuardedFetchLoader.load()).fetchWithWebToolsNetworkGuard;
-}
+const loadWebFetchRuntime = createLazyPromise(() => import("../../web-fetch/runtime.js"));
+const loadWebGuardedFetch = createLazyPromise(() => import("./web-guarded-fetch.js"));
 
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   return resolveWebProviderConfig(cfg, "fetch") as NonNullable<WebFetchConfig> | undefined;
-}
-
-function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
-  if (typeof fetch?.readability === "boolean") {
-    return fetch.readability;
-  }
-  return true;
-}
-
-function resolveFetchUseTrustedEnvProxy(fetch?: WebFetchConfig): boolean {
-  return fetch?.useTrustedEnvProxy === true;
 }
 
 /**
@@ -280,34 +249,15 @@ function buildWebFetchRequestHeaders(params: {
 }
 
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
-  const raw =
-    fetch && "maxCharsCap" in fetch && typeof fetch.maxCharsCap === "number"
-      ? fetch.maxCharsCap
-      : undefined;
-  return resolveIntegerOption(raw, DEFAULT_FETCH_MAX_CHARS, { min: 100 });
+  return resolveIntegerOption(fetch?.maxCharsCap, DEFAULT_FETCH_MAX_CHARS, { min: 100 });
 }
 
 function resolveFetchMaxResponseBytes(fetch?: WebFetchConfig): number {
-  const raw =
-    fetch && "maxResponseBytes" in fetch && typeof fetch.maxResponseBytes === "number"
-      ? fetch.maxResponseBytes
-      : undefined;
-  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
-    return DEFAULT_FETCH_MAX_RESPONSE_BYTES;
-  }
-  const value = Math.floor(raw);
-  return Math.min(FETCH_MAX_RESPONSE_BYTES_MAX, Math.max(FETCH_MAX_RESPONSE_BYTES_MIN, value));
-}
-
-function resolveMaxChars(value: unknown, fallback: number, cap: number): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  const clamped = Math.max(100, Math.floor(parsed));
-  return Math.min(clamped, cap);
-}
-
-function resolveMaxRedirects(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  return Math.max(0, Math.floor(parsed));
+  return resolveIntegerOption(
+    asPositiveFiniteNumber(fetch?.maxResponseBytes),
+    DEFAULT_FETCH_MAX_RESPONSE_BYTES,
+    { min: FETCH_MAX_RESPONSE_BYTES_MIN, max: FETCH_MAX_RESPONSE_BYTES_MAX },
+  );
 }
 
 function looksLikeHtml(value: string): boolean {
@@ -394,35 +344,30 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
   if (maxChars <= 0) {
     return { text: "", truncated: true, rawLength: value.length, length: 0 };
   }
-  const includeWarning = maxChars >= WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD;
+  // Keep framing from outweighing source content in truncated previews. Short
+  // sources can still retain the warning when both fit in full.
+  const includeWarning =
+    maxChars >=
+    WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD +
+      Math.min(value.length, WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD);
   const wrapperOverhead = includeWarning
     ? WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD
     : WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD;
-  if (wrapperOverhead > maxChars) {
-    const minimal = includeWarning
-      ? wrapWebContent("", "web_fetch")
-      : wrapExternalContent("", { source: "web_fetch", includeWarning: false });
-    const truncatedWrapper = truncateWebFetchText(minimal, maxChars);
-    return {
-      text: truncatedWrapper.text,
-      truncated: true,
-      rawLength: value.length,
-      length: truncatedWrapper.text.length,
-    };
-  }
   const maxInner = Math.max(0, maxChars - wrapperOverhead);
   // Charge sanitizer expansion before wrapping; clipping a later marker can
   // increase output size, so a second raw-length adjustment is not sufficient.
   const truncated = truncateSanitizedExternalContent(value, maxInner);
-  const wrappedText = includeWarning
-    ? wrapWebContent(truncated.text, "web_fetch")
-    : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
+  // Tiny budgets may be shorter than the boundary markers themselves.
+  const wrapped = truncateWebFetchText(
+    wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning }),
+    maxChars,
+  );
 
   return {
-    text: wrappedText,
-    truncated: truncated.truncated,
+    text: wrapped.text,
+    truncated: truncated.truncated || wrapped.truncated,
     rawLength: value.length,
-    length: wrappedText.length,
+    length: wrapped.text.length,
   };
 }
 
@@ -568,12 +513,6 @@ function sanitizeWebFetchUrl(raw: string): string {
   const trimmed = raw.slice(0, end).replace(/^\s+/, "");
   const repaired = trimmed.replace(/^(https?:\/\/)\s+/i, "$1");
   return repaired.replace(/^(https?:\/\/[^/?#\s]+)\s+$/i, "$1");
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.webFetchTestApi")] = {
-    sanitizeWebFetchUrl,
-  };
 }
 
 async function buildWebFetchPayload(params: {
@@ -771,7 +710,7 @@ async function fetchWebPayload(params: WebFetchRuntimeParams): Promise<Record<st
   let release: () => Promise<void>;
   let finalUrl = params.url;
   try {
-    const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();
+    const { fetchWithWebToolsNetworkGuard } = await loadWebGuardedFetch();
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
@@ -987,15 +926,10 @@ export function createWebFetchTool(options?: {
       const providerCacheKey =
         normalizeOptionalLowercaseString(runtimeWebFetch?.selectedProvider) ??
         normalizeOptionalLowercaseString(runtimeWebFetch?.providerConfigured) ??
-        (executionFetch && "provider" in executionFetch
-          ? normalizeOptionalLowercaseString(executionFetch.provider)
-          : undefined);
-      const readabilityEnabled = resolveFetchReadabilityEnabled(executionFetch);
+        normalizeOptionalLowercaseString(executionFetch?.provider);
+      const readabilityEnabled = executionFetch?.readability !== false;
       const userAgent =
-        (executionFetch &&
-          "userAgent" in executionFetch &&
-          typeof executionFetch.userAgent === "string" &&
-          executionFetch.userAgent) ||
+        (typeof executionFetch?.userAgent === "string" && executionFetch.userAgent) ||
         DEFAULT_FETCH_USER_AGENT;
       const maxResponseBytes = resolveFetchMaxResponseBytes(executionFetch);
       let providerFallbackResolved = false;
@@ -1034,15 +968,16 @@ export function createWebFetchTool(options?: {
         const result = await runWebFetch({
           url,
           extractMode,
-          maxChars: resolveMaxChars(
+          maxChars: resolveIntegerOption(
             maxChars ?? executionFetch?.maxChars,
             DEFAULT_FETCH_MAX_CHARS,
-            maxCharsCap,
+            { min: 100, max: maxCharsCap },
           ),
           maxResponseBytes,
-          maxRedirects: resolveMaxRedirects(
+          maxRedirects: resolveIntegerOption(
             executionFetch?.maxRedirects,
             DEFAULT_FETCH_MAX_REDIRECTS,
+            { min: 0 },
           ),
           timeoutSeconds: resolveTimeoutSeconds(
             executionFetch?.timeoutSeconds,
@@ -1053,7 +988,7 @@ export function createWebFetchTool(options?: {
           headers: resolveFetchHeaders(executionFetch),
           readabilityEnabled,
           config,
-          useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),
+          useTrustedEnvProxy: executionFetch?.useTrustedEnvProxy === true,
           ssrfPolicy: hostnameAllowlist
             ? { ...executionFetch?.ssrfPolicy, hostnameAllowlist }
             : executionFetch?.ssrfPolicy,

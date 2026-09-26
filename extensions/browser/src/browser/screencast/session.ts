@@ -1,5 +1,5 @@
+import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { CDPSession, Frame, Page } from "playwright-core";
-import type { WebSocket } from "ws";
 import { getPwAiModule } from "../pw-ai-module.js";
 import { clearBrowserScreencastTokens, type BrowserScreencastTokenParams } from "./tokens.js";
 import { encodeBrowserScreencastFrame } from "./wire.js";
@@ -9,7 +9,7 @@ const FRAME_INTERVAL_MS = 50;
 const sessions = new Map<string, BrowserScreencastSession>();
 
 type ScreencastFrame = Parameters<typeof encodeBrowserScreencastFrame>[1] & { sessionId: number };
-type ViewerRequester = { signal?: AbortSignal; isCurrent?: () => boolean };
+type ViewerRequester = { signal?: AbortSignal; isCurrent?: () => boolean; release?: () => void };
 
 class BrowserScreencastSession {
   readonly viewers = new Map<WebSocket, ViewerRequester>();
@@ -37,6 +37,7 @@ class BrowserScreencastSession {
     this.viewers.set(ws, requester);
     ws.once("close", () => {
       requester.signal?.removeEventListener("abort", onRequesterGone);
+      requester.release?.();
       this.viewers.delete(ws);
       this.readyViewers.delete(ws);
       if (this.viewers.size === 0) {
@@ -323,6 +324,7 @@ export function attachBrowserScreencastViewer(
   ws: WebSocket,
 ): void {
   if (params.requesterSignal?.aborted || params.isRequesterCurrent?.() === false) {
+    params.releaseRequester?.();
     ws.close(4006, "authority_revoked");
     return;
   }
@@ -330,11 +332,16 @@ export function attachBrowserScreencastViewer(
     params.lifecycleSignal.throwIfAborted();
     params.assertCurrent();
   } catch {
+    params.releaseRequester?.();
     ws.close(4004, "target_closed");
     return;
   }
   const key = `${params.profileName}:${params.targetId}`;
-  const requester = { signal: params.requesterSignal, isCurrent: params.isRequesterCurrent };
+  const requester = {
+    signal: params.requesterSignal,
+    isCurrent: params.isRequesterCurrent,
+    release: params.releaseRequester,
+  };
   let session = sessions.get(key);
   let previousDrain: Promise<void> | undefined;
   if (

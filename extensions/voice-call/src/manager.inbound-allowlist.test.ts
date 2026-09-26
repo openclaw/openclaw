@@ -3,69 +3,28 @@ import { describe, expect, it } from "vitest";
 import { FakeProvider, createManagerHarness } from "./manager.test-harness.js";
 
 describe("CallManager inbound allowlist", () => {
-  it("rejects inbound calls with missing caller ID when allowlist enabled", async () => {
+  it.each([
+    { label: "missing caller ID", from: undefined },
+    { label: "anonymous caller ID", from: "anonymous" },
+    { label: "an allowlist suffix", from: "+99915550001234" },
+  ])("rejects inbound calls with $label", async ({ from }) => {
     const { manager, provider } = await createManagerHarness({
       inboundPolicy: "allowlist",
       allowFrom: ["+15550001234"],
     });
-
-    manager.processEvent({
-      id: "evt-allowlist-missing",
+    await manager.processEvent({
+      id: "evt-allowlist-rejected",
       type: "call.initiated",
-      callId: "call-missing",
-      providerCallId: "provider-missing",
+      callId: "call-rejected",
+      providerCallId: "provider-rejected",
       timestamp: Date.now(),
       direction: "inbound",
+      from,
       to: "+15550000000",
     });
-
-    expect(manager.getCallByProviderCallId("provider-missing")).toBeUndefined();
+    expect(manager.getCallByProviderCallId("provider-rejected")).toBeUndefined();
     expect(provider.hangupCalls).toHaveLength(1);
-    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-missing");
-  });
-
-  it("rejects inbound calls with anonymous caller ID when allowlist enabled", async () => {
-    const { manager, provider } = await createManagerHarness({
-      inboundPolicy: "allowlist",
-      allowFrom: ["+15550001234"],
-    });
-
-    manager.processEvent({
-      id: "evt-allowlist-anon",
-      type: "call.initiated",
-      callId: "call-anon",
-      providerCallId: "provider-anon",
-      timestamp: Date.now(),
-      direction: "inbound",
-      from: "anonymous",
-      to: "+15550000000",
-    });
-
-    expect(manager.getCallByProviderCallId("provider-anon")).toBeUndefined();
-    expect(provider.hangupCalls).toHaveLength(1);
-    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-anon");
-  });
-
-  it("rejects inbound calls that only match allowlist suffixes", async () => {
-    const { manager, provider } = await createManagerHarness({
-      inboundPolicy: "allowlist",
-      allowFrom: ["+15550001234"],
-    });
-
-    manager.processEvent({
-      id: "evt-allowlist-suffix",
-      type: "call.initiated",
-      callId: "call-suffix",
-      providerCallId: "provider-suffix",
-      timestamp: Date.now(),
-      direction: "inbound",
-      from: "+99915550001234",
-      to: "+15550000000",
-    });
-
-    expect(manager.getCallByProviderCallId("provider-suffix")).toBeUndefined();
-    expect(provider.hangupCalls).toHaveLength(1);
-    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-suffix");
+    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-rejected");
   });
 
   it("rejects duplicate inbound events with a single hangup call", async () => {
@@ -73,7 +32,7 @@ describe("CallManager inbound allowlist", () => {
       inboundPolicy: "disabled",
     });
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-reject-init",
       type: "call.initiated",
       callId: "provider-dup",
@@ -84,7 +43,7 @@ describe("CallManager inbound allowlist", () => {
       to: "+15550000000",
     });
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-reject-ring",
       type: "call.ringing",
       callId: "provider-dup",
@@ -96,8 +55,9 @@ describe("CallManager inbound allowlist", () => {
     });
 
     expect(manager.getCallByProviderCallId("provider-dup")).toBeUndefined();
-    expect(provider.hangupCalls).toHaveLength(1);
-    expect(provider.hangupCalls[0]?.providerCallId).toBe("provider-dup");
+    expect(provider.hangupCalls).toEqual([
+      { callId: "provider-dup", providerCallId: "provider-dup", reason: "hangup-bot" },
+    ]);
   });
 
   it("retries rejected inbound hangup after a transient provider failure", async () => {
@@ -121,7 +81,7 @@ describe("CallManager inbound allowlist", () => {
       provider,
     );
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-reject-fail-init",
       type: "call.initiated",
       callId: "provider-flaky",
@@ -133,7 +93,7 @@ describe("CallManager inbound allowlist", () => {
     });
     await Promise.resolve();
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-reject-fail-ring",
       type: "call.ringing",
       callId: "provider-flaky",
@@ -158,7 +118,7 @@ describe("CallManager inbound allowlist", () => {
       allowFrom: ["+15550001234"],
     });
 
-    manager.processEvent({
+    await manager.processEvent({
       id: "evt-allowlist-exact",
       type: "call.initiated",
       callId: "call-exact",

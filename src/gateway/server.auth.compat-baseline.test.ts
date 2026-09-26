@@ -5,13 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   BACKEND_GATEWAY_CLIENT,
   connectReq,
   CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
   createSignedDevice,
-  getGatewayTestPort,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   readConnectChallengeNonce,
@@ -107,45 +107,16 @@ async function expectSharedOperatorScopesCleared(
   }
 }
 
-async function expectLocalBackendGatewayClientScopesPreserved(
+async function expectLocalSharedAuthScopesPreserved(
   port: number,
   auth: { token?: string; password?: string; skipDefaultAuth?: boolean },
+  client: typeof BACKEND_GATEWAY_CLIENT | typeof CLI_CLIENT,
 ) {
   const ws = await openWs(port);
   try {
     const res = await connectReq(ws, {
       ...auth,
-      client: { ...BACKEND_GATEWAY_CLIENT },
-      scopes: ["operator.admin"],
-      device: null,
-    });
-    expect(res.ok, JSON.stringify(res)).toBe(true);
-
-    const helloOk = res.payload as
-      | {
-          auth?: {
-            scopes?: unknown;
-          };
-        }
-      | undefined;
-    expect(helloOk?.auth?.scopes).toEqual(["operator.admin"]);
-
-    const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
-    expect(adminRes.ok).toBe(true);
-  } finally {
-    ws.close();
-  }
-}
-
-async function expectLocalCliSharedAuthScopesPreserved(
-  port: number,
-  auth: { token?: string; password?: string },
-) {
-  const ws = await openWs(port);
-  try {
-    const res = await connectReq(ws, {
-      ...auth,
-      client: { ...CLI_CLIENT },
+      client: { ...client },
       scopes: ["operator.admin"],
       device: null,
     });
@@ -177,8 +148,9 @@ describe("gateway auth compatibility baseline", () => {
       previousCredential = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "token", token: "secret" };
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim);
     });
 
     afterAll(async () => {
@@ -201,11 +173,11 @@ describe("gateway auth compatibility baseline", () => {
     });
 
     test("preserves scopes for direct-local backend shared-token connects without device identity", async () => {
-      await expectLocalBackendGatewayClientScopesPreserved(port, { token: "secret" });
+      await expectLocalSharedAuthScopesPreserved(port, { token: "secret" }, BACKEND_GATEWAY_CLIENT);
     });
 
     test("preserves scopes for direct-local CLI shared-token connects without device identity", async () => {
-      await expectLocalCliSharedAuthScopesPreserved(port, { token: "secret" });
+      await expectLocalSharedAuthScopesPreserved(port, { token: "secret" }, CLI_CLIENT);
     });
 
     test("returns stable token-missing details for control ui without token", async () => {
@@ -344,8 +316,9 @@ describe("gateway auth compatibility baseline", () => {
         rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 },
       };
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim);
     });
 
     afterAll(async () => {
@@ -387,8 +360,9 @@ describe("gateway auth compatibility baseline", () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "password", password: "secret" };
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim);
     });
 
     afterAll(async () => {
@@ -427,11 +401,15 @@ describe("gateway auth compatibility baseline", () => {
     });
 
     test("preserves scopes for direct-local backend shared-password connects without device identity", async () => {
-      await expectLocalBackendGatewayClientScopesPreserved(port, { password: "secret" });
+      await expectLocalSharedAuthScopesPreserved(
+        port,
+        { password: "secret" },
+        BACKEND_GATEWAY_CLIENT,
+      );
     });
 
     test("preserves scopes for direct-local CLI shared-password connects without device identity", async () => {
-      await expectLocalCliSharedAuthScopesPreserved(port, { password: "secret" });
+      await expectLocalSharedAuthScopesPreserved(port, { password: "secret" }, CLI_CLIENT);
     });
   });
 
@@ -444,8 +422,9 @@ describe("gateway auth compatibility baseline", () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "none" };
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port, { controlUiEnabled: true });
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      port = portClaim.port;
+      server = await startTestGatewayServer(portClaim, { controlUiEnabled: true });
     });
 
     afterAll(async () => {
@@ -464,7 +443,11 @@ describe("gateway auth compatibility baseline", () => {
     });
 
     test("allows auth-none local backend connects without device identity", async () => {
-      await expectLocalBackendGatewayClientScopesPreserved(port, { skipDefaultAuth: true });
+      await expectLocalSharedAuthScopesPreserved(
+        port,
+        { skipDefaultAuth: true },
+        BACKEND_GATEWAY_CLIENT,
+      );
     });
 
     test("rejects auth-none browser-origin backend connects without device identity", async () => {

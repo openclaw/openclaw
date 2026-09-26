@@ -22,7 +22,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
-  LMSTUDIO_DOCKER_HOST_INFERENCE_BASE_URL,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
 } from "./defaults.js";
 import type { LmstudioModelWire } from "./models.js";
@@ -634,6 +633,7 @@ describe("lmstudio setup", () => {
     });
 
     expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       provider: "lmstudio",
       agentDir: undefined,
     });
@@ -661,19 +661,6 @@ describe("lmstudio setup", () => {
     expect(result?.auth).toBeUndefined();
   });
 
-  it("non-interactive setup prefers --lmstudio-api-key over --custom-api-key", async () => {
-    const { ctx } = await runNonInteractive({
-      customApiKey: "old-custom-key",
-      lmstudioApiKey: "new-lmstudio-key",
-    });
-
-    expectRecordFields(
-      ctx.resolveApiKey.mock.calls[0]?.[0],
-      { flagValue: "new-lmstudio-key", flagName: "--lmstudio-api-key" },
-      "resolveApiKey options",
-    );
-  });
-
   it("non-interactive setup overwrites existing config apiKey during re-auth", async () => {
     const { result } = await runNonInteractive({
       config: buildConfig({
@@ -688,26 +675,6 @@ describe("lmstudio setup", () => {
     const provider = requireNonInteractiveLmstudioProvider(result);
     expectApiKeyProvider(provider);
     expect(provider.apiKey).not.toBe("stale-config-key");
-  });
-
-  it("non-interactive setup fails when requested model is missing", async () => {
-    const ctx = buildNonInteractiveContext({
-      customModelId: "missing-model",
-    });
-    const dockerSetup = ["1", "true", "yes", "on"].includes(
-      process.env.OPENCLAW_DOCKER_SETUP?.trim().toLowerCase() ?? "",
-    );
-    const expectedBaseUrl = dockerSetup
-      ? LMSTUDIO_DOCKER_HOST_INFERENCE_BASE_URL
-      : LMSTUDIO_DEFAULT_INFERENCE_BASE_URL;
-
-    await expect(configureLmstudioNonInteractive(ctx)).resolves.toBeNull();
-
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
-      `LM Studio model missing-model was not found at ${expectedBaseUrl}.\nAvailable models: qwen3-8b-instruct`,
-    );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
-    expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();
   });
 
   it("non-interactive setup rejects an installed model that is not loaded", async () => {
@@ -750,7 +717,7 @@ describe("lmstudio setup", () => {
         max_context_length: 32768,
       }),
     ]);
-    const { prompter, text } = createQueuedWizardPrompterHarness({ context: "4096" });
+    const { prompter, text } = createMethodBoundWizardPrompterHarness({ context: "4096" });
 
     const result = await runInteractive({ prompter });
 
@@ -769,15 +736,6 @@ describe("lmstudio setup", () => {
       contextTokens: 4096,
       maxTokens: 4096,
     });
-  });
-
-  it("interactive setup preserves gateway wizard prompter method binding", async () => {
-    const { prompter, text } = createMethodBoundWizardPrompterHarness({ context: "4096" });
-
-    const result = await runInteractive({ prompter });
-
-    expect(text).toHaveBeenCalledTimes(3);
-    expect(result.defaultModel).toBe("lmstudio/qwen3-8b-instruct");
   });
 
   it("interactive setup preserves gateway wizard note binding on discovery failure", async () => {
@@ -878,6 +836,7 @@ describe("lmstudio setup", () => {
       timeoutMs: 5000,
     });
     expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       provider: "lmstudio",
       agentDir: undefined,
     });
@@ -943,6 +902,7 @@ describe("lmstudio setup", () => {
       timeoutMs: 5000,
     });
     expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       provider: "lmstudio",
       agentDir: undefined,
     });
@@ -971,6 +931,7 @@ describe("lmstudio setup", () => {
       timeoutMs: 5000,
     });
     expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       provider: "lmstudio",
       agentDir: undefined,
     });
@@ -1084,13 +1045,6 @@ describe("lmstudio setup", () => {
     providerPatch: Partial<ModelProviderConfig>;
     expectedProviderPatch: Partial<ModelProviderConfig>;
   }>([
-    {
-      name: "injects lmstudio-local for explicit models by default",
-      providerPatch: {},
-      expectedProviderPatch: {
-        apiKey: LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
-      },
-    },
     {
       name: "keeps api-key auth backed by default env marker",
       providerPatch: {

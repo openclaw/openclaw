@@ -1,4 +1,3 @@
-// Slack plugin module implements approval handler behavior.
 import type { App } from "@slack/bolt";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import {
@@ -19,6 +18,7 @@ import { logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { SLACK_APPROVAL_HEADER_BLOCK_ID } from "./approval-actions.js";
+import { runSlackApprovalMessageUpdate } from "./approval-message-updates.js";
 import {
   isSlackAnyNativeApprovalClientEnabled,
   shouldHandleSlackNativeApprovalRequest,
@@ -108,33 +108,18 @@ function formatSlackApprover(resolvedBy?: string | null): string | null {
   return trimmed ? trimmed : null;
 }
 
-function formatSlackMetadataLine(label: string, value: string): string {
-  return `*${label}:* ${value}`;
-}
-
 function buildSlackMetadataLines(metadata: readonly SlackMetadataItem[]): string[] {
-  const lines: string[] = [];
-  for (const item of metadata) {
-    lines.push(formatSlackMetadataLine(item.label, item.value));
-  }
-  return lines;
+  return metadata.map(({ label, value }) => `*${label}:* ${value}`);
 }
 
 function buildSlackMetadataContextElements(metadata: readonly SlackMetadataItem[]) {
   const lines = buildSlackMetadataLines(metadata);
   const visibleLineCount =
     lines.length > SLACK_CONTEXT_ELEMENTS_MAX ? SLACK_CONTEXT_ELEMENTS_MAX - 1 : lines.length;
-  const elements: Array<{ type: "mrkdwn"; text: string }> = [];
-  for (let index = 0; index < visibleLineCount; index += 1) {
-    const line = lines[index];
-    if (line === undefined) {
-      continue;
-    }
-    elements.push({
-      type: "mrkdwn",
-      text: truncateSlackMrkdwn(line, SLACK_TEXT_OBJECT_MAX),
-    });
-  }
+  const elements = lines.slice(0, visibleLineCount).map((line) => ({
+    type: "mrkdwn" as const,
+    text: truncateSlackMrkdwn(line, SLACK_TEXT_OBJECT_MAX),
+  }));
   if (lines.length > SLACK_CONTEXT_ELEMENTS_MAX) {
     elements.push({
       type: "mrkdwn",
@@ -162,19 +147,6 @@ function buildSlackPluginMetadata(view: SlackPluginApprovalView): SlackMetadataI
 
 function resolveSlackPluginDescription(view: SlackPluginApprovalView): string {
   return normalizeOptionalString(view.description) ?? "A plugin action needs your approval.";
-}
-
-function buildSlackPluginRequestBlocks(view: SlackPluginApprovalView): SlackBlock[] {
-  return [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*Request*\n${truncateSlackMrkdwn(view.title, 2600)}`,
-      },
-    },
-    ...buildSlackMetadataContextBlocks(buildSlackPluginMetadata(view)),
-  ];
 }
 
 type SlackApprovalRenderInput =
@@ -231,18 +203,18 @@ function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendin
         text: `${heading}\n${headerDescription}`,
       },
     },
-    ...(view.approvalKind === "plugin"
-      ? buildSlackPluginRequestBlocks(view)
-      : [
-          {
-            type: "section" as const,
-            text: {
-              type: "mrkdwn" as const,
-              text: `${bodyLabel}\n${buildSlackCodeBlock(truncateSlackMrkdwn(view.commandText, 2600))}`,
-            },
-          },
-          ...(phase === "pending" ? buildSlackMetadataContextBlocks(view.metadata) : []),
-        ]),
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: `${bodyLabel}\n${
+          isPlugin
+            ? truncateSlackMrkdwn(view.title, 2600)
+            : buildSlackCodeBlock(truncateSlackMrkdwn(view.commandText, 2600))
+        }`,
+      },
+    },
+    ...(includeMetadata ? buildSlackMetadataContextBlocks(metadata) : []),
   ];
   if (phase === "pending") {
     blocks.push(
@@ -257,18 +229,21 @@ function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendin
 
 async function updateMessage(params: {
   client: WebClient;
+  accountId: string;
   channelId: string;
   messageTs: string;
   text: string;
   blocks: SlackBlock[];
 }): Promise<void> {
   try {
-    await params.client.chat.update({
-      channel: params.channelId,
-      ts: params.messageTs,
-      text: truncateSlackTextByUtf8Bytes(params.text, SLACK_EDIT_TEXT_MAX_BYTES),
-      blocks: params.blocks,
-    });
+    await runSlackApprovalMessageUpdate(params, () =>
+      params.client.chat.update({
+        channel: params.channelId,
+        ts: params.messageTs,
+        text: truncateSlackTextByUtf8Bytes(params.text, SLACK_EDIT_TEXT_MAX_BYTES),
+        blocks: params.blocks,
+      }),
+    );
   } catch (err) {
     logError(`slack approvals: failed to update message: ${String(err)}`);
   }
@@ -383,6 +358,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       const client = resolveApprovalClient(resolved.context, entry.teamId);
       await updateMessage({
         client,
+        accountId: resolved.accountId,
         channelId: entry.channelId,
         messageTs: entry.messageTs,
         text: payload.text,

@@ -1,9 +1,10 @@
-// Msteams plugin module implements access behavior.
-import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import {
+  formatAllowlistMatchMeta,
+  resolveAllowlistMatchSimple,
+} from "openclaw/plugin-sdk/allow-from";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
-  resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -22,7 +23,7 @@ import type {
 import { formatUnknownError } from "../errors.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMonitorLogger } from "../monitor-types.js";
-import { resolveMSTeamsAllowlistMatch, resolveMSTeamsRouteConfig } from "../policy.js";
+import { resolveMSTeamsRouteConfig } from "../policy.js";
 import { looksLikeMSTeamsConversationId } from "../resolve-allowlist.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
@@ -127,6 +128,13 @@ export async function resolveMSTeamsSenderAccess(params: {
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
   const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
   const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
+  // Bot Framework uses non-personal types and group/team/channel markers for shared scopes.
+  // Consumers fail closed when those asserted facts contradict direct-message classification.
+  const hasConflictingConversationScope =
+    isDirectMessage &&
+    (activity.conversation?.isGroup === true ||
+      activity.channelData?.team !== undefined ||
+      activity.channelData?.channel !== undefined);
   const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
   const senderName = activity.from?.name ?? activity.from?.id ?? senderId;
 
@@ -154,7 +162,7 @@ export async function resolveMSTeamsSenderAccess(params: {
     allowNameMatching,
   });
 
-  const resolved = await resolveStableChannelMessageIngress({
+  const resolved = await core.channel.inbound.ingress.resolveStable({
     channelId: "msteams",
     accountId: pairing.accountId,
     identity: {
@@ -229,6 +237,7 @@ export async function resolveMSTeamsSenderAccess(params: {
     channelIngress: resolved,
     pairing,
     isDirectMessage,
+    hasConflictingConversationScope,
     conversationId,
     senderId,
     senderName,
@@ -269,6 +278,7 @@ export async function admitMSTeamsMessage(params: {
     senderName,
     pairing,
     isDirectMessage,
+    hasConflictingConversationScope,
     channelGate,
     senderAccess,
     commandAccess,
@@ -279,6 +289,14 @@ export async function admitMSTeamsMessage(params: {
   const effectiveDmAllowFrom = senderAccess.effectiveAllowFrom;
   const effectiveGroupAllowFrom = senderAccess.effectiveGroupAllowFrom;
 
+  if (hasConflictingConversationScope) {
+    params.log.info("dropping message (conflicting conversation scope)", {
+      conversationId: params.conversationId,
+    });
+    params.log.debug?.("dropping message (conflicting conversation scope)");
+    return null;
+  }
+
   if (isDirectMessage && msteamsCfg && senderAccess.decision !== "allow") {
     if (senderAccess.reasonCode === "dm_policy_disabled") {
       params.log.info("dropping dm (dms disabled)", {
@@ -288,7 +306,7 @@ export async function admitMSTeamsMessage(params: {
       params.log.debug?.("dropping dm (dms disabled)");
       return null;
     }
-    const allowMatch = resolveMSTeamsAllowlistMatch({
+    const allowMatch = resolveAllowlistMatchSimple({
       allowFrom: effectiveDmAllowFrom,
       senderId,
       senderName,
@@ -374,7 +392,7 @@ export async function admitMSTeamsMessage(params: {
       return null;
     }
     if (!senderAccess.allowed) {
-      const allowMatch = resolveMSTeamsAllowlistMatch({
+      const allowMatch = resolveAllowlistMatchSimple({
         allowFrom: effectiveGroupAllowFrom,
         senderId,
         senderName,

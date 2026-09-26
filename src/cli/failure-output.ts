@@ -1,12 +1,14 @@
 // Shared root CLI failure formatting with debug stack gating and recovery hints.
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import {
   UpdateSchemaRefusalError,
   type UpdateSchemaRefusalDatabase,
 } from "../state/openclaw-update-schema-refusal.js";
 import { formatCliCommand } from "./command-format.js";
+import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
 
 type FormatCliFailureOptions = {
   title: string;
@@ -30,10 +32,13 @@ export type CliJsonFailure = {
     updaterVersion?: string;
     targetVersion?: string;
     commands?: readonly string[];
+    matches?: readonly CronCliJobMatch[];
   };
 };
 
-const gatewayRunFailures = new WeakMap<Error, { runId: string; origin: "gateway" }>();
+export type CliGatewayRunFailure = { runId: string; origin: "gateway" };
+
+const gatewayRunFailures = new WeakMap<Error, CliGatewayRunFailure>();
 
 /** Agent dispatch supplies observed Gateway IDs; error identity and human output stay intact. */
 export function recordCliGatewayRunFailure(error: unknown, runId: string | undefined): void {
@@ -42,22 +47,30 @@ export function recordCliGatewayRunFailure(error: unknown, runId: string | undef
   }
 }
 
+/** Human diagnostics (agent transport-loss hint) read back the run identity recorded at dispatch. */
+export function readCliGatewayRunFailure(error: unknown): CliGatewayRunFailure | undefined {
+  return error instanceof Error ? gatewayRunFailures.get(error) : undefined;
+}
+
 export class ExpectedCliError extends Error {
   readonly humanOutput: string;
   readonly humanOutputWritten: boolean;
   readonly machineOutput: string;
+  readonly matches?: readonly CronCliJobMatch[];
 
   constructor(params: {
     message: string;
     humanOutput: string;
     humanOutputWritten?: boolean;
     machineOutput: string;
+    matches?: readonly CronCliJobMatch[];
   }) {
     super(params.message);
     this.name = "ExpectedCliError";
     this.humanOutput = params.humanOutput;
     this.humanOutputWritten = params.humanOutputWritten ?? false;
     this.machineOutput = params.machineOutput;
+    this.matches = params.matches;
   }
 }
 
@@ -78,10 +91,20 @@ export function isGatewayCredentialsCliError(
   );
 }
 
+// These producers already supply the operator remedy. Classify by name to keep
+// their runtime modules out of the root CLI's cold startup path.
+const EXPECTED_CLI_ERROR_NAMES = new Set([
+  "GatewayExplicitAuthRequiredError",
+  "AgentSelectionRequiredError",
+  "ConfigReadOnlyError",
+  "NixModeConfigMutationError",
+]);
+
 export function isExpectedCliError(error: unknown): error is Error {
   return (
     error instanceof ExpectedCliError ||
     isGatewayCredentialsCliError(error) ||
+    (error instanceof Error && EXPECTED_CLI_ERROR_NAMES.has(error.name)) ||
     isGatewayTransportError(error)
   );
 }
@@ -112,10 +135,11 @@ export function formatCliJsonFailure(
     : formatCliOperatorError(error, options);
   return {
     ok: false,
-    ...(error instanceof Error ? gatewayRunFailures.get(error) : undefined),
+    ...readCliGatewayRunFailure(error),
     error: {
       type: "cli_error",
       message,
+      ...(error instanceof ExpectedCliError && error.matches ? { matches: error.matches } : {}),
       ...(error instanceof UpdateSchemaRefusalError
         ? {
             code: error.code,
@@ -191,7 +215,13 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     lines.push("[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.");
   }
 
-  if (options.includeDoctorHint !== false) {
+  // Doctor needs the same coordinators; inspect wrappers without loading the SQLite runtime.
+  if (
+    options.includeDoctorHint !== false &&
+    !collectNestedErrorCandidates(options.error).some(
+      (error) => error instanceof Error && error.name === "StateDatabaseCoordinatorContentionError",
+    )
+  ) {
     lines.push(`[openclaw] Try: ${formatCliCommand("openclaw doctor", env)}`);
   }
   lines.push(`[openclaw] Help: ${formatCliCommand("openclaw --help", env)}`);

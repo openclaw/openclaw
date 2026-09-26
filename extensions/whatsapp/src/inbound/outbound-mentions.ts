@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements outbound mentions behavior.
 import type { AnyMessageContent } from "baileys";
 
 export type WhatsAppOutboundMentionParticipant =
@@ -111,19 +110,6 @@ function extractLidDigits(value: string | null | undefined): string | null {
   return parts && LID_JID_DOMAIN_RE.test(parts.domain) ? parts.user : null;
 }
 
-function isLidJid(jid: string): boolean {
-  const parts = extractKnownJidParts(jid);
-  return Boolean(parts && LID_JID_DOMAIN_RE.test(parts.domain));
-}
-
-function lidReplacementText(jid: string): string | undefined {
-  const parts = extractKnownJidParts(jid);
-  if (!parts || !LID_JID_DOMAIN_RE.test(parts.domain)) {
-    return undefined;
-  }
-  return `@${parts.user}`;
-}
-
 function participantValues(participant: WhatsAppOutboundMentionParticipant): {
   id?: string | null;
   lid?: string | null;
@@ -138,8 +124,8 @@ function chooseMentionJid(participant: WhatsAppOutboundMentionParticipant): stri
   const idJid = normalizeKnownUserJid(values.id ?? "");
   const lidJid = normalizeKnownUserJid(values.lid ?? "");
   return (
-    (idJid && isLidJid(idJid) ? idJid : null) ??
-    (lidJid && isLidJid(lidJid) ? lidJid : null) ??
+    (extractLidDigits(idJid) ? idJid : null) ??
+    (extractLidDigits(lidJid) ? lidJid : null) ??
     idJid ??
     lidJid ??
     normalizeKnownUserJid(values.phoneNumber ?? "") ??
@@ -158,9 +144,10 @@ function buildMentionTargetMaps(participants: readonly WhatsAppOutboundMentionPa
     if (!mentionJid) {
       continue;
     }
+    const lidDigits = extractLidDigits(mentionJid);
     const target = {
       mentionJid,
-      ...(isLidJid(mentionJid) ? { replacementText: lidReplacementText(mentionJid) } : {}),
+      ...(lidDigits ? { replacementText: `@${lidDigits}` } : {}),
     };
     const values = participantValues(participant);
     for (const value of [values.id, values.phoneNumber, values.e164]) {

@@ -387,7 +387,7 @@ export async function resolveRuntimeWebProviderSelection<
       ? params.providers.filter((provider) => provider.id === params.configuredProvider)
       : params.providers;
     type UnresolvedProvider = {
-      provider: string;
+      providerId: string;
       path: string;
       ref?: SecretRef;
       refKey?: string;
@@ -396,6 +396,10 @@ export async function resolveRuntimeWebProviderSelection<
       restoreResolvedValue: (value: string) => void;
     };
     const unresolvedWithoutFallback: UnresolvedProvider[] = [];
+    const hasProviderRef = (
+      entry: UnresolvedProvider,
+    ): entry is UnresolvedProvider & { ref: SecretRef; refKey: string } =>
+      Boolean(entry.ref && entry.refKey);
 
     let keylessFallbackProvider: TProvider | undefined;
 
@@ -478,7 +482,7 @@ export async function resolveRuntimeWebProviderSelection<
         selectedCandidateResolution.unresolvedRefReason
       ) {
         unresolvedWithoutFallback.push({
-          provider: provider.id,
+          providerId: provider.id,
           path: selectedCandidatePath,
           ref: selectedCandidateResolution.secretRef,
           refKey: selectedCandidateResolution.secretRefKey,
@@ -505,7 +509,7 @@ export async function resolveRuntimeWebProviderSelection<
         continue;
       }
 
-      if (params.configuredProvider) {
+      if (params.configuredProvider || isKeyless || selectedCandidateResolution.value) {
         selectedProvider = provider.id;
         selectedPath = selectedCandidatePath;
         selectedResolution = selectedCandidateResolution;
@@ -521,42 +525,6 @@ export async function resolveRuntimeWebProviderSelection<
             value: selectedCandidateResolution.value,
           });
         }
-        break;
-      }
-
-      if (isKeyless) {
-        selectedProvider = provider.id;
-        selectedPath = selectedCandidatePath;
-        selectedResolution = selectedCandidateResolution;
-        if (selectedCandidateResolution.value) {
-          setResolvedCredentialPath({
-            resolvedConfig: params.resolvedConfig,
-            path: selectedCandidatePath,
-            value: selectedCandidateResolution.value,
-          });
-          params.setResolvedCredential({
-            resolvedConfig: params.resolvedConfig,
-            provider,
-            value: selectedCandidateResolution.value,
-          });
-        }
-        break;
-      }
-
-      if (selectedCandidateResolution.value) {
-        selectedProvider = provider.id;
-        selectedPath = selectedCandidatePath;
-        selectedResolution = selectedCandidateResolution;
-        setResolvedCredentialPath({
-          resolvedConfig: params.resolvedConfig,
-          path: selectedCandidatePath,
-          value: selectedCandidateResolution.value,
-        });
-        params.setResolvedCredential({
-          resolvedConfig: params.resolvedConfig,
-          provider,
-          value: selectedCandidateResolution.value,
-        });
         break;
       }
     }
@@ -591,21 +559,7 @@ export async function resolveRuntimeWebProviderSelection<
       related: UnresolvedProvider[] = [unresolved],
     ): never => {
       recordUnresolvedNoFallback(unresolved);
-      const relatedUnavailableProviders = related.flatMap((entry) =>
-        entry.ref && entry.refKey
-          ? [
-              {
-                providerId: entry.provider,
-                path: entry.path,
-                ref: entry.ref,
-                refKey: entry.refKey,
-                reason: entry.reason,
-                contractDigest: entry.contractDigest,
-                restoreResolvedValue: entry.restoreResolvedValue,
-              },
-            ]
-          : [],
-      );
+      const relatedUnavailableProviders = related.filter(hasProviderRef);
       if (relatedUnavailableProviders.length > 0) {
         const error = new RuntimeWebProviderUnavailableError(
           params.noFallbackCode,
@@ -621,23 +575,8 @@ export async function resolveRuntimeWebProviderSelection<
     if (params.configuredProvider) {
       const unresolved = unresolvedWithoutFallback[0];
       if (unresolved) {
-        const refKey = unresolved.refKey;
-        const ref = unresolved.ref;
-        if (refKey && ref) {
-          const unavailable = {
-            providerId: params.configuredProvider,
-            path: unresolved.path,
-            ref,
-            refKey,
-            reason: unresolved.reason,
-            contractDigest: unresolved.contractDigest,
-            restoreResolvedValue: unresolved.restoreResolvedValue,
-          };
-          if (params.allowUnavailableProviders) {
-            unavailableProviders.push(unavailable);
-          } else {
-            failUnresolvedNoFallback(unresolved);
-          }
+        if (hasProviderRef(unresolved) && params.allowUnavailableProviders) {
+          unavailableProviders.push(unresolved);
         } else {
           failUnresolvedNoFallback(unresolved);
         }
@@ -651,21 +590,7 @@ export async function resolveRuntimeWebProviderSelection<
         if (!params.allowUnavailableProviders) {
           failUnresolvedNoFallback(firstUnresolved, unresolvedWithoutFallback);
         }
-        const unavailable = unresolvedWithoutFallback.flatMap((entry) =>
-          entry.ref && entry.refKey
-            ? [
-                {
-                  providerId: entry.provider,
-                  path: entry.path,
-                  ref: entry.ref,
-                  refKey: entry.refKey,
-                  reason: entry.reason,
-                  contractDigest: entry.contractDigest,
-                  restoreResolvedValue: entry.restoreResolvedValue,
-                },
-              ]
-            : [],
-        );
+        const unavailable = unresolvedWithoutFallback.filter(hasProviderRef);
         if (unavailable.length !== unresolvedWithoutFallback.length) {
           failUnresolvedNoFallback(firstUnresolved, unresolvedWithoutFallback);
         }

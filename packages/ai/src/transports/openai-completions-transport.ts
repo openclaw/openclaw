@@ -1,4 +1,5 @@
-import type { Context, Model, StreamFn } from "@openclaw/llm-core";
+import { randomUUID } from "node:crypto";
+import type { Model, StreamFn } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import {
@@ -6,6 +7,7 @@ import {
   reasoningTagTextPolicy,
   type OpenAICompletionsOptions,
 } from "../provider-options.js";
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
 import { tagUnresolvedTextAsCommentary } from "../utils/assistant-text-phase.js";
 import {
@@ -13,6 +15,7 @@ import {
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
 } from "../utils/stream-first-event-timeout.js";
+import { createAssistantOutput } from "./assistant-output.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
@@ -33,9 +36,14 @@ import {
 import {
   createOpenAIProviderAcceptanceHook,
   resolveOpenAIClientBaseUrl,
+  resolvePromptCacheKey,
   type MutableAssistantOutput,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
+import {
+  filterProviderTurnHeadersForExplicitOpencodeSession,
+  resolveProviderTransportTurnState,
+} from "./provider-transport-turn-state.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
@@ -112,12 +120,11 @@ function createSseDoneDetector() {
 
 function createOpenAICompletionsClient(
   model: Model,
-  context: Context,
   apiKey: string,
-  optionHeaders?: Record<string, string>,
+  headers: Record<string, string>,
   opts?: { fetch?: typeof globalThis.fetch },
 ) {
-  const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);
+  const clientConfig = buildOpenAICompletionsClientConfig(model, headers);
   return new OpenAI({
     apiKey,
     baseURL: clientConfig.baseURL,
@@ -131,14 +138,12 @@ function createOpenAICompletionsClient(
 
 function buildOpenAICompletionsClientConfig(
   model: Model,
-  context: Context,
-  optionHeaders?: Record<string, string>,
+  headers: Record<string, string>,
 ): {
   baseURL: string | undefined;
   defaultHeaders: Record<string, string>;
   defaultQuery?: Record<string, string>;
 } {
-  const headers = buildOpenAIClientHeaders(model, context, optionHeaders);
   const defaultQuery: Record<string, string> = {};
   let baseURL = model.baseUrl;
   let isAzureHost = false;
@@ -181,26 +186,22 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
-      const output: MutableAssistantOutput = {
-        role: "assistant" as const,
-        content: [],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      };
+      const output: MutableAssistantOutput = createAssistantOutput(model);
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+        const turnState = resolveProviderTransportTurnState(model, {
+          sessionId: options?.sessionId,
+          turnId: randomUUID(),
+          attempt: 1,
+          transport: "stream",
+        });
+        const optionHeaders = resolveOpencodeSessionHeaders(model, options);
+        const turnHeaders = filterProviderTurnHeadersForExplicitOpencodeSession(
+          model,
+          options,
+          turnState?.headers,
+        );
         // The OpenAI SDK consumes the SSE terminal without yielding it. Observe
         // the raw body so native tool calls can distinguish clean DONE from EOF.
         const doneDetector = createSseDoneDetector();
@@ -230,11 +231,18 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
             statusText: response.statusText,
           });
         };
+        const cacheRetention = resolveCacheRetention(options?.cacheRetention);
         const client = createOpenAICompletionsClient(
           model,
-          context,
           apiKey,
-          resolveOpencodeSessionHeaders(model, options),
+          buildOpenAIClientHeaders(
+            model,
+            context,
+            { ...turnHeaders, ...optionHeaders },
+            undefined,
+            resolvePromptCacheKey(options, cacheRetention),
+            cacheRetention,
+          ),
           {
             fetch: doneDetectingFetch,
           },

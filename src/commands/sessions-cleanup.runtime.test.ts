@@ -91,6 +91,10 @@ describe("runLocalSessionsCleanup", () => {
     );
 
     expect(result.appliedSummaries).toEqual([mainSummary]);
+    expect(runSessionsCleanup.mock.calls.map(([params]) => params.reclamationMode)).toEqual([
+      "in-process",
+      "in-process",
+    ]);
     expect(result.failure).toMatchObject({
       target: { agentId: "work", storePath: "/tmp/work/sessions.json" },
       lifecycleCommitted: false,

@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
@@ -23,7 +26,8 @@ function createTool(stateDir: string) {
 }
 
 describe("transcripts tool imports", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
   });
 
@@ -97,29 +101,5 @@ describe("transcripts tool imports", () => {
     const storedTranscript = await storeFor(stateDir).readUtterancesForSession(stored!);
     expect(storedTranscript[0]?.text).toContain("transcript line 0");
     expect(storedTranscript.at(-1)?.text).toContain("transcript line 2000");
-  });
-
-  it("requires date-qualified selectors for repeated stored session ids", async () => {
-    const stateDir = tempDirs.make("openclaw-transcripts-");
-    const store = storeFor(stateDir);
-    await store.writeSession({
-      sessionId: "standup",
-      title: "Tuesday standup",
-      source: { providerId: "manual-transcript" },
-      startedAt: "2026-05-21T10:00:00.000Z",
-    });
-    await store.writeSession({
-      sessionId: "standup",
-      title: "Wednesday standup",
-      source: { providerId: "manual-transcript" },
-      startedAt: "2026-05-22T10:00:00.000Z",
-    });
-
-    await expect(store.readSession("standup")).rejects.toThrow(
-      "multiple transcripts sessions match standup",
-    );
-    await expect(store.readSession("2026-05-21/standup")).resolves.toMatchObject({
-      title: "Tuesday standup",
-    });
   });
 });

@@ -2,12 +2,10 @@
 import type {
   Chat,
   Message,
-  MessageOrigin,
   RichBlock,
   RichBlockCaption,
   RichMessageButton,
   RichText,
-  User,
 } from "grammy/types";
 import type {
   ChannelInboundMediaInput,
@@ -57,17 +55,13 @@ export function resolveTelegramPrimaryMedia(
   if (photo) {
     return { kind: "image", fileRef: photo };
   }
-  if (msg.video) {
-    return { kind: "video", fileRef: msg.video };
+  const video = msg.video ?? msg.video_note;
+  if (video) {
+    return { kind: "video", fileRef: video };
   }
-  if (msg.video_note) {
-    return { kind: "video", fileRef: msg.video_note };
-  }
-  if (msg.audio) {
-    return { kind: "audio", fileRef: msg.audio };
-  }
-  if (msg.voice) {
-    return { kind: "audio", fileRef: msg.voice };
+  const audio = msg.audio ?? msg.voice;
+  if (audio) {
+    return { kind: "audio", fileRef: audio };
   }
   if (msg.document) {
     return { kind: "document", fileRef: msg.document };
@@ -293,28 +287,32 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
 
 export function joinTelegramTextParts(
   messages: readonly Message[],
-  separator: string,
+  separator: string | ((previous: Message) => string),
 ): { text: string; entities: TelegramTextEntity[] } {
   const textParts: string[] = [];
   const entities: TelegramTextEntity[] = [];
   let offset = 0;
+  let previous: Message | undefined;
 
   for (const message of messages) {
     const textPart = getTelegramTextParts(message);
     if (!textPart.text) {
       continue;
     }
-    if (textParts.length > 0) {
-      offset += separator.length;
+    if (previous) {
+      const gap = typeof separator === "string" ? separator : separator(previous);
+      textParts.push(gap);
+      offset += gap.length;
     }
     entities.push(
       ...textPart.entities.map((entity) => ({ ...entity, offset: entity.offset + offset })),
     );
     textParts.push(textPart.text);
     offset += textPart.text.length;
+    previous = message;
   }
 
-  return { text: textParts.join(separator), entities };
+  return { text: textParts.join(""), entities };
 }
 
 function isTelegramMentionWordChar(char: string | undefined): boolean {
@@ -347,7 +345,7 @@ function isBotCommandAddressedToMention(command: string, mention: string): boole
   return atIndex > 1;
 }
 
-export function hasBotMention(msg: Message, botUsername: string) {
+export function hasBotMention(msg: Message, botUsername: string, botId?: number) {
   const { text, entities } = getTelegramTextParts(msg);
   const mention = normalizeLowercaseStringOrEmpty(`@${botUsername}`);
   if (hasStandaloneTelegramMention(normalizeLowercaseStringOrEmpty(text), mention)) {
@@ -359,6 +357,12 @@ export function hasBotMention(msg: Message, botUsername: string) {
       return true;
     }
     if (ent.type === "bot_command" && isBotCommandAddressedToMention(slice, mention)) {
+      return true;
+    }
+    // A `text_mention` entity tags a user by id (the entity text is the display
+    // name, not `@username`), so the `mention` branch above never matches it.
+    // When it resolves to this bot, it is still an explicit mention of us.
+    if (ent.type === "text_mention" && botId !== undefined && ent.user?.id === botId) {
       return true;
     }
   }
@@ -404,129 +408,57 @@ export type TelegramForwardedContext = {
   fromMessageId?: number;
 };
 
-function normalizeForwardedUserLabel(user: User) {
-  const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
-  const username = normalizeOptionalString(user.username);
-  const id = String(user.id);
-  const display =
-    (name && username
-      ? `${name} (@${username})`
-      : name || (username ? `@${username}` : undefined)) || `user:${id}`;
-  return { display, name: name || undefined, username, id };
-}
-
-function normalizeForwardedChatLabel(chat: Chat, fallbackKind: "chat" | "channel") {
-  const title = normalizeOptionalString(chat.title);
-  const username = normalizeOptionalString(chat.username);
-  const id = String(chat.id);
-  const display = title || (username ? `@${username}` : undefined) || `${fallbackKind}:${id}`;
-  return { display, title, username, id };
-}
-
-function buildForwardedContextFromUser(params: {
-  user: User;
-  date?: number;
-  type: string;
-}): TelegramForwardedContext | null {
-  const { display, name, username, id } = normalizeForwardedUserLabel(params.user);
-  if (!display) {
+export function normalizeForwardedContext(msg: Message): TelegramForwardedContext | null {
+  const origin = msg.forward_origin;
+  if (!origin) {
     return null;
   }
-  return {
-    from: display,
-    date: params.date,
-    fromType: params.type,
-    fromId: id,
-    fromUsername: username,
-    fromTitle: name,
-  };
-}
-
-function buildForwardedContextFromHiddenName(params: {
-  name?: string;
-  date?: number;
-  type: string;
-}): TelegramForwardedContext | null {
-  const trimmed = params.name?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return {
-    from: trimmed,
-    date: params.date,
-    fromType: params.type,
-    fromTitle: trimmed,
-  };
-}
-
-function buildForwardedContextFromChat(params: {
-  chat: Chat;
-  date?: number;
-  type: string;
-  signature?: string;
-  messageId?: number;
-}): TelegramForwardedContext | null {
-  const fallbackKind = params.type === "channel" ? "channel" : "chat";
-  const { display, title, username, id } = normalizeForwardedChatLabel(params.chat, fallbackKind);
-  if (!display) {
-    return null;
-  }
-  const signature = normalizeOptionalString(params.signature);
-  const from = signature ? `${display} (${signature})` : display;
-  const chatType = normalizeOptionalString(params.chat.type) as Chat["type"] | undefined;
-  return {
-    from,
-    date: params.date,
-    fromType: params.type,
-    fromId: id,
-    fromUsername: username,
-    fromTitle: title,
-    fromSignature: signature,
-    fromChatType: chatType,
-    fromMessageId: params.messageId,
-  };
-}
-
-function resolveForwardOrigin(origin: MessageOrigin): TelegramForwardedContext | null {
+  const context = { date: origin.date, fromType: origin.type };
   switch (origin.type) {
-    case "user":
-      return buildForwardedContextFromUser({
-        user: origin.sender_user,
-        date: origin.date,
-        type: "user",
-      });
-    case "hidden_user":
-      return buildForwardedContextFromHiddenName({
-        name: origin.sender_user_name,
-        date: origin.date,
-        type: "hidden_user",
-      });
+    case "user": {
+      const user = origin.sender_user;
+      const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+      const username = normalizeOptionalString(user.username);
+      const id = String(user.id);
+      const from =
+        (name && username
+          ? `${name} (@${username})`
+          : name || (username ? `@${username}` : undefined)) || `user:${id}`;
+      return {
+        ...context,
+        from,
+        fromId: id,
+        fromUsername: username,
+        fromTitle: name || undefined,
+      };
+    }
+    case "hidden_user": {
+      const name = origin.sender_user_name?.trim();
+      return name ? { ...context, from: name, fromTitle: name } : null;
+    }
     case "chat":
-      return buildForwardedContextFromChat({
-        chat: origin.sender_chat,
-        date: origin.date,
-        type: "chat",
-        signature: origin.author_signature,
-      });
-    case "channel":
-      return buildForwardedContextFromChat({
-        chat: origin.chat,
-        date: origin.date,
-        type: "channel",
-        signature: origin.author_signature,
-        messageId: origin.message_id,
-      });
+    case "channel": {
+      const chat = origin.type === "channel" ? origin.chat : origin.sender_chat;
+      const title = normalizeOptionalString(chat.title);
+      const username = normalizeOptionalString(chat.username);
+      const id = String(chat.id);
+      const display = title || (username ? `@${username}` : undefined) || `${origin.type}:${id}`;
+      const signature = normalizeOptionalString(origin.author_signature);
+      return {
+        ...context,
+        from: signature ? `${display} (${signature})` : display,
+        fromId: id,
+        fromUsername: username,
+        fromTitle: title,
+        fromSignature: signature,
+        fromChatType: normalizeOptionalString(chat.type) as Chat["type"] | undefined,
+        fromMessageId: origin.type === "channel" ? origin.message_id : undefined,
+      };
+    }
     default:
       origin satisfies never;
       return null;
   }
-}
-
-export function normalizeForwardedContext(msg: Message): TelegramForwardedContext | null {
-  if (!msg.forward_origin) {
-    return null;
-  }
-  return resolveForwardOrigin(msg.forward_origin);
 }
 
 export function extractTelegramLocation(msg: Message): NormalizedLocation | null {

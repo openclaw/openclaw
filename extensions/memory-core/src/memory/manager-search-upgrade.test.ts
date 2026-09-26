@@ -1,13 +1,21 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
-import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import { MEMORY_INDEX_PROVENANCE_VERSION, type MemoryIndexMeta } from "./manager-reindex-state.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
-describe("memory search after a chunking upgrade", () => {
+const versions = ["chunkingVersion", "provenanceVersion"] as const;
+describe.each(versions)("memory search after a %s upgrade", (versionKey) => {
+  const currentVersion =
+    versionKey === "chunkingVersion" ? MEMORY_CHUNKING_VERSION : MEMORY_INDEX_PROVENANCE_VERSION;
   const fixture = createManagerIndexFixture({
     getMemorySearchManager,
     closeAllMemorySearchManagers,
@@ -38,7 +46,7 @@ describe("memory search after a chunking upgrade", () => {
 
   async function seedIndex(
     cfg: ReturnType<typeof createConfig>,
-    oldChunkingVersion = true,
+    oldVersion = true,
   ): Promise<string> {
     const manager = await fixture.getFreshManager(cfg);
     await manager.sync({ reason: "test", force: true });
@@ -48,13 +56,14 @@ describe("memory search after a chunking upgrade", () => {
     }
     await manager.close();
     await closeAllMemorySearchManagers();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    if (oldChunkingVersion) {
+    if (oldVersion) {
       // Keep real indexed files unchanged, but reopen the publication as an older runtime's index.
       withDatabase(dbPath, (db) => {
         const meta = readMeta(db);
         db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
-          JSON.stringify({ ...meta, chunkingVersion: MEMORY_CHUNKING_VERSION - 1 }),
+          JSON.stringify({ ...meta, [versionKey]: currentVersion - 1 }),
         );
       });
     }
@@ -74,7 +83,7 @@ describe("memory search after a chunking upgrade", () => {
         expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
       );
       expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
-      expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION);
+      expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(currentVersion);
     },
   );
 
@@ -85,10 +94,59 @@ describe("memory search after a chunking upgrade", () => {
 
     expect(manager.status().custom?.indexIdentity).toMatchObject({
       status: "mismatched",
-      code: "chunking_version",
+      code: versionKey === "chunkingVersion" ? "chunking_version" : "provenance_version",
       owner: "openclaw",
     });
-    expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION - 1);
+    expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(currentVersion - 1);
+  });
+
+  it("rebuilds runtime format changes during ordinary dirty-index synchronization", async () => {
+    const cfg = createConfig();
+    const dbPath = await seedIndex(cfg);
+    const manager = await fixture.getFreshManager(cfg);
+    await manager.sync({ reason: "watch" });
+    expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(currentVersion);
+    expect(await manager.search("alpha", { lexicalOnly: true })).not.toEqual([]);
+  });
+
+  it("preserves newer indexes during forced background recovery until explicit reindex", async () => {
+    const cfg = createConfig();
+    const dbPath = await seedIndex(cfg);
+    withDatabase(dbPath, (db) => {
+      const meta = readMeta(db);
+      db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
+        JSON.stringify({ ...meta, [versionKey]: currentVersion + 1 }),
+      );
+    });
+    const manager = await fixture.getFreshManager(cfg);
+    const embedded = fixture.provider.embedBatchCalls;
+    await manager.sync({ reason: "search", force: true });
+    expect(await manager.search("alpha", { lexicalOnly: true })).toEqual([]);
+    expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(currentVersion + 1);
+    expect(fixture.provider.embedBatchCalls).toBe(embedded);
+    await manager.sync({ reason: "cli", force: true });
+    expect(await manager.search("alpha", { lexicalOnly: true })).not.toEqual([]);
+    expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(currentVersion);
+  });
+
+  it("serves only compatible lexical rows when the older-version rebuild fails", async () => {
+    const cfg = createConfig();
+    const dbPath = await seedIndex(cfg);
+    await fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-12.md"),
+      "# Log\nAlpha memory line changed after the prior publication.",
+    );
+    fixture.provider.embedBatchPermanentFailure = new Error("embedding migration unavailable");
+    const manager = await fixture.getFreshManager(cfg);
+    const results = await manager.search("alpha", { lexicalOnly: true });
+    if (versionKey === "chunkingVersion") {
+      expect(results).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+      );
+    } else {
+      expect(results).toEqual([]);
+    }
+    expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(currentVersion - 1);
   });
 
   it("preserves configuration-only mismatch behavior", async () => {

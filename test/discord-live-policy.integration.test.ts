@@ -20,6 +20,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../src/plugins/runtime.js";
+import { createPluginRuntime } from "../src/plugins/runtime/index.js";
 import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
@@ -27,6 +28,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../src/test-utils/gateway-scheduler-clock.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
@@ -62,12 +64,14 @@ describe("Discord admission through Gateway policy publication", () => {
         deactivate: () => Promise<void>;
       };
       createNoopThreadBindingManager: (accountId: string) => object;
+      setDiscordRuntime: (runtime: ReturnType<typeof createPluginRuntime>) => void;
     }>({ pluginId: "discord", artifactBasename: "runtime-api.js" });
     const { discordPlugin } = await loadBundledPluginFacade<{ discordPlugin: ChannelPlugin }>({
       pluginId: "discord",
       artifactBasename: "api.js",
     });
     const cfg: OpenClawConfig = {
+      plugins: { allow: ["discord"] },
       channels: { discord: { token: "synthetic-token", groupPolicy: "allowlist", guilds: {} } },
       messages: { inbound: { debounceMs: 0 } },
     };
@@ -76,6 +80,7 @@ describe("Discord admission through Gateway policy publication", () => {
     ]);
     setActivePluginRegistry(registry);
     setRuntimeConfigSnapshot(cfg, cfg);
+    discord.setDiscordRuntime(createPluginRuntime());
     let channelId = "456";
     let pendingChannelLookup: Promise<void> | undefined;
     let channelLookupStarted = false;
@@ -192,6 +197,7 @@ describe("Discord admission through Gateway policy publication", () => {
       cronState: createLazyGatewayCronState({ cfg, deps: {}, broadcast: vi.fn() }),
     };
     const { applyHotReload } = createGatewayReloadHandlers({
+      scheduler: createTestGatewayScheduler(),
       deps: {},
       broadcast: vi.fn(),
       getPluginRegistry: () => registry,
@@ -232,7 +238,7 @@ describe("Discord admission through Gateway policy publication", () => {
       await waitForFast(() =>
         expect(committed, "policy-only publication must not wait for the active turn").toBe(next),
       );
-      await pendingReload;
+      expect(await pendingReload).toBe("applied");
     };
     const activeTurn = tryBeginGatewayRootWorkAdmission();
     expect(activeTurn).not.toBeNull();

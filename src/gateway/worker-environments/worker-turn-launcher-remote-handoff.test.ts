@@ -3,6 +3,7 @@ import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkerConnectRequestFrameSchema } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
@@ -12,6 +13,7 @@ import {
   type ExecutionIdentityAdmissionWork,
 } from "../../audit/execution-identity-admission.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { setActiveNodeContext } from "../../infra/active-node-context.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
@@ -19,10 +21,8 @@ import {
   completeWorkerLaunchDescriptor,
   type WorkerLaunchDescriptor,
 } from "../../worker/launch-descriptor.js";
-import {
-  createAgentRuntimeApprovalAuthorityValidator,
-  verifyAgentRuntimeIdentityToken,
-} from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
+import { verifyAgentRuntimeIdentityToken } from "../agent-runtime-identity-token.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
@@ -52,8 +52,10 @@ import {
 describe("worker turn launcher remote handoff", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => setActiveNodeContext(null));
 
   it("round-trips the stored bootstrap receipt while reporting keep-local conflicts", async () => {
+    setActiveNodeContext({ nodeId: "active-mac" });
     let admissionWork: ExecutionIdentityAdmissionWork | undefined;
     setWorkerTurnAdmissionCleanup(
       configureExecutionIdentityAdmissionSink((work) => {
@@ -74,7 +76,7 @@ describe("worker turn launcher remote handoff", () => {
       timeoutMs: 10_000,
     });
     expect(initialized.code).toBe(0);
-    seedActivePlacement();
+    await seedActivePlacement();
     const manager = openSessionManager();
     const earlierRequestId = manager.appendMessage(
       makeAgentUserMessage({ content: "Earlier request", timestamp: 10 }),
@@ -87,21 +89,15 @@ describe("worker turn launcher remote handoff", () => {
     );
     manager.appendCustomMessageEntry("context", "Custom durable context", true, {});
     manager.appendCompaction("Compacted durable context", earlierRequestId, 100);
-    manager.appendMessage({
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "read",
-      content: [{ type: "text", text: "result" }],
-      isError: false,
-      timestamp: 12,
-    });
+    manager.appendMessage(makeTextToolResult("call-1", "read", "result", false, 12));
     let descriptor: WorkerLaunchDescriptor | undefined;
     const environment = browserEnvironment();
+    environment.desktop!.apps![0]!.args = ["-File", "C:\\ProgramData\\OpenClaw\\browser.ps1"];
     const bootstrapReceipt = environment.bootstrapReceipt;
     if (!bootstrapReceipt) {
       throw new Error("expected bootstrap receipt");
     }
-    const acknowledgeCredentialDelivery = vi.fn(() => true);
+    const acknowledgeCredentialDelivery = vi.fn(async () => true);
     const reconcileWorkspace = vi.fn(
       async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
         if (request.source.kind !== "local") {
@@ -240,9 +236,11 @@ describe("worker turn launcher remote handoff", () => {
       },
       {
         ...turn("run-worker-turn", true),
+        gatewayUiCommandTarget: { connId: "requesting-ui", profileId: "requester" },
         toolsAllow: ["browser"],
         workspaceDir: path.join(root, "stale-caller-workspace"),
         transcriptPrompt: "Canonical transcript request",
+        extraSystemPrompt: "Keep the worker guidance.",
         onAgentEvent,
       },
       runLocal,
@@ -283,6 +281,9 @@ describe("worker turn launcher remote handoff", () => {
         ),
     ).toBe(true);
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
+    expect(descriptor?.assignment.systemPrompt).toBe(
+      "Keep the worker guidance.\n\nCurrent active computer (latest physical input, not message origin): active_node=active-mac",
+    );
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
     expect(descriptor?.assignment.agentId).toBe(sessionTarget.agentId);
     expect(descriptor?.version).toBe(4);
@@ -300,6 +301,7 @@ describe("worker turn launcher remote handoff", () => {
       turnSourceTo: "chat-worker",
       turnSourceAccountId: "worker-account",
       turnSourceThreadId: "thread-worker",
+      gatewayUiCommandTarget: { connId: "requesting-ui", profileId: "requester" },
     });
     expect(descriptor?.assignment.agentId).toBe(verifiedRuntimeIdentity?.agentId);
     expect(
@@ -312,10 +314,12 @@ describe("worker turn launcher remote handoff", () => {
     }
     expect(verifiedRuntimeIdentity).not.toHaveProperty("approvalOwnerPluginId");
     expect(descriptor?.assignment).not.toHaveProperty("admittedRunContext");
+    expect(descriptor?.assignment).not.toHaveProperty("gatewayUiCommandTarget");
     expect(descriptor?.assignment.toolAuthority.allowedToolNames).toEqual(["browser"]);
     expect(descriptor?.assignment.browser).toEqual({
       cdpUrl: "http://127.0.0.1:9222",
       launcherPath: "/usr/local/bin/openclaw-worker-browser",
+      launcherArgs: ["-File", "C:\\ProgramData\\OpenClaw\\browser.ps1"],
     });
     expect(descriptor?.assignment.initialMessages).toEqual([
       {
@@ -358,9 +362,10 @@ describe("worker turn launcher remote handoff", () => {
   });
 
   it("keeps reset tool pairs valid without replaying the already-persisted current user", async () => {
+    setActiveNodeContext({ nodeId: "disconnected-mac" }, { isCurrent: () => false });
     const remote = path.join(await realpath(root), "remote");
     await mkdir(remote);
-    seedActivePlacement("worker-turn", remote);
+    await seedActivePlacement("worker-turn", remote);
     const image = {
       type: "image" as const,
       data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
@@ -389,14 +394,9 @@ describe("worker turn launcher remote handoff", () => {
     const firstKeptEntryId = manager.appendMessage(
       makeAgentUserMessage({ content: "Earlier request", timestamp: 17 }),
     );
-    manager.appendMessage({
-      role: "toolResult",
-      toolCallId: "shared-call",
-      toolName: "read",
-      content: [{ type: "text", text: "Discarded owner result" }],
-      isError: false,
-      timestamp: 18,
-    });
+    manager.appendMessage(
+      makeTextToolResult("shared-call", "read", "Discarded owner result", false, 18),
+    );
     manager.appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "shared-call", name: "read", arguments: {} }],
@@ -404,14 +404,9 @@ describe("worker turn launcher remote handoff", () => {
         timestamp: 19,
       }),
     );
-    manager.appendMessage({
-      role: "toolResult",
-      toolCallId: "shared-call",
-      toolName: "read",
-      content: [{ type: "text", text: "Kept owner result" }],
-      isError: false,
-      timestamp: 20,
-    });
+    manager.appendMessage(
+      makeTextToolResult("shared-call", "read", "Kept owner result", false, 20),
+    );
     manager.appendMessage(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "Earlier reply" }],
@@ -492,7 +487,7 @@ describe("worker turn launcher remote handoff", () => {
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => browserEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
       startTunnel: vi.fn(async () => tunnel),
       stopTunnel: vi.fn(async () => {}),
       destroy: vi.fn(async () => attachedEnvironment()),
@@ -531,6 +526,9 @@ describe("worker turn launcher remote handoff", () => {
       "media/inbound/openclaw-staged-",
     );
     expect(tunnel.stageAttachments).toHaveBeenCalledOnce();
+    expect(descriptor?.assignment.systemPrompt).toBe(
+      "Current active computer (latest physical input, not message origin): active_node=unknown",
+    );
     const verifiedRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
       descriptor?.assignment.agentRuntimeIdentityToken,
     );

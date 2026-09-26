@@ -1,7 +1,7 @@
-// Codex plugin module implements source behavior.
 import path from "node:path";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   defaultCodexAppInventoryCache,
   type CodexAppInventoryRequest,
@@ -11,6 +11,7 @@ import type { CodexAppServerStartOptions } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import {
   isOpenAiCuratedMarketplace,
+  marketplaceRef,
   pluginReadParams,
   type CodexPluginMarketplaceRef,
 } from "../app-server/plugin-inventory.js";
@@ -23,7 +24,7 @@ import {
   withCodexAppServerJsonClient,
   type CodexAppServerScopedRequest,
 } from "../app-server/request.js";
-import { exists, isDirectory, resolveHomePath, resolveUserHomeDir } from "./helpers.js";
+import { isDirectory, resolveHomePath, resolveUserHomeDir } from "./helpers.js";
 import {
   discoverCodexMemorySources,
   discoverPluginDirs,
@@ -62,6 +63,7 @@ export type CodexSource = {
 type CodexSourceDiscoveryOptions = {
   input?: string;
   memoryOnly?: boolean;
+  authOnly?: boolean;
   evaluatePluginMigrationEligibility?: boolean;
   verifyPluginApps?: boolean;
 };
@@ -88,7 +90,7 @@ type PluginReadResult =
       error: string;
     };
 
-function defaultCodexHome(): string {
+export function defaultCodexHome(): string {
   const configuredHome = process.env.CODEX_HOME;
   // Codex preserves nonempty CODEX_HOME verbatim; --from remains trimmed below as CLI convenience.
   return resolveHomePath(
@@ -218,7 +220,7 @@ function discoverInstalledCuratedPluginSources(
       }
       installedByName.set(plugin.pluginName, {
         plugin,
-        marketplace: marketplaceRef(marketplace),
+        marketplace: marketplaceRef(marketplace, CODEX_PLUGINS_MARKETPLACE_NAME),
         ...(remote
           ? { readPluginName: summary.remotePluginId?.trim() || undefined }
           : { readPluginName: plugin.pluginName }),
@@ -227,14 +229,6 @@ function discoverInstalledCuratedPluginSources(
     }
   }
   return Array.from(installedByName.values());
-}
-
-function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMarketplaceRef {
-  return {
-    name: CODEX_PLUGINS_MARKETPLACE_NAME,
-    ...(marketplace.path ? { path: marketplace.path } : {}),
-    ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
-  };
 }
 
 async function withPluginMigrationEligibility(params: {
@@ -281,7 +275,7 @@ async function withPluginMigrationEligibility(params: {
     }
 
     const apps = detail.detail.apps
-      .map(sourcePluginAppFact)
+      .map(({ id, name }) => ({ id, name }))
       .toSorted((left, right) => left.id.localeCompare(right.id));
     pending.push({ plugin, apps });
   }
@@ -317,7 +311,7 @@ async function withPluginMigrationEligibility(params: {
         ...plugin,
         migratable: false,
         migrationBlock: { code: "codex_subscription_required", apps },
-        message: codexSubscriptionRequiredMessage(plugin),
+        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but ${codexPluginMigrationSubscriptionWarning()}`,
       });
     }
     return evaluated;
@@ -450,20 +444,13 @@ async function refreshSourceAppInventory(
   });
 }
 
-function sourcePluginAppFact(app: v2.AppSummary): CodexPluginMigrationAppFact {
-  return {
-    id: app.id,
-    name: app.name,
-  };
-}
-
 type SourcePluginRuntimeAppFact = CodexPluginMigrationAppFact & {
   isCallable?: false;
 };
 
 function sourcePluginAppFactWithInventory(
   app: CodexPluginMigrationAppFact,
-  info: v2.AppInfo | undefined,
+  info: CodexAppServerRequestResult<"app/read">["apps"][number] | undefined,
   installedApp?: v2.InstalledApp,
 ): SourcePluginRuntimeAppFact {
   if (!installedApp) {
@@ -475,14 +462,14 @@ function sourcePluginAppFactWithInventory(
       : { ...app, isEnabled: false };
   }
   if (!installedApp.enabled) {
-    return { ...app, isAccessible: info.isAccessible, isEnabled: false };
+    return { ...app, isAccessible: true, isEnabled: false };
   }
   return {
     ...app,
     // Metadata proves authorization, but only the committed runtime proves
     // that this enabled app actually exposes a model-callable tool.
-    isAccessible: info.isAccessible && installedApp.callable,
-    isEnabled: info.isEnabled,
+    isAccessible: installedApp.callable,
+    isEnabled: installedApp.enabled,
     ...(!installedApp.callable ? { isCallable: false as const } : {}),
   };
 }
@@ -531,10 +518,6 @@ export function codexPluginMigrationSubscriptionWarning(): string {
   return "Codex app-backed plugin migration requires the Codex app-server source account to be logged in with a ChatGPT subscription account. Log in to the Codex app with subscription auth; OpenClaw auth or API-key auth does not satisfy Codex app connector access.";
 }
 
-function codexSubscriptionRequiredMessage(plugin: CodexPluginSource): string {
-  return `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but ${codexPluginMigrationSubscriptionWarning()}`;
-}
-
 function pluginNameFromSummary(summary: v2.PluginSummary): string | undefined {
   const candidates = [summary.name, summary.id];
   for (const candidate of candidates) {
@@ -569,21 +552,22 @@ export async function discoverCodexSource(
   const authPath = path.join(codexHome, "auth.json");
   const modelsCachePath = path.join(codexHome, "models_cache.json");
   const hooksPath = path.join(codexHome, "hooks", "hooks.json");
-  const memoryFiles = await discoverCodexMemorySources(codexHome);
-  const codexSkills = options.memoryOnly
+  const skipAssets = options.memoryOnly === true || options.authOnly === true;
+  const memoryFiles = options.authOnly ? [] : await discoverCodexMemorySources(codexHome);
+  const codexSkills = skipAssets
     ? []
     : await discoverSkillDirs({
         root: codexSkillsDir,
         sourceLabel: "Codex skill",
         excludeSystem: true,
       });
-  const personalAgentSkills = options.memoryOnly
+  const personalAgentSkills = skipAssets
     ? []
     : await discoverSkillDirs({
         root: agentsSkillsDir,
         sourceLabel: "personal AgentSkill",
       });
-  const sourcePluginDiscovery: { plugins: CodexPluginSource[]; error?: string } = options.memoryOnly
+  const sourcePluginDiscovery: { plugins: CodexPluginSource[]; error?: string } = skipAssets
     ? { plugins: [] }
     : await discoverInstalledCuratedPlugins(codexHome, options);
   const sourcePluginNames = new Set(
@@ -591,17 +575,15 @@ export async function discoverCodexSource(
       plugin.pluginName ? [plugin.pluginName] : [],
     ),
   );
-  const cachedPlugins = (options.memoryOnly ? [] : await discoverPluginDirs(codexHome)).filter(
-    (plugin) => {
-      const normalizedName = sanitizePluginName(plugin.name);
-      return !sourcePluginNames.has(normalizedName);
-    },
-  );
+  const cachedPlugins = (skipAssets ? [] : await discoverPluginDirs(codexHome)).filter((plugin) => {
+    const normalizedName = sanitizePluginName(plugin.name);
+    return !sourcePluginNames.has(normalizedName);
+  });
   const plugins = [...sourcePluginDiscovery.plugins, ...cachedPlugins].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
   const archivePaths: CodexArchiveSource[] = [];
-  if (!options.memoryOnly && (await exists(configPath))) {
+  if (!skipAssets && (await pathExists(configPath))) {
     archivePaths.push({
       id: "archive:config.toml",
       path: configPath,
@@ -609,7 +591,7 @@ export async function discoverCodexSource(
       message: "Codex config is archived for manual review; it is not activated automatically",
     });
   }
-  if (!options.memoryOnly && (await exists(hooksPath))) {
+  if (!skipAssets && (await pathExists(hooksPath))) {
     archivePaths.push({
       id: "archive:hooks/hooks.json",
       path: hooksPath,
@@ -621,7 +603,7 @@ export async function discoverCodexSource(
   const skills = [...codexSkills, ...personalAgentSkills].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
-  const hasAuth = !options.memoryOnly && (await exists(authPath));
+  const hasAuth = !options.memoryOnly && (await pathExists(authPath));
   const high = Boolean(
     memoryFiles.length || codexSkills.length || plugins.length || archivePaths.length || hasAuth,
   );
@@ -633,7 +615,7 @@ export async function discoverCodexSource(
     ...((await isDirectory(codexSkillsDir)) ? { codexSkillsDir } : {}),
     ...((await isDirectory(agentsSkillsDir)) ? { personalAgentsSkillsDir: agentsSkillsDir } : {}),
     ...(hasAuth ? { authPath } : {}),
-    ...((await exists(modelsCachePath)) ? { modelsCachePath } : {}),
+    ...((await pathExists(modelsCachePath)) ? { modelsCachePath } : {}),
     memoryFiles,
     skills,
     plugins,

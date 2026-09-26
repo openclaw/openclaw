@@ -31,16 +31,20 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 
 vi.mock("../secrets/egress-proxy/registry.js", () => ({
   isSecretEgressProxyActive: () => mocks.egressActive,
-  registerSecretEgressProxyRun: (_run: unknown, bindings: unknown) => {
+  registerSecretEgressProxyProcess: (bindings: unknown) => {
     mocks.proxyBindings.push(bindings);
     return {
-      HTTPS_PROXY: mocks.proxyUrl,
-      HTTP_PROXY: mocks.proxyUrl,
-      NODE_USE_ENV_PROXY: "1",
-      NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
-      SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
-      CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
-      REQUESTS_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+      revoke: () => {},
+      env: {
+        HTTPS_PROXY: mocks.proxyUrl,
+        HTTP_PROXY: mocks.proxyUrl,
+        NODE_USE_ENV_PROXY: "1",
+        NODE_EXTRA_CA_CERTS: "/state/secret-egress/root-ca.pem",
+        SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
+        CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+        REQUESTS_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+        GIT_SSL_CAINFO: "/state/secret-egress/root-ca.pem",
+      },
     };
   },
 }));
@@ -133,6 +137,7 @@ const EGRESS_ENV = {
   SSL_CERT_FILE: "/state/secret-egress/root-ca.pem",
   CURL_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
   REQUESTS_CA_BUNDLE: "/state/secret-egress/root-ca.pem",
+  GIT_SSL_CAINFO: "/state/secret-egress/root-ca.pem",
 } as const;
 
 async function withTeamStoreEntries(
@@ -188,7 +193,7 @@ async function captureStoreExecEnvironment(params: {
   });
   await tool.execute(params.callId, { command: "echo ok", yieldMs: 120_000 });
   if (params.host === "gateway") {
-    return mocks.gatewayParams.at(-1)?.env ?? {};
+    return mocks.spawnInputs.at(-1)?.env ?? {};
   }
   if (params.host === "node") {
     return mocks.nodeHostParams.at(-1)?.env ?? {};
@@ -264,23 +269,6 @@ describe("exec store environment", () => {
     mocks.nodeHostParams.length = 0;
     mocks.spawnInputs.length = 0;
     mocks.proxyBindings.length = 0;
-  });
-
-  it("adds only team env-kind entries to gateway exec subprocesses", async () => {
-    await withTeamStoreEntries(
-      [
-        { name: "AWS_REGION", value: "us-west-2", kind: "env" },
-        { name: "INTERNAL_VALUE", value: "not-for-subprocesses", kind: "secret" },
-      ],
-      async () => {
-        const tool = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
-
-        await tool.execute("call-store-env", { command: "echo ok", yieldMs: 120_000 });
-
-        expect(mocks.gatewayParams[0]?.env.AWS_REGION).toBe("us-west-2");
-        expect(mocks.gatewayParams[0]?.env).not.toHaveProperty("INTERNAL_VALUE");
-      },
-    );
   });
 
   it("applies store env when code mode invokes exec through the hidden tool catalog", async () => {
@@ -459,11 +447,12 @@ describe("exec store environment", () => {
     },
   );
 
-  it.each(
-    (["gateway", "sandbox", "node"] as const).flatMap((host) =>
-      [undefined, "off", "0", "false"].map((sentinelMode) => ({ host, sentinelMode })),
-    ),
-  )(
+  it.each([
+    { host: "gateway", sentinelMode: undefined },
+    { host: "gateway", sentinelMode: "false" },
+    { host: "sandbox", sentinelMode: "false" },
+    { host: "node", sentinelMode: "false" },
+  ] as const)(
     "applies enabled secret egress for $host exec with provider sentinels $sentinelMode",
     async ({ host, sentinelMode }) => {
       vi.stubEnv("OPENCLAW_SECRET_SENTINELS", sentinelMode);

@@ -1,9 +1,6 @@
-import {
-  claimDeliveryQueueEntryPlatformSend,
-  dispatchDeliveryQueueEntryPlatformSend,
-  renewDeliveryQueueEntryPlatformSendLease,
-} from "../delivery-queue-sqlite-claim.js";
-import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
+import type { DeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
+import { executeDeliveryQueueOperation } from "../delivery-queue-worker-store.js";
+import { generateSecureUuid } from "../secure-random.js";
 
 /** Atomically transfer a stable pending producer intent to one platform sender. */
 export async function claimDeliveryPlatformSendAttempt(
@@ -11,13 +8,16 @@ export async function claimDeliveryPlatformSendAttempt(
   stateDir?: string,
   reconciledPlatformSendStartedAt?: number,
   reconciledPlatformSendAttemptId?: string,
+  context?: DeliveryQueueStateContext,
 ): Promise<string | undefined> {
-  return claimDeliveryQueueEntryPlatformSend({
-    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-    id,
-    stateDir,
-    ...(reconciledPlatformSendStartedAt !== undefined ? { reconciledPlatformSendStartedAt } : {}),
-    ...(reconciledPlatformSendAttemptId !== undefined ? { reconciledPlatformSendAttemptId } : {}),
+  return executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.claimPlatformSend",
+    input: {
+      id,
+      claimId: generateSecureUuid(),
+      ...(reconciledPlatformSendStartedAt !== undefined ? { reconciledPlatformSendStartedAt } : {}),
+      ...(reconciledPlatformSendAttemptId !== undefined ? { reconciledPlatformSendAttemptId } : {}),
+    },
   });
 }
 
@@ -25,12 +25,15 @@ export async function claimDeliveryPlatformSendAttempt(
 export async function claimReusableDeliveryPlatformSendAttempt(
   id: string,
   stateDir?: string,
+  context?: DeliveryQueueStateContext,
 ): Promise<string | undefined> {
-  return claimDeliveryQueueEntryPlatformSend({
-    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-    id,
-    stateDir,
-    requiresProducerClaim: true,
+  return executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.claimPlatformSend",
+    input: {
+      id,
+      claimId: generateSecureUuid(),
+      requiresProducerClaim: true,
+    },
   });
 }
 
@@ -39,30 +42,13 @@ export async function renewDeliveryPlatformSendLease(
   id: string,
   stateDir: string | undefined,
   claimId: string,
+  context?: DeliveryQueueStateContext,
 ): Promise<number | undefined> {
-  return renewDeliveryQueueEntryPlatformSendLease({
-    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-    id,
-    stateDir,
-    claimId,
+  return executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.renewPlatformSendLease",
+    input: {
+      id,
+      claimId,
+    },
   });
-}
-
-/** Promote or refresh the exact live owner at recipient-visible dispatch. */
-export function markOwnedDeliveryPlatformSendDispatched(
-  id: string,
-  stateDir: string | undefined,
-  route: { replyToId?: string | null } | undefined,
-  claimId: string,
-): void {
-  const dispatched = dispatchDeliveryQueueEntryPlatformSend({
-    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-    id,
-    stateDir,
-    route,
-    claimId,
-  });
-  if (!dispatched) {
-    throw new Error(`Delivery platform claim was lost: ${id}`);
-  }
 }

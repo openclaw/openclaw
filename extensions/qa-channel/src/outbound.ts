@@ -1,13 +1,12 @@
-// Qa Channel plugin module implements outbound behavior.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   loadOutboundMediaFromUrl,
   type OutboundMediaLoadOptions,
 } from "openclaw/plugin-sdk/outbound-media";
+import type { QaBusAttachment, QaBusToolCall } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { resolveQaChannelAccount } from "./accounts.js";
 import { buildQaTarget, resolveQaTargetThread, sendQaBusMessage } from "./bus-client.js";
-import type { QaBusAttachment, QaBusToolCall } from "./protocol.js";
 import type { CoreConfig } from "./types.js";
 
 type QaChannelTextSendParams = {
@@ -38,7 +37,6 @@ export async function sendQaChannelText(params: QaChannelTextSendParams) {
     to: buildQaTarget({
       chatType: parsed.chatType,
       conversationId: parsed.conversationId,
-      threadId: resolved.threadId,
     }),
     text: params.text,
     isError: params.isError,

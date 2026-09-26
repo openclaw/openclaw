@@ -3,7 +3,25 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import { resolveEffectiveHomeDir } from "../infra/home-dir.js";
 import { withTempHomeCore } from "../plugin-sdk/test-helpers/temp-home.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import {
+  captureOpenClawStateDatabaseReadAdmission,
+  closeOpenClawStateDatabaseByPathAsync,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, captureFullEnv, withEnvAsync } from "./env.js";
 import { createTempHomeEnv } from "./temp-home.js";
 
@@ -18,6 +36,97 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("createTempHomeEnv", () => {
+  it.each(["shared", "plugin-sdk"] as const)(
+    "closes a configured agent database anywhere in the owned %s home before removal",
+    async (fixtureKind) => {
+      const prefix = `openclaw-temp-home-${fixtureKind}-`;
+      let home = "";
+      let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
+      let databaseOpenAtRemoval: boolean | undefined;
+      const remove = fs.rm;
+      const removeSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        if (home && path.resolve(String(target)) === path.resolve(home)) {
+          databaseOpenAtRemoval = database?.db.isOpen;
+          return;
+        }
+        await remove(target, options);
+      });
+      const openConfiguredDatabase = (fixtureHome: string) => {
+        home = fixtureHome;
+        database = openOpenClawAgentDatabase({
+          agentId: "main",
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") },
+          path: path.join(home, "configured-sessions.sqlite"),
+        });
+      };
+      try {
+        if (fixtureKind === "shared") {
+          const temporary = await createTempHomeEnv(prefix);
+          openConfiguredDatabase(temporary.home);
+          await temporary.restore();
+        } else {
+          await withTempHomeCore(
+            async (fixtureHome) => {
+              openConfiguredDatabase(fixtureHome);
+            },
+            { prefix },
+          );
+        }
+        expect(databaseOpenAtRemoval).toBe(false);
+        expect(database?.db.isOpen).toBe(false);
+      } finally {
+        removeSpy.mockRestore();
+        await closeOpenClawAgentDatabasesAsync();
+        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        if (home) {
+          await fs.rm(home, { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
+  it("restores the environment and retains home after resource drainage fails", async () => {
+    const envKeys = [
+      "HOME",
+      "USERPROFILE",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "OPENCLAW_HOME",
+      "OPENCLAW_STATE_DIR",
+    ];
+    const environment = captureEnv(envKeys);
+    const previous = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    const temporary = await createTempHomeEnv("openclaw-temp-home-drain-");
+    const stateDir = path.join(temporary.home, ".openclaw");
+    const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+    const admission = captureOpenClawStateDatabaseReadAdmission(databasePath);
+    const failure = new Error("fixture resource still owns its state");
+    let rejectClose = true;
+    const unregister = registerOpenClawStateDatabaseAsyncResource({
+      close: async (identity) => {
+        if (identity?.key === admission.identity.key && rejectClose) {
+          throw failure;
+        }
+      },
+    });
+    const marker = path.join(temporary.home, "owned.txt");
+    try {
+      await fs.writeFile(marker, "retained fixture");
+      await expect(temporary.restore()).rejects.toBe(failure);
+      expect(Object.fromEntries(envKeys.map((key) => [key, process.env[key]]))).toEqual(previous);
+      expect(await fs.readFile(marker, "utf8")).toBe("retained fixture");
+    } finally {
+      // Release the deliberately retained owner before disposing its fixture.
+      rejectClose = false;
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      unregister();
+      environment.restore();
+      await fs.rm(temporary.home, { recursive: true, force: true });
+    }
+  });
+
   it.each(["directory", "environment"])(
     "rolls back failed %s acquisition without removing a sibling home",
     async (stage) => {
@@ -75,25 +184,40 @@ describe("createTempHomeEnv", () => {
     },
   );
 
-  it("sets home env vars and restores them on cleanup", async () => {
-    const previousHome = process.env.HOME;
-    const previousUserProfile = process.env.USERPROFILE;
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-
-    const tempHome = await createTempHomeEnv("openclaw-temp-home-");
-    expect(process.env.HOME).toBe(tempHome.home);
-    expect(process.env.USERPROFILE).toBe(tempHome.home);
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(path.join(tempHome.home, ".openclaw"));
-    const homeStat = await fs.stat(tempHome.home);
-    expect(homeStat.isDirectory()).toBe(true);
-
-    await tempHome.restore();
-
-    expect(process.env.HOME).toBe(previousHome);
-    expect(process.env.USERPROFILE).toBe(previousUserProfile);
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
-    await expectPathMissing(tempHome.home);
-  });
+  it.each([false, true])(
+    "sets home env vars and restores them on cleanup (inherited home override=%s)",
+    async (inheritedOverride) => {
+      const callerHome = inheritedOverride ? path.join(os.tmpdir(), "caller-home") : undefined;
+      await withEnvAsync({ OPENCLAW_HOME: callerHome }, async () => {
+        const previousHome = process.env.HOME;
+        const previousUserProfile = process.env.USERPROFILE;
+        const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+        const previousEffectiveHome = resolveEffectiveHomeDir();
+        const tempHome = await createTempHomeEnv("openclaw-temp-home-");
+        try {
+          expect(process.env.HOME).toBe(tempHome.home);
+          expect(process.env.USERPROFILE).toBe(tempHome.home);
+          expect(process.env.OPENCLAW_STATE_DIR).toBe(path.join(tempHome.home, ".openclaw"));
+          expect(resolveEffectiveHomeDir()).toBe(tempHome.home);
+          const homeStat = await fs.stat(tempHome.home);
+          expect(homeStat.isDirectory()).toBe(true);
+          if (process.platform !== "win32") {
+            const stateStat = await fs.stat(path.join(tempHome.home, ".openclaw"));
+            expect(homeStat.mode & 0o777).toBe(0o700);
+            expect(stateStat.mode & 0o777).toBe(0o700);
+          }
+        } finally {
+          await tempHome.restore();
+        }
+        expect(process.env.HOME).toBe(previousHome);
+        expect(process.env.USERPROFILE).toBe(previousUserProfile);
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
+        expect(process.env.OPENCLAW_HOME).toBe(callerHome);
+        expect(resolveEffectiveHomeDir()).toBe(previousEffectiveHome);
+        await expectPathMissing(tempHome.home);
+      });
+    },
+  );
 });
 
 describe("withTempHome acquisition", () => {
@@ -145,7 +269,22 @@ describe("withTempHome acquisition", () => {
           const failure = new Error("env acquisition failed");
           const body = vi.fn(async () => undefined);
           let failedHome = "";
-          await expect(
+          const started = createDeferred();
+          const release = createDeferred();
+          const envReached = createDeferred();
+          const writes: string[] = [];
+          const storePath = path.join(callerHome, "sessions.json");
+          const active = runExclusiveSessionStoreWrite(storePath, async () => {
+            started.resolve();
+            await release.promise;
+            writes.push("active");
+          });
+          await started.promise;
+          const pending = runExclusiveSessionStoreWrite(storePath, async () => {
+            writes.push("pending");
+          });
+          const writers = Promise.allSettled([active, pending]);
+          const acquisition = expect(
             withTempHomeCore(body, {
               prefix,
               skipHomeCleanup,
@@ -155,11 +294,24 @@ describe("withTempHome acquisition", () => {
                 ACQUISITION_DELETED: undefined,
                 ACQUISITION_THROW: (home) => {
                   failedHome = home;
+                  envReached.resolve();
                   throw failure;
                 },
               },
             }),
           ).rejects.toBe(failure);
+          try {
+            await Promise.race([envReached.promise, acquisition]);
+          } finally {
+            release.resolve();
+            await writers;
+            await acquisition;
+          }
+          expect(await writers).toEqual([
+            { status: "fulfilled", value: undefined },
+            { status: "fulfilled", value: undefined },
+          ]);
+          expect(writes).toEqual(["active", "pending"]);
           expect(body).not.toHaveBeenCalled();
           const changedKeys = [
             ...new Set([...Object.keys(callerEnv), ...Object.keys(process.env)]),

@@ -4,6 +4,8 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable, Updateable } from "kysely";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { ensureSessionRepositoryWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB, SessionRepositoryWorkspaces } from "./openclaw-state-db.generated.js";
@@ -12,23 +14,8 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-
-export type SessionRepositoryWorkspaceRecord = {
-  workspaceId: string;
-  agentId: string;
-  sessionKey: string;
-  url: string;
-  requestedRef: string | null;
-  runSetupScript: boolean;
-  baseCommit: string | null;
-  baseManifestHash: string | null;
-  branch: string;
-  checkpointRef: string | null;
-  manifestHash: string | null;
-  revision: number;
-  createdAtMs: number;
-  updatedAtMs: number;
-};
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import type { SessionRepositoryWorkspaceRecord } from "./session-repository-workspaces.types.js";
 
 type WorkspaceOwner = { agentId: string; sessionKey: string };
 type WorkspaceMutation = {
@@ -69,10 +56,61 @@ function project(row: Selectable<SessionRepositoryWorkspaces>): SessionRepositor
   };
 }
 
+function readWorkspace(
+  db: DatabaseSync,
+  workspaceId: string,
+): SessionRepositoryWorkspaceRecord | undefined {
+  if (!tableExists(db, table)) {
+    return undefined;
+  }
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db).selectFrom(table).selectAll().where("workspace_id", "=", workspaceId),
+  );
+  return row ? project(row) : undefined;
+}
+
+export function findSessionRepositoryWorkspaceInDatabase(
+  db: DatabaseSync,
+  owner: WorkspaceOwner,
+): SessionRepositoryWorkspaceRecord | undefined {
+  if (!tableExists(db, table)) {
+    return undefined;
+  }
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom(table)
+      .selectAll()
+      .where("agent_id", "=", owner.agentId)
+      .where("session_key", "=", owner.sessionKey),
+  );
+  return row ? project(row) : undefined;
+}
+
+/** Deletion preparation must not reopen the shared database on the caller thread. */
+export async function findSessionRepositoryWorkspaces(
+  owners: readonly WorkspaceOwner[],
+  options: { path: string; env?: NodeJS.ProcessEnv },
+): Promise<SessionRepositoryWorkspaceRecord[]> {
+  const reply = await executeExistingOpenClawStateRead(options, {
+    type: "sessionRepositoryWorkspaces.find",
+    owners: owners.map(({ agentId, sessionKey }) => ({ agentId, sessionKey })),
+  });
+  if (!reply) {
+    return [];
+  }
+  if (!reply.ok || reply.type !== "sessionRepositoryWorkspaces.find") {
+    throw new Error("Unexpected session repository workspace lookup result");
+  }
+  return reply.workspaces;
+}
+
 export function createSessionRepositoryWorkspaceStore(
-  options: { database?: OpenClawStateDatabase; now?: () => number } = {},
+  options: { database?: OpenClawStateDatabase; path?: string; now?: () => number } = {},
 ) {
-  const databasePath = (options.database ?? openOpenClawStateDatabase()).path;
+  const databasePath =
+    options.database?.path ?? path.resolve(options.path ?? resolveOpenClawStateSqlitePath());
   const now = options.now ?? Date.now;
   const read = () => openOpenClawStateDatabase({ path: databasePath }).db;
   const write = <T>(operation: (db: DatabaseSync) => T) =>
@@ -88,38 +126,14 @@ export function createSessionRepositoryWorkspaceStore(
       }
     }
   };
-  const get = (workspaceId: string): SessionRepositoryWorkspaceRecord | undefined => {
-    const db = read();
-    if (!tableExists(db, table)) {
-      return undefined;
-    }
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      query(db).selectFrom(table).selectAll().where("workspace_id", "=", workspaceId),
-    );
-    return row ? project(row) : undefined;
-  };
-  const find = (owner: WorkspaceOwner): SessionRepositoryWorkspaceRecord | undefined => {
-    const db = read();
-    if (!tableExists(db, table)) {
-      return undefined;
-    }
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      query(db)
-        .selectFrom(table)
-        .selectAll()
-        .where("agent_id", "=", owner.agentId)
-        .where("session_key", "=", owner.sessionKey),
-    );
-    return row ? project(row) : undefined;
-  };
+  const get = (workspaceId: string) => readWorkspace(read(), workspaceId);
+  const find = (owner: WorkspaceOwner) => findSessionRepositoryWorkspaceInDatabase(read(), owner);
   const mutate = (
     input: WorkspaceMutation,
     values: (current: SessionRepositoryWorkspaceRecord) => Updateable<SessionRepositoryWorkspaces>,
   ): SessionRepositoryWorkspaceRecord =>
     write((db) => {
-      const current = get(input.workspaceId);
+      const current = readWorkspace(db, input.workspaceId);
       if (!current || current.revision !== input.expectedRevision) {
         throw new Error("Repository workspace revision changed");
       }
@@ -140,6 +154,7 @@ export function createSessionRepositoryWorkspaceStore(
       if (!updated) {
         throw new Error("Repository workspace revision changed");
       }
+      sessionChanges.emit({ agentId: updated.agent_id, sessionKey: updated.session_key }, db);
       return project(updated);
     });
   const artifactPath = (workspaceId: string): string => {
@@ -172,7 +187,7 @@ export function createSessionRepositoryWorkspaceStore(
       ensure();
       return write((db) => {
         input.assertCurrent();
-        const existing = find({ agentId, sessionKey });
+        const existing = findSessionRepositoryWorkspaceInDatabase(db, { agentId, sessionKey });
         if (existing) {
           if (
             existing.url !== url ||
@@ -210,6 +225,7 @@ export function createSessionRepositoryWorkspaceStore(
         if (!inserted) {
           throw new Error("Repository workspace creation failed");
         }
+        sessionChanges.emit({ agentId: inserted.agent_id, sessionKey: inserted.session_key }, db);
         return project(inserted);
       });
     },
@@ -258,10 +274,16 @@ export function createSessionRepositoryWorkspaceStore(
       write((db) => {
         input.assertCurrent();
         if (tableExists(db, table)) {
-          executeSqliteQueryTakeFirstSync(
+          const deleted = executeSqliteQueryTakeFirstSync(
             db,
-            query(db).deleteFrom(table).where("workspace_id", "=", input.workspaceId),
+            query(db)
+              .deleteFrom(table)
+              .where("workspace_id", "=", input.workspaceId)
+              .returning(["agent_id", "session_key"]),
           );
+          if (deleted) {
+            sessionChanges.emit({ agentId: deleted.agent_id, sessionKey: deleted.session_key }, db);
+          }
         }
       });
       // The row disappears first: an interrupted cleanup leaves only unowned artifacts.

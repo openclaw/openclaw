@@ -25,12 +25,9 @@ function unsetPathForWriteAt(
     if (index === undefined || index >= value.length) {
       return { changed: false, value };
     }
-    if (isLeaf) {
-      const next = value.slice();
-      next.splice(index, 1);
-      return { changed: true, value: next };
-    }
-    const child = unsetPathForWriteAt(value[index], pathSegments, depth + 1);
+    const child = isLeaf
+      ? { changed: true, value: WRITE_PRUNED_OBJECT }
+      : unsetPathForWriteAt(value[index], pathSegments, depth + 1);
     if (!child.changed) {
       return { changed: false, value };
     }
@@ -46,16 +43,9 @@ function unsetPathForWriteAt(
   if (isBlockedObjectKey(segment) || !isRecord(value) || !Object.hasOwn(value, segment)) {
     return { changed: false, value };
   }
-  if (isLeaf) {
-    const next: Record<string, unknown> = { ...value };
-    delete next[segment];
-    return {
-      changed: true,
-      value: Object.keys(next).length === 0 ? WRITE_PRUNED_OBJECT : next,
-    };
-  }
-
-  const child = unsetPathForWriteAt(value[segment], pathSegments, depth + 1);
+  const child = isLeaf
+    ? { changed: true, value: WRITE_PRUNED_OBJECT }
+    : unsetPathForWriteAt(value[segment], pathSegments, depth + 1);
   if (!child.changed) {
     return { changed: false, value };
   }
@@ -71,26 +61,6 @@ function unsetPathForWriteAt(
   };
 }
 
-function unsetPathForWrite(
-  root: OpenClawConfig,
-  pathSegments: string[],
-): { changed: boolean; next: OpenClawConfig } {
-  if (pathSegments.length === 0) {
-    return { changed: false, next: root };
-  }
-  const result = unsetPathForWriteAt(root, pathSegments, 0);
-  if (!result.changed) {
-    return { changed: false, next: root };
-  }
-  if (result.value === WRITE_PRUNED_OBJECT) {
-    return { changed: true, next: {} };
-  }
-  if (isRecord(result.value)) {
-    return { changed: true, next: result.value as OpenClawConfig };
-  }
-  return { changed: false, next: root };
-}
-
 export function applyUnsetPathsForWrite(
   root: OpenClawConfig,
   unsetPaths: readonly string[][] | undefined,
@@ -100,9 +70,13 @@ export function applyUnsetPathsForWrite(
     if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
       continue;
     }
-    const unsetResult = unsetPathForWrite(next, unsetPath);
+    const unsetResult = unsetPathForWriteAt(next, unsetPath, 0);
     if (unsetResult.changed) {
-      next = unsetResult.next;
+      if (unsetResult.value === WRITE_PRUNED_OBJECT) {
+        next = {};
+      } else if (isRecord(unsetResult.value)) {
+        next = unsetResult.value;
+      }
     }
   }
   return next;

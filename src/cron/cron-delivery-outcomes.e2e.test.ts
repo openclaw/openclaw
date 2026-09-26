@@ -11,12 +11,12 @@ import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runCronCommandJob } from "./command-runner.js";
 import { resolveCronDeliveryPreviews } from "./delivery-preview.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 
 type WebhookRequest = {
   body: Record<string, unknown>;
@@ -75,7 +75,7 @@ function commandRunner(): NonNullable<CronServiceDeps["runCommandJob"]> {
 }
 
 function historyEntry(storePath: string, jobId: string) {
-  const history = readCronTaskRunHistoryPage({
+  const history = readCronRunHistoryPageForTests({
     storeKey: cronStoreKey(storePath),
     jobId,
     limit: 1,
@@ -284,7 +284,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
                 lastFailureNotificationDeliveryStatus: "not-requested",
               },
             });
-            const history = readCronTaskRunHistoryPage({
+            const history = readCronRunHistoryPageForTests({
               storeKey: cronStoreKey(storePath),
               jobId: job.id,
               limit: 25,
@@ -321,6 +321,12 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
           resetTaskRegistryForTests({ persist: false });
           const storePath = state.path("cron", "jobs.json");
           let now = Date.now();
+          const runIsolatedAgentJob = vi.fn(async () => ({
+            status: "ok" as const,
+            delivered: false,
+            deliveryAttempted: true,
+            deliveryError: "primary route rejected",
+          }));
           const cron = new CronService({
             storePath,
             cronEnabled: true,
@@ -328,12 +334,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
             requestHeartbeat: vi.fn(),
-            runIsolatedAgentJob: vi.fn(async () => ({
-              status: "ok" as const,
-              delivered: false,
-              deliveryAttempted: true,
-              deliveryError: "primary route rejected",
-            })),
+            runIsolatedAgentJob,
             sendCronFailureAlert: async (params) =>
               await sendGatewayCronFailureAlert({
                 ...params,
@@ -388,7 +389,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             await cron.run(job.id, "force");
             await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
             expect(receiver.requests).toHaveLength(1);
-            const history = readCronTaskRunHistoryPage({
+            const history = readCronRunHistoryPageForTests({
               storeKey: cronStoreKey(storePath),
               jobId: job.id,
               limit: 10,
@@ -407,6 +408,12 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             ).toHaveLength(1);
 
             now += 3_540_000;
+            runIsolatedAgentJob.mockResolvedValue({
+              status: "ok",
+              delivered: false,
+              deliveryAttempted: true,
+              deliveryError: "primary target no longer exists",
+            });
             await cron.run(job.id, "force");
             await vi.waitFor(() => expect(receiver.requests).toHaveLength(2));
 

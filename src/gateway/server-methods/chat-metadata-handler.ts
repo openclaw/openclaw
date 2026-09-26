@@ -1,93 +1,182 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   errorShape,
   validateChatMetadataParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { ChatMetadataParams } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { readUserProfileAliasRevision } from "../../state/user-profile-events.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
+import { readOperatorRolePolicyRevision } from "../operator-role-policy.js";
+import { SESSION_READ_SCOPE } from "../operator-scopes.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { hasSessionReadAccessChanged, hiddenSessionNotFound } from "../session-sharing-policy.js";
+import { createSessionListEntryFilter } from "../session-sharing.js";
+import { retainGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import {
+  chatMetadataSessionFields,
+  type ChatMetadataReadParams,
+} from "./chat-metadata-contract.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
-export async function handleChatMetadataRequest({
-  params,
-  respond,
-  context,
-  client,
-  signal,
-}: GatewayRequestHandlerOptions): Promise<void> {
-  if (!assertValidParams(params, validateChatMetadataParams, "chat.metadata", respond)) {
-    return;
-  }
-  const metadataParams = params;
+/** Resolve saved-session grants or capture a new draft's current human authority. */
+export function resolveChatMetadataReadParams(
+  options: Pick<GatewayRequestHandlerOptions, "respond" | "context" | "client" | "signal">,
+  params: ChatMetadataParams,
+): ChatMetadataReadParams | undefined {
+  const { respond, context, client, signal } = options;
   const cfg = context.getRuntimeConfig();
-  if (metadataParams.sessionKey) {
+  // Session mutations are checked against the retained target before publication.
+  const roleRevision = readOperatorRolePolicyRevision();
+  const aliasRevision = readUserProfileAliasRevision();
+  const profileInput = client?.authenticatedUserProfile?.profileId;
+  const userInput = client?.authenticatedUserId;
+  const isRequestCurrent = () =>
+    !signal?.aborted &&
+    readOperatorRolePolicyRevision() === roleRevision &&
+    readUserProfileAliasRevision() === aliasRevision &&
+    client?.authenticatedUserProfile?.profileId === profileInput &&
+    client?.authenticatedUserId === userInput;
+  const assertRequestCurrent = () => {
+    if (!isRequestCurrent() || context.getRuntimeConfig() !== cfg) {
+      throw new PreparedModelRuntimePublicationSupersededError(
+        "Chat metadata access changed while preparing its metadata. Retry the request.",
+      );
+    }
+  };
+  if (params.sessionKey) {
+    const sessionKey = params.sessionKey;
     const requested = resolveRequestedSessionAgentId(
       cfg,
-      metadataParams.sessionKey,
-      normalizeOptionalChatText(metadataParams.agentId),
+      params.sessionKey,
+      normalizeOptionalChatText(params.agentId),
     );
     if (!requested.ok) {
       respond(false, undefined, requested.error);
-      return;
+      return undefined;
     }
-    // The router authorizes the session selector; only the persisted entry supplies auth profiles.
-    const session = loadGatewaySessionEntryReadOnly(metadataParams.sessionKey, {
-      agentId: requested.agentId,
-      projection: "list",
-    });
-    respond(
-      true,
-      await context.readChatMetadata({
+    // Persisted session state owns account pins; a caller cannot replace them with a draft id.
+    const requesterProfileId = resolveAuthenticatedProfileId(client);
+    const session = retainGatewaySessionEntryReadOnly(
+      params.sessionKey,
+      requested.agentId,
+      (previous, current) =>
+        !hasSessionReadAccessChanged(previous, current) &&
+        chatMetadataSessionFields.every((field) =>
+          isDeepStrictEqual(previous[field], current[field]),
+        ),
+    );
+    const isCurrent = () => isRequestCurrent() && session.isCurrent();
+    const assertVisible = () => {
+      const visible = createSessionListEntryFilter({
+        client,
+        cfg: (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
+      });
+      if (
+        session.entry &&
+        visible?.(session.legacyKey ?? session.canonicalKey, session.entry) === false
+      ) {
+        throw new SessionMutationAuthorizationChangedError(hiddenSessionNotFound(sessionKey));
+      }
+    };
+    try {
+      assertVisible();
+      return {
         agentId: resolveSessionAgentId({
-          sessionKey: metadataParams.sessionKey,
+          sessionKey: params.sessionKey,
           config: session.cfg,
           agentId: requested.agentId,
         }),
         sessionKey: session.canonicalKey,
+        storePath: session.readSource?.path ?? session.storePath,
         sessionEntry: session.entry,
-        requesterProfileId: resolveAuthenticatedProfileId(client),
-      }),
-    );
-    return;
+        isCurrent,
+        assertCurrent: () => {
+          assertVisible();
+          assertRequestCurrent();
+          if (!session.isCurrentAtResponse()) {
+            throw new PreparedModelRuntimePublicationSupersededError(
+              "Session changed while preparing its metadata. Retry the request.",
+            );
+          }
+        },
+        release: session.release,
+        requesterProfileId,
+      };
+    } catch (error) {
+      session.release();
+      throw error;
+    }
   }
-  const resolvedAgent = resolveAgentIdOrRespondError({
-    rawAgentId: metadataParams.agentId,
+  const resolved = resolveAgentIdOrRespondError({
+    rawAgentId: params.agentId,
     respond,
     cfg,
-    normalize: (rawAgentId) =>
-      typeof rawAgentId === "string" && rawAgentId.trim()
-        ? normalizeAgentId(rawAgentId)
-        : undefined,
+    normalize: (id) => (typeof id === "string" && id.trim() ? normalizeAgentId(id) : undefined),
   });
-  if (!resolvedAgent) {
+  if (!resolved) {
+    return undefined;
+  }
+  assertRequestCurrent();
+  const draftAccountSelection = params.authProfileId
+    ? preparePersonalModelAccountSelection(
+        { client, context, signal },
+        params.authProfileId,
+        SESSION_READ_SCOPE,
+      )
+    : undefined;
+  return {
+    agentId: resolved.agentId,
+    requesterProfileId: draftAccountSelection?.owner ?? resolveAuthenticatedProfileId(client),
+    isCurrent: isRequestCurrent,
+    assertCurrent: assertRequestCurrent,
+    ...(draftAccountSelection ? { draftAccountSelection } : {}),
+  };
+}
+
+export async function handleChatMetadataRequest(
+  options: GatewayRequestHandlerOptions,
+): Promise<void> {
+  const { params, respond, context, client } = options;
+  if (!assertValidParams(params, validateChatMetadataParams, "chat.metadata", respond)) {
     return;
   }
+  let scope: ChatMetadataReadParams | undefined;
   try {
-    const draftAccountSelection = metadataParams.authProfileId
-      ? preparePersonalModelAccountSelection(
-          { client, context, signal },
-          metadataParams.authProfileId,
-          "operator.read",
-        )
-      : undefined;
-    const metadata = await context.readChatMetadata({
-      agentId: resolvedAgent.agentId,
-      requesterProfileId: draftAccountSelection?.owner ?? resolveAuthenticatedProfileId(client),
-      ...(draftAccountSelection ? { draftAccountSelection } : {}),
-    });
-    draftAccountSelection?.assertCurrent();
-    respond(true, metadata);
+    scope = resolveChatMetadataReadParams(options, params);
+    if (!scope) {
+      return;
+    }
+    const metadata = await context.readChatMetadata(scope);
+    scope.draftAccountSelection?.assertCurrent();
+    scope.assertCurrent?.();
+    const cfg = context.getRuntimeConfig();
+    const policy = prepareOperatorModelPresentation({
+      cfg,
+      policyConfig: context.getCommittedRuntimeConfig?.() ?? cfg,
+      client,
+    })?.forAgent(scope.agentId, metadata.models);
+    respond(true, policy ? policy.metadata(metadata) : metadata);
   } catch (error) {
+    if (error instanceof SessionMutationAuthorizationChangedError) {
+      respond(false, undefined, error.error);
+      return;
+    }
     if (!(error instanceof ModelAccountConnectAuthorityError)) {
       throw error;
     }
     respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+  } finally {
+    scope?.release?.();
   }
 }

@@ -4,7 +4,7 @@ import { beforeAll, describe, it } from "vitest";
  *
  * Installs surface, directory, threading, and plugin contract suites for bundled channel shards.
  */
-import { expectChannelPluginContract } from "../../../../plugin-sdk/channel-test-helpers.js";
+import { expectChannelPluginContract } from "../../../../plugin-sdk/test-helpers/channel-contract-suites.js";
 import {
   getBundledChannelDirectoryPluginAsync,
   getBundledChannelPluginAsync,

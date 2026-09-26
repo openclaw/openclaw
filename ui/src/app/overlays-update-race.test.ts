@@ -1,13 +1,9 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import {
-  client,
-  deferred,
-  flushMicrotasks,
-  type RequestFn,
-} from "./overlays-access.test-support.ts";
+import { client, flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { updateRunHarness } from "./update-run.test-support.ts";
 
@@ -51,7 +47,7 @@ describe("update run response races", () => {
   it.each(["activeRun", "lastRun"] as const)(
     "discovers %s when disconnect wins the admission reply",
     async (field) => {
-      const admission = deferred();
+      const admission = deferred<unknown>();
       const run = updateRunFixture(
         field === "lastRun"
           ? {
@@ -65,7 +61,7 @@ describe("update run response races", () => {
       let admitted = false;
       const request = vi.fn<RequestFn>(async (method, _params, options) => {
         if (method === "update.run") {
-          options?.onSent?.();
+          options?.onSent?.("update-run-request");
           admitted = true;
           return admission.promise;
         }
@@ -97,7 +93,7 @@ describe("update run response races", () => {
   it.each(["Gateway", "profile", "administrator", "dispose"] as const)(
     "discards a run read after changing %s",
     async (boundary) => {
-      const pending = deferred();
+      const pending = deferred<unknown>();
       const run = updateRunFixture();
       const request = vi.fn<RequestFn>(async (method) =>
         method === "update.runs.get" ? pending.promise : {},
@@ -137,7 +133,7 @@ describe("update run response races", () => {
   );
 
   it("ignores a retired reconnect response after a replacement connection reads the final row", async () => {
-    const pending = deferred();
+    const pending = deferred<unknown>();
     const run = updateRunFixture();
     let reads = 0;
     const firstRequest = vi.fn<RequestFn>(async (method) => {
@@ -181,7 +177,7 @@ describe("update run response races", () => {
   });
 
   it("does not send an update after the config-write barrier loses its authority", async () => {
-    const drained = deferred<void>();
+    const drained = deferred();
     const request = vi.fn<RequestFn>(async () => ({}));
     const harness = updateRunHarness(request);
     const overlays = createApplicationOverlays(harness.gateway, {
@@ -215,7 +211,7 @@ describe("update run response races", () => {
   ] as const)(
     "reconciles lost admission using $baseline history and $discovered run identity",
     async ({ baseline, discovered, attach }) => {
-      const admission = deferred();
+      const admission = deferred<unknown>();
       const previous = updateRunFixture({
         status: "succeeded",
         phase: "finished",
@@ -232,7 +228,7 @@ describe("update run response races", () => {
       let requested = false;
       const request = vi.fn<RequestFn>(async (method, _params, options) => {
         if (method === "update.run") {
-          options?.onSent?.();
+          options?.onSent?.("update-run-request");
           requested = true;
           return admission.promise;
         }

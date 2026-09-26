@@ -1,0 +1,15 @@
+.content:has(openclaw-terminal-page) {
+  overflow: hidden;
+  padding: 0;
+}
+
+.content:has(openclaw-terminal-page) > openclaw-router-outlet,
+openclaw-terminal-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  width: 100%;
+}

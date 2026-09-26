@@ -2,38 +2,37 @@
 // Suppresses internal auto-reply tokens before they leak to chat surfaces.
 import { isSilentReplyText, SILENT_REPLY_TOKEN, stripSilentToken } from "../auto-reply/tokens.js";
 
-const SUPPRESSED_CONTROL_REPLY_TOKENS = [
+export const SUPPRESSED_CONTROL_REPLY_TOKENS = [
   SILENT_REPLY_TOKEN,
   "ANNOUNCE_SKIP",
   "REPLY_SKIP",
 ] as const;
 
-const MIN_BARE_PREFIX_LENGTH_BY_TOKEN: Readonly<
-  Record<(typeof SUPPRESSED_CONTROL_REPLY_TOKENS)[number], number>
-> = {
-  [SILENT_REPLY_TOKEN]: 2,
-  ANNOUNCE_SKIP: 3,
-  REPLY_SKIP: 3,
-};
+// Long padding falls through to the full classifier without another unbounded scan.
+const POSSIBLE_CONTROL_REPLY_START = new RegExp(
+  `^(?:[\\s\\p{P}]{64}|[\\s\\p{P}]{0,63}(?:${SUPPRESSED_CONTROL_REPLY_TOKENS.join("|")}))`,
+  "iu",
+);
 
-function normalizeSuppressedControlReplyFragment(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const normalized = trimmed.toUpperCase();
-  if (/[^A-Z_]/.test(normalized)) {
-    return "";
-  }
-  return normalized;
-}
+const CONTROL_REPLY_SEQUENCE_PREFIX = new RegExp(
+  `^(?:(?:${SUPPRESSED_CONTROL_REPLY_TOKENS.join("|")})\\s+)+([A-Z_]+)$`,
+  "i",
+);
 
 /**
- * Return true when a chat-visible reply is exactly an internal control token.
+ * Recognize control-only replies, including a repeated marker's unfinished tail.
  */
 export function isSuppressedControlReplyText(text: string): boolean {
+  if (!POSSIBLE_CONTROL_REPLY_START.test(text)) {
+    return false;
+  }
   const normalized = text.trim();
-  return SUPPRESSED_CONTROL_REPLY_TOKENS.some((token) => isSilentReplyText(normalized, token));
+  const repeatedFragment = CONTROL_REPLY_SEQUENCE_PREFIX.exec(normalized)?.[1]?.toUpperCase();
+  return SUPPRESSED_CONTROL_REPLY_TOKENS.some(
+    (token) =>
+      isSilentReplyText(normalized, token) ||
+      (repeatedFragment !== undefined && token.startsWith(repeatedFragment)),
+  );
 }
 
 /** Remove internal control tokens when a model appends one to visible reply text. */
@@ -56,26 +55,24 @@ export function stripSuppressedControlReplyToken(text: string): string {
  */
 export function isSuppressedControlReplyLeadFragment(text: string): boolean {
   const trimmed = text.trim();
-  const normalized = normalizeSuppressedControlReplyFragment(text);
-  if (!normalized) {
-    return false;
-  }
   return SUPPRESSED_CONTROL_REPLY_TOKENS.some((token) => {
-    const tokenUpper = token.toUpperCase();
-    if (normalized === tokenUpper) {
-      return false;
+    let fragment = trimmed;
+    // Separate assistant messages share a live buffer. Consume only complete,
+    // whitespace-delimited controls before inspecting the next token's prefix.
+    // Fixed-size lookahead keeps ordinary growing replies off a full-text scan.
+    while (
+      fragment.length > token.length &&
+      fragment.slice(0, token.length).toUpperCase() === token &&
+      /\s/.test(fragment.charAt(token.length))
+    ) {
+      fragment = fragment.slice(token.length).trimStart();
     }
-    if (!tokenUpper.startsWith(normalized)) {
-      return false;
-    }
-    if (normalized.includes("_")) {
-      return true;
-    }
-    if (token !== SILENT_REPLY_TOKEN && trimmed !== trimmed.toUpperCase()) {
-      return false;
-    }
-    // Bare fragments are common while streaming. Require a minimum prefix so
-    // ordinary words do not disappear just because they start like a token.
-    return normalized.length >= MIN_BARE_PREFIX_LENGTH_BY_TOKEN[token];
+    // Hold even a single character until it diverges or the turn finishes;
+    // terminal projection releases ordinary short replies such as "RE".
+    return (
+      fragment.length > 0 &&
+      fragment.length < token.length &&
+      token.startsWith(fragment.toUpperCase())
+    );
   });
 }

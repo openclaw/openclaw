@@ -9,10 +9,11 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
 import { normalizeMeetUrl } from "../meet-url.js";
 import { createMeetWithBrowserProxyOnNode } from "./chrome-create.js";
+import { meetTranscriptScript } from "./google-meet-caption-scripts.js";
 import {
+  meetAudioCaptureScript,
   meetLeaveScript,
   meetStatusScript,
-  meetTranscriptScript,
 } from "./google-meet-page-scripts.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./google-meet-platform-constants.js";
 import {
@@ -129,6 +130,7 @@ export const GOOGLE_MEET_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     },
   },
   browser: {
+    buildAudioCaptureScript: meetAudioCaptureScript,
     allowsMicrophone: MeetingPlatformAdapter.isTalkBackMode,
     buildStatusJoinScript: (params) =>
       meetStatusScript({

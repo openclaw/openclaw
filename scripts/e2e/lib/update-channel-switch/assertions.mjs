@@ -3,14 +3,13 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { legacyPackageAcceptanceCompat } from "../package-compat.mjs";
 
 const [command, ...args] = process.argv.slice(2);
 const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-update> [...]",
+    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
   );
   process.exit(2);
 }
@@ -128,7 +127,7 @@ function prepareGitFixture(root) {
         missing.push(`${dependency} -> ${String(patchFile)}`);
       }
     }
-    if (missing.length > 0 && !legacyPackageAcceptanceCompat(packageJson.version)) {
+    if (missing.length > 0) {
       throw new Error(
         `package ${packageJson.version} has missing pnpm patchedDependencies in package fixture: ${missing.join(", ")}`,
       );
@@ -223,26 +222,26 @@ function assertConfigChannel(channel) {
   if (config.update?.channel === channel) {
     return;
   }
-  if (process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1") {
-    console.log(
-      `legacy package did not persist update.channel ${channel}; got ${JSON.stringify(config.update?.channel)}`,
-    );
-    return;
-  }
   throw new Error(
     `expected persisted update.channel ${channel}, got ${JSON.stringify(config.update?.channel)}`,
   );
 }
 
-function assertDryRun(kind, channel) {
+function assertDryRun(kind, channel, selection) {
   const preview = JSON.parse(process.env.UPDATE_JSON ?? "");
+  const reportedKind =
+    kind === "git" &&
+    selection === "stored" &&
+    process.env.OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT === "1"
+      ? "package"
+      : kind;
   assert.equal(preview.dryRun, true);
   assert.equal(preview.installKind, "package");
   assert.equal(preview.storedChannel, "dev");
   assert.equal(preview.effectiveChannel, channel);
-  assert.equal(preview.updateInstallKind, kind);
-  assert.equal(preview.mode, kind === "git" ? "git" : "npm");
-  assert.equal(preview.switchToGit, kind === "git");
+  assert.equal(preview.updateInstallKind, reportedKind);
+  assert.equal(preview.mode, reportedKind === "git" ? "git" : "npm");
+  assert.equal(preview.switchToGit, reportedKind === "git");
   assert.equal(preview.switchToPackage, false);
 }
 
@@ -262,6 +261,17 @@ function assertInstalledVersion(root, expectedVersion) {
   }
 }
 
+function assertDirtyExit(statusRaw, frozenCompat) {
+  const status = Number(statusRaw);
+  const acceptsZero = frozenCompat === "1";
+  if (status === 1 || (status === 0 && acceptsZero)) {
+    return;
+  }
+  throw new Error(
+    `unexpected dirty-worktree update exit ${statusRaw}; expected ${acceptsZero ? "0 or 1" : "1"}`,
+  );
+}
+
 switch (command) {
   case "prepare-git-fixture":
     prepareGitFixture(args[0] ?? "/tmp/openclaw-git");
@@ -278,11 +288,14 @@ switch (command) {
   case "assert-dirty-update":
     assertDirtyUpdate(args[0], args[1]);
     break;
+  case "assert-dirty-exit":
+    assertDirtyExit(args[0], args[1]);
+    break;
   case "assert-config-channel":
     assertConfigChannel(args[0]);
     break;
   case "assert-dry-run":
-    assertDryRun(args[0], args[1]);
+    assertDryRun(args[0], args[1], args[2]);
     break;
   case "assert-status-kind":
     assertStatusKind(args[0]);

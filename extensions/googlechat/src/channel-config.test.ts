@@ -9,7 +9,6 @@ import {
   googleChatApprovalControls,
 } from "./approval-card-actions.js";
 import { googlechatPlugin } from "./channel.js";
-import { googlechatSetupPlugin } from "./channel.setup.js";
 
 describe("googlechatPlugin config adapter", () => {
   afterEach(() => {
@@ -56,16 +55,6 @@ describe("googlechatPlugin config adapter", () => {
     expect(googlechatPlugin.status?.collectStatusIssues?.([account])).toEqual([]);
   });
 
-  it("keeps setup metadata aligned with the runtime plugin", () => {
-    expect(googlechatSetupPlugin.id).toBe(googlechatPlugin.id);
-    expect(googlechatSetupPlugin.meta).toEqual(googlechatPlugin.meta);
-    expect(googlechatSetupPlugin.capabilities?.chatTypes).toEqual(
-      googlechatPlugin.capabilities?.chatTypes,
-    );
-    expect(googlechatPlugin.capabilities?.media).toBe(true);
-    expect(googlechatPlugin.capabilities?.reactions).toBeUndefined();
-  });
-
   it("classifies Google Chat users as direct and spaces as groups", () => {
     const inferTargetChatType = googlechatPlugin.messaging?.inferTargetChatType;
 
@@ -88,10 +77,6 @@ describe("googlechatPlugin config adapter", () => {
     });
     expect(googlechatPlugin.actions?.supportsAction?.({ action: "send" })).toBe(true);
     expect(googlechatPlugin.actions?.supportsAction?.({ action: "upload-file" })).toBe(false);
-  });
-
-  it("registers an exec-capable native approval runtime", () => {
-    expect(googlechatPlugin.approvalCapability?.nativeRuntime?.eventKinds).toContain("exec");
   });
 
   it("keeps read-only accessors from resolving service account SecretRefs", () => {

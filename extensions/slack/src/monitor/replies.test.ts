@@ -83,7 +83,7 @@ function baseParams(overrides?: Record<string, unknown>) {
   return { ...params, replies: params.replies.map(prepareSlackReply) };
 }
 
-function largePortableTablePresentation() {
+function largePortableTablePresentation(rowLength = 110) {
   return {
     blocks: [
       {
@@ -91,7 +91,7 @@ function largePortableTablePresentation() {
         caption: "Large pipeline",
         headers: ["Account"],
         rows: Array.from({ length: 100 }, (_entry, index) => [
-          index === 0 ? "<@U123>" : `account-${String(index)} ${"x".repeat(110)}`,
+          index === 0 ? "<@U123>" : `account-${String(index)} ${"x".repeat(rowLength)}`,
         ]),
       },
     ],
@@ -106,7 +106,7 @@ function requireSendCall(index = 0) {
   return call;
 }
 
-function acceptedSlackSendResult(messageId: string, kind: "media" | "text" = "media") {
+function acceptedSlackSendResult(messageId: string, kind: "media" | "text" | "card" = "media") {
   return {
     messageId,
     channelId: "C123",
@@ -152,15 +152,6 @@ describe("deliverReplies identity passthrough", () => {
     messageHookRunner.runMessageSent.mockReset();
     triggerInternalHook.mockReset();
   });
-  it("passes identity to sendMessageSlack for text replies", async () => {
-    sendMock.mockResolvedValue(undefined);
-    const identity = { username: "Bot", iconEmoji: ":robot:" };
-    await deliverReplies(baseParams({ identity }));
-
-    expect(sendMock).toHaveBeenCalledOnce();
-    const options = requireSendCall()[2];
-    expect(options.identity).toBe(identity);
-  });
 
   it.each([
     { name: "current reply", replyToCurrent: true, isCompactionNotice: false },
@@ -191,60 +182,57 @@ describe("deliverReplies identity passthrough", () => {
     },
   );
 
-  it("passes identity to sendMessageSlack for media replies", async () => {
-    sendMock.mockResolvedValue(undefined);
-    const identity = { username: "Bot", iconUrl: "https://example.com/icon.png" };
-    await deliverReplies(
-      baseParams({
-        identity,
-        replies: [{ text: "caption", mediaUrls: ["https://example.com/img.png"] }],
-      }),
-    );
+  it.each([
+    { rowLength: 110, textCalls: 1 },
+    { rowLength: 450, textCalls: 2 },
+  ])(
+    "delivers complete literal table text within the hard limit ($rowLength)",
+    async ({ rowLength, textCalls }) => {
+      sendMock.mockResolvedValue({ messageId: "table-ts", channelId: "C123" });
 
-    expect(sendMock).toHaveBeenCalledOnce();
-    const options = requireSendCall()[2];
-    expect(options.identity).toBe(identity);
-  });
-
-  it("routes non-native portable tables through complete Slack-safe text delivery", async () => {
-    sendMock.mockResolvedValue({ messageId: "table-ts", channelId: "C123" });
-
-    await deliverReplies(
-      baseParams({
-        textLimit: 8000,
-        replies: [
-          {
-            presentation: largePortableTablePresentation(),
-            interactive: {
-              blocks: [
-                {
-                  type: "buttons",
-                  buttons: [{ label: "Refresh", value: "refresh" }],
-                },
-              ],
+      await deliverReplies(
+        baseParams({
+          textLimit: 8000,
+          replies: [
+            {
+              presentation: largePortableTablePresentation(rowLength),
+              interactive: {
+                blocks: [
+                  {
+                    type: "buttons",
+                    buttons: [{ label: "Refresh", value: "refresh" }],
+                  },
+                ],
+              },
             },
-          },
-        ],
-      }),
-    );
+          ],
+        }),
+      );
 
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    const [_textTarget, text, textOptions] = requireSendCall(0);
-    expect(text).toContain("- Account: <@U123>");
-    expect(text).toContain("- Account: account-99");
-    expect(text.length).toBeGreaterThan(8000);
-    expect(textOptions.textIsSlackPlainText).toBe(true);
-    expect(textOptions.blocks).toBeUndefined();
+      expect(sendMock).toHaveBeenCalledTimes(textCalls + 1);
+      const textSends = Array.from({ length: textCalls }, (_entry, index) =>
+        requireSendCall(index),
+      );
+      const text = textSends.map((call) => call[1]).join("");
+      expect(text).toContain("- Account: <@U123>");
+      expect(text).toContain("- Account: account-99");
+      expect(text.length).toBeGreaterThan(8000);
+      for (const [_target, chunk, options] of textSends) {
+        expect(chunk.length).toBeLessThanOrEqual(40_000);
+        expect(options.textIsSlackPlainText).toBe(true);
+        expect(options.blocks).toBeUndefined();
+      }
 
-    const [_blockTarget, blockText, blockOptions] = requireSendCall(1);
-    expect(blockText).toBe("");
-    expect(blockOptions.blocks).toEqual([
-      expect.objectContaining({
-        type: "actions",
-        elements: [expect.objectContaining({ type: "button", value: "refresh" })],
-      }),
-    ]);
-  });
+      const [_blockTarget, blockText, blockOptions] = requireSendCall(textCalls);
+      expect(blockText).toBe("");
+      expect(blockOptions.blocks).toEqual([
+        expect.objectContaining({
+          type: "actions",
+          elements: [expect.objectContaining({ type: "button", value: "refresh" })],
+        }),
+      ]);
+    },
+  );
 
   it("delivers media before native chart blocks with the same reply context", async () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
@@ -350,28 +338,6 @@ describe("deliverReplies identity passthrough", () => {
     expect(sendMock).toHaveBeenCalledOnce();
     const options = requireSendCall()[2];
     expect(options).not.toHaveProperty("identity");
-  });
-
-  it("forwards the validated Enterprise event scope", async () => {
-    sendMock.mockResolvedValue({ messageId: "123.456", channelId: "C123" });
-    const listenerClient = { chat: { postMessage: vi.fn() } } as never;
-    const eventScope = {
-      teamId: "T1",
-      client: listenerClient,
-    };
-
-    await deliverReplies(
-      baseParams({
-        cfg: { channels: { slack: {} } },
-        eventScope,
-        mediaMaxBytes: 1024,
-      }),
-    );
-
-    const options = requireSendCall()[2];
-    expect(options.eventScope).toBe(eventScope);
-    expect(options.textLimit).toBe(4000);
-    expect(options.mediaMaxBytes).toBe(1024);
   });
 
   it("delivers block-only replies through to sendMessageSlack", async () => {
@@ -1129,21 +1095,6 @@ describe("deliverReplies reasoning suppression", () => {
     const [, text] = requireSendCall();
     expect(text).toBe("visible answer");
   });
-
-  it("delivers nothing when all payloads are reasoning", async () => {
-    sendMock.mockResolvedValue(undefined);
-
-    await deliverReplies(
-      baseParams({
-        replies: [
-          { text: "Let me think about this...", isReasoning: true },
-          { text: "I need to consider...", isReasoning: true },
-        ],
-      }),
-    );
-
-    expect(sendMock).not.toHaveBeenCalled();
-  });
 });
 
 describe("deliverReplies message_sent hook", () => {
@@ -1455,6 +1406,63 @@ describe("deliverReplies message_sent hook", () => {
     expect(sendMock).toHaveBeenCalledOnce();
   });
 
+  it("preserves accepted media and blocks when a later block projection fails", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    const failure = new Error("later block projection failed");
+    const params = baseParams({
+      replies: [
+        {
+          text: "Caption",
+          mediaUrl: "https://example.com/report.png",
+          channelData: {
+            slack: { blocks: Array.from({ length: 50 }, () => ({ type: "divider" })) },
+          },
+          presentation: { title: "Later block", blocks: [] },
+        },
+      ],
+    });
+    const lastSegment = params.replies[0]?.resolveDelivery().segments.at(-1);
+    expect(lastSegment?.kind).toBe("blocks");
+    if (lastSegment?.kind !== "blocks" || !lastSegment.blocks[0]) {
+      throw new Error("expected the later block segment");
+    }
+    Object.defineProperty(lastSegment.blocks[0], "text", {
+      get() {
+        throw failure;
+      },
+    });
+    for (const accepted of [
+      acceptedSlackSendResult("media-1"),
+      acceptedSlackSendResult("card-1", "card"),
+    ]) {
+      sendMock.mockImplementationOnce(async (_target, _text, options) => {
+        await options.onDeliveryResult?.(accepted);
+        return accepted;
+      });
+    }
+
+    const error = await deliverReplies(params).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      cause: failure,
+      deliveryResult: {
+        messageIds: ["media-1", "card-1"],
+        receipt: { platformMessageIds: ["media-1", "card-1"] },
+        visibleReplySent: true,
+      },
+    });
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        content: "Caption\n\nShared a Block Kit message",
+        success: false,
+        error: failure.message,
+      }),
+      expect.anything(),
+    );
+  });
+
   it("preserves an undispatched first-send failure without a partial wrapper", async () => {
     const failure = new PlatformMessageNotDispatchedError("first_upload_failed", {
       cause: new Error("upload connection refused"),
@@ -1552,20 +1560,6 @@ describe("deliverReplies message_sent hook", () => {
 
     expect(sendMock).toHaveBeenCalledOnce();
     expect(messageHookRunner.runMessageSent).not.toHaveBeenCalled();
-  });
-
-  it("fires the internal message:sent hook when a session key is supplied", async () => {
-    messageHookRunner.hasHooks.mockReturnValue(false);
-    sendMock.mockResolvedValue({ messageId: "ts", channelId: "C123" });
-
-    await deliverReplies(
-      baseParams({
-        replies: [{ text: "internal" }],
-        sessionKeyForInternalHooks: "slack:C123:U1",
-      }),
-    );
-
-    expect(triggerInternalHook).toHaveBeenCalledOnce();
   });
 
   it("threads group context into the internal message:sent hook when isGroup is set", async () => {

@@ -189,17 +189,13 @@ export function registerGoogleMeetDoctorCommand(context: GoogleMeetCliCommandCon
         method: "googlemeet.status",
         payload: { sessionId },
       });
+      let status: Awaited<ReturnType<GoogleMeetRuntime["status"]>>;
       if (delegated.ok) {
-        const status = delegated.payload as Awaited<ReturnType<GoogleMeetRuntime["status"]>>;
-        if (options.json) {
-          writeStdoutJson(status);
-          return;
-        }
-        writeDoctorStatus(status);
-        return;
+        status = delegated.payload as Awaited<ReturnType<GoogleMeetRuntime["status"]>>;
+      } else {
+        const rt = await params.ensureRuntime();
+        status = await rt.status(sessionId);
       }
-      const rt = await params.ensureRuntime();
-      const status = await rt.status(sessionId);
       if (options.json) {
         writeStdoutJson(status);
         return;

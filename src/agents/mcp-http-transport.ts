@@ -15,6 +15,8 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 const STREAM_RETRY_EXHAUSTED_RE = /^Maximum reconnection attempts \(\d+\) exceeded\.$/;
 const SESSION_TERMINATION_TIMEOUT_MS = 5_000;
 
+export class McpSseSessionExpiredError extends Error {}
+
 class McpHttpResponseTooLargeError extends Error {
   readonly code = "MCP_HTTP_RESPONSE_TOO_LARGE";
 
@@ -73,22 +75,42 @@ function limitMcpResponseStream<Chunk extends Uint8Array>(
           return;
         }
 
-        for (const byte of chunk) {
-          if (previousByteWasCr && byte === 0x0a) {
-            previousByteWasCr = false;
-            continue;
-          }
+        const bytes = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+        let cursor = previousByteWasCr && bytes[0] === 0x0a ? 1 : 0;
+        if (bytes.length > 0) {
           previousByteWasCr = false;
-          if (byte === 0x0d || byte === 0x0a) {
-            finishEventLine();
-            previousByteWasCr = byte === 0x0d;
-            continue;
+        }
+        // Keep both delimiter positions so many short lines cannot repeatedly
+        // scan the rest of the chunk for an absent delimiter.
+        let lf = bytes.indexOf(0x0a, cursor);
+        let cr = bytes.indexOf(0x0d, cursor);
+        while (cursor < bytes.length) {
+          const delimiter = lf < 0 ? cr : cr < 0 ? lf : Math.min(lf, cr);
+          const end = delimiter < 0 ? bytes.length : delimiter;
+          if (end > cursor) {
+            if (lineBytes === 0) {
+              lineIsComment = bytes[cursor] === 0x3a;
+            }
+            lineBytes += end - cursor;
+            previousByteWasCr = false;
+            checkEventLimit();
           }
-          if (lineBytes === 0) {
-            lineIsComment = byte === 0x3a;
+          if (delimiter < 0) {
+            break;
           }
-          lineBytes += 1;
-          checkEventLimit();
+          finishEventLine();
+          previousByteWasCr = bytes[delimiter] === 0x0d;
+          cursor = delimiter + 1;
+          if (previousByteWasCr && bytes[cursor] === 0x0a) {
+            cursor += 1;
+            previousByteWasCr = false;
+          }
+          if (lf >= 0 && lf < cursor) {
+            lf = bytes.indexOf(0x0a, cursor);
+          }
+          if (cr >= 0 && cr < cursor) {
+            cr = bytes.indexOf(0x0d, cursor);
+          }
         }
         controller.enqueue(chunk);
       },
@@ -193,35 +215,8 @@ abstract class OpenClawMcpHttpTransport implements Transport {
     }
   }
 
-  abstract start(): Promise<void>;
-  abstract close(): Promise<void>;
-  abstract send(message: JSONRPCMessage): Promise<void>;
-}
-
-/** Converts legacy SSE terminal HTTP failures into the lifecycle close the SDK omits. */
-export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
-  private readonly transport: SSEClientTransport;
-
-  constructor(url: URL, options?: SSEClientTransportOptions) {
-    super();
-    const baseFetch = options?.fetch ?? fetch;
-    const limitedFetch = withMcpHttpResponseLimits(baseFetch);
-    const eventSourceInit = options?.eventSourceInit;
-    const configuredEventSourceFetch = eventSourceInit?.fetch;
-    this.transport = new SSEClientTransport(url, {
-      ...options,
-      fetch: limitedFetch,
-      eventSourceInit: {
-        ...eventSourceInit,
-        fetch: async (eventUrl, init) => {
-          const raw = configuredEventSourceFetch
-            ? await configuredEventSourceFetch(eventUrl, init)
-            : await baseFetch(eventUrl, init);
-          return limitMcpEventSourceResponse(raw);
-        },
-      },
-    });
-  }
+  protected abstract readonly transport: Transport & { setProtocolVersion(version: string): void };
+  protected abstract onTransportError(error: Error): void;
 
   async start(): Promise<void> {
     // The SDK transport exposes callback properties rather than EventTarget listeners.
@@ -230,18 +225,7 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
     // oxlint-disable-next-line unicorn/prefer-add-event-listener
     this.transport.onclose = () => this.emitClose();
     // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    this.transport.onerror = (error) => {
-      this.emitError(error);
-      if (
-        isMcpSseEventTooLargeError(error) ||
-        (error instanceof SseError && error.code !== undefined)
-      ) {
-        void this.close();
-        // EventSource schedules reconnect after its error callback returns.
-        // Close again on the next turn so that new timer cannot survive.
-        setTimeout(() => void this.transport.close(), 0).unref?.();
-      }
-    };
+    this.transport.onerror = (error) => this.onTransportError(error);
     await this.transport.start();
   }
 
@@ -254,15 +238,65 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
     this.emitClose();
   }
 
+  setProtocolVersion(version: string): void {
+    this.transport.setProtocolVersion(version);
+  }
+
+  abstract send(message: JSONRPCMessage): Promise<void>;
+}
+
+/** Converts legacy SSE terminal HTTP failures into the lifecycle close the SDK omits. */
+export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
+  protected readonly transport: SSEClientTransport;
+
+  constructor(url: URL, options?: SSEClientTransportOptions) {
+    super();
+    const baseFetch = options?.fetch ?? fetch;
+    const limitedFetch = withMcpHttpResponseLimits(baseFetch);
+    const eventSourceInit = options?.eventSourceInit;
+    const configuredEventSourceFetch = eventSourceInit?.fetch;
+    this.transport = new SSEClientTransport(url, {
+      ...options,
+      fetch: async (input, init) => {
+        const response = await limitedFetch(input, init);
+        // The SDK discards POST status codes. Preserve session expiration for
+        // the runtime owner without closing before the failed request settles.
+        if (init?.method === "POST" && response.status === 404) {
+          const text = await response.text().catch(() => null);
+          throw new McpSseSessionExpiredError(`Error POSTing to endpoint (HTTP 404): ${text}`);
+        }
+        return response;
+      },
+      eventSourceInit: {
+        ...eventSourceInit,
+        fetch: async (eventUrl, init) => {
+          const raw = configuredEventSourceFetch
+            ? await configuredEventSourceFetch(eventUrl, init)
+            : await baseFetch(eventUrl, init);
+          return limitMcpEventSourceResponse(raw);
+        },
+      },
+    });
+  }
+
+  protected onTransportError(error: Error): void {
+    this.emitError(error);
+    if (
+      isMcpSseEventTooLargeError(error) ||
+      (error instanceof SseError && error.code !== undefined)
+    ) {
+      void this.close();
+      // EventSource schedules reconnect after its error callback returns.
+      // Close again on the next turn so that new timer cannot survive.
+      setTimeout(() => void this.transport.close(), 0).unref?.();
+    }
+  }
+
   async send(message: JSONRPCMessage): Promise<void> {
     if (this.closed) {
       throw new Error("MCP SSE transport is closed");
     }
     await this.transport.send(message);
-  }
-
-  setProtocolVersion(version: string): void {
-    this.transport.setProtocolVersion(version);
   }
 }
 
@@ -273,7 +307,7 @@ type OpenClawStreamableHttpOptions = StreamableHTTPClientTransportOptions & {
 
 /** Owns Streamable HTTP notification recovery and stateful cleanup around SDK 1.30.0. */
 export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransport {
-  private readonly transport: StreamableHTTPClientTransport;
+  protected readonly transport: StreamableHTTPClientTransport;
   private readonly url: URL;
   private readonly cleanupFetch: FetchLike;
   private readonly requestInit?: RequestInit;
@@ -309,54 +343,32 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
     return this.transport.protocolVersion;
   }
 
-  async start(): Promise<void> {
-    // The SDK transport exposes callback properties rather than EventTarget listeners.
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    this.transport.onmessage = (message) => this.onmessage?.(message);
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    this.transport.onclose = () => this.emitClose();
-    // oxlint-disable-next-line unicorn/prefer-add-event-listener
-    this.transport.onerror = (error) => {
-      if (this.closed) {
-        // SDK reconnect callbacks can finish after close() cleared their old timer.
-        // Defer a second close so any timer armed later in that callback is cancelled.
-        setTimeout(() => void this.transport.close(), 0).unref?.();
-        return;
-      }
-      this.emitError(error);
-      const sessionExpired =
-        this.pendingExpiredNotificationGet &&
-        error instanceof StreamableHTTPError &&
-        error.code === 404;
-      if (sessionExpired) {
-        this.pendingExpiredNotificationGet = false;
-      }
-      if (
-        isMcpSseEventTooLargeError(error) ||
-        sessionExpired ||
-        STREAM_RETRY_EXHAUSTED_RE.test(error.message)
-      ) {
-        void this.close();
-      }
-    };
-    await this.transport.start();
-  }
-
-  async close(): Promise<void> {
+  protected onTransportError(error: Error): void {
     if (this.closed) {
+      // SDK reconnect callbacks can finish after close() cleared their old timer.
+      // Defer a second close so any timer armed later in that callback is cancelled.
+      setTimeout(() => void this.transport.close(), 0).unref?.();
       return;
     }
-    this.closed = true;
-    await this.transport.close();
-    this.emitClose();
+    this.emitError(error);
+    const sessionExpired =
+      this.pendingExpiredNotificationGet &&
+      error instanceof StreamableHTTPError &&
+      error.code === 404;
+    if (sessionExpired) {
+      this.pendingExpiredNotificationGet = false;
+    }
+    if (
+      isMcpSseEventTooLargeError(error) ||
+      sessionExpired ||
+      STREAM_RETRY_EXHAUSTED_RE.test(error.message)
+    ) {
+      void this.close();
+    }
   }
 
   async send(message: JSONRPCMessage, options?: Parameters<Transport["send"]>[1]): Promise<void> {
     await this.transport.send(message, options);
-  }
-
-  setProtocolVersion(version: string): void {
-    this.transport.setProtocolVersion(version);
   }
 
   /** Uses a fresh request signal because failed initialization makes the SDK's signal unusable. */
@@ -376,8 +388,10 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
       headers,
       signal: AbortSignal.timeout(SESSION_TERMINATION_TIMEOUT_MS),
     });
-    await response.body?.cancel();
-    if (!response.ok && response.status !== 405) {
+    void response.body?.cancel().catch(() => undefined);
+    // A terminated session is no longer addressable; MCP servers report 404
+    // for that id, which is already the desired outcome of cleanup.
+    if (!response.ok && response.status !== 404 && response.status !== 405) {
       throw new StreamableHTTPError(
         response.status,
         `Failed to terminate session: ${response.statusText}`,

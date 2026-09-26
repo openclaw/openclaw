@@ -1,10 +1,9 @@
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
-import { rejectConfigNonFiniteNumbers, visitConfigValueTree } from "../config/io.read-helpers.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -12,6 +11,7 @@ import {
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
+import { rejectConfigNonFiniteNumbers, visitConfigValueTree } from "../config/value-tree.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -114,12 +114,9 @@ function parseSecretRefBuilder(params: {
   if (!id) {
     throw new Error(`${params.fieldPrefix}.id is required.`);
   }
-  if (source === "env" && !isValidEnvSecretRefId(id)) {
-    throw new Error(`${params.fieldPrefix}.id must match /^[A-Z][A-Z0-9_]{0,127}$/ for env refs.`);
-  }
-  if (source === "store" && !isValidEnvSecretRefId(id)) {
+  if ((source === "env" || source === "store") && !isValidEnvSecretRefId(id)) {
     throw new Error(
-      `${params.fieldPrefix}.id must match /^[A-Z][A-Z0-9_]{0,127}$/ for store refs.`,
+      `${params.fieldPrefix}.id must match /^[A-Z][A-Z0-9_]{0,127}$/ for ${source} refs.`,
     );
   }
   if (source === "file" && !isValidFileSecretRefId(id)) {
@@ -239,7 +236,7 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
     provider = {
       source: "exec",
       command,
-      ...(opts.providerArg?.length ? { args: opts.providerArg.map((entry) => entry.trim()) } : {}),
+      ...(opts.providerArg?.length ? { args: opts.providerArg } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
       ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
@@ -384,16 +381,25 @@ export function buildConfigSetOperations(params: {
     return parseBatchOperations(batchEntries);
   }
 
-  const pathProvided = typeof params.path === "string" && params.path.trim().length > 0;
-  const parsedConcretePath = pathProvided
-    ? parseConcreteConfigPathWithProvenance(params.path as string)
-    : null;
-  const pathTokens = parsedConcretePath?.tokens ?? null;
-  const parsedPath = pathTokens?.map(String) ?? null;
+  const parsedConcretePath =
+    typeof params.path === "string" && params.path.trim()
+      ? parseConcreteConfigPathWithProvenance(params.path)
+      : undefined;
+  if (!parsedConcretePath) {
+    throw modeError(
+      modeResolution.mode === "ref_builder"
+        ? "ref builder mode requires <path>."
+        : modeResolution.mode === "provider_builder"
+          ? "provider builder mode requires <path>."
+          : "value/json mode requires <path> when batch mode is not used.",
+    );
+  }
+  const pathFields = {
+    requestedPath: parsedConcretePath.tokens.map(String),
+    pathTokens: parsedConcretePath.tokens,
+    quotedNumericSegments: parsedConcretePath.quotedNumericSegments,
+  };
   if (modeResolution.mode === "ref_builder") {
-    if (!pathProvided || !parsedPath) {
-      throw modeError("ref builder mode requires <path>.");
-    }
     if (params.value !== undefined) {
       throw modeError("ref builder mode does not accept <value>.");
     }
@@ -404,9 +410,7 @@ export function buildConfigSetOperations(params: {
     }
     return [
       buildAssignmentOperation({
-        requestedPath: parsedPath,
-        pathTokens: pathTokens ?? undefined,
-        quotedNumericSegments: parsedConcretePath?.quotedNumericSegments,
+        ...pathFields,
         value: parseSecretRefBuilder({
           provider: params.opts.refProvider,
           source: params.opts.refSource,
@@ -420,40 +424,28 @@ export function buildConfigSetOperations(params: {
   }
 
   if (modeResolution.mode === "provider_builder") {
-    if (!pathProvided || !parsedPath) {
-      throw modeError("provider builder mode requires <path>.");
-    }
     if (params.value !== undefined) {
       throw modeError("provider builder mode does not accept <value>.");
     }
     const value = buildProviderFromBuilder(params.opts);
-    validateProviderAliasPath(parsedPath);
+    validateProviderAliasPath(pathFields.requestedPath);
     return [
       {
         inputMode: "builder",
-        requestedPath: parsedPath,
-        ...(pathTokens ? { pathTokens } : {}),
-        ...(parsedConcretePath
-          ? { quotedNumericSegments: parsedConcretePath.quotedNumericSegments }
-          : {}),
-        setPath: parsedPath,
+        ...pathFields,
+        setPath: pathFields.requestedPath,
         value,
         schemaValidated: true,
       },
     ];
   }
 
-  if (!pathProvided || !parsedPath) {
-    throw modeError("value/json mode requires <path> when batch mode is not used.");
-  }
   if (params.value === undefined) {
     throw modeError("value/json mode requires <value>.");
   }
   return [
     buildAssignmentOperation({
-      requestedPath: parsedPath,
-      pathTokens: pathTokens ?? undefined,
-      quotedNumericSegments: parsedConcretePath?.quotedNumericSegments,
+      ...pathFields,
       value: parseConfigSetValue(params.value, strictJson),
       inputMode: modeResolution.mode === "json" ? "json" : "value",
     }),
@@ -478,7 +470,7 @@ async function readStdinText(): Promise<string> {
 }
 
 async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> {
-  const file = normalizeOptionalString(opts.file);
+  const file = readNonBlankString(opts.file);
   const stdin = Boolean(opts.stdin);
   if (Boolean(file) === stdin) {
     throw configPatchModeError("provide exactly one of --file <path> or --stdin.");

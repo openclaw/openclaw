@@ -11,67 +11,53 @@ const PLUGIN_SOURCE_ROOTS = {
   workspace: path.resolve(path.sep, "Users", "x", "ws", ".openclaw", "extensions"),
 };
 
-function expectFormattedSource(params: {
-  origin: "bundled" | "workspace" | "global";
-  sourceKey: "stock" | "workspace" | "global";
-  dirName: string;
-  fileName: string;
-  expectedValue: string;
-  expectedRootKey: "stock" | "workspace" | "global";
-}) {
-  const out = formatPluginSourceForTable(
-    {
-      origin: params.origin,
-      source: path.join(PLUGIN_SOURCE_ROOTS[params.sourceKey], params.dirName, params.fileName),
-    },
-    PLUGIN_SOURCE_ROOTS,
-  );
-  expect(out.value).toBe(params.expectedValue);
-  expect(out.rootKey).toBe(params.expectedRootKey);
-}
-
-function expectFormattedSourceCase(params: ReturnType<typeof createFormattedSourceExpectation>) {
-  expectFormattedSource(params);
-}
-
-function expectResolvedSourceRoots(params: {
-  homeDir: string;
-  env: NodeJS.ProcessEnv;
-  workspaceDir: string;
-  expected: Record<"stock" | "global" | "workspace", string>;
-}) {
-  const roots = withPathResolutionEnv(params.homeDir, params.env, (env) =>
-    resolvePluginSourceRoots({
-      env,
-      workspaceDir: params.workspaceDir,
-    }),
-  );
-
-  expect(roots).toEqual(params.expected);
-}
-
-function createFormattedSourceExpectation(
-  origin: "bundled" | "workspace" | "global",
-  sourceKey: "stock" | "workspace" | "global",
-  dirName: string,
-  fileName: string,
-) {
-  return {
-    origin,
-    sourceKey,
-    dirName,
-    fileName,
-    expectedValue: `${origin === "bundled" ? "stock" : origin}:${dirName}/${fileName}`,
-    expectedRootKey: sourceKey,
-  } as const;
-}
-
 describe("formatPluginSourceForTable", () => {
   it.each([
-    createFormattedSourceExpectation("bundled", "stock", "demo-stock", "index.ts"),
-    createFormattedSourceExpectation("workspace", "workspace", "demo-workspace", "index.ts"),
-    createFormattedSourceExpectation("global", "global", "demo-global", "index.js"),
-  ])("shortens $origin sources under the $sourceKey root", expectFormattedSourceCase);
+    { directory: "p-home", expectedRoot: "$OPENCLAW_HOME" },
+    { directory: "p-home-other", expectedRoot: path.resolve(path.sep, "tmp", "p-home-other") },
+  ])("preserves source identity for $directory", ({ directory, expectedRoot }) => {
+    const homeDir = path.resolve(path.sep, "tmp", "p-home");
+    const source = path.resolve(path.sep, "tmp", directory, "p", "index.js");
+    const out = withPathResolutionEnv(homeDir, { OPENCLAW_HOME: homeDir }, () =>
+      formatPluginSourceForTable({ origin: "config", source }, PLUGIN_SOURCE_ROOTS),
+    );
+
+    expect(out).toEqual({ value: path.join(expectedRoot, "p", "index.js") });
+  });
+
+  it.each([
+    { origin: "bundled", rootKey: "stock", file: "index.ts" },
+    { origin: "workspace", rootKey: "workspace", file: "index.ts" },
+    { origin: "global", rootKey: "global", file: "index.js" },
+  ] as const)("shortens $origin sources under their root", ({ origin, rootKey, file }) => {
+    expect(
+      formatPluginSourceForTable(
+        { origin, source: path.join(PLUGIN_SOURCE_ROOTS[rootKey], "demo", file) },
+        PLUGIN_SOURCE_ROOTS,
+      ),
+    ).toEqual({ value: `${rootKey}:demo/${file}`, rootKey });
+  });
+
+  it.each([
+    { origin: "bundled", rootKey: "stock", kind: "missing" },
+    { origin: "workspace", rootKey: "workspace", kind: "missing" },
+    { origin: "global", rootKey: "global", kind: "empty" },
+    { origin: "bundled", rootKey: "stock", kind: "exact" },
+    { origin: "workspace", rootKey: "workspace", kind: "sibling" },
+    { origin: "config", rootKey: "global", kind: "configured" },
+  ] as const)(
+    "keeps the fallback for $origin sources with $kind roots",
+    ({ origin, rootKey, kind }) => {
+      const root = path.resolve(path.sep, "plugins");
+      const source =
+        kind === "exact" ? root : path.join(kind === "sibling" ? `${root}-other` : root, "demo.ts");
+      const roots = {
+        global: root,
+        ...(kind === "missing" ? {} : { [rootKey]: kind === "empty" ? "" : root }),
+      };
+      expect(formatPluginSourceForTable({ origin, source }, roots)).toEqual({ value: source });
+    },
+  );
 
   it("middle-truncates long out-of-root source paths for table rows", () => {
     const longSource = path.join(
@@ -111,15 +97,14 @@ describe("formatPluginSourceForTable", () => {
     if (!stock) {
       throw new Error("expected bundled plugin source root");
     }
-    expectResolvedSourceRoots({
-      homeDir,
-      env: rawEnv,
-      workspaceDir: "~/ws",
-      expected: {
-        stock,
-        global: path.join(homeDir, "state", "extensions"),
-        workspace: path.join(homeDir, "ws", ".openclaw", "extensions"),
-      },
+    expect(
+      withPathResolutionEnv(homeDir, rawEnv, (env) =>
+        resolvePluginSourceRoots({ env, workspaceDir: "~/ws" }),
+      ),
+    ).toEqual({
+      stock,
+      global: path.join(homeDir, "state", "extensions"),
+      workspace: path.join(homeDir, "ws", ".openclaw", "extensions"),
     });
   });
 });

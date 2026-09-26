@@ -1,7 +1,19 @@
-// Nextcloud Talk plugin module implements message adapter behavior.
-import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  defineChannelMessageAdapter,
+  type ChannelMessageSendTextContext,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { sendMessageNextcloudTalk } from "./send.js";
 import type { CoreConfig } from "./types.js";
+
+function sendNextcloudTalkMessage(ctx: ChannelMessageSendTextContext, text = ctx.text) {
+  return sendMessageNextcloudTalk(ctx.to, text, {
+    accountId: ctx.accountId ?? undefined,
+    replyTo: ctx.replyToId ?? undefined,
+    cfg: ctx.cfg as CoreConfig,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+  });
+}
 
 export const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
   id: "nextcloud-talk",
@@ -13,17 +25,11 @@ export const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
     },
   },
   send: {
-    text: async ({ cfg, to, text, accountId, replyToId }) =>
-      await sendMessageNextcloudTalk(to, text, {
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-        cfg: cfg as CoreConfig,
-      }),
-    media: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
-      await sendMessageNextcloudTalk(to, mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text, {
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-        cfg: cfg as CoreConfig,
-      }),
+    text: sendNextcloudTalkMessage,
+    media: (ctx) =>
+      sendNextcloudTalkMessage(
+        ctx,
+        ctx.mediaUrl ? `${ctx.text}\n\nAttachment: ${ctx.mediaUrl}` : ctx.text,
+      ),
   },
 });

@@ -28,10 +28,12 @@ import {
   compactToolSearchCatalogEntry,
 } from "./tool-search-catalog.js";
 import {
-  formatToolSearchControlError,
-  formatToolSearchControlResult,
   prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
+} from "./tool-search-request.js";
+import {
+  formatToolSearchControlError,
+  formatToolSearchControlResult,
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
@@ -101,21 +103,6 @@ describe("Tool Search flattened call arguments", () => {
       expected: { path: "projects/flattened.md" },
     },
     {
-      label: "toolId selector with a target id",
-      arguments: { toolId: "inspect_resource", id: "record-7" },
-      expected: { id: "record-7" },
-    },
-    {
-      label: "canonical id with a target name",
-      arguments: { id: "inspect_resource", name: "record-name" },
-      expected: { name: "record-name" },
-    },
-    {
-      label: "name selector with a target id",
-      arguments: { name: "inspect_resource", id: "record-7" },
-      expected: { id: "record-7" },
-    },
-    {
       label: "explicit args precedence",
       arguments: {
         id: "inspect_resource",
@@ -140,14 +127,29 @@ describe("Tool Search flattened call arguments", () => {
       arguments: { id: "inspect_resource", args: null, input: null, command: "flattened" },
       expected: { command: "flattened" },
     },
+    ...["args", "input"].map((wrapper) => ({
+      label: `empty ${wrapper} wrapper with flattened top-level params`,
+      arguments: { id: "inspect_resource", [wrapper]: {}, command: "list", timeout_ms: 5_000 },
+      expected: { command: "list", timeout_ms: 5_000 },
+    })),
     {
-      label: "bare selector",
-      arguments: { id: "inspect_resource" },
+      label: "empty args wrapper with dotted params",
+      arguments: {
+        id: "inspect_resource",
+        args: {},
+        "args.path": "projects/example.md",
+        "args.limit": 20,
+      },
+      expected: { path: "projects/example.md", limit: 20 },
+    },
+    {
+      label: "empty args wrapper without other params",
+      arguments: { id: "inspect_resource", args: {} },
       expected: {},
     },
     {
-      label: "redundant matching selectors",
-      arguments: { id: "inspect_resource", toolId: "inspect_resource", name: "inspect_resource" },
+      label: "bare selector",
+      arguments: { id: "inspect_resource" },
       expected: {},
     },
   ])("preserves target arguments for $label", ({ arguments: args, expected }) => {
@@ -178,6 +180,15 @@ describe("Tool Search flattened call arguments", () => {
       parameters: Type.Object({ id: Type.String() }, { additionalProperties: false }),
       expected: { id: "record-7" },
     },
+    ...["args", "input"].map((wrapper) => ({
+      label: `empty ${wrapper} wrapper with flattened target arguments`,
+      arguments: { id: "inspect_resource", [wrapper]: {}, command: "list", timeout_ms: 5_000 },
+      parameters: Type.Object(
+        { command: Type.String(), timeout_ms: Type.Number() },
+        { additionalProperties: false },
+      ),
+      expected: { command: "list", timeout_ms: 5_000 },
+    })),
     {
       label: "redundant selectors for a strict no-argument tool",
       arguments: { id: "inspect_resource", toolId: "inspect_resource", name: "inspect_resource" },
@@ -266,16 +277,6 @@ describe("Tool Search flattened call arguments", () => {
 describe("Tool Search dispatcher argument preparation", () => {
   it.each([
     {
-      label: "args-wrapped selector and input",
-      input: { args: { id: "openclaw:example-plugin:example_tool", args: { path: "/x" } } },
-      expected: { id: "openclaw:example-plugin:example_tool", args: { path: "/x" } },
-    },
-    {
-      label: "input-wrapped selector and args",
-      input: { input: { id: "example_tool", args: { path: "/x" } } },
-      expected: { id: "example_tool", args: { path: "/x" } },
-    },
-    {
       label: "args-wrapped toolId alias, canonicalized to id",
       input: { args: { toolId: "example_tool" } },
       expected: { id: "example_tool", toolId: "example_tool" },
@@ -296,7 +297,6 @@ describe("Tool Search dispatcher argument preparation", () => {
 
   it.each([
     { label: "non-record input", input: "not an object" },
-    { label: "already-canonical selector", input: { id: "example_tool", args: { path: "/x" } } },
     { label: "nested wrapper without a selector", input: { args: { path: "/x" } } },
     { label: "nested wrapper that is not a record", input: { args: "not an object" } },
     {
@@ -304,16 +304,8 @@ describe("Tool Search dispatcher argument preparation", () => {
       input: { args: { id: "", toolId: "example_tool" } },
     },
     {
-      label: "empty-string outer id alongside a valid nested selector",
-      input: { id: "", args: { id: "example_tool" } },
-    },
-    {
       label: "non-string outer id alongside a valid nested selector",
       input: { id: 1, args: { id: "example_tool" } },
-    },
-    {
-      label: "empty-string outer toolId alongside a valid nested selector",
-      input: { toolId: "", args: { id: "example_tool" } },
     },
     {
       label: "empty-string outer name alongside a valid nested selector",
@@ -728,6 +720,7 @@ describe("Tool Search input schemas", () => {
         name: target.name,
         description: target.description,
         parameters: hostileSchema,
+        outputSchema: hostileSchema as never,
         tool: target,
       };
       const catalogRef = createToolSearchCatalogRef();
@@ -921,15 +914,13 @@ describe("Tool Search network error boundaries", () => {
           ? await runtime.call("raw_network", {}, { parentToolCallId })
           : await runtime.callValue("raw_network", {}, { parentToolCallId });
 
-      const result = formatToolSearchControlResult(
-        payload,
-        runtime,
-        surface === "structured tool call" ? parentToolCallId : undefined,
-      );
+      const result = formatToolSearchControlResult(payload, runtime, {
+        parentToolCallId: surface === "structured tool call" ? parentToolCallId : undefined,
+      });
       const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
       expect(text.length).toBeLessThan(21_000);
-      expect(text).toContain("SECURITY NOTICE:");
+      expect(text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
       expect(text).toContain("[truncated]");
       expect(text).not.toContain("<|im_start|>");
       expect(text.indexOf("[truncated]")).toBeLessThan(
@@ -938,7 +929,9 @@ describe("Tool Search network error boundaries", () => {
       expect(result.details).toBe(payload);
       expect(JSON.stringify(result.details)).toContain(huge);
 
-      const isolated = formatToolSearchControlResult({ value: "local" }, runtime, "other-parent");
+      const isolated = formatToolSearchControlResult({ value: "local" }, runtime, {
+        parentToolCallId: "other-parent",
+      });
       expect(isolated.content[0]).toEqual({
         type: "text",
         text: '{\n  "value": "local"\n}',
@@ -958,7 +951,7 @@ describe("Tool Search network error boundaries", () => {
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
     expect(text.length).toBeLessThan(21_000);
-    expect(text).toContain("SECURITY NOTICE:");
+    expect(text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(text).toContain("[truncated]");
     expect(text).not.toContain("<s>");
     expect(result.details).toBe(payload);

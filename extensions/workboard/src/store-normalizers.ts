@@ -96,8 +96,20 @@ export function normalizeBoardMetadata(
     1000,
     "board description",
   );
-  const icon = normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
-  const color = normalizeBoundedString(input.color, fallback?.color, 40, "board color");
+  const clearAppearance = input.clearAppearance === undefined ? [] : input.clearAppearance;
+  if (
+    !Array.isArray(clearAppearance) ||
+    clearAppearance.some((field) => field !== "icon" && field !== "color")
+  ) {
+    throw new Error("clearAppearance must be an array containing only icon or color.");
+  }
+  // Legacy empty/null inputs preserve appearance. Explicit clears take precedence.
+  const icon = clearAppearance.includes("icon")
+    ? undefined
+    : normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
+  const color = clearAppearance.includes("color")
+    ? undefined
+    : normalizeBoundedString(input.color, fallback?.color, 40, "board color");
   let automationJobId = fallback?.automationJobId;
   if (Object.hasOwn(input, "automationJobId")) {
     automationJobId = normalizeOptionalString(input.automationJobId);
@@ -602,13 +614,7 @@ function normalizeEvent(value: unknown): WorkboardEvent | null {
 }
 
 export function normalizeEvents(value: unknown): WorkboardEvent[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map(normalizeEvent)
-    .filter((event): event is WorkboardEvent => event !== null)
-    .slice(-MAX_CARD_EVENTS);
+  return normalizeList(value, normalizeEvent, MAX_CARD_EVENTS) ?? [];
 }
 
 function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {

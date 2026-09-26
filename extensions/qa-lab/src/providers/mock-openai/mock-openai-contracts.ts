@@ -7,7 +7,11 @@ import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
-export type MockOpenAiRequestKind = "agent-initial" | "compaction-summary" | "tool-continuation";
+export type MockOpenAiRequestKind =
+  | "agent-initial"
+  | "compaction-summary"
+  | "tool-continuation"
+  | "activity-summary";
 export type MockCompactionSummaryFaultMode =
   | "none"
   | "empty-output-once"
@@ -19,6 +23,7 @@ export type QaMockProviderDispatchRequest = {
   route: "responses" | "anthropic-messages";
   body: Record<string, unknown>;
   raw: string;
+  headers?: IncomingMessage["headers"];
 };
 
 export type QaMockProviderFailure = {
@@ -26,6 +31,7 @@ export type QaMockProviderFailure = {
   type: string;
   code?: string;
   message: string;
+  retryAfterSeconds?: number;
   presentation?: "anthropic-thinking";
 };
 
@@ -146,27 +152,9 @@ export type MockToolCallItem = { id: string; call_id: string; name: string; name
   | { type: "custom_tool_call"; input: string; status: "completed" }
 );
 
-/**
- * Provider variant tag for `body.model`. The mock previously ignored
- * `body.model` for dispatch and only echoed it in the prose output, which
- * made the parity gate tautological when run against the mock alone
- * (both providers produced identical scenario plans by construction).
- * Tagging requests with a normalized variant lets individual scenario
- * branches opt into provider-specific behavior while the rest of the
- * dispatcher stays shared, and lets `/debug/requests` consumers verify
- * which provider lane a given request came from without re-parsing the
- * raw model string.
- *
- * Policy:
- * - `openai/*`, `gpt-*`, `o1-*`, anything starting with `gpt-` → `"openai"`
- * - `anthropic/*`, `claude-*` → `"anthropic"`
- * - Everything else (including empty strings) → `"unknown"`
- *
- * The `/v1/messages` route always feeds `body.model` straight through,
- * so an Anthropic request with an `openai/gpt-5.6-luna` model string is still
- * classified as `"openai"`. That matches the parity program's convention
- * where the provider label is the source of truth, not the HTTP route.
- */
+// Model identity, not HTTP route, selects the parity lane. An Anthropic wire
+// request may intentionally carry an OpenAI model; debug consumers retain this
+// classification to verify which provider-specific scenario plan was exercised.
 type MockOpenAiProviderVariant = "openai" | "anthropic" | "unknown";
 
 export function resolveProviderVariant(model: string | undefined): MockOpenAiProviderVariant {
@@ -198,8 +186,11 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
   return "unknown";
 }
 
+export type MockOpenAiCodeModeExecSurface = "native" | "guest";
+
 export type MockOpenAiRequestSnapshot = {
   cursor: number;
+  sessionId?: string;
   raw: string;
   body: Record<string, unknown>;
   prompt: string;
@@ -208,6 +199,7 @@ export type MockOpenAiRequestSnapshot = {
   toolOutput: string;
   model: string;
   providerVariant: MockOpenAiProviderVariant;
+  codeModeExecSurface?: MockOpenAiCodeModeExecSurface;
   imageInputCount: number;
   requestKind: MockOpenAiRequestKind;
   compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
@@ -225,17 +217,26 @@ export type MockOpenAiRequestSnapshot = {
 
 export type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
 
+/** Snapshot fields known before the mock decides an outcome or plans a tool. */
+export type MockOpenAiRequestSnapshotBase = Omit<
+  MockOpenAiRequestSnapshotInput,
+  | "outcome"
+  | "errorCode"
+  | "plannedToolCallId"
+  | "plannedToolItemId"
+  | "plannedToolName"
+  | "plannedWireToolName"
+  | "plannedToolArgs"
+  | "toolOutputCallId"
+  | "toolOutputStructuredError"
+>;
+
 // Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
 // This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
 export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
 export const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
 
-// Anthropic /v1/messages request/response shapes the mock actually needs.
-// This is a subset of the real Anthropic Messages API — just enough so the
-// QA suite can run its parity pack against a "baseline" Anthropic provider
-// without needing real API keys. The scenarios drive their dispatch through
-// the shared mock scenario logic (buildResponsesPayload), with `model`
-// preserved so provider-aware branches can intentionally diverge.
+// Anthropic wire fields used by the shared Responses scenario dispatcher.
 export type AnthropicMessageContentBlock =
   | { type: "text"; text: string }
   | {
@@ -277,10 +278,8 @@ export const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility chec
 export const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
 export const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 export const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
-export const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE =
-  /empty response after write recovery qa check/i;
-export const QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE =
-  /empty response after write exhaustion qa check/i;
+export const QA_EMPTY_RESPONSE_SIDE_EFFECT_PROMPT_RE =
+  /empty response after write (recovery|exhaustion) qa check/i;
 export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery gateway qa check/i;
 export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
   /repeated request queued reply gateway qa check/i;
@@ -292,7 +291,6 @@ export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress( error)? qa check/i;
 export const QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE = /global tool loop breaker qa check/i;
 export const QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE = /provider http 503 after tool qa check/i;
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
-export const QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE = /qa msteams ambiguous gateway timeout/i;
 export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
 export const QA_THREAD_REPLY_RECEIPT_PROMPT_RE =
   /qa thread reply receipt check[\s\S]*channel id: `([^`]+)`[\s\S]*thread id: `([^`]+)`/i;
@@ -348,9 +346,13 @@ export const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback w
 export const QA_SUBAGENT_SELF_YIELD_WORKER_RE = /subagent self yield qa worker/i;
 export const QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE = /subagent self yield qa remote job finished/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE =
-  /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback)/i;
+  /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback|private)/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE =
   /subagent terminal reply qa worker:\s*(visible|silent|empty|restart|fallback)/i;
+export const QA_SUBAGENT_PRIVATE_WORKER_RE =
+  /subagent private completion qa worker:\s*(first|second)/i;
+export const QA_SUBAGENT_PRIVATE_RESULT_RE = /QA-PARENT-PRIVATE-CHILD1-[A-F0-9]{32}/u;
+export const QA_SUBAGENT_PRIVATE_SECOND_RESULT = "QA-PARENT-PRIVATE-CHILD2-DONE";
 export const QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE = /reply to the requester after spawning/i;
 export const QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE =
   /return no assistant output after the write/i;

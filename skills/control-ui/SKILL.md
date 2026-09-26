@@ -45,6 +45,8 @@ typed tool exists.
 Read [hosting.md](references/hosting.md) before opening or repairing a remote
 Control UI. Read [dashboards.md](references/dashboards.md) before creating or
 restructuring a board.
+Use the `visualize` skill for widget composition, libraries, interactive code
+explanations, and dashboard content. Keep session and board organization here.
 
 ## Navigate and arrange the UI
 
@@ -71,6 +73,8 @@ Control UI tab when possible.
 2. Create or rename tabs with `tab_create` / `tab_update`; use short lowercase
    slug IDs.
 3. Add content with the correct owner:
+   - native text, metrics, tables, charts, and links: `show_widget` with
+     `pin: true` and `report`;
    - self-contained custom HTML/SVG or registered-source content:
      `show_widget` with `pin: true`;
    - trusted plugin widgets: `dashboard widget_put` with an advertised

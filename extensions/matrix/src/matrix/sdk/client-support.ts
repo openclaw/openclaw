@@ -4,16 +4,9 @@ import type {
   MatrixCryptoBootstrapResult,
 } from "./crypto-bootstrap.js";
 
-export type MatrixOwnDeviceVerificationStatus = {
-  encryptionEnabled: boolean;
-  userId: string | null;
-  deviceId: string | null;
-  // "verified" is intentionally strict: this device must be trusted through the
-  // Matrix cross-signing identity chain, not merely signed by the owner key.
-  verified: boolean;
-  localVerified: boolean;
-  crossSigningVerified: boolean;
-  signedByOwner: boolean;
+// Own-device "verified" requires the Matrix cross-signing identity chain,
+// not merely a signature from the owner key.
+export type MatrixOwnDeviceVerificationStatus = MatrixDeviceVerificationStatus & {
   recoveryKeyStored: boolean;
   recoveryKeyCreatedAt: string | null;
   recoveryKeyId: string | null;

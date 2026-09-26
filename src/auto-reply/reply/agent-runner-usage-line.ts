@@ -25,24 +25,29 @@ const formatResponseUsageLine = (
   }
   const input = usage.input;
   const output = usage.output;
+  const hasSplitTokens = typeof input === "number" || typeof output === "number";
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
+  const totalLabel =
+    !hasSplitTokens && typeof usage.total === "number"
+      ? `${formatTokenCount(usage.total)} total`
+      : undefined;
   const cacheRead = typeof usage.cacheRead === "number" ? usage.cacheRead : undefined;
   const cacheWrite = typeof usage.cacheWrite === "number" ? usage.cacheWrite : undefined;
   const canPriceUsage =
     usage.cost !== undefined || (typeof input === "number" && typeof output === "number");
   const cost = params.showCost && canPriceUsage ? estimateAggregateUsageCost(params) : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
-  if (typeof input !== "number" && typeof output !== "number" && !costLabel) {
-    return null;
-  }
   const cacheSuffix =
     (typeof cacheRead === "number" && cacheRead > 0) ||
     (typeof cacheWrite === "number" && cacheWrite > 0)
       ? ` · cache ${formatTokenCount(cacheRead ?? 0)} cached / ${formatTokenCount(cacheWrite ?? 0)} new`
       : "";
+  if (!hasSplitTokens && !totalLabel && !cacheSuffix && !costLabel) {
+    return null;
+  }
   const suffix = costLabel ? ` · est ${costLabel}` : "";
-  return `Usage: ${inputLabel} in / ${outputLabel} out${cacheSuffix}${suffix}`;
+  return `Usage: ${totalLabel ?? `${inputLabel} in / ${outputLabel} out`}${cacheSuffix}${suffix}`;
 };
 
 export const resolveResponseUsageLine = (params: {
@@ -92,13 +97,7 @@ export const resolveResponseUsageLine = (params: {
 };
 
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
-  let index = -1;
-  for (let i = payloads.length - 1; i >= 0; i -= 1) {
-    if (payloads[i]?.text) {
-      index = i;
-      break;
-    }
-  }
+  const index = payloads.findLastIndex((payload) => payload?.text);
   if (index === -1) {
     return [...payloads, { text: line, isStatusNotice: true }];
   }

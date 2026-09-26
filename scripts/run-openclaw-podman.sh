@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Rootless OpenClaw in Podman: run after one-time setup.
 #
 # One-time setup (from repo root): ./scripts/podman/setup.sh
@@ -188,10 +192,24 @@ sync_local_control_ui_origins_via_cli() {
   local config_dir=""
   local allowed_json=""
   local merged_json=""
+  local public_origin=""
   config_dir="$(dirname "$file")"
   if ! command -v openclaw >/dev/null 2>&1; then
     echo "Warning: openclaw not found; unable to sync gateway.controlUi.allowedOrigins in $file." >&2
     return 0
+  fi
+  allowed_json="$(
+    OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
+      openclaw config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+  )"
+  if [[ -z "$allowed_json" ]]; then
+    public_origin="$(
+      OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
+        openclaw config get gateway.publicOrigin 2>/dev/null || true
+    )"
+    if [[ -n "${public_origin//[[:space:]]/}" ]]; then
+      return 0
+    fi
   fi
   if ! command -v python3 >/dev/null 2>&1; then
     OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
@@ -200,10 +218,6 @@ sync_local_control_ui_origins_via_cli() {
       --strict-json >/dev/null
     return 0
   fi
-  allowed_json="$(
-    OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
-      openclaw config get gateway.controlUi.allowedOrigins --json 2>/dev/null || true
-  )"
   merged_json="$(python3 - "$port" "$allowed_json" <<'PY'
 import json
 import sys
@@ -278,6 +292,8 @@ control_ui = gateway.setdefault("controlUi", {})
 if not isinstance(control_ui, dict):
     raise SystemExit(f"{path}: expected gateway.controlUi object")
 allowed = control_ui.get("allowedOrigins")
+public_origin = gateway.get("publicOrigin")
+inherits_public_origin = "allowedOrigins" not in control_ui and isinstance(public_origin, str) and public_origin.strip()
 desired = [
     f"http://127.0.0.1:{port}",
     f"http://localhost:{port}",
@@ -298,7 +314,8 @@ for origin in desired:
     if origin not in seen:
         cleaned.append(origin)
         seen.add(origin)
-control_ui["allowedOrigins"] = cleaned
+if not inherits_public_origin:
+    control_ui["allowedOrigins"] = cleaned
 with open(tmp, "w", encoding="utf-8") as fh:
     json.dump(data, fh, indent=2)
     fh.write("\n")
@@ -382,7 +399,7 @@ if [[ "$RUN_SETUP" == true ]]; then
   TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
   podman run --pull="$PODMAN_PULL" --rm -it \
     --init \
-    "${USERNS_ARGS[@]}" "${RUN_USER_ARGS[@]}" \
+    ${USERNS_ARGS[@]+"${USERNS_ARGS[@]}"} ${RUN_USER_ARGS[@]+"${RUN_USER_ARGS[@]}"} \
     -e HOME=/home/node -e TERM=xterm-256color -e BROWSER=echo \
     -e NPM_CONFIG_CACHE=/home/node/.openclaw/.npm \
     -e OPENCLAW_NO_RESPAWN=1 \
@@ -398,7 +415,7 @@ TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
 run_podman_detached --pull="$PODMAN_PULL" -d --replace \
   --name "$CONTAINER_NAME" \
   --init \
-  "${USERNS_ARGS[@]}" "${RUN_USER_ARGS[@]}" \
+  ${USERNS_ARGS[@]+"${USERNS_ARGS[@]}"} ${RUN_USER_ARGS[@]+"${RUN_USER_ARGS[@]}"} \
   -e HOME=/home/node -e TERM=xterm-256color \
   -e NPM_CONFIG_CACHE=/home/node/.openclaw/.npm \
   -e OPENCLAW_NO_RESPAWN=1 \

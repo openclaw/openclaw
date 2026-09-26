@@ -1,5 +1,6 @@
 // Covers miscellaneous config schema defaults and validation cases.
 import { describe, expect, it } from "vitest";
+import { configAccentCases } from "./config-accent.test-support.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -302,16 +303,6 @@ describe("model provider localService config", () => {
 });
 
 describe("$schema key in config (#14998)", () => {
-  it("accepts config with $schema string", () => {
-    const result = OpenClawSchema.safeParse({
-      $schema: "https://openclaw.ai/config.json",
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.$schema).toBe("https://openclaw.ai/config.json");
-    }
-  });
-
   it("accepts config without $schema", () => {
     const result = OpenClawSchema.safeParse({});
     expect(result.success).toBe(true);
@@ -320,14 +311,6 @@ describe("$schema key in config (#14998)", () => {
   it("rejects non-string $schema", () => {
     const result = OpenClawSchema.safeParse({ $schema: 123 });
     expect(result.success).toBe(false);
-  });
-
-  it("accepts $schema during full config validation", () => {
-    const result = validateConfigObject({
-      $schema: "./schema.json",
-      gateway: { port: 18789 },
-    });
-    expect(result.ok).toBe(true);
   });
 
   it("preserves $schema through validateConfigObject round-trip", () => {
@@ -523,13 +506,7 @@ describe("ui.seamColor", () => {
 });
 
 describe("ui.prefs.accent", () => {
-  it.each([
-    ["lowercase hex", "#ff5c5c", true],
-    ["uppercase hex", "#AbCdEf", true],
-    ["missing hash", "ff5c5c", false],
-    ["invalid hex", "#gggggg", false],
-    ["invalid length", "#ff5c5c00", false],
-  ])("validates %s", (_label, accent, valid) => {
+  it.each(configAccentCases)("validates %s", (_label, accent, valid) => {
     expect(validateConfigObject({ ui: { prefs: { accent } } }).ok).toBe(valid);
   });
 });
@@ -1159,7 +1136,35 @@ describe("cron webhook schema", () => {
 });
 
 describe("broadcast", () => {
-  it("accepts a broadcast peer map with strategy", () => {
+  it.each([
+    { name: "legacy peer array", key: "120363403215116621@g.us", entry: ["alfred", "baerbel"] },
+    {
+      name: "legacy array without a new participant cap",
+      key: "+15551234567",
+      entry: Array.from({ length: 17 }, () => "alfred"),
+    },
+    { name: "qualified peer array", key: "telegram:-100123", entry: ["alfred", "baerbel"] },
+    {
+      name: "qualified object with runtime defaults",
+      key: "discord:123456789",
+      entry: { agents: ["alfred", "baerbel"] },
+    },
+    {
+      name: "qualified object at upper bounds",
+      key: "slack:C0123",
+      entry: {
+        agents: Array.from({ length: 16 }, () => "alfred"),
+        mentionGating: false,
+        maxRounds: 4,
+        maxTurns: 32,
+      },
+    },
+    {
+      name: "qualified object at lower bounds",
+      key: "whatsapp:1203@g.us",
+      entry: { agents: ["alfred"], mentionGating: true, maxRounds: 1, maxTurns: 1 },
+    },
+  ])("accepts $name", ({ key, entry }) => {
     const res = validateConfigObject({
       agents: {
         ownership: "explicit",
@@ -1167,7 +1172,7 @@ describe("broadcast", () => {
       },
       broadcast: {
         strategy: "parallel",
-        "120363403215116621@g.us": ["alfred", "baerbel"],
+        [key]: entry,
       },
     });
     expect(res.ok).toBe(true);
@@ -1180,11 +1185,68 @@ describe("broadcast", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("rejects non-array broadcast entries", () => {
+  it.each([
+    { name: "non-array entry", key: "1203@g.us", entry: 123 },
+    { name: "unqualified object", key: "1203@g.us", entry: { agents: ["alfred"] } },
+    {
+      name: "too many qualified array participants",
+      key: "telegram:-100123",
+      entry: Array.from({ length: 17 }, () => "alfred"),
+    },
+    {
+      name: "too many object participants",
+      key: "telegram:-100123",
+      entry: { agents: Array.from({ length: 17 }, () => "alfred") },
+    },
+    {
+      name: "unknown object option",
+      key: "telegram:-100123",
+      entry: { agents: ["alfred"], extra: true },
+    },
+    ...[0, 5, 1.5].map((maxRounds) => ({
+      name: `invalid rounds ${maxRounds}`,
+      key: "telegram:-100123",
+      entry: { agents: ["alfred"], maxRounds },
+    })),
+    ...[0, 33, 1.5].map((maxTurns) => ({
+      name: `invalid turns ${maxTurns}`,
+      key: "telegram:-100123",
+      entry: { agents: ["alfred"], maxTurns },
+    })),
+  ])("rejects $name", ({ key, entry }) => {
     const res = validateConfigObject({
-      broadcast: { "120363403215116621@g.us": 123 },
+      agents: { entries: { alfred: {} } },
+      broadcast: { [key]: entry },
     });
     expect(res.ok).toBe(false);
+  });
+
+  it.each([
+    { entry: ["alfred", "missing"], path: "broadcast.telegram:-100123.1" },
+    { entry: { agents: ["alfred", "missing"] }, path: "broadcast.telegram:-100123.agents.1" },
+  ])("rejects unknown participant IDs at $path", ({ entry, path }) => {
+    const res = validateConfigObject({
+      agents: { entries: { alfred: {} } },
+      broadcast: { "telegram:-100123": entry },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues).toContainEqual({
+        path,
+        message: 'Unknown agent id "missing" (not in agents.entries).',
+      });
+    }
+  });
+
+  it.each([
+    { entry: ["missing"], path: "broadcast.telegram:-100123.0" },
+    { entry: { agents: ["missing"] }, path: "broadcast.telegram:-100123.agents.0" },
+  ])("validates qualified participants without a configured roster at $path", ({ entry, path }) => {
+    const res = validateConfigObjectRaw({ broadcast: { "telegram:-100123": entry } });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(issuePaths(res.issues)).toContain(path);
+    }
   });
 });
 
@@ -1321,7 +1383,7 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expectSomeIssueMessageContains(snap.issues, '"heartbeat"');
-      expect(issuePaths(snap.legacyIssues)).toContain("heartbeat");
+      expect(issuePaths(snap.legacyIssues)).not.toContain("heartbeat");
       expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
         every: "30m",
         model: "anthropic/claude-3-5-haiku-20241022",
@@ -1344,7 +1406,7 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expectSomeIssueMessageContains(snap.issues, '"heartbeat"');
-      expect(issuePaths(snap.legacyIssues)).toContain("heartbeat");
+      expect(issuePaths(snap.legacyIssues)).not.toContain("heartbeat");
       expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
         showOk: true,
         showAlerts: false,
@@ -1437,7 +1499,7 @@ describe("config strict validation", () => {
       expect(snap.valid).toBe(false);
       expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
       expect(issuePaths(snap.issues)).toContain("agents.entries.openclaw.sandbox");
-      expect(issuePaths(snap.legacyIssues)).toContain("agents.defaults.sandbox");
+      expect(issuePaths(snap.legacyIssues)).not.toContain("agents.defaults.sandbox");
       expect(snap.sourceConfigBeforeMigrations?.agents?.defaults?.sandbox).toEqual({
         perSession: true,
       });

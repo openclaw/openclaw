@@ -236,10 +236,10 @@ export class TerminalPanelUploadController {
         return;
       }
 
-      let uploadedPath: string;
+      let uploaded: Awaited<ReturnType<typeof uploadTerminalFile>>;
       const uploadStartedAtMs = Date.now();
       try {
-        const result = await uploadTerminalFile(
+        uploaded = await uploadTerminalFile(
           client,
           batch.tab.gatewaySessionId,
           { name: file.name, contentBase64 },
@@ -248,13 +248,17 @@ export class TerminalPanelUploadController {
         if (!this.ensureCurrent(batch)) {
           return;
         }
-        uploadedPath = result.path;
       } catch (error) {
         this.failBatch(batch, error, isRetryableUploadError(error));
         return;
       }
+      let uploadedPath: string;
       try {
-        uploadedPath = quoteTerminalUploadPath(uploadedPath, batch.tab.shell);
+        uploadedPath = quoteTerminalUploadPath(
+          uploaded.path,
+          batch.tab.shell,
+          uploaded.uploadPathStyle,
+        );
       } catch (error) {
         this.failBatch(batch, error, false);
         return;
@@ -354,14 +358,6 @@ export function renderTerminalPanelActions(params: {
   onHide: () => void;
 }) {
   return html`<div class="rail-header__actions tp-actions">
-    <input
-      class="tp-file-input"
-      type="file"
-      multiple
-      aria-hidden="true"
-      tabindex="-1"
-      @change=${params.upload.handleFileSelection}
-    />
     <button
       class="rail-header__action tp-icon tp-upload"
       type="button"
@@ -438,6 +434,14 @@ export function renderTerminalPanelActions(params: {
 
 export function renderTerminalUploadLayer(upload: TerminalPanelUploadController) {
   const progress = upload.progress;
+  const progressLabel =
+    progress &&
+    (progress.state === "failed"
+      ? t("terminal.uploadFailed")
+      : t("terminal.uploadProgress", {
+          current: String(progress.current),
+          total: String(progress.total),
+        }));
   return html`${
     upload.dragActive
       ? html`<div class="tp-drop-overlay">${t("terminal.dropFiles")}</div>`
@@ -452,16 +456,7 @@ export function renderTerminalUploadLayer(upload: TerminalPanelUploadController)
         >
           <div class="tp-upload-card__header">
             <div class="tp-upload-card__copy">
-              <div class="tp-upload-card__title">
-                ${
-                  progress.state === "failed"
-                    ? t("terminal.uploadFailed")
-                    : t("terminal.uploadProgress", {
-                        current: String(progress.current),
-                        total: String(progress.total),
-                      })
-                }
-              </div>
+              <div class="tp-upload-card__title">${progressLabel}</div>
               <div class="tp-upload-card__file">${progress.fileName}</div>
             </div>
             <div class="tp-upload-card__actions">
@@ -488,14 +483,7 @@ export function renderTerminalUploadLayer(upload: TerminalPanelUploadController)
           <div
             class="tp-upload-progress"
             role="progressbar"
-            aria-label=${
-              progress.state === "failed"
-                ? t("terminal.uploadFailed")
-                : t("terminal.uploadProgress", {
-                    current: String(progress.current),
-                    total: String(progress.total),
-                  })
-            }
+            aria-label=${progressLabel}
             aria-valuemin="0"
             aria-valuemax=${String(progress.total)}
             aria-valuenow=${String(progress.completed)}

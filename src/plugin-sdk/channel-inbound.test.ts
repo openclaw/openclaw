@@ -1,14 +1,14 @@
 /**
  * Tests channel inbound context and dispatch helper behavior.
  */
-import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  configureChannelAdmissionEvidenceCollection,
-  readChannelContextAdmissionEvidence,
-} from "../channels/message-access/admission-evidence.js";
+import { readChannelContextAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
 import { recordInboundSession } from "../channels/session.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
@@ -115,6 +115,20 @@ describe("channel-inbound public helpers", () => {
     );
     let staleEntryAtDispatch: ReturnType<typeof loadSessionEntry>;
     const { runChannelInboundEvent } = await import("openclaw/plugin-sdk/channel-inbound");
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+    const maintenanceCommitted = createDeferredCore();
+    // Cold Worker startup can exceed a polling deadline; observe its committed row instead.
+    onTestFinished(
+      sessionChanges.subscribe((change) => {
+        if (
+          "sessionKey" in change &&
+          change.sessionKey === staleSessionKey &&
+          change.storePath === databasePath
+        ) {
+          maintenanceCommitted.resolve();
+        }
+      }),
+    );
 
     const result = await runChannelInboundEvent({
       channel: "test",
@@ -163,12 +177,11 @@ describe("channel-inbound public helpers", () => {
     expect(result.dispatched).toBe(true);
     expect(staleEntryAtDispatch).toMatchObject({ sessionId: "published-inbound-stale" });
     expect(staleEntryAtDispatch?.archivedAt).toBeUndefined();
-    await vi.waitFor(() => {
-      expect(loadSessionEntry({ storePath, sessionKey: staleSessionKey })).toMatchObject({
-        sessionId: "published-inbound-stale",
-        updatedAt: 1,
-        archivedAt: expect.any(Number),
-      });
+    await maintenanceCommitted.promise;
+    expect(loadSessionEntry({ storePath, sessionKey: staleSessionKey })).toMatchObject({
+      sessionId: "published-inbound-stale",
+      updatedAt: 1,
+      archivedAt: expect.any(Number),
     });
   });
 
@@ -208,28 +221,23 @@ describe("channel-inbound public helpers", () => {
   });
 
   it("keeps public resolver and builder paths non-authoritative", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const channelIngress = await channelIngressRuntime.resolveStableChannelMessageIngress({
-        channelId: "test",
-        accountId: "default",
-        subject: { stableId: "u1" },
-        conversation: { kind: "group", id: "room-1" },
-        dmPolicy: "open",
-        groupPolicy: "open",
-      });
-      const ctx = buildChannelTurnContext({
-        ...createInboundParams({ channelIngress }),
-        message: {
-          rawBody: "hello",
-          inboundTurnKind: "user_request",
-        },
-      });
+    const channelIngress = await channelIngressRuntime.resolveStableChannelMessageIngress({
+      channelId: "test",
+      accountId: "default",
+      subject: { stableId: "u1" },
+      conversation: { kind: "group", id: "room-1" },
+      dmPolicy: "open",
+      groupPolicy: "open",
+    });
+    const ctx = buildChannelTurnContext({
+      ...createInboundParams({ channelIngress }),
+      message: {
+        rawBody: "hello",
+        inboundTurnKind: "user_request",
+      },
+    });
 
-      expect(ctx.InboundTurnKind).toBe("user_request");
-      expect(readChannelContextAdmissionEvidence(ctx)).toBeUndefined();
-    } finally {
-      cleanup();
-    }
+    expect(ctx.InboundTurnKind).toBe("user_request");
+    expect(readChannelContextAdmissionEvidence(ctx)).toBeUndefined();
   });
 });

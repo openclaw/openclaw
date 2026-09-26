@@ -1,8 +1,18 @@
-// Discord plugin module implements error body behavior.
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DISCORD_RESPONSE_BODY_SUMMARY_MAX_CHARS = 240;
+
+export function parseDiscordHttpErrorBody(raw: string): unknown {
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { message: truncateUtf16Safe(raw, 200) };
+  }
+}
 
 export function summarizeDiscordResponseBody(
   body: string,

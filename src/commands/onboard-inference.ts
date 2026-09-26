@@ -63,12 +63,6 @@ type DetectInferenceBackendsOptions = {
   deps?: DetectInferenceBackendsDeps;
 };
 
-type DetectNativeCodexAppServerOptions = {
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  probeLocalCommand?: typeof probeLocalCommand;
-};
-
 type CliAuthKind = "api-key" | "chatgpt-subscription" | "claude-subscription" | "token";
 type CliLoginState = {
   credentials: boolean | undefined;
@@ -157,17 +151,6 @@ async function probeCodexCommand(params: {
   }
   return pathProbe;
 }
-/** Detects a native Codex App Server without coupling it to inference selection. */
-async function detectNativeCodexAppServer(
-  options: DetectNativeCodexAppServerOptions = {},
-): Promise<LocalCommandProbe> {
-  return await probeCodexCommand({
-    probe: options.probeLocalCommand ?? probeLocalCommand,
-    env: options.env ?? process.env,
-    platform: options.platform ?? process.platform,
-  });
-}
-
 /**
  * Detect usable inference backends in ladder order. Returns candidates only
  * for backends that exist on this machine; explicit setup owns selection.
@@ -225,13 +208,11 @@ export async function detectInferenceBackends(
       credentials: true,
     });
   }
-  const envCandidates = detectAmbientInferenceBackends(env).filter(
-    (candidate) => candidate.kind === "openai-api-key" || candidate.kind === "anthropic-api-key",
-  );
+  const envCandidates = detectAmbientInferenceBackends(env);
 
   const [claudeProbe, codexProbe, geminiProbe] = await Promise.all([
     probe("claude"),
-    detectNativeCodexAppServer({ probeLocalCommand: probe, env, platform }),
+    probeCodexCommand({ probe, env, platform }),
     probe("gemini"),
   ]);
   const cliCandidates: InferenceBackendCandidate[] = [];

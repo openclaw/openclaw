@@ -5,6 +5,18 @@ import {
   type TalkEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { vi } from "vitest";
+import { DiscordAudioTransport } from "./audio-transport.js";
+import { getDiscordAudioTestWorker } from "./audio-worker.test-support.js";
+import * as sdkRuntime from "./sdk-runtime.js";
+
+vi.mock("./audio-worker-thread.js", async () => {
+  const { InProcessDiscordAudioWorker } = await import("./audio-worker.test-support.js");
+  return {
+    createDiscordAudioWorkerThread: (
+      options: import("./audio-worker-protocol.js").DiscordAudioWorkerOptions,
+    ) => new InProcessDiscordAudioWorker(undefined, { workerData: options }),
+  };
+});
 import { createVoiceCaptureState } from "./capture-state.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
 import { DiscordRealtimePlayer } from "./realtime-player.js";
@@ -13,11 +25,11 @@ import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import type { VoiceSessionEntry } from "./session.js";
 import { DiscordVoiceConversationQueue } from "./voice-conversation-input.js";
 
-export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) => void) {
+export function createRealtimePlaybackFixture(
+  onTalkEvent?: (event: TalkEvent) => void,
+  options: { outputAudioMode?: "response" | "continuous"; bargeIn?: boolean } = {},
+) {
   const voiceSdk = loadDiscordVoiceSdk();
-  const player = voiceSdk.createAudioPlayer({
-    behaviors: { noSubscriber: voiceSdk.NoSubscriberBehavior.Play, maxMissedFrames: 100 },
-  });
   // A signalling-only connection supplies the session shape without opening Discord sockets.
   const connection = new voiceSdk.VoiceConnection(
     {
@@ -29,6 +41,31 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
     },
     { adapterCreator: () => ({ sendPayload: () => true, destroy: () => {} }) },
   );
+  const sdkOverride = vi.spyOn(sdkRuntime, "loadDiscordVoiceSdk").mockReturnValue({
+    ...voiceSdk,
+    createAudioPlayer: () =>
+      voiceSdk.createAudioPlayer({
+        behaviors: { noSubscriber: voiceSdk.NoSubscriberBehavior.Play, maxMissedFrames: 100 },
+      }),
+    joinVoiceChannel: () => connection,
+    entersState: voiceSdk.entersState,
+  });
+  const audio = new DiscordAudioTransport(
+    {
+      guildId: "guild",
+      channelId: "voice",
+      group: "playback-integration",
+      selfDeaf: true,
+      selfMute: false,
+      connectTimeoutMs: 30_000,
+      reconnectGraceMs: 15_000,
+      captureSilenceGraceMs: 2_000,
+      realtime: true,
+    },
+    () => ({ sendPayload: () => true, destroy: () => {} }),
+  );
+  const player = getDiscordAudioTestWorker(audio)["player"];
+  sdkOverride.mockRestore();
   const entry: VoiceSessionEntry = {
     generation: 1,
     captureOnly: false,
@@ -47,8 +84,7 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
       lastRoutePolicy: "session",
       matchedBy: "default",
     },
-    connection,
-    player,
+    audio,
     playbackQueue: Promise.resolve(),
     processingQueue: Promise.resolve(),
     conversations: new DiscordVoiceConversationQueue(),
@@ -59,7 +95,7 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
     receiveRecovery: createVoiceReceiveRecoveryState(),
     stop: vi.fn(),
   };
-  const roomPlayer = new DiscordRealtimePlayer(player);
+  const roomPlayer = new DiscordRealtimePlayer(audio);
   const lanes: Array<{ playback: DiscordRealtimePlayback<unknown>; close: () => void }> = [];
   const createLane = (interruption: "decline" | "clear" | "unsupported" = "decline") => {
     let closed = false;
@@ -98,7 +134,8 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
       mode: "agent-proxy",
       onTerminalError,
       providerId: () => "openai",
-      realtimeConfig: () => undefined,
+      realtimeConfig: () =>
+        options.bargeIn === undefined ? undefined : { bargeIn: options.bargeIn },
       stopTerminally,
       stopped: () => closed,
       wakeNameRequired: () => false,
@@ -111,6 +148,7 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
         createBridge: (events) => {
           callbacks = events;
           return {
+            outputAudioMode: options.outputAudioMode,
             connect: async () => {},
             close: () => {},
             sendAudio: () => {},
@@ -127,7 +165,7 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
       },
       providerConfig: {},
       audioSink: {
-        sendAudio: (audio, metadata) => playback.sendOutputAudio(audio, metadata),
+        sendAudio: (pcm, metadata) => playback.sendOutputAudio(pcm, metadata),
         sendMark: (markName, acknowledge) =>
           acknowledge ? playback.sendOutputMark(acknowledge) : bridge?.acknowledgeMark(markName),
         getPlaybackState: () => playback.getPlaybackState(),
@@ -149,11 +187,12 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
       stopTerminally,
       sendUserMessage,
       acknowledgeMark,
-      close() {
+      close(this: void, preserveUnplayedSpeech = false) {
         closed = true;
-        playback.close();
+        playback.close(preserveUnplayedSpeech);
         harness.close();
-        bridge?.close();
+        // The synthetic provider closes synchronously, including reentrant player callbacks.
+        void bridge?.close();
         cancel.mockRestore();
       },
     };
@@ -161,6 +200,7 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
     return lane;
   };
   const firstLane = createLane();
+  const stopPlayer = player.stop.bind(player);
   const stop = vi.spyOn(player, "stop");
   const onPlayerError = vi.fn();
   player.on("error", onPlayerError);
@@ -169,8 +209,10 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
     voiceSdk,
     player,
     ...firstLane,
+    closeSpeaker: firstLane.close,
     createLane,
     roomPlayer,
+    stopPlayer,
     stop,
     onPlayerError,
     close() {
@@ -178,7 +220,7 @@ export function createRealtimePlaybackFixture(onTalkEvent?: (event: TalkEvent) =
       for (const lane of lanes) {
         lane.close();
       }
-      connection.destroy();
+      void audio.stop();
       player.off("error", onPlayerError);
       stop.mockRestore();
     },

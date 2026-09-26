@@ -4,6 +4,7 @@ import type { TerminalPtySpawnParams } from "./terminal-pty.js";
 export type TerminalPtyControl =
   | { type: "start"; params: TerminalPtySpawnParams }
   | { type: "input"; data: string }
+  | { type: "input"; dataBase64: string }
   | { type: "resize"; cols: number; rows: number }
   | { type: "kill"; signal?: string };
 
@@ -25,7 +26,8 @@ export function decodeTerminalPtyControl(raw: unknown): TerminalPtyControl | und
       Array.isArray(params.args) &&
       params.args.every((arg) => typeof arg === "string") &&
       (params.cwd === undefined || typeof params.cwd === "string") &&
-      isStringRecord(params.env) &&
+      (params.env === undefined || isStringRecord(params.env)) &&
+      (params.name === undefined || typeof params.name === "string") &&
       typeof params.cols === "number" &&
       typeof params.rows === "number"
     ) {
@@ -36,13 +38,19 @@ export function decodeTerminalPtyControl(raw: unknown): TerminalPtyControl | und
           args: params.args,
           cwd: params.cwd,
           env: params.env,
+          name: params.name,
           cols: params.cols,
           rows: params.rows,
         },
       };
     }
-  } else if (raw.type === "input" && typeof raw.data === "string") {
-    return { type: "input", data: raw.data };
+  } else if (raw.type === "input") {
+    if (typeof raw.data === "string") {
+      return { type: "input", data: raw.data };
+    }
+    if (typeof raw.dataBase64 === "string") {
+      return { type: "input", dataBase64: raw.dataBase64 };
+    }
   } else if (
     raw.type === "resize" &&
     typeof raw.cols === "number" &&

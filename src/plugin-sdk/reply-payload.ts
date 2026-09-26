@@ -20,6 +20,7 @@ export type { MediaPayload } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 /** Plugin-facing reply payload without core-only trusted local media internals. */
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
+
 export type AskUserQuestionOptionIndices = ReadonlyMap<string, ReadonlyMap<string, number>>;
 
 /** Read bounded Gateway-owned option ordering for one native ask_user question. */
@@ -72,10 +73,12 @@ export function resolveAskUserQuestionOptionIndex(params: {
 export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
 export {
   buildTtsSupplementMediaPayload,
+  copyReplyPayloadMetadata,
   FAST_MODE_AUTO_PROGRESS_KIND,
   getReplyPayloadTtsSupplement,
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
+  isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
   markReplyPayloadAsTtsSupplement,
 } from "../auto-reply/reply-payload.js";
@@ -488,19 +491,8 @@ export function formatTextWithAttachmentLinks(
   mediaUrls: string[],
 ): string {
   const trimmedText = text?.trim() ?? "";
-  if (!trimmedText && mediaUrls.length === 0) {
-    return "";
-  }
-  const mediaBlock = mediaUrls.length
-    ? mediaUrls.map((url) => `Attachment: ${url}`).join("\n")
-    : "";
-  if (!trimmedText) {
-    return mediaBlock;
-  }
-  if (!mediaBlock) {
-    return trimmedText;
-  }
-  return `${trimmedText}\n\n${mediaBlock}`;
+  const mediaBlock = mediaUrls.map((url) => `Attachment: ${url}`).join("\n");
+  return [trimmedText, mediaBlock].filter(Boolean).join("\n\n");
 }
 
 /** Send a caption with only the first media item, mirroring caption-limited channel transports. */

@@ -5,12 +5,10 @@ import {
   loadPluginMetadataSnapshotRuntime,
 } from "./plugin-metadata-snapshot-required.js";
 
-const { loadSource, createSourceLoader } = vi.hoisted(() => {
-  const sourceLoader = vi.fn();
-  return { loadSource: sourceLoader, createSourceLoader: vi.fn(() => sourceLoader) };
-});
-vi.mock("./plugin-module-loader-cache.js", () => ({
-  getCachedPluginSourceModuleLoader: createSourceLoader,
+const { loadNative } = vi.hoisted(() => ({ loadNative: vi.fn() }));
+vi.mock("./native-module-require.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./native-module-require.js")>()),
+  tryNativeRequireModule: loadNative,
 }));
 
 const readerKeys = ["getCurrentPluginMetadataSnapshot", "loadPluginMetadataSnapshot"] as const;
@@ -20,8 +18,7 @@ beforeEach(() => {
   for (const key of readerKeys) {
     delete snapshotReaderSlot[key];
   }
-  loadSource.mockReset();
-  createSourceLoader.mockClear();
+  loadNative.mockReset();
 });
 afterEach(() => {
   for (const key of readerKeys) {
@@ -55,7 +52,7 @@ describe("required plugin metadata readers", () => {
   it("keeps a registered missing-current result distinct from an unavailable runtime", () => {
     snapshotReaderSlot.getCurrentPluginMetadataSnapshot = () => undefined;
     expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBeUndefined();
-    expect(createSourceLoader).not.toHaveBeenCalled();
+    expect(loadNative).not.toHaveBeenCalled();
   });
 
   it.each(reads)("preserves the original registered $name error", ({ run }) => {
@@ -66,14 +63,19 @@ describe("required plugin metadata readers", () => {
     snapshotReaderSlot.getCurrentPluginMetadataSnapshot = fail;
     snapshotReaderSlot.loadPluginMetadataSnapshot = fail;
     expect(captureFailure(run)).toBe(failure);
-    expect(createSourceLoader).not.toHaveBeenCalled();
+    expect(loadNative).not.toHaveBeenCalled();
   });
 
-  it.each(reads)("propagates the required source-loader error for $name", ({ run }) => {
+  it.each(reads)("propagates the required native-loader error for $name", ({ run }) => {
     const failure = new Error("required metadata module failed to load");
-    loadSource.mockImplementation(() => {
+    loadNative.mockImplementation(() => {
       throw failure;
     });
     expect(captureFailure(run)).toBe(failure);
+  });
+
+  it.each(reads)("refuses a second transformed metadata owner for $name", ({ run }) => {
+    loadNative.mockReturnValue({ ok: false });
+    expect(run).toThrow("Host plugin metadata runtime requires native loading");
   });
 });

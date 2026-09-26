@@ -1,6 +1,7 @@
 import type { AssistantMessage, Context, Model, ToolResultMessage } from "@openclaw/llm-core";
 import type { ResponseOutputItem } from "openai/resources/responses/responses.js";
 import { expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import { resolveResponsesContinuationRequest } from "./openai-responses-continuation.js";
 import {
@@ -102,14 +103,13 @@ it.each([
         },
       ],
     };
-    const toolResult: ToolResultMessage = {
-      role: "toolResult",
-      toolCallId: "call_async|fc_async",
-      toolName: "lookup",
-      content: [{ type: "text", text: "found" }],
-      isError: false,
-      timestamp: 2,
-    };
+    const toolResult: ToolResultMessage = makeTextToolResult(
+      "call_async|fc_async",
+      "lookup",
+      "found",
+      false,
+      2,
+    );
     const context: Context = {
       messages: [
         { role: "user", content: "look up", timestamp: 1 },
@@ -224,14 +224,13 @@ it.each(["before", "after"] as const)(
         { type: "toolCall", id: "call_1|fc_1", name: "lookup", arguments: {}, async: true },
       ],
     };
-    const result: ToolResultMessage = {
-      role: "toolResult",
-      toolCallId: "call_1|fc_1",
-      toolName: "lookup",
-      content: [{ type: "text", text: "found" }],
-      isError: false,
-      timestamp: 2,
-    };
+    const result: ToolResultMessage = makeTextToolResult(
+      "call_1|fc_1",
+      "lookup",
+      "found",
+      false,
+      2,
+    );
     const input = { type: "function_call_output", call_id: "call_1", output: "found" };
     const response: AssistantMessage = {
       ...createOpenAIResponsesAssistantOutput(model),

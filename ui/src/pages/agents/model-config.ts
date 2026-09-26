@@ -2,17 +2,52 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 // Agent model selection staged against the runtime config form, split out of
 // agents-page.ts to keep that page inside the TS LOC ratchet.
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  resolveAgentConfig,
-  resolveEffectiveModelFallbacks,
-  resolveModelPrimary,
-} from "../../lib/agents/display.ts";
-import {
-  currentConfigObject,
-  type AgentConfigEntryTarget,
-} from "../../lib/config/config-state-model.ts";
+import type { AgentConfigEntryTarget } from "../../lib/config/config-state-model.ts";
 
 type RuntimeConfig = ApplicationContext["runtimeConfig"];
+
+export function createAgentModelActions(params: {
+  getRuntimeConfig: () => RuntimeConfig;
+  canUpdate: (agentId: string) => boolean;
+  onPrimaryChanged: () => void;
+}) {
+  return {
+    onModelChange: (agentId: string, modelId: string | null) => {
+      if (params.canUpdate(agentId)) {
+        stageAgentPrimaryModel(params.getRuntimeConfig(), agentId, modelId);
+        params.onPrimaryChanged();
+      }
+    },
+    onDecisionModelChange: (agentId: string, modelId: string | null) => {
+      if (params.canUpdate(agentId)) {
+        stageAgentDecisionModel(params.getRuntimeConfig(), agentId, modelId);
+      }
+    },
+    onModelFallbacksChange: (agentId: string, fallbacks: string[]) => {
+      if (params.canUpdate(agentId)) {
+        stageAgentModelFallbacks(params.getRuntimeConfig(), agentId, fallbacks);
+      }
+    },
+  };
+}
+
+/** Null inherits; an empty string is an explicit per-agent disable. */
+function stageAgentDecisionModel(
+  runtimeConfig: RuntimeConfig,
+  agentId: string,
+  model: string | null,
+) {
+  const target = runtimeConfig.agentEntry(agentId, { ensure: model !== null });
+  if (!target) {
+    return;
+  }
+  const path = [...target.path, "decisionModel"];
+  if (model === null) {
+    runtimeConfig.removeFormValue(path);
+  } else {
+    runtimeConfig.patchForm(path, model);
+  }
+}
 
 function modelEntry(target: AgentConfigEntryTarget) {
   return {
@@ -60,7 +95,7 @@ function existingModelParts(existing: unknown): {
 }
 
 /** Stage a primary-model change; clearing falls back to the inherited default. */
-export function stageAgentPrimaryModel(
+function stageAgentPrimaryModel(
   runtimeConfig: RuntimeConfig,
   agentId: string,
   modelId: string | null,
@@ -75,29 +110,21 @@ export function stageAgentPrimaryModel(
   stageModelShape(runtimeConfig, entry.path, modelId, existingModelParts(entry.existing).fallbacks);
 }
 
-/** Stage fallback-list edits, preserving the effective primary model shape. */
-export function stageAgentModelFallbacks(
+/** Stage an explicit fallback chain without changing primary inheritance. */
+function stageAgentModelFallbacks(
   runtimeConfig: RuntimeConfig,
   agentId: string,
   fallbacks: string[],
 ) {
-  const config = currentConfigObject(runtimeConfig.state);
-  const normalized = normalizeStringEntries(fallbacks);
-  const resolved = resolveAgentConfig(config, agentId);
-  const effective = resolveEffectiveModelFallbacks(resolved.entry?.model, resolved.defaults?.model);
-  const existingTarget = runtimeConfig.agentEntry(agentId);
-  const mustWrite = normalized.length > 0 || (effective?.length ?? 0) > 0 || existingTarget;
-  const target = mustWrite
-    ? (existingTarget ?? runtimeConfig.agentEntry(agentId, { ensure: true }))
-    : null;
+  const target = runtimeConfig.agentEntry(agentId, { ensure: true });
   if (!target) {
     return;
   }
   const entry = modelEntry(target);
-  const primary =
-    existingModelParts(entry.existing).primary ??
-    resolveModelPrimary(resolved.entry?.model) ??
-    resolveModelPrimary(resolved.defaults?.model) ??
-    null;
-  stageModelShape(runtimeConfig, entry.path, primary, normalized.length > 0 ? normalized : null);
+  stageModelShape(
+    runtimeConfig,
+    entry.path,
+    existingModelParts(entry.existing).primary,
+    normalizeStringEntries(fallbacks),
+  );
 }

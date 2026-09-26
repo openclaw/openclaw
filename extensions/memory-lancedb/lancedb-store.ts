@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { setTimeout as delay } from "node:timers/promises";
 import type * as LanceDB from "@lancedb/lancedb";
-import { Field, FixedSizeList, Float32, Float64, Schema, Utf8 } from "apache-arrow";
+import type * as Arrow from "apache-arrow";
 import type { MemoryCategory } from "./config.js";
 import { loadLanceDbModule } from "./lancedb-runtime.js";
 import {
@@ -11,6 +12,11 @@ import {
   MEMORY_TABLE_NAME,
   quoteLanceSqlString,
 } from "./lancedb-schema.js";
+
+// LanceDB's CJS serializer needs Arrow datatypes from the same module instance.
+const { Field, FixedSizeList, Float32, Float64, Schema, Utf8 }: typeof Arrow = createRequire(
+  import.meta.url,
+)("apache-arrow");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TABLE_INITIALIZATION_ATTEMPTS = 3;
@@ -53,7 +59,7 @@ type StoredMemoryRow = MemoryEntry & {
   agentId: string;
 };
 
-function createMemoryTableSchema(vectorDim: number): Schema {
+function createMemoryTableSchema(vectorDim: number): Arrow.Schema {
   return new Schema([
     new Field("id", new Utf8(), true),
     new Field("text", new Utf8(), true),
@@ -124,6 +130,8 @@ export class MemoryDB {
 
   private async ensureInitialized(): Promise<void> {
     if (this.table) {
+      // Retained handles need an explicit refresh to observe external commits.
+      await this.table.checkoutLatest();
       return;
     }
     if (this.initPromise) {
@@ -213,16 +221,10 @@ export class MemoryDB {
     limit?: number,
     options: MemoryListOptions = {},
   ): Promise<MemoryListEntry[]> {
-    await this.ensureInitialized();
-
-    let query = this.table!.query()
-      .where(memoryAgentPredicate(agentId))
-      .select(["id", "text", "importance", "category", "createdAt"]);
-    if (!options.orderByCreatedAt && limit !== undefined) {
-      query = query.limit(limit);
-    }
-
-    const rows = await query.toArray();
+    const rows = await this.query(agentId, {
+      columns: [...MEMORY_QUERY_COLUMNS],
+      limit: options.orderByCreatedAt ? undefined : limit,
+    });
     const entries = rows.map((row) => ({
       id: row.id as string,
       text: row.text as string,

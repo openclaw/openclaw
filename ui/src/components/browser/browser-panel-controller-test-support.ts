@@ -1,3 +1,4 @@
+import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import type { ReactiveController } from "lit";
 import { afterEach, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
@@ -29,22 +30,24 @@ export function setupBrowserPanelTestCleanup(): void {
 
 export function createBrowserClient(
   handleRequest: (envelope: BrowserRequestEnvelope) => Promise<unknown>,
-  options: { screencast?: boolean } = {},
+  options: { screencast?: boolean; sessionScoped?: boolean } = {},
 ) {
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method !== "browser.request") {
-      throw new Error(`Unexpected Gateway method: ${method}`);
-    }
-    const envelope = params as BrowserRequestEnvelope;
-    if (envelope.path === "/screencast" && !options.screencast) {
-      throw new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "Screencast unavailable",
-        details: { code: "SCREENCAST_UNSUPPORTED", reason: "playwright" },
-      });
-    }
-    return await handleRequest(envelope);
-  });
+  const request = vi.fn(
+    async (method: string, params?: unknown, _options?: GatewayClientRequestOptions) => {
+      if (method !== (options.sessionScoped ? "browser.dashboard.request" : "browser.request")) {
+        throw new Error(`Unexpected Gateway method: ${method}`);
+      }
+      const envelope = params as BrowserRequestEnvelope;
+      if (envelope.path === "/screencast" && !options.screencast) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Screencast unavailable",
+          details: { code: "SCREENCAST_UNSUPPORTED", reason: "playwright" },
+        });
+      }
+      return await handleRequest(envelope);
+    },
+  );
   return {
     client: {
       request,
@@ -74,6 +77,7 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
   readonly renderRoot = document.createElement("div");
   readonly resourceBasePath = "";
   readonly authToken = null;
+  sessionKey = "";
   available = true;
   isConnected = true;
   open = true;

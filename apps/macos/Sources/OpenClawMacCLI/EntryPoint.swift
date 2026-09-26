@@ -19,19 +19,25 @@ enum RootCommandAction: Equatable {
 struct OpenClawMacCLI {
     static func main() async {
         let args = Array(CommandLine.arguments.dropFirst())
-        switch resolveRootCommandAction(args) {
+        let context: MacCLIContext
+        do {
+            context = try MacCLIContext(arguments: args)
+        } catch {
+            exitMacCLI(error, json: args.contains("--json"))
+        }
+        switch resolveRootCommandAction(context.arguments) {
         case .usage:
             printUsage()
-        case let .control(commandArgs):
-            runMacControl(commandArgs)
+        case .control:
+            runMacControl(context)
         case let .connect(commandArgs):
-            await runConnect(commandArgs)
+            await runConnect(commandArgs, configURL: context.configURL)
         case let .configureRemote(commandArgs):
-            runConfigureRemote(commandArgs)
+            runConfigureRemote(commandArgs, context: context)
         case let .discover(commandArgs):
             await runDiscover(commandArgs)
         case let .wizard(commandArgs):
-            await runWizardCommand(commandArgs)
+            await runWizardCommand(commandArgs, configURL: context.configURL)
         case let .unknown(exitCode):
             fputs("openclaw-mac: unknown command\n", stderr)
             printUsage()
@@ -88,6 +94,8 @@ private func printUsage() {
       openclaw-mac discover [--timeout <ms>] [--json] [--include-local]
       openclaw-mac wizard [--url <ws://host:port>] [--token <token>] [--password <password>]
                           [--mode <local|remote>] [--workspace <path>] [--json]
+
+    All commands accept --profile <name>; overrides OPENCLAW_PROFILE (default: default).
 
     Examples:
       openclaw-mac connect

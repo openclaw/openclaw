@@ -1,7 +1,7 @@
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
-import { estimateFreshLlmBoundaryTokenPressure } from "../context-token-pressure.js";
+import { createFreshLlmBoundaryTokenEstimator } from "../context-token-pressure.js";
 
 /** Ephemeral foreground facts; a separately routed summarizer cannot reconstruct these. */
 export type CompactionRequestBudget = Readonly<{
@@ -58,30 +58,34 @@ export function createCompactionRequestBudget(params: {
   pendingQueuedContextMessages?: AgentMessage[];
   pendingAdditivePrompt?: string;
 }): CompactionRequestBudget {
-  const fixedTokens = estimateFreshLlmBoundaryTokenPressure({
-    ...params,
+  const estimateTokens = createFreshLlmBoundaryTokenEstimator(params);
+  const fixedTokens = estimateTokens({
     messages: [],
     prompt: "",
   });
   const pendingUserTokens =
-    estimateFreshLlmBoundaryTokenPressure({
-      ...params,
-      messages: [],
-      prompt: params.pendingPrompt ?? "",
-      imageCount: params.pendingImageCount,
-    }) - fixedTokens;
+    (params.pendingPrompt ?? "") === "" && (params.pendingImageCount ?? 0) === 0
+      ? 0
+      : estimateTokens({
+          messages: [],
+          prompt: params.pendingPrompt ?? "",
+          imageCount: params.pendingImageCount,
+        }) - fixedTokens;
   const pendingQueuedContextTokens = estimateCompactionHistoryTokens(
     params.pendingQueuedContextMessages ?? [],
   );
   const additionalContextTokens =
     estimateCompactionHistoryTokens(params.pendingContextMessages ?? []) +
     pendingQueuedContextTokens;
-  const additiveTokens = params.pendingAdditivePrompt
-    ? estimateFreshLlmBoundaryTokenPressure({
+  let additiveTokens = 0;
+  if (params.pendingAdditivePrompt) {
+    const estimateAdditiveTokens = createFreshLlmBoundaryTokenEstimator({});
+    additiveTokens =
+      estimateAdditiveTokens({
         messages: [],
         prompt: params.pendingAdditivePrompt,
-      }) - estimateFreshLlmBoundaryTokenPressure({ messages: [], prompt: "" })
-    : 0;
+      }) - estimateAdditiveTokens({ messages: [], prompt: "" });
+  }
   return {
     contextWindow: params.contextWindow,
     reserveTokens: params.reserveTokens,
@@ -135,9 +139,10 @@ export function estimateCompactionHistoryTokens(
         budget?.pendingUserTokens ?? budget?.pendingTokens ?? 0,
       )
     : 0;
+  const estimateTokens = createFreshLlmBoundaryTokenEstimator({});
   return (
-    estimateFreshLlmBoundaryTokenPressure({ messages, prompt: "" }) -
-    estimateFreshLlmBoundaryTokenPressure({ messages: [], prompt: "" }) -
+    estimateTokens({ messages, prompt: "" }) -
+    estimateTokens({ messages: [], prompt: "" }) -
     overlap
   );
 }

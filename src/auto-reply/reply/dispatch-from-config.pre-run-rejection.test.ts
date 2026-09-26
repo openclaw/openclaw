@@ -173,6 +173,20 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     ]);
   });
 
+  it("attributes message.processed to the ingesting agent", async () => {
+    await dispatchReplyFixture({
+      body: "hello",
+      messageId: "3",
+      reply: { text: "Agent reply." },
+    });
+
+    expect(processedEvents).toHaveLength(1);
+    expect(processedEvents[0]?.agentId).toBe("main");
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
+  });
+
   it.each<{
     label: string;
     state: ReplyOperationRunState;
@@ -212,6 +226,8 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
         dispatcher: createDispatcher(),
         replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
         replyResolver: async (_ctx, opts) => {
+          // Queue and question owners publish their decisions after outer operation admission.
+          Object.assign(runState, state);
           if (failed) {
             opts?.onAgentRunTerminalOutcome?.("failed");
           }

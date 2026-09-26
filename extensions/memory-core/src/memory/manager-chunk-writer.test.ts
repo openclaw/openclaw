@@ -11,10 +11,12 @@ const CHUNK_WRITE_TABLES = [
   "memory_index_chunk_provenance",
 ];
 
+const PREPARED_WRITE_TABLES = new Set([...CHUNK_WRITE_TABLES, "memory_index_chunks_fts"]);
+
 function chunkWriteTables(sqls: string[]): string[] {
   return sqls.flatMap((sql) => {
     const table = /^\s*INSERT INTO "?(\w+)"?\s*\(/i.exec(sql)?.[1];
-    return table && CHUNK_WRITE_TABLES.includes(table) ? [table] : [];
+    return table && PREPARED_WRITE_TABLES.has(table) ? [table] : [];
   });
 }
 
@@ -25,7 +27,7 @@ describe("memory chunk publication", () => {
   });
 
   it.each(["none", "batch-wide-test"])(
-    "bounds preparations while preserving oversized entry annotations (%s)",
+    "publishes oversized entry annotations without caller-thread index writes (%s)",
     async (provider) => {
       const memoryPath = path.join(fixture.paths.workspace, "MEMORY.md");
       await fs.writeFile(
@@ -79,15 +81,7 @@ describe("memory chunk publication", () => {
           projectKey: null,
           importance: null,
         });
-        const nonemptyFiles = db
-          .prepare("SELECT DISTINCT path, source FROM memory_index_chunks")
-          .all().length;
-        for (const table of CHUNK_WRITE_TABLES) {
-          expect(
-            preparedTables.filter((prepared) => prepared === table),
-            table,
-          ).toHaveLength(nonemptyFiles);
-        }
+        expect(preparedTables).toEqual([]);
 
         await fs.writeFile(memoryPath, "");
         Reflect.set(manager, "dirty", true);
@@ -126,11 +120,13 @@ describe("memory chunk publication", () => {
           [
             "memory_index_sources",
             ...CHUNK_WRITE_TABLES,
-            "memory_embedding_cache",
             "memory_index_chunks_fts",
             "memory_index_state",
           ].map((table) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
         const before = snapshot();
+        const cacheSnapshot = () =>
+          db.prepare("SELECT * FROM memory_embedding_cache ORDER BY rowid").all();
+        const cacheBefore = cacheSnapshot();
         expect(before[1]?.some((row) => String(row.text).includes("Alpha memory line."))).toBe(
           true,
         );
@@ -151,16 +147,21 @@ describe("memory chunk publication", () => {
           await expect(manager.sync({ reason: "test" })).rejects.toThrow(
             "forced chunk publication failure",
           );
-          expect(chunkWriteTables(prepare.mock.calls.map(([sql]) => sql))).toEqual(
-            CHUNK_WRITE_TABLES.slice(0, CHUNK_WRITE_TABLES.indexOf(failedTable) + 1),
-          );
+          expect(chunkWriteTables(prepare.mock.calls.map(([sql]) => sql))).toEqual([]);
         } finally {
           prepare.mockRestore();
         }
         expect(snapshot()).toEqual(before);
+        // Completed provider work is durable even when index publication rolls back.
+        const retainedCache = cacheSnapshot();
+        expect(retainedCache).toEqual(expect.arrayContaining(cacheBefore));
+        expect(retainedCache).toHaveLength(cacheBefore.length + 1);
+        const completedRequests = fixture.provider.embedBatchCalls;
 
         db.exec("DROP TRIGGER fail_chunk_publication");
         await manager.sync({ reason: "retry" });
+        expect(fixture.provider.embedBatchCalls).toBe(completedRequests);
+        expect(cacheSnapshot()).toEqual(retainedCache);
         expect(
           db
             .prepare("SELECT text FROM memory_index_chunks WHERE path LIKE ? AND source = ?")

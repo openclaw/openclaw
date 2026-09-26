@@ -34,28 +34,6 @@ function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId
   return { recipient: normalizeSignalReactionRecipient(withoutSignal) };
 }
 
-async function mutateSignalReaction(params: {
-  cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
-  accountId?: string;
-  target: { recipient?: string; groupId?: string };
-  timestamp: number;
-  emoji: string;
-  remove?: boolean;
-  targetAuthor?: string;
-  targetAuthorUuid?: string;
-}) {
-  const options = {
-    cfg: params.cfg,
-    accountId: params.accountId,
-    groupId: params.target.groupId,
-    targetAuthor: params.targetAuthor,
-    targetAuthorUuid: params.targetAuthorUuid,
-  };
-  const mutateReaction = params.remove ? removeReactionSignal : sendReactionSignal;
-  await mutateReaction(params.target.recipient ?? "", params.timestamp, params.emoji, options);
-  return jsonResult({ ok: true, [params.remove ? "removed" : "added"]: params.emoji });
-}
-
 export const signalMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg, accountId }) => {
     const configuredAccounts = accountId
@@ -91,7 +69,14 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       : { ...payload, replyToId: normalizedReplyToId };
   },
 
-  handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    toolContext,
+    assertDirectAdapterHandoff,
+  }) => {
     if (action === "send") {
       throw new Error("Send should be handled by outbound, not actions handler.");
     }
@@ -154,16 +139,16 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       if (!emoji) {
         throw new Error(`Emoji required to ${remove ? "remove" : "add"} reaction.`);
       }
-      return await mutateSignalReaction({
+      const mutateReaction = remove ? removeReactionSignal : sendReactionSignal;
+      await mutateReaction(target.recipient ?? "", timestamp, emoji, {
         cfg,
         accountId: account.accountId,
-        target,
-        timestamp,
-        emoji,
-        remove: Boolean(remove),
+        groupId: target.groupId,
         targetAuthor,
         targetAuthorUuid,
+        ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
       });
+      return jsonResult({ ok: true, [remove ? "removed" : "added"]: emoji });
     }
 
     throw new Error(`Action ${action} not supported for ${providerId}.`);

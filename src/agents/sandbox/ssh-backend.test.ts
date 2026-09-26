@@ -167,6 +167,16 @@ async function expectBackendCreationToReject(params: {
   ).rejects.toThrow(params.error);
 }
 
+function createBackendParams(cfg = createBackendSandboxConfig()) {
+  return {
+    sessionKey: "agent:worker:task",
+    scopeKey: "agent:worker",
+    workspaceDir: "/tmp/workspace",
+    agentWorkspaceDir: "/tmp/workspace",
+    cfg,
+  };
+}
+
 describe("ssh sandbox backend", () => {
   let envSnapshot: ReturnType<typeof captureFullEnv>;
 
@@ -476,6 +486,35 @@ describe("ssh sandbox backend", () => {
     expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledOnce();
   });
 
+  it("finalizes only its own prepared exec once and ignores forged or foreign tokens", async () => {
+    const params = createBackendParams(
+      createBackendSandboxConfig({ target: "worker@example.com:22" }),
+    );
+    const workdir = { runtimeId: "owned-finalization", remoteWorkspaceDir: "/remote/workspace" };
+    const owner = await createPreprovisionedSshSandboxBackend(params, workdir);
+    const foreign = await createPreprovisionedSshSandboxBackend(params, workdir);
+    const spec = await owner.buildExecSpec({ command: "true", env: {}, usePty: false });
+    const forgedCleanup = vi.fn(async () => {});
+    const outcome = { status: "completed" as const, exitCode: 0, timedOut: false };
+
+    await foreign.finalizeExec?.({ ...outcome, token: spec.finalizeToken });
+    await owner.finalizeExec?.({
+      ...outcome,
+      token: { cleanup: forgedCleanup, session: { dispose: forgedCleanup } },
+    });
+    expect(forgedCleanup).not.toHaveBeenCalled();
+    expect(sshMocks.spawnCommand).toHaveBeenCalledOnce();
+    expect(sshMocks.disposeSshSandboxSession).not.toHaveBeenCalled();
+
+    await Promise.all([
+      owner.finalizeExec?.({ ...outcome, token: spec.finalizeToken }),
+      owner.finalizeExec?.({ ...outcome, token: spec.finalizeToken }),
+    ]);
+    await owner.finalizeExec?.({ ...outcome, token: spec.finalizeToken });
+    expect(sshMocks.spawnCommand).toHaveBeenCalledTimes(2);
+    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledOnce();
+  });
+
   it("disposes the SSH session when staged exec upload or final cleanup fails", async () => {
     const backend = await createPreprovisionedSshSandboxBackend(
       {
@@ -541,6 +580,8 @@ describe("ssh sandbox backend", () => {
       });
     const skillsWorkspaceDir = tempDirs.make("openclaw-ssh-skills-");
     await fs.mkdir(path.join(skillsWorkspaceDir, "skills"), { recursive: true });
+    const cfg = createBackendSandboxConfig({ target: "peter@example.com:2222" });
+    cfg.docker.env = { LANG: "C.UTF-8" };
 
     const backend = await createSshSandboxBackend({
       sessionKey: "agent:worker:task",
@@ -548,47 +589,7 @@ describe("ssh sandbox backend", () => {
       workspaceDir: "/tmp/workspace",
       agentWorkspaceDir: "/tmp/agent",
       skillsWorkspaceDir,
-      cfg: {
-        mode: "all",
-        backend: "ssh",
-        scope: "session",
-        workspaceAccess: "rw",
-        workspaceRoot: "~/.openclaw/sandboxes",
-        dockerTmpfsSource: "configured",
-        docker: {
-          image: "openclaw-sandbox:bookworm-slim",
-          containerPrefix: "openclaw-sbx-",
-          workdir: "/workspace",
-          readOnlyRoot: true,
-          tmpfs: ["/tmp"],
-          network: "none",
-          capDrop: ["ALL"],
-          env: { LANG: "C.UTF-8" },
-        },
-        ssh: {
-          target: "peter@example.com:2222",
-          command: "ssh",
-          workspaceRoot: "/remote/openclaw",
-          strictHostKeyChecking: true,
-          updateHostKeys: true,
-        },
-        browser: {
-          enabled: false,
-          image: "openclaw-browser",
-          containerPrefix: "openclaw-browser-",
-          network: "bridge",
-          cdpPort: 9222,
-          vncPort: 5900,
-          noVncPort: 6080,
-          headless: true,
-          noVncEnabled: false,
-          allowHostControl: false,
-          autoStart: false,
-          autoStartTimeoutMs: 1000,
-        },
-        tools: { allow: [], deny: [] },
-        prune: { idleHours: 24, maxAgeDays: 7 },
-      },
+      cfg,
     });
 
     const execSpec = await backend.buildExecSpec({
@@ -628,6 +629,75 @@ describe("ssh sandbox backend", () => {
     expect(sshMocks.createSshSandboxSessionFromSettings).toHaveBeenCalledTimes(2);
     expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
+
+  it("does not contact the remote runtime when authority is revoked during session setup", async () => {
+    let current = true;
+    const backend = await createSshSandboxBackend({
+      ...createBackendParams(createBackendSandboxConfig({ target: "worker@example.com:22" })),
+      assertRuntimeCurrent: () => {
+        if (!current) {
+          throw new Error("runtime removed");
+        }
+      },
+    });
+    sshMocks.createSshSandboxSessionFromSettings.mockImplementation(async () => {
+      current = false;
+      return createSession();
+    });
+    await expect(backend.runShellCommand({ script: "printf stale" })).rejects.toThrow(
+      "runtime removed",
+    );
+    expect(sshMocks.runSshSandboxCommand).not.toHaveBeenCalled();
+    expect(sshMocks.uploadDirectoryToSshTarget).not.toHaveBeenCalled();
+    expect(sshMocks.spawnCommand).not.toHaveBeenCalled();
+    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledOnce();
+  });
+
+  it.each(["upload", "admission"])(
+    "discards staged exec when runtime authority is revoked during %s",
+    async (stage) => {
+      let current = true;
+      const backend = await createSshSandboxBackend({
+        ...createBackendParams(createBackendSandboxConfig({ target: "worker@example.com:22" })),
+        assertRuntimeCurrent: () => {
+          if (!current) {
+            throw new Error("runtime removed");
+          }
+        },
+      });
+      sshMocks.spawnCommand.mockImplementationOnce(async () => {
+        current = stage !== "upload";
+        return {
+          failed: false,
+          isCanceled: false,
+          exitCode: 0,
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+        };
+      });
+
+      const preparing = backend.buildExecSpec({ command: "printf stale", env: {}, usePty: false });
+      if (stage === "upload") {
+        await expect(preparing).rejects.toThrow("runtime removed");
+      } else {
+        const spec = await preparing;
+        current = false;
+        expect(() => spec.assertCurrent?.()).toThrow("runtime removed");
+        await backend.finalizeExec?.({
+          status: "failed",
+          exitCode: null,
+          timedOut: false,
+          token: spec.finalizeToken,
+        });
+      }
+
+      expect(sshMocks.spawnCommand).toHaveBeenCalledTimes(2);
+      expect(requirePreparedSshInvocation(1).argv.at(-1)).toContain(
+        "openclaw-sandbox-exec-cleanup",
+      );
+      expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("adopts a preprovisioned workdir without clearing or uploading placement files", async () => {
     const remoteWorkspaceDir = "/srv/openclaw/workspaces/session-1";
@@ -696,15 +766,9 @@ describe("ssh sandbox backend", () => {
         code: 0,
       });
 
-    const backend = await createSshSandboxBackend({
-      sessionKey: "agent:worker:task",
-      scopeKey: "agent:worker",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-      cfg: createBackendSandboxConfig({
-        target: "peter@example.com:2222",
-      }),
-    });
+    const backend = await createSshSandboxBackend(
+      createBackendParams(createBackendSandboxConfig({ target: "peter@example.com:2222" })),
+    );
 
     await expect(
       backend.validateWorkdir?.(
@@ -844,14 +908,8 @@ describe("ssh sandbox backend", () => {
     const skillsWorkspaceDir = tempDirs.make("openclaw-ssh-skills-");
     await fs.mkdir(path.join(skillsWorkspaceDir, "skills"), { recursive: true });
     const backend = await createSshSandboxBackend({
-      sessionKey: "agent:worker:task",
-      scopeKey: "agent:worker",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      ...createBackendParams(createBackendSandboxConfig({ target: "peter@example.com:2222" })),
       skillsWorkspaceDir,
-      cfg: createBackendSandboxConfig({
-        target: "peter@example.com:2222",
-      }),
     });
 
     const firstExec = await backend.buildExecSpec({

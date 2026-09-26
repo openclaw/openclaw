@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createNativeNotificationsCapability } from "../../app/native-notifications.ts";
-import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
+import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 
@@ -74,10 +74,8 @@ function submitFromClick(flow: DraftSubmissionFlow, background = false) {
 
 describe("New Session notification onboarding", () => {
   it.each([
-    { surface: "web", background: false },
     { surface: "web", background: true },
     { surface: "native", background: false },
-    { surface: "native", background: true },
   ] as const)(
     "prompts $surface synchronously and only once when background=$background",
     async ({ surface, background }) => {

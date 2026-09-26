@@ -1,10 +1,10 @@
-// Qa Channel plugin module implements channel behavior.
 import type { ChannelThreadingToolContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
@@ -21,7 +21,6 @@ import { qaChannelMessageActions } from "./channel-actions.js";
 import { createQaChannelPluginBase, QA_CHANNEL_ID, qaChannelRuntimeMeta } from "./channel-base.js";
 import { startQaGatewayAccount } from "./gateway.js";
 import { sendQaChannelMedia, sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
-import type { ChannelPlugin } from "./runtime-api.js";
 import { qaChannelStatus } from "./status.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
@@ -175,8 +174,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
       normalizeTarget: normalizeQaTarget,
       inferTargetChatType: ({ to }) => parseQaTarget(to).chatType,
       targetResolver: {
-        looksLikeId: (raw) =>
-          /^((dm|channel|group):|thread:[^/]+\/)/i.test(raw.trim()) || raw.trim().length > 0,
+        looksLikeId: (raw) => raw.trim().length > 0,
         hint: "<dm:user|channel:room|group:room|thread:room/thread>",
       },
       resolveOutboundSessionRoute: ({
@@ -190,6 +188,10 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
       }) => {
         const resolved = resolveQaTargetThread({ target, threadId });
         const parsed = resolved.target;
+        const baseTarget = buildQaTarget({
+          chatType: parsed.chatType,
+          conversationId: parsed.conversationId,
+        });
         const baseRoute = buildChannelOutboundSessionRoute({
           cfg,
           agentId,
@@ -197,26 +199,17 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
           accountId,
           recipientSessionExact: true,
           peer: {
-            kind:
-              parsed.chatType === "direct"
-                ? "direct"
-                : parsed.chatType === "group"
-                  ? "group"
-                  : "channel",
-            id: buildQaTarget(parsed),
+            kind: parsed.chatType,
+            id: baseTarget,
           },
           chatType: parsed.chatType,
           from: `${QA_CHANNEL_ID}:${accountId ?? DEFAULT_ACCOUNT_ID}`,
-          to: buildQaTarget(parsed),
+          to: baseTarget,
         });
-        // An explicit thread target already owns the complete session identity;
-        // applying reply or current-thread metadata would append a second thread.
-        if (parsed.threadId !== undefined) {
-          return baseRoute;
-        }
         return buildThreadAwareOutboundSessionRoute({
           route: baseRoute,
-          replyToId,
+          // Structured thread identity is authoritative; reply metadata must not replace its thread.
+          replyToId: resolved.threadId === undefined ? replyToId : undefined,
           threadId: resolved.threadId,
           currentSessionKey,
           canRecoverCurrentThread: ({ route }) =>
@@ -243,6 +236,24 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
       },
     },
     threading: {
+      resolveReplyTransport: ({
+        currentMessageId,
+        replyToId,
+        replyToIsExplicit,
+        replyDelivery,
+      }) => {
+        if (
+          !currentMessageId ||
+          replyToId !== undefined ||
+          replyToIsExplicit ||
+          (replyDelivery && replyDelivery.replyToMode !== "all")
+        ) {
+          return null;
+        }
+        // Correlate queued replies like the inbound callback, without restoring
+        // references that an earlier first/off/batched policy may have removed.
+        return { replyToId: currentMessageId };
+      },
       matchesToolContextTarget: ({ target, toolContext }) =>
         matchesQaToolContextTarget(target, toolContext),
       resolveAutoThreadId: ({ to, toolContext }) =>

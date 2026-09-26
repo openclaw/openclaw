@@ -3,19 +3,27 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { DesktopHostConfig } from "../../config/types.desktop.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
 import {
   createHostDesktopService,
   createHostDesktopSource,
   inspectHostDesktop,
+  inspectHostDesktopSetup,
 } from "./host-source.js";
 import type { ManagedLinuxDesktop } from "./managed-linux.js";
+import * as managedLinux from "./managed-linux.js";
+import { releaseDesktopObserverToken } from "./observe-bridge.js";
+import * as rfbProbe from "./rfb-probe.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 async function listenRfb(params: { banner?: string; securityTypes?: number[] }) {
@@ -68,17 +76,107 @@ async function unusedPort(): Promise<number> {
 function fakeManagedDesktop(
   status: ReturnType<ManagedLinuxDesktop["status"]> = { state: "not-started" },
 ) {
-  const acquire = vi.fn(async () => ({
-    attachment: { kind: "tcp" as const, host: "127.0.0.1" as const, port: 46_001 },
-    auth: "vnc-password" as const,
-    vncPassword: "managed-secret",
-  }));
-  const stop = vi.fn(async () => undefined);
-  const managed: ManagedLinuxDesktop = { acquire, stop, status: () => status };
-  return { acquire, managed, stop };
+  let active = true;
+  const leases = new Set<{ onStop(): Promise<void> }>();
+  const acquire = vi.fn(async () => {
+    active = true;
+    return {
+      attachment: { kind: "tcp" as const, host: "127.0.0.1" as const, port: 46_001 },
+      auth: "vnc-password" as const,
+      vncPassword: "managed-secret",
+    };
+  });
+  const acquireComputer = vi.fn(async (params: { onStop(): Promise<void> }) => {
+    leases.add(params);
+    return {
+      env: { DISPLAY: ":99", DBUS_SESSION_BUS_ADDRESS: "unix:path=/managed/bus" },
+      isCurrent: () => active && leases.has(params),
+      release: () => {
+        leases.delete(params);
+      },
+    };
+  });
+  const stop = vi.fn(async () => {
+    active = false;
+    await Promise.all([...leases].map(async (lease) => await lease.onStop()));
+    leases.clear();
+  });
+  const managed: ManagedLinuxDesktop = { acquire, acquireComputer, stop, status: () => status };
+  return { acquire, acquireComputer, managed, stop };
 }
 
 describe("gateway host desktop source", () => {
+  it.each([
+    { name: "VncAuth", banner: "RFB 003.008\n", securityTypes: [2] },
+    { name: "Screen Sharing", banner: "RFB 003.889\n", securityTypes: [30] },
+  ])("discovers $name for setup while desktop access stays disabled", async (server) => {
+    const port = await listenRfb(server);
+    const config = Object.freeze({
+      enabled: false,
+      port,
+      passwordFile: "/nonexistent/desktop-password",
+    });
+    const probeRfb = vi.fn(rfbProbe.probeRfbServer);
+    await expect(inspectHostDesktop({ config, probeRfb })).resolves.toMatchObject({
+      status: { enabled: false, state: "disabled" },
+    });
+    expect(probeRfb).not.toHaveBeenCalled();
+    const readFile = vi.spyOn(fs, "readFile");
+    await expect(inspectHostDesktopSetup({ config, probeRfb })).resolves.toEqual({
+      state: "ready",
+    });
+    expect(readFile).not.toHaveBeenCalled();
+    expect(config.enabled).toBe(false);
+  });
+
+  it.each([
+    { name: "unauthenticated VNC", securityTypes: [1] },
+    { name: "VeNCrypt", securityTypes: [19] },
+    { name: "another service", banner: "HTTP/1.1 200" },
+  ])("does not offer $name as a ready desktop", async (server) => {
+    const port = await listenRfb(server);
+    await expect(
+      inspectHostDesktopSetup({ config: { enabled: false, port } }),
+    ).resolves.toMatchObject({
+      state: "unsupported",
+    });
+  });
+
+  it("reports a missing server without changing the disabled desktop setting", async () => {
+    const port = await unusedPort();
+    await expect(
+      inspectHostDesktopSetup({ config: { enabled: false, port }, platform: "darwin" }),
+    ).resolves.toMatchObject({ state: "needs-server" });
+  });
+
+  it("discovers managed setup without starting it and preserves attached-server precedence", async () => {
+    const createManaged = vi.spyOn(managedLinux, "createManagedLinuxDesktop");
+    const probeRfb = vi
+      .fn<typeof rfbProbe.probeRfbServer>()
+      .mockResolvedValue({ kind: "unreachable" });
+    const config = { enabled: false, managed: true };
+    await expect(inspectHostDesktopSetup({ config, platform: "linux", probeRfb })).resolves.toEqual(
+      {
+        state: "managed",
+      },
+    );
+    await expect(
+      inspectHostDesktopSetup({ config: { ...config, port: 5901 }, platform: "linux", probeRfb }),
+    ).resolves.toMatchObject({ state: "needs-server" });
+    await expect(
+      inspectHostDesktopSetup({ config, platform: "darwin", probeRfb }),
+    ).resolves.toMatchObject({
+      state: "unsupported",
+    });
+    probeRfb.mockResolvedValue({ kind: "rfb", securityTypes: [2] });
+    await expect(inspectHostDesktopSetup({ config, platform: "linux", probeRfb })).resolves.toEqual(
+      {
+        state: "ready",
+      },
+    );
+    expect(createManaged).not.toHaveBeenCalled();
+  });
+
   it("refuses an unauthenticated VNC server", async () => {
     const port = await listenRfb({ securityTypes: [1] });
     const source = createHostDesktopSource({ config: { enabled: true, port } });
@@ -128,7 +226,7 @@ describe("gateway host desktop source", () => {
 
     const registry = createDesktopSessionRegistry();
     const service = createHostDesktopService({
-      config: { enabled: true, port },
+      getConfig: () => ({ enabled: true, port }),
       platform: "darwin",
       registry,
     });
@@ -192,6 +290,10 @@ describe("gateway host desktop source", () => {
       auth: "vnc-password",
     });
     expect(managed.acquire).not.toHaveBeenCalled();
+    await expect(source.acquireComputer({ onStop: async () => undefined })).rejects.toThrow(
+      "selected host desktop is an external VNC server",
+    );
+    expect(managed.acquireComputer).not.toHaveBeenCalled();
   });
 
   it("keeps a default-port RFB listener ahead of managed mode", async () => {
@@ -207,7 +309,70 @@ describe("gateway host desktop source", () => {
       auth: "vnc-password",
     });
     expect(managed.acquire).not.toHaveBeenCalled();
+    await expect(source.acquireComputer({ onStop: async () => undefined })).rejects.toThrow(
+      "selected host desktop is an external VNC server",
+    );
+    expect(managed.acquireComputer).not.toHaveBeenCalled();
   });
+
+  it("binds managed audio to screen preauthentication without starting capture or returning the VNC secret", async () => {
+    vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({ kind: "unreachable" });
+    const managed = fakeManagedDesktop();
+    const start = vi.fn(async () => {
+      throw new Error("capture must wait for user input");
+    });
+    const acquire = managed.managed.acquire.bind(managed.managed);
+    managed.managed.acquire = async () => ({
+      ...(await acquire()),
+      resolveAudio: () => ({ start }),
+    });
+    const registry = createDesktopSessionRegistry();
+    cleanups.push(() => registry.stopAll());
+    const service = createHostDesktopService({
+      getConfig: () => ({ enabled: true, managed: true }),
+      registry,
+      platform: "linux",
+      managedDesktop: managed.managed,
+    });
+    const requester = { connId: "managed-audio-viewer", isCurrent: () => true };
+    const observed = await service.observe({ control: true, requester });
+    expect(observed.audio).toMatchObject({ encoding: "pcm-s16le", sampleRate: 48000, channels: 2 });
+    expect(observed.audio?.wsPath).toMatch(/^\/desktop\/audio\?token=/u);
+    expect(observed.preauthenticated).toBe(true);
+    expect(observed.vncPassword).toBeUndefined();
+    expect(start).not.toHaveBeenCalled();
+    expect(await releaseDesktopObserverToken(observed.wsPath, requester)).toBe(true);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "native stderr /private/audio/path synthetic-secret"])(
+    "projects only a fixed setup code for actual managed failure (%s)",
+    async (reason) => {
+      vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({ kind: "unreachable" });
+      const managed = fakeManagedDesktop();
+      const acquire = managed.managed.acquire.bind(managed.managed);
+      managed.managed.acquire = async () => ({
+        ...(await acquire()),
+        audioUnavailableReason: reason,
+      });
+      const registry = createDesktopSessionRegistry();
+      cleanups.push(() => registry.stopAll());
+      const service = createHostDesktopService({
+        getConfig: () => ({ enabled: true, managed: true }),
+        registry,
+        platform: "linux",
+        managedDesktop: managed.managed,
+      });
+      const requester = { connId: "setup-diagnostic-viewer", isCurrent: () => true };
+      const observed = await service.observe({ control: false, requester });
+      expect(observed.audio).toBeUndefined();
+      expect(observed.audioUnavailableReason).toBe(reason ? "setup-unavailable" : undefined);
+      expect(JSON.stringify(observed)).not.toMatch(
+        /native stderr|private\/audio|synthetic-secret/u,
+      );
+      await releaseDesktopObserverToken(observed.wsPath, requester);
+    },
+  );
 
   it("starts managed mode only on Linux after the default port is unreachable", async () => {
     const managed = fakeManagedDesktop();
@@ -222,6 +387,189 @@ describe("gateway host desktop source", () => {
       auth: "vnc-password",
     });
     expect(managed.acquire).toHaveBeenCalledOnce();
+    const onStop = vi.fn(async () => undefined);
+    const computer = await source.acquireComputer({ onStop });
+    expect(computer.env.DISPLAY).toBe(":99");
+    expect(computer.isCurrent()).toBe(true);
+    await source.teardown?.();
+    expect(computer.isCurrent()).toBe(false);
+    expect(onStop).toHaveBeenCalledOnce();
+  });
+
+  it("keeps computer activity alive after all eight observers detach, then expires after release", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({ kind: "unreachable" });
+    const managed = fakeManagedDesktop();
+    const registry = createDesktopSessionRegistry({ lingerMs: 10 });
+    const service = createHostDesktopService({
+      getConfig: () => ({ enabled: true, managed: true }),
+      platform: "linux",
+      registry,
+      managedDesktop: managed.managed,
+    });
+    cleanups.push(() => registry.stopAll());
+    const computer = await service.acquireComputer({ onStop: async () => undefined });
+    await service.observe({ control: false });
+    const observers = Array.from({ length: 8 }, () =>
+      registry.attachObserver("host", {
+        control: false,
+        ownerEpoch: 0,
+        close: vi.fn(),
+      }),
+    );
+    expect(observers.every(Boolean)).toBe(true);
+    for (const observer of observers) {
+      observer?.release();
+    }
+    await vi.advanceTimersByTimeAsync(20);
+    expect(managed.stop).not.toHaveBeenCalled();
+    expect(computer.isCurrent()).toBe(true);
+    computer.release();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(managed.stop).toHaveBeenCalled();
+    expect(computer.isCurrent()).toBe(false);
+  });
+
+  it("enables, reconfigures, and re-enables host desktop without reviving old viewers or tickets", async () => {
+    const firstPort = await listenRfb({ securityTypes: [2] });
+    const secondPort = await listenRfb({ securityTypes: [2] });
+    let config: DesktopHostConfig = { enabled: false, port: firstPort };
+    const registry = createDesktopSessionRegistry();
+    const service = createHostDesktopService({ getConfig: () => config, registry });
+    const requester = { connId: "host-viewer", isCurrent: () => true };
+    cleanups.push(() => registry.stopAll());
+    await expect(service.status()).resolves.toEqual({
+      enabled: false,
+      state: "disabled",
+      port: firstPort,
+    });
+    await expect(service.observe({ control: false })).rejects.toThrow("host desktop is disabled");
+
+    config = { ...config, enabled: true };
+    const first = await service.observe({ control: true, requester });
+    const closeFirst = vi.fn();
+    expect(
+      registry.attachObserver("host", { control: true, ownerEpoch: 0, close: closeFirst }),
+    ).toBeDefined();
+
+    config = { ...config, port: secondPort };
+    await service.reconcileRuntimePolicy();
+    expect(closeFirst).toHaveBeenCalledOnce();
+    await expect(releaseDesktopObserverToken(first.wsPath, requester)).resolves.toBe(false);
+    const second = await service.observe({ control: false, requester });
+    await expect(service.status()).resolves.toMatchObject({ state: "attached", port: secondPort });
+    const closeSecond = vi.fn();
+    expect(
+      registry.attachObserver("host", { control: false, ownerEpoch: 1, close: closeSecond }),
+    ).toBeDefined();
+
+    config = { ...config, enabled: false };
+    await service.reconcileRuntimePolicy();
+    expect(closeSecond).toHaveBeenCalledOnce();
+    await expect(service.acquireComputer({ onStop: async () => undefined })).rejects.toThrow(
+      "host desktop is disabled",
+    );
+
+    config = { ...config, enabled: true };
+    const third = await service.observe({ control: false, requester });
+    expect(third.auth).toBe("vnc-password");
+    await expect(releaseDesktopObserverToken(second.wsPath, requester)).resolves.toBe(false);
+    expect(
+      registry.attachObserver("host", { control: true, ownerEpoch: 1, close: vi.fn() }),
+    ).toBeUndefined();
+    await expect(releaseDesktopObserverToken(third.wsPath, requester)).resolves.toBe(true);
+  });
+
+  it.each(["disable", "reconfigure"])("retires managed computer holds on %s", async (change) => {
+    vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({ kind: "unreachable" });
+    const managed = fakeManagedDesktop();
+    let config: DesktopHostConfig = { enabled: true, managed: true };
+    const registry = createDesktopSessionRegistry();
+    const service = createHostDesktopService({
+      getConfig: () => config,
+      registry,
+      platform: "linux",
+      managedDesktop: managed.managed,
+    });
+    cleanups.push(() => registry.stopAll());
+    const onStop = vi.fn(async () => undefined);
+    const computer = await service.acquireComputer({ onStop });
+    expect(computer.isCurrent()).toBe(true);
+
+    config = change === "disable" ? { ...config, enabled: false } : { ...config, port: 46_002 };
+    expect(computer.isCurrent()).toBe(false);
+    await service.reconcileRuntimePolicy();
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(managed.stop).toHaveBeenCalled();
+    expect(registry.hasActivity("host", 0)).toBe(false);
+  });
+
+  it("does not start a managed desktop after disable while probing the host", async () => {
+    const probing = createDeferred();
+    const probe = createDeferred<rfbProbe.RfbProbeResult>();
+    vi.spyOn(rfbProbe, "probeRfbServer").mockImplementation(async () => {
+      probing.resolve();
+      return await probe.promise;
+    });
+    const managed = fakeManagedDesktop();
+    let config: DesktopHostConfig = { enabled: true, managed: true };
+    const registry = createDesktopSessionRegistry();
+    const service = createHostDesktopService({
+      getConfig: () => config,
+      registry,
+      platform: "linux",
+      managedDesktop: managed.managed,
+    });
+    cleanups.push(() => registry.stopAll());
+    const observed = expect(service.observe({ control: false })).rejects.toThrow(
+      "Desktop session stopped before connecting",
+    );
+    await probing.promise;
+    config = { ...config, enabled: false };
+    const reconciled = service.reconcileRuntimePolicy();
+    probe.resolve({ kind: "unreachable" });
+    await Promise.all([observed, reconciled]);
+    expect(managed.acquire).not.toHaveBeenCalled();
+    await expect(service.status()).resolves.toMatchObject({ state: "disabled" });
+  });
+
+  it("joins managed startup before completing a disable and leaves no live desktop", async () => {
+    vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue({ kind: "unreachable" });
+    const starting = createDeferred();
+    const started = createDeferred();
+    let liveDesktop = false;
+    const managed = fakeManagedDesktop();
+    managed.acquire.mockImplementation(async () => {
+      starting.resolve();
+      await started.promise;
+      liveDesktop = true;
+      return {
+        attachment: { kind: "tcp", host: "127.0.0.1", port: 46_001 },
+        auth: "vnc-password",
+        vncPassword: "managed-secret",
+      };
+    });
+    managed.stop.mockImplementation(async () => {
+      liveDesktop = false;
+    });
+    let config: DesktopHostConfig = { enabled: true, managed: true };
+    const registry = createDesktopSessionRegistry();
+    const service = createHostDesktopService({
+      getConfig: () => config,
+      registry,
+      platform: "linux",
+      managedDesktop: managed.managed,
+    });
+    cleanups.push(() => registry.stopAll());
+    const observed = expect(service.observe({ control: false })).rejects.toThrow(
+      "Desktop session stopped before connecting",
+    );
+    await starting.promise;
+    config = { ...config, enabled: false };
+    const reconciled = service.reconcileRuntimePolicy();
+    started.resolve();
+    await Promise.all([observed, reconciled]);
+    expect(liveDesktop).toBe(false);
   });
 
   it("reports managed mode as Linux-only on other platforms", async () => {

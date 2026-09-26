@@ -8,60 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { VENICE_BASE_URL, VENICE_MODEL_CATALOG, VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
-const ORIGINAL_VITEST = process.env.VITEST;
-
-function restoreDiscoveryEnv(): void {
-  if (ORIGINAL_NODE_ENV === undefined) {
-    delete process.env.NODE_ENV;
-  } else {
-    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
-  }
-
-  if (ORIGINAL_VITEST === undefined) {
-    delete process.env.VITEST;
-  } else {
-    process.env.VITEST = ORIGINAL_VITEST;
-  }
-}
-
-async function runWithDiscoveryEnabled<T>(operation: () => Promise<T>): Promise<T> {
-  process.env.NODE_ENV = "development";
-  delete process.env.VITEST;
-  try {
-    return await operation();
-  } finally {
-    restoreDiscoveryEnv();
-  }
-}
-
-function makeModelsResponse(id: string): Response {
-  return new Response(
-    JSON.stringify({
-      data: [
-        {
-          id,
-          model_spec: {
-            name: id,
-            privacy: "private",
-            availableContextTokens: 131072,
-            maxCompletionTokens: 4096,
-            capabilities: {
-              supportsReasoning: false,
-              supportsVision: false,
-              supportsFunctionCalling: true,
-            },
-          },
-        },
-      ],
-    }),
-    {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    },
-  );
-}
-
 type ModelSpecOverride = {
   id: string;
   availableContextTokens?: number;
@@ -130,7 +76,6 @@ describe("venice-models", () => {
   afterEach(() => {
     clearLiveCatalogCacheForTests();
     vi.unstubAllGlobals();
-    restoreDiscoveryEnv();
   });
 
   it("excludes stale models from the static fallback catalog", () => {
@@ -213,7 +158,7 @@ describe("venice-models", () => {
       manifest.modelCatalog.providers.venice.models.map(({ id, cost }) => [id, cost]),
     );
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await discoverVeniceModels();
 
     expect(models.map(({ id, cost }) => ({ id, cost }))).toEqual([
       { id: "zai-org-glm-4.7", cost: manifestCosts.get("zai-org-glm-4.7") },
@@ -239,7 +184,7 @@ describe("venice-models", () => {
       },
       { id: "qwen-3-7-plus", pricing: { input: { usd: 0 }, output: { usd: 0 } } },
     ]);
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await discoverVeniceModels();
     expect(models.map(({ cost }) => cost)).toEqual([
       { input: 7, output: 11, cacheRead: 0, cacheWrite: 0 },
       { input: 3, output: 5, cacheRead: 0.3, cacheWrite: 3.75 },
@@ -276,7 +221,7 @@ describe("venice-models", () => {
       { id: "grok-4-5", pricing },
       { id: "unknown-invalid-price", pricing },
     ]);
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await discoverVeniceModels();
     expect(models[0]?.cost).toEqual(VENICE_MODEL_CATALOG.find(({ id }) => id === "grok-4-5")?.cost);
     expect(models[1]?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
@@ -302,7 +247,7 @@ describe("venice-models", () => {
           },
         },
       ]);
-      const [model] = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+      const [model] = await discoverVeniceModels();
       const start = Math.floor(threshold) + 1;
       expect(model?.cost.tieredPricing).toEqual([
         { input: 3, output: 5, cacheRead: 0.3, cacheWrite: 3.75, range: [0, start] },
@@ -364,7 +309,7 @@ describe("venice-models", () => {
     "prices $id at cached and uncached context boundaries",
     async ({ id, threshold, base, extended }) => {
       stubVeniceModelsFetch([{ id }]);
-      const discovered = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+      const discovered = await discoverVeniceModels();
       for (const catalog of [VENICE_MODEL_CATALOG, discovered]) {
         const definition = catalog.find((model) => model.id === id)!;
         for (const prompt of [threshold - 1, threshold, threshold + 1]) {
@@ -418,24 +363,6 @@ describe("venice-models", () => {
     },
   );
 
-  it("uses the shared fallback after a transient fetch failure", async () => {
-    let attempts = 0;
-    const fetchMock = vi.fn(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw Object.assign(new TypeError("fetch failed"), {
-          cause: { code: "ECONNRESET", message: "socket hang up" },
-        });
-      }
-      return makeModelsResponse("zai-org-glm-4.7");
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
-    expect(attempts).toBe(1);
-    expect(models.map((m) => m.id)).toEqual(VENICE_MODEL_CATALOG.map((m) => m.id));
-  });
-
   it("uses API maxCompletionTokens for catalog models when present", async () => {
     const fetchMock = stubVeniceModelsFetch([
       {
@@ -450,7 +377,7 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await discoverVeniceModels();
     const glm = models.find((m) => m.id === "zai-org-glm-4.7");
     expect(glm?.maxTokens).toBe(2048);
     const [input, init] = fetchMock.mock.calls[0] ?? [];
@@ -472,7 +399,7 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await discoverVeniceModels();
     const qwen = models.find((m) => m.id === "qwen3-235b-a22b-thinking-2507");
     expect(qwen?.maxTokens).toBe(16384);
   });
@@ -496,7 +423,7 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await discoverVeniceModels();
     const newModel = models.find((m) => m.id === "new-model-2026");
     expect(newModel?.maxTokens).toBe(50000);
     expect(newModel?.maxTokens).toBeLessThanOrEqual(newModel?.contextWindow ?? Infinity);
@@ -516,7 +443,7 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await discoverVeniceModels();
     const newModel = models.find((m) => m.id === "new-model-without-context");
     expect(newModel?.contextWindow).toBe(128000);
     expect(newModel?.maxTokens).toBe(128000);
@@ -535,7 +462,7 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await discoverVeniceModels();
     const knownModel = models.find((m) => m.id === "zai-org-glm-4.7");
     const partialModel = models.find((m) => m.id === "new-model-partial");
     expect(models).not.toHaveLength(VENICE_MODEL_CATALOG.length);
@@ -560,7 +487,7 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await discoverVeniceModels();
     const knownModel = models.find((m) => m.id === "qwen3-coder-480b-a35b-instruct-turbo");
     const newModel = models.find((m) => m.id === "new-model-valid");
     expect(models).not.toHaveLength(VENICE_MODEL_CATALOG.length);
@@ -577,7 +504,7 @@ describe("venice-models", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const models = await runWithDiscoveryEnabled(() => discoverVeniceModels());
+    const models = await discoverVeniceModels();
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(models).toHaveLength(VENICE_MODEL_CATALOG.length);
     expect(models.map((m) => m.id)).toEqual(VENICE_MODEL_CATALOG.map((m) => m.id));

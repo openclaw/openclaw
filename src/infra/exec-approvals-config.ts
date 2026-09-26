@@ -113,8 +113,8 @@ export function resolveExecApprovalsSocketPath(): string {
   return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_SOCKET);
 }
 
-export function resolveExecApprovalsDisplayPath(): string {
-  const stateDir = resolveExecApprovalsStateDir().displayPath;
+export function resolveExecApprovalsDisplayPath(env: NodeJS.ProcessEnv = process.env): string {
+  const stateDir = resolveExecApprovalsStateDir(env).displayPath;
   const locator = path.join("state", "openclaw.sqlite#exec_approvals_config");
   return stateDir === DEFAULT_EXEC_APPROVALS_STATE_DIR
     ? `${stateDir}/${locator}`
@@ -355,7 +355,7 @@ function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | unde
   return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
 }
 
-function ensureAllowlistIds(
+function normalizeAllowlistMetadata(
   allowlist: ExecAllowlistEntry[] | undefined,
 ): ExecAllowlistEntry[] | undefined {
   if (!Array.isArray(allowlist) || allowlist.length === 0) {
@@ -363,29 +363,16 @@ function ensureAllowlistIds(
   }
   let changed = false;
   const next = allowlist.map((entry) => {
-    if (entry.id) {
-      return entry;
+    let normalized = entry;
+    if (!normalized.id) {
+      normalized = { ...normalized, id: crypto.randomUUID() };
     }
-    changed = true;
-    return { ...entry, id: crypto.randomUUID() };
-  });
-  return changed ? next : allowlist;
-}
-
-function stripAllowlistCommandText(
-  allowlist: ExecAllowlistEntry[] | undefined,
-): ExecAllowlistEntry[] | undefined {
-  if (!Array.isArray(allowlist) || allowlist.length === 0) {
-    return allowlist;
-  }
-  let changed = false;
-  const next = allowlist.map((entry) => {
-    if (typeof entry.commandText !== "string") {
-      return entry;
+    if (typeof normalized.commandText === "string") {
+      const { commandText: _commandText, ...rest } = normalized;
+      normalized = rest;
     }
-    changed = true;
-    const { commandText: _commandText, ...rest } = entry;
-    return rest;
+    changed ||= normalized !== entry;
+    return normalized;
   });
   return changed ? next : allowlist;
 }
@@ -421,8 +408,7 @@ export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApp
   }
   for (const [key, agent] of Object.entries(agents)) {
     const coerced = coerceAllowlistEntries(agent.allowlist);
-    const withIds = ensureAllowlistIds(coerced);
-    const allowlist = stripAllowlistCommandText(withIds);
+    const allowlist = normalizeAllowlistMetadata(coerced);
     const sanitizedPolicy = sanitizeExecApprovalPolicy(agent);
     const agentChanged =
       allowlist !== agent.allowlist ||

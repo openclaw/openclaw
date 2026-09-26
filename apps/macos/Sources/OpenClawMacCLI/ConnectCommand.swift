@@ -82,18 +82,17 @@ struct ConnectOutput: Encodable {
 
 actor SnapshotStore {
     private var value: (snapshot: HelloOk, generation: UInt64)?
-    // The channel awaits retirement before reconnecting. Keep that socket epoch
-    // so a queued old callback cannot overwrite the replacement snapshot.
-    private var activeGeneration: UInt64?
-    private var lastRetiredGeneration: UInt64?
+    /// The channel awaits retirement before reconnecting. Keep that socket epoch
+    /// so a queued old callback cannot overwrite the replacement snapshot.
+    private var socketGeneration = GatewaySocketGenerationState()
 
     func set(_ snapshot: HelloOk, generation: UInt64) {
-        guard self.admitGeneration(generation) else { return }
+        guard self.socketGeneration.admit(generation) else { return }
         self.value = (snapshot, generation)
     }
 
     func retire(generation: UInt64) {
-        guard self.retireGeneration(generation) else { return }
+        guard self.socketGeneration.retire(generation) else { return }
         if self.value?.generation == generation {
             self.value = nil
         }
@@ -102,38 +101,9 @@ actor SnapshotStore {
     func get() -> HelloOk? {
         self.value?.snapshot
     }
-
-    private func admitGeneration(_ generation: UInt64) -> Bool {
-        if let lastRetiredGeneration,
-           generation <= lastRetiredGeneration
-        {
-            return false
-        }
-        if let activeGeneration {
-            return generation == activeGeneration
-        }
-        self.activeGeneration = generation
-        return true
-    }
-
-    private func retireGeneration(_ generation: UInt64) -> Bool {
-        if let lastRetiredGeneration,
-           generation <= lastRetiredGeneration
-        {
-            return false
-        }
-        if let activeGeneration,
-           generation != activeGeneration
-        {
-            return false
-        }
-        self.activeGeneration = nil
-        self.lastRetiredGeneration = generation
-        return true
-    }
 }
 
-func runConnect(_ args: [String]) async {
+func runConnect(_ args: [String], configURL: URL) async {
     let opts = ConnectOptions.parse(args)
     if opts.help {
         print("""
@@ -146,6 +116,7 @@ func runConnect(_ args: [String]) async {
                                [--role <role>] [--scopes <a,b,c>]
 
         Options:
+          --profile <name>  App profile; overrides OPENCLAW_PROFILE (default: default)
           --url <url>        Gateway WebSocket URL (overrides config)
           --token <token>    Gateway token (if required)
           --password <pw>    Gateway password (if required)
@@ -163,7 +134,7 @@ func runConnect(_ args: [String]) async {
         return
     }
 
-    let config = loadGatewayConfig()
+    let config = loadGatewayConfig(from: configURL)
     do {
         let endpoint = try resolveGatewayEndpoint(opts: opts, config: config)
         let displayName = opts.displayName ?? Host.current().localizedName ?? "OpenClaw macOS Debug CLI"
@@ -209,7 +180,7 @@ func runConnect(_ args: [String]) async {
             error: nil)
         printConnectOutput(output, json: opts.json)
     } catch {
-        let endpoint = bestEffortEndpoint(opts: opts, config: config)
+        let endpoint = try? resolveGatewayEndpoint(opts: opts, config: config)
         let fallbackMode = (opts.mode ?? config.mode ?? "local").lowercased()
         let output = ConnectOutput(
             status: "error",
@@ -299,13 +270,17 @@ func resolveGatewayEndpoint(opts: ConnectOptions, config: GatewayConfig) throws 
     }
     return GatewayEndpoint(
         url: url,
-        token: resolvedToken(opts: opts, mode: resolvedMode, config: config),
-        password: resolvedPassword(opts: opts, mode: resolvedMode, config: config),
+        token: resolvedCredential(
+            opts.token,
+            mode: resolvedMode,
+            local: config.token,
+            remote: config.remoteToken),
+        password: resolvedCredential(
+            opts.password,
+            mode: resolvedMode,
+            local: config.password,
+            remote: config.remotePassword),
         mode: resolvedMode)
-}
-
-private func bestEffortEndpoint(opts: ConnectOptions, config: GatewayConfig) -> GatewayEndpoint? {
-    try? resolveGatewayEndpoint(opts: opts, config: config)
 }
 
 private func gatewayEndpoint(
@@ -320,45 +295,31 @@ private func gatewayEndpoint(
     }
     return GatewayEndpoint(
         url: url,
-        token: resolvedToken(
-            opts: opts,
+        token: resolvedCredential(
+            opts.token,
             mode: mode,
-            config: config,
+            local: config.token,
+            remote: config.remoteToken,
             inheritConfigCredentials: inheritConfigCredentials),
-        password: resolvedPassword(
-            opts: opts,
+        password: resolvedCredential(
+            opts.password,
             mode: mode,
-            config: config,
+            local: config.password,
+            remote: config.remotePassword,
             inheritConfigCredentials: inheritConfigCredentials),
         mode: mode)
 }
 
-private func resolvedToken(
-    opts: ConnectOptions,
+private func resolvedCredential(
+    _ explicit: String?,
     mode: String,
-    config: GatewayConfig,
+    local: String?,
+    remote: String?,
     inheritConfigCredentials: Bool = true) -> String?
 {
-    if let token = opts.token, !token.isEmpty { return token }
+    if let explicit, !explicit.isEmpty { return explicit }
     guard inheritConfigCredentials else { return nil }
-    if mode == "remote" {
-        return config.remoteToken
-    }
-    return config.token
-}
-
-private func resolvedPassword(
-    opts: ConnectOptions,
-    mode: String,
-    config: GatewayConfig,
-    inheritConfigCredentials: Bool = true) -> String?
-{
-    if let password = opts.password, !password.isEmpty { return password }
-    guard inheritConfigCredentials else { return nil }
-    if mode == "remote" {
-        return config.remotePassword
-    }
-    return config.password
+    return mode == "remote" ? remote : local
 }
 
 func makeGatewayConnectOptions(

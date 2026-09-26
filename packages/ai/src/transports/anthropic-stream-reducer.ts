@@ -42,6 +42,7 @@ import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.
 import {
   coerceTransportToolCallArguments,
   finalizeTerminalToolCallArguments,
+  iterateModelStream,
   sanitizeTransportPayloadText,
   transportAbortError,
   type WritableTransportStream,
@@ -70,7 +71,6 @@ export async function consumeAnthropicStream(params: {
   let costModel = model;
   let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
   let inputTransformations: unknown[] | undefined;
-  const anthropicStream = params.events;
   try {
     const blocks: AnthropicStreamBlock[] = output.content;
     const blockIndexes = new Map<number, number>();
@@ -92,7 +92,9 @@ export async function consumeAnthropicStream(params: {
       managed && resolveProviderEndpoint(model).endpointClass === "xiaomi-native";
     const reasoningContentThinkingBlocks = new Map<number, number>();
     const reasoningContentTextBlocks = new Map<number, number>();
+    let sawMessageStart = false;
     let sawMessageStop = false;
+    let sawStopReason = false;
     const pendingTextEnds: Array<Extract<AssistantMessageEvent, { type: "text_end" }>> = [];
     // Hold text_end until tool-boundary classification is known.
     const flushPendingTextEnds = () => {
@@ -212,7 +214,7 @@ export async function consumeAnthropicStream(params: {
         });
       }
     };
-    for await (const rawEvent of anthropicStream) {
+    for await (const rawEvent of iterateModelStream(params.events, options.signal)) {
       const event = asRecord(rawEvent);
       // A serving-model fallback replaces the initial snapshot; report only once at completion.
       inputTransformations = readAnthropicInputTransformations(event) ?? inputTransformations;
@@ -224,6 +226,7 @@ export async function consumeAnthropicStream(params: {
         throw new Error(readStringField(error, "message") || "Anthropic Messages stream failed");
       }
       if (event.type === "message_start") {
+        sawMessageStart = true;
         const message = asOptionalObjectRecord(event.message);
         const usage = asRecord(message?.usage);
         output.responseId = typeof message?.id === "string" ? message.id : undefined;
@@ -589,6 +592,7 @@ export async function consumeAnthropicStream(params: {
         const delta = asOptionalObjectRecord(event.delta);
         const usage = asOptionalObjectRecord(event.usage);
         if (typeof delta?.stop_reason === "string" && delta.stop_reason) {
+          sawStopReason = true;
           if (delta.stop_reason === "refusal") {
             applyAnthropicRefusal(output, delta.stop_details, model.provider);
           } else {
@@ -624,12 +628,21 @@ export async function consumeAnthropicStream(params: {
     if ([...blockIndexes.values()].some((index) => blocks[index]?.type === "toolCall")) {
       throw new Error("Provider completed stream with an incomplete tool call");
     }
+    // Proxies may omit message_stop, but EOF cannot complete a started response
+    // without a terminal fact. Preserve their existing empty/ping-only behavior.
+    if ((sawMessageStart || blocks.length > 0) && !sawMessageStop && !sawStopReason) {
+      throw new Error("Anthropic stream ended before a terminal event");
+    }
+    // Fine-grained tool streaming delivers tool input without server-side JSON
+    // validation, so repair invalid string literals before rejecting the turn.
     finalizeTerminalToolCallArguments(
       sealedToolCalls.map(({ block }) => block),
       (block) =>
         block.partialJson && block.partialJson.length > 0
           ? block.partialJson
           : seededToolArguments.get(block),
+      undefined,
+      { repairStringLiterals: true },
     );
     for (const sealed of sealedToolCalls) {
       delete sealed.block.partialJson;

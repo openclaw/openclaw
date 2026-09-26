@@ -36,11 +36,11 @@ async function settleTerminalPaint(page: Page): Promise<void> {
 
 async function cycleThemeMode(page: Page, currentMode: "Dark" | "Light" | "System") {
   const sidebar = page.locator("openclaw-app-sidebar");
-  const toggle = sidebar.getByRole("button", { name: `Color mode: ${currentMode}` });
-  if (!(await toggle.isVisible())) {
-    await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
+  const identityMenu = sidebar.getByRole("button", { name: /^Identity and app menu for / });
+  if ((await identityMenu.getAttribute("aria-expanded")) !== "true") {
+    await identityMenu.click();
   }
-  await toggle.click();
+  await sidebar.getByRole("menuitem", { name: `Color mode: ${currentMode}`, exact: true }).click();
 }
 
 suite.define(() => {
@@ -53,7 +53,7 @@ suite.define(() => {
 
       const panel = await openTerminalSidePanel(page);
       await gateway.waitForRequest("terminal.open");
-      await panel.locator(".tabstrip-tab.is-live").waitFor();
+      await page.locator('[data-region-header="side"] .tabstrip-tab.is-live').waitFor();
       const canvas = panel.locator(".tp-host canvas");
       await canvas.waitFor({ state: "visible" });
       await settleTerminalPaint(page);
@@ -155,7 +155,7 @@ suite.define(() => {
 
       await retry.click();
       await expect.poll(async () => (await gateway.getRequests("terminal.open")).length).toBe(2);
-      await panel.locator(".tabstrip-tab.is-live").waitFor();
+      await page.locator('[data-region-header="side"] .tabstrip-tab.is-live').waitFor();
       const canvas = panel.locator(".tp-host canvas");
       await canvas.waitFor({ state: "visible" });
       await settleTerminalPaint(page);

@@ -49,6 +49,7 @@ describe("runPreparedCliAgent interrupted partial output", () => {
         terminalInterruption: { reason },
       });
       const context = buildPreparedCliRunContext({ onSuccessfulAuthBinding });
+      context.reusableCliSession = { mode: "reuse", sessionId: "interrupted-native-session" };
 
       const result = await runPreparedCliAgent(context);
 

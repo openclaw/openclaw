@@ -2,18 +2,24 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  });
+});
 
 describe("worker placement workspace journal", () => {
   let root: string;
@@ -26,18 +32,19 @@ describe("worker placement workspace journal", () => {
     store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-  });
-
   const prune = () =>
     store.pruneOrphanedWorkspaceReconciliations({
       retainFailedOwner: (recoveryError) =>
         recoveryError.startsWith(FORCED_WORKER_ABANDONMENT_ERROR),
     });
 
-  const seedJournal = () => {
-    const active = seedActivePlacement(store, { environmentId: "worker-1", ownerEpoch: 7 });
+  const seedJournal = async () => {
+    seedAttachedPlacementEnvironment(database, {
+      environmentId: "worker-1",
+      sessionId: REQUEST.sessionId,
+      ownerEpoch: 7,
+    });
+    const active = await seedActivePlacement(store, { environmentId: "worker-1", ownerEpoch: 7 });
     if (active.state !== "active") {
       throw new Error("expected active placement");
     }
@@ -62,8 +69,8 @@ describe("worker placement workspace journal", () => {
     return { active, owner };
   };
 
-  it("prunes a workspace journal only after its exact owner is gone", () => {
-    const { active, owner } = seedJournal();
+  it("prunes a workspace journal only after its exact owner is gone", async () => {
+    const { active, owner } = await seedJournal();
 
     expect(prune()).toEqual([]);
     const draining = store.startDrain({
@@ -86,8 +93,8 @@ describe("worker placement workspace journal", () => {
     expect(store.listWorkspaceReconciliationOwners()).toEqual([]);
   });
 
-  it("retains a failed owner whose forced rollback is retryable", () => {
-    const { active, owner } = seedJournal();
+  it("retains a failed owner whose forced rollback is retryable", async () => {
+    const { active, owner } = await seedJournal();
     const draining = store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,

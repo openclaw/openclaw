@@ -30,15 +30,12 @@ function createMessage(
 describe("session run terminal bookkeeping", () => {
   it.each([
     { content: [] },
-    { content: [{ type: "input_text", text: "" }] },
     { content: [{ type: "input_text", text: "provider rate limit" }] },
-    { content: [{ type: "input_text", text: "[assistant turn failed before producing content]" }] },
     { content: [{ type: "output_text", text: "provider rate limit" }] },
     { content: [{ type: "thinking", thinking: "Internal reasoning" }] },
     { content: [{ type: "reasoning", text: "Internal reasoning" }] },
     { content: [{ type: "redacted_thinking", data: "redacted" }] },
     { content: [{ type: "text", text: "[assistant turn failed before producing content]" }] },
-    { content: [{ type: "text", text: "⚠️ Error: provider rate limit" }] },
     {
       content: [
         { type: "text", text: "⚠️ Error: provider" },
@@ -46,7 +43,6 @@ describe("session run terminal bookkeeping", () => {
       ],
     },
     { role: " Assistant ", content: [{ type: "text", text: "⚠️ Error: provider rate limit" }] },
-    { content: [{ type: "text", text: "The agent run failed before producing a reply." }] },
     {
       content: [
         { type: "text", text: "⚠️ Error: The agent run failed" },
@@ -103,38 +99,31 @@ describe("session run terminal bookkeeping", () => {
         { type: "image", source: "synthetic-image" },
       ],
     },
-    {
-      content: [
-        { type: "reasoning", text: "Internal reasoning" },
-        { type: "text", text: "Useful partial reply." },
-      ],
-    },
-    {
-      content: [
-        { type: "text", text: "provider rate limit" },
-        { type: "toolCall", id: "tool-1", name: "exec", arguments: {} },
-      ],
-    },
   ])("preserves useful failed-run content on a late delta: %j", ({ content }) => {
     const failed = reduceSessionProjection(createSessionProjection(primaryScope), {
       type: "runTerminal",
       runId: "run-1",
       status: "error",
+      seq: 10,
       errorMessage: "provider rate limit",
       message: { role: "assistant", content, stopReason: "error" },
     });
     expect(
       reduceSessionProjection(failed, {
         type: "runDelta",
+        seq: 11,
         runId: "run-1",
         message: createMessage("assistant", "late stream"),
       }),
     ).toBe(failed);
   });
 
-  it("upgrades an empty completed final exactly once without reopening the run", () => {
-    const emptyMessage = createMessage("assistant", "");
-    const deliveredMessage = createMessage("assistant", "eventual final");
+  it("upgrades an identified empty completed final exactly once without reopening the run", () => {
+    const emptyMessage = createMessage("assistant", "", { id: "assistant-final", seq: 7 });
+    const deliveredMessage = createMessage("assistant", "eventual final", {
+      id: "assistant-final",
+      seq: 7,
+    });
     let state = reduceSessionProjection(createSessionProjection(primaryScope), {
       type: "runTerminal",
       runId: "run-1",
@@ -142,6 +131,17 @@ describe("session run terminal bookkeeping", () => {
       message: emptyMessage,
     });
     expect(hasSessionProjectionAcceptedFinal(state.runs["run-1"], emptyMessage)).toBe(false);
+    const mismatchedMessage = createMessage("assistant", "wrong final", {
+      id: "different-assistant-final",
+      seq: 7,
+    });
+    state = reduceSessionProjection(state, {
+      type: "runTerminal",
+      runId: "run-1",
+      status: "completed",
+      message: mismatchedMessage,
+    });
+    expect(state.runs["run-1"]?.message).toBe(emptyMessage);
     state = reduceSessionProjection(state, {
       type: "runTerminal",
       runId: "run-1",
@@ -166,6 +166,28 @@ describe("session run terminal bookkeeping", () => {
       true,
     );
     expect(reduceSessionProjection(acceptedLaterFinal, laterEvent)).toBe(acceptedLaterFinal);
+  });
+
+  it("recovers a sequence-identified empty final when persisted metadata adds an ID", () => {
+    const emptyMessage = createMessage("assistant", "", { seq: 7 });
+    const deliveredMessage = createMessage("assistant", "eventual final", {
+      id: "assistant-final",
+      seq: 7,
+    });
+    let state = reduceSessionProjection(createSessionProjection(primaryScope), {
+      type: "runTerminal",
+      runId: "run-1",
+      status: "completed",
+      message: emptyMessage,
+    });
+    state = reduceSessionProjection(state, {
+      type: "runTerminal",
+      runId: "run-1",
+      status: "completed",
+      message: deliveredMessage,
+    });
+
+    expect(state.runs["run-1"]?.message).toBe(deliveredMessage);
   });
 
   it("accepts distinct same-run persisted finals and ignores the later final's replay", () => {

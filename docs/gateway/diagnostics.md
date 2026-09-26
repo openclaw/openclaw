@@ -115,6 +115,23 @@ Heartbeat-timeout records also capture these facts before termination:
 - `bufferedBytes`: aggregate local WebSocket buffering at the timeout decision,
   not the delivery status of an individual ping.
 
+## Command-lane diagnostics
+
+`[diagnostic] lane wait exceeded` is emitted when a queued task starts after
+waiting at least its warning threshold (normally 2 seconds). `waitedMs` measures
+that wait; `queueAhead` and `activeAhead` describe enqueue-time contention,
+while `activeNow` and `queueBehind` describe the lane when the task starts.
+
+Both this warning and `lane task error` include the enqueue-time `taskKind`,
+`sessionKey`, `runId`, and `requesterSessionKey` when the caller supplies them.
+These are structured log fields and appear on the same console line, allowing
+subagent queue contention to be attributed without a separate registry lookup.
+Embedded runs supply `spawn`, `turn`, or `cron` as the task kind; their session
+key identifies the waiting or failed session, and their requester key is the
+spawning parent when present. Queued manual cron runs supply their accepted run ID.
+Unknown fields are omitted. Identity is diagnostic provenance, not authority,
+and does not change admission, ordering, or warning thresholds.
+
 ## Stability recorder
 
 The Gateway records a bounded, payload-free stability stream by default when
@@ -147,6 +164,29 @@ available and contain fixed phase names and numbers, not patch values or session
 keys. Repeated stage visits contribute to the counts and totals. Parallel and
 nested stages can overlap, so their totals are neither an exclusive breakdown
 of request time nor CPU measurements.
+
+With diagnostics and warning logs enabled, `sessions.create` calls lasting at
+least one second emit `slow session create`. Its `elapsedMs` and
+`phaseDurationsMs` separate request preparation, admission, target discovery,
+worktree preparation, row snapshot and projection, transcript initialization,
+writer admission, commit, publication, initial-turn dispatch, and response work.
+These are elapsed times, including waits, with fixed phase names and no session
+keys or request values. Worktree preparation measures only work required before
+the response; provisioning already deferred to an initial turn stays with that
+turn's lifecycle.
+
+Two related info-level records help attribute slow worktree cleanup:
+`slow managed worktree removal` separates allocation admission, callback work,
+and final settlement, with preparation, snapshot, checkout removal, and body
+finalization timings inside the callback; `slow Git ref mutation` separates directory resolution,
+queue waiting, and queued work. Both require diagnostics and info-level logging,
+emit only after an operation lasting at least one second settles, and have
+separate fixed budgets of 60 records per minute per runtime isolate with
+`omittedObservations` counts. They retain fixed scalar fields and existing traces,
+without adding private paths or new identities. Their elapsed intervals can nest
+inside `worktreeCleanup` and include asynchronous waits; they are not CPU or
+individual child-command timings. See [Slow worktree cleanup](/logging#slow-worktree-cleanup)
+for fields and missing-record limits.
 
 SQLite session-write warnings also separate `queueWaitMs`, `writerExecutionMs`,
 and `completionDelayMs`. These measure time until the writer starts, work and
@@ -192,6 +232,108 @@ openclaw gateway stability --bundle latest --export
 
 Persisted bundles live under `~/.openclaw/logs/stability/` when events exist.
 
+## CPU profile
+
+An operator with `operator.admin` can request one in-memory profile of the Gateway's
+main JavaScript isolate:
+
+```bash
+openclaw gateway call diagnostics.cpuProfile --params '{}' --timeout 30000 --json
+```
+
+This Node-only RPC requests five seconds of sampling at a 10 ms interval. It opens
+no debugger port and sends no process signal. A disconnected caller or Gateway
+shutdown cancels the capture and runs profiler cleanup. Overlapping requests fail
+instead of queuing. No profile is written to disk or included in diagnostics exports.
+
+The result contains `profile` in V8 CPU-profile format, `requestedDurationMs`,
+`actualDurationMs`, `startBlockedMs`, `samplingIntervalMicros`, `redactedNodeCount`, and
+`sampleLossCount: null` because V8 does not expose an explicit lost-sample count.
+The complete result is limited to 1 MiB; larger profiles fail without truncating
+nodes or samples. Code locations inside the OpenClaw package use `openclaw:` paths;
+Node builtin locations use `node:` paths. External paths, eval labels, and other
+unrecognized names are redacted. Bounded code-symbol names at recognized locations
+are retained; their syntax does not prove that a computed name is public. Review
+the profile before sharing it. Graph edges, native signed script IDs, and sample order remain intact. V8 can
+emit samples out of timestamp order, so signed time deltas are preserved for profile
+viewers to reconstruct timestamps and order samples.
+
+Sampling can outlast the requested interval when the event loop is blocked. The
+response limit does not bound V8's internal allocation during that delay. Profile
+samples describe this isolate, not all process threads, and are not exact
+per-function CPU accounting.
+
+Starting a CPU profile synchronously scans V8's heap to build its code map. On a
+large Gateway this can block the main event loop for seconds on every capture,
+before regular sampling begins. Keeping the inspector domain enabled or sending
+the request from a Worker does not avoid that main-isolate work.
+`startBlockedMs` measures the synchronous start call with a monotonic clock,
+excluding promise waits, setup, sampling time, and stop/cleanup. Use it to
+attribute capture-induced stalls when analyzing an individual capture; it cannot
+be subtracted from aggregate event-loop maxima or percentiles. The measurement
+reports the cost; it does not prevent or interrupt the native stall.
+
+The RPC refuses a known active inspector listener, profiling flags, coverage
+collection, or any active Node tracing, including non-CPU categories. Stop tracing
+before requesting a profile, and do not enable it during capture: V8 can send raw
+profile chunks to an existing trace writer before this RPC sanitizes the result.
+The RPC cannot discover arbitrary third-party in-process inspector sessions;
+do not run it alongside another debugger, profiler, tracer, or coverage owner. An unavailable
+response names the reason and whether cleanup failed. If cleanup remains uncertain,
+further captures are refused; the RPC never restarts the Gateway automatically.
+
+## Sampling heap profile
+
+An operator with `operator.admin` can sample allocations in the Gateway's main
+JavaScript isolate without taking a whole-heap snapshot:
+
+```bash
+openclaw gateway call diagnostics.heapProfile --params '{}' --timeout 30000 --json
+openclaw gateway call diagnostics.heapProfile --params '{"durationMs":10000,"samplingIntervalBytes":32768}' --timeout 45000 --json
+```
+
+The Node-only RPC defaults to five seconds and an average sampling interval of
+32 KiB. Parameters must be positive integers. Durations above 30 seconds are
+clamped to 30 seconds; intervals below 4 KiB are clamped to 4 KiB. Smaller intervals
+collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
+than the requested capture. The critical-memory warning points to this RPC;
+pressure never starts a capture automatically.
+
+The result includes actual elapsed `durationMs`, `samplingIntervalBytes`,
+`heapUsedBefore`, `heapUsedAfter`, `rssBefore`, `rssAfter` (all memory values in
+bytes), `redactedNodeCount`, `unattributedSampleCount`, `unattributedSampleBytes`,
+and `truncated`. When present, `profile` contains the sanitized V8 sampling tree
+and samples. Each node's `selfSize` is the estimated allocation bytes at that call
+site; sum its descendants for inclusive
+bytes. Samples link to nodes by `nodeId`.
+
+V8 can sample allocations made while constructing its own profile, after a call
+site has been translated into the returned tree. Samples without a matching tree
+node are omitted and reported in `unattributedSampleCount` and
+`unattributedSampleBytes`; native tree sizes remain unchanged. `truncated` is true
+when such references are omitted or a size-capped summary replaces the tree.
+
+The complete result is capped at 1 MiB. When the tree and samples exceed that cap,
+`truncated` is true and `summary` replaces `profile`. Summary entries combine
+identical call stacks, retain up to eight frames in leaf-first order, and contain
+`selfBytes`, inclusive `totalBytes`, and `count` (the number of sampled allocations
+at those sites, not an exact object count). Entries are ordered by `totalBytes`,
+then `selfBytes`; lower-ranked entries are omitted to fit the cap. Inclusive totals
+overlap across callers, so do not add them together. Start with large `selfBytes`
+and inspect the stack to identify the allocating code.
+
+Sampling is cheaper than a whole-heap snapshot but is still approximate. V8's
+default sampling mode excludes objects collected before capture ends; this is not
+an inventory of every transient allocation or objects allocated before capture.
+Native allocations, external buffers, other isolates, and other process threads
+are not attributed, so sampled bytes need not explain the full RSS change.
+
+Heap and CPU captures share one inspector owner: overlapping calls fail instead
+of queuing. Both use the same redaction, runtime-conflict checks, cancellation,
+and cleanup rules described above. No listener is opened and no file is written.
+Event-loop stalls can extend capture duration, and the response cap does not bound
+V8's internal sampling memory. Review retained code-symbol names before sharing.
+
 ## Useful options
 
 ```bash
@@ -233,6 +375,42 @@ Memory pressure events record RSS, heap, threshold, and growth facts
 (`rss_threshold`, `heap_threshold`, `rss_growth`) without performing a
 file-system scan or writing a pre-OOM snapshot.
 
+On Node, persistent database workers collect garbage after a completed operation
+when their used heap has grown by 32 MiB since the last idle collection. SQLite,
+history, transcript, and reclamation workers request a 512 MiB V8 old-generation
+limit; an explicit process-wide `--max-old-space-size` overrides Node's worker
+resource limit. These limits do not cover native allocations or transferred buffers.
+Memory diagnostics report each sampled direct worker by script and thread ID,
+including its heap and external memory. Task workers also publish ArrayBuffer
+bytes from inside their isolate; ArrayBuffers are already included in external
+memory, so do not add those values together. Other direct workers use native heap
+statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
+the parent registry's coverage.
+
+`workerHeapSampledCount` and `workerArrayBuffersSampledCount` show coverage against
+`workerCount`. `workerMemoryCoverage` is `complete`, `partial`, or `unavailable`
+for direct workers. Before the first sample or after a sample expires, missing
+bytes are omitted instead of reported as zero; `workerMemoryMissing` identifies
+pending, stale, or unavailable workers. Samples expire after 60 seconds. Sampling
+never waits for a busy worker and keeps at most one request outstanding per
+transport. If a worker cannot handle port messages, native V8 interrupts still
+refresh its heap and external counters; ArrayBuffer coverage remains unavailable
+until the worker responds. Memory pressure warnings include these counters and the external-memory
+limit caveat; Node does not provide a worker limit for external/native allocations.
+
+Critical memory pressure retires idle workers through their existing cleanup owners,
+including when diagnostic event collection is disabled. Active operations keep
+their custody and the usual 30-minute database retention window resumes after use.
+No stored data, database schema, or update procedure changes.
+
+When a task pool recreates an idle-retired Worker within five minutes, it keeps
+one replacement warm for five minutes of inactivity. Other slots retain their
+normal idle timeout. Node Code Mode likewise retains at most one completed
+Worker for five minutes, reusing it only when its runtime entry and heap limit
+match. Warm task workers still collect released payloads in place; critical
+pressure, cancellation, rotation, and shutdown retain their existing cleanup
+paths. No configuration setting is needed.
+
 ## Related
 
 - [Health checks](/gateway/health)
@@ -240,3 +418,5 @@ file-system scan or writing a pre-OOM snapshot.
 - [Gateway protocol](/gateway/protocol/rpc-methods#rpc-method-families)
 - [Logging](/logging)
 - [OpenTelemetry export](/gateway/opentelemetry) - separate flow for streaming diagnostics to a collector
+- [Codex harness runtime](/plugins/codex-harness-runtime) - runtime boundaries, permissions, and diagnostics for the Codex harness
+- [Diagnostics flags](/diagnostics/flags) - the named flags that turn on extra logging for one subsystem without raising `logging.level` globally

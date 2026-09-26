@@ -6,9 +6,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { isProcessAlive, waitForDead, waitForPidFile } from "../../../test/helpers/process-wait.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
+import { processProbeEntrypoints } from "../process-probes-runtime.test-support.js";
 import { createProcessSupervisor } from "./supervisor.js";
 import type { ManagedRun } from "./types.js";
 
@@ -153,7 +158,7 @@ function fragmentedOutputFixture(): string {
   `;
 }
 
-async function expectPending(promise: Promise<void>) {
+async function expectPending<T>(promise: Promise<T>) {
   const settled = await Promise.race([
     promise.then(() => true),
     new Promise<false>((resolve) => {
@@ -164,6 +169,27 @@ async function expectPending(promise: Promise<void>) {
 }
 
 describe("supervisor anchored shell real process ownership", () => {
+  it.skipIf(process.platform === "win32")(
+    "keeps the root command alive when it closes its inherited lineage descriptor",
+    async () => {
+      const supervisor = createProcessSupervisor();
+      const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+        'require("node:fs").closeSync(3); setTimeout(() => process.stdout.write("SURVIVED\\n"), 300)',
+      )}`;
+      const run = await supervisor.spawn({ mode: "anchored-shell", command });
+      try {
+        await expect(run.wait()).resolves.toMatchObject({
+          exitCode: 0,
+          exitSignal: null,
+          stdout: "SURVIVED\n",
+        });
+        await run.waitForExtinction!();
+      } finally {
+        await supervisor.shutdown();
+      }
+    },
+  );
+
   it.skipIf(process.platform !== "win32")(
     "keeps anchored Windows commands console-free",
     async () => {
@@ -217,22 +243,14 @@ describe("supervisor anchored shell real process ownership", () => {
       try {
         await expect(fixture.run.wait()).resolves.toMatchObject({ exitCode: 0, exitSignal: null });
         const cleanup = fixture.cleanup();
-        if (ignoreTerm) {
-          await expect(cleanup).rejects.toThrow("cleanup identity lost");
-        } else {
-          await cleanup;
-          expect(isProcessAlive(pid)).toBe(false);
-        }
+        await cleanup;
+        expect(isProcessAlive(pid)).toBe(false);
         await waitForDead(pid, 5_000);
       } finally {
         await fixture.release();
         killPidIfAlive(pid);
         await waitForDead(pid, 5_000);
-        if (ignoreTerm) {
-          await expect(fixture.supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
-        } else {
-          await fixture.supervisor.shutdown();
-        }
+        await fixture.supervisor.shutdown();
       }
     },
   );
@@ -240,8 +258,6 @@ describe("supervisor anchored shell real process ownership", () => {
     "completes an otherwise idle host with %s command environment",
     async (environment) => {
       const cwd = tempDirs.make("openclaw-anchored-shell-idle-");
-      const hostPath = path.join(cwd, "host.mts");
-      const supervisorUrl = new URL("./supervisor.ts", import.meta.url).href;
       let command =
         'printf "%s\\n" "${OPENCLAW_TEST_PARENT_ENV-absent}" "${OPENCLAW_TEST_CHILD_ENV-absent}"';
       if (process.platform === "win32") {
@@ -252,39 +268,26 @@ describe("supervisor anchored shell real process ownership", () => {
         );
         command = `"${commandPath}"`;
       }
-      await writeFile(
-        hostPath,
-        `
-          const { createProcessSupervisor } = await import(${JSON.stringify(supervisorUrl)});
-          const supervisor = createProcessSupervisor();
-          const environment = ${JSON.stringify(environment)};
-          const run = await supervisor.spawn({
-            mode: "anchored-shell",
-            command: ${JSON.stringify(command)},
-            ...(environment === "inherited" ? {} : {
-              env: environment === "empty" ? {} : { OPENCLAW_TEST_CHILD_ENV: "child" },
-            }),
-          });
-          try {
-            const result = await run.wait();
-            await run.waitForExtinction();
-            console.log(JSON.stringify(result));
-          } finally {
-            await supervisor.shutdown();
-          }
-        `,
-        "utf8",
-      );
       // A separate host has no Vitest timers or IPC keeping admission alive.
-      const host = spawnSync(process.execPath, ["--import", "tsx", hostPath], {
-        env: {
-          ...process.env,
-          OPENCLAW_TEST_PARENT_ENV: "parent",
-          OPENCLAW_TEST_CHILD_ENV: undefined,
+      const host = spawnSync(
+        process.execPath,
+        [
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(processProbeEntrypoints.idleSupervisor),
+          ),
+          environment,
+          command,
+        ],
+        {
+          env: {
+            ...process.env,
+            OPENCLAW_TEST_PARENT_ENV: "parent",
+            OPENCLAW_TEST_CHILD_ENV: undefined,
+          },
+          encoding: "utf8",
+          timeout: 10_000,
         },
-        encoding: "utf8",
-        timeout: 10_000,
-      });
+      );
       expect(host.error).toBeUndefined();
       expect(host.status, host.stderr).toBe(0);
       const result = JSON.parse(host.stdout);

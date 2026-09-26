@@ -5,7 +5,7 @@ enum NodeServiceManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "node.service")
     private static let lifecycleQueue = LifecycleQueue()
     private static var launchdPlistURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        LaunchAgentPlist.homeDirectoryURL
             .appendingPathComponent("Library/LaunchAgents/\(nodeLaunchdLabel).plist")
     }
 
@@ -89,11 +89,9 @@ extension NodeServiceManager {
     }
 
     private static func serviceCommand(_ args: [String]) async -> [String] {
-        await CommandResolver.openclawCommand(
+        await CommandResolver.localOpenclawCommand(
             subcommand: "node",
-            extraArgs: self.withJsonFlag(args),
-            // Service management must always run locally, even if remote mode is configured.
-            configRoot: ["gateway": ["mode": "local"]])
+            extraArgs: self.withJsonFlag(args))
     }
 
     private struct CommandResult {

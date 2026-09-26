@@ -34,8 +34,9 @@ export function resolveAgentHarnessPolicy(
     config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
   } & AgentRuntimePolicyScope,
+  // Configured selectors can reuse a normalized lookup without losing their route input.
+  configured = resolveModelRuntimePolicy(params),
 ): AgentHarnessPolicy {
-  const configured = resolveModelRuntimePolicy(params);
   const configuredRuntime = normalizeOptionalAgentRuntimeId(configured.policy?.id);
   const runtime =
     configuredRuntime && configuredRuntime !== "default"
@@ -52,6 +53,7 @@ export function resolveAgentHarnessPolicy(
   }
   const openAIImplicitRuntime = resolveOpenAIImplicitAgentRuntime({
     ...params,
+    runtimePolicy: configured,
     api: params.modelApi,
     baseUrl: params.modelBaseUrl,
   });

@@ -1,4 +1,6 @@
 import {
+  createMeetingBrowserAudioCaptureSource,
+  type MeetingBrowserAudioCaptureRequest,
   createMeetingLeaveSource,
   createMeetingTranscriptSource,
 } from "openclaw/plugin-sdk/meeting-page-script-runtime";
@@ -6,6 +8,22 @@ import { TEAMS_MEETING_SELECTORS } from "./teams-meetings-selectors.js";
 import { teamsMeetingStatusCallSource } from "./teams-meetings-status-call-source.js";
 import { teamsMeetingStatusPreludeSource } from "./teams-meetings-status-prejoin-source.js";
 import { normalizeTeamsMeetingUrlForReuse } from "./teams-meetings-urls.js";
+
+export function teamsMeetingAudioCaptureScript(params: MeetingBrowserAudioCaptureRequest): string {
+  return createMeetingBrowserAudioCaptureSource({
+    ...params,
+    audioOutputsGlobal: "__openclawTeamsAudioOutputs",
+    ownershipSource: `
+      ${pageIdentityFunctionSource()}
+      const expectedIdentity = ${JSON.stringify(normalizeTeamsMeetingUrlForReuse(params.meetingUrl))};
+      const state = window.__openclawTeamsMeeting;
+      return Boolean(expectedIdentity && state?.sessionId === sessionId &&
+        state.identity === expectedIdentity && !state.leavePending &&
+        (meetingIdentity(location.href) === expectedIdentity ||
+          (state.inCallUrl === location.href && state.inCallControl?.isConnected)));
+    `,
+  });
+}
 
 function pageIdentityFunctionSource(): string {
   return `const meetingIdentity = (rawUrl) => {

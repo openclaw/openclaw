@@ -1,4 +1,3 @@
-// Doctor scanner and repair for plugin/channel config that references missing plugins.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
@@ -8,13 +7,18 @@ import {
   isExplicitPluginDisableMarker,
   isRetiredPluginId,
   normalizePluginId,
+  normalizePluginsConfig,
 } from "../../../plugins/config-state.js";
+import { hasIncompletePluginDiscovery } from "../../../plugins/discovery-availability.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
+import { isActivatedManifestOwner } from "../../../plugins/manifest-owner-policy.js";
+import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import {
   listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginLookupIds,
 } from "../../../plugins/official-external-plugin-catalog.js";
+import { normalizePluginPolicyId } from "../../../plugins/plugin-policy-id.js";
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
@@ -32,11 +36,12 @@ type StalePluginConfigHit = {
 };
 
 type StalePluginRegistryState = {
+  plugins: PluginManifestRecord[];
   knownIds: Set<string>;
   officialLookupIds: Set<string>;
   knownChannelIds: Set<string>;
   missingInstalledIds: Set<string>;
-  hasDiscoveryErrors: boolean;
+  incompleteDiscovery: boolean;
 };
 
 function collectPluginRegistryState(
@@ -87,15 +92,16 @@ function collectPluginRegistryState(
     }
   }
   return {
+    plugins: registry.plugins,
     knownIds,
     officialLookupIds,
     knownChannelIds,
     missingInstalledIds: new Set([...installedIds].filter((pluginId) => !knownIds.has(pluginId))),
-    hasDiscoveryErrors: registry.diagnostics.some((diag) => diag.level === "error"),
+    incompleteDiscovery: hasIncompletePluginDiscovery(registry.diagnostics),
   };
 }
 
-/** Return true when plugin discovery errors should pause stale-plugin auto-removal. */
+/** Incomplete discovery cannot prove that a configured plugin should be removed. */
 export function isStalePluginAutoRepairBlocked(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -103,7 +109,7 @@ export function isStalePluginAutoRepairBlocked(
   if (cfg.plugins?.enabled === false) {
     return false;
   }
-  return collectPluginRegistryState(cfg, env).hasDiscoveryErrors;
+  return collectPluginRegistryState(cfg, env).incompleteDiscovery;
 }
 
 /** Scan plugin/channel config surfaces for ids no longer present in manifests or installs. */
@@ -341,7 +347,7 @@ export function collectStalePluginConfigWarnings(params: {
   }
   if (params.autoRepairBlocked) {
     lines.push(
-      `- Auto-removal is paused because plugin discovery currently has errors. Fix plugin discovery first, then rerun "${params.doctorFixCommand}".`,
+      `- Auto-removal is paused because plugin discovery is incomplete; uninspected configuration is preserved. Resolve the plugin discovery diagnostics, then rerun "${params.doctorFixCommand}".`,
     );
   } else {
     lines.push(
@@ -362,13 +368,14 @@ export function maybeRepairStalePluginConfig(
 ): {
   config: OpenClawConfig;
   changes: string[];
+  warnings?: string[];
 } {
   if (cfg.plugins?.enabled === false) {
     return { config: cfg, changes: [] };
   }
   const environment = env ?? process.env;
   const registryState = collectPluginRegistryState(cfg, environment);
-  if (registryState.hasDiscoveryErrors) {
+  if (registryState.incompleteDiscovery) {
     return { config: cfg, changes: [] };
   }
 
@@ -384,12 +391,40 @@ export function maybeRepairStalePluginConfig(
   const next = structuredClone(cfg);
   const nextPlugins = asNullableRecord(next.plugins);
 
+  let retainedAllowedIds: string[] = [];
   const allowIds = hits.filter((hit) => hit.surface === "allow").map((hit) => hit.pluginId);
   if (allowIds.length > 0 && Array.isArray(nextPlugins?.allow)) {
     const staleAllowIds = new Set(allowIds.map((pluginId) => normalizePluginId(pluginId)));
     nextPlugins.allow = nextPlugins.allow.filter(
       (pluginId) => typeof pluginId !== "string" || !staleAllowIds.has(normalizePluginId(pluginId)),
     );
+    // Preserve channel/slot bypasses without turning an emptied allowlist into unrestricted access.
+    if (normalizePluginsConfig(next.plugins).allow.length === 0) {
+      const config = normalizePluginsConfig(cfg.plugins);
+      const activePlugins = registryState.plugins.filter((plugin) =>
+        isActivatedManifestOwner({ plugin, normalizedConfig: config, rootConfig: cfg }),
+      );
+      const activePolicyIds = new Set(
+        activePlugins.map((plugin) => normalizePluginPolicyId(plugin.id)),
+      );
+      const aliasedOwners = activePlugins.filter(
+        (plugin) => !activePolicyIds.has(normalizePluginId(plugin.id)),
+      );
+      if (aliasedOwners.length > 0) {
+        return {
+          config: cfg,
+          changes: [],
+          warnings: [
+            `- Stale plugin cleanup paused: preserving the restrictive plugins.allow policy because active plugin ids alias to other owners (${aliasedOwners.map((plugin) => `${plugin.id} -> ${normalizePluginId(plugin.id)}`).join(", ")}). Choose noncolliding allowed plugin ids, then rerun openclaw doctor --fix.`,
+          ],
+        };
+      }
+      retainedAllowedIds = activePlugins.map((plugin) => normalizePluginId(plugin.id));
+      nextPlugins.allow = retainedAllowedIds;
+      if (retainedAllowedIds.length === 0) {
+        nextPlugins.enabled = false;
+      }
+    }
   }
 
   const denyIds = hits.filter((hit) => hit.surface === "deny").map((hit) => hit.pluginId);
@@ -438,6 +473,16 @@ export function maybeRepairStalePluginConfig(
   if (allowIds.length > 0) {
     changes.push(
       `- plugins.allow: removed ${allowIds.length} stale plugin id${allowIds.length === 1 ? "" : "s"} (${allowIds.join(", ")})`,
+    );
+  }
+  if (retainedAllowedIds.length > 0) {
+    changes.push(
+      `- plugins.allow: retained already enabled plugins as explicit allowlist entries (${retainedAllowedIds.join(", ")}); review this list when changing channels or plugin slots`,
+    );
+  }
+  if (nextPlugins?.enabled === false) {
+    changes.push(
+      "- plugins.enabled: disabled plugins because no allowed plugins remain; review plugins.allow before enabling plugins",
     );
   }
   if (denyIds.length > 0) {

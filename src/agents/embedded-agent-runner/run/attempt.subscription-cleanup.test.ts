@@ -122,7 +122,7 @@ describe("cleanupEmbeddedAttemptResources", () => {
           order.push("dispose");
         },
       },
-      sessionManager: {},
+      sessionManager: undefined,
       aborted: true,
       abortSettlePromise: settle.promise,
       runId: "run-1",
@@ -153,7 +153,7 @@ describe("cleanupEmbeddedAttemptResources", () => {
           order.push("dispose");
         },
       },
-      sessionManager: {},
+      sessionManager: undefined,
       aborted: true,
       abortSettlePromise: new Promise(() => {}),
       runId: "run-1",
@@ -191,7 +191,7 @@ describe("cleanupEmbeddedAttemptResources", () => {
           order.push("dispose");
         },
       },
-      sessionManager: {},
+      sessionManager: undefined,
       bundleMcpRuntime: {
         dispose: async () => {
           order.push("runtime-dispose-start");
@@ -206,6 +206,41 @@ describe("cleanupEmbeddedAttemptResources", () => {
     expect(order).toEqual(["flush", "dispose", "runtime-dispose-start"]);
   });
 
+  it("cancels an idle wait without detaching runtime disposal", async () => {
+    const { cleanupEmbeddedAttemptResources } = await import("./attempt-subscription-cleanup.js");
+    const { flushPendingToolResultsAfterIdle } = await import("../wait-for-idle-before-flush.js");
+    const controller = new AbortController();
+    const idle = createDeferred();
+    const runtime = createDeferred();
+    const dispose = vi.fn();
+    const disposeRuntime = vi.fn(async () => await runtime.promise);
+    let settled = false;
+    const cleanup = cleanupEmbeddedAttemptResources({
+      flushPendingToolResultsAfterIdle,
+      session: { agent: { waitForIdle: () => idle.promise }, dispose },
+      sessionManager: undefined,
+      abortSignal: controller.signal,
+      bundleMcpRuntime: { dispose: disposeRuntime },
+    }).then(() => {
+      settled = true;
+    });
+    try {
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(disposeRuntime).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+      runtime.resolve();
+      await cleanup;
+      expect(settled).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      idle.resolve();
+      runtime.resolve();
+      await cleanup;
+    }
+  });
+
   it("does not wait for the settle promise on non-aborted cleanup", async () => {
     const { cleanupEmbeddedAttemptResources } = await import("./attempt-subscription-cleanup.js");
     const dispose = vi.fn();
@@ -216,7 +251,7 @@ describe("cleanupEmbeddedAttemptResources", () => {
         agent: {},
         dispose,
       },
-      sessionManager: {},
+      sessionManager: undefined,
       aborted: false,
       abortSettlePromise: new Promise(() => {}),
       runId: "run-1",

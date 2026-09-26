@@ -20,8 +20,6 @@ import {
   parsePlaybackMarkSequence,
   type OpenAIRealtimeUserMessageOptions,
   type OpenAIRealtimeVoiceBridgeConfig,
-  type RealtimeAzureDeploymentSessionUpdate,
-  type RealtimeGaSessionUpdate,
   type RealtimeTurnDetectionConfig,
 } from "./realtime-voice-session-policy.js";
 
@@ -127,10 +125,10 @@ export abstract class OpenAIRealtimeProtocol {
     this.sendEvent(this.buildGaSessionUpdate());
   }
 
-  protected buildGaSessionUpdate(): RealtimeGaSessionUpdate {
+  protected buildGaSessionUpdate() {
     const cfg = this.config;
     return {
-      type: "session.update",
+      type: "session.update" as const,
       session:
         cfg.gaSessionPolicy ??
         buildOpenAIRealtimeGaSessionPolicy({
@@ -155,7 +153,7 @@ export abstract class OpenAIRealtimeProtocol {
     return Boolean(this.config.azureEndpoint && this.config.azureDeployment);
   }
 
-  protected buildAzureDeploymentSessionUpdate(): RealtimeAzureDeploymentSessionUpdate {
+  protected buildAzureDeploymentSessionUpdate() {
     const cfg = this.config;
     const format = this.resolveLegacyRealtimeAudioFormat();
     const tools = normalizeOpenAIRealtimeTools(
@@ -164,7 +162,7 @@ export abstract class OpenAIRealtimeProtocol {
       AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH,
     );
     return {
-      type: "session.update",
+      type: "session.update" as const,
       session: {
         modalities: ["text", "audio"],
         instructions: cfg.instructions,
@@ -237,13 +235,17 @@ export abstract class OpenAIRealtimeProtocol {
     }
   }
 
-  private drainResponseQueue(): void {
-    if (
+  protected get responseBusy(): boolean {
+    return (
       this.interruptingPlayback ||
       this.responseActive ||
       this.responseCreateState !== "idle" ||
       this.responseCancelInFlight
-    ) {
+    );
+  }
+
+  private drainResponseQueue(): void {
+    if (this.responseBusy) {
       return;
     }
     if (this.standaloneSpeechQueue.length > 0) {
@@ -346,10 +348,7 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected requestResponseCreate(options?: OpenAIRealtimeUserMessageOptions): void {
     if (
-      this.interruptingPlayback ||
-      this.responseActive ||
-      this.responseCreateState !== "idle" ||
-      this.responseCancelInFlight ||
+      this.responseBusy ||
       this.continuingToolCallIds.size > 0 ||
       this.pendingToolCallIds.size > 0
     ) {
@@ -377,13 +376,7 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   protected flushStandaloneSpeech(): void {
-    if (
-      this.interruptingPlayback ||
-      this.standaloneSpeechActive ||
-      this.responseActive ||
-      this.responseCreateState !== "idle" ||
-      this.responseCancelInFlight
-    ) {
+    if (this.responseBusy || this.standaloneSpeechActive) {
       return;
     }
     const text = this.standaloneSpeechQueue.shift();

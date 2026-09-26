@@ -1,4 +1,7 @@
-import type {
+import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
+import type { SessionEntrySummary } from "./session-accessor.types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export type {
   DeletedAgentSessionEntryPurgeParams,
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
@@ -11,15 +14,99 @@ import type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
 } from "./session-accessor.lifecycle-types.js";
-import type { SessionEntrySummary } from "./session-accessor.types.js";
-import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
-/** One writer callback owns this record; no Worker object or plan payload is retained. */
+export type SessionTranscriptContextVersion = {
+  generation: string | null;
+  rawSeq: number | null;
+  updatedAt: number | null;
+};
+
+export type CanonicalSessionValidationResult = {
+  validatedRows: number;
+  certifiedRows: number;
+  hasMore: boolean;
+  oversizedRows: number;
+};
+
+/** Worker operation facts; no Worker object or plan payload is retained. */
 export type SqliteSessionReclamationDiagnostics = {
-  kind?: "entry" | "lifecycle-artifacts" | "history-eviction" | "historical-generation";
+  kind?:
+    | "archive-publish-prepare"
+    | "archive-publish-record"
+    | "entry"
+    | "lifecycle-artifacts"
+    | "history-eviction"
+    | "historical-generation"
+    | "maintenance-plan"
+    | "maintenance-finalize"
+    | "maintenance-statistics"
+    | "maintenance-pages"
+    | "cold-batch"
+    | "cold-maintain"
+    | "cold-restore";
   workerThreadId?: number;
+};
+
+/** One validated request owns this record until its observed release event. */
+export type SqliteSessionReclamationAdmissionDiagnostics = {
+  admissionId: number;
+  releaseCause?: "worker-release" | "worker-exit";
+};
+
+export type SqliteSessionDatabaseAdmissionDiagnostics = {
+  admissionMode?: "cached" | "async";
+  admissionMs?: number;
+};
+
+/** One cleanup attempt owns these numeric observations; no row or transcript is retained. */
+export type SqliteSessionArtifactPreparationDiagnostics =
+  SqliteSessionDatabaseAdmissionDiagnostics & {
+    nodeInventoryMs?: number;
+    referencePlanningMs?: number;
+    orphanPlanningMs?: number;
+    markerScanMs?: number;
+    nodeRows?: number;
+    windowRows?: number;
+    referenceIds?: number;
+    selectedEntries?: number;
+    markerWindows?: number;
+    markerRows?: number;
+    deletePlans?: number;
+    completed?: boolean;
+  };
+
+/** One pruning attempt retains only aggregate stage observations. */
+export type SqliteSessionArchivePruningDiagnostics = {
+  trigger: "initial" | "after-eviction" | "final";
+  checkpointCalls?: number;
+  checkpointIncomplete?: number;
+  checkpoint?: SqliteWalHealth;
+  totalBytesBefore?: number;
+  totalBytesAfter?: number;
+  walBytesBefore?: number;
+  walBytesAfter?: number;
+  checkpointMs?: number;
+  checkpointMaxMs?: number;
+  vacuumMs?: number;
+  vacuumPasses?: number;
+  vacuumPagesRequested?: number;
+  queryMs?: number;
+  rowDeletionMs?: number;
+  fileRemovalMs?: number;
+  removedFiles?: number;
+  missingFiles?: number;
+  failedRemovals?: number;
+  measurementMs?: number;
+  measurements?: number;
+  legacyInventoryMs?: number;
+  completed?: boolean;
+};
+
+export type SqliteSessionWriteDiagnostics = SqliteSessionReclamationDiagnostics & {
+  artifactPreparation?: SqliteSessionArtifactPreparationDiagnostics;
+  reclamationAdmission?: SqliteSessionReclamationAdmissionDiagnostics;
 };
 
 export type SessionTranscriptInstance = SessionEntrySummary & {
@@ -52,6 +139,8 @@ export type TranscriptEventAppendOptions = {
   appendIntent?: "active-branch";
   /** Synchronous authority check run inside the append transaction. */
   beforeCommitInTransaction?: () => void;
+  /** Reject the append when the transcript changed since the caller loaded it. */
+  expectedMutationAt?: number | null;
 };
 
 export type TranscriptAppendRefusal =
@@ -96,20 +185,6 @@ type SessionEntryBatchProjectionMutation = {
 export type SessionEntryBatchProjectionUpdate<T> = {
   mutations?: Iterable<SessionEntryBatchProjectionMutation>;
   result: T;
-};
-
-export type {
-  DeletedAgentSessionEntryPurgeParams,
-  DeleteSessionEntryLifecycleParams,
-  DeleteSessionEntryLifecycleResult,
-  ResetSessionEntryLifecycleParams,
-  ResetSessionEntryLifecycleResult,
-  SessionEntryLifecycleMutationResult,
-  SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
-  SessionLifecycleArchivedTranscript,
-  SessionLifecycleArtifactCleanupParams,
-  SessionLifecycleArtifactCleanupResult,
 };
 
 export type {

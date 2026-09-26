@@ -1,4 +1,3 @@
-// Discord plugin module implements gateway registry behavior.
 import type { GatewayPlugin } from "../internal/gateway.js";
 
 /**
@@ -17,22 +16,18 @@ function resolveAccountKey(accountId?: string): string {
   return accountId ?? DEFAULT_ACCOUNT_KEY;
 }
 
-/** Register a GatewayPlugin instance for an account. */
 export function registerGateway(accountId: string | undefined, gateway: GatewayPlugin): void {
   gatewayRegistry.set(resolveAccountKey(accountId), gateway);
 }
 
-/** Unregister a GatewayPlugin instance for an account. */
 export function unregisterGateway(accountId?: string): void {
   gatewayRegistry.delete(resolveAccountKey(accountId));
 }
 
-/** Get the GatewayPlugin for an account. Returns undefined if not registered. */
 export function getGateway(accountId?: string): GatewayPlugin | undefined {
   return gatewayRegistry.get(resolveAccountKey(accountId));
 }
 
-/** Clear all registered gateways (for testing). */
 export function clearGateways(): void {
   gatewayRegistry.clear();
 }

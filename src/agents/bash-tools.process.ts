@@ -28,6 +28,7 @@ import {
   appendExecTimeoutRetryGuidance,
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
+import { ProcessToolOutputSchema } from "./bash-tools.process-schema.js";
 import { handleProcessSendKeys, writeProcessStdin } from "./bash-tools.process-send-keys.js";
 import { processSchema } from "./bash-tools.schemas.js";
 import {
@@ -121,15 +122,6 @@ function isWritableStdin(stdin: ManagedRunStdin | undefined): stdin is ManagedRu
   return true;
 }
 
-function runningSessionInputDetails(runtime: RunningSessionRuntime) {
-  return {
-    stdinWritable: runtime.stdinWritable,
-    waitingForInput: runtime.waitingForInput,
-    idleMs: runtime.idleMs,
-    lastOutputAt: runtime.lastOutputAt,
-  };
-}
-
 function resolvePollWaitMs(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, Math.min(MAX_POLL_WAIT_MS, Math.floor(value)));
@@ -165,9 +157,20 @@ function resetPollRetrySuggestion(sessionId: string): void {
   }
 }
 
+function isConfirmedRequestedStop(session: ProcessSession): boolean {
+  return (
+    session.cancellationRequested === true &&
+    session.exitReason === "manual-cancel" &&
+    session.finalizationFailed !== true
+  );
+}
+
 function finishedSessionDetails(sessionId: string, finished: ProcessSession) {
   return {
-    status: finished.terminalStatus === "completed" ? "completed" : "failed",
+    status:
+      finished.terminalStatus === "completed" || isConfirmedRequestedStop(finished)
+        ? "completed"
+        : "failed",
     sessionId,
     exitCode: finished.exitCode ?? undefined,
     ...(finished.exitSignal != null ? { exitSignal: finished.exitSignal } : {}),
@@ -206,7 +209,9 @@ function finishedPollResult(
     retentionCapNote(finished) +
       retainedOutputNote +
       (output || "(no new output)") +
-      `\n\nProcess exited with ${renderExecExitLabel(finished)}.`,
+      (isConfirmedRequestedStop(finished)
+        ? `\n\nProcess stopped by request (${renderExecExitLabel(finished)}).`
+        : `\n\nProcess exited with ${renderExecExitLabel(finished)}.`),
     finished.exitReason,
   );
   return attachInternalToolResultAcknowledgement(
@@ -249,8 +254,8 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
       cleanup();
       reject(createAbortError(signal?.reason));
     };
+    // An active poll must outlive the child's last handle so one-shot callers receive its result.
     const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
-    timer.unref?.();
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
@@ -296,6 +301,7 @@ export function createProcessTool(
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
+    outputSchema: ProcessToolOutputSchema,
     execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const assertCurrent = () => {
         signal?.throwIfAborted();
@@ -346,10 +352,7 @@ export function createProcessTool(
                     status: s.terminalStatus ?? "running",
                     endedAt: s.endedAt,
                   }
-                : Object.assign(
-                    { pid: s.pid ?? undefined },
-                    runningSessionInputDetails(describeRunningSession(s)),
-                  ),
+                : Object.assign({ pid: s.pid ?? undefined }, describeRunningSession(s)),
             ),
           );
         const lines = sessions.map((s) => {
@@ -479,7 +482,7 @@ export function createProcessTool(
               sessionId: params.sessionId,
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
-              ...runningSessionInputDetails(runtime),
+              ...runtime,
               ...(typeof retryInMs === "number" ? { retryInMs } : {}),
             }),
             () => delivery.acknowledge(),
@@ -504,7 +507,10 @@ export function createProcessTool(
           const text =
             retentionCapNote(record) +
             (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
-            defaultTailNote(totalLines, window.usingDefaultTail);
+            defaultTailNote(totalLines, window.usingDefaultTail) +
+            (isConfirmedRequestedStop(record)
+              ? `\n\nProcess stopped by request (${renderExecExitLabel(record)}).`
+              : "");
           const output = runtime
             ? text + buildInputWaitHint(runtime)
             : appendExecTimeoutRetryGuidance(text, record.exitReason);
@@ -514,7 +520,7 @@ export function createProcessTool(
                   status: record.exited ? "completed" : "running",
                   sessionId: params.sessionId,
                   name: deriveSessionName(record.command),
-                  ...runningSessionInputDetails(runtime),
+                  ...runtime,
                 }
               : finishedSessionDetails(params.sessionId, record)),
             // Code Mode reads details, so preserve the requested page and its recovery hints.
@@ -607,7 +613,7 @@ export function createProcessTool(
           // action as a tool error and invite the model to retry it.
           return textResult(`Termination requested for session ${params.sessionId}.`, {
             status: "completed",
-            name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+            name: deriveSessionName(scopedSession.command),
           });
         }
 
@@ -641,7 +647,7 @@ export function createProcessTool(
             // match the finished-session remove branch's success shape.
             return textResult(`Removed session ${params.sessionId} (termination requested).`, {
               status: "completed",
-              name: scopedSession ? deriveSessionName(scopedSession.command) : undefined,
+              name: deriveSessionName(scopedSession.command),
             });
           }
           if (scopedFinished) {

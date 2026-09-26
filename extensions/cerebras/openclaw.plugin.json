@@ -1,5 +1,6 @@
 {
   "id": "cerebras",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

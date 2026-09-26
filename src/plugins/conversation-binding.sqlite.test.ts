@@ -2,7 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -43,6 +46,7 @@ describe("plugin conversation bindings through SQLite", () => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     registrySnapshot = captureActivePluginRegistrySnapshot();
     await drainGlobalSingletonLifecycleState();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     setTestEnvValue("OPENCLAW_STATE_DIR", makeTrackedTempDir("plugin-binding-sqlite", tempDirs));
     installGenericBindingChannel();
@@ -50,6 +54,7 @@ describe("plugin conversation bindings through SQLite", () => {
 
   afterEach(async () => {
     await drainGlobalSingletonLifecycleState();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     restoreActivePluginRegistrySnapshot(registrySnapshot);
     envSnapshot.restore();
@@ -76,7 +81,7 @@ describe("plugin conversation bindings through SQLite", () => {
         },
       };
       if (approval === "persistent approval") {
-        seedPluginConversationBindingApprovalForTest({ ...owner, ...conversation });
+        await seedPluginConversationBindingApprovalForTest({ ...owner, ...conversation });
       }
 
       const service = getSessionBindingService();
@@ -130,6 +135,7 @@ describe("plugin conversation bindings through SQLite", () => {
       expect(workRecord.targetSessionKey).not.toBe(record.targetSessionKey);
 
       await drainGlobalSingletonLifecycleState();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       installGenericBindingChannel();
 
@@ -145,6 +151,7 @@ describe("plugin conversation bindings through SQLite", () => {
       expect(service.listBySession(workRecord.targetSessionKey)).toEqual([workRecord]);
       const touchedAt = record.boundAt + 1_000;
       service.touch(record.bindingId, touchedAt, record.conversation);
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       expect(service.resolveByConversation(conversation)?.metadata).toMatchObject({
         ...record.metadata,
@@ -165,6 +172,7 @@ describe("plugin conversation bindings through SQLite", () => {
       await expect(
         service.unbind({ targetSessionKey: workRecord.targetSessionKey, reason: "session-ended" }),
       ).resolves.toEqual([workRecord]);
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       expect(service.resolveByConversation(workConversation)).toBeNull();
       expect(service.listBySession(workRecord.targetSessionKey)).toEqual([]);

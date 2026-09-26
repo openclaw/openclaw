@@ -1,10 +1,14 @@
 // Command execution startup tests cover startup behavior before CLI command execution.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
 const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensureCliPluginRegistryLoadedMock = vi.hoisted(() => vi.fn(async () => {}));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
@@ -131,8 +135,6 @@ describe("command-execution-startup", () => {
       },
       allowInvalid: true,
       loadPlugins: true,
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
     });
 
     expect(ensureConfigReadyMock).toHaveBeenLastCalledWith({
@@ -140,12 +142,110 @@ describe("command-execution-startup", () => {
       commandPath: ["message", "send"],
       measure: expect.any(Function),
       allowInvalid: true,
-      skipPristineCoreStateMigrations: true,
-      skipPristineStartupStateMigrations: true,
     });
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
       routeLogsToStderr: false,
     });
   });
+
+  it.each([
+    { commandPath: ["gateway"], asyncReads: 2 },
+    { commandPath: ["gateway", "run"], asyncReads: 2 },
+    { commandPath: ["doctor"], asyncReads: 0 },
+  ])(
+    "routes fresh $commandPath snapshots through their host preparation",
+    async ({ commandPath, asyncReads }) => {
+      const root = tempDirs.make("openclaw-cli-snapshot-preparation-");
+      const configPath = path.join(root, "openclaw.json");
+      const env = {
+        HOME: root,
+        USERPROFILE: root,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        VITEST: "true",
+      };
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      const [{ createConfigIoContext }, snapshots, metadata, runtime, lifecycle, state] =
+        await Promise.all([
+          import("../config/io.context.js"),
+          import("../config/io.snapshot.js"),
+          import("../config/io.plugin-metadata.js"),
+          import("../config/runtime-snapshot.js"),
+          import("../plugins/plugin-metadata-lifecycle.js"),
+          import("../state/openclaw-state-db.js"),
+        ]);
+      const context = createConfigIoContext({
+        configPath,
+        env,
+        homedir: () => root,
+        observe: false,
+      });
+      const prepare = vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync");
+      const captures: Array<ReturnType<typeof runtime.captureManagedConfigSnapshotPreparation>> =
+        [];
+      ensureConfigReadyMock.mockImplementationOnce(async () => {
+        captures.push(runtime.captureManagedConfigSnapshotPreparation(configPath));
+        expect(
+          runtime.captureManagedConfigSnapshotPreparation(path.join(root, "other.json")),
+        ).toBeNull();
+        expect(runtime.hasManagedRuntimeConfigWriteOwner(configPath)).toBe(false);
+        await expect(
+          runtime.preflightManagedRuntimeConfigWrite(
+            configPath,
+            {},
+            { requireImmediateApplication: true },
+          ),
+        ).rejects.toThrow("The Gateway cannot apply this activation");
+        for (const port of [19001, 19002]) {
+          fs.writeFileSync(
+            configPath,
+            JSON.stringify({ gateway: { mode: "local", port }, plugins: { enabled: false } }),
+          );
+          const result = await snapshots.readConfigFileSnapshotWithPluginMetadataFromContext(
+            context,
+            {
+              allowCurrentPluginMetadata: false,
+            },
+          );
+          expect(result.snapshot.issues).toEqual([]);
+          expect(result.snapshot.valid).toBe(true);
+          expect(result.snapshot.config.gateway?.port).toBe(port);
+          expect(result.pluginMetadataSnapshot).toBeDefined();
+        }
+      });
+      try {
+        await mod.ensureCliExecutionBootstrap({
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          commandPath,
+          startupPolicy: {
+            suppressDoctorStdout: true,
+            hideBanner: true,
+            skipConfigGuard: false,
+            loadPlugins: false,
+            pluginRegistry: { scope: "all" },
+          },
+        });
+        expect(prepare).toHaveBeenCalledTimes(asyncReads);
+        expect(runtime.captureManagedConfigSnapshotPreparation(configPath)).toBeNull();
+        const captured = captures[0];
+        if (asyncReads > 0) {
+          if (!captured) {
+            throw new Error("Gateway bootstrap did not own snapshot preparation");
+          }
+          await expect(captured(async () => undefined)).rejects.toThrow(
+            "snapshot preparation owner has closed",
+          );
+        } else {
+          expect(captured).toBeNull();
+        }
+      } finally {
+        prepare.mockRestore();
+        vi.unstubAllEnvs();
+        lifecycle.clearPluginMetadataLifecycleCaches();
+        state.closeOpenClawStateDatabaseForTest();
+      }
+    },
+  );
 });

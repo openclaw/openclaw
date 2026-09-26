@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/slack",
-  "version": "2026.9.2",
+  "version": "2026.9.6",
   "description": "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
   "repository": {
     "type": "git",
@@ -8,22 +8,20 @@
   },
   "type": "module",
   "dependencies": {
-    "@slack/bolt": "5.0.0",
-    "@slack/socket-mode": "3.0.1",
+    "@slack/bolt": "5.1.0",
     "@slack/types": "3.1.0",
     "@slack/web-api": "8.1.1",
-    "get-east-asian-width": "1.6.0",
-    "typebox": "1.3.18",
-    "undici": "7.29.1",
-    "ws": "8.21.3",
-    "zod": "4.4.3"
+    "get-east-asian-width": "1.7.0",
+    "typebox": "1.3.33",
+    "undici": "8.10.2",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.2"
+    "openclaw": ">=2026.9.6"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -149,16 +147,17 @@
       }
     },
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/slack",
       "npmSpec": "@openclaw/slack",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.5.28",
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.9.2"
+      "pluginApi": ">=2026.9.6"
     },
     "build": {
-      "openclawVersion": "2026.9.2",
+      "openclawVersion": "2026.9.6",
       "bundledDist": false
     },
     "release": {

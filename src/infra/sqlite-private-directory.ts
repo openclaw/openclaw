@@ -17,13 +17,15 @@ export async function createPrivateSqliteDirectory(directoryPath: string): Promi
   createPrivateWindowsDirectory(directoryPath);
 }
 
-export function resolvePrivateSqliteSnapshotStagingRoot(): string {
-  const appData = process.platform === "win32" ? process.env.LOCALAPPDATA?.trim() : undefined;
+export function resolvePrivateSqliteSnapshotStagingRoot(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const appData = process.platform === "win32" ? env.LOCALAPPDATA?.trim() : undefined;
   const defaultRoot = process.platform === "win32" ? "AppData/Local" : ".cache";
   const platformRoot = process.platform === "darwin" ? "Library/Caches" : defaultRoot;
   const cacheRoot =
-    [process.env.XDG_CACHE_HOME?.trim(), appData].find((root) => root && path.isAbsolute(root)) ??
-    path.join(resolveRequiredOsHomeDir(), platformRoot);
+    [env.XDG_CACHE_HOME?.trim(), appData].find((root) => root && path.isAbsolute(root)) ??
+    path.join(resolveRequiredOsHomeDir(env), platformRoot);
   return resolvePreferredOpenClawTmpDir({
     preferredDir: path.join(cacheRoot, "openclaw"),
     tmpdir: () => cacheRoot,

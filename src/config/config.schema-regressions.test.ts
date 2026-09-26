@@ -2,6 +2,29 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
+function validateAgentDefaults(defaults: Record<string, unknown>) {
+  return validateConfigObject({ agents: { defaults } });
+}
+
+function validateExec(exec: Record<string, unknown>, perAgent = false) {
+  return validateConfigObject(
+    perAgent ? { agents: { entries: { main: { tools: { exec } } } } } : { tools: { exec } },
+  );
+}
+
+function validateBinding(agentId: string, entries?: Record<string, unknown>) {
+  return validateConfigObject({
+    ...(entries ? { agents: { entries } } : {}),
+    bindings: [
+      {
+        type: "route",
+        agentId,
+        match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+      },
+    ],
+  });
+}
+
 describe("config schema regressions", () => {
   it.each([true, false])("accepts and preserves gateway.cliAgents.enabled=%s", (enabled) => {
     const result = validateConfigObject({ gateway: { cliAgents: { enabled } } });
@@ -15,12 +38,8 @@ describe("config schema regressions", () => {
   it.each([0, 3_000])(
     "accepts the documented global exec approval running notice delay %i",
     (approvalRunningNoticeMs) => {
-      const result = validateConfigObject({
-        tools: {
-          exec: {
-            approvalRunningNoticeMs,
-          },
-        },
+      const result = validateExec({
+        approvalRunningNoticeMs,
       });
 
       expect(result.ok).toBe(true);
@@ -33,19 +52,12 @@ describe("config schema regressions", () => {
   it.each([0, 3_000])(
     "preserves the per-agent exec approval running notice delay %i",
     (approvalRunningNoticeMs) => {
-      const result = validateConfigObject({
-        agents: {
-          entries: {
-            main: {
-              tools: {
-                exec: {
-                  approvalRunningNoticeMs,
-                },
-              },
-            },
-          },
+      const result = validateExec(
+        {
+          approvalRunningNoticeMs,
         },
-      });
+        true,
+      );
 
       expect(result.ok).toBe(true);
       if (result.ok) {
@@ -59,12 +71,8 @@ describe("config schema regressions", () => {
   it.each([-1, 1.5, "3000"])(
     "rejects invalid global exec approval running notice delay %s",
     (approvalRunningNoticeMs) => {
-      const result = validateConfigObject({
-        tools: {
-          exec: {
-            approvalRunningNoticeMs,
-          },
-        },
+      const result = validateExec({
+        approvalRunningNoticeMs,
       });
 
       expect(result.ok).toBe(false);
@@ -79,19 +87,12 @@ describe("config schema regressions", () => {
   it.each([-1, 1.5, "3000"])(
     "rejects invalid per-agent exec approval running notice delay %s",
     (approvalRunningNoticeMs) => {
-      const result = validateConfigObject({
-        agents: {
-          entries: {
-            main: {
-              tools: {
-                exec: {
-                  approvalRunningNoticeMs,
-                },
-              },
-            },
-          },
+      const result = validateExec(
+        {
+          approvalRunningNoticeMs,
         },
-      });
+        true,
+      );
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -194,18 +195,14 @@ describe("config schema regressions", () => {
   });
 
   it("accepts agents.defaults.startupContext overrides", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          startupContext: {
-            enabled: true,
-            applyOn: ["new"],
-            dailyMemoryDays: 3,
-            maxFileBytes: 8192,
-            maxFileChars: 1000,
-            maxTotalChars: 2500,
-          },
-        },
+    const res = validateAgentDefaults({
+      startupContext: {
+        enabled: true,
+        applyOn: ["new"],
+        dailyMemoryDays: 3,
+        maxFileBytes: 8192,
+        maxFileChars: 1000,
+        maxTotalChars: 2500,
       },
     });
 
@@ -213,14 +210,10 @@ describe("config schema regressions", () => {
   });
 
   it("rejects oversized agents.defaults.startupContext overrides", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          startupContext: {
-            dailyMemoryDays: 99,
-            maxFileBytes: 999_999,
-          },
-        },
+    const res = validateAgentDefaults({
+      startupContext: {
+        dailyMemoryDays: 99,
+        maxFileBytes: 999_999,
       },
     });
 
@@ -252,7 +245,7 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts agents.entries experimental localModelLean overrides", () => {
+  it("accepts agents.entries experimental overrides", () => {
     const res = validateConfigObject({
       agents: {
         entries: {
@@ -308,44 +301,32 @@ describe("config schema regressions", () => {
   });
 
   it("accepts string values for agents defaults model inputs", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-6",
-          imageModel: "openai/gpt-4.1-mini",
-        },
-      },
+    const res = validateAgentDefaults({
+      model: "anthropic/claude-opus-4-6",
+      imageModel: "openai/gpt-4.1-mini",
     });
 
     expect(res.ok).toBe(true);
   });
 
   it("accepts pdf default model and limits", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          pdfModel: {
-            primary: "anthropic/claude-opus-4-6",
-            fallbacks: ["openai/gpt-5.4-mini"],
-          },
-          pdfMaxMb: 12,
-          pdfMaxPages: 25,
-        },
+    const res = validateAgentDefaults({
+      pdfModel: {
+        primary: "anthropic/claude-opus-4-6",
+        fallbacks: ["openai/gpt-5.4-mini"],
       },
+      pdfMaxMb: 12,
+      pdfMaxPages: 25,
     });
 
     expect(res.ok).toBe(true);
   });
 
   it("rejects non-positive pdf limits", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          pdfModel: { primary: "openai/gpt-5.4-mini" },
-          pdfMaxMb: 0,
-          pdfMaxPages: 0,
-        },
-      },
+    const res = validateAgentDefaults({
+      pdfModel: { primary: "openai/gpt-5.4-mini" },
+      pdfMaxMb: 0,
+      pdfMaxPages: 0,
     });
 
     expect(res.ok).toBe(false);
@@ -426,18 +407,7 @@ describe("config schema regressions", () => {
   });
 
   it("rejects bindings referencing an agentId missing from agents.entries (openclaw#84692)", () => {
-    const res = validateConfigObject({
-      agents: {
-        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
-      },
-      bindings: [
-        {
-          type: "route",
-          agentId: "ghost",
-          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
-        },
-      ],
-    });
+    const res = validateBinding("ghost", { alpha: { model: "anthropic/claude-3-5-sonnet" } });
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -446,18 +416,7 @@ describe("config schema regressions", () => {
   });
 
   it("accepts bindings whose agentId is present in agents.entries", () => {
-    const res = validateConfigObject({
-      agents: {
-        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
-      },
-      bindings: [
-        {
-          type: "route",
-          agentId: "alpha",
-          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
-        },
-      ],
-    });
+    const res = validateBinding("alpha", { alpha: { model: "anthropic/claude-3-5-sonnet" } });
 
     expect(res.ok).toBe(true);
   });
@@ -473,35 +432,13 @@ describe("config schema regressions", () => {
   });
 
   it("accepts exact main bindings when agents.entries omits the implicit main agent", () => {
-    const res = validateConfigObject({
-      agents: {
-        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
-      },
-      bindings: [
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
-        },
-      ],
-    });
+    const res = validateBinding("main", { alpha: { model: "anthropic/claude-3-5-sonnet" } });
 
     expect(res.ok).toBe(true);
   });
 
   it("rejects normalized main binding variants when agents.entries omits them", () => {
-    const res = validateConfigObject({
-      agents: {
-        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
-      },
-      bindings: [
-        {
-          type: "route",
-          agentId: "MAIN",
-          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
-        },
-      ],
-    });
+    const res = validateBinding("MAIN", { alpha: { model: "anthropic/claude-3-5-sonnet" } });
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -510,32 +447,13 @@ describe("config schema regressions", () => {
   });
 
   it("accepts a normalized main binding variant when that agent is explicitly configured", () => {
-    const res = validateConfigObject({
-      agents: {
-        entries: { MAIN: { model: "anthropic/claude-3-5-sonnet" } },
-      },
-      bindings: [
-        {
-          type: "route",
-          agentId: "MAIN",
-          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
-        },
-      ],
-    });
+    const res = validateBinding("MAIN", { MAIN: { model: "anthropic/claude-3-5-sonnet" } });
 
     expect(res.ok).toBe(true);
   });
 
   it("rejects non-default bindings when the implicit-main roster is materialized", () => {
-    const res = validateConfigObject({
-      bindings: [
-        {
-          type: "route",
-          agentId: "alpha",
-          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
-        },
-      ],
-    });
+    const res = validateBinding("alpha");
 
     expect(res.ok).toBe(false);
   });

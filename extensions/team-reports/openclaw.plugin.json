@@ -1,19 +1,62 @@
 {
   "id": "team-reports",
+  "uiCapabilities": ["page", "navigation"],
   "name": "Team Reports",
   "description": "Daily, weekly, and monthly team activity reports from GitHub and Discord, with model-written summaries, served in the Control UI.",
+  "categories": ["data-analytics"],
   "enabledByDefault": false,
+  "contracts": {
+    "gatewayMethodDispatch": ["authenticated-request"]
+  },
   "activation": {
     "onStartup": true,
     "onCommands": [
       "team-reports"
     ]
   },
+  "configGroups": [
+    {
+      "id": "report-display",
+      "title": "Report display",
+      "order": 10,
+      "properties": ["basePath", "displayTimezone"]
+    },
+    {
+      "id": "activity-sources",
+      "title": "Activity sources",
+      "order": 20,
+      "properties": ["github", "discord"]
+    },
+    {
+      "id": "team-members",
+      "title": "Team members",
+      "order": 30,
+      "properties": ["people", "peopleFile"]
+    },
+    {
+      "id": "summaries",
+      "title": "Summaries",
+      "order": 40,
+      "properties": ["summaries"]
+    },
+    {
+      "id": "schedule",
+      "title": "Schedule",
+      "order": 50,
+      "properties": ["schedule"]
+    },
+    {
+      "id": "retention",
+      "title": "Retention",
+      "order": 60,
+      "properties": ["retention"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "properties": {
       "basePath": {
-        "default": "/reports",
+        "default": "/plugins/team-reports",
         "type": "string",
         "pattern": "^\\/(?!api\\/channels(?:\\/|$))(?!\\.{1,2}(?:\\/|$))(?!.*\\/\\.{1,2}(?:\\/|$))[A-Za-z0-9._-]+(?:\\/[A-Za-z0-9._-]+)*\\/*$"
       },

@@ -10,6 +10,7 @@ import {
   validateUpdateRunsListResult,
   validateUpdateStatusResult,
 } from "./index.js";
+import { UPDATE_RUN_DRIVER_LIMIT } from "./update-run-vocabulary.js";
 
 const run = LedgerRecordSchema.parse({
   runId: "27d967ef-0485-4f98-a93a-229d50c75111",
@@ -20,6 +21,8 @@ const run = LedgerRecordSchema.parse({
   status: "succeeded",
   reason: null,
   origin: {
+    driver: { host: "gateway.test", pid: 1234, startIdentity: "98765" },
+    previousDrivers: [{ host: "gateway.test", pid: 1200, startIdentity: "98700" }],
     requester: { channel: "telegram", accountId: "primary", senderId: "operator" },
     sessionKey: "agent:main:main",
     deliveryContext: { channel: "telegram", to: "chat", accountId: "default", threadId: "1" },
@@ -60,6 +63,224 @@ const run = LedgerRecordSchema.parse({
 });
 
 describe("update run wire contract", () => {
+  it.each(["candidate", "installed"] as const)(
+    "carries %s admission through lookup, history, and status responses",
+    (owner) => {
+      const checks = [{ name: "config", status: "warn", detail: "Missing custom path." }];
+      const admission =
+        owner === "candidate"
+          ? { owner, protocol: 1, candidateVersion: "2026.9.5", checks }
+          : { owner, fallbackReason: "update-admission-unsupported-target" };
+      const candidateAdmission =
+        owner === "candidate"
+          ? {
+              protocol: 1,
+              verdict: "admit",
+              reasons: [],
+              warnings: [{ code: "missing-load-path", message: "Missing custom path." }],
+              facts: {
+                candidateVersion: "2026.9.5",
+                installedVersion: "2026.9.4",
+                nodeEngines: ">=24.16.0",
+                checks,
+              },
+            }
+          : undefined;
+      const record = LedgerRecordSchema.parse({
+        ...run,
+        admission,
+        origin: { ...run.origin, admission, candidateAdmission },
+      });
+      expect(record.admission).toEqual(admission);
+      expect(record.origin.candidateAdmission).toEqual(candidateAdmission);
+      expect(validateUpdateRunRecord(record)).toBe(true);
+      expect(validateUpdateRunsGetResult({ run: record })).toBe(true);
+      expect(validateUpdateRunsListResult({ runs: [record] })).toBe(true);
+      expect(
+        validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects non-string candidate Node engine facts", () => {
+    const record = {
+      ...run,
+      origin: {
+        ...run.origin,
+        candidateAdmission: {
+          protocol: 1,
+          verdict: "admit",
+          reasons: [],
+          warnings: [],
+          facts: {
+            candidateVersion: "2026.9.5",
+            installedVersion: "2026.9.4",
+            nodeEngines: 24,
+            checks: [],
+          },
+        },
+      },
+    };
+    expect(validateUpdateRunRecord(record)).toBe(false);
+    expect(
+      validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
+    ).toBe(false);
+  });
+
+  it.each([
+    undefined,
+    {
+      ownership: "foreign",
+      cause: "package-mismatch",
+      destinationKind: "npm-global",
+      prefix: "/other-prefix",
+      packageRoot: "/other-prefix/lib/node_modules/openclaw",
+      runningRoot: "~/.npm-global/lib/node_modules/openclaw",
+      runningPrefix: "~/.npm-global",
+      launcher: "/other-prefix/bin/openclaw",
+      launcherTarget: null,
+    },
+  ])(
+    "carries a bounded failing check through history responses (destination=%j)",
+    (destination) => {
+      const fact = {
+        check: destination ? "package-install" : "readyz",
+        code: destination ? "global-install-foreign-destination" : "readyz-unhealthy",
+        message: "Readiness returned HTTP 503.",
+        errorName: "Error",
+        location: "src/infra/update-runner-git.ts:42:7",
+        ...(destination ? { destination } : {}),
+      };
+      const step = { step: "gateway verification", status: "failed", failureFacts: [fact] };
+      const failed = {
+        ...run,
+        target: { ...run.target, installationMethod: "git-checkout" },
+        verification: {
+          ...run.verification,
+          rollbackOutcome: { status: "succeeded", reason: "Previous package restored" },
+          recovery: {
+            serviceRestartSafe: true,
+            packageRollbackVerified: true,
+            version: "2026.8.1",
+          },
+        },
+        steps: [step],
+      };
+      expect(LedgerRecordSchema.parse(failed)).toEqual(failed);
+      expect(validateUpdateRunsGetResult({ run: failed })).toBe(true);
+      if (destination) {
+        for (const invalid of [
+          { ownership: "private-owner" },
+          { prefix: "x".repeat(241) },
+          { extra: "private-text" },
+        ]) {
+          const malformed = {
+            ...failed,
+            steps: [
+              { ...step, failureFacts: [{ ...fact, destination: { ...destination, ...invalid } }] },
+            ],
+          };
+          expect(LedgerRecordSchema.safeParse(malformed).success).toBe(false);
+          expect(validateUpdateRunsGetResult({ run: malformed })).toBe(false);
+        }
+      }
+      expect(
+        validateUpdateRunsGetResult({
+          run: {
+            ...failed,
+            steps: [
+              {
+                ...step,
+                failureFacts: Array.from({ length: 6 }, () => fact),
+              },
+            ],
+          },
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it.each([null, { serviceRestartSafe: false, reason: "source-rollback-failed" }])(
+    "carries nullable failure evidence and recovery through history (%j)",
+    (recovery) => {
+      const record = LedgerRecordSchema.parse({
+        ...run,
+        target: { installationMethod: null },
+        steps: [
+          {
+            step: "staging",
+            status: "failed",
+            failureFacts: [{ check: "staging", code: "Error", errorName: null, location: null }],
+          },
+        ],
+        verification: { rollbackOutcome: null, recovery },
+      });
+      expect(validateUpdateRunsGetResult({ run: record })).toBe(true);
+      expect(validateUpdateRunsListResult({ runs: [record] })).toBe(true);
+      expect(
+        validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
+      ).toBe(true);
+    },
+  );
+
+  it.each([
+    { exitCode: 23 },
+    { exitCode: 0 },
+    { exitCode: null },
+    {
+      snapshotCapacity: {
+        reason: "snapshot-location-unavailable",
+        sqliteBytes: 1024,
+        pluginBytes: 2048,
+        requiredBytes: 8192,
+        selection: null,
+        candidates: [
+          {
+            kind: "explicit-tmpdir",
+            directory: "/synthetic/file",
+            availableBytes: 16384,
+            allocationError: "not a directory",
+          },
+        ],
+      },
+    },
+    { configChange: { kind: "key", key: "meta" } },
+    { configChange: { kind: "migration", message: "Enabled the configured provider." } },
+    {
+      configWriteRefusal: {
+        reason: "config-input-changed",
+        message: "Config changed before promotion.",
+        keys: ["meta", "plugins", "wizard"],
+      },
+    },
+    ...[null, { kind: "state-volume", directory: "/synthetic/state.update-captures" }].map(
+      (selection) => ({
+        snapshotCapacity: {
+          reason: selection ? selection.kind : "snapshot-capacity-insufficient",
+          sqliteBytes: 1024,
+          pluginBytes: 2048,
+          requiredBytes: 8192,
+          candidates: [
+            { kind: "system-tmpdir", directory: "/synthetic/tmp", availableBytes: null },
+          ],
+          selection,
+        },
+      }),
+    ),
+  ])("carries typed update evidence through the wire projection: %j", (evidence) => {
+    const record = LedgerRecordSchema.parse({
+      ...run,
+      steps: [{ ...run.steps[0], ...evidence }],
+    });
+    expect(record.steps[0]).toMatchObject(evidence);
+    expect(validateUpdateRunRecord(record)).toBe(true);
+    expect(validateUpdateRunsGetResult({ run: record })).toBe(true);
+    expect(validateUpdateRunsListResult({ runs: [record] })).toBe(true);
+    expect(
+      validateUpdateStatusResult({ sentinel: null, updateAvailable: null, lastRun: record }),
+    ).toBe(true);
+  });
+
   it("carries a canonical ledger record through lookup, history, and additive status responses", () => {
     expect(validateUpdateRunRecord(run)).toBe(true);
     expect(validateUpdateRunsGetResult({ run })).toBe(true);
@@ -85,17 +306,103 @@ describe("update run wire contract", () => {
     ["unknown phase", { phase: "complete" }],
     ["unknown status", { status: "ok" }],
     ["unknown trigger", { trigger: "web" }],
+    ["unknown admission owner", { admission: { owner: "other" } }],
+    [
+      "unsupported admission protocol",
+      { origin: { admission: { owner: "candidate", protocol: 2 } } },
+    ],
+    [
+      "unknown admission check status",
+      { admission: { owner: "candidate", checks: [{ name: "config", status: "passed" }] } },
+    ],
+    [
+      "oversized admission checks",
+      {
+        admission: {
+          owner: "candidate",
+          checks: Array.from({ length: 33 }, () => ({ name: "config", status: "ok" })),
+        },
+      },
+    ],
     ["negative timestamp", { updatedAtMs: -1 }],
     ["unsafe timestamp", { updatedAtMs: Number.MAX_SAFE_INTEGER + 1 }],
     ["oversized text", { reason: "x".repeat(1025) }],
     ["oversized steps", { steps: Array.from({ length: 129 }, () => run.steps[0]) }],
     ["oversized repairs", { repair: Array.from({ length: 17 }, () => run.repair[0]) }],
+    [
+      "unknown Doctor evidence kind",
+      { steps: [{ ...run.steps[0], configChange: { kind: "other", key: "meta" } }] },
+    ],
+    [
+      "oversized Doctor key",
+      { steps: [{ ...run.steps[0], configChange: { kind: "key", key: "x".repeat(1025) } }] },
+    ],
+    [
+      "oversized Doctor refusal keys",
+      {
+        steps: [
+          {
+            ...run.steps[0],
+            configWriteRefusal: {
+              reason: "config-input-changed",
+              message: "Config changed before promotion.",
+              keys: Array.from({ length: 33 }, () => "meta"),
+            },
+          },
+        ],
+      },
+    ],
     ["invalid service port", { verification: { port: 65536 } }],
+    ["unknown installation method", { target: { installationMethod: "other" } }],
+    [
+      "unknown rollback status",
+      { verification: { rollbackOutcome: { status: "unknown", reason: "unknown" } } },
+    ],
+    [
+      "unknown recovery refusal",
+      { verification: { recovery: { serviceRestartSafe: false, reason: "unknown" } } },
+    ],
+    ...(
+      [
+        ["errorName", 81],
+        ["location", 161],
+      ] as const
+    ).map(
+      ([field, length]) =>
+        [
+          `oversized failure ${field}`,
+          {
+            steps: [
+              {
+                step: "staging",
+                status: "failed",
+                failureFacts: [{ check: "staging", code: "Error", [field]: "x".repeat(length) }],
+              },
+            ],
+          },
+        ] as const,
+    ),
+    [
+      "oversized driver host",
+      { origin: { driver: { ...run.origin.driver, host: "x".repeat(256) } } },
+    ],
+    [
+      "oversized driver start identity",
+      { origin: { driver: { ...run.origin.driver, startIdentity: "1".repeat(129) } } },
+    ],
+    [
+      "too many previous drivers",
+      {
+        origin: {
+          previousDrivers: Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, () => run.origin.driver),
+        },
+      },
+    ],
     [
       "oversized plugin errors",
       { verification: { pluginErrors: Array.from({ length: 33 }, () => "failed") } },
     ],
-  ])("rejects %s consistently with the canonical ledger", (_name, fields) => {
+  ] as const)("rejects %s consistently with the canonical ledger", (_name, fields) => {
     const invalid = { ...run, ...fields };
     expect(LedgerRecordSchema.safeParse(invalid).success).toBe(false);
     expect(validateUpdateRunRecord(invalid)).toBe(false);
@@ -128,6 +435,17 @@ describe("update run wire contract", () => {
     };
     expect(validateUpdateRunResult({ ...outcome, runId: run.runId })).toBe(true);
     expect(validateUpdateRunResult(outcome)).toBe(false);
+    const acknowledged = {
+      ...outcome,
+      runId: run.runId,
+      ackDelivered: true,
+      ackQueued: true,
+      acknowledgement: "Updating OpenClaw.",
+    };
+    expect(validateUpdateRunResult(acknowledged)).toBe(true);
+    for (const invalid of [{ ackQueued: "true" }, { acknowledgement: false }]) {
+      expect(validateUpdateRunResult({ ...acknowledged, ...invalid })).toBe(false);
+    }
     const change = { runId: run.runId, phase: "verifying", status: "running", updatedAtMs: 250 };
     expect(validateUpdateRunChangedEvent(change)).toBe(true);
     expect(validateUpdateRunChangedEvent({ ...change, phase: "complete" })).toBe(false);

@@ -9,7 +9,7 @@ await withStableDeliveryPreparation({
   id,
   stateDir,
   run: async (owner) => {
-    owner.beforeFirstModifier();
+    await owner.beforeFirstModifier();
     process.stdout.write(`${JSON.stringify({ ready: true, pid: process.pid })}\n`);
     await new Promise<void>(() => {
       setInterval(() => {}, 1_000);

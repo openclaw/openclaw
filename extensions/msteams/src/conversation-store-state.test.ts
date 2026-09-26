@@ -1,4 +1,3 @@
-// Msteams tests cover conversation store state plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,6 +5,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
@@ -14,7 +14,8 @@ import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(() => {
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     cleanup();
   }),
@@ -25,32 +26,32 @@ function conversationStateKey(conversationId: string): string {
 }
 
 describe("msteams conversation store (plugin state)", () => {
+  let stateDir: string;
+  let env: NodeJS.ProcessEnv;
+
   beforeEach(() => {
     resetPluginStateStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);
+    stateDir = tempDirs.make("openclaw-msteams-store-");
+    env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   });
 
-  it("filters expired SQLite entries while preserving entries without lastSeenAt", async () => {
-    const stateDir = tempDirs.make("openclaw-msteams-store-");
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
+  function openStoredConversations() {
+    return createPluginStateKeyedStoreForTests<StoredConversationReference>("msteams", {
+      namespace: "conversations",
+      maxEntries: 2000,
+      env,
+    });
+  }
 
+  it("filters expired SQLite entries while preserving entries without lastSeenAt", async () => {
     const ref: StoredConversationReference = {
       conversation: { id: "19:active@thread.tacv2" },
       channelId: "msteams",
       serviceUrl: "https://service.example.com",
       user: { id: "u1", aadObjectId: "aad1" },
     };
-    const sqliteStore = createPluginStateKeyedStoreForTests<StoredConversationReference>(
-      "msteams",
-      {
-        namespace: "conversations",
-        maxEntries: 2000,
-        env,
-      },
-    );
+    const sqliteStore = openStoredConversations();
     await sqliteStore.register(conversationStateKey("19:active@thread.tacv2"), ref);
     await sqliteStore.register(conversationStateKey("19:old@thread.tacv2"), {
       ...ref,
@@ -87,11 +88,6 @@ describe("msteams conversation store (plugin state)", () => {
   });
 
   it("ignores a stale legacy JSON file at runtime", async () => {
-    const stateDir = tempDirs.make("openclaw-msteams-store-");
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
     const ref: StoredConversationReference = {
       conversation: { id: "conv-current" },
       channelId: "msteams",
@@ -112,14 +108,7 @@ describe("msteams conversation store (plugin state)", () => {
         },
       })}\n`,
     );
-    const sqliteStore = createPluginStateKeyedStoreForTests<StoredConversationReference>(
-      "msteams",
-      {
-        namespace: "conversations",
-        maxEntries: 2000,
-        env,
-      },
-    );
+    const sqliteStore = openStoredConversations();
     await sqliteStore.register(conversationStateKey("conv-current"), ref);
 
     const store = createMSTeamsConversationStoreState({ env });
@@ -128,7 +117,6 @@ describe("msteams conversation store (plugin state)", () => {
   });
 
   it("hashes external conversation ids before using plugin-state keys", async () => {
-    const stateDir = tempDirs.make("openclaw-msteams-store-");
     const longConversationId = `a:${"x".repeat(900)}`;
     const store = createMSTeamsConversationStoreState({ stateDir });
 
@@ -145,7 +133,6 @@ describe("msteams conversation store (plugin state)", () => {
   });
 
   it("serializes concurrent upserts so sparse activities preserve independent fields", async () => {
-    const stateDir = tempDirs.make("openclaw-msteams-store-");
     const store = createMSTeamsConversationStoreState({ stateDir });
 
     await store.upsert("conv-race", {
@@ -178,76 +165,39 @@ describe("msteams conversation store (plugin state)", () => {
     });
   });
 
-  it("keeps newest conversations by lastSeenAt at the row cap", async () => {
-    const stateDir = tempDirs.make("openclaw-msteams-store-");
-    const env: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const sqliteStore = createPluginStateKeyedStoreForTests<StoredConversationReference>(
-      "msteams",
-      {
-        namespace: "conversations",
-        maxEntries: 2000,
-        env,
-      },
-    );
-    for (let index = 0; index < 1000; index += 1) {
-      const id = `conv-${String(index).padStart(4, "0")}`;
-      await sqliteStore.register(conversationStateKey(id), {
-        conversation: { id },
+  it.each([
+    { legacy: false, evictedId: "conv-seen-0000" },
+    { legacy: true, evictedId: "conv-legacy" },
+  ])(
+    "prunes the oldest conversation at the row cap (timestamp-less: $legacy)",
+    async ({ legacy, evictedId }) => {
+      const sqliteStore = openStoredConversations();
+      const reference = {
         channelId: "msteams",
         serviceUrl: "https://service.example.com",
-        lastSeenAt: new Date(Date.UTC(2026, 1, 1, 0, 0, index)).toISOString(),
-      });
-    }
+      };
+      if (legacy) {
+        await sqliteStore.register(conversationStateKey("conv-legacy"), {
+          ...reference,
+          conversation: { id: "conv-legacy" },
+        });
+      }
+      for (let index = 0; index < (legacy ? 999 : 1000); index += 1) {
+        const id = `conv-seen-${String(index).padStart(4, "0")}`;
+        await sqliteStore.register(conversationStateKey(id), {
+          ...reference,
+          conversation: { id },
+          lastSeenAt: new Date(Date.UTC(2026, 1, 1, 0, 0, index)).toISOString(),
+        });
+      }
 
-    const store = createMSTeamsConversationStoreState({ env });
-    await store.upsert("conv-recent", {
-      conversation: { id: "conv-recent" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-    });
-    const ids = (await store.list()).map((entry) => entry.conversationId);
+      const store = createMSTeamsConversationStoreState({ env });
+      await store.upsert("conv-new", { ...reference, conversation: { id: "conv-new" } });
+      const ids = (await store.list()).map((entry) => entry.conversationId);
 
-    expect(ids).toHaveLength(1000);
-    expect(ids).toContain("conv-recent");
-    expect(ids).not.toContain("conv-0000");
-  });
-
-  it("treats timestamp-less conversations as oldest during later cap pruning", async () => {
-    const stateDir = tempDirs.make("openclaw-msteams-store-");
-    const env: NodeJS.ProcessEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const sqliteStore = createPluginStateKeyedStoreForTests<StoredConversationReference>(
-      "msteams",
-      {
-        namespace: "conversations",
-        maxEntries: 2000,
-        env,
-      },
-    );
-    await sqliteStore.register(conversationStateKey("conv-legacy"), {
-      conversation: { id: "conv-legacy" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-    });
-    for (let index = 0; index < 999; index += 1) {
-      const id = `conv-seen-${String(index).padStart(4, "0")}`;
-      await sqliteStore.register(conversationStateKey(id), {
-        conversation: { id },
-        channelId: "msteams",
-        serviceUrl: "https://service.example.com",
-        lastSeenAt: new Date(Date.UTC(2026, 1, 1, 0, 0, index)).toISOString(),
-      });
-    }
-
-    const store = createMSTeamsConversationStoreState({ env });
-    await store.upsert("conv-new", {
-      conversation: { id: "conv-new" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-    });
-    const ids = (await store.list()).map((entry) => entry.conversationId);
-
-    expect(ids).toHaveLength(1000);
-    expect(ids).toContain("conv-new");
-    expect(ids).not.toContain("conv-legacy");
-  });
+      expect(ids).toHaveLength(1000);
+      expect(ids).toContain("conv-new");
+      expect(ids).not.toContain(evictedId);
+    },
+  );
 });

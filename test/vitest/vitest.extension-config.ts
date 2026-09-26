@@ -1,5 +1,6 @@
 // Vitest extension config helpers keep extension shard defaults aligned.
 import type { ViteUserConfig } from "vitest/config";
+import { databaseWorkerExtensionTestFiles } from "./vitest.extension-database-workers-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { pluginControlUiPathGlob } from "./vitest.ui-paths.mjs";
 
@@ -23,7 +24,7 @@ export function createExtensionVitestConfig(
       name: `extension-${name}`,
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],
-      exclude: [pluginControlUiPathGlob],
+      exclude: [pluginControlUiPathGlob, ...databaseWorkerExtensionTestFiles],
       ...options,
     },
   );
@@ -33,12 +34,5 @@ export function createSingleChannelExtensionVitestConfig(
   extensionId: string,
   env: Record<string, string | undefined> = process.env,
 ) {
-  return createScopedVitestConfig([`extensions/${extensionId}/**/*.test.ts`], {
-    dir: "extensions",
-    env,
-    name: `extension-${extensionId}`,
-    passWithNoTests: true,
-    setupFiles: ["test/setup.extensions.ts"],
-    exclude: [pluginControlUiPathGlob],
-  });
+  return createExtensionVitestConfig(extensionId, [`extensions/${extensionId}`], env);
 }

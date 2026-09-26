@@ -2,7 +2,7 @@ import { execFileSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, it, type TestContext } from "vitest";
+import { expect, it, vi, type TestContext } from "vitest";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import {
   isProcessAlive,
@@ -79,6 +79,12 @@ it.for([
   { scenario: "hung-exit", setup: "shared", fail: false },
   { scenario: "bad-exit", setup: "shared", fail: false },
   { scenario: "forced", setup: "raw", fail: false },
+  { scenario: "unexpected-exit-zero", setup: "raw", fail: false },
+  { scenario: "unexpected-exit-nonzero", setup: "raw", fail: false },
+  { scenario: "unexpected-start", setup: "raw", fail: false },
+  ...(process.platform === "win32"
+    ? []
+    : [{ scenario: "unexpected-signal", setup: "raw", fail: false }]),
 ])("joins $scenario shutdown with $setup setup (test failure: $fail)", (options, context) =>
   runJoinedShutdownTest(context, async () => {
     const tempDirs = createTempDirTracker();
@@ -97,7 +103,8 @@ it.for([
       return;
     }
     const brokenShutdown = scenario.startsWith("hung-") || scenario === "bad-exit";
-    expect(result.code, result.output).toBe(fail || brokenShutdown ? 1 : 0);
+    const unexpectedExit = scenario.startsWith("unexpected-");
+    expect(result.code, result.output).toBe(fail || brokenShutdown || unexpectedExit ? 1 : 0);
     if (fail) {
       expect(result.output).toContain("intentional fixture failure");
     }
@@ -115,7 +122,17 @@ it.for([
       );
     }
     expect(result.callerPreserved).toBe(true);
-    if (scenario.startsWith("hung-")) {
+    if (unexpectedExit) {
+      expect(result.output).toContain("Worker exited unexpectedly");
+      if (scenario === "unexpected-start") {
+        expect(result.output).toContain("during starting state");
+      }
+      expect(result.output).toContain("unexpected-exit-tail");
+      expect(result.output).not.toContain("[test] passed");
+      expect(result.events.some((event: { event: string }) => event.event === "terminate")).toBe(
+        false,
+      );
+    } else if (scenario.startsWith("hung-")) {
       // Advance the real stop deadline only after the worker reaches the hung boundary.
       expect(result.events).toContainEqual({ event: "deadline", delay: 60_000 });
       expect(result.output).toContain("Timeout waiting for worker to respond");
@@ -199,17 +216,46 @@ installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.m
 `,
       );
       let child!: ChildProcess;
-      const invocation = runFixture(
-        root,
-        { scenario: "slow-exit", setup: "shared", fail: false },
-        fixturePreloadArgs(preload),
-        {
-          onReady(owned) {
-            child = owned;
+      let fireDeadline: (() => void) | undefined;
+      const schedule = globalThis.setTimeout;
+      // Capture only this command's deadline; readiness and native cleanup keep real timers.
+      const deadlineSpy =
+        mode === "timeout"
+          ? vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) => {
+              if (ms !== 20_000 || fireDeadline) {
+                return schedule(callback, ms, ...args);
+              }
+              let pending = true;
+              const fire = () => {
+                if (!pending) {
+                  return;
+                }
+                pending = false;
+                clearTimeout(timer);
+                callback(...args);
+              };
+              // Keep the original deadline as a failsafe if readiness never arrives.
+              const timer = schedule(fire, ms);
+              fireDeadline = fire;
+              return timer;
+            })
+          : undefined;
+      let invocation: ReturnType<typeof runFixture>;
+      try {
+        invocation = runFixture(
+          root,
+          { scenario: "slow-exit", setup: "shared", fail: false },
+          fixturePreloadArgs(preload),
+          {
+            onReady(owned) {
+              child = owned;
+            },
+            signal: context.signal,
           },
-          signal: context.signal,
-        },
-      );
+        );
+      } finally {
+        deadlineSpy?.mockRestore();
+      }
       const outcome = invocation.then(
         (result) => ({ result, error: undefined }),
         (error: unknown) => ({ result: undefined, error }),
@@ -255,6 +301,12 @@ installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.m
         pids.splice(0, pids.length, ...owned);
         if (mode === "signal") {
           child.kill("SIGTERM");
+        } else {
+          expect(
+            fireDeadline,
+            "managed command deadline must be armed before readiness",
+          ).toBeTypeOf("function");
+          fireDeadline!();
         }
         const result = await outcome;
         await waitForFile(path.join(root, "term-received"), 1_000);

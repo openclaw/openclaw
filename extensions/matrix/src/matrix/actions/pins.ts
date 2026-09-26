@@ -1,4 +1,3 @@
-// Matrix plugin module implements pins behavior.
 import { withResolvedRoomAction } from "./client.js";
 import { fetchEventSummary, readPinnedEvents } from "./summary.js";
 import {
@@ -49,15 +48,7 @@ export async function listMatrixPins(
   return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
     const pinned = await readPinnedEvents(client, resolvedRoom);
     const events = (
-      await Promise.all(
-        pinned.map(async (eventId) => {
-          try {
-            return await fetchEventSummary(client, resolvedRoom, eventId);
-          } catch {
-            return null;
-          }
-        }),
-      )
+      await Promise.all(pinned.map((eventId) => fetchEventSummary(client, resolvedRoom, eventId)))
     ).filter((event): event is MatrixMessageSummary => Boolean(event));
     return { pinned, events };
   });

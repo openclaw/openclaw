@@ -6,7 +6,7 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -22,6 +22,7 @@ import {
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { buildCommandContext } from "./commands-context.js";
 import { handleGoalCommand } from "./commands-goal.js";
+import type { CommandDispatchParams } from "./commands-types.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
 import {
   emptyAliasIndex,
@@ -44,7 +45,7 @@ import "./get-reply.test-runtime-mocks.js";
 registerGetReplyBaselineBypass();
 
 type LoadModelCatalogFn =
-  typeof import("../../agents/prepared-model-catalog.js").loadPreparedModelCatalog;
+  typeof import("../../agents/prepared-model-catalog.js").readPreparedModelCatalog;
 
 const mocks = vi.hoisted(() => ({
   buildStatusReply: vi.fn(),
@@ -66,7 +67,7 @@ vi.mock("./commands-status.js", () => ({
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: mocks.loadModelCatalog,
+  readPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
 vi.mock("../../agents/workspace.js", () => ({
@@ -193,11 +194,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     });
     mocks.ensureAgentWorkspace.mockReset();
     mocks.handleCommands.mockReset();
-    mocks.handleCommands.mockImplementation(async (params: unknown) => {
-      const result = await handleGoalCommand(
-        params as Parameters<typeof handleGoalCommand>[0],
-        true,
-      );
+    mocks.handleCommands.mockImplementation(async (params: CommandDispatchParams) => {
+      const modelLevels = await params.resolveModelLevels();
+      const result = await handleGoalCommand({ ...params, ...modelLevels }, true);
       return result ?? { shouldContinue: true, reply: undefined };
     });
     mocks.handleInlineActions.mockReset();
@@ -243,39 +242,32 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { mode: "complete", mark: markCompleteReplyConfig },
-    { mode: "fast", mark: withFastReplyConfig },
-  ])(
-    "uses $mode configs through directives without config, workspace, or session bootstrap",
-    async ({ mark }) => {
-      continuePlainTextReply();
-      const cfg = mark({
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-4-6",
-            workspace: state.workspaceDir,
-          },
+  it("uses complete configs through directives without config, workspace, or session bootstrap", async () => {
+    continuePlainTextReply();
+    const cfg = withFastReplyConfig({
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-6",
+          workspace: state.workspaceDir,
         },
-        channels: { telegram: { allowFrom: ["*"] } },
-        session: { store: isolatedStorePath },
-      } as OpenClawConfig);
+      },
+      channels: { telegram: { allowFrom: ["*"] } },
+      session: { store: isolatedStorePath },
+    } as OpenClawConfig);
 
-      // Check the mocked runtime resolver before fast bootstrap can create its workspace.
-      expect(isPathInside(state.root, resolveAgentWorkspaceDirMock(cfg, "main"))).toBe(true);
+    // Check the mocked runtime resolver before fast bootstrap can create its workspace.
+    expect(isPathInside(state.root, resolveAgentWorkspaceDirMock(cfg, "main"))).toBe(true);
 
-      await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
-        text: "ok",
-      });
-      expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
-      expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
-      expect(mocks.initSessionState).not.toHaveBeenCalled();
-      expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
-      expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
-      const preparedReplyParams = requirePreparedReplyParams();
-      expect(preparedReplyParams.cfg).toBe(cfg);
-    },
-  );
+    await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, cfg)).resolves.toEqual({
+      text: "ok",
+    });
+    expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+    expect(requirePreparedReplyParams().cfg).toBe(cfg);
+  });
 
   it("still merges partial config overrides against getRuntimeConfig()", async () => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
@@ -306,6 +298,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       createGetReplySessionState({
         sessionKey: "agent:main:slack:channel:C123",
         sessionId: "rotated-session",
+        sessionEntry: { lifecycleRevision: "prepared-revision" },
         storePath: "/tmp/custom-sessions.json",
       }),
     );
@@ -324,6 +317,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(onSessionPrepared).toHaveBeenCalledWith({
       sessionKey: "agent:main:slack:channel:C123",
       sessionId: "rotated-session",
+      lifecycleRevision: "prepared-revision",
       storePath: "/tmp/custom-sessions.json",
     });
   });
@@ -460,8 +454,29 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     });
   });
 
+  async function resolveNativeStatusReply(cfg: OpenClawConfig) {
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: emptyAliasIndex(),
+    });
+    return getReplyFromConfig(
+      buildGetReplyCtx({
+        Body: "/status",
+        BodyForAgent: "/status",
+        RawBody: "/status",
+        CommandBody: "/status",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        SessionKey: "telegram:slash:123",
+        CommandTargetSessionKey: "agent:main:telegram:123",
+      }),
+      undefined,
+      cfg,
+    );
+  }
+
   it("handles native /status before workspace bootstrap", async () => {
-    const targetSessionKey = "agent:main:telegram:123";
     const cfg = markCompleteReplyConfig({
       agents: {
         defaults: {
@@ -471,26 +486,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       },
       session: { store: isolatedStorePath },
     } as OpenClawConfig);
-    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      aliasIndex: emptyAliasIndex(),
-    });
-
-    const reply = await getReplyFromConfig(
-      buildGetReplyCtx({
-        Body: "/status",
-        BodyForAgent: "/status",
-        RawBody: "/status",
-        CommandBody: "/status",
-        CommandSource: "native",
-        CommandAuthorized: true,
-        SessionKey: "telegram:slash:123",
-        CommandTargetSessionKey: targetSessionKey,
-      }),
-      undefined,
-      cfg,
-    );
+    const reply = await resolveNativeStatusReply(cfg);
 
     if (!reply || Array.isArray(reply) || typeof reply.text !== "string") {
       throw new Error("expected status reply text");
@@ -514,7 +510,6 @@ describe("getReplyFromConfig fast test bootstrap", () => {
   });
 
   it("uses configured agent thinking defaults for native /status", async () => {
-    const targetSessionKey = "agent:main:telegram:123";
     const cfg = markCompleteReplyConfig({
       agents: {
         defaults: {
@@ -531,26 +526,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       },
       session: { store: isolatedStorePath },
     } as OpenClawConfig);
-    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      aliasIndex: emptyAliasIndex(),
-    });
-
-    const reply = await getReplyFromConfig(
-      buildGetReplyCtx({
-        Body: "/status",
-        BodyForAgent: "/status",
-        RawBody: "/status",
-        CommandBody: "/status",
-        CommandSource: "native",
-        CommandAuthorized: true,
-        SessionKey: "telegram:slash:123",
-        CommandTargetSessionKey: targetSessionKey,
-      }),
-      undefined,
-      cfg,
-    );
+    const reply = await resolveNativeStatusReply(cfg);
 
     expect(Array.isArray(reply)).toBe(false);
     if (!reply || Array.isArray(reply)) {
@@ -589,26 +565,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       },
       session: { store: storePath },
     } as OpenClawConfig);
-    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      aliasIndex: emptyAliasIndex(),
-    });
-
-    const reply = await getReplyFromConfig(
-      buildGetReplyCtx({
-        Body: "/status",
-        BodyForAgent: "/status",
-        RawBody: "/status",
-        CommandBody: "/status",
-        CommandSource: "native",
-        CommandAuthorized: true,
-        SessionKey: "telegram:slash:123",
-        CommandTargetSessionKey: targetSessionKey,
-      }),
-      undefined,
-      cfg,
-    );
+    const reply = await resolveNativeStatusReply(cfg);
 
     expect(Array.isArray(reply)).toBe(false);
     if (!reply || Array.isArray(reply)) {

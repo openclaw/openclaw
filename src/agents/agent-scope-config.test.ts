@@ -1,13 +1,20 @@
 // Agent scope tests cover which per-agent fields may flatten into runtime defaults.
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import * as agentRoster from "./agent-roster.js";
 import {
   AgentSelectionRequiredError,
+  listAgentEntries,
   listAgentEntriesWithSource,
   listAgentIds,
   resolveConfiguredAgentId,
   resolveAgentConfig,
+  resolveAgentEntry,
   resolveAgentOperationAgentId,
   resolveAgentWorkspaceDir,
   resolveAmbientOwnerAgentId,
@@ -15,8 +22,12 @@ import {
   resolveDefaultAgentId,
   resolveSoleAgentId,
   tryResolveAmbientOwnerAgentId,
+  tryResolveAgentOperationAgentId,
   tryResolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+  tryResolveLegacyDataOwnerAgentId,
   tryResolveSoleAgentId,
+  withAgentRosterFactsBatch,
 } from "./agent-scope-config.js";
 
 vi.unmock("./agent-scope-config.js");
@@ -86,6 +97,74 @@ describe("agent roster resolution", () => {
     expect(tryResolveDefaultAgentId(duplicateDefaults)).toBeUndefined();
   });
 
+  it.each([
+    ["absent", "{}", "main"],
+    ["empty entries", '{"agents":{"entries":{}}}', undefined],
+    ["empty list", '{"agents":{"list":[]}}', undefined],
+    ["malformed entries", '{"agents":{"entries":null,"list":[{"id":"ops"}]}}', undefined],
+    ["malformed list", '{"agents":{"list":42}}', undefined],
+    ["entries precedence", '{"agents":{"entries":{" OPS ":{}},"list":[{"id":"other"}]}}', "ops"],
+    ["invalid keyed entries", '{"agents":{"entries":{"skip":[],"invalid":null,"ops":{}}}}', "ops"],
+    ["invalid list entries", '{"agents":{"list":[null,42,false,{"id":" OPS "}]}}', "ops"],
+    ["duplicate list ids", '{"agents":{"list":[{"id":"ops"},{"id":"ops"}]}}', undefined],
+    ["duplicate normalized keys", '{"agents":{"entries":{" OPS ":{},"ops":{}}}}', undefined],
+  ])("preserves sole-agent selection for %s", (_name, raw, expected) => {
+    expect(tryResolveSoleAgentId(JSON.parse(raw))).toBe(expected);
+  });
+
+  it("reads only enough own enumerable entries to distinguish a sole mutable agent", () => {
+    const entries: Record<string, unknown> = Object.create({ inherited: {} });
+    Object.defineProperty(entries, "hidden", { value: {} });
+    entries[" OPS "] = { name: "Ops" };
+    entries.other = {};
+    const tail = vi.fn(() => ({ name: "Tail" }));
+    Object.defineProperty(entries, "tail", { enumerable: true, configurable: true, get: tail });
+    const cfg = { agents: { ownership: "explicit" as const, entries } };
+    expect(tryResolveSoleAgentId(cfg)).toBeUndefined();
+    expect(tail).not.toHaveBeenCalled();
+    expect(listAgentEntriesWithSource(cfg)).toEqual([
+      { entry: { id: " OPS ", name: "Ops" }, source: { kind: "entries", key: " OPS " } },
+      { entry: { id: "other" }, source: { kind: "entries", key: "other" } },
+      { entry: { id: "tail", name: "Tail" }, source: { kind: "entries", key: "tail" } },
+    ]);
+    expect(tail).toHaveBeenCalledTimes(1);
+    delete entries.other;
+    delete entries.tail;
+    expect(tryResolveSoleAgentId(cfg)).toBe("ops");
+    delete entries[" OPS "];
+    expect(tryResolveSoleAgentId(cfg)).toBeUndefined();
+  });
+
+  it("preserves sparse legacy list objects, arrays, and source indices", () => {
+    const first = { id: " OPS " };
+    const arrayEntry = Object.assign([], { id: "array" });
+    const list: unknown[] = [];
+    const inherited = { id: "inherited" };
+    const prototype = Object.create(Array.prototype);
+    prototype[2] = inherited;
+    Object.setPrototypeOf(list, prototype);
+    list[1] = null;
+    list[3] = first;
+    list[5] = arrayEntry;
+    const tail = vi.fn(() => ({ id: "tail" }));
+    Object.defineProperty(list, 7, { configurable: true, get: tail });
+    const cfg = { agents: { list } };
+    expect(tryResolveSoleAgentId(cfg)).toBeUndefined();
+    expect(tail).not.toHaveBeenCalled();
+    expect(listAgentEntriesWithSource(cfg)).toEqual([
+      { entry: inherited, source: { kind: "list", index: 2 } },
+      { entry: first, source: { kind: "list", index: 3 } },
+      { entry: arrayEntry, source: { kind: "list", index: 5 } },
+      { entry: { id: "tail" }, source: { kind: "list", index: 7 } },
+    ]);
+    expect(tail).toHaveBeenCalledTimes(1);
+    expect(listAgentEntries(cfg)[1]).toBe(first);
+    expect(listAgentEntries(cfg)[2]).toBe(arrayEntry);
+    list.length = 4;
+    delete prototype[2];
+    expect(tryResolveSoleAgentId(cfg)).toBe("ops");
+  });
+
   it("keeps the generic selection hint free of surface-specific assumptions", () => {
     expect(() => resolveDefaultAgentId({ agents: { entries: { alpha: {}, beta: {} } } })).toThrow(
       "Multiple agents are configured, but this operation has no explicit owner. Select an agent explicitly; CLI callers can pass --agent <id>, channels can add a binding, and ambient services can set their agentId target.",
@@ -131,6 +210,14 @@ describe("agent roster resolution", () => {
       expected: "solo",
     },
     {
+      name: "sole explicit agent without a default designation",
+      config: retainLegacyDefaultAgentId(
+        { agents: { ownership: "explicit", entries: { solo: {} } } },
+        "solo",
+      ),
+      expected: "solo",
+    },
+    {
       name: "explicit requested agent before every configured owner",
       config: {
         agents: {
@@ -156,6 +243,7 @@ describe("agent roster resolution", () => {
       agents: { ownership: "explicit" as const, entries: { ops: {}, research: {} } },
     } satisfies OpenClawConfig;
 
+    retainLegacyDefaultAgentId(ownerlessFleet, "ops");
     expect(tryResolveAmbientOwnerAgentId(ownerlessFleet)).toBeUndefined();
     expect(() => resolveAmbientOwnerAgentId(ownerlessFleet)).toThrow(AgentSelectionRequiredError);
     expect(() =>
@@ -180,7 +268,7 @@ describe("agent roster resolution", () => {
       },
     } satisfies OpenClawConfig;
 
-    expect(resolveDefaultAgentDir(config)).toBe("/tmp/openclaw-beta-agent");
+    expect(resolveDefaultAgentDir(config)).toBe(path.resolve("/tmp/openclaw-beta-agent"));
   });
 
   it("preserves legacy default ownership for non-explicit CLI operations", () => {
@@ -212,6 +300,62 @@ describe("agent roster resolution", () => {
 
     expect(cfg.agents?.entries?.ops?.default).toBeUndefined();
     expect(resolveAgentOperationAgentId(cfg)).toBe("ops");
+  });
+
+  it("uses the recorded explicit owner ahead of migration provenance and retired markers", () => {
+    const migrated = migratePersistedImplicitMainRoster({
+      agents: {
+        defaults: { systemAgent: { agentId: "research" } },
+        entries: { ops: { default: true }, research: {} },
+      },
+    }).config as OpenClawConfig;
+    migrated.agents!.ownership = "explicit";
+    for (const config of [migrated, structuredClone(migrated)]) {
+      expect(tryResolveLegacyCompatibilityAgentId(config)).toBe("research");
+      expect(resolveAgentOperationAgentId(config)).toBe("research");
+      expect(resolveAmbientOwnerAgentId(config)).toBe("research");
+      expect(tryResolveDefaultAgentId(config)).toBeUndefined();
+    }
+  });
+
+  it.each([undefined, "", "deleted"])(
+    "does not infer an explicit fleet owner from a retired marker with designation %s",
+    (agentId) => {
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId } },
+          entries: { ops: { default: true }, research: {} },
+        },
+      };
+      retainLegacyDefaultAgentId(config, "ops");
+      expect(tryResolveLegacyCompatibilityAgentId(config)).toBeUndefined();
+      expect(tryResolveAgentOperationAgentId(config)).toBeUndefined();
+    },
+  );
+
+  it.each([undefined, "explicit"] as const)(
+    "requires explicit ownership for a designated operation owner (%s)",
+    (ownership) => {
+      const config: OpenClawConfig = {
+        agents: {
+          ownership,
+          defaults: { systemAgent: { agentId: "research" } },
+          entries: { ops: {}, research: {} },
+        },
+      };
+      expect(tryResolveAgentOperationAgentId(config)).toBe(
+        ownership === "explicit" ? "research" : undefined,
+      );
+    },
+  );
+
+  it("does not designate a sole explicit agent from migration provenance", () => {
+    const config = retainLegacyDefaultAgentId(
+      { agents: { ownership: "explicit", entries: { ops: {} } } },
+      "ops",
+    );
+    expect(tryResolveLegacyCompatibilityAgentId(config)).toBeUndefined();
   });
 
   it("prefers a per-agent toolProgressDetail over the roster default", () => {
@@ -256,6 +400,63 @@ describe("agent roster resolution", () => {
     expect(unrelatedEntryReads).toBe(0);
   });
 
+  it.each([false, true])("prepares one immutable fleet roster (captured: %s)", (captured) => {
+    const prepare = captured ? captureRuntimeConfig : freezeJsonSnapshot;
+    const config = prepare({
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { systemAgent: { agentId: "agent-0" } },
+        entries: Object.fromEntries(
+          Array.from({ length: 200 }, (_, index) => [`agent-${index}`, { name: `${index}` }]),
+        ),
+      },
+    });
+    const entries = vi.spyOn(agentRoster, "listAgentEntriesWithSource");
+    const ids = vi.spyOn(agentRoster, "listAgentIds");
+    try {
+      for (let index = 0; index < 200; index += 1) {
+        withAgentRosterFactsBatch(config, () => {
+          expect(resolveAgentConfig(config, `agent-${index}`)?.name).toBe(`${index}`);
+          expect(tryResolveLegacyCompatibilityAgentId(config)).toBe("agent-0");
+        });
+      }
+      // One point-lookup index and one configured-owner membership projection.
+      expect(entries.mock.calls.length + ids.mock.calls.length).toBeLessThanOrEqual(2);
+    } finally {
+      entries.mockRestore();
+      ids.mockRestore();
+    }
+  });
+
+  it("retains first-match and keyed clone semantics on immutable rosters", () => {
+    const config = captureRuntimeConfig({
+      agents: { entries: { " OPS ": { name: "first" }, ops: { name: "second" } } },
+    });
+    const first = resolveAgentEntry(config, "ops");
+    expect(first).toEqual({ id: " OPS ", name: "first" });
+    if (first) {
+      first.name = "caller change";
+    }
+    expect(resolveAgentEntry(config, "OPS")?.name).toBe("first");
+  });
+
+  it("refreshes immutable roster facts when retained migration ownership changes", () => {
+    const config = captureRuntimeConfig({ agents: { entries: { ops: {}, research: {} } } });
+    retainLegacyDefaultAgentId(config, "ops");
+    expect(tryResolveLegacyDataOwnerAgentId(config)).toBe("ops");
+    retainLegacyDefaultAgentId(config, "research");
+    expect(tryResolveLegacyDataOwnerAgentId(config)).toBe("research");
+    retainLegacyDefaultAgentId(config, undefined);
+    expect(tryResolveLegacyDataOwnerAgentId(config)).toBeUndefined();
+  });
+
+  it("reads mutations below a shallow-frozen roster owner", () => {
+    const config = Object.freeze({ agents: { entries: { ops: { name: "before" } } } });
+    expect(resolveAgentConfig(config, "ops")?.name).toBe("before");
+    config.agents.entries.ops.name = "after";
+    expect(resolveAgentConfig(config, "ops")?.name).toBe("after");
+  });
+
   it("keeps the retained legacy owner on the inherited workspace before config write", () => {
     const cfg = migratePersistedImplicitMainRoster({
       agents: {
@@ -266,8 +467,8 @@ describe("agent roster resolution", () => {
 
     expect(cfg.agents?.entries?.ops?.default).toBeUndefined();
     expect(cfg.agents?.entries?.ops?.workspace).toBeUndefined();
-    expect(resolveAgentWorkspaceDir(cfg, "ops")).toBe("/srv/ops");
-    expect(resolveAgentWorkspaceDir(cfg, "research")).toBe("/srv/ops/research");
+    expect(resolveAgentWorkspaceDir(cfg, "ops")).toBe(path.resolve("/srv/ops"));
+    expect(resolveAgentWorkspaceDir(cfg, "research")).toBe(path.resolve("/srv/ops/research"));
   });
 
   it("keeps a raw legacy marker owner on the inherited workspace", () => {
@@ -278,8 +479,8 @@ describe("agent roster resolution", () => {
       },
     };
 
-    expect(resolveAgentWorkspaceDir(cfg, "ops")).toBe("/srv/ops");
-    expect(resolveAgentWorkspaceDir(cfg, "research")).toBe("/srv/ops/research");
+    expect(resolveAgentWorkspaceDir(cfg, "ops")).toBe(path.resolve("/srv/ops"));
+    expect(resolveAgentWorkspaceDir(cfg, "research")).toBe(path.resolve("/srv/ops/research"));
   });
 
   it("keeps the implicit default workspace inside an overridden state directory", () => {
@@ -290,7 +491,7 @@ describe("agent roster resolution", () => {
         HOME: "/home/operator",
         OPENCLAW_STATE_DIR: stateDir,
       }),
-    ).toBe(`${stateDir}/workspace`);
+    ).toBe(path.resolve(stateDir, "workspace"));
   });
 
   it("offers a non-throwing diagnostic lookup for malformed rosters", () => {
@@ -306,18 +507,22 @@ describe("agent roster resolution", () => {
 
   it("copies own __proto__ fields without changing the listed entry prototype", () => {
     const entry = JSON.parse('{"__proto__":{"tools":{"allow":["*"]}}}') as Record<string, unknown>;
-    const [listed] = listAgentEntriesWithSource({
+    const cfg = {
       agents: { entries: { ops: entry } },
-    } as OpenClawConfig);
+    } as OpenClawConfig;
+    const [listed] = listAgentEntriesWithSource(cfg);
     expect(listed).toBeDefined();
-    const listedEntry = listed!.entry;
+    const [plainEntry] = listAgentEntries(cfg);
+    expect(plainEntry).toBeDefined();
 
-    expect(Object.getPrototypeOf(listedEntry)).toBe(Object.prototype);
-    expect(Object.hasOwn(listedEntry, "__proto__")).toBe(true);
-    expect(Object.getOwnPropertyDescriptor(listedEntry, "__proto__")?.value).toEqual({
-      tools: { allow: ["*"] },
-    });
-    expect(listedEntry.tools).toBeUndefined();
+    for (const listedEntry of [listed!.entry, plainEntry!]) {
+      expect(Object.getPrototypeOf(listedEntry)).toBe(Object.prototype);
+      expect(Object.hasOwn(listedEntry, "__proto__")).toBe(true);
+      expect(Object.getOwnPropertyDescriptor(listedEntry, "__proto__")?.value).toEqual({
+        tools: { allow: ["*"] },
+      });
+      expect(listedEntry.tools).toBeUndefined();
+    }
   });
 });
 

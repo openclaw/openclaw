@@ -5,8 +5,6 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 // Msteams plugin module implements reply dispatcher behavior.
 import {
-  buildChannelProgressDraftLine,
-  buildChannelProgressDraftLineForEntry,
   normalizeAgentPlanSteps,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
@@ -89,26 +87,20 @@ export function createMSTeamsReplyDispatcher(params: {
    */
   const TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 
-  // Forward references: sendTypingIndicator is built before the stream
-  // controller exists, but the keepalive tick needs to check stream state so
-  // we don't overlay "..." typing on the visible streaming card, and we want
-  // to suppress typing pulses entirely once the user pressed Stop (otherwise
-  // typing keeps pulsing for the rest of the agent run, fighting the cancel
-  // signal). Both refs are wired once the stream controller is constructed
-  // below.
-  const streamActiveRef: { current: () => boolean } = { current: () => false };
-  const streamCanceledRef: { current: () => boolean } = { current: () => false };
-
-  const rawSendTypingIndicator = async () => {
+  const sendTypingIndicator = async () => {
+    // Stream previews and Stop suppress typing; between segments, typing keeps
+    // the Bot Framework turn context alive for later tool replies.
+    if (!isTypingSupported || streamController.isStreamActive() || streamController.wasCanceled()) {
+      return;
+    }
     await withRevokedProxyFallback({
       run: async () => {
         await params.context.sendActivity({ type: "typing" });
       },
       onRevoked: async () => {
-        const baseRef = buildConversationReference(params.conversationRef);
         await sendMSTeamsActivityWithReference(
           params.app,
-          baseRef,
+          buildConversationReference(params.conversationRef),
           { type: "typing" },
           { serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg) },
         );
@@ -118,28 +110,6 @@ export function createMSTeamsReplyDispatcher(params: {
       },
     });
   };
-
-  const sendTypingIndicator = isTypingSupported
-    ? async () => {
-        // While the streaming card is actively being updated the user
-        // already sees a live indicator in the stream — don't overlay a
-        // plain "..." typing on top of it. Between segments (tool chain)
-        // the stream is finalized, so typing indicators are appropriate
-        // and they are what keep the TurnContext alive. See #59731.
-        if (streamActiveRef.current()) {
-          return;
-        }
-        // Once the user pressed Stop (or Teams ended the stream), suppress
-        // typing pulses too — otherwise the bot keeps pulsing "typing..." in
-        // Teams for the rest of the agent run, fighting the user's explicit
-        // cancel. The agent can't currently be canceled, but it's about to
-        // wind down on its own; in the meantime we honor the cancel visually.
-        if (streamCanceledRef.current()) {
-          return;
-        }
-        await rawSendTypingIndicator();
-      }
-    : async () => {};
 
   const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.cfg,
@@ -191,9 +161,6 @@ export function createMSTeamsReplyDispatcher(params: {
     // conversation.id scopes per-chat.
     progressSeed: `${params.accountId ?? "default"}:${params.conversationRef.conversation?.id ?? ""}`,
   });
-  // Wire the forward-declared gates used by sendTypingIndicator.
-  streamActiveRef.current = () => streamController.isStreamActive();
-  streamCanceledRef.current = () => streamController.wasCanceled();
 
   // Resolve block-streaming preference from the canonical nested config
   // (`streaming.mode = "block"` or `streaming.block.enabled = true`); legacy
@@ -230,6 +197,11 @@ export function createMSTeamsReplyDispatcher(params: {
   };
 
   const pendingDeliveries: PendingDelivery[] = [];
+  // onIdle can overlap later deliveries. Join both close and fallback sends
+  // before another payload can mutate or overtake the native segment.
+  let pendingSettlement: Promise<void> | undefined;
+  const findPendingNativeDelivery = () =>
+    pendingDeliveries.find((candidate) => candidate.native && !candidate.nativeSettled);
 
   const joinAcceptedContents = (contents: readonly (string | undefined)[]): string =>
     contents.filter((content): content is string => Boolean(content)).join("\n");
@@ -422,7 +394,6 @@ export function createMSTeamsReplyDispatcher(params: {
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
     onReplyStart: async () => {
-      await streamController.onReplyStart();
       // Always start the typing keepalive loop when typing is enabled and
       // supported by this conversation type. The sendTypingIndicator gate
       // skips actual sends while the stream card is visually active, so
@@ -439,9 +410,20 @@ export function createMSTeamsReplyDispatcher(params: {
   const delivery: ChannelInboundTurnPlan["delivery"] = {
     observeMessageSent: true,
     deliver: async (payload) => {
+      if (pendingSettlement) {
+        await pendingSettlement;
+      }
       const preparedPayload = streamController.preparePayload(payload);
       const native = streamController.claimNativeDelivery();
-      const messages = preparedPayload ? renderReplyPayload(preparedPayload) : [];
+      if (preparedPayload && !native && findPendingNativeDelivery()) {
+        // Close the earlier native segment before later blocks can overtake
+        // its final text or escape a Stop discovered by that closing request.
+        await settleDelivery();
+      }
+      const messages =
+        preparedPayload && !streamController.wasCanceled()
+          ? renderReplyPayload(preparedPayload)
+          : [];
       if (!native && messages.length === 0) {
         return {
           visibleReplySent: false,
@@ -478,67 +460,70 @@ export function createMSTeamsReplyDispatcher(params: {
     },
   };
 
-  const settleDelivery = async (): Promise<void> => {
-    await flushPendingMessages();
+  const settleDelivery = (): Promise<void> =>
+    (pendingSettlement ??= Promise.resolve()
+      .then(async () => {
+        await flushPendingMessages();
 
-    const nativeDelivery = pendingDeliveries.find(
-      (candidate) => candidate.native && !candidate.nativeSettled,
-    );
-    if (!nativeDelivery) {
-      await streamController.finalize();
-      return;
-    }
-    let nativeResult;
-    try {
-      nativeResult = await streamController.finalize();
-    } catch (error) {
-      nativeDelivery.errors.push(error);
-      nativeDelivery.nativeSettled = true;
-      settlePendingDelivery(nativeDelivery);
-      return;
-    }
+        const nativeDelivery = findPendingNativeDelivery();
+        if (!nativeDelivery) {
+          await streamController.finalize();
+          return;
+        }
+        let nativeResult;
+        try {
+          nativeResult = await streamController.finalize();
+        } catch (error) {
+          nativeDelivery.errors.push(error);
+          nativeDelivery.nativeSettled = true;
+          settlePendingDelivery(nativeDelivery);
+          return;
+        }
 
-    if (nativeResult.visibleReplySent) {
-      nativeDelivery.nativeResult = {
-        messageIds: nativeResult.messageId ? [nativeResult.messageId] : [],
-        ...(nativeResult.content !== undefined ? { content: nativeResult.content } : {}),
-      };
-    }
-    const hasPostNativePayloads = Boolean(nativeResult.postNativePayloads?.length);
-    if (nativeResult.logicalContent !== undefined) {
-      nativeDelivery.content = nativeResult.logicalContent;
-    } else if (
-      nativeResult.content !== undefined &&
-      ((!nativeResult.fallbackPayload && !hasPostNativePayloads) ||
-        nativeDelivery.content === undefined)
-    ) {
-      nativeDelivery.content = nativeResult.content;
-    }
-    const afterNativePayloads = [
-      ...(nativeResult.fallbackPayload ? [nativeResult.fallbackPayload] : []),
-      ...(nativeResult.postNativePayloads ?? []),
-    ];
-    if (afterNativePayloads.length > 0) {
-      nativeDelivery.messages.push(
-        ...afterNativePayloads.flatMap((payload) => renderReplyPayload(payload)),
-      );
-      nativeDelivery.blockSettled = nativeDelivery.messages.length === 0;
-    }
-    nativeDelivery.nativeSettled = true;
-    if (!nativeDelivery.blockSettled) {
-      await flushPendingMessages();
-    }
-    settlePendingDelivery(nativeDelivery);
-    if (nativeResult.messageId) {
-      try {
-        params.onSentMessageIds?.([nativeResult.messageId]);
-      } catch (error) {
-        params.log.warn?.("failed to record sent Teams message id", {
-          error: formatUnknownError(error),
-        });
-      }
-    }
-  };
+        if (nativeResult.visibleReplySent) {
+          nativeDelivery.nativeResult = {
+            messageIds: nativeResult.messageId ? [nativeResult.messageId] : [],
+            ...(nativeResult.content !== undefined ? { content: nativeResult.content } : {}),
+          };
+        }
+        const hasPostNativePayloads = Boolean(nativeResult.postNativePayloads?.length);
+        if (nativeResult.logicalContent !== undefined) {
+          nativeDelivery.content = nativeResult.logicalContent;
+        } else if (
+          nativeResult.content !== undefined &&
+          ((!nativeResult.fallbackPayload && !hasPostNativePayloads) ||
+            nativeDelivery.content === undefined)
+        ) {
+          nativeDelivery.content = nativeResult.content;
+        }
+        const afterNativePayloads = [
+          ...(nativeResult.fallbackPayload ? [nativeResult.fallbackPayload] : []),
+          ...(nativeResult.postNativePayloads ?? []),
+        ];
+        if (afterNativePayloads.length > 0) {
+          nativeDelivery.messages.push(
+            ...afterNativePayloads.flatMap((payload) => renderReplyPayload(payload)),
+          );
+          nativeDelivery.blockSettled = nativeDelivery.messages.length === 0;
+        }
+        nativeDelivery.nativeSettled = true;
+        if (!nativeDelivery.blockSettled) {
+          await flushPendingMessages();
+        }
+        settlePendingDelivery(nativeDelivery);
+        if (nativeResult.messageId) {
+          try {
+            params.onSentMessageIds?.([nativeResult.messageId]);
+          } catch (error) {
+            params.log.warn?.("failed to record sent Teams message id", {
+              error: formatUnknownError(error),
+            });
+          }
+        }
+      })
+      .finally(() => {
+        pendingSettlement = undefined;
+      }));
 
   // Pipe agent tool/plan/approval/command events into the stream controller's
   // progress-draft surface. In "progress" stream mode this lets the live
@@ -568,59 +553,15 @@ export function createMSTeamsReplyDispatcher(params: {
           streamController.resetReasoningProgress();
           return false;
         },
-        onToolStart: async (payload: PipelinePayload) => {
-          const name = typeof payload?.name === "string" ? payload.name : undefined;
-          const detailMode =
-            typeof payload?.detailMode === "string" ? payload.detailMode : undefined;
-          await streamController.pushProgressLine(
-            buildChannelProgressDraftLineForEntry(
-              msteamsCfg,
-              {
-                event: "tool",
-                ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
-                ...(typeof payload?.toolCallId === "string"
-                  ? { toolCallId: payload.toolCallId }
-                  : {}),
-                ...(name ? { name } : {}),
-                ...(typeof payload?.phase === "string" ? { phase: payload.phase } : {}),
-                ...(payload?.args && typeof payload.args === "object"
-                  ? { args: payload.args as Record<string, unknown> }
-                  : {}),
-              },
-              detailMode === "explain" || detailMode === "raw" ? { detailMode } : undefined,
-            ),
-            name ? { toolName: name } : undefined,
-          );
-          return false;
-        },
-        onItemEvent: async (payload: PipelinePayload) => {
-          await streamController.pushProgressLine(
-            buildChannelProgressDraftLineForEntry(msteamsCfg, {
-              event: "item",
-              ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
-              ...(typeof payload?.toolCallId === "string"
-                ? { toolCallId: payload.toolCallId }
-                : {}),
-              ...(typeof payload?.kind === "string" ? { itemKind: payload.kind } : {}),
-              ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
-              ...(typeof payload?.name === "string" ? { name: payload.name } : {}),
-              ...(typeof payload?.phase === "string" ? { phase: payload.phase } : {}),
-              ...(typeof payload?.status === "string" ? { status: payload.status } : {}),
-              ...(typeof payload?.summary === "string" ? { summary: payload.summary } : {}),
-              ...(typeof payload?.progressText === "string"
-                ? { progressText: payload.progressText }
-                : {}),
-              ...(typeof payload?.meta === "string" ? { meta: payload.meta } : {}),
-            }),
-          );
-          return false;
-        },
+        onToolStart: streamController.pushToolEvent,
+        onItemEvent: streamController.pushItemEvent,
         onPlanUpdate: async (payload: PipelinePayload) => {
           if (payload?.phase !== "update") {
             return false;
           }
           await streamController.pushPlanProgress(normalizeAgentPlanSteps(payload.steps), {
             explanation: typeof payload.explanation === "string" ? payload.explanation : undefined,
+            explanationFormat: payload.explanationFormat === "plain" ? "plain" : undefined,
           });
           return false;
         },
@@ -635,57 +576,6 @@ export function createMSTeamsReplyDispatcher(params: {
           });
           return false;
         },
-        onCommandOutput: async (payload: PipelinePayload) => {
-          if (payload?.phase !== "end") {
-            return false;
-          }
-          await streamController.pushProgressLine(
-            buildChannelProgressDraftLineForEntry(msteamsCfg, {
-              event: "command-output",
-              ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
-              ...(typeof payload?.toolCallId === "string"
-                ? { toolCallId: payload.toolCallId }
-                : {}),
-              phase: payload.phase as string,
-              ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
-              ...(typeof payload?.name === "string" ? { name: payload.name } : {}),
-              ...(typeof payload?.status === "string" ? { status: payload.status } : {}),
-              ...(typeof payload?.exitCode === "number" ? { exitCode: payload.exitCode } : {}),
-            }),
-          );
-          return false;
-        },
-        onPatchSummary: async (payload: PipelinePayload) => {
-          if (payload?.phase !== "end") {
-            return false;
-          }
-          await streamController.pushProgressLine(
-            buildChannelProgressDraftLine({
-              event: "patch",
-              ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
-              ...(typeof payload?.toolCallId === "string"
-                ? { toolCallId: payload.toolCallId }
-                : {}),
-              phase: payload.phase as string,
-              ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
-              ...(typeof payload?.name === "string" ? { name: payload.name } : {}),
-              ...(Array.isArray(payload?.added) &&
-              payload.added.every((s: unknown) => typeof s === "string")
-                ? { added: payload.added }
-                : {}),
-              ...(Array.isArray(payload?.modified) &&
-              payload.modified.every((s: unknown) => typeof s === "string")
-                ? { modified: payload.modified }
-                : {}),
-              ...(Array.isArray(payload?.deleted) &&
-              payload.deleted.every((s: unknown) => typeof s === "string")
-                ? { deleted: payload.deleted }
-                : {}),
-              ...(typeof payload?.summary === "string" ? { summary: payload.summary } : {}),
-            }),
-          );
-          return false;
-        },
       }
     : {};
 
@@ -696,6 +586,8 @@ export function createMSTeamsReplyDispatcher(params: {
     },
     delivery,
     replyOptions: {
+      progressPreambleEnabled: shouldSuppressDefaultToolProgressMessages,
+      commentaryProgressEnabled: shouldSuppressDefaultToolProgressMessages,
       ...(streamController.hasStream()
         ? {
             onPartialReply: (payload: { text?: string }) => {

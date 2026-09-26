@@ -1,4 +1,3 @@
-// Mattermost API module exposes the plugin public contract.
 export type {
   BaseProbeResult,
   ChannelAccountSnapshot,
@@ -34,6 +33,7 @@ export {
 export { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
 export { isRequestBodyLimitError } from "openclaw/plugin-sdk/webhook-ingress";
 export {
+  createWebhookInFlightLimiter,
   readRequestBodyWithLimit,
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";

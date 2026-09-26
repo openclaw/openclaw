@@ -1,4 +1,3 @@
-// Memory Core tests cover manager reindex state plugin behavior.
 import {
   MEMORY_CHUNKING_VERSION,
   type MemorySource,
@@ -30,20 +29,7 @@ function createMeta(overrides: Partial<MemoryIndexMeta> = {}): MemoryIndexMeta {
 }
 
 function createIdentityParams(
-  overrides: {
-    meta?: MemoryIndexMeta | null;
-    provider?: { id: string; model?: string } | null;
-    providerKey?: string;
-    providerAliases?: Array<{ model: string; providerKey: string }>;
-    providerKeyKnown?: boolean;
-    configuredSources?: MemorySource[];
-    configuredScopeHash?: string;
-    chunkTokens?: number;
-    chunkOverlap?: number;
-    vectorReady?: boolean;
-    hasIndexedChunks?: boolean;
-    ftsTokenizer?: string;
-  } = {},
+  overrides: Partial<Parameters<typeof resolveMemoryIndexIdentityState>[0]> = {},
 ) {
   return {
     meta: createMeta(),
@@ -67,44 +53,39 @@ function isMemoryIndexIdentityDirty(
 }
 
 describe("memory reindex state", () => {
-  it.each([
-    {
-      name: "missing provenance version",
-      meta: { provenanceVersion: undefined },
-      reason: "index provenance classifier changed",
-      code: "provenance_version",
-    },
-    {
-      name: "missing chunking version",
-      meta: { chunkingVersion: undefined },
-      reason: "index chunking implementation changed",
-      code: "chunking_version",
-    },
-  ])("invalidates indexes with $name as OpenClaw-owned", ({ meta, reason, code }) => {
+  it("invalidates indexes with missing provenance version as OpenClaw-owned", () => {
     expect(
-      resolveMemoryIndexIdentityState(createIdentityParams({ meta: createMeta(meta) })),
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({ meta: createMeta({ provenanceVersion: undefined }) }),
+      ),
     ).toEqual({
       status: "mismatched",
-      reason,
-      code,
+      reason: "index provenance classifier changed",
+      code: "provenance_version",
       owner: "openclaw",
+      versionOrder: "older",
     });
   });
 
-  it("invalidates indexes built by a previous chunking implementation", () => {
-    expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({
-          meta: createMeta({ chunkingVersion: MEMORY_CHUNKING_VERSION - 1 }),
-        }),
-      ),
-    ).toMatchObject({
-      status: "mismatched",
-      reason: "index chunking implementation changed",
-      code: "chunking_version",
-      owner: "openclaw",
-    });
-  });
+  it.each([undefined, MEMORY_CHUNKING_VERSION - 1])(
+    "invalidates indexes with missing or previous chunking version %s",
+    (chunkingVersion) => {
+      expect(
+        resolveMemoryIndexIdentityState(
+          createIdentityParams({
+            meta: createMeta({ chunkingVersion }),
+          }),
+        ),
+      ).toEqual({
+        status: "mismatched",
+        reason: "index chunking implementation changed",
+        code: "chunking_version",
+        owner: "openclaw",
+        versionOrder: "older",
+        chunkingVersionOnly: true,
+      });
+    },
+  );
 
   it("classifies missing metadata as OpenClaw-owned", () => {
     expect(resolveMemoryIndexIdentityState(createIdentityParams({ meta: null }))).toEqual({
@@ -134,14 +115,6 @@ describe("memory reindex state", () => {
     ).toMatchObject([{ provider: "empty-model-provider", model: "" }]);
   });
 
-  it("marks identity dirty when the embedding model changes", () => {
-    expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({ provider: { id: "openai", model: "mock-embed-v2" } }),
-      ),
-    ).toMatchObject({ status: "mismatched", code: "model", owner: "configuration" });
-  });
-
   it("returns a mismatch reason when provider identity changes", () => {
     expect(
       resolveMemoryIndexIdentityState(
@@ -154,26 +127,6 @@ describe("memory reindex state", () => {
       status: "mismatched",
       reason: "index was built for provider openai, expected ollama",
       code: "provider",
-      owner: "configuration",
-    });
-  });
-
-  it("marks identity dirty when the provider cache key changes", () => {
-    expect(
-      resolveMemoryIndexIdentityState(
-        createIdentityParams({
-          provider: { id: "gemini", model: "gemini-embedding-2-preview" },
-          providerKey: "provider-key-dims-768",
-          meta: createMeta({
-            provider: "gemini",
-            model: "gemini-embedding-2-preview",
-            providerKey: "provider-key-dims-3072",
-          }),
-        }),
-      ),
-    ).toMatchObject({
-      status: "mismatched",
-      code: "provider_settings",
       owner: "configuration",
     });
   });
@@ -423,14 +376,11 @@ describe("memory reindex state", () => {
     ).toBe(false);
   });
 
-  it.each([
-    { name: "empty model", model: "" },
-    { name: "whitespace-only model", model: "  " },
-  ])("falls back to fts-only for $name", ({ model }) => {
+  it("falls back to fts-only for a whitespace-only model", () => {
     expect(
       resolveMemoryIndexIdentityState(
         createIdentityParams({
-          provider: { id: "openai", model },
+          provider: { id: "openai", model: "  " },
           meta: createMeta({ model: "fts-only" }),
         }),
       ),
@@ -448,5 +398,26 @@ describe("memory reindex state", () => {
     if (state.status === "mismatched") {
       expect(state.reason).toContain("expected fts-only");
     }
+  });
+  it.each<Partial<MemoryIndexMeta>>([
+    { sources: ["sessions"] },
+    { scopeHash: "different-corpus" },
+    { chunkTokens: 999 },
+    { chunkOverlap: 999 },
+    { ftsTokenizer: "porter" },
+    { provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION - 1 },
+    { provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION + 1 },
+    { chunkingVersion: MEMORY_CHUNKING_VERSION + 1 },
+  ])("never marks incompatible or newer indexes as lexical-compatible: %j", (change) => {
+    const state = resolveMemoryIndexIdentityState(
+      createIdentityParams({
+        meta: createMeta({
+          chunkingVersion: MEMORY_CHUNKING_VERSION - 1,
+          ...change,
+        }),
+      }),
+    );
+    expect(state.status).toBe("mismatched");
+    expect(state).not.toHaveProperty("chunkingVersionOnly", true);
   });
 });

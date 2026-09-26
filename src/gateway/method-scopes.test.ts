@@ -10,6 +10,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
+import { createExpectedBroadOperatorScopes } from "./scope-expectations.test-support.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
@@ -39,6 +40,22 @@ afterEach(() => {
 });
 
 describe("method scope resolution", () => {
+  it.each(["openclaw", " "])(
+    "authorizes runtime-aware inventory %j with write scope",
+    (runtimeId) => {
+      const params = { runtimeId };
+      expect(
+        authorizeOperatorScopesForMethod("environments.list", ["operator.read"], params),
+      ).toEqual({
+        allowed: false,
+        missingScope: "operator.write",
+      });
+      expect(
+        authorizeOperatorScopesForMethod("environments.list", ["operator.write"], params),
+      ).toEqual({ allowed: true });
+    },
+  );
+
   it("requires write scope before sessions.assignOwner visibility is considered", () => {
     const params = {
       key: "agent:main:shared",
@@ -61,23 +78,26 @@ describe("method scope resolution", () => {
   });
 
   it.each([
+    ["canvas.document.preview", ["operator.read"]],
     ["canvas.document.view", ["operator.read"]],
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
     ["audit.activity.list", ["operator.read"]],
-    ["audit.run.inspect", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["users.list", ["operator.read"]],
     ["users.self", ["operator.read"]],
+    ["users.personalFile.get", ["operator.read"]],
+    ["users.personalFile.set", ["operator.read"]],
+    ["agents.files.set", ["operator.admin"]],
     ["users.linkEmail", ["operator.admin"]],
     ["users.setDisplayName", ["operator.write"]],
     ["users.setAvatar", ["operator.write"]],
     ["tasks.get", ["operator.read"]],
+    ["tasks.history", ["operator.read"]],
     ["taskSuggestions.list", ["operator.read"]],
     ["taskSuggestions.create", ["operator.write"]],
     ["taskSuggestions.accept", ["operator.admin"]],
     ["taskSuggestions.dismiss", ["operator.write"]],
-    ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
     ["sessions.dispatch", ["operator.write"]],
     ["sessions.reclaim", ["operator.write"]],
@@ -120,13 +140,14 @@ describe("method scope resolution", () => {
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["diagnostics.lanes", ["operator.read"]],
+    ["diagnostics.cpuProfile", ["operator.admin"]],
+    ["diagnostics.heapProfile", ["operator.admin"]],
     ["gateway.restart.preflight", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
     ["hooks.status", ["operator.read"]],
     ["skills.curator.pin", ["operator.admin"]],
     ["skills.curator.unpin", ["operator.admin"]],
     ["skills.curator.restore", ["operator.admin"]],
-    ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
     ["talk.client.create", ["operator.talk"]],
     ["talk.client.transcript", ["operator.talk"]],
@@ -141,6 +162,7 @@ describe("method scope resolution", () => {
     ["talk.session.steer", ["operator.talk"]],
     ["talk.session.close", ["operator.talk"]],
     ["update.status", ["operator.admin"]],
+    ["update.report", ["operator.admin"]],
     ["update.runs.get", ["operator.admin"]],
     ["update.runs.list", ["operator.admin"]],
     ["update.hold", ["operator.admin"]],
@@ -152,15 +174,10 @@ describe("method scope resolution", () => {
     ["tools.github.authorize.start", ["operator.admin"]],
     ["tools.github.authorize.poll", ["operator.admin"]],
     ["tools.github.authorize.cancel", ["operator.admin"]],
-    ["config.schema", ["operator.read"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],
-    ["exec.approvals.get", ["operator.admin"]],
-    ["exec.approvals.set", ["operator.admin"]],
-    ["exec.approvals.node.get", ["operator.admin"]],
-    ["exec.approvals.node.set", ["operator.admin"]],
     ["conversations.list", ["operator.admin"]],
     ["conversations.send", ["operator.admin"]],
     ["conversations.turn", ["operator.admin"]],
@@ -337,15 +354,7 @@ describe("method scope resolution", () => {
         pluginId: "scope-plugin",
         actionId: "missing",
       }),
-    ).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    ).toEqual(createExpectedBroadOperatorScopes());
     expect(
       authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.approvals"], {
         pluginId: "scope-plugin",
@@ -632,22 +641,13 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
-  it("delegates effort patches to the admin-scoped session policy", () => {
-    const params = { key: "agent:main:ios-1", thinkingLevel: "high" };
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", params)).toEqual([
-      "operator.admin",
-    ]);
-    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.write"], params)).toEqual({
-      allowed: false,
-      missingScope: "operator.admin",
-    });
-    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.admin"], params)).toEqual({
-      allowed: true,
-    });
-  });
-
-  it("delegates model patches to the write-scoped session policy", () => {
-    const params = { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" };
+  it.each([
+    { model: "anthropic/claude-sonnet-5" },
+    { thinkingLevel: "high" },
+    { fastMode: true },
+    { thinkingLevel: null, fastMode: null },
+  ])("delegates model and effort patches to the write-scoped session policy: %j", (patch) => {
+    const params = { key: "agent:main:ios-1", ...patch };
     expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", params)).toEqual([
       "operator.write",
     ]);
@@ -775,15 +775,7 @@ describe("method scope resolution", () => {
         pluginId: "remote-plugin",
         actionId: "approve",
       }),
-    ).toEqual([
-      "operator.admin",
-      "operator.read",
-      "operator.write",
-      "operator.approvals",
-      "operator.questions",
-      "operator.pairing",
-      "operator.talk.secrets",
-    ]);
+    ).toEqual(createExpectedBroadOperatorScopes());
   });
 
   it("returns empty scopes for unknown methods", () => {
@@ -920,10 +912,10 @@ describe("operator scope authorization", () => {
     "question.resolve",
     "question.get",
     "question.list",
-  ])("requires questions scope for %s", (method) => {
+  ])("keeps broad question authority distinct from own-run admission for %s", (method) => {
     expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
-      allowed: false,
-      missingScope: "operator.questions",
+      allowed: true,
+      sessionScope: "operator.sessions.write",
     });
     expect(authorizeOperatorScopesForMethod(method, ["operator.questions"])).toEqual({
       allowed: true,

@@ -187,17 +187,10 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
     });
 
   const accountsByChannel = payload.channelAccounts as Record<string, unknown> | undefined;
-  const accountPayloads: Partial<Record<string, Array<Record<string, unknown>>>> = {};
-  for (const channelId of Object.keys(accountsByChannel ?? {}).toSorted()) {
-    const raw = accountsByChannel?.[channelId];
-    if (Array.isArray(raw)) {
-      accountPayloads[channelId] = raw as Array<Record<string, unknown>>;
-    }
-  }
   const accountLinesStart = lines.length;
-  for (const channelId of Object.keys(accountPayloads).toSorted()) {
-    const accounts = accountPayloads[channelId];
-    if (accounts && accounts.length > 0) {
+  for (const channelId of Object.keys(accountsByChannel ?? {}).toSorted()) {
+    const accounts = accountsByChannel?.[channelId];
+    if (Array.isArray(accounts) && accounts.length > 0) {
       lines.push(...accountLines(channelId, accounts));
     }
   }
@@ -218,7 +211,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
     lines.push("");
   }
   lines.push(
-    `Tip: ${formatDocsLink("/cli#status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
+    `Tip: ${formatDocsLink("/cli/status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
   );
   return lines;
 }

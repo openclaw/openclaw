@@ -1,20 +1,19 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 /**
  * Browser agent action hook routes.
  *
  * Handles file chooser and dialog interception for both Playwright-backed
  * OpenClaw profiles and Chrome MCP existing-session profiles.
  */
-import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { evaluateChromeMcpScript, uploadChromeMcpFile } from "../chrome-mcp.js";
 import { resolveExistingUploadPaths } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import {
-  readBody,
-  requirePwAi,
-  resolveTargetIdFromBody,
-  withRouteTabContext,
-} from "./agent.shared.js";
+import { readBody, requirePwAi, withRouteTabContext } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -27,7 +26,7 @@ export function registerBrowserAgentActHookRoutes(
 ) {
   app.post("/hooks/file-chooser", async (req, res) => {
     const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+    const targetId = normalizeOptionalString(body.targetId);
     const ref = toStringOrEmpty(body.ref) || undefined;
     const inputRef = toStringOrEmpty(body.inputRef) || undefined;
     const element = toStringOrEmpty(body.element) || undefined;
@@ -48,7 +47,7 @@ export function registerBrowserAgentActHookRoutes(
       ctx,
       targetId,
       enforceCurrentUrlAllowed: true,
-      run: async ({ profileCtx, cdpUrl, tab, signal }) => {
+      run: async ({ profileCtx, cdpUrl, tab, signal, assertCurrent }) => {
         const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
         if (!resolvedResult.ok) {
           res.status(400).json({ error: resolvedResult.error });
@@ -64,6 +63,9 @@ export function registerBrowserAgentActHookRoutes(
           const uid = inputRef || ref;
           if (!uid) {
             return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.uploadRefRequired);
+          }
+          if (assertCurrent) {
+            await assertCurrent();
           }
           await uploadChromeMcpFile({
             profileName: profileCtx.profile.name,
@@ -82,41 +84,24 @@ export function registerBrowserAgentActHookRoutes(
           return;
         }
 
-        const browserFilesystemLocal = capabilities.browserFilesystemLocal;
+        if ((inputRef || element) && ref) {
+          return jsonError(res, 400, "ref cannot be combined with inputRef/element");
+        }
+        const target = {
+          cdpUrl,
+          browserFilesystemLocal: capabilities.browserFilesystemLocal,
+          targetId: tab.targetId,
+          paths: resolvedPaths,
+          timeoutMs,
+          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+          ...(assertCurrent ? { assertCurrent } : {}),
+        };
         if (inputRef || element) {
-          if (ref) {
-            return jsonError(res, 400, "ref cannot be combined with inputRef/element");
-          }
-          await pw.setInputFilesViaPlaywright({
-            cdpUrl,
-            browserFilesystemLocal,
-            targetId: tab.targetId,
-            inputRef,
-            element,
-            paths: resolvedPaths,
-            ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-            signal,
-          });
+          await pw.setInputFilesViaPlaywright({ ...target, inputRef, element, signal });
         } else if (ref) {
-          await pw.uploadViaPlaywright({
-            cdpUrl,
-            browserFilesystemLocal,
-            targetId: tab.targetId,
-            paths: resolvedPaths,
-            timeoutMs: timeoutMs ?? undefined,
-            ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-            ref,
-            signal,
-          });
+          await pw.uploadViaPlaywright({ ...target, ref, signal });
         } else {
-          await pw.armFileUploadViaPlaywright({
-            cdpUrl,
-            browserFilesystemLocal,
-            targetId: tab.targetId,
-            paths: resolvedPaths,
-            timeoutMs: timeoutMs ?? undefined,
-            ssrfPolicy: ctx.state().resolved.ssrfPolicy,
-          });
+          await pw.armFileUploadViaPlaywright(target);
         }
         res.json({ ok: true });
       },
@@ -125,9 +110,9 @@ export function registerBrowserAgentActHookRoutes(
 
   app.post("/hooks/dialog", async (req, res) => {
     const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+    const targetId = normalizeOptionalString(body.targetId);
     const accept = toBoolean(body.accept);
-    const promptText = toStringOrEmpty(body.promptText) || undefined;
+    const promptText = readStringValue(body.promptText);
     let timeoutMs: number | undefined;
     try {
       timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
@@ -145,13 +130,16 @@ export function registerBrowserAgentActHookRoutes(
       ctx,
       targetId,
       enforceCurrentUrlAllowed: true,
-      run: async ({ profileCtx, cdpUrl, tab, signal }) => {
+      run: async ({ profileCtx, cdpUrl, tab, signal, assertCurrent }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           if (dialogId) {
             return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogId);
           }
           if (timeoutMs) {
             return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogTimeout);
+          }
+          if (assertCurrent) {
+            await assertCurrent();
           }
           await evaluateChromeMcpScript({
             profileName: profileCtx.profile.name,
@@ -177,26 +165,17 @@ export function registerBrowserAgentActHookRoutes(
                 window.prompt = originals.prompt;
                 delete window.__openclawDialogHook;
               };
-              window.alert = (...args) => {
-                try {
-                  return undefined;
-                } finally {
-                  restore();
-                }
+              window.alert = () => {
+                restore();
+                return undefined;
               };
-              window.confirm = (...args) => {
-                try {
-                  return ${accept ? "true" : "false"};
-                } finally {
-                  restore();
-                }
+              window.confirm = () => {
+                restore();
+                return ${accept ? "true" : "false"};
               };
-              window.prompt = (...args) => {
-                try {
-                  return ${accept ? JSON.stringify(promptText ?? "") : "null"};
-                } finally {
-                  restore();
-                }
+              window.prompt = () => {
+                restore();
+                return ${accept ? JSON.stringify(promptText ?? "") : "null"};
               };
               return true;
             }`,
@@ -214,6 +193,7 @@ export function registerBrowserAgentActHookRoutes(
           accept,
           promptText,
           timeoutMs: timeoutMs ?? undefined,
+          ...(assertCurrent ? { assertCurrent } : {}),
         });
         res.json({ ok: true });
       },

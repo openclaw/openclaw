@@ -5,6 +5,9 @@ import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatComposerTextDraftStore
+import ai.openclaw.app.ui.chat.ChatModelPickerAction
+import ai.openclaw.app.ui.chat.chatModelPickerAction
+import ai.openclaw.app.ui.chat.chatModelPickerSections
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -29,6 +32,41 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class ChatControllerModelSelectionTest {
   private val json = chatControllerTestJson
+
+  @Test
+  fun publishedSessionCatalogRevealsHiddenFavoriteAsSelectableChoice() =
+    runTest {
+      var visible = false
+      val (controller, requests) =
+        chatControllerTestSetup {
+          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" || it == "session-scoped-model-catalog" }
+          respond("chat.history", historyResponse("beta-session", emptyList()))
+          respond("models.list") { paramsJson ->
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            assertEquals(JsonPrimitive("beta"), params["agentId"])
+            assertEquals(JsonPrimitive("agent:beta:main"), params["sessionKey"])
+            if (visible) {
+              """{"commands":[],"models":[{"id":"published","name":"Published","provider":"fixture","available":true}]}"""
+            } else {
+              """{"commands":[],"models":[]}"""
+            }
+          }
+        }
+      controller.load("agent:beta:main")
+      advanceUntilIdle()
+      val favorites = listOf("fixture/published")
+      assertTrue(chatModelPickerSections(controller.modelCatalog.value, favorites, emptyList()).pinned.isEmpty())
+      val historyRequests = requests.count { it.first == "chat.history" }
+
+      visible = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+
+      val choice = chatModelPickerSections(controller.modelCatalog.value, favorites, emptyList()).pinned.single()
+      assertEquals("published", choice.id)
+      assertEquals(ChatModelPickerAction.Select, chatModelPickerAction(choice))
+      assertEquals(historyRequests, requests.count { it.first == "chat.history" })
+    }
 
   @Test
   fun nativeModelLockSurvivesHistoryAndPartialSettingsWithoutLockingThinking() =
@@ -90,7 +128,7 @@ class ChatControllerModelSelectionTest {
                   modelTransportStarted.complete(Unit)
                   releaseModelTransport.await()
                 }
-                withEnqueue { patches += patch }
+                withEnqueue { if (method == "sessions.patch") patches += patch }
                 if ("thinkingLevel" in patch) {
                   thinkingStarted.complete(Unit)
                   releaseThinking.await()
@@ -613,12 +651,12 @@ class ChatControllerModelSelectionTest {
         """{"key":"main","sessionId":"model-session","modelProvider":"synthetic","model":"reasoning",${thinkingFields("high", "off", "high")},"permissionMode":null,"permissionModePending":false}"""
       val (controller, requests) =
         chatControllerTestSetup {
-          respond("chat.metadata") {
+          respond("models.list") {
             """
             {"commands":[],"models":[
-              {"id":"reasoning","provider":"synthetic","available":true,"input":["text"],"reasoning":true},
-              {"id":"plain","provider":"synthetic","available":true,"input":["text"],"reasoning":false},
-              {"id":"plain-next","provider":"synthetic","available":true,"input":["text"],"reasoning":false}
+              {"id":"reasoning","name":"reasoning","provider":"synthetic","available":true,"input":["text"],"reasoning":true,"thinkingLevels":[{"id":"off","label":"Off"},{"id":"high","label":"High"}]},
+              {"id":"plain","name":"plain","provider":"synthetic","available":true,"input":["text"],"reasoning":false,"thinkingLevels":[]},
+              {"id":"plain-next","name":"plain-next","provider":"synthetic","available":true,"input":["text"],"reasoning":false,"thinkingLevels":[]}
             ]}
             """.trimIndent()
           }
@@ -787,10 +825,10 @@ class ChatControllerModelSelectionTest {
         """{"key":"$sessionKey","agentId":"ops","sessionId":"conversation-id","updatedAt":1,"modelProvider":"synthetic","model":"reasoning",${thinkingFields("high", "off", "high")}}"""
       val (controller, requests) =
         chatControllerTestSetup {
-          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
+          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" || it == "session-scoped-model-catalog" }
           respond(
-            "chat.metadata",
-            """{"commands":[],"models":[{"id":"reasoning","provider":"synthetic","available":true,"input":["text"],"reasoning":true},{"id":"plain","provider":"synthetic","available":true,"input":["text"],"reasoning":false}]}""",
+            "models.list",
+            """{"commands":[],"models":[{"id":"reasoning","name":"reasoning","provider":"synthetic","available":true,"input":["text"],"reasoning":true,"thinkingLevels":[{"id":"off","label":"Off"},{"id":"high","label":"High"}]},{"id":"plain","name":"plain","provider":"synthetic","available":true,"input":["text"],"reasoning":false,"thinkingLevels":[]}]}""",
           )
           respond("sessions.list") {
             if (changed) {
@@ -1475,7 +1513,7 @@ class ChatControllerModelSelectionTest {
     runTest {
       val controller =
         createScriptedChatController {
-          respond("sessions.list", """{"sessions":[{"key":"main",${thinkingFields("off", "off", "ultra")}}]}""")
+          respond("sessions.list", """{"sessions":[{"key":"main","modelProvider":"openai","model":"gpt-5.6-sol",${thinkingFields("off", "off", "ultra")}}]}""")
           respond("sessions.patch") { paramsJson ->
             val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
             if ("model" in params) {
@@ -1533,11 +1571,11 @@ class ChatControllerModelSelectionTest {
     }
 
   @Test
-  fun modelPatchPreservesAcceptedThinkingWhenResolutionOmitsThinkingMetadata() =
+  fun modelPatchRetainsSavedThinkingButRetiresPreviousModelOptions() =
     runTest {
       val controller =
         createScriptedChatController {
-          respond("sessions.list", """{"sessions":[{"key":"main",${thinkingFields("off", "off", "ultra")}}]}""")
+          respond("sessions.list", """{"sessions":[{"key":"main","modelProvider":"fixture","model":"previous",${thinkingFields("off", "off", "ultra")}}]}""")
           respond("sessions.patch") { paramsJson ->
             val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
             if ("model" in params) {
@@ -1555,9 +1593,9 @@ class ChatControllerModelSelectionTest {
       assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5.6-sol"))
 
       assertEquals("ultra", controller.thinkingLevel.value)
-      assertTrue(controller.thinkingLevelSelection.value.isGatewayProvided)
+      assertFalse(controller.thinkingLevelSelection.value.isGatewayProvided)
       assertEquals(
-        listOf("off", "ultra"),
+        emptyList<String>(),
         controller.thinkingLevelSelection.value.options
           .map { it.id },
       )
@@ -1717,7 +1755,7 @@ class ChatControllerModelSelectionTest {
             respond("chat.history", """{"messages":[],"sessionInfo":$previousSettings}""")
             respond("sessions.list", """{"sessions":[$previousSettings]}""")
             respond("sessions.patch", """{"resolved":{"modelProvider":"openai","model":"gpt-5",${thinkingFields("high", "off", "high")}}}""")
-            respond("chat.metadata", """{"commands":[],"models":[]}""")
+            respond("models.list", """{"commands":[],"models":[]}""")
           }
         val controller = setup.controller
         if (refreshFromEvent) {
@@ -1774,13 +1812,14 @@ class ChatControllerModelSelectionTest {
   @Test
   fun historyHydratesSelectedModelAndAgentScopedCatalog() =
     runTest {
-      val (controller, requests) =
+      val setup =
         chatControllerTestSetup {
           respond("chat.history") { paramsJson ->
             """
             {
               "sessionId": "session-ops",
               "messages": [],
+              "defaults": {"modelProvider": " openai ", "model": " openai/configured-default "},
               "sessionInfo": {
                 "key": "agent:ops:main",
                 "sessionId": "session-ops",
@@ -1790,7 +1829,7 @@ class ChatControllerModelSelectionTest {
             }
             """.trimIndent()
           }
-          respond("chat.metadata") { paramsJson ->
+          respond("models.list") { paramsJson ->
             """
             {
               "commands": [],
@@ -1808,18 +1847,20 @@ class ChatControllerModelSelectionTest {
           }
           respond("sessions.list", """{"sessions":[]}""")
         }
+      val (controller, requests) = setup
 
       controller.load("agent:ops:main")
       advanceUntilIdle()
 
       assertEquals("anthropic/claude-opus-4", controller.selectedModelRef.value)
+      assertEquals("openai/configured-default", controller.defaultModelRef.value)
       assertEquals(
         "claude-opus-4",
         controller.modelCatalog.value
           .single()
           .id,
       )
-      val metadataRequest = requests.single { it.first == "chat.metadata" }
+      val metadataRequest = requests.single { it.first == "models.list" }
       assertTrue(metadataRequest.second.orEmpty().contains("\"agentId\":\"ops\""))
 
       val selectedBeforeEvent = controller.sessions.value.singleOrNull { it.key == "agent:ops:main" }
@@ -1837,38 +1878,83 @@ class ChatControllerModelSelectionTest {
       assertEquals("claude-opus-4", selectedAfterEvent.model)
       assertEquals("high", controller.thinkingLevel.value)
       assertEquals(24_000L, selectedAfterEvent.totalTokens)
+      assertEquals("openai/configured-default", controller.defaultModelRef.value)
+
+      val oldHistory = CompletableDeferred<String>()
+      setup.respond("chat.history") { oldHistory.await() }
+      controller.refresh()
+      runCurrent()
+      setup.respond(
+        "chat.history",
+        """{"sessionId":"session-other","messages":[],"defaults":{"modelProvider":"fixture","model":"other-default"},"sessionInfo":{"key":"agent:other:main","modelProvider":"fixture","model":"selected"}}""",
+      )
+      controller.switchSession("agent:other:main")
+      assertNull(controller.defaultModelRef.value)
+      runCurrent()
+      assertEquals("fixture/other-default", controller.defaultModelRef.value)
+      oldHistory.complete("""{"sessionId":"session-ops","messages":[],"defaults":{"modelProvider":"openai","model":"stale-default"}}""")
+      advanceUntilIdle()
+      assertEquals("fixture/other-default", controller.defaultModelRef.value)
+
+      val beforeConfig = CompletableDeferred<String>()
+      setup.respond("chat.history") { beforeConfig.await() }
+      controller.refresh()
+      runCurrent()
+      val patchReply = CompletableDeferred<String>()
+      setup.respond("sessions.patch") { patchReply.await() }
+      val pendingModel = async { controller.setSessionModelAwait("agent:other:main", "fixture/pinned") }
+      runCurrent()
+      val afterConfig = CompletableDeferred<String>()
+      setup.respond("chat.history") { afterConfig.await() }
+      controller.handleGatewayEvent("config.changed", "{}")
+      assertNull("Configuration changes must retire the old default immediately", controller.defaultModelRef.value)
+      runCurrent()
+      beforeConfig.complete("""{"sessionId":"session-other","messages":[],"defaults":{"modelProvider":"fixture","model":"other-default"}}""")
+      runCurrent()
+      assertNull("A history request started before config.changed must not restore the old badge", controller.defaultModelRef.value)
+      afterConfig.complete("""{"sessionId":"session-other","messages":[],"defaults":{"modelProvider":"fixture","model":"changed-default"},"sessionInfo":{"key":"agent:other:main","modelProvider":"fixture","model":"selected"}}""")
+      advanceUntilIdle()
+      assertEquals("fixture/changed-default", controller.defaultModelRef.value)
+      assertFalse("Refreshing defaults must not cancel an admitted model change", pendingModel.isCompleted)
+      patchReply.complete("""{"resolved":{"modelProvider":"fixture","model":"pinned"}}""")
+      assertTrue(pendingModel.await())
+      assertEquals("fixture/pinned", controller.selectedModelRef.value)
+
+      setup.respond("chat.history", """{"sessionId":"session-other","messages":[],"sessionInfo":{"key":"agent:other:main","modelProvider":"fixture","model":"pinned"}}""")
+      controller.refresh()
+      advanceUntilIdle()
+      assertNull("Missing defaults must not reuse the selected model or the previous default", controller.defaultModelRef.value)
     }
 
   @Test
-  fun metadataScopeFollowsNegotiatedGatewayContract() =
+  fun catalogScopeAlwaysFollowsSessionWhileCommandsKeepNegotiatedScope() =
     runTest {
       for (advertised in listOf(null, false, true)) {
         val (controller, requests) =
           chatControllerTestSetup {
-            gatewayAdvertisesCapability = { if (it == "session-scoped-chat-metadata") advertised else false }
+            gatewayAdvertisesCapability = { if (it == "session-scoped-chat-metadata") advertised else it == "session-scoped-model-catalog" }
             respond("chat.history", historyResponse("session-ops", emptyList()))
             respond("chat.metadata") { paramsJson ->
               val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
-              // Stable v2026.7.1-2 rejects any additional property before computing metadata.
               require(params.keys == if (advertised == true) setOf("agentId", "sessionKey") else setOf("agentId"))
-              """{"swarmEnabled":false,"commands":[{"name":"new","textAliases":["/new"]}],"models":[{"id":"gpt-5.6-luna","provider":"openai","available":true,"input":["text"]}]}"""
+              """{"commands":[{"name":"new","textAliases":["/new"]}]}"""
             }
+            respond("models.list", """{"models":[{"id":"chat","provider":"fixture","name":"Chat","input":["text"]}]}""")
           }
         controller.load("agent:ops:first")
         advanceUntilIdle()
-        assertEquals("legacy and current peers both load commands", listOf("new"), controller.commands.value.map { it.name })
+        assertEquals(listOf("new"), controller.commands.value.map { it.name })
         assertEquals(
-          "gpt-5.6-luna",
+          "chat",
           controller.modelCatalog.value
             .single()
             .id,
         )
         controller.switchSession("agent:ops:second")
         advanceUntilIdle()
-        val metadata = requests.filter { it.first == "chat.metadata" }.map { json.parseToJsonElement(it.second.orEmpty()) as JsonObject }
-        assertEquals(if (advertised == true) 2 else 1, metadata.size)
-        assertEquals("ops", (metadata.last()["agentId"] as JsonPrimitive).content)
-        assertEquals(if (advertised == true) JsonPrimitive("agent:ops:second") else null, metadata.last()["sessionKey"])
+        val catalogs = requests.filter { it.first == "models.list" }.map { json.parseToJsonElement(it.second.orEmpty()) as JsonObject }
+        assertEquals(listOf(JsonPrimitive("agent:ops:first"), JsonPrimitive("agent:ops:second")), catalogs.map { it["sessionKey"] })
+        assertTrue(catalogs.all { it["agentId"] == JsonPrimitive("ops") })
       }
     }
 
@@ -1888,9 +1974,9 @@ class ChatControllerModelSelectionTest {
     var available = false
     val (controller, requests) =
       chatControllerTestSetup {
-        gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
+        gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" || it == "session-scoped-model-catalog" }
         respond("chat.history", historyResponse("session-current", listOf(ReplayHistoryMessage("assistant", "Earlier reply", 1))))
-        respond("chat.metadata") { availabilityMetadata(available) }
+        respond("models.list") { availabilityMetadata(available) }
       }
     controller.load("global", ownerAgentId = "main")
     advanceUntilIdle()
@@ -1899,7 +1985,7 @@ class ChatControllerModelSelectionTest {
     fun owner() = resolveChatComposerOwner(null, controller.sessionOwnerAgentId.value, sessionKey = controller.sessionKey.value, mainSessionKey = "main")
     val drafts = ChatComposerTextDraftStore()
     drafts[owner()] = "Unsent draft"
-    val metadataRequests = requests.count { it.first == "chat.metadata" }
+    val metadataRequests = requests.count { it.first == "models.list" }
     for (unrelated in listOf(
       """{"sessionKey":"other","agentId":"main","reason":"patch"}""",
       """{"sessionKey":"global","agentId":"ops","reason":"patch"}""",
@@ -1908,7 +1994,7 @@ class ChatControllerModelSelectionTest {
       controller.handleGatewayEvent("sessions.changed", unrelated)
     }
     advanceUntilIdle()
-    assertEquals(metadataRequests, requests.count { it.first == "chat.metadata" })
+    assertEquals(metadataRequests, requests.count { it.first == "models.list" })
     val historyRequests = requests.count { it.first == "chat.history" }
     for (next in listOf(true, false)) {
       available = next
@@ -1928,7 +2014,7 @@ class ChatControllerModelSelectionTest {
       assertEquals(messages, controller.messages.value)
       assertEquals("Unsent draft", drafts[owner()])
     }
-    assertEquals(metadataRequests + 2, requests.count { it.first == "chat.metadata" })
+    assertEquals(metadataRequests + 2, requests.count { it.first == "models.list" })
     if (reason != "seqGap") assertEquals(historyRequests, requests.count { it.first == "chat.history" })
   }
 
@@ -1941,8 +2027,8 @@ class ChatControllerModelSelectionTest {
       val (controller, requests) =
         chatControllerTestSetup {
           respond("chat.history", historyResponse("session-main", listOf(ReplayHistoryMessage("assistant", "Earlier reply", 1))))
-          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
-          respond("chat.metadata") { paramsJson ->
+          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" || it == "session-scoped-model-catalog" }
+          respond("models.list") { paramsJson ->
             metadataRequests += 1
             val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
             // Neutral agent credentials work; this session's selected profile starts unavailable.
@@ -2018,11 +2104,11 @@ class ChatControllerModelSelectionTest {
       var metadataFails = false
       var serverModel = "before"
       val metadata =
-        """{"commands":[],"models":[{"id":"before","provider":"fixture","available":true},{"id":"after","provider":"fixture","available":true}]}"""
+        """{"commands":[],"models":[{"id":"before","name":"before","provider":"fixture","available":true},{"id":"after","name":"after","provider":"fixture","available":true}]}"""
       val controller =
         createScriptedChatController {
-          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
-          respond("chat.metadata") {
+          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" || it == "session-scoped-model-catalog" }
+          respond("models.list") {
             if (metadataFails) error("metadata read failed")
             metadata
           }
@@ -2081,8 +2167,8 @@ class ChatControllerModelSelectionTest {
       var currentMetadataFails = false
       val controller =
         createScriptedChatController {
-          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
-          respond("chat.metadata") {
+          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" || it == "session-scoped-model-catalog" }
+          respond("models.list") {
             metadataRequests += 1
             when {
               metadataRequests == 2 -> oldRefresh.await()
@@ -2134,7 +2220,7 @@ class ChatControllerModelSelectionTest {
       var metadataFails = false
       val controller =
         createScriptedChatController {
-          respond("chat.metadata") {
+          respond("models.list") {
             if (metadataFails) error("metadata read failed")
             availabilityMetadata(true)
           }
@@ -2158,53 +2244,13 @@ class ChatControllerModelSelectionTest {
     }
 
   @Test
-  fun legacyMetadataFailureCannotCrossVisualSessionSelection() =
-    runTest {
-      for (returnToOriginal in listOf(false, true)) {
-        val oldRefresh = CompletableDeferred<String>()
-        var metadataRequests = 0
-        val (controller, requests) =
-          chatControllerTestSetup {
-            gatewayAdvertisesCapability = { false }
-            respond("chat.history", historyResponse("session-current", emptyList()))
-            respond("chat.metadata") {
-              metadataRequests += 1
-              if (metadataRequests == 2) oldRefresh.await() else availabilityMetadata(true)
-            }
-          }
-        controller.load("agent:main:first")
-        advanceUntilIdle()
-        val acceptedChoices = controller.modelCatalog.value
-        controller.handleGatewayEvent("chat.metadata.changed", "{}")
-        runCurrent()
-        assertEquals(2, metadataRequests)
-
-        controller.switchSession("agent:main:second")
-        runCurrent()
-        if (returnToOriginal) {
-          controller.switchSession("agent:main:first")
-          runCurrent()
-        }
-        assertEquals("Same-agent selection keeps the warm legacy catalog", 2, metadataRequests)
-        oldRefresh.completeExceptionally(IllegalStateException("previous visual selection failed"))
-        advanceUntilIdle()
-        assertNull("A shared catalog scope does not own a later visible selection", controller.errorText.value)
-        assertEquals(acceptedChoices, controller.modelCatalog.value)
-        for ((_, paramsJson) in requests.filter { it.first == "chat.metadata" }) {
-          val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
-          assertEquals(setOf("agentId"), params.keys)
-        }
-      }
-    }
-
-  @Test
   fun olderMetadataSuccessCannotClearNewerFailure() =
     runTest {
       val oldRefresh = CompletableDeferred<String>()
       var metadataRequests = 0
       val controller =
         createScriptedChatController {
-          respond("chat.metadata") {
+          respond("models.list") {
             when (++metadataRequests) {
               1 -> availabilityMetadata(false)
               2 -> oldRefresh.await()
@@ -2252,7 +2298,7 @@ class ChatControllerModelSelectionTest {
         var nextFailure: Throwable? = null
         val controller =
           createScriptedChatController {
-            respond("chat.metadata") {
+            respond("models.list") {
               nextFailure?.let { throw it }
               availabilityMetadata(true)
             }
@@ -2280,7 +2326,7 @@ class ChatControllerModelSelectionTest {
       val controller =
         createScriptedChatController {
           respond("chat.history", historyResponse("session-main", emptyList()))
-          respond("chat.metadata") {
+          respond("models.list") {
             when (++metadataRequests) {
               1 -> availabilityMetadata(true)
               2 -> throw GatewayRequestOutcomeUnknown("request timeout")
@@ -2316,7 +2362,7 @@ class ChatControllerModelSelectionTest {
       var sends = 0
       val controller =
         createScriptedChatController {
-          respond("chat.metadata") { availabilityMetadata(available, unavailableReason) }
+          respond("models.list") { availabilityMetadata(available, unavailableReason) }
           respond("sessions.patch", "{}")
           respond("chat.send") {
             sends += 1
@@ -2356,8 +2402,8 @@ class ChatControllerModelSelectionTest {
           var metadataRequests = 0
           val controller =
             createScriptedChatController {
-              gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
-              respond("chat.metadata") {
+              gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" || it == "session-scoped-model-catalog" }
+              respond("models.list") {
                 metadataRequests += 1
                 when (metadataRequests) {
                   2 -> oldRefresh.await()
@@ -2412,8 +2458,8 @@ class ChatControllerModelSelectionTest {
         var metadataRequests = 0
         val controller =
           createScriptedChatController {
-            gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
-            respond("chat.metadata") {
+            gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" || it == "session-scoped-model-catalog" }
+            respond("models.list") {
               metadataRequests += 1
               if (metadataRequests == 2) oldRefresh.await() else availabilityMetadata(false)
             }
@@ -2455,17 +2501,17 @@ class ChatControllerModelSelectionTest {
     }
 
   @Test
-  fun emptyModelCatalogIsRetriedOnNextHealthEvent() =
+  fun failedEmptyCatalogShowsErrorUntilExplicitRefresh() =
     runTest {
       var metadataRequests = 0
       val controller =
         createScriptedChatController {
-          respond("chat.metadata") { _ ->
+          respond("models.list") { _ ->
             metadataRequests += 1
             if (metadataRequests == 1) {
-              """{"commands":[{"name":"new","textAliases":["/new"]}],"models":[]}"""
+              """{"refreshFailed":true,"models":[]}"""
             } else {
-              """{"commands":[{"name":"new","textAliases":["/new"]}],"models":[{"id":"gpt-5","provider":"openai","input":["text"]}]}"""
+              """{"commands":[{"name":"new","textAliases":["/new"]}],"models":[{"id":"gpt-5","name":"gpt-5","provider":"openai","input":["text"]}]}"""
             }
           }
         }
@@ -2474,7 +2520,8 @@ class ChatControllerModelSelectionTest {
       advanceUntilIdle()
       assertTrue(controller.modelCatalog.value.isEmpty())
 
-      controller.handleGatewayEvent("health", null)
+      assertFalse(controller.errorText.value.isNullOrBlank())
+      controller.refreshCommands()
       advanceUntilIdle()
 
       assertEquals(2, metadataRequests)
@@ -2487,12 +2534,12 @@ class ChatControllerModelSelectionTest {
     }
 
   @Test
-  fun validEmptyModelCatalogStopsAfterOneRetry() =
+  fun validEmptyModelCatalogNeedsNoRetry() =
     runTest {
       var metadataRequests = 0
       val controller =
         createScriptedChatController {
-          respond("chat.metadata") {
+          respond("models.list") {
             metadataRequests += 1
             """{"commands":[],"models":[]}"""
           }
@@ -2503,7 +2550,7 @@ class ChatControllerModelSelectionTest {
         advanceUntilIdle()
       }
 
-      assertEquals(2, metadataRequests)
+      assertEquals(1, metadataRequests)
       assertTrue(controller.modelCatalog.value.isEmpty())
       assertNull("An accepted empty catalog is not a failed read", controller.errorText.value)
     }
@@ -2523,15 +2570,15 @@ class ChatControllerModelSelectionTest {
             """{"runId":"run-${sentThinkingLevels.size}","status":"ok"}"""
           }
           respond("chat.history") { historyResponse("model-session", persistedMessages) }
-          // Gating reads the controller-owned agent-scoped catalog hydrated from chat.metadata.
+          // Gating reads the session catalog published by models.list.
           respond("sessions.list", """{"sessions":[]}""")
-          respond("chat.metadata") { paramsJson ->
+          respond("models.list") { paramsJson ->
             """
             {
               "commands": [],
               "models": [
-                {"id": "plain", "name": "plain", "provider": "openai", "available": true, "input": ["text"], "reasoning": false},
-                {"id": "reasoning", "name": "reasoning", "provider": "openai", "available": true, "input": ["text"], "reasoning": true}
+                {"id": "plain", "name": "plain", "provider": "openai", "available": true, "input": ["text"], "reasoning": false,"thinkingLevels":[]},
+                {"id": "reasoning", "name": "reasoning", "provider": "openai", "available": true, "input": ["text"], "reasoning": true,"thinkingLevels":[{"id":"off","label":"Off"},{"id":"high","label":"High"}]}
               ]
             }
             """.trimIndent()
@@ -2572,7 +2619,7 @@ class ChatControllerModelSelectionTest {
       val sentThinkingLevels = mutableListOf<String>()
       val controller =
         createScriptedChatController {
-          respond("chat.metadata") { paramsJson ->
+          respond("models.list") { paramsJson ->
             """
             {
               "commands": [],
@@ -2621,7 +2668,7 @@ class ChatControllerModelSelectionTest {
     unavailableReason: String? = null,
   ): String {
     val reasonField = unavailableReason?.let { ",\"unavailableReason\":\"$it\"" }.orEmpty()
-    return """{"swarmEnabled":false,"commands":[],"models":[{"id":"gpt-5.6-luna","provider":"openai","available":$available$reasonField,"input":["text"]}]}"""
+    return """{"swarmEnabled":false,"commands":[],"models":[{"id":"gpt-5.6-luna","name":"gpt-5.6-luna","provider":"openai","available":$available$reasonField,"input":["text"]}]}"""
   }
 
   private fun thinkingFields(

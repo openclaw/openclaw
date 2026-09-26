@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createChromeExtensionSetupResult } from "../test-helpers/chrome-extension-setup.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
+  createTauriDeviceSettingsSnapshot,
 } from "../test-helpers/native-device-settings.ts";
 import {
   createNativeDeviceSettingsCapability,
@@ -29,16 +31,104 @@ function publish(detail: unknown) {
 }
 
 describe("native device settings wire contract", () => {
-  it("validates setup results and forwards an explicit parameter-free installation action", async () => {
-    const post = installBridge();
-    const result = { nativeHostRegistered: true, installRequested: true, discoveredProfiles: 0 };
-    post.mockResolvedValueOnce(result);
-    await expect(capability!.installChromeExtension()).resolves.toEqual(result);
+  it("uses the shipped installation projection on an older native host without offering new actions", async () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    delete snapshot.browser.chromeSetupActions;
+    const post = installBridge(snapshot);
+    const legacy = { nativeHostRegistered: true, installRequested: true, discoveredProfiles: 0 };
+    post.mockResolvedValueOnce({ ...legacy, privatePath: "not forwarded" });
+    await expect(capability!.installChromeExtension!()).resolves.toEqual(legacy);
     expect(post).toHaveBeenLastCalledWith({ type: "install-chrome-extension" });
-    post.mockResolvedValueOnce({ ...result, discoveredProfiles: -1 });
-    await expect(capability!.installChromeExtension()).rejects.toThrow("invalid result");
-    post.mockRejectedValueOnce(new Error("CLI unavailable"));
-    await expect(capability!.installChromeExtension()).rejects.toThrow("CLI unavailable");
+    post.mockClear();
+    for (const action of ["inspect", "install", "verify"] as const) {
+      await expect(capability!.setupChromeExtension(action)).rejects.toThrow("does not advertise");
+    }
+    expect(post).not.toHaveBeenCalled();
+    const status = { ...legacy, installedProfiles: 1 };
+    post.mockResolvedValueOnce(status);
+    await expect(capability!.chromeExtensionStatus!()).resolves.toEqual(status);
+    expect(post).toHaveBeenLastCalledWith({ type: "chrome-extension-status" });
+    post.mockResolvedValueOnce(legacy);
+    await expect(capability!.chromeExtensionStatus!()).rejects.toThrow("invalid result");
+  });
+  it.each(["installChromeExtension", "chromeExtensionStatus"] as const)(
+    "rejects legacy %s completion after document retirement",
+    async (operation) => {
+      const post = installBridge();
+      const pending = createDeferred<unknown>();
+      post.mockReturnValueOnce(pending.promise);
+      const response = capability![operation]!();
+      const rejected = expect(response).rejects.toThrow("invalid result");
+      capability!.dispose();
+      pending.resolve({
+        nativeHostRegistered: true,
+        installRequested: true,
+        installedProfiles: 0,
+        discoveredProfiles: 0,
+      });
+      await rejected;
+    },
+  );
+
+  it.each(["inspect", "install", "verify"] as const)(
+    "forwards only the explicit %s action and validates its host-bound result",
+    async (action) => {
+      const post = installBridge();
+      const result = createChromeExtensionSetupResult({ action });
+      post.mockResolvedValueOnce({ ...result, privatePath: "not forwarded" });
+      await expect(capability!.setupChromeExtension(action)).resolves.toEqual(result);
+      expect(post).toHaveBeenLastCalledWith({ type: "chrome-extension-setup", action });
+      for (const invalid of [
+        { ...result, action: "other" },
+        { ...result, target: { ...result.target, kind: "remote-host" } },
+        { ...result, target: { ...result.target, platform: "linux" } },
+        { ...result, target: { ...result.target, relayPort: 0 } },
+        { ...result, installation: { ...result.installation, installedProfiles: -1 } },
+        { ...result, installation: { ...result.installation, discoveredProfiles: -1 } },
+        { ...result, reason: "raw failure with private details" },
+      ]) {
+        post.mockResolvedValueOnce(invalid);
+        await expect(capability!.setupChromeExtension(action)).rejects.toThrow("invalid result");
+      }
+      post.mockRejectedValueOnce(new Error("CLI unavailable"));
+      await expect(capability!.setupChromeExtension(action)).rejects.toThrow("CLI unavailable");
+    },
+  );
+
+  it.each(["linux", "windows"] as const)(
+    "uses the %s device-settings transport without publishing setup as a settings snapshot",
+    async (platform) => {
+      const snapshot = createTauriDeviceSettingsSnapshot(platform);
+      const post = installBridge(snapshot);
+      const listener = vi.fn();
+      capability!.subscribe(listener);
+      const result = createChromeExtensionSetupResult({
+        action: "inspect",
+        target: {
+          kind: "local-host",
+          platform: platform === "linux" ? "linux" : "win32",
+          hostname: "Example desktop",
+          profile: "chrome",
+          relayPort: 18792,
+        },
+      });
+      post.mockResolvedValueOnce(result);
+      await expect(capability!.setupChromeExtension("inspect")).resolves.toEqual(result);
+      expect(post).toHaveBeenLastCalledWith({ type: "chrome-extension-setup", action: "inspect" });
+      expect(capability!.snapshot).toEqual(snapshot);
+      expect(listener).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects setup completion after the document capability is disposed", async () => {
+    const post = installBridge();
+    const pending = createDeferred<unknown>();
+    post.mockReturnValueOnce(pending.promise);
+    const response = capability!.setupChromeExtension("verify");
+    const rejected = expect(response).rejects.toThrow("invalid result");
+    capability!.dispose();
+    pending.resolve(createChromeExtensionSetupResult({ action: "verify" }));
+    await rejected;
   });
   it("exists only with the native message handler and reads the document-start snapshot", () => {
     vi.stubGlobal("webkit", undefined);
@@ -61,6 +151,63 @@ describe("native device settings wire contract", () => {
     expect(capability?.snapshot).toEqual(snapshot);
   });
 
+  it.each(["linux", "windows", "macos"] as const)(
+    "accepts the %s companion's desktop setting without location access",
+    (platform) => {
+      const snapshot = createTauriDeviceSettingsSnapshot(platform);
+      installBridge(snapshot);
+      expect(capability?.snapshot).toEqual(snapshot);
+      const listener = vi.fn();
+      capability?.subscribe(listener);
+      const failed = {
+        ...snapshot,
+        revision: 2,
+        desktopSharing: {
+          state: "error",
+          detail: "Install the OpenClaw CLI to share this desktop.",
+        },
+      };
+      publish(failed);
+      expect(capability?.snapshot).toEqual(failed);
+      expect(listener).toHaveBeenCalledWith(failed);
+    },
+  );
+
+  it("keeps a newer native event when an earlier edit reply settles", async () => {
+    const initial = createTauriDeviceSettingsSnapshot("linux");
+    const post = installBridge(initial);
+    const delayed = createDeferred<unknown>();
+    post.mockReturnValueOnce(delayed.promise);
+    const listener = vi.fn();
+    const settled = vi.fn();
+    capability!.subscribe(listener);
+    capability!.set("capabilities.desktopSharingEnabled", false, settled);
+    const stopped = {
+      ...initial,
+      revision: 3,
+      capabilities: { desktopSharingEnabled: false },
+      desktopSharing: { state: "off" },
+    };
+    publish(stopped);
+    delayed.resolve({
+      ...stopped,
+      revision: 2,
+      desktopSharing: { state: "starting" },
+    });
+    await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    expect(capability!.snapshot?.desktopSharing?.state).toBe("off");
+    expect(capability!.snapshot?.revision).toBe(3);
+    expect(listener.mock.calls.every(([snapshot]) => snapshot.desktopSharing.state === "off")).toBe(
+      true,
+    );
+    listener.mockClear();
+    publish(initial);
+    publish({ ...initial, revision: undefined });
+    publish(stopped);
+    expect(listener).not.toHaveBeenCalled();
+    expect(capability!.snapshot).toEqual(stopped);
+  });
+
   it("accepts absent optional families and voice fields", () => {
     const { device, permissions } = createNativeDeviceSettingsSnapshot();
     const snapshot = {
@@ -74,8 +221,40 @@ describe("native device settings wire contract", () => {
   });
 
   it.each([
+    { state: "locked", enabled: true },
+    { state: "unlocked", enabled: false },
+    { state: "unknown", enabled: true },
+    { state: undefined, enabled: undefined },
+  ] as const)(
+    "preserves published desktop state $state and hosting $enabled",
+    ({ state, enabled }) => {
+      installBridge();
+      const listener = vi.fn();
+      capability?.subscribe(listener);
+      const snapshot = createNativeDeviceSettingsSnapshot();
+      if (state === undefined) {
+        delete snapshot.desktopAvailability;
+        delete snapshot.capabilities.unattendedDesktopEnabled;
+      } else {
+        snapshot.desktopAvailability = { state };
+        snapshot.capabilities.unattendedDesktopEnabled = enabled;
+      }
+      publish(snapshot);
+      expect(capability?.snapshot).toEqual(snapshot);
+      expect(listener).toHaveBeenCalledWith(snapshot);
+    },
+  );
+
+  it.each([
     { name: "empty", entries: [] },
     { name: "single", entries: [{ id: "camera", status: "granted" }] },
+    {
+      name: "requestable macOS",
+      entries: [
+        { id: "screenRecording", status: "notDetermined" },
+        { id: "accessibility", status: "notDetermined" },
+      ],
+    },
     {
       name: "reordered",
       entries: createNativeDeviceSettingsSnapshot().permissions.entries.toReversed(),
@@ -91,14 +270,51 @@ describe("native device settings wire contract", () => {
     expect(listener).toHaveBeenCalledWith(next);
   });
 
+  it("accepts shipped Mac snapshots without exposing their retired Terminal permission", () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    snapshot.device.appVersion = "2026.9.5";
+    // The v2026.9.5 native permission list always included automation, even when unavailable.
+    const shippedSnapshot = {
+      ...snapshot,
+      permissions: {
+        ...snapshot.permissions,
+        entries: [...snapshot.permissions.entries, { id: "automation", status: "unavailable" }],
+      },
+    };
+    installBridge(shippedSnapshot);
+    expect(capability?.snapshot).toEqual(snapshot);
+
+    const listener = vi.fn();
+    capability?.subscribe(listener);
+    const updated = { ...snapshot, app: { ...snapshot.app, showDockIcon: false } };
+    publish({ ...shippedSnapshot, app: updated.app });
+    expect(capability?.snapshot).toEqual(updated);
+    expect(listener).toHaveBeenCalledWith(updated);
+    expectTypeOf<
+      Extract<Parameters<NativeDeviceSettingsCapability["requestPermission"]>[0], "automation">
+    >().toBeNever();
+    expectTypeOf<
+      Extract<Parameters<NativeDeviceSettingsCapability["openSystemSettings"]>[0], "automation">
+    >().toBeNever();
+  });
+
   it.each([
     ["contract", { contract: 2 }],
+    ["negative revision", { revision: -1 }],
+    ["fractional revision", { revision: 1.5 }],
+    ["non-numeric revision", { revision: "2" }],
     ["device", { device: { platform: "macos" } }],
     ["app", { app: { ...createNativeDeviceSettingsSnapshot().app, showDockIcon: "yes" } }],
     ["absent family encoded as null", { app: null }],
     ["appearance", { app: { appearance: "sepia" } }],
     ["notifications", { app: { notificationsEnabled: "true" } }],
+    ["native experience", { app: { nativeExperienceEnabled: "true" } }],
     ["iOS capability", { capabilities: { healthSummaryEnabled: "true" } }],
+    ["unattended desktop toggle", { capabilities: { unattendedDesktopEnabled: "true" } }],
+    ["desktop sharing toggle", { capabilities: { desktopSharingEnabled: "true" } }],
+    ...[null, {}, { state: "available" }, { state: true }].map(
+      (desktopAvailability) => ["desktop availability", { desktopAvailability }] as const,
+    ),
     ...[
       null,
       { selectedId: 1, available: [] },
@@ -226,7 +442,7 @@ describe("native device settings wire contract", () => {
     capability!.set("browser.cookieSync.targetProfile", pending, settled);
     const observed: string[] = [];
     capability!.subscribe(() =>
-      observed.push(pending || capability!.snapshot!.browser!.cookieSync.targetProfile),
+      observed.push(pending || capability!.snapshot!.browser!.cookieSync!.targetProfile),
     );
     reply.resolve(createNativeDeviceSettingsSnapshot());
     await vi.waitFor(() => expect(observed).toEqual(["default"]));
@@ -264,6 +480,7 @@ describe("native device settings wire contract", () => {
     const post = installBridge();
     post.mockClear();
     capability?.set("app.showDockIcon", false);
+    capability?.set("app.nativeExperienceEnabled", true);
     capability?.set("app.iconStyle", "origami");
     capability?.set("voice.microphone", null);
     capability?.set("browser.cookieSync.domains", ["example.com"]);
@@ -274,6 +491,7 @@ describe("native device settings wire contract", () => {
     capability?.checkForUpdates();
     expect(post.mock.calls.map(([message]) => message)).toEqual([
       { type: "set", key: "app.showDockIcon", value: false },
+      { type: "set", key: "app.nativeExperienceEnabled", value: true },
       { type: "set", key: "app.iconStyle", value: "origami" },
       { type: "set", key: "voice.microphone", value: null },
       { type: "set", key: "browser.cookieSync.domains", value: ["example.com"] },

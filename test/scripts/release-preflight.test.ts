@@ -3,9 +3,11 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const SCRIPT = resolve("scripts/release-preflight.mjs");
+const testNodeExecPath = resolveTestNodeExecPath();
 const CHECK_COMMANDS = [
   "pnpm deps:root-ownership:check",
   "node scripts/generate-npm-package-lock.mjs --all",
@@ -21,6 +23,7 @@ const CHECK_COMMANDS = [
   "pnpm native:i18n:check",
 ];
 const FIX_COMMANDS = [
+  "pnpm update:compat:check",
   "node --import tsx scripts/sync-plugin-versions.ts",
   "pnpm channels:catalog:gen",
   "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
@@ -51,7 +54,7 @@ function makeFakePnpm(waitFor?: { command: string; event: string }): {
     const binPath = join(binDir, bin);
     writeFileSync(
       binPath,
-      `#!${process.execPath}
+      `#!${testNodeExecPath}
 import { appendFileSync, readFileSync } from "node:fs";
 
 const command = ${JSON.stringify(bin)} + " " + process.argv.slice(2).join(" ");
@@ -89,7 +92,7 @@ function runPreflight(
   extraEnv: NodeJS.ProcessEnv = {},
   cwd = process.cwd(),
 ) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], {
+  return spawnSync(testNodeExecPath, [SCRIPT, ...args], {
     cwd,
     encoding: "utf8",
     env: {
@@ -173,7 +176,7 @@ function runIsolatedPreflight(
   delete env.NODE_PATH;
   delete env.PNPM_CONFIG_MODULES_DIR;
   delete env.npm_config_modules_dir;
-  return spawnSync(process.execPath, [fixture.script, ...args], {
+  return spawnSync(testNodeExecPath, [fixture.script, ...args], {
     cwd: fixture.root,
     encoding: "utf8",
     env,
@@ -208,7 +211,9 @@ describe("scripts/release-preflight.mjs", () => {
     const result = runIsolatedPreflight(["--macos-versions-only", "--check"]);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Cannot find module 'tsx/esm'");
+    expect(result.stderr).toContain(
+      "Run pnpm install --frozen-lockfile in an independently owned checkout.",
+    );
     expect(result.stderr).toContain("[release-preflight] FAILED (exit 1)");
   });
 
@@ -240,7 +245,7 @@ describe("scripts/release-preflight.mjs", () => {
 
   it("runs independent generators while blocking only failed dependents", () => {
     const fakePnpm = makeFakePnpm();
-    const result = spawnSync(process.execPath, [SCRIPT, "--fix"], {
+    const result = spawnSync(testNodeExecPath, [SCRIPT, "--fix"], {
       cwd: process.cwd(),
       encoding: "utf8",
       env: {
@@ -257,6 +262,18 @@ describe("scripts/release-preflight.mjs", () => {
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(FIX_COMMANDS.toSorted());
     expect(result.stderr).toContain(
       "- plugin inventory: exit 7 (node --import tsx scripts/generate-plugin-inventory-doc.mts --write)",
+    );
+  });
+
+  it("fails release preparation when the supported updater inventory is stale", () => {
+    const fakePnpm = makeFakePnpm();
+    const result = runPreflight(["--fix"], fakePnpm, {
+      OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS: "pnpm update:compat:check",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "- previous updater compatibility: exit 7 (pnpm update:compat:check)",
     );
   });
 
@@ -337,6 +354,7 @@ describe("scripts/release-preflight.mjs", () => {
     expect(result.status).toBe(0);
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
       [
+        "pnpm update:compat:check",
         "node --import tsx scripts/sync-plugin-versions.ts",
         "pnpm channels:catalog:gen",
         "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",

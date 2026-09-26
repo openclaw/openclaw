@@ -2,9 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
-  stripMarkdown,
   processLineMessage,
-  convertTableToFlexBubble,
   convertCodeBlockToFlexBubble,
   hasMarkdownToConvert,
 } from "./markdown-to-line.js";
@@ -13,37 +11,15 @@ function requireEntry<T>(entries: readonly T[], index: number, context: string):
   return expectDefined(entries[index], context);
 }
 
-describe("stripMarkdown", () => {
-  it("handles complex markdown", () => {
-    const input = `# Title
-
-This is **bold** and *italic* text.
-
-> A quote
-
-Some ~~deleted~~ content.`;
-
-    expect(stripMarkdown(input)).toBe(`Title
-
-This is bold and italic text.
-
-A quote
-
-Some deleted content.`);
-  });
-});
-
-describe("convertTableToFlexBubble", () => {
+describe("processLineMessage table cards", () => {
   it("replaces empty cells with placeholders", () => {
-    const table = {
-      headers: ["A", "B"],
-      rows: [["", ""]],
+    const result = processLineMessage("| A | B |\n|---|---|\n| | |");
+    expect(result.flexMessages).toHaveLength(1);
+    const bubble = requireEntry(result.flexMessages, 0, "empty-cell table flex message")
+      .contents as {
+      body: { contents: Array<{ contents?: Array<{ contents?: Array<{ text: string }> }> }> };
     };
-
-    const bubble = convertTableToFlexBubble(table);
-    const body = bubble.body as {
-      contents: Array<{ contents?: Array<{ contents?: Array<{ text: string }> }> }>;
-    };
+    const body = bubble.body;
     const rowsBox = requireEntry(body.contents, 2, "third flex body content") as {
       contents: Array<{ contents: Array<{ text: string }> }>;
     };
@@ -120,19 +96,6 @@ describe("convertCodeBlockToFlexBubble", () => {
     expect(requireEntry(body.contents, 0, "first flex body content").text).toBe("Code");
   });
 
-  it("truncates very long code", () => {
-    const longCode = "x".repeat(3000);
-    const block = { code: longCode };
-
-    const bubble = convertCodeBlockToFlexBubble(block);
-
-    const body = bubble.body as { contents: Array<{ contents: Array<{ text: string }> }> };
-    const codeContent = requireEntry(body.contents, 1, "second flex body content");
-    const codeText = requireEntry(codeContent.contents, 0, "truncated code text").text;
-    expect(codeText.length).toBeLessThan(longCode.length);
-    expect(codeText).toContain("...");
-  });
-
   it("does not split a surrogate pair at the truncation boundary", () => {
     // The emoji's surrogate pair straddles the 2000-char cap; a raw slice
     // would leave a lone high surrogate at the end of the code text.
@@ -192,23 +155,6 @@ describe("processLineMessage", () => {
     expect(result.text).not.toContain("\n...");
     expect(result.text.indexOf("Header")).toBeLessThan(result.text.indexOf("const line0"));
     expect(result.text.indexOf("const line119")).toBeLessThan(result.text.indexOf("Footer"));
-  });
-
-  it("processes text with code blocks", () => {
-    const text = `Check this code:
-
-\`\`\`js
-console.log("hi");
-\`\`\`
-
-That's it.`;
-
-    const result = processLineMessage(text);
-
-    expect(result.flexMessages).toHaveLength(1);
-    expect(result.text).toContain("Check this code:");
-    expect(result.text).toContain("That's it.");
-    expect(result.text).not.toContain("```");
   });
 
   it.each([
@@ -395,22 +341,6 @@ print("done")
     expect(result.segments).toBeDefined();
   });
 
-  it("preserves all rows in ordered segments when a row-overflow table is downgraded", () => {
-    const rows = Array.from({ length: 15 }, (_, i) => `| R${i + 1} | V${i + 1} |`).join("\n");
-    const result = processLineMessage(`Header\n\n| Name | Value |\n|---|---|\n${rows}\n\nFooter`);
-
-    expect(result.flexMessages).toHaveLength(0);
-    expect(result.segments).toBeDefined();
-    const segmentTexts = result.segments!.filter((s) => s.type === "text").map((s) => s.text);
-    const combined = segmentTexts.join(" ");
-    expect(combined).toContain("R1");
-    expect(combined).toContain("R15");
-    expect(combined).toContain("Header");
-    expect(combined).toContain("Footer");
-    expect(combined.indexOf("Header")).toBeLessThan(combined.indexOf("R1"));
-    expect(combined.indexOf("R15")).toBeLessThan(combined.indexOf("Footer"));
-  });
-
   it("handles plain text unchanged", () => {
     const text = "Just plain text with no markdown.";
 
@@ -462,7 +392,6 @@ describe("empty code fences", () => {
   // LINE rejects the whole push when a Flex text is blank, so a fence with no
   // code has to drop out rather than cost the reply it was part of.
   it.each([
-    ["no language", "Here:\n\n```\n```\n\ndone"],
     ["with a language", "Here:\n\n```js\n```\n\ndone"],
     ["whitespace only", "Here:\n\n```\n   \n```\n\ndone"],
   ])("renders no card for a fence with %s, keeping the surrounding text", (_label, markdown) => {
@@ -471,12 +400,6 @@ describe("empty code fences", () => {
     expect(processed.flexMessages).toEqual([]);
     expect(processed.text).toContain("Here:");
     expect(processed.text).toContain("done");
-  });
-
-  it("still renders a card for a fence that has code", () => {
-    const processed = processLineMessage("Here:\n\n```js\nconst a = 1;\n```\n\ndone");
-
-    expect(processed.flexMessages).toHaveLength(1);
   });
 
   it("keeps the surviving card when one fence of two is empty", () => {

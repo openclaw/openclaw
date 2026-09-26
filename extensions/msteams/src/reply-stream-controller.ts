@@ -1,9 +1,5 @@
-// Msteams plugin module implements reply stream controller behavior.
 import {
-  type AgentPlanStep,
   createChannelProgressDraftCompositor,
-  type ChannelProgressDraftLine,
-  isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -231,8 +227,32 @@ export function createTeamsReplyStreamController(params: {
     return payloads;
   };
 
+  const finalizeWithoutReceipt = (
+    logicalContent?: string,
+    canceled = false,
+  ): MSTeamsNativeDeliveryFinalization => {
+    const pending = pendingFinalPayload;
+    pendingFinalPayload = undefined;
+    const fallback =
+      pending && !canceled ? fallbackPayloadAfterAcknowledgedText(pending) : undefined;
+    const postNativePayloads =
+      replacementSettlementPending && !canceled ? takeDeferredReplacementPayloads(fallback) : [];
+    if (canceled) {
+      deferredReplacementEntries = [];
+    }
+    return {
+      ...acknowledgedNativeDelivery(),
+      ...(!canceled && logicalContent ? { logicalContent } : {}),
+      ...(!replacementSettlementPending && fallback ? { fallbackPayload: fallback } : {}),
+      ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
+    };
+  };
+
   // Teams cannot delete an empty interim card; final delivery settles it.
   const progressDraft = createChannelProgressDraftCompositor({
+    preparedItems: true,
+    // Informative Teams activities are already plain text, unlike Markdown draft transports.
+    formatPlainText: (text) => text,
     entry: params.msteamsConfig,
     mode: streamMode,
     active: Boolean(stream) && streamMode === "progress",
@@ -256,16 +276,9 @@ export function createTeamsReplyStreamController(params: {
   });
 
   return {
-    async onReplyStart(): Promise<void> {
-      // Starting a reply is not enough to decide that native streaming should
-      // own delivery. Wait for text tokens or explicit progress work so
-      // no-token replies keep the normal block-delivery path.
-    },
-
     onPartialReply(payload: { text?: string }): void {
-      // Partial-token streaming only fires in "partial" mode. In "progress"
-      // mode, openclaw's pipeline doesn't deliver tokens — the model output
-      // arrives as a single payload at preparePayload time.
+      // Partial-token streaming only fires in "partial" mode. Progress-mode
+      // final payloads arrive at preparePayload instead.
       if (!stream || !payload.text || wasCanceled() || streamMode !== "partial") {
         return;
       }
@@ -276,7 +289,8 @@ export function createTeamsReplyStreamController(params: {
         pendingFinalPayload = { text: payload.text };
         return;
       }
-      if (streamFinalizationPending) {
+      // Closing the first segment does not grant another native delivery claim.
+      if (streamFinalizationPending || nativeDeliveryClaimed) {
         return;
       }
       // Convert cumulative-text from the pipeline into deltas for the SDK's
@@ -337,41 +351,13 @@ export function createTeamsReplyStreamController(params: {
       }
     },
 
-    async noteProgressWork(options?: { toolName?: string }): Promise<void> {
-      if (
-        options?.toolName !== undefined &&
-        !isChannelProgressDraftWorkToolName(options.toolName)
-      ) {
-        return;
-      }
-      await progressDraft.noteActivity();
-    },
+    pushItemEvent: progressDraft.pushItemEvent.bind(progressDraft),
+    pushToolEvent: progressDraft.pushToolEvent,
 
-    async pushProgressLine(
-      line?: string | ChannelProgressDraftLine,
-      options?: { toolName?: string },
-    ): Promise<void> {
-      await progressDraft.pushToolProgress(line, options);
-    },
-
-    async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }): Promise<void> {
-      await progressDraft.pushReasoningProgress(text, options);
-    },
-
-    resetReasoningProgress: () => progressDraft.resetReasoningProgress(),
-
-    async pushApprovalEvent(
-      payload: Parameters<typeof progressDraft.pushApprovalEvent>[0],
-    ): Promise<void> {
-      await progressDraft.pushApprovalEvent(payload);
-    },
-
-    async pushPlanProgress(
-      steps?: AgentPlanStep[],
-      options?: { explanation?: string },
-    ): Promise<void> {
-      await progressDraft.pushPlanProgress(steps, options);
-    },
+    pushReasoningProgress: progressDraft.pushReasoningProgress.bind(progressDraft),
+    resetReasoningProgress: progressDraft.resetReasoningProgress,
+    pushApprovalEvent: progressDraft.pushApprovalEvent.bind(progressDraft),
+    pushPlanProgress: progressDraft.pushPlanProgress.bind(progressDraft),
 
     preparePayload(payload: ReplyPayload): Maybe<ReplyPayload> {
       if (!stream) {
@@ -434,18 +420,6 @@ export function createTeamsReplyStreamController(params: {
           return undefined;
         }
       }
-      // Partial mode with tokens already streamed: stream carries the text;
-      // strip text from the payload (keep media if any) so block delivery
-      // doesn't duplicate. Exception: if a non-cancel stream failure was
-      // latched mid-flight, deliver only a provider-acknowledged remainder;
-      // preserve the full reply when delivery was not acknowledged.
-      if (tokensEmitted && !streamFailed) {
-        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-        pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
-        streamFinalizationPending = true;
-        tokensEmitted = false;
-        return hasMedia ? { ...payload, text: undefined } : undefined;
-      }
       if (streamFailed) {
         // Trim the provider-acknowledged prefix only from the failed segment.
         // Retain its ID/text for final settlement while later tool rounds fall through whole.
@@ -456,20 +430,14 @@ export function createTeamsReplyStreamController(params: {
         pendingFinalPayload = undefined;
         return fallback;
       }
-      // Progress mode (or partial mode that received no tokens — e.g. a
-      // tool-only response): emit the final text into the stream so the
-      // preview card transitions in place to the final reply. The SDK's
-      // HttpStream accumulates the text and the next `finalize()` close()
-      // flushes it as the closing activity.
-      if (streamMode === "progress" && payload.text) {
+      // A native stream owns one final segment. Later progress payloads use
+      // block delivery, just like later partial-mode segments after tools.
+      if (streamMode === "progress" && payload.text && !nativeDispatchStarted) {
         try {
           stream.emit(payload.text);
           emittedText = payload.text;
           nativeDispatchStarted = true;
-          pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
-          streamFinalizationPending = true;
-          const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-          return hasMedia ? { ...payload, text: undefined } : undefined;
+          tokensEmitted = true;
         } catch (err) {
           if (isStreamCancelledError(err)) {
             canceledLocally = true;
@@ -479,6 +447,13 @@ export function createTeamsReplyStreamController(params: {
           // safety net so the user still sees the final reply.
           params.log?.debug?.(`progress-mode finalize failed: ${coerceErrorMessage(err)}`);
         }
+      }
+      if (tokensEmitted) {
+        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+        pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
+        streamFinalizationPending = true;
+        tokensEmitted = false;
+        return hasMedia ? { ...payload, text: undefined } : undefined;
       }
       return payload;
     },
@@ -552,30 +527,7 @@ export function createTeamsReplyStreamController(params: {
         const result = await stream.close();
         streamFinalizationPending = false;
         if (!result) {
-          const fallback = pendingFinalPayload;
-          pendingFinalPayload = undefined;
-          const canceled = wasCanceled();
-          const replacementFallback =
-            replacementSettlementPending && fallback && !canceled
-              ? fallbackPayloadAfterAcknowledgedText(fallback)
-              : undefined;
-          const fallbackPayload =
-            !replacementSettlementPending && fallback && !canceled
-              ? fallbackPayloadAfterAcknowledgedText(fallback)
-              : undefined;
-          const postNativePayloads =
-            replacementSettlementPending && !canceled
-              ? takeDeferredReplacementPayloads(replacementFallback)
-              : [];
-          if (canceled) {
-            deferredReplacementEntries = [];
-          }
-          return {
-            ...acknowledgedNativeDelivery(),
-            ...(!canceled && logicalContent ? { logicalContent } : {}),
-            ...(fallbackPayload ? { fallbackPayload } : {}),
-            ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
-          };
+          return finalizeWithoutReceipt(logicalContent, wasCanceled());
         }
         const replacementFallback =
           replacementSettlementPending && replacementEmitFailed && pendingFinalPayload
@@ -610,26 +562,10 @@ export function createTeamsReplyStreamController(params: {
         streamFailed = true;
         streamFinalizationPending = false;
         params.log?.warn?.(`msteams stream finalize failed: ${coerceErrorMessage(err)}`);
-        const fallback = pendingFinalPayload;
-        pendingFinalPayload = undefined;
-        const replacementFallback =
-          replacementSettlementPending && fallback
-            ? fallbackPayloadAfterAcknowledgedText(fallback)
-            : undefined;
-        const fallbackPayload =
-          !replacementSettlementPending && fallback
-            ? fallbackPayloadAfterAcknowledgedText(fallback)
-            : undefined;
-        const postNativePayloads = replacementSettlementPending
-          ? takeDeferredReplacementPayloads(replacementFallback)
-          : [];
-        return {
-          ...acknowledgedNativeDelivery(),
-          ...(logicalContent ? { logicalContent } : {}),
-          ...(fallbackPayload ? { fallbackPayload } : {}),
-          ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
-        };
+        return finalizeWithoutReceipt(logicalContent);
       } finally {
+        // This segment's acknowledged-prefix fallback has been consumed.
+        failedSegmentFallbackPrepared = true;
         queuedFinalActivity = undefined;
         replacementEmitFailed = false;
         replacementFinalPending = false;

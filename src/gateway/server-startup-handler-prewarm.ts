@@ -1,10 +1,9 @@
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../shared/session-list-limits.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 
-const SIDEBAR_PREWARM_MAX_SESSION_ENTRIES = 2_000;
 const GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS = 250;
 
 type StartupTrace = {
@@ -13,92 +12,115 @@ type StartupTrace = {
 
 type GatewayHandlerPrewarmItem = {
   name: string;
+  notBeforeMs?: number;
   load: () => Promise<unknown>;
 };
 
-async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: string): Promise<void> {
-  const [{ loadCombinedSessionStoreForGatewayCore }, { listSessionsFromStoreAsync }] =
-    await Promise.all([
-      import("../config/sessions/combined-store-gateway.js"),
-      import("./session-utils-list.js"),
-    ]);
-  const loaded = loadCombinedSessionStoreForGatewayCore(cfg, {
-    agentId,
-    projection: "list",
-  });
-  await listSessionsFromStoreAsync({
-    cfg,
-    ...loaded,
-    opts: {
-      agentId,
-      configuredAgentsOnly: true,
-      includeDerivedTitles: true,
-      includeGlobal: true,
-      includeUnknown: true,
-      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-    },
-  });
-}
-
-function dashboardDataPrewarmItems(
-  cfg: OpenClawConfig,
-  log: { info?: (msg: string) => void },
+function gatewayPrewarmItems(
+  getConfig: () => OpenClawConfig,
+  isCancelled: () => boolean,
 ): GatewayHandlerPrewarmItem[] {
-  const agentIds = listAgentIds(cfg);
-  let sessionDataPrewarmChecked = false;
-  let sessionDataPrewarmAllowed = false;
-  const shouldPrewarmSessionData = async () => {
-    if (sessionDataPrewarmChecked) {
-      return sessionDataPrewarmAllowed;
-    }
-    sessionDataPrewarmChecked = true;
-    const { canPrewarmCombinedSessionStoresForGateway } =
-      await import("../config/sessions/combined-store-gateway.js");
-    sessionDataPrewarmAllowed = canPrewarmCombinedSessionStoresForGateway(cfg, {
-      agentIds,
-      maxRows: SIDEBAR_PREWARM_MAX_SESSION_ENTRIES,
-    });
-    if (!sessionDataPrewarmAllowed) {
-      log.info?.(
-        `skipping optional dashboard session prewarm: combined stores exceed ${SIDEBAR_PREWARM_MAX_SESSION_ENTRIES} rows`,
-      );
-    }
-    return sessionDataPrewarmAllowed;
-  };
   return [
-    ...agentIds.map((agentId) => ({
-      name: `sessions.${agentId}`,
+    { name: "connection", load: () => import("./server/ws-connection/message-handler.js") },
+    ...["chat.history", "chat.send", "sessions.list"].map((method) => ({
+      name: method,
       load: async () => {
-        // A count-only query keeps unusually large stores off the synchronous JSON projection
-        // path. The request-time session handler remains authoritative when skipped.
-        if (!(await shouldPrewarmSessionData())) {
-          return;
+        const [{ coreGatewayHandlers }, { prepareGatewayRequestHandler }] = await Promise.all([
+          import("./server-methods/core-handlers.js"),
+          import("./server-methods/lazy-core-handlers.js"),
+        ]);
+        if (!isCancelled()) {
+          const handler = coreGatewayHandlers[method];
+          if (!handler) {
+            throw new Error(`Gateway prewarm handler not found: ${method}`);
+          }
+          await prepareGatewayRequestHandler(handler);
         }
-        await prewarmGatewaySessionListData(cfg, agentId);
       },
     })),
+    { name: "agent-events", load: () => import("./server-chat.js") },
+    { name: "session-key", load: () => import("./server-session-key.js") },
+    ...listAgentIds(getConfig()).map((agentId) => ({
+      name: `skills.${agentId}`,
+      load: async () => {
+        const [
+          { prepareWorkspaceSkillEntries },
+          { getAgentWorkspaceAccess },
+          { ensureSkillsWatcher },
+        ] = await Promise.all([
+          import("../skills/loading/workspace-skill-loader.js"),
+          import("../agents/workspace-access.js"),
+          import("../skills/runtime/refresh.js"),
+        ]);
+        const config = getConfig();
+        if (isCancelled() || !listAgentIds(config).includes(agentId)) {
+          return;
+        }
+        const workspaceDir = resolveAgentWorkspaceDir(config, agentId);
+        // Remote workspaces retain request-owned discovery and connection lifetimes.
+        if (!getAgentWorkspaceAccess(workspaceDir, "loadSkills")) {
+          ensureSkillsWatcher({ workspaceDir, config, agentId });
+          await prepareWorkspaceSkillEntries(workspaceDir, { config, agentId });
+        }
+      },
+    })),
+    {
+      name: "context-window-cache",
+      notBeforeMs: 5_000,
+      load: async () => {
+        const { prewarmContextWindowCacheAfterReady } = await import("../agents/context.js");
+        if (!isCancelled()) {
+          await prewarmContextWindowCacheAfterReady({ config: getConfig(), isCancelled });
+        }
+      },
+    },
+    {
+      name: "memory-search",
+      load: async () => {
+        const { getMemoryCapabilityRegistration } = await import("../plugins/memory-state.js");
+        if (isCancelled() || getMemoryCapabilityRegistration()?.pluginId !== "memory-core") {
+          return;
+        }
+        const { loadBundledPluginPublicArtifactModuleSync } =
+          await import("../plugins/public-surface-loader.js");
+        if (isCancelled()) {
+          return;
+        }
+        const { prewarmMemorySearchWorker } = loadBundledPluginPublicArtifactModuleSync<{
+          prewarmMemorySearchWorker: () => Promise<void>;
+        }>({ dirName: "memory-core", artifactBasename: "prewarm-api.js" });
+        await prewarmMemorySearchWorker();
+      },
+    },
     {
       name: "plugins",
       load: async () => {
         const { listManagedPlugins } = await import("../plugins/management-service.js");
-        await listManagedPlugins({ config: cfg });
+        if (!isCancelled()) {
+          await listManagedPlugins({ config: getConfig() });
+        }
       },
     },
   ];
 }
 
 export function scheduleGatewayHandlerPrewarm(params: {
-  cfgAtStart: OpenClawConfig;
+  scheduler: GatewayScheduler;
+  getConfig: () => OpenClawConfig;
   startupTrace?: StartupTrace;
-  log: { info?: (msg: string) => void; warn: (msg: string) => void };
+  log: { warn: (msg: string) => void };
   items?: readonly GatewayHandlerPrewarmItem[];
   waitForPostReadyWork?: () => Promise<void>;
 }): GatewayIdleTaskHandle {
-  // Frequent updater restarts make cold dashboard data the remaining slow tier.
-  // Keep bounded session reads first and process-stable plugin data second.
-  // Provider catalogs stay request-driven because their adapters may do unbounded external work.
-  const items = params.items ?? dashboardDataPrewarmItems(params.cfgAtStart, params.log);
   let stopped = false;
+  const startedAt = params.scheduler.now();
+  // Warm code and local facts without executing requests or acquiring live provider catalogs.
+  const items =
+    params.items ??
+    gatewayPrewarmItems(
+      params.getConfig,
+      () => stopped || getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+    );
   let nextIndex = 0;
   let currentItemName = "unknown";
   let idleTask: GatewayIdleTaskHandle | undefined;
@@ -119,7 +141,9 @@ export function scheduleGatewayHandlerPrewarm(params: {
       currentItemName = item.name;
       const load = () => item.load();
       idleTask = scheduleGatewayIdleTask({
-        delayMs: 0,
+        id: "startup:handler-prewarm",
+        scheduler: params.scheduler,
+        delayMs: Math.max(0, (item.notBeforeMs ?? 0) - (params.scheduler.now() - startedAt)),
         retryDelayMs: GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS,
         isClosing: () => stopped,
         isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,

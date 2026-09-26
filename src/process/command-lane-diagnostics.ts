@@ -7,7 +7,13 @@ import {
   getCommandLaneSnapshot,
   listCommandLaneTotals,
 } from "./command-queue.js";
-import { CommandLane, STATIC_COMMAND_LANES } from "./lanes.js";
+import { getQueueState } from "./command-queue.state.js";
+import {
+  CommandLane,
+  STATIC_COMMAND_LANES,
+  SUBAGENT_LANE_PREFIX,
+  SWARM_LANE_PREFIX,
+} from "./lanes.js";
 
 type DynamicCommandLaneSummary = {
   laneCount: number;
@@ -17,6 +23,30 @@ type DynamicCommandLaneSummary = {
 };
 
 const STATIC_COMMAND_LANE_SET: ReadonlySet<string> = new Set(STATIC_COMMAND_LANES);
+const MAX_SWARM_LANE_SNAPSHOTS = 32;
+
+function getSubagentLaneSnapshot(): CommandLaneSnapshot {
+  const snapshot: CommandLaneSnapshot = {
+    ...getCommandLaneSnapshot(CommandLane.Subagent),
+    concurrencyScope: "session",
+    saturatedLaneCount: 0,
+  };
+  for (const state of getQueueState().lanes.values()) {
+    if (!state.lane.startsWith(SUBAGENT_LANE_PREFIX) || state.lane.startsWith(SWARM_LANE_PREFIX)) {
+      continue;
+    }
+    const activeCount = state.activeTaskIds.size;
+    snapshot.activeCount += activeCount;
+    snapshot.queuedCount += state.queue.length;
+    snapshot.draining ||= state.draining;
+    snapshot.generation = Math.max(snapshot.generation, state.generation);
+    if (activeCount >= state.maxConcurrent) {
+      snapshot.saturatedLaneCount = (snapshot.saturatedLaneCount ?? 0) + 1;
+      snapshot.blockedBy = "lane";
+    }
+  }
+  return snapshot;
+}
 
 export function getCommandLaneDiagnostics(): {
   lanes: CommandLaneSnapshot[];
@@ -24,9 +54,15 @@ export function getCommandLaneDiagnostics(): {
 } {
   const lanes = [...STATIC_COMMAND_LANES]
     .toSorted()
-    .map((lane) =>
-      lane === CommandLane.Background ? getBackgroundWorkSnapshot() : getCommandLaneSnapshot(lane),
-    )
+    .map((lane) => {
+      if (lane === CommandLane.Background) {
+        return getBackgroundWorkSnapshot();
+      }
+      if (lane === CommandLane.Subagent) {
+        return getSubagentLaneSnapshot();
+      }
+      return getCommandLaneSnapshot(lane);
+    })
     // Disabled lanes disappear only once their outstanding work has cleared.
     .filter((lane) => lane.maxConcurrent > 0 || lane.activeCount > 0 || lane.queuedCount > 0);
   const dynamic: DynamicCommandLaneSummary = {
@@ -35,8 +71,20 @@ export function getCommandLaneDiagnostics(): {
     queuedCount: 0,
     queuedLaneCount: 0,
   };
+  let swarmSnapshots = 0;
   for (const totals of listCommandLaneTotals()) {
-    if (STATIC_COMMAND_LANE_SET.has(totals.lane) || isBackgroundWorkLane(totals.lane)) {
+    if (totals.lane.startsWith(SWARM_LANE_PREFIX)) {
+      // Keep group identity visible without making saturation payloads unbounded.
+      if (swarmSnapshots < MAX_SWARM_LANE_SNAPSHOTS) {
+        lanes.push(getCommandLaneSnapshot(totals.lane));
+        swarmSnapshots += 1;
+        continue;
+      }
+    } else if (
+      STATIC_COMMAND_LANE_SET.has(totals.lane) ||
+      isBackgroundWorkLane(totals.lane) ||
+      totals.lane.startsWith(SUBAGENT_LANE_PREFIX)
+    ) {
       continue;
     }
     dynamic.laneCount += 1;

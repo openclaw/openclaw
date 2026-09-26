@@ -1,6 +1,9 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
-import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
+import type {
+  SystemAgentSetupActivateParams,
+  SystemAgentSetupDetectResult,
+} from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
@@ -8,27 +11,26 @@ import { renderProviderIcon } from "./model-setup-icon-loader.ts";
 
 type ManualProvider = SystemAgentSetupDetectResult["manualProviders"][number];
 
+export function manualProviderActivation(
+  providers: readonly ManualProvider[],
+  providerId: string,
+  apiKey: string,
+): SystemAgentSetupActivateParams | null {
+  const provider = providers.find((candidate) => candidate.id === providerId);
+  const value = apiKey.trim();
+  return provider && value
+    ? {
+        kind: "api-key",
+        authChoice: provider.id,
+        apiKey: value,
+        ...(provider.modelTarget ? { modelTarget: provider.modelTarget } : {}),
+      }
+    : null;
+}
+
 type WebAwesomeSelectEvent = CustomEvent<{
   item: HTMLElement & { checked?: boolean; value?: string };
 }>;
-
-function focusSelectedManualProvider(event: Event): void {
-  const dropdown = event.currentTarget as HTMLElement;
-  const options = Array.from(
-    dropdown.querySelectorAll<HTMLElement & { active: boolean }>(
-      "wa-dropdown-item[data-manual-provider]:not([disabled])",
-    ),
-  );
-  const selected = options.find((option) => option.hasAttribute("data-selected")) ?? options[0];
-  if (!selected) {
-    return;
-  }
-  for (const option of options) {
-    option.active = option === selected;
-  }
-  selected.focus({ preventScroll: true });
-  selected.scrollIntoView?.({ block: "nearest" });
-}
 
 function handleManualProviderKeydown(event: KeyboardEvent): void {
   const dropdown = event.currentTarget as HTMLElement & { open: boolean };
@@ -119,7 +121,6 @@ export function renderManualProviderPicker(
       aria-label=${t("modelSetup.manual.provider")}
       @wa-select=${(event: WebAwesomeSelectEvent) =>
         handleManualProviderSelect(event, props.manualProviderId, props.onManualProviderChange)}
-      @wa-after-show=${focusSelectedManualProvider}
       @keydown=${handleManualProviderKeydown}
     >
       <button
@@ -170,6 +171,7 @@ export function renderManualProviderPicker(
               type="checkbox"
               .checked=${selected}
               ?disabled=${props.actionsDisabled}
+              ?autofocus=${selected && !props.actionsDisabled}
               ${ref((element) => syncDropdownItemRadio(element, selected))}
             >
               <span slot="icon">

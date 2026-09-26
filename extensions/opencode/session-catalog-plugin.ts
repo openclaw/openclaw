@@ -211,6 +211,7 @@ function createOpenCodeNodeHostBindings(api: OpenClawPluginApi) {
     terminalCommand: OPENCODE_TERMINAL_RESUME_COMMAND,
     sessionIdPattern: SESSION_ID_PATTERN,
     executable: "opencode",
+    hasActiveWork: () => false,
     args: (threadId) => ["--session", threadId],
     listAvailable: available,
     terminalAvailable: available,
@@ -320,6 +321,7 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
       },
       terminal: {
         executable: "opencode",
+        uploadPathStyle: "native",
         args: (threadId) => ["--session", threadId],
         title: (threadId) => `opencode --session ${threadId.slice(0, 12)}…`,
         requireLocalSession: requireLocalOpenCodeSession,

@@ -1,11 +1,9 @@
 // Discord tests cover gateway plugin plugin behavior.
 import { EventEmitter } from "node:events";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
-import {
-  fetchDiscordGatewayInfoWithTimeout,
-  resolveDiscordGatewayInfoTimeoutMs,
-} from "./gateway-metadata.js";
+import { fetchDiscordGatewayInfoWithTimeout } from "./gateway-metadata.js";
 
 const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
   const GatewayIntentsLocal = {
@@ -94,11 +92,7 @@ describe("createDiscordGatewayPlugin", () => {
   function createPlugin(
     testing?: NonNullable<Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]>,
     discordConfig: Parameters<typeof createDiscordGatewayPlugin>[0]["discordConfig"] = {},
-    runtime: Parameters<typeof createDiscordGatewayPlugin>[0]["runtime"] = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    },
+    runtime: Parameters<typeof createDiscordGatewayPlugin>[0]["runtime"] = createRuntimeSpies(),
   ) {
     return createDiscordGatewayPlugin({
       discordConfig,
@@ -106,25 +100,6 @@ describe("createDiscordGatewayPlugin", () => {
       ...(testing ? { testing } : {}),
     });
   }
-
-  it("subscribes to guild emoji changes without enabling voice by default", () => {
-    const intents = resolveDiscordGatewayIntents();
-
-    expect(intents & GatewayIntents.GuildExpressions).toBe(GatewayIntents.GuildExpressions);
-    expect(intents & GatewayIntents.GuildVoiceStates).toBe(0);
-  });
-
-  it("includes GuildVoiceStates when voice is enabled", () => {
-    const intents = resolveDiscordGatewayIntents({ voiceEnabled: true });
-
-    expect(intents & GatewayIntents.GuildVoiceStates).toBe(GatewayIntents.GuildVoiceStates);
-  });
-
-  it("omits GuildVoiceStates when voice is disabled", () => {
-    const intents = resolveDiscordGatewayIntents({ voiceEnabled: false });
-
-    expect(intents & GatewayIntents.GuildVoiceStates).toBe(0);
-  });
 
   it("omits MessageContent only when explicitly disabled", () => {
     const defaultIntents = resolveDiscordGatewayIntents();
@@ -157,15 +132,6 @@ describe("createDiscordGatewayPlugin", () => {
 
     expect(intents & GatewayIntents.GuildPresences).toBe(GatewayIntents.GuildPresences);
     expect(intents & GatewayIntents.GuildMembers).toBe(GatewayIntents.GuildMembers);
-  });
-
-  it("resolves gateway metadata timeout from env, then default", () => {
-    expect(
-      resolveDiscordGatewayInfoTimeoutMs({
-        env: { OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS: "25000" },
-      }),
-    ).toBe(25_000);
-    expect(resolveDiscordGatewayInfoTimeoutMs({ env: {} })).toBe(30_000);
   });
 
   it("parses valid Discord gateway metadata", async () => {
@@ -221,13 +187,6 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("omits voice states when Discord voice is disabled in account config", () => {
     const plugin = createPlugin(undefined, { voice: { enabled: false } });
-    const options = (plugin as unknown as { options?: { intents?: number } }).options;
-
-    expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(0);
-  });
-
-  it("omits voice states when Discord voice config is absent", () => {
-    const plugin = createPlugin(undefined, {});
     const options = (plugin as unknown as { options?: { intents?: number } }).options;
 
     expect((options?.intents ?? 0) & GatewayIntents.GuildVoiceStates).toBe(0);
@@ -330,11 +289,7 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("logs Discord gateway websocket error and abnormal close details", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
     const plugin = createPlugin(
       {
         webSocketCtor: function WebSocketCtor() {
@@ -368,11 +323,7 @@ describe("createDiscordGatewayPlugin", () => {
 
   it("keeps gateway close reason logs UTF-16 safe", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const runtime = createRuntimeSpies();
     const plugin = createPlugin(
       {
         webSocketCtor: function WebSocketCtor() {

@@ -7,12 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { dispatchCronDelivery } from "../../cron/isolated-agent/delivery-dispatch.js";
+import { readCronRunHistoryPageForTests } from "../../cron/run-history.test-support.js";
 import { CronService, type CronEvent } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
 import type { CronServiceDeps } from "../../cron/service/state.js";
 import { loadCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
-import { readCronTaskRunHistoryPage } from "../../cron/task-run-history.js";
 import type { CronJob } from "../../cron/types.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import type { RespondFn } from "../../gateway/server-methods/types.js";
@@ -126,7 +126,6 @@ describe("cron CLI delivery suppression readback", () => {
           const sessionKey = `agent:main:cron:${job.id}:run:${sessionId}`;
           const now = Date.now();
           const dispatch = await dispatchCronDelivery({
-            cfg: {},
             cfgWithAgentDefaults: {},
             deps: {},
             job,
@@ -137,7 +136,6 @@ describe("cron CLI delivery suppression readback", () => {
             lifecycleRevision: randomUUID(),
             sessionUpdatedAt: now,
             runStartedAt: now,
-            runEndedAt: now,
             timeoutMs: 5_000,
             resolvedDelivery:
               phase === "delivery-error" || phase === "required-delivery-error"
@@ -166,11 +164,14 @@ describe("cron CLI delivery suppression readback", () => {
             abortSignal,
             isAborted: () => abortSignal?.aborted === true,
             abortReason: () => "fixture aborted",
-            withRunSession: (result) => ({ ...result, sessionId, sessionKey }),
           });
+          const failure = dispatch.disposition?.kind === "error" ? dispatch.disposition : undefined;
           return {
-            status: "ok",
-            ...dispatch.result,
+            status: failure ? "error" : "ok",
+            error: failure?.error,
+            errorKind: failure?.errorKind,
+            sessionId,
+            sessionKey,
             delivered: dispatch.delivered,
             deliveryAttempted: dispatch.deliveryAttempted,
             deliveryError: dispatch.deliveryError,
@@ -257,7 +258,7 @@ describe("cron CLI delivery suppression readback", () => {
               lastDeliveryStatus: deliveryStatus,
             });
             expect(persisted.state.lastDelivered).toBe(delivered);
-            const history = readCronTaskRunHistoryPage({
+            const history = readCronRunHistoryPageForTests({
               storeKey: cronStoreKey(storePath),
               jobId: job.id,
             });
@@ -331,7 +332,8 @@ describe("cron CLI delivery suppression readback", () => {
           }
           expect(events).toHaveLength(6);
           expect(
-            readCronTaskRunHistoryPage({ storeKey: cronStoreKey(storePath), jobId: job.id }).total,
+            readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
+              .total,
           ).toBe(6);
         } finally {
           cron.stop();

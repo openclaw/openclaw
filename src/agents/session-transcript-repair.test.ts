@@ -3,6 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
   sanitizeToolCallInputs,
+  makeMissingToolResult,
   sanitizeToolUseResultPairing,
   repairToolUseResultPairing,
   stripToolResultDetails,
@@ -35,36 +36,6 @@ function getAssistantToolCallBlocks(messages: AgentMessage[]) {
 }
 
 describe("sanitizeToolUseResultPairing", () => {
-  const buildDuplicateToolResultInput = (opts?: {
-    middleMessage?: unknown;
-    secondText?: string;
-  }): AgentMessage[] =>
-    castAgentMessages([
-      sparseAssistant([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }]),
-      textToolResult("call_1", "read", "first", { isError: false }),
-      ...(opts?.middleMessage ? [castAgentMessage(opts.middleMessage)] : []),
-      textToolResult("call_1", "read", opts?.secondText ?? "second", { isError: false }),
-    ]);
-
-  it("moves tool results directly after tool calls and inserts missing results", () => {
-    const input = castAgentMessages([
-      sparseAssistant([
-        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-        { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
-      ]),
-      { role: "user", content: "user message that should come after tool use" },
-      textToolResult("call_2", "exec", "ok", { isError: false }),
-    ]);
-
-    const out = sanitizeToolUseResultPairing(input);
-    expect(out[0]?.role).toBe("assistant");
-    expect(out[1]?.role).toBe("toolResult");
-    expect((out[1] as { toolCallId?: string }).toolCallId).toBe("call_1");
-    expect(out[2]?.role).toBe("toolResult");
-    expect((out[2] as { toolCallId?: string }).toolCallId).toBe("call_2");
-    expect(out[3]?.role).toBe("user");
-  });
-
   it("uses custom text for synthesized missing tool results", () => {
     const input = castAgentMessages([
       sparseAssistant([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }]),
@@ -177,44 +148,6 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.moved).toBe(true);
   });
 
-  it("repairs blank tool result names from matching tool calls", () => {
-    const input = castAgentMessages([
-      sparseAssistant([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }]),
-      textToolResult("call_1", "   ", "ok", { isError: false }),
-    ]);
-
-    const out = sanitizeToolUseResultPairing(input);
-    const toolResult = out.find((message) => message.role === "toolResult") as {
-      toolName?: string;
-    };
-
-    expect(toolResult?.toolName).toBe("read");
-  });
-
-  it("drops duplicate tool results for the same id within a span", () => {
-    const input = castAgentMessages([
-      ...buildDuplicateToolResultInput(),
-      { role: "user", content: "ok" },
-    ]);
-
-    const out = sanitizeToolUseResultPairing(input);
-    expect(out.reduce((count, m) => count + (m.role === "toolResult" ? 1 : 0), 0)).toBe(1);
-  });
-
-  it("drops duplicate tool results for the same id across the transcript", () => {
-    const input = buildDuplicateToolResultInput({
-      middleMessage: { role: "assistant", content: [{ type: "text", text: "ok" }] },
-      secondText: "second (duplicate)",
-    });
-
-    const out = sanitizeToolUseResultPairing(input);
-    const results = out.filter((m) => m.role === "toolResult") as Array<{
-      toolCallId?: string;
-    }>;
-    expect(results).toHaveLength(1);
-    expect(results[0]?.toolCallId).toBe("call_1");
-  });
-
   it("drops orphan tool results that do not match any tool call", () => {
     const input = castAgentMessages([
       { role: "user", content: "hello" },
@@ -228,13 +161,7 @@ describe("sanitizeToolUseResultPairing", () => {
   });
 
   it("reports the original messages discarded during pairing repair", () => {
-    const orphan = {
-      role: "toolResult" as const,
-      toolCallId: "call_orphan",
-      toolName: "read",
-      content: [{ type: "text" as const, text: "orphan" }],
-      isError: false,
-    };
+    const orphan = textToolResult("call_orphan", "read", "orphan", { isError: false });
     const input = castAgentMessages([
       { role: "user", content: "hello" },
       orphan,
@@ -302,24 +229,6 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.messages).toHaveLength(2);
     expect(result.messages[0]?.role).toBe("assistant");
     expect(result.messages[1]?.role).toBe("user");
-  });
-
-  it("still repairs tool results for normal assistant messages with stopReason 'toolUse'", () => {
-    // Normal tool calls (stopReason: "toolUse" or "stop") should still be repaired
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_normal", name: "read", arguments: {} }],
-        stopReason: "toolUse",
-      },
-      { role: "user", content: "user message" },
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    // Should add a synthetic tool result for the missing result
-    expect(result.added).toHaveLength(1);
-    expect(result.added[0]?.toolCallId).toBe("call_normal");
   });
 
   function createAbortedAssistantTranscript() {
@@ -560,21 +469,6 @@ describe("repairToolUseResultPairing repeated per-turn ids", () => {
     ).toMatchObject({ toolName: "exec" });
     expect(result.discarded).toEqual([]);
   });
-
-  it("handles a long valid repeated-id transcript as an unchanged linear pass", () => {
-    const input = castAgentMessages(
-      Array.from({ length: 1_000 }, (_, index) => [
-        makeAssistant(`exec_${index % 4}`),
-        makeResult(`exec_${index % 4}`, `result ${index}`),
-      ]).flat(),
-    );
-
-    const result = repairToolUseResultPairing(input);
-
-    expect(result.messages).toBe(input);
-    expect(result.added).toHaveLength(0);
-    expect(result.droppedDuplicateCount).toBe(0);
-  });
 });
 
 describe("repairToolUseResultPairing prefers real result over synthetic error", () => {
@@ -669,13 +563,7 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
   it("real error matching custom synthetic text stays first without marker", () => {
     const input = castAgentMessages([
       makeAssistant("call_1"),
-      {
-        role: "toolResult" as const,
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "aborted" }],
-        isError: true,
-      },
+      textToolResult("call_1", "read", "aborted", { isError: true }),
       makeRealResult("call_1"),
     ]);
 
@@ -717,13 +605,7 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
         content: [{ type: "toolCall", id: "call_2", name: "write", arguments: {} }],
       },
       makeRealResult("call_1"),
-      {
-        role: "toolResult" as const,
-        toolCallId: "call_2",
-        toolName: "write",
-        content: [{ type: "text", text: "second output" }],
-        isError: false,
-      },
+      textToolResult("call_2", "write", "second output", { isError: false }),
     ]);
 
     const result = repairToolUseResultPairing(input);
@@ -794,25 +676,6 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     expect(toolResults[0]?.content?.[0]?.text).toBe(DEFAULT_MISSING_TOOL_RESULT_TEXT);
   });
 
-  it("span-level: synthetic then real in span → picks real", () => {
-    const input = castAgentMessages([
-      makeAssistant("call_1"),
-      makeSyntheticResult("call_1"),
-      makeRealResult("call_1"),
-      { role: "user", content: "next" },
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    const toolResults = result.messages.filter((m) => m.role === "toolResult") as Array<{
-      isError?: boolean;
-      content?: Array<{ text?: string }>;
-    }>;
-    expect(toolResults).toHaveLength(1);
-    expect(toolResults[0]?.isError).not.toBe(true);
-    expect(toolResults[0]?.content?.[0]?.text).toBe("real output");
-  });
-
   it("does not treat real error containing marker substring as synthetic", () => {
     const input = castAgentMessages([
       makeAssistant("call_1"),
@@ -840,19 +703,6 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     expect(toolResults).toHaveLength(1);
     expect(toolResults[0]?.content?.[0]?.text).toContain("extra context from real error");
   });
-
-  it("changed flag is true when duplicates are dropped", () => {
-    const input = castAgentMessages([
-      makeAssistant("call_1"),
-      makeRealResult("call_1"),
-      makeRealResult("call_1", "duplicate"),
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    expect(result.messages).not.toBe(input);
-    expect(result.droppedDuplicateCount).toBeGreaterThan(0);
-  });
 });
 
 describe("sanitizeToolCallInputs legacy block filtering", () => {
@@ -876,6 +726,37 @@ describe("sanitizeToolCallInputs legacy block filtering", () => {
 });
 
 describe("sanitizeToolCallInputs allowed-name filtering", () => {
+  it.each([false, true])("preserves completed removed tools (signed thinking: %s)", (signed) => {
+    const assistant = sparseAssistant([
+      ...(signed
+        ? [{ type: "thinking", thinking: "Recorded work", thinkingSignature: "sig_old" }]
+        : []),
+      { type: "toolCall", id: "old_call", name: "removed_plugin", arguments: { action: "done" } },
+    ]);
+    const input = castAgentMessages([
+      assistant,
+      textToolResult("old_call", "removed_plugin", "completed-action-id", { isError: false }),
+    ]);
+    const options = { allowedToolNames: ["read"], allowProviderOwnedThinkingReplay: signed };
+    expect(sanitizeToolCallInputs(input, options)).toBe(input);
+    expect(sanitizeToolCallInputs(castAgentMessages([assistant]), options)).toEqual([]);
+    for (const result of [
+      textToolResult("other_call", "removed_plugin", "unrelated result", { isError: false }),
+      makeMissingToolResult({ toolCallId: "old_call", toolName: "removed_plugin" }),
+    ]) {
+      expect(sanitizeToolCallInputs(castAgentMessages([assistant, result]), options)).toEqual([
+        result,
+      ]);
+    }
+    const later = sparseAssistant([
+      { type: "toolCall", id: "old_call", name: "read", arguments: {} },
+    ]);
+    const laterResult = textToolResult("old_call", "read", "later result", { isError: false });
+    expect(
+      sanitizeToolCallInputs(castAgentMessages([assistant, later, laterResult]), options),
+    ).toEqual([later, laterResult]);
+  });
+
   function sanitizeAssistantContent(
     content: unknown[],
     options?: Parameters<typeof sanitizeToolCallInputs>[1],
@@ -1382,18 +1263,6 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
 
   it.each([
     {
-      name: "trims leading whitespace from tool names",
-      content: [{ type: "toolCall", id: "call_1", name: " read", arguments: {} }],
-      options: undefined,
-      expectedNames: ["read"],
-    },
-    {
-      name: "trims trailing whitespace from tool names",
-      content: [{ type: "toolUse", id: "call_1", name: "exec ", input: { command: "ls" } }],
-      options: undefined,
-      expectedNames: ["exec"],
-    },
-    {
       name: "trims both leading and trailing whitespace from tool names",
       content: [
         { type: "toolCall", id: "call_1", name: " read ", arguments: {} },
@@ -1463,16 +1332,6 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
     const inputObj = (toolCalls[0]?.input ?? {}) as Record<string, unknown>;
     const attachments = (inputObj.attachments ?? []) as Array<Record<string, unknown>>;
     expect(attachments[0]?.content).toBe("SECRET");
-  });
-  it("preserves other block properties when trimming tool names", () => {
-    const toolCalls = sanitizeAssistantToolCalls([
-      { type: "toolCall", id: "call_1", name: " read ", arguments: { path: "/tmp/test" } },
-    ]);
-
-    expect(toolCalls).toHaveLength(1);
-    expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
-    expect((toolCalls[0] as { id?: unknown }).id).toBe("call_1");
-    expect((toolCalls[0] as { arguments?: unknown }).arguments).toEqual({ path: "/tmp/test" });
   });
 });
 

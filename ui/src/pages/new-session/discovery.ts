@@ -9,6 +9,8 @@ import type {
   RequiredNodeCommand,
   RuntimeTargetIssue,
   WorkerExecutionMode,
+  WorkerMachineOption,
+  WorkerOperatingSystem,
   WorkerSlotSummary,
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 
@@ -17,6 +19,7 @@ export type DraftBranches = {
   branches: Array<{ name: string; kind: "local" | "remote" }>;
   defaultBranch?: string;
   headBranch?: string;
+  branchesUnavailable?: boolean;
 };
 
 export type DraftRepositoryState =
@@ -32,18 +35,15 @@ export type DraftRepositoryState =
 export type DraftCloudProfile = {
   id: string;
   providerId: string;
+  providerDisplayId?: string;
   trust?: "persistent" | "disposable";
   executionModes?: readonly WorkerExecutionMode[];
   machines?: DraftMachineOption[];
+  operatingSystems?: DraftOperatingSystem[];
 };
 
-export type DraftMachineOption = {
-  id: string;
-  label: string;
-  cpu?: number;
-  memoryGb?: number;
-  default?: boolean;
-};
+export type DraftOperatingSystem = WorkerOperatingSystem;
+export type DraftMachineOption = WorkerMachineOption;
 
 export type DraftEnvironment = {
   id: string;
@@ -119,9 +119,11 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
       const profile = raw as {
         id?: unknown;
         providerId?: unknown;
+        providerDisplayId?: unknown;
         trust?: unknown;
         executionModes?: unknown;
         machines?: unknown;
+        operatingSystems?: unknown;
       };
       const id = normalizeOptionalString(profile.id);
       const providerId = normalizeOptionalString(profile.providerId);
@@ -133,15 +135,22 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
           ? profile.trust
           : undefined;
       const machines = readDraftMachineOptions(profile.machines);
+      const operatingSystems = readDraftOperatingSystems(profile.operatingSystems);
       return [
         {
           id,
           providerId,
+          ...(typeof profile.providerDisplayId === "string" &&
+          /^[a-z][a-z0-9-]{0,63}$/.test(profile.providerDisplayId) &&
+          profile.providerDisplayId.trim() === profile.providerDisplayId
+            ? { providerDisplayId: profile.providerDisplayId }
+            : {}),
           trust,
           ...(Object.hasOwn(profile, "executionModes")
             ? { executionModes: readDraftCloudProfileExecutionModes(profile.executionModes) }
             : {}),
           ...(machines.length > 0 ? { machines } : {}),
+          ...(operatingSystems.length > 0 ? { operatingSystems } : {}),
         },
       ];
     })
@@ -150,26 +159,80 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
 
 function readDraftMachineOptions(value: unknown): DraftMachineOption[] {
   const options = new Map<string, DraftMachineOption>();
-  for (const raw of (Array.isArray(value) ? value : []).slice(0, 32)) {
+  for (const raw of (Array.isArray(value) ? value : []).slice(0, 64)) {
     if (!isRecord(raw)) {
       continue;
     }
     const id = normalizeOptionalString(raw.id);
     const label = normalizeOptionalString(raw.label);
-    if (!id || id.length > 128 || !label || label.length > 128 || options.has(id)) {
+    const os = normalizeOptionalString(raw.os);
+    const key = JSON.stringify([os, id]);
+    if (
+      !id ||
+      id.length > 128 ||
+      !label ||
+      label.length > 128 ||
+      options.has(key) ||
+      (raw.os !== undefined && (!os || os.length > 64))
+    ) {
       continue;
     }
     const cpu = normalizeMachineSize(raw.cpu);
     const memoryGb = normalizeMachineSize(raw.memoryGb);
-    options.set(id, {
+    options.set(key, {
       id,
       label,
+      ...(os ? { os } : {}),
       ...(cpu === undefined ? {} : { cpu }),
       ...(memoryGb === undefined ? {} : { memoryGb }),
       ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
     });
   }
   return [...options.values()];
+}
+
+function readDraftOperatingSystems(value: unknown): DraftOperatingSystem[] {
+  const options = new Map<string, DraftOperatingSystem>();
+  for (const raw of (Array.isArray(value) ? value : []).slice(0, 8)) {
+    if (!isRecord(raw)) {
+      continue;
+    }
+    const id = normalizeOptionalString(raw.id);
+    const label = normalizeOptionalString(raw.label);
+    const disabledReason = normalizeOptionalString(raw.disabledReason)?.slice(0, 256);
+    if (!id || id.length > 64 || !label || label.length > 64 || options.has(id)) {
+      continue;
+    }
+    options.set(id, {
+      id,
+      label,
+      ...(typeof raw.default === "boolean" ? { default: raw.default } : {}),
+      ...(disabledReason ? { disabledReason } : {}),
+    });
+  }
+  return [...options.values()];
+}
+
+export function defaultCloudOs(profile: DraftCloudProfile): string {
+  return (
+    profile.operatingSystems?.find((os) => os.default)?.id ??
+    profile.operatingSystems?.[0]?.id ??
+    profile.machines?.find((machine) => machine.os)?.os ??
+    ""
+  );
+}
+
+export function cloudMachinesForOs(profile: DraftCloudProfile, os: string): DraftMachineOption[] {
+  return (profile.machines ?? []).filter((machine) => !machine.os || machine.os === os);
+}
+
+/** Providers that omit a marked default still present their first catalog choice as the default. */
+export function defaultCloudMachine(
+  profile: DraftCloudProfile,
+  os = defaultCloudOs(profile),
+): DraftMachineOption | undefined {
+  const machines = cloudMachinesForOs(profile, os);
+  return machines.find((machine) => machine.default) ?? machines[0];
 }
 
 const ENVIRONMENT_STATUSES = new Set<EnvironmentStatus>([

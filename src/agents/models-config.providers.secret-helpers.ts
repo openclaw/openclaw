@@ -5,6 +5,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
+import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
@@ -12,7 +14,6 @@ import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.
 import {
   isNonSecretApiKeyMarker,
   resolveEnvSecretRefHeaderValueMarker,
-  resolveNonEnvSecretRefApiKeyMarker,
   resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
@@ -60,6 +61,7 @@ export type ProviderAuthResolver = (
   source: "env" | "profile" | "none";
   profileId?: string;
   preparationFailed?: boolean;
+  authFlow?: string;
 };
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
@@ -92,11 +94,6 @@ export function resolveEnvApiKeyVarName(
   }
   const match = /^(?:env: |shell env: )([A-Z0-9_]+)$/.exec(resolved.source);
   return match ? match[1] : undefined;
-}
-
-/** Resolves the AWS SDK API key env var used by Bedrock-style auth. */
-function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return resolveAwsSdkEnvVarName(env);
 }
 
 function resolveEnvAuthEvidenceApiKeyMarker(
@@ -133,7 +130,10 @@ export function normalizeHeaderValues(params: {
       source && sourceValue !== undefined
         ? {
             config: source.config,
-            path: `models.providers.${source.providerKey}.headers.${headerName}`,
+            path: appendConfigPathSegment(
+              `${appendConfigPathSegment("models.providers", source.providerKey)}.headers`,
+              headerName,
+            ),
             value: sourceValue,
             defaults: source.config.secrets?.defaults,
           }
@@ -163,59 +163,28 @@ export function resolveApiKeyFromCredential(
   cred: AuthProfileStore["profiles"][string] | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): ProfileApiKeyResolution | undefined {
-  if (!cred) {
+  if (!cred || (cred.type !== "api_key" && cred.type !== "token")) {
     return undefined;
   }
-  if (cred.type === "api_key") {
-    const keyRef = coerceSecretRef(cred.keyRef);
-    if (keyRef && keyRef.id.trim()) {
-      if (keyRef.source === "env") {
-        const envVar = keyRef.id.trim();
-        return {
-          apiKey: envVar,
-          source: "env-ref",
-          discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        };
-      }
+  const ref = coerceSecretRef(cred.type === "api_key" ? cred.keyRef : cred.tokenRef);
+  if (ref && ref.id.trim()) {
+    if (ref.source === "env") {
+      const envVar = ref.id.trim();
       return {
-        apiKey: resolveNonEnvSecretRefApiKeyMarker(keyRef.source),
-        source: "non-env-ref",
+        apiKey: envVar,
+        source: "env-ref",
+        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
       };
     }
-    if (cred.key?.trim()) {
-      return {
-        apiKey: cred.key,
-        source: "plaintext",
-        discoveryApiKey: toDiscoveryApiKey(cred.key),
-      };
-    }
-    return undefined;
+    return {
+      apiKey: resolveNonEnvSecretRefApiKeyMarker(ref.source),
+      source: "non-env-ref",
+    };
   }
-  if (cred.type === "token") {
-    const tokenRef = coerceSecretRef(cred.tokenRef);
-    if (tokenRef && tokenRef.id.trim()) {
-      if (tokenRef.source === "env") {
-        const envVar = tokenRef.id.trim();
-        return {
-          apiKey: envVar,
-          source: "env-ref",
-          discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        };
-      }
-      return {
-        apiKey: resolveNonEnvSecretRefApiKeyMarker(tokenRef.source),
-        source: "non-env-ref",
-      };
-    }
-    if (cred.token?.trim()) {
-      return {
-        apiKey: cred.token,
-        source: "plaintext",
-        discoveryApiKey: toDiscoveryApiKey(cred.token),
-      };
-    }
-  }
-  return undefined;
+  const value = cred.type === "api_key" ? cred.key : cred.token;
+  return value?.trim()
+    ? { apiKey: value, source: "plaintext", discoveryApiKey: toDiscoveryApiKey(value) }
+    : undefined;
 }
 
 /** Resolves the first usable API key from matching auth profiles. */
@@ -349,7 +318,7 @@ export function resolveMissingProviderApiKey(params: {
     }
   }
   if (authMode === "aws-sdk") {
-    const awsEnvVar = resolveAwsSdkApiKeyVarName(params.env);
+    const awsEnvVar = resolveAwsSdkEnvVarName(params.env);
     if (!awsEnvVar) {
       return params.provider;
     }

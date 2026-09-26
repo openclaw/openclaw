@@ -330,6 +330,7 @@ class ChatControllerSessionPolicyTest {
         updatedAtMs = 1L,
         displayName = "Phone",
         label = "Daily",
+        autoLabel = "Device fallback",
         category = "Work",
         pinned = true,
         archived = false,
@@ -343,6 +344,7 @@ class ChatControllerSessionPolicyTest {
     val merged = mergeChatSessionEntry(existing, next)
 
     assertEquals("Daily", merged.label)
+    assertEquals("Device fallback", merged.autoLabel)
     assertEquals("Work", merged.category)
     assertEquals(true, merged.pinned)
     assertEquals(false, merged.archived)

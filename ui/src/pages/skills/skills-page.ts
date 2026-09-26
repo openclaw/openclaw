@@ -1,15 +1,18 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
-import { html, type PropertyValues } from "lit";
+import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { AgentsListResult, SkillStatusReport } from "../../api/types.ts";
-import { pathForPluginsHubTab } from "../../app-route-paths.ts";
+import type { SkillStatusReport } from "../../api/types.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { icons } from "../../components/icons.ts";
+import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { searchClawHub, type ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
@@ -35,20 +38,23 @@ import {
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { PluginIconController } from "../plugins/plugin-icon-controller.ts";
 import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "../plugins/plugins-hub.ts";
 import { SkillLibraryController } from "./library-controller.ts";
-import { renderSkillLibrary } from "./library-view.ts";
-import { renderSkills, type SkillDetailTab, type SkillsStatusFilter } from "./view.ts";
+import { renderSkillLibrary, renderSkillLibraryDialogs } from "./library-view.ts";
+import type { SkillDetailTab, SkillsStatusFilter } from "./view-types.ts";
+import { renderSkills } from "./view.ts";
 
 export type SkillsRouteData = {
   gateway: ApplicationContext["gateway"];
   gatewaySnapshot: ApplicationGatewaySnapshot;
   agents: ApplicationContext["agents"];
-  agentsList: AgentsListResult | null;
   selectedAgentId: string | null;
+  selectionIntentRevision: number;
   report: SkillStatusReport | null;
   error: string | null;
+  clawhubRef?: string;
 };
 
 class SkillsPage extends OpenClawLightDomElement {
@@ -56,6 +62,7 @@ class SkillsPage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData?: SkillsRouteData;
+  @property({ attribute: false }) surface: "discovery" | "settings" = "settings";
 
   @state() skillsAgentId: string | null = null;
   @state() skillsAgentRevision = 0;
@@ -85,6 +92,7 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() skillCardContentKeys: Record<string, string> = {};
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
+  @state() clawhubIconUrls: Record<string, string> = {};
 
   get runtimeConfig(): ApplicationContext["runtimeConfig"] {
     return this.context.runtimeConfig;
@@ -107,35 +115,66 @@ class SkillsPage extends OpenClawLightDomElement {
     invalidateRequests: () => this.resetLoadedSkillState(),
     ensureInitialData: () => this.ensureInitialData(),
   });
+  private readonly clawhubIcons = new PluginIconController({
+    kind: "catalog",
+    getFetchContext: () => ({
+      resourceBasePath: this.context.resourceBasePath,
+      gatewayUrl: this.context.gateway.connection.gatewayUrl,
+      auth: {
+        hello: this.context.gateway.snapshot.hello,
+        settings: { token: this.context.gateway.connection.token },
+        password: this.context.gateway.connection.password,
+      },
+    }),
+    isConnected: () => this.gateway.connected,
+    onUrlsChange: (urls) => {
+      this.clawhubIconUrls = urls;
+    },
+  });
   private readonly library = new SkillLibraryController(
     this,
     this.gateway,
-    () => this.skillsAgentId ?? this.context.agents.state.agentsList?.defaultId ?? null,
+    () => this.skillsAgentId,
     () => this.refreshPage(),
   );
   private readonly clawhubSearchTask = new Task(this, {
-    autoRun: false,
     args: () =>
       [
-        this.gateway.connected ? this.gateway.client : null,
+        this.gateway.connected && !this.clawhubSearchTimer && this.surface === "discovery"
+          ? this.gateway.client
+          : null,
         this.debouncedClawHubSearchQuery,
+        this.gateway.epoch,
       ] as const,
     task: ([client, query], { signal }) =>
-      client && query ? searchClawHub(client, query, signal) : initialState,
+      client ? searchClawHub(client, query, signal) : initialState,
   });
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.agents,
-    (agents) => {
-      const cleanup = agents.subscribe(() => {
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.agents,
+      (agents) => {
+        const cleanup = agents.subscribe(() => {
+          this.reconcileAgentState();
+          this.ensureInitialData();
+          this.requestUpdate();
+        });
         this.reconcileAgentState();
         this.ensureInitialData();
-        this.requestUpdate();
-      });
-      this.reconcileAgentState();
-      this.ensureInitialData();
-      return cleanup;
-    },
-  );
+        return cleanup;
+      },
+    )
+    .watch(
+      () => this.context && this.agentSelection,
+      (selection, notify) => selection.subscribe(notify),
+      () => {
+        const previous = this.skillsAgentId;
+        this.reconcileAgentState();
+        if (this.routeDataInitialized && previous !== this.skillsAgentId) {
+          this.routeDataEnabled = false;
+          this.ensureInitialData();
+        }
+      },
+    );
 
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
@@ -144,30 +183,52 @@ class SkillsPage extends OpenClawLightDomElement {
     }
   }
 
+  override updated() {
+    this.clawhubIcons.syncCatalog(
+      [],
+      [
+        ...(this.clawhubSearchResults ?? []).flatMap((result) =>
+          result.icon ? [result.icon] : [],
+        ),
+        ...(this.clawhubDetail?.skill?.icon ? [this.clawhubDetail.skill.icon] : []),
+        ...(this.clawhubDetail?.owner?.image ? [this.clawhubDetail.owner.image] : []),
+      ],
+    );
+  }
+
   override disconnectedCallback() {
     this.subscriptions.clear();
     if (this.clawhubSearchTimer) {
       clearTimeout(this.clawhubSearchTimer);
       this.clawhubSearchTimer = null;
     }
+    this.clawhubIcons.reset();
     super.disconnectedCallback();
+  }
+
+  private get agentSelection() {
+    return this.surface === "settings"
+      ? this.context.settingsAgentSelection
+      : this.context.agentSelection;
   }
 
   private reconcileAgentState() {
     const agentState = this.context.agents.state;
-    if (agentState.agentsList) {
-      const previousAgentId = this.skillsAgentId;
+    const previousAgentId = this.skillsAgentId;
+    setSkillsAgentId(this, this.agentSelection.state.selectedId);
+    if (this.surface === "discovery" && agentState.agentsList) {
       reconcileSkillsAgentId(this, agentState.agentsList);
-      if (previousAgentId !== this.skillsAgentId) {
-        this.skillsDetailKey = null;
-        this.skillsDetailTab = "overview";
-      }
+    }
+    if (previousAgentId !== this.skillsAgentId) {
+      this.skillsDetailKey = null;
+      this.skillsDetailTab = "overview";
+      closeClawHubDetail(this);
     }
   }
 
   private resetLoadedSkillState() {
     this.library.reset();
-    void this.clawhubSearchTask.run([null, ""]);
+    this.clawhubSearchTask.abort();
     if (this.clawhubSearchTimer) {
       clearTimeout(this.clawhubSearchTimer);
       this.clawhubSearchTimer = null;
@@ -185,7 +246,7 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillMessages = {};
     this.skillsDetailKey = null;
     this.skillsDetailTab = "overview";
-    this.debouncedClawHubSearchQuery = "";
+    this.debouncedClawHubSearchQuery = this.clawhubSearchQuery.trim();
     this.clawhubDetail = null;
     this.clawhubDetailRef = null;
     this.clawhubDetailLoading = false;
@@ -198,6 +259,7 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillCardContentKeys = {};
     this.skillCardLoadingKey = null;
     this.skillCardErrors = {};
+    this.clawhubIcons.reset();
   }
 
   private applyRouteData() {
@@ -211,15 +273,31 @@ class SkillsPage extends OpenClawLightDomElement {
       this.routeDataEnabled = false;
       return;
     }
-    if (this.skillsAgentId && data.selectedAgentId && data.selectedAgentId !== this.skillsAgentId) {
+    const selection = this.agentSelection.state;
+    // A preload may finish after another explicit choice, including an A→B→A switch.
+    if (this.agentSelection.intentRevision !== data.selectionIntentRevision) {
+      this.routeDataEnabled = false;
+      this.reconcileAgentState();
       return;
     }
-    this.skillsAgentId = data.selectedAgentId ?? this.skillsAgentId;
+    setSkillsAgentId(this, data.selectedAgentId);
+    if (data.selectedAgentId && selection.selectedId !== data.selectedAgentId) {
+      this.agentSelection.set(data.selectedAgentId);
+    }
+    this.reconcileAgentState();
+    if (this.skillsAgentId !== data.selectedAgentId) {
+      this.routeDataEnabled = false;
+      return;
+    }
+    this.routeDataEnabled = true;
     this.skillsLoading = false;
     this.skillsReport = data.report;
     this.skillsError = data.error;
     if (data.report) {
       void loadClawHubSecurityVerdicts(this, data.report);
+    }
+    if (data.clawhubRef && data.clawhubRef !== this.clawhubDetailRef) {
+      void loadClawHubDetail(this, data.clawhubRef);
     }
   }
 
@@ -246,14 +324,6 @@ class SkillsPage extends OpenClawLightDomElement {
     if (!this.skillsReport && !this.skillsLoading) {
       void loadSkills(this);
     }
-    if (
-      this.clawhubSearchQuery.trim() &&
-      this.clawhubSearchTask.status !== TaskStatus.PENDING &&
-      this.clawhubSearchResults === null &&
-      this.clawhubSearchError === null
-    ) {
-      this.runClawHubSearch(this.clawhubSearchQuery);
-    }
   }
 
   private async loadAgents() {
@@ -274,38 +344,18 @@ class SkillsPage extends OpenClawLightDomElement {
     await Promise.all([refreshSkills(this, () => this.loadAgents()), this.library.load()]);
   }
 
-  private changeAgent(agentId: string) {
-    if (this.skillOperation || this.skillsLoading) {
-      return;
-    }
-    const previousAgentId = this.skillsAgentId;
-    setSkillsAgentId(this, agentId);
-    if (previousAgentId !== this.skillsAgentId) {
-      this.skillsDetailKey = null;
-      this.skillsDetailTab = "overview";
-    }
-    void loadSkills(this, { clearMessages: true });
-  }
-
   private changeClawHubQuery(query: string) {
     this.clawhubSearchQuery = query;
     this.clawhubInstallMessage = null;
-    this.debouncedClawHubSearchQuery = "";
-    void this.clawhubSearchTask.run([null, ""]);
     if (this.clawhubSearchTimer) {
       clearTimeout(this.clawhubSearchTimer);
     }
-    this.clawhubSearchTimer = setTimeout(() => this.runClawHubSearch(query), 300);
-  }
-
-  private runClawHubSearch(query: string) {
-    const normalizedQuery = query.trim();
-    this.debouncedClawHubSearchQuery = normalizedQuery;
-    if (!normalizedQuery || !this.gateway.connected || !this.gateway.client) {
-      void this.clawhubSearchTask.run([null, ""]);
-      return;
-    }
-    void this.clawhubSearchTask.run([this.gateway.client, normalizedQuery]);
+    this.clawhubSearchTimer = setTimeout(() => {
+      this.clawhubSearchTimer = null;
+      this.debouncedClawHubSearchQuery = query.trim();
+      this.requestUpdate();
+    }, 300);
+    this.requestUpdate();
   }
 
   get clawhubSearchResults(): ClawHubSearchResult[] | null {
@@ -316,10 +366,7 @@ class SkillsPage extends OpenClawLightDomElement {
   }
 
   get clawhubSearchLoading(): boolean {
-    return (
-      this.debouncedClawHubSearchQuery.length > 0 &&
-      this.clawhubSearchTask.status === TaskStatus.PENDING
-    );
+    return this.clawhubSearchTimer !== null || this.clawhubSearchTask.status === TaskStatus.PENDING;
   }
 
   get clawhubSearchError(): string | null {
@@ -352,71 +399,96 @@ class SkillsPage extends OpenClawLightDomElement {
     );
   }
 
+  private canInstallFromClawHub(): boolean {
+    // The library owns the destination; a pending or failed first load is not workspace consent.
+    return (
+      this.library.list !== null &&
+      !this.library.loading &&
+      (this.library.showWorkspace
+        ? this.canInstallSkills()
+        : this.library.canWrite && Boolean(this.library.list.profileId))
+    );
+  }
+
   private selectHubTab(tab: PluginsHubTab) {
     if (tab === "skills") {
       return;
     }
-    if (tab === "workshop") {
-      this.context.navigate("skill-workshop");
-      return;
-    }
-    this.context.navigate("plugins", {
-      pathname: pathForPluginsHubTab(tab, this.context.basePath),
-    });
+    this.context.navigate(tab);
   }
 
   override render() {
     const agents = this.context.agents.state;
     const error = this.skillsError ?? agents.agentsError;
     return html`
-      ${renderPluginsHubHeader({
-        active: "skills",
-        onSelect: (tab) => this.selectHubTab(tab),
-      })}
+      ${
+        this.surface === "discovery"
+          ? renderPluginsHubHeader({
+              active: "skills",
+              onSelect: (tab) => this.selectHubTab(tab),
+              secondaryAction: {
+                label: t("skillDiscovery.settings"),
+                icon: icons.settings,
+                onClick: () =>
+                  this.context.navigate("skill-settings", {
+                    search: this.skillsAgentId
+                      ? `?agent=${encodeURIComponent(this.skillsAgentId)}`
+                      : "",
+                  }),
+              },
+            })
+          : renderSettingsPageHeader({
+              title: titleForRoute("skill-settings"),
+              subtitle: subtitleForRoute("skill-settings"),
+            })
+      }
       ${renderSettingsWorkspace(html`
-        <wa-tab-panel
-          id=${PLUGINS_HUB_PANEL_ID}
-          name="skills"
-          active
-          aria-labelledby="plugins-tab-skills"
+        <div
+          id=${this.surface === "discovery" ? PLUGINS_HUB_PANEL_ID : nothing}
+          role=${this.surface === "discovery" ? "tabpanel" : nothing}
+          aria-labelledby=${this.surface === "discovery" ? "plugins-tab-skills" : nothing}
         >
           ${renderSkills({
-            library: renderSkillLibrary(this.library),
+            state: this,
+            surface: this.surface,
+            libraryEntries: this.library.list?.entries ?? [],
+            onLibraryOpen: (skillId) => void this.library.open(skillId),
+            library:
+              this.surface === "discovery"
+                ? html`
+                    ${this.library.error && !this.library.draft && !this.library.importOpen ? html`<div class="callout danger" role="alert">${this.library.error}</div>` : nothing}
+                    ${this.library.notice && !this.library.draft ? html`<div class="callout success" role="status">${this.library.notice}</div>` : nothing}
+                    ${renderSkillLibraryDialogs(this.library)}
+                  `
+                : renderSkillLibrary(
+                    this.library,
+                    html`
+                      <button
+                        type="button"
+                        class="btn"
+                        @click=${() =>
+                          this.context.navigate("skills", {
+                            search: this.skillsAgentId
+                              ? `?agent=${encodeURIComponent(this.skillsAgentId)}`
+                              : "",
+                          })}
+                      >
+                        ${icons.search} ${t("skillDiscovery.search")}
+                      </button>
+                      <button
+                        type="button"
+                        class="btn"
+                        @click=${() => this.context.navigate("skill-workshop")}
+                      >
+                        ${t("pluginsPage.workshopTab")}
+                      </button>
+                    `,
+                  ),
             showInventory: this.library.showWorkspace,
-            personalImport: !this.library.showWorkspace,
             canUpdate: this.canUpdateSkills(),
-            canInstall: this.library.showWorkspace
-              ? this.canInstallSkills()
-              : this.library.canWrite && Boolean(this.library.list?.profileId),
-            connected: this.gateway.connected,
+            canInstall: this.canInstallFromClawHub(),
             loading: this.skillsLoading || agents.agentsLoading || this.library.busy,
-            report: this.skillsReport,
-            agentsList: agents.agentsList,
-            selectedAgentId: this.skillsAgentId ?? agents.agentsList?.defaultId ?? null,
             error,
-            filter: this.skillsFilter,
-            statusFilter: this.skillsStatusFilter,
-            edits: this.skillEdits,
-            messages: this.skillMessages,
-            operation: this.skillOperation,
-            detailKey: this.skillsDetailKey,
-            detailTab: this.skillsDetailTab,
-            clawhubVerdicts: this.clawhubVerdicts,
-            clawhubVerdictsLoading: this.clawhubVerdictsLoading,
-            clawhubVerdictsError: this.clawhubVerdictsError,
-            skillCardContents: this.skillCardContents,
-            skillCardLoadingKey: this.skillCardLoadingKey,
-            skillCardErrors: this.skillCardErrors,
-            clawhubQuery: this.clawhubSearchQuery,
-            clawhubResults: this.clawhubSearchResults,
-            clawhubSearchLoading: this.clawhubSearchLoading,
-            clawhubSearchError: this.clawhubSearchError,
-            clawhubDetail: this.clawhubDetail,
-            clawhubDetailRef: this.clawhubDetailRef,
-            clawhubDetailLoading: this.clawhubDetailLoading,
-            clawhubDetailError: this.clawhubDetailError,
-            clawhubInstallMessage: this.clawhubInstallMessage,
-            onAgentChange: (agentId) => this.changeAgent(agentId),
             onFilterChange: (next) => (this.skillsFilter = next),
             onStatusFilterChange: (next) => (this.skillsStatusFilter = next),
             onRefresh: () => void this.refreshPage(),
@@ -450,18 +522,21 @@ class SkillsPage extends OpenClawLightDomElement {
             onClawHubDetailOpen: (ref) => void loadClawHubDetail(this, ref),
             onClawHubDetailClose: () => closeClawHubDetail(this),
             onClawHubInstall: (ref, version) => {
+              if (!this.canInstallFromClawHub()) {
+                return;
+              }
               if (!this.library.showWorkspace) {
                 this.clawhubDetailRef = null;
                 this.library.importSource = { slug: ref, version };
                 this.library.importSlug = "";
                 this.library.importOpen = true;
                 this.requestUpdate();
-              } else if (this.canInstallSkills()) {
+              } else {
                 void installFromClawHub(this, ref, version);
               }
             },
           })}
-        </wa-tab-panel>
+        </div>
       `)}
     `;
   }

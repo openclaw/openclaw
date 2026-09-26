@@ -77,15 +77,18 @@ export function resolveSystemAgentRescuePolicy(
   const sandboxActive = resolveScopedSandboxMode(input.cfg, input.agentId) !== "off";
   const yolo = !sandboxActive && isYoloHostPosture(input.cfg, input.agentId);
   const enabled = yolo;
+  const denied = {
+    allowed: false,
+    enabled,
+    ownerDmOnly,
+    pendingTtlMinutes,
+    yolo,
+    sandboxActive,
+  } as const;
 
   if (sandboxActive) {
     return {
-      allowed: false,
-      enabled,
-      ownerDmOnly,
-      pendingTtlMinutes,
-      yolo,
-      sandboxActive,
+      ...denied,
       reason: "sandbox-active",
       message:
         "OpenClaw rescue is blocked because OpenClaw sandboxing is active. Fix the install locally or disable sandboxing before using remote rescue.",
@@ -93,36 +96,21 @@ export function resolveSystemAgentRescuePolicy(
   }
   if (!enabled) {
     return {
-      allowed: false,
-      enabled,
-      ownerDmOnly,
-      pendingTtlMinutes,
-      yolo,
-      sandboxActive,
+      ...denied,
       reason: "disabled",
       message: "OpenClaw rescue requires YOLO host posture with sandboxing off.",
     };
   }
   if (!input.senderIsOwner) {
     return {
-      allowed: false,
-      enabled,
-      ownerDmOnly,
-      pendingTtlMinutes,
-      yolo,
-      sandboxActive,
+      ...denied,
       reason: "not-owner",
       message: "OpenClaw rescue only accepts commands from an OpenClaw owner.",
     };
   }
   if (ownerDmOnly && !input.isDirectMessage) {
     return {
-      allowed: false,
-      enabled,
-      ownerDmOnly,
-      pendingTtlMinutes,
-      yolo,
-      sandboxActive,
+      ...denied,
       reason: "not-direct-message",
       message: "OpenClaw rescue is restricted to owner DMs by default.",
     };

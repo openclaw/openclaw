@@ -127,7 +127,9 @@ export async function runLocalSessionsCleanup(
     let result: CleanupRunResult;
     try {
       result = await withPluginRuntimeRegistryScope(owners.registry, () =>
-        runSessionsCleanup({ ...params, targets: [target] }),
+        // Reuse the CLI's admitted handle instead of rescanning the whole database
+        // on a fresh reclamation Worker connection for every historical session.
+        runSessionsCleanup({ ...params, targets: [target], reclamationMode: "in-process" }),
       );
     } catch (cause) {
       // The local runner changes plugin scope per store, so it owns combining
@@ -150,7 +152,7 @@ export async function runLocalSessionsCleanup(
   }
   const first = results[0];
   if (!first) {
-    return await runSessionsCleanup(params);
+    return await runSessionsCleanup({ ...params, reclamationMode: "in-process" });
   }
   return {
     mode: first.mode,

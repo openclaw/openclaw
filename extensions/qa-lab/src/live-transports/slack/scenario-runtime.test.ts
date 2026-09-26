@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runSlackScenario } from "./scenario-runtime.js";
 import type { SlackQaScenarioImplementation, SlackQaScenarioRun } from "./slack-live.contracts.js";
-import { slackQaMpimAppMentionDedupeScenario } from "./slack-live.scenario-implementations.js";
+import {
+  slackQaChartPresentationNativeScenario,
+  slackQaMpimAppMentionDedupeScenario,
+  slackQaTablePresentationNativeScenario,
+} from "./slack-live.scenario-implementations.js";
 
 const { runSlackApprovalScenario, runSlackCodexApprovalScenario } = vi.hoisted(() => ({
   runSlackApprovalScenario: vi.fn(),
@@ -123,6 +127,65 @@ describe("Slack scenario runtime capture merge", () => {
     vi.useRealTimers();
     vi.clearAllMocks();
   });
+
+  it.each([
+    { kind: "chart", implementation: slackQaChartPresentationNativeScenario },
+    { kind: "table", implementation: slackQaTablePresentationNativeScenario },
+  ])(
+    "captures the native $kind write before waiting for its final reply",
+    async ({ kind, implementation }) => {
+      const builtRun = implementation.buildRun("U_SUT");
+      if (
+        builtRun.kind === "approval" ||
+        builtRun.kind === "codex-approval" ||
+        builtRun.kind === "direct-transport"
+      ) {
+        throw new Error(`expected Slack native ${kind} message scenario`);
+      }
+      const summaryText = builtRun.input.match(
+        new RegExp(`SLACK_QA_${kind.toUpperCase()}_SUMMARY_[A-Z0-9]+`, "u"),
+      )?.[0];
+      const finalMarker = builtRun.matchText;
+      if (!summaryText) {
+        throw new Error(`missing Slack native ${kind} summary marker`);
+      }
+      const readMessageWrites = vi
+        .fn()
+        .mockResolvedValue([{ channelId: "C_NATIVE", text: summaryText, ts: "2.000000" }]);
+      const history = vi.fn().mockResolvedValue({
+        messages: [{ bot_id: "B_SUT", text: finalMarker, ts: "3.000000", user: "U_SUT" }],
+      });
+      const run = { ...builtRun, afterReply: undefined };
+      const environment = {
+        channelId: "C_NATIVE",
+        configureScenario: vi.fn().mockResolvedValue({
+          cfg: {},
+          primaryModel: "mock-openai/gpt-5.6-luna",
+          run,
+        }),
+        context: {
+          driverClient: {
+            chat: {
+              postMessage: vi.fn().mockResolvedValue({ channel: "C_NATIVE", ts: "1.000000" }),
+            },
+          },
+          sutReadClient: { conversations: { history } },
+        },
+        getMessageWriteCursor: () => 0,
+        observedMessages: [],
+        readMessageWrites,
+        scenario: { id: `slack-${kind}-presentation-native`, timeoutMs: 1_000, title: kind },
+        sutIdentity: { botId: "B_SUT", userId: "U_SUT" },
+      };
+
+      await expect(runSlackScenario(environment as never, implementation)).resolves.toEqual(
+        expect.objectContaining({ details: expect.stringContaining("reply matched") }),
+      );
+      expect(readMessageWrites.mock.invocationCallOrder[0]).toBeLessThan(
+        history.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    },
+  );
 
   it("returns structured RTT evidence for a matched reply", async () => {
     vi.useFakeTimers();

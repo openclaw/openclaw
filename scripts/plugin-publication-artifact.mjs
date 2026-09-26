@@ -1133,6 +1133,18 @@ export function verifyPluginPublicationArtifact(params) {
   if (!statSync(outputPath).isFile()) {
     throw new Error(`Verified plugin tarball was not written: ${outputPath}`);
   }
+  if (params.verificationOutput) {
+    if (!normalized.sourcePackageJsonSha256) {
+      throw new Error("A publication qualification receipt requires the exact source manifest.");
+    }
+    // Carry the consumed tuple, including retained producer attempts. Parent
+    // verification must not rediscover a different artifact or trust local paths.
+    writeFileSync(
+      params.verificationOutput,
+      `${JSON.stringify({ ...normalized, ...expectedBinding })}\n`,
+      { flag: "wx", mode: 0o600 },
+    );
+  }
   return {
     artifactDigest: expectedArtifactDigest,
     artifactId,
@@ -1251,6 +1263,7 @@ export function main(argv = process.argv.slice(2)) {
     workflowRunMetadataPath: values.workflowRunMetadata,
     runStatePolicy: values.runStatePolicy,
     workflowSha: values.workflowSha,
+    verificationOutput: values.verificationOutput,
   });
   if (values.githubOutput) {
     appendGithubOutput(values.githubOutput, {

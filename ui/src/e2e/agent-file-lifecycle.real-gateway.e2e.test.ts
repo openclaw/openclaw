@@ -2,8 +2,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import type WaSelect from "@awesome.me/webawesome/dist/components/select/select.js";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
@@ -15,12 +13,18 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
   captureAgentFileScreenshot,
   selectAgentFileWorkspace,
 } from "./agent-file-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent file lifecycle with a real Gateway",
@@ -40,6 +44,30 @@ const refreshInventoryArgs = [
   "--params",
   JSON.stringify({ agentId: "main", view: "all", refresh: true }),
 ];
+async function refreshInventory() {
+  let result = await catalogInstance.cli(refreshInventoryArgs);
+  expect(result.code, result.stderr).toBe(0);
+  let catalog: ModelCatalogResult = JSON.parse(result.stdout);
+  // Refresh can return the previous inventory while discovery continues.
+  await expect
+    .poll(async () => {
+      if (catalog.pendingProviders?.length) {
+        result = await catalogInstance.cli([
+          "gateway",
+          "call",
+          "models.list",
+          "--json",
+          "--params",
+          JSON.stringify({ agentId: "main", view: "all" }),
+        ]);
+        expect(result.code, result.stderr).toBe(0);
+        catalog = JSON.parse(result.stdout);
+      }
+      return catalog.pendingProviders ?? [];
+    })
+    .toEqual([]);
+  return result;
+}
 const catalogModels = (id: string) => [
   { id: "anchor", name: "Anchor" },
   { id: "selected", name: "Selected" },
@@ -101,9 +129,6 @@ const catalogSuite = createControlUiE2eSuite({
     };
     try {
       await catalogInstance.startGateway();
-      const initialInventory = await catalogInstance.cli(refreshInventoryArgs);
-      expect(initialInventory.code, initialInventory.stderr).toBe(0);
-      expect(initialInventory.stdout).toContain("inventory-before");
       return {
         baseUrl: `http://127.0.0.1:${catalogInstance.port}/`,
         close,
@@ -134,11 +159,11 @@ catalogSuite.define(() => {
     url.hash = new URL(browserUrl).hash;
     const frames: unknown[] = [];
     const commands: unknown[] = [];
-    const metadataRequests = new Set<string>();
+    const catalogRequests = new Set<string>();
     const mutations: string[] = [];
-    let rejectMetadata = false;
-    let holdMetadata = false;
-    const heldMetadata: Array<() => void> = [];
+    let rejectCatalog = false;
+    let holdCatalog = false;
+    const heldCatalogs: Array<() => void> = [];
     const publish = async (id: string) => {
       const args = [
         "config",
@@ -153,12 +178,15 @@ catalogSuite.define(() => {
       expect(result.code, result.stderr).toBe(0);
     };
     try {
+      const initialInventory = await refreshInventory();
+      expect(initialInventory.code, initialInventory.stderr).toBe(0);
+      expect(initialInventory.stdout).toContain("inventory-before");
       await catalogSuite.withPage(
         {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 1000, width: 1440 },
-          recordVideo: { dir: catalogSuite.artifactDir },
+          ...(captureEnabled ? { recordVideo: { dir: catalogSuite.artifactDir } } : {}),
         },
         async ({ page }) => {
           await page.routeWebSocket(`ws://127.0.0.1:${owner.port}/**`, (socket) => {
@@ -167,8 +195,8 @@ catalogSuite.define(() => {
               const frame = requireRecord(JSON.parse(message.toString()));
               if (frame.type === "req" && frame.method !== "connect") {
                 frames.push({ direction: "sent", frame });
-                if (frame.method === "chat.metadata" && typeof frame.id === "string") {
-                  metadataRequests.add(frame.id);
+                if (frame.method === "models.list" && typeof frame.id === "string") {
+                  catalogRequests.add(frame.id);
                 }
                 if (
                   ["config.set", "config.patch", "config.apply", "agents.update"].includes(
@@ -182,21 +210,21 @@ catalogSuite.define(() => {
             });
             server.onMessage((message) => {
               const frame = requireRecord(JSON.parse(message.toString()));
-              const metadataReply = typeof frame.id === "string" && metadataRequests.has(frame.id);
+              const catalogReply = typeof frame.id === "string" && catalogRequests.has(frame.id);
               if (
-                metadataReply ||
+                catalogReply ||
                 frame.event === "config.changed" ||
                 frame.event === "chat.metadata.changed"
               ) {
                 frames.push({
                   direction: "received",
                   frame,
-                  transportFailure: metadataReply && rejectMetadata,
+                  transportFailure: catalogReply && rejectCatalog,
                 });
               }
-              if (metadataReply && holdMetadata) {
-                heldMetadata.push(() => socket.send(message));
-              } else if (metadataReply && rejectMetadata) {
+              if (catalogReply && holdCatalog) {
+                heldCatalogs.push(() => socket.send(message));
+              } else if (catalogReply && rejectCatalog) {
                 socket.send(
                   JSON.stringify({
                     type: "res",
@@ -213,19 +241,25 @@ catalogSuite.define(() => {
           await page.goto(url.toString());
           await waitForControlUiGatewayReady(page);
           const editor = page.locator("openclaw-agents-page");
-          const picker = editor.locator(".model-picker__select");
+          const picker = editor.locator(
+            'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
+          );
           await expect
-            .poll(() => picker.locator('wa-option[value="fixture/retiring"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
             .toBe(1);
-          await editor
-            .locator(".agent-identity-editor__fields input[maxlength='64']")
-            .fill("Keep this identity draft");
-          await picker.click();
-          await picker.locator('wa-option[value="fixture/selected"]').click();
+          const identityName = editor.locator(
+            ".agent-identity-editor__fields input[maxlength='64']",
+          );
+          // Identity hydration can replace the selection between fill's browser and keyboard steps.
+          await expect.poll(() => identityName.inputValue()).toBe("Assistant");
+          await identityName.fill("Keep this identity draft");
+          expect(await identityName.inputValue()).toBe("Keep this identity draft");
+          await picker.locator(".picker-select__trigger").click();
+          await picker.locator('[role="option"][data-value="fixture/selected"]').click();
           const fallbackInput = editor.locator("openclaw-multi-select.agent-fallbacks input");
           await fallbackInput.fill("fixture/anchor");
           await fallbackInput.press("Enter");
-          const selected = () => picker.evaluate((element) => (element as WaSelect).value);
+          const selected = () => pickerValue(picker);
           await expect.poll(selected).toBe("fixture/selected");
           await expect.poll(() => mutations.length).toBeGreaterThan(0);
           await expect
@@ -240,69 +274,119 @@ catalogSuite.define(() => {
             })
             .toEqual({ primary: "fixture/selected", fallbacks: ["fixture/anchor"] });
           const writesBeforePublication = [...mutations];
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          }
 
           await publish("published");
           await expect
-            .poll(() => picker.locator('wa-option[value="fixture/published"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
             .toBe(1);
-          expect(await picker.locator('wa-option[value="fixture/retiring"]').count()).toBe(0);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+          expect(
+            await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
+          ).toBe(0);
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+          }
 
           inventoryModel = "inventory-after";
-          const refreshed = await owner.cli(refreshInventoryArgs);
-          commands.push({ args: refreshInventoryArgs, ...refreshed });
+          const refreshed = await refreshInventory();
+          commands.push({ args: refreshInventoryArgs, publishedInventory: refreshed });
           expect(refreshed.code, refreshed.stderr).toBe(0);
           expect(refreshed.stdout).toContain("inventory-after");
           await expect
-            .poll(() => picker.locator('wa-option[value="ollama/inventory-after"]').count())
+            .poll(() =>
+              picker.locator('[role="option"][data-value="ollama/inventory-after"]').count(),
+            )
             .toBe(1);
-          expect(await picker.locator('wa-option[value="ollama/inventory-before"]').count()).toBe(
-            0,
-          );
+          expect(
+            await picker.locator('[role="option"][data-value="ollama/inventory-before"]').count(),
+          ).toBe(0);
 
-          holdMetadata = true;
+          const settleCatalogFrames = () =>
+            page.evaluate(async () => {
+              // SAFETY: Gateway readiness above establishes this app's connected runtime.
+              const app = document.querySelector("openclaw-app") as HTMLElement & {
+                runtime: { context: { gateway: { snapshot: { client: GatewayBrowserClient } } } };
+              };
+              await app.runtime.context.gateway.snapshot.client.request("health", {});
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+              });
+            });
+
+          holdCatalog = true;
           inventoryModel = "inventory-held";
-          commands.push(await owner.cli(refreshInventoryArgs));
-          await expect.poll(() => heldMetadata.length).toBeGreaterThan(0);
-          holdMetadata = false;
+          commands.push(await refreshInventory());
+          await expect.poll(() => heldCatalogs.length).toBe(1);
+          const readsWhileHeld = catalogRequests.size;
           inventoryModel = "inventory-latest";
-          commands.push(await owner.cli(refreshInventoryArgs));
-          await expect
-            .poll(() => picker.locator('wa-option[value="ollama/inventory-latest"]').count())
-            .toBe(1);
-          for (const release of heldMetadata) {
+          commands.push(await refreshInventory());
+          await settleCatalogFrames();
+          expect(catalogRequests.size).toBe(readsWhileHeld);
+          expect(heldCatalogs).toHaveLength(1);
+
+          // Release the retired read, but keep its queued replacement behind the wire gate.
+          for (const release of heldCatalogs.splice(0)) {
             release();
           }
-          await page.screenshot({
-            path: path.join(catalogSuite.artifactDir, "latest-publication.png"),
-          });
-          expect(await picker.locator('wa-option[value="ollama/inventory-latest"]').count()).toBe(
-            1,
-          );
-          expect(await picker.locator('wa-option[value="ollama/inventory-held"]').count()).toBe(0);
+          await expect.poll(() => heldCatalogs.length).toBe(1);
+          expect(catalogRequests.size).toBe(readsWhileHeld + 1);
+          await settleCatalogFrames();
+          expect(
+            await picker.locator('[role="option"][data-value="ollama/inventory-held"]').count(),
+          ).toBe(0);
+          expect(
+            await picker.locator('[role="option"][data-value="ollama/inventory-after"]').count(),
+          ).toBe(1);
+          holdCatalog = false;
+          for (const release of heldCatalogs.splice(0)) {
+            release();
+          }
+          await expect
+            .poll(() =>
+              picker.locator('[role="option"][data-value="ollama/inventory-latest"]').count(),
+            )
+            .toBe(1);
+          if (captureEnabled) {
+            await page.screenshot({
+              path: path.join(catalogSuite.artifactDir, "latest-publication.png"),
+            });
+          }
+          expect(
+            await picker.locator('[role="option"][data-value="ollama/inventory-latest"]').count(),
+          ).toBe(1);
+          expect(
+            await picker.locator('[role="option"][data-value="ollama/inventory-held"]').count(),
+          ).toBe(0);
 
-          rejectMetadata = true;
-          await publish("held");
+          rejectCatalog = true;
+          // Refresh the same catalog owner; a config write retires its display facts.
+          inventoryModel = "inventory-read-failure";
+          const failedReadRefresh = await refreshInventory();
+          commands.push({ args: refreshInventoryArgs, publishedInventory: failedReadRefresh });
+          expect(failedReadRefresh.stdout).toContain("inventory-read-failure");
           const error = editor
             .getByRole("alert")
             .filter({ hasText: "Catalog transport unavailable" });
           await error.waitFor({ state: "visible" });
-          expect(await picker.locator('wa-option[value="fixture/published"]').count()).toBe(1);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "read-failure.png") });
+          expect(
+            await picker.locator('[role="option"][data-value="fixture/published"]').count(),
+          ).toBe(1);
+          if (captureEnabled) {
+            await page.screenshot({
+              path: path.join(catalogSuite.artifactDir, "read-failure.png"),
+            });
+          }
 
-          rejectMetadata = false;
+          rejectCatalog = false;
           await publish("recovered");
           await expect
-            .poll(() => picker.locator('wa-option[value="fixture/recovered"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/recovered"]').count())
             .toBe(1);
           await error.waitFor({ state: "hidden" });
           expect(await selected()).toBe("fixture/selected");
-          expect(
-            await editor
-              .locator(".agent-identity-editor__fields input[maxlength='64']")
-              .inputValue(),
-          ).toBe("Keep this identity draft");
+          expect(await identityName.inputValue()).toBe("Keep this identity draft");
           expect(
             await editor
               .locator(".multi-select__chip")
@@ -325,7 +409,9 @@ catalogSuite.define(() => {
           commands.push(persisted);
           expect(persisted.code, persisted.stderr).toBe(0);
           expect(JSON.parse(persisted.stdout)).toBe("fixture/anchor");
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+          }
         },
       );
     } finally {
@@ -447,6 +533,63 @@ suite.define(() => {
               .poll(() => readFile(path.join(mainWorkspace, "AGENTS.md"), "utf8"))
               .toBe("# Saved through real Gateway\n");
             await captureAgentFileScreenshot(page, "07-real-gateway-main-save.png");
+
+            const agentsFile = path.join(mainWorkspace, "AGENTS.md");
+            const appended = "# Saved through real Gateway\n- agent appended a memory\n";
+            await writeFile(agentsFile, appended, "utf8");
+            await editor.fill("# Operator draft that never saw the memory\n");
+            await save.click();
+            const conflict = page.locator(".callout.danger");
+            await expect.poll(() => conflict.isVisible()).toBe(true);
+            expect(await readFile(agentsFile, "utf8")).toBe(appended);
+            await captureAgentFileScreenshot(page, "08-real-gateway-stale-save-refused.png");
+
+            await save.click();
+            await expect.poll(() => conflict.isVisible()).toBe(true);
+            expect(await readFile(agentsFile, "utf8")).toBe(appended);
+
+            await conflict.getByRole("button", { name: "Overwrite" }).click();
+            await expect
+              .poll(() => readFile(agentsFile, "utf8"))
+              .toBe("# Operator draft that never saw the memory\n");
+            await expect.poll(() => conflict.isVisible()).toBe(false);
+
+            const secondAppend = "# Operator draft that never saw the memory\n- second memory\n";
+            await writeFile(agentsFile, secondAppend, "utf8");
+            await editor.fill("# Another operator draft\n");
+            await save.click();
+            await expect.poll(() => conflict.isVisible()).toBe(true);
+            expect(await readFile(agentsFile, "utf8")).toBe(secondAppend);
+            await conflict.getByRole("button", { name: "Reload" }).click();
+            await expect.poll(() => editor.inputValue()).toBe(secondAppend);
+            expect(await readFile(agentsFile, "utf8")).toBe(secondAppend);
+            await captureAgentFileScreenshot(page, "09-real-gateway-conflict-reloaded.png");
+
+            await editor.fill("# Draft typed before the refresh\n");
+            const thirdAppend = `${secondAppend}- third memory\n`;
+            await writeFile(agentsFile, thirdAppend, "utf8");
+            await page
+              .locator(".settings-section__header")
+              .filter({ hasText: "Core Files" })
+              .getByRole("button", { name: "Refresh" })
+              .click();
+            await expect.poll(() => editor.inputValue()).toBe("# Draft typed before the refresh\n");
+            await save.click();
+            await expect.poll(() => conflict.isVisible()).toBe(true);
+            expect(await readFile(agentsFile, "utf8")).toBe(thirdAppend);
+            await captureAgentFileScreenshot(page, "10-real-gateway-refresh-then-save.png");
+
+            await page
+              .locator(".agent-file-header")
+              .getByRole("button", { name: "Reset", exact: true })
+              .click();
+            await expect.poll(() => editor.inputValue()).toBe(thirdAppend);
+            const afterReset = `${thirdAppend}- edited after Reset\n`;
+            await editor.fill(afterReset);
+            await save.click();
+            await expect.poll(() => readFile(agentsFile, "utf8")).toBe(afterReset);
+            await expect.poll(() => conflict.isVisible()).toBe(false);
+            await captureAgentFileScreenshot(page, "11-real-gateway-reset-then-save.png");
           },
         );
       },

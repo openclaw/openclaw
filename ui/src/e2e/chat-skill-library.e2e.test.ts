@@ -230,7 +230,7 @@ suite.define(() => {
       expect(await page.getByLabel("SKILL.md", { exact: true }).inputValue()).toBe(alice.content);
       expect(await page.getByRole("button", { name: "Save skill", exact: true }).count()).toBe(0);
       expect(await page.getByLabel("Retained revision", { exact: true }).count()).toBe(0);
-      const panel = page.locator(".md-preview-dialog__panel");
+      const panel = page.locator(".skill-reader-dialog");
       expect(await panel.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
       expect(await gateway.getRequests("skills.library.activate")).toHaveLength(0);
       await page.getByRole("button", { name: "Close", exact: true }).click();
@@ -238,7 +238,7 @@ suite.define(() => {
       menu = await openSkills(page);
       await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
       await menu.getByRole("menuitem", { name: /^Connectors/u }).click();
-      await menu.getByRole("menuitem", { name: "Browse connectors", exact: true }).waitFor();
+      await menu.getByRole("menuitem", { name: "Add MCP server…", exact: true }).waitFor();
       expect(await menu.getByText("Selected for this session", { exact: true }).count()).toBe(0);
       expect(await menu.getByText("Add from your libraries", { exact: true }).count()).toBe(0);
       expect(await menu.locator('wa-dropdown-item[value^="library-"]').count()).toBe(0);
@@ -251,6 +251,8 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
       menu = await openSkills(page);
       await gateway.setMethodResponse("skills.library.list", projection([]));
+      const metadataBeforeActivation = (await gateway.getRequests("chat.metadata")).length;
+      await gateway.deferNext("chat.metadata");
       await menu
         .locator(`wa-dropdown-item[value="library-selected:${alice.entry.skillId}"]`)
         .click();
@@ -261,8 +263,17 @@ suite.define(() => {
         skillId: alice.entry.skillId,
       });
       await menu.getByText("No managed skills selected.", { exact: true }).waitFor();
-      await gateway.waitForRequest("chat.metadata");
+      await gateway.waitForRequest("chat.metadata", { after: metadataBeforeActivation });
+      for (let index = 0; index < 5; index++) {
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      }
+      await page.screenshot({ path: `${suite.artifactDir}/metadata-refresh-held.png` });
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(metadataBeforeActivation + 1);
+      await gateway.resolveDeferred("chat.metadata", { commands: [] });
+      await gateway.waitForRequest("chat.metadata", { after: metadataBeforeActivation + 1 });
       await menu.getByText(/updated for the next turn/u).waitFor();
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(metadataBeforeActivation + 2);
+      await page.screenshot({ path: `${suite.artifactDir}/metadata-refresh-complete.png` });
 
       await gateway.setMethodResponse("skills.library.activate", {
         sessionKey,

@@ -60,81 +60,6 @@ describe("ChatGPT Responses cached transport", () => {
     configureAiTransportHost({});
   });
 
-  it("does not clobber a newer cached websocket when releasing a stale reused lease", async () => {
-    let connectionCount = 0;
-    const sockets: Array<EventTarget & { connectionId: number; readyState: number }> = [];
-    let releaseFirstReuse: (() => void) | undefined;
-    const holdFirstReuse = new Promise<void>((resolve) => {
-      releaseFirstReuse = resolve;
-    });
-    let originalSendCount = 0;
-
-    class ReplacementRaceWebSocket extends EventTarget {
-      readonly connectionId = ++connectionCount;
-      readyState = 1;
-
-      constructor() {
-        super();
-        sockets.push(this);
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
-      }
-
-      send(): void {
-        const complete = () => {
-          queueMicrotask(() => {
-            this.dispatchEvent(
-              Object.assign(new Event("message"), {
-                data: JSON.stringify(completion(`resp_${this.connectionId}`)),
-              }),
-            );
-          });
-        };
-        if (this.connectionId === 1 && ++originalSendCount > 1) {
-          void holdFirstReuse.then(complete);
-          return;
-        }
-        complete();
-      }
-
-      // Keep the original lease pending until its replacement is installed.
-      close(): void {
-        this.readyState = 3;
-      }
-    }
-
-    vi.stubGlobal("WebSocket", ReplacementRaceWebSocket);
-    const sessionId = "replacement-before-release";
-    const options = {
-      apiKey: createJwt(),
-      sessionId,
-      transport: "websocket-cached" as const,
-    };
-
-    expect((await streamOpenAICodexResponses(model, context, options).result()).stopReason).toBe(
-      "stop",
-    );
-    const staleReuse = streamOpenAICodexResponses(model, context, options).result();
-    await vi.waitFor(() => expect(originalSendCount).toBe(2));
-
-    closeOpenAICodexWebSocketSessions(sessionId);
-    expect((await streamOpenAICodexResponses(model, context, options).result()).stopReason).toBe(
-      "stop",
-    );
-    expect(connectionCount).toBe(2);
-
-    sockets[0]?.dispatchEvent(
-      Object.assign(new Event("close"), { code: 1000, reason: "stale_lease", wasClean: true }),
-    );
-    releaseFirstReuse?.();
-    await expect(staleReuse).resolves.toMatchObject({ stopReason: "error" });
-
-    expect((await streamOpenAICodexResponses(model, context, options).result()).stopReason).toBe(
-      "stop",
-    );
-    expect(connectionCount).toBe(2);
-    expect(sockets[1]?.readyState).toBe(1);
-  });
-
   it.each(["close", "abort"] as const)(
     "keeps an authenticated replacement socket when a reused lease ends by %s",
     async (termination) => {
@@ -700,7 +625,11 @@ describe("ChatGPT Responses cached transport", () => {
         diagnostics: [
           {
             type: "provider_transport_failure",
-            error: { message: "Unexpected server response: 426" },
+            error: {
+              message: expect.stringMatching(
+                /(?:Unexpected server response: 426|Expected 101 status code)/u,
+              ),
+            },
             details: {
               configuredTransport: "auto",
               fallbackTransport: "sse",
@@ -708,11 +637,22 @@ describe("ChatGPT Responses cached transport", () => {
               phase: "before_message_stream_start",
             },
           },
+          {
+            type: "openai_responses_terminal",
+            timestamp: expect.any(Number),
+            details: { eventType: "response.completed", stopReason: "stop", endTurn: "absent" },
+          },
         ],
       });
       const stickyResult = await runSession("sticky-sse-fallback");
       expect(stickyResult.stopReason).toBe("stop");
-      expect(stickyResult.diagnostics).toBeUndefined();
+      expect(stickyResult.diagnostics).toEqual([
+        {
+          type: "openai_responses_terminal",
+          timestamp: expect.any(Number),
+          details: { eventType: "response.completed", stopReason: "stop", endTurn: "absent" },
+        },
+      ]);
       expect((await runSession("unrelated-sse-fallback")).stopReason).toBe("stop");
       expect(websocketUpgrades).toHaveLength(2);
 

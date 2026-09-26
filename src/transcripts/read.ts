@@ -6,10 +6,10 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { isTranscriptSessionActive, readTranscriptCaptureSnapshot } from "./capture.js";
-import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./provider-types.js";
+import type { TranscriptSourceLocator } from "./provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
 import { normalizeExportText } from "./store-artifacts.js";
-import type { TranscriptReadEntry, TranscriptReadPurpose } from "./store-read.js";
+import type { TranscriptReadEntry } from "./store-read.js";
 import type { TranscriptsStore } from "./store.js";
 
 /** Only public locator fields cross the Gateway; provider-private keys stay in the archive. */
@@ -77,12 +77,9 @@ export function projectTranscriptMarkdown(markdown: string): string {
   return normalizeExportText(markdown).split("\n").map(sanitizeTerminalText).join("\n");
 }
 
-export async function readTranscriptNotes(
-  store: TranscriptsStore,
-  session: TranscriptSessionDescriptor,
-  purpose: TranscriptReadPurpose = "page",
-): Promise<TranscriptsGetResult["summary"]> {
-  const stored = store.readNotes(session, purpose);
+export function projectTranscriptNotes(
+  stored: Awaited<ReturnType<TranscriptsStore["readNotes"]>>,
+): TranscriptsGetResult["summary"] {
   if (stored.markdown === undefined) {
     return undefined;
   }

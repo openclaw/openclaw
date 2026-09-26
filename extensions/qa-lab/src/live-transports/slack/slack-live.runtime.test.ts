@@ -3,7 +3,6 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
-import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
 import { testing as adapterTesting } from "./adapter.runtime.js";
 import { resolveApprovalDecision } from "./slack-live.approvals.js";
 import {
@@ -16,10 +15,7 @@ import {
   parseSlackQaCredentialPayload,
   resolveSlackQaRuntimeEnv,
 } from "./slack-live.config.js";
-import {
-  assertSlackCodexApprovalModelSupported,
-  type SlackQaScenarioImplementation,
-} from "./slack-live.contracts.js";
+import { assertSlackCodexApprovalModelSupported } from "./slack-live.contracts.js";
 import { buildSlackInvalidBlocksTableProbe } from "./slack-live.invalid-blocks.js";
 import {
   observeSlackScenarioMessages,
@@ -31,7 +27,7 @@ import {
   extractSlackNativeApprovalId,
   runSlackTableInvalidBlocksFallbackScenario,
 } from "./slack-live.observations.js";
-import * as slackScenarioImplementations from "./slack-live.scenario-implementations.js";
+import { findScenario } from "./slack-live.scenario.test-helpers.js";
 import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 // Keep real Slack operations in Vitest's graph instead of recompiling them through Jiti.
@@ -40,37 +36,6 @@ vi.mock("./slack-plugin.runtime.js", async () => {
   const runtime = await import("@openclaw/slack/test-api.js");
   return { loadSlackQaRuntime: () => runtime };
 });
-
-function toSlackScenarioExportName(id: string): string {
-  const suffix = id
-    .replace(/^slack-/, "")
-    .split("-")
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join("");
-  return `slackQa${suffix}Scenario`;
-}
-
-function findScenario(ids?: string[]) {
-  return resolveLiveTransportQaScenarioIds({
-    channelId: "slack",
-    providerMode: "live-frontier",
-    scenarioIds: ids,
-    supportsModuleFlows: true,
-  }).map((id) => {
-    const implementation = (
-      slackScenarioImplementations as unknown as Record<string, SlackQaScenarioImplementation>
-    )[toSlackScenarioExportName(id)];
-    if (!implementation) {
-      throw new Error(`missing Slack test implementation for ${id}`);
-    }
-    const scenario = requireFlowScenario(readQaScenarioById(id));
-    return Object.assign({}, implementation, {
-      id,
-      timeoutMs: scenario.execution.timeoutMs ?? 60_000,
-      title: scenario.title,
-    });
-  });
-}
 
 const testing = {
   assertSlackCodexApprovalModelSupported,
@@ -91,28 +56,6 @@ const testing = {
   waitForSlackNoReply,
   waitForSlackReaction,
 };
-
-function renderExpectedSlackChartAccessibleText(summaryText: string) {
-  return [
-    summaryText,
-    "",
-    "QA latency trend (line chart)",
-    "X axis: Percentile",
-    "Y axis: Milliseconds",
-    "- Latency: P50: 120; P95: 240",
-  ].join("\n");
-}
-
-function renderExpectedSlackTableAccessibleText(summaryText: string) {
-  return [
-    summaryText,
-    "",
-    "QA pipeline report (table)",
-    "Account\tStage\tARR",
-    "Acme\tWon\t125000",
-    "Globex\tReview\t82000",
-  ].join("\n");
-}
 
 describe("Slack live QA runtime helpers", () => {
   beforeAll(async () => {
@@ -422,6 +365,22 @@ describe("Slack live QA runtime helpers", () => {
     ).toBeUndefined();
   });
 
+  it.each(["slack-allowlist-block", "slack-channel-disabled-warning", "slack-mention-gating"])(
+    "keeps the %s negative observation inside its flow deadline",
+    (scenarioId) => {
+      const scenario = testing.findScenario([scenarioId])[0];
+      const run = scenario?.buildRun("U999999999");
+      if (!scenario || !run || !("expectReply" in run)) {
+        throw new Error(`missing Slack message scenario ${scenarioId}`);
+      }
+      expect(run.expectReply).toBe(false);
+      expect(run.noReplyObservationMs).toBe(8_000);
+      expect(scenario.timeoutMs).toBeGreaterThan(
+        run.noReplyObservationMs ?? Number.POSITIVE_INFINITY,
+      );
+    },
+  );
+
   it("accepts only Codex harness providers for Codex approval scenarios", () => {
     expect(() =>
       testing.assertSlackCodexApprovalModelSupported("openai/gpt-5.6-luna"),
@@ -642,7 +601,7 @@ describe("Slack live QA runtime helpers", () => {
         ?.streaming,
     ).toEqual({ mode: "off" });
     const omitted = progressConfig("slack-progress-commentary-omitted");
-    expect(omitted).toMatchObject({ toolProgress: true });
+    expect(omitted).toMatchObject({ style: "compact", toolProgress: true });
     expect(Object.hasOwn(omitted ?? {}, "commentary")).toBe(false);
     expect(
       buildScenarioConfig("slack-progress-commentary-verbose-dedupe").agents?.defaults
@@ -703,9 +662,11 @@ describe("Slack live QA runtime helpers", () => {
       if (!commentaryMarker || !toolMarker || !outputMarker || !finalMarker || !verifyObserved) {
         throw new Error(`missing Slack progress verifier: ${testCase.id}`);
       }
-      // Progress cards compact command details from the middle, so the QA marker
-      // stays at the command suffix where the real Slack presentation preserves it.
-      expect(input).toContain(`sleep 5; printf '%s\\n' '${outputMarker}' # ${toolMarker}`);
+      // Compact progress cards retain the leading command segment, so keep the
+      // QA marker there instead of in a trailing shell comment that Slack drops.
+      expect(input).toContain(
+        `printf '%s' '${toolMarker}' >/dev/null; sleep 5; printf '%s\\n' '${outputMarker}'`,
+      );
       const messages = [
         {
           channelId: "C123456789",
@@ -734,7 +695,12 @@ describe("Slack live QA runtime helpers", () => {
                     ? "🛠️ Exec"
                     : testCase.toolProgress === "standalone"
                       ? `🛠️ Exec\n\`\`\`\n${outputMarker}\n\`\`\``
-                      : `🛠️ Exec ${toolMarker}`,
+                      : testCase.id === "slack-progress-commentary-omitted"
+                        ? commentaryMarker
+                        : `🛠️ Exec ${toolMarker}`,
+                ...(testCase.id === "slack-progress-commentary-omitted"
+                  ? { blockText: [`🛠️ *Exec* — sleep 5`] }
+                  : {}),
                 ts: testCase.toolProgress === "draft" ? "1.500000" : "1.750000",
               },
             ]),
@@ -745,6 +711,31 @@ describe("Slack live QA runtime helpers", () => {
           messages,
         }),
       ).toContain("verified");
+
+      if (testCase.id === "slack-progress-commentary-omitted") {
+        expect(
+          verifyObserved({
+            finalMessage: { text: finalMarker, ts: "2.000000" },
+            messages: messages.map((message) => {
+              if (message.ts !== "1.500000") {
+                return message;
+              }
+              return Object.assign({}, message, { blockText: ["Exec — sleep 5"] });
+            }),
+          }),
+        ).toContain("verified");
+        expect(
+          verifyObserved({
+            finalMessage: { text: finalMarker, ts: "2.000000" },
+            messages: messages.map((message) => {
+              if (message.ts !== "1.500000") {
+                return message;
+              }
+              return Object.assign({}, message, { blockText: ["Run — `sleep 5`"] });
+            }),
+          }),
+        ).toContain("verified");
+      }
     }
   });
 
@@ -1275,266 +1266,6 @@ describe("Slack live QA runtime helpers", () => {
     expect(run).toMatchObject({ expectReply: true });
     expect(run && "input" in run ? run.input : "").toContain('emoji to exactly "✅"');
     expect(run && "input" in run ? run.input : "").toContain("Do not substitute a shortcode");
-  });
-
-  it("drives the live native chart scenario through a portable message-tool presentation", () => {
-    const scenario = testing.findScenario(["slack-chart-presentation-native"])[0];
-    const run = scenario?.buildRun("U999999999");
-    const input = run && "input" in run ? run.input : "";
-    const summaryText = input.match(/SLACK_QA_CHART_SUMMARY_[A-Z0-9]+/u)?.[0];
-
-    expect(run).toMatchObject({ expectReply: true });
-    expect(scenario?.configOverrides).toEqual({ messageTool: true });
-    if (!summaryText) {
-      throw new Error("missing Slack chart summary token");
-    }
-    expect(input).toContain(
-      JSON.stringify({
-        action: "send",
-        message: summaryText,
-        presentation: {
-          blocks: [
-            {
-              type: "chart",
-              chartType: "line",
-              title: "QA latency trend",
-              categories: ["P50", "P95"],
-              series: [{ name: "Latency", values: [120, 240] }],
-              xLabel: "Percentile",
-              yLabel: "Milliseconds",
-            },
-          ],
-        },
-      }),
-    );
-    expect(run && "matchText" in run ? run.matchText : "").toMatch(
-      /^SLACK_QA_CHART_DONE_[A-Z0-9]+$/u,
-    );
-  });
-
-  it("verifies the SUT-owned native chart and exact accessible top-level text", async () => {
-    const scenario = testing.findScenario(["slack-chart-presentation-native"])[0];
-    const run = scenario?.buildRun("U999999999");
-    const input = run && "input" in run ? run.input : "";
-    const summaryText = input.match(/SLACK_QA_CHART_SUMMARY_[A-Z0-9]+/u)?.[0];
-    const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
-    if (!summaryText || !afterReply) {
-      throw new Error("missing Slack chart scenario verifier");
-    }
-    const accessibleText = renderExpectedSlackChartAccessibleText(summaryText);
-    const history = vi.fn(async () => ({
-      messages: [
-        {
-          blocks: [
-            {
-              type: "data_visualization",
-              title: "QA latency trend",
-              chart: {
-                type: "line",
-                series: [
-                  {
-                    name: "Latency",
-                    data: [
-                      { label: "P50", value: 120 },
-                      { label: "P95", value: 240 },
-                    ],
-                  },
-                ],
-                axis_config: {
-                  categories: ["P50", "P95"],
-                  x_label: "Percentile",
-                  y_label: "Milliseconds",
-                },
-              },
-            },
-          ],
-          // Slack history flattens the top-level accessibility newlines on readback.
-          text: accessibleText.replace(/\s+/gu, " "),
-          ts: "2.000000",
-          user: "U999999999",
-        },
-      ],
-    }));
-
-    await expect(
-      afterReply(
-        {} as never,
-        {
-          channelId: "C123456789",
-          sentTs: "1.000000",
-          sutIdentity: { userId: "U999999999" },
-          sutReadClient: { conversations: { history } },
-        } as never,
-      ),
-    ).resolves.toBe("verified native data_visualization block and deterministic accessible text");
-    expect(history).toHaveBeenCalledWith({
-      channel: "C123456789",
-      inclusive: true,
-      limit: 50,
-      oldest: "1.000000",
-    });
-  });
-
-  it("rejects fallback-only Slack chart delivery", async () => {
-    vi.useFakeTimers();
-    const scenario = testing.findScenario(["slack-chart-presentation-native"])[0];
-    const run = scenario?.buildRun("U999999999");
-    const input = run && "input" in run ? run.input : "";
-    const summaryText = input.match(/SLACK_QA_CHART_SUMMARY_[A-Z0-9]+/u)?.[0];
-    const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
-    if (!summaryText || !afterReply) {
-      throw new Error("missing Slack chart scenario verifier");
-    }
-    const accessibleText = renderExpectedSlackChartAccessibleText(summaryText);
-    const history = vi.fn(async () => ({
-      messages: [
-        {
-          text: accessibleText.replace(/\s+/gu, " "),
-          ts: "2.000000",
-          user: "U999999999",
-        },
-      ],
-    }));
-    const result = expect(
-      afterReply(
-        {} as never,
-        {
-          channelId: "C123456789",
-          sentTs: "1.000000",
-          sutIdentity: { userId: "U999999999" },
-          sutReadClient: { conversations: { history } },
-        } as never,
-      ),
-    ).rejects.toThrow("waiting for Slack message");
-
-    await vi.advanceTimersByTimeAsync(16_000);
-    await result;
-  });
-
-  it("drives the live native table scenario through a portable message-tool presentation", () => {
-    const scenario = testing.findScenario(["slack-table-presentation-native"])[0];
-    const run = scenario?.buildRun("U999999999");
-    const input = run && "input" in run ? run.input : "";
-    const summaryText = input.match(/SLACK_QA_TABLE_SUMMARY_[A-Z0-9]+/u)?.[0];
-
-    expect(run).toMatchObject({ expectReply: true });
-    expect(scenario?.configOverrides).toEqual({ messageTool: true });
-    if (!summaryText) {
-      throw new Error("missing Slack table summary token");
-    }
-    expect(input).toContain(
-      JSON.stringify({
-        action: "send",
-        message: summaryText,
-        presentation: {
-          blocks: [
-            {
-              type: "table",
-              caption: "QA pipeline report",
-              headers: ["Account", "Stage", "ARR"],
-              rows: [
-                ["Acme", "Won", 125000],
-                ["Globex", "Review", 82000],
-              ],
-              rowHeaderColumnIndex: 0,
-            },
-          ],
-        },
-      }),
-    );
-    expect(run && "matchText" in run ? run.matchText : "").toBe(summaryText);
-  });
-
-  it("verifies the SUT-owned native table and exact accessible top-level text", async () => {
-    const scenario = testing.findScenario(["slack-table-presentation-native"])[0];
-    const run = scenario?.buildRun("U999999999");
-    const input = run && "input" in run ? run.input : "";
-    const summaryText = input.match(/SLACK_QA_TABLE_SUMMARY_[A-Z0-9]+/u)?.[0];
-    const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
-    if (!summaryText || !afterReply) {
-      throw new Error("missing Slack table scenario verifier");
-    }
-    const accessibleText = renderExpectedSlackTableAccessibleText(summaryText);
-    const history = vi.fn(async () => ({
-      messages: [
-        {
-          blocks: [
-            {
-              type: "data_table",
-              caption: "QA pipeline report",
-              rows: [
-                [
-                  { type: "raw_text", text: "Account" },
-                  { type: "raw_text", text: "Stage" },
-                  { type: "raw_text", text: "ARR" },
-                ],
-                [
-                  { type: "raw_text", text: "Acme" },
-                  { type: "raw_text", text: "Won" },
-                  { type: "raw_number", value: 125000, text: "125000" },
-                ],
-                [
-                  { type: "raw_text", text: "Globex" },
-                  { type: "raw_text", text: "Review" },
-                  { type: "raw_number", value: 82000, text: "82000" },
-                ],
-              ],
-              row_header_column_index: 0,
-            },
-          ],
-          text: accessibleText.replace(/\s+/gu, " "),
-          ts: "2.000000",
-          user: "U999999999",
-        },
-      ],
-    }));
-
-    await expect(
-      afterReply(
-        {} as never,
-        {
-          channelId: "C123456789",
-          sentTs: "1.000000",
-          sutIdentity: { userId: "U999999999" },
-          sutReadClient: { conversations: { history } },
-        } as never,
-      ),
-    ).resolves.toBe("verified native data_table block and deterministic accessible text");
-  });
-
-  it("rejects fallback-only Slack table delivery", async () => {
-    vi.useFakeTimers();
-    const scenario = testing.findScenario(["slack-table-presentation-native"])[0];
-    const run = scenario?.buildRun("U999999999");
-    const input = run && "input" in run ? run.input : "";
-    const summaryText = input.match(/SLACK_QA_TABLE_SUMMARY_[A-Z0-9]+/u)?.[0];
-    const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
-    if (!summaryText || !afterReply) {
-      throw new Error("missing Slack table scenario verifier");
-    }
-    const history = vi.fn(async () => ({
-      messages: [
-        {
-          text: renderExpectedSlackTableAccessibleText(summaryText).replace(/\s+/gu, " "),
-          ts: "2.000000",
-          user: "U999999999",
-        },
-      ],
-    }));
-    const result = expect(
-      afterReply(
-        {} as never,
-        {
-          channelId: "C123456789",
-          sentTs: "1.000000",
-          sutIdentity: { userId: "U999999999" },
-          sutReadClient: { conversations: { history } },
-        } as never,
-      ),
-    ).rejects.toThrow("waiting for Slack message");
-
-    await vi.advanceTimersByTimeAsync(16_000);
-    await result;
   });
 
   it("builds the invalid_blocks fallback probe as a direct transport scenario", () => {

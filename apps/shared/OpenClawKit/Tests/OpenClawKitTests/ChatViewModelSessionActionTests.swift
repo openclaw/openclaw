@@ -1002,7 +1002,7 @@ struct ChatViewModelSessionActionTests {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.sessionBranches = staleBranches
 
-        await viewModel.refreshSessionBranchesForMenuPresentation()
+        await viewModel.refreshSessionBranches()
 
         #expect(viewModel.sessionBranches == freshBranches)
         #expect(await transport.branchListSessionKeys() == ["main"])
@@ -1038,7 +1038,7 @@ struct ChatViewModelSessionActionTests {
             outbox: store)
         viewModel.reconciledOutboxBranchScopes.insert(scope)
 
-        await viewModel.refreshSessionBranchesForMenuPresentation()
+        await viewModel.refreshSessionBranches()
 
         #expect(viewModel.reconciledOutboxBranchScopes.contains(scope))
         #expect(await store.branchState(for: scope)?.switchPendingSince == nil)
@@ -1301,19 +1301,20 @@ struct ChatViewModelSessionActionTests {
         #expect(await transport.forkedMessages().map { [$0.sessionKey, $0.entryID] } == [["main", "message-42"]])
     }
 
-    @Test func `remote rewind refreshes current transcript only`() async {
+    @Test func `remote rewind refreshes current transcript only`() async throws {
         let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "other", reason: "rewind")))
         viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "main", reason: "rewind")))
 
-        let refreshed = await self.waitForHistoryRequest(transport)
-        #expect(refreshed)
+        try await waitUntil("remote rewind history request") {
+            await transport.historySessionKeys().isEmpty == false
+        }
         #expect(await transport.historySessionKeys() == ["main"])
     }
 
-    @Test func `remote branch switch refreshes current transcript and branches only`() async {
+    @Test func `remote branch switch refreshes current transcript and branches only`() async throws {
         let transport = SessionActionTransport(branches: self.branches())
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.setReplyTarget(messageID: UUID(), text: "old branch", senderLabel: "User")
@@ -1326,8 +1327,9 @@ struct ChatViewModelSessionActionTests {
         #expect(viewModel.hasBlockingRunActivity)
         #expect(viewModel.canSend == false)
 
-        let refreshed = await self.waitForBranchListRequest(transport)
-        #expect(refreshed)
+        try await waitUntil("remote branch switch branch list request") {
+            await transport.branchListSessionKeys().isEmpty == false
+        }
         let unlocked = await self.waitForBranchSwitchActivityToClear(viewModel)
         #expect(unlocked)
         #expect(viewModel.replyTarget == nil)
@@ -1411,36 +1413,6 @@ struct ChatViewModelSessionActionTests {
             group.cancelAll()
             return started
         }
-    }
-
-    private func waitForHistoryRequest(
-        _ transport: SessionActionTransport,
-        timeout: Duration = .seconds(15)) async -> Bool
-    {
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while clock.now < deadline {
-            if await transport.historySessionKeys().isEmpty == false {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
-    }
-
-    private func waitForBranchListRequest(
-        _ transport: SessionActionTransport,
-        timeout: Duration = .seconds(15)) async -> Bool
-    {
-        let clock = ContinuousClock()
-        let deadline = clock.now + timeout
-        while clock.now < deadline {
-            if await transport.branchListSessionKeys().isEmpty == false {
-                return true
-            }
-            await Task.yield()
-        }
-        return false
     }
 
     private func waitForBranchSwitchActivityToClear(

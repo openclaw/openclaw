@@ -1,48 +1,10 @@
 // Telegram tests cover approval handler plugin behavior.
+import type { PendingApprovalView } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { telegramApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import { buildTelegramCanonicalApprovalTerminalText } from "./approval-terminal.js";
 
-type TelegramPayload = {
-  text: string;
-  buttons?: Array<Array<{ text: string; callback_data?: string }>>;
-};
-
 describe("telegramApprovalNativeRuntime", () => {
-  it("subscribes to system-agent approval events", () => {
-    expect(telegramApprovalNativeRuntime.eventKinds).toContain("system-agent");
-  });
-
-  it("distinguishes a typed click winner from a losing surface", () => {
-    const approval = {
-      id: "req-1",
-      status: "denied",
-      decision: "deny",
-    } as never;
-
-    expect(
-      buildTelegramCanonicalApprovalTerminalText({
-        result: { applied: true, approval },
-        fallbackApprovalId: "req-1",
-      }),
-    ).toContain("✅ Approval resolved here\nCanonical result: Denied");
-    expect(
-      buildTelegramCanonicalApprovalTerminalText({
-        result: { applied: false, approval },
-        fallbackApprovalId: "req-1",
-      }),
-    ).toContain("ℹ️ Approval already resolved\nCanonical result: Denied");
-    expect(
-      buildTelegramCanonicalApprovalTerminalText({
-        result: {
-          applied: false,
-          approval: { id: "req\n1", status: "denied", decision: "deny" } as never,
-        },
-        fallbackApprovalId: "req-1",
-      }),
-    ).toContain("ID: req\\n1");
-  });
-
   it("renders a cancelled system-agent result as lifecycle cancellation", () => {
     expect(
       buildTelegramCanonicalApprovalTerminalText({
@@ -70,112 +32,8 @@ describe("telegramApprovalNativeRuntime", () => {
     ).toBe("⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.");
   });
 
-  it("renders only the allowed pending buttons", async () => {
-    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        token: "tg-token",
-      },
-      request: {
-        id: "req-1",
-        request: {
-          command: "echo hi",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "exec",
-      nowMs: 0,
-      view: {
-        approvalKind: "exec",
-        approvalId: "req-1",
-        commandText: "echo hi",
-        actions: [
-          {
-            decision: "allow-once",
-            label: "Allow Once",
-            action: {
-              type: "approval",
-              approvalId: "req-1",
-              approvalKind: "exec",
-              decision: "allow-once",
-            },
-            command: "/approve req-1 allow-once",
-            style: "success",
-          },
-          {
-            decision: "deny",
-            label: "Deny",
-            action: {
-              type: "approval",
-              approvalId: "req-1",
-              approvalKind: "exec",
-              decision: "deny",
-            },
-            command: "/approve req-1 deny",
-            style: "danger",
-          },
-        ],
-      } as never,
-    })) as TelegramPayload;
-
-    expect(payload.text).toContain("/approve req-1 allow-once");
-    expect(payload.text).not.toContain("allow-always");
-    expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
-    expect(payload.buttons?.[0]?.map((button) => button.callback_data)).toEqual([
-      "tga1:e:o:req-1",
-      "tga1:e:d:req-1",
-    ]);
-    expect(payload.text).not.toContain("Scope:");
-  });
-
-  it("renders owner-declared plugin approval scope in pending text", async () => {
-    const scope = {
-      kind: "message-send" as const,
-      target: "email",
-      recipientCount: 3,
-      recipients: ["alice@example.com"],
-      audience: "external" as const,
-    };
-    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: { token: "tg-token" },
-      request: {
-        approvalKind: "plugin",
-        id: "plugin:req-1",
-        request: {
-          title: "Send email",
-          description: "Deliver the requested announcement.",
-          scope,
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "plugin",
-      nowMs: 0,
-      view: {
-        approvalKind: "plugin",
-        phase: "pending",
-        approvalId: "plugin:req-1",
-        title: "Send email",
-        description: "Deliver the requested announcement.",
-        severity: "warning",
-        scope,
-        metadata: [],
-        actions: [],
-        expiresAtMs: 60_000,
-      },
-    })) as TelegramPayload;
-
-    expect(payload.text).toContain(
-      "Scope: Send to 3 recipients via email (external): alice@example.com, +2 more",
-    );
-  });
-
-  it("renders a system-agent approval with an optional Control UI link", async () => {
-    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+  it("builds the Control UI link with its configured base path and encoded approval ID", async () => {
+    const payload = await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
       cfg: {
         gateway: {
           publicOrigin: "https://control.example.com",
@@ -210,56 +68,14 @@ describe("telegramApprovalNativeRuntime", () => {
         agentId: "main",
         commandText: "set config gateway.port to 19001",
         operationSummary: "set config gateway.port to 19001",
-        actions: [
-          {
-            decision: "allow-once",
-            label: "Allow Once",
-            action: {
-              type: "approval",
-              approvalId: "system-agent:change-1",
-              approvalKind: "system-agent",
-              decision: "allow-once",
-            },
-            command: "/approve system-agent:change-1 allow-once",
-            style: "success",
-          },
-          {
-            decision: "deny",
-            label: "Deny",
-            action: {
-              type: "approval",
-              approvalId: "system-agent:change-1",
-              approvalKind: "system-agent",
-              decision: "deny",
-            },
-            command: "/approve system-agent:change-1 deny",
-            style: "danger",
-          },
-        ],
+        actions: [],
         expiresAtMs: 120_000,
       },
-    })) as TelegramPayload;
+    });
 
-    expect(payload.text).toBe(
-      [
-        "🔒 OpenClaw change requires approval",
-        "Change: set config gateway.port to 19001",
-        "Agent: main",
-        "Expires in: 2m",
-      ].join("\n"),
+    expect(payload.buttons?.flat().find((button) => button.url)?.url).toBe(
+      "https://control.example.com/openclaw/approve/system-agent%3Achange-1",
     );
-    expect(payload.buttons).toEqual([
-      [
-        {
-          text: "Review in Control UI",
-          url: "https://control.example.com/openclaw/approve/system-agent%3Achange-1",
-        },
-      ],
-      [
-        { text: "Allow Once", callback_data: "tga1:s:o:system-agent:change-1", style: "success" },
-        { text: "Deny", callback_data: "tga1:s:d:system-agent:change-1", style: "danger" },
-      ],
-    ]);
   });
 
   it("omits the Control UI button without a configured public origin", async () => {
@@ -337,9 +153,9 @@ describe("telegramApprovalNativeRuntime", () => {
     expect(payload.buttons).toEqual([]);
   });
 
-  it("renders resolved and expired events as visible terminal receipts", async () => {
+  it("renders resolved and expired receipts without letting IDs inject lines", async () => {
     const request = {
-      id: "req-1",
+      id: "req\n1",
       request: { command: "echo hi" },
       createdAtMs: 0,
       expiresAtMs: 60_000,
@@ -350,14 +166,14 @@ describe("telegramApprovalNativeRuntime", () => {
       context: { token: "tg-token" },
       request,
       resolved: {
-        id: "req-1",
+        id: "req\n1",
         decision: "deny",
         resolvedBy: "telegram:9",
         ts: 1,
       },
       view: {
         approvalKind: "exec",
-        approvalId: "req-1",
+        approvalId: "req\n1",
         phase: "resolved",
         title: "Exec approval",
         metadata: [],
@@ -374,7 +190,7 @@ describe("telegramApprovalNativeRuntime", () => {
       request,
       view: {
         approvalKind: "exec",
-        approvalId: "req-1",
+        approvalId: "req\n1",
         phase: "expired",
         title: "Exec approval",
         metadata: [],
@@ -390,7 +206,7 @@ describe("telegramApprovalNativeRuntime", () => {
           "✅ Exec approval resolved",
           "Canonical result: Denied",
           "Resolved by: telegram:9",
-          "ID: req-1",
+          "ID: req\\n1",
           "",
           "Command:",
           "echo hi",
@@ -403,7 +219,7 @@ describe("telegramApprovalNativeRuntime", () => {
         text: [
           "⏱️ Exec approval expired",
           "Canonical result: Expired",
-          "ID: req-1",
+          "ID: req\\n1",
           "",
           "Command:",
           "echo hi",
@@ -419,6 +235,14 @@ describe("telegramApprovalNativeRuntime", () => {
       applicationStatus: "applied",
       summary: "set config gateway.port to 19001",
       expected: "✅ OpenClaw change approved and applied: set config gateway.port to 19001",
+    },
+    {
+      name: "completion unconfirmed after an approved write",
+      decision: "allow-once",
+      applicationStatus: "not-applied",
+      summary: "set config gateway.port to 19001",
+      expected:
+        "⚠️ OpenClaw change approved, but completion could not be confirmed. Check the current settings before retrying.",
     },
     {
       name: "denied and not applied",
@@ -689,125 +513,192 @@ describe("telegramApprovalNativeRuntime", () => {
     expect(sendMessage).toHaveBeenCalledOnce();
   });
 
-  it("passes topic thread ids to typing and message delivery", async () => {
+  it("delivers only allowed pending actions into the originating forum topic", async () => {
     const sendTyping = vi.fn().mockResolvedValue({ ok: true });
     const sendMessage = vi.fn().mockResolvedValue({
       chatId: "-1003841603622",
       messageId: "m1",
     });
-
-    const entry = await telegramApprovalNativeRuntime.transport.deliverPending({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        token: "tg-token",
-        deps: {
-          sendTyping,
-          sendMessage,
-        },
-      },
-      plannedTarget: {
-        surface: "origin",
-        reason: "preferred",
-        target: {
-          to: "-1003841603622",
-          threadId: 928,
-        },
-      },
-      preparedTarget: {
-        chatId: "-1003841603622",
-        messageThreadId: 928,
-      },
-      request: {
-        id: "req-1",
-        request: {
-          command: "echo hi",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
+    const request = {
+      id: "req-1",
+      request: { command: "echo hi" },
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+    };
+    const view: PendingApprovalView = {
       approvalKind: "exec",
-      view: {
-        approvalKind: "exec",
-        approvalId: "req-1",
-        commandText: "echo hi",
-        actions: [],
-      } as never,
-      pendingPayload: {
-        text: "pending",
-        buttons: [],
+      approvalId: "req-1",
+      phase: "pending",
+      title: "Exec approval",
+      metadata: [],
+      commandText: "echo hi",
+      expiresAtMs: 60_000,
+      actions: [
+        {
+          decision: "allow-once",
+          label: "Allow Once",
+          action: {
+            type: "approval",
+            approvalId: "req-1",
+            approvalKind: "exec",
+            decision: "allow-once",
+          },
+          command: "/approve req-1 allow-once",
+          style: "success",
+        },
+        {
+          decision: "deny",
+          label: "Deny",
+          action: {
+            type: "approval",
+            approvalId: "req-1",
+            approvalKind: "exec",
+            decision: "deny",
+          },
+          command: "/approve req-1 deny",
+          style: "danger",
+        },
+      ],
+    };
+    const params = {
+      cfg: {},
+      accountId: "default",
+      context: { token: "tg-token", deps: { sendTyping, sendMessage } },
+      request,
+      approvalKind: "exec" as const,
+      view,
+      plannedTarget: {
+        surface: "origin" as const,
+        reason: "preferred" as const,
+        target: { to: "telegram:-1003841603622:topic:928" },
       },
+    };
+    const pendingPayload = await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      ...params,
+      nowMs: 0,
+    });
+    const prepared = await telegramApprovalNativeRuntime.transport.prepareTarget({
+      ...params,
+      pendingPayload,
+    });
+    if (!prepared) {
+      throw new Error("Expected a forum approval target");
+    }
+    await telegramApprovalNativeRuntime.transport.deliverPending({
+      ...params,
+      pendingPayload,
+      preparedTarget: prepared.target,
     });
 
-    expect(sendTyping).toHaveBeenCalledWith("-1003841603622", {
-      cfg: {},
-      token: "tg-token",
-      accountId: "default",
-      messageThreadId: 928,
-    });
-    expect(sendMessage).toHaveBeenCalledWith("-1003841603622", "pending", {
-      cfg: {},
-      token: "tg-token",
-      accountId: "default",
-      buttons: [],
-      messageThreadId: 928,
-    });
-    expect(entry).toEqual({
-      chatId: "-1003841603622",
-      messageId: "m1",
-    });
+    expect(sendTyping).toHaveBeenCalledWith(
+      "-1003841603622",
+      expect.objectContaining({ messageThreadId: 928 }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "-1003841603622",
+      expect.stringContaining("/approve req-1 allow-once"),
+      expect.objectContaining({
+        messageThreadId: 928,
+        buttons: [
+          [
+            expect.objectContaining({ text: "Allow Once", callback_data: "tga1:e:o:req-1" }),
+            expect.objectContaining({ text: "Deny", callback_data: "tga1:e:d:req-1" }),
+          ],
+        ],
+      }),
+    );
+    expect(sendMessage.mock.calls[0]?.[1]).not.toContain("allow-always");
+    expect(sendMessage.mock.calls[0]?.[2]).not.toHaveProperty("directMessagesTopicId");
   });
 
-  it("passes channel Direct Messages topic ids to approval delivery", async () => {
+  it("delivers plugin scope and actions using channel Direct Messages topic metadata", async () => {
     const sendTyping = vi.fn().mockResolvedValue({ ok: true });
     const sendMessage = vi.fn().mockResolvedValue({
       chatId: "-1003841603622",
       messageId: "m1",
     });
-
-    await telegramApprovalNativeRuntime.transport.deliverPending?.({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        token: "tg-token",
-        deps: { sendTyping, sendMessage },
-      },
-      plannedTarget: {
-        surface: "origin",
-        reason: "preferred",
-        target: {
-          to: "-1003841603622:direct-topic:77",
-        },
-      },
-      preparedTarget: {
-        chatId: "-1003841603622",
-        directMessagesTopicId: 77,
-      },
+    const scope = {
+      kind: "message-send" as const,
+      target: "email",
+      recipientCount: 3,
+      recipients: ["alice@example.com"],
+      audience: "external" as const,
+    };
+    const request = {
+      approvalKind: "plugin" as const,
+      id: "plugin:req-1",
       request: {
-        id: "req-direct-topic",
-        request: { command: "echo hi" },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
+        title: "Send email",
+        description: "Deliver the requested announcement.",
+        scope,
       },
-      approvalKind: "exec",
-      view: {
-        approvalKind: "exec",
-        approvalId: "req-direct-topic",
-        commandText: "echo hi",
-        actions: [],
-      } as never,
-      pendingPayload: {
-        text: "pending",
-        buttons: [],
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+    };
+    const view: PendingApprovalView = {
+      approvalKind: "plugin",
+      phase: "pending",
+      approvalId: "plugin:req-1",
+      title: "Send email",
+      description: "Deliver the requested announcement.",
+      severity: "warning",
+      scope,
+      metadata: [],
+      expiresAtMs: 60_000,
+      actions: [
+        {
+          decision: "deny",
+          label: "Deny",
+          style: "danger",
+          command: "/approve plugin:req-1 deny",
+          action: {
+            type: "approval",
+            approvalId: "plugin:req-1",
+            approvalKind: "plugin",
+            decision: "deny",
+          },
+        },
+      ],
+    };
+    const params = {
+      cfg: {},
+      accountId: "default",
+      context: { token: "tg-token", deps: { sendTyping, sendMessage } },
+      request,
+      approvalKind: "plugin" as const,
+      view,
+      plannedTarget: {
+        surface: "origin" as const,
+        reason: "preferred" as const,
+        target: { to: "telegram:-1003841603622:direct-topic:77" },
       },
+    };
+    const pendingPayload = await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      ...params,
+      nowMs: 0,
+    });
+    const prepared = await telegramApprovalNativeRuntime.transport.prepareTarget({
+      ...params,
+      pendingPayload,
+    });
+    if (!prepared) {
+      throw new Error("Expected a channel Direct Messages approval target");
+    }
+    await telegramApprovalNativeRuntime.transport.deliverPending({
+      ...params,
+      pendingPayload,
+      preparedTarget: prepared.target,
     });
 
-    expect(sendMessage).toHaveBeenCalledWith("-1003841603622", "pending", {
-      cfg: {},
-      token: "tg-token",
-      accountId: "default",
-      buttons: [],
-      directMessagesTopicId: 77,
-    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "-1003841603622",
+      expect.stringContaining("3 recipients via email"),
+      expect.objectContaining({
+        directMessagesTopicId: 77,
+        buttons: [[expect.objectContaining({ callback_data: "tga1:p:d:plugin:req-1" })]],
+      }),
+    );
+    expect(sendMessage.mock.calls[0]?.[2]).not.toHaveProperty("messageThreadId");
+    expect(sendMessage.mock.calls[0]?.[1]).toContain("alice@example.com");
   });
 });

@@ -1,58 +1,35 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import {
   createAlwaysConfiguredPluginConfig,
-  createActionHubPluginFixture,
   createGatewayActionPlugin,
   messageActionRunnerMocks as mocks,
   resetMessageActionRunnerMocks,
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
+  useActionHubPluginFixture,
+  readRecordField,
+  expectRecordFields,
+  createEnabledMessageActionConfig,
 } from "./message-action-runner.test-helpers.js";
 import type { MessageSendResult } from "./message.js";
-
-const requireLabeledRecord = createRequireRecord("record", "expected-label");
-
-function readRecordField(record: Record<string, unknown>, key: string, label: string) {
-  const value = record[key];
-  return requireLabeledRecord(value, label);
-}
-
-function expectRecordFields(
-  record: Record<string, unknown>,
-  expected: Record<string, unknown>,
-  label: string,
-) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key], `${label}.${key}`).toEqual(value);
-  }
-}
+import { resetDirectoryCache } from "./target-resolver.js";
 
 describe("runMessageAction plugin dispatch", () => {
   beforeEach(() => {
     resetMessageActionRunnerMocks();
   });
   describe("alias-based plugin action dispatch", () => {
-    const { handleAction, plugin: actionHubPlugin } = createActionHubPluginFixture();
-
-    beforeEach(() => {
-      setTestPlugin(actionHubPlugin, "actionhub");
-      handleAction.mockClear();
-    });
-
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
-      vi.unstubAllEnvs();
-    });
+    const { handleAction, plugin: actionHubPlugin } = useActionHubPluginFixture();
 
     it("uses the selected operation-local plugin for target resolution", async () => {
       const resolveTarget = vi.fn(async ({ input }: { input: string }) => ({
@@ -78,13 +55,7 @@ describe("runMessageAction plugin dispatch", () => {
       setActivePluginRegistry(createTestRegistry([]));
       mocks.resolveOutboundChannelPlugin.mockReturnValue(scopedPlugin);
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            "operation-local": {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("operation-local"),
         action: "react",
         params: {
           channel: "operation-local",
@@ -136,13 +107,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
       });
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            "operation-local": {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("operation-local"),
         action: "broadcast",
         params: {
           channel: "operation-local",
@@ -168,13 +133,7 @@ describe("runMessageAction plugin dispatch", () => {
     it("rejects unsupported read actions before conversation authorization", async () => {
       await expect(
         runMessageAction({
-          cfg: {
-            channels: {
-              actionhub: {
-                enabled: true,
-              },
-            },
-          } as OpenClawConfig,
+          cfg: createEnabledMessageActionConfig("actionhub"),
           action: "react",
           params: {
             channel: "actionhub",
@@ -214,13 +173,7 @@ describe("runMessageAction plugin dispatch", () => {
 
         await expect(
           runMessageAction({
-            cfg: {
-              channels: {
-                actionhub: {
-                  enabled: true,
-                },
-              },
-            } as OpenClawConfig,
+            cfg: createEnabledMessageActionConfig("actionhub"),
             action: "pin",
             params: {
               channel: "actionhub",
@@ -275,13 +228,7 @@ describe("runMessageAction plugin dispatch", () => {
 
       await expect(
         runMessageAction({
-          cfg: {
-            channels: {
-              actionhub: {
-                enabled: true,
-              },
-            },
-          } as OpenClawConfig,
+          cfg: createEnabledMessageActionConfig("actionhub"),
           action: "pin",
           params: {
             channel: "actionhub",
@@ -335,13 +282,7 @@ describe("runMessageAction plugin dispatch", () => {
 
       await expect(
         runMessageAction({
-          cfg: {
-            channels: {
-              gatewaychat: {
-                enabled: true,
-              },
-            },
-          } as OpenClawConfig,
+          cfg: createEnabledMessageActionConfig("gatewaychat"),
           action: "react",
           params: {
             channel: "gatewaychat",
@@ -388,13 +329,7 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "broadcast",
         params: {
           channel: "gatewaychat",
@@ -515,13 +450,7 @@ describe("runMessageAction plugin dispatch", () => {
       });
 
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "broadcast",
         params: {
           channel: "gatewaychat",
@@ -566,13 +495,7 @@ describe("runMessageAction plugin dispatch", () => {
       );
 
       const result = await runMessageAction({
-        cfg: {
-          channels: {
-            gatewaychat: {
-              enabled: true,
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "broadcast",
         params: {
           channel: "gatewaychat",
@@ -599,6 +522,247 @@ describe("runMessageAction plugin dispatch", () => {
           ],
         },
       });
+    });
+  });
+  describe("ordinary target preparation currentness", () => {
+    const channel = "directorychat";
+    const cfg = createEnabledMessageActionConfig(channel);
+    type Directory = NonNullable<ChannelPlugin["directory"]>;
+    type TargetResolver = NonNullable<NonNullable<ChannelPlugin["messaging"]>["targetResolver"]>;
+    const listPeers = vi.fn<NonNullable<Directory["listPeers"]>>();
+    const listPeersLive = vi.fn<NonNullable<Directory["listPeersLive"]>>();
+    const resolveTarget = vi.fn<NonNullable<TargetResolver["resolveTarget"]>>();
+    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+      jsonResult({ ok: true, to: params.to }),
+    );
+    const basePlugin = createGatewayActionPlugin({
+      pluginId: channel,
+      label: "Directory Chat",
+      blurb: "Directory-backed action test plugin.",
+      actions: ["pin", "send"],
+      gatewayActions: [],
+      messaging: {
+        targetResolver: {
+          looksLikeId: (value) => value.startsWith("user:resolved-"),
+          resolveTarget,
+        },
+      },
+      handleAction,
+    });
+    const plugin: ChannelPlugin = {
+      ...basePlugin,
+      directory: { listPeers, listPeersLive },
+      actions: { ...basePlugin.actions, providerOwnedReadGates: ["pin"] },
+    };
+    const entry = (name: string) => ({
+      kind: "user" as const,
+      id: `user:resolved-${name}`,
+      name,
+    });
+    const runLookup = (
+      name: string,
+      assertCurrent?: () => void,
+      action: "pin" | "broadcast" = "pin",
+      abortSignal?: AbortSignal,
+    ) =>
+      runMessageAction({
+        cfg,
+        action,
+        params: {
+          channel,
+          accountId: "default",
+          ...(action === "broadcast"
+            ? { targets: ["user:resolved-First", `user:${name}`], message: "hello" }
+            : { target: `user:${name}`, messageId: "message-1" }),
+        },
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: channel,
+          currentChannelId: `user:resolved-${name}`,
+          currentChatType: "direct",
+        },
+        assertDirectAdapterHandoff: assertCurrent,
+        abortSignal,
+      });
+
+    beforeEach(() => {
+      listPeers.mockReset().mockResolvedValue([]);
+      listPeersLive.mockReset().mockResolvedValue([entry("Alpha")]);
+      resolveTarget.mockReset().mockImplementation(async ({ input }) => ({
+        to: input.startsWith("user:resolved-")
+          ? input
+          : `user:resolved-${input.replace(/^user:/, "")}`,
+        kind: "user",
+      }));
+      handleAction.mockClear();
+      resetDirectoryCache();
+      setTestPlugin(plugin, channel, "bundled");
+    });
+    afterEach(() => {
+      resetDirectoryCache();
+      setActivePluginRegistry(createTestRegistry([]));
+    });
+
+    describe.each(["pin", "broadcast"] as const)("%s", (action) => {
+      it.each(["active", "caller", "signal"] as const)(
+        "checks currentness after directory request preparation (%s)",
+        async (retirement) => {
+          const retired = retirement !== "active";
+          const entered = createDeferred();
+          const release = createDeferred();
+          const caller = new AbortController();
+          const canceled = new Error("caller retired during directory preparation");
+          const requests: string[] = [];
+          listPeersLive.mockImplementationOnce(async ({ query, accountId }) => {
+            const assertCurrent = captureChannelReadAuthority();
+            entered.resolve();
+            await release.promise;
+            assertCurrent?.();
+            requests.push(`${accountId}:${query}`);
+            return [entry("Alpha")];
+          });
+
+          const pending = runLookup(
+            "Alpha",
+            retirement === "signal" ? undefined : () => caller.signal.throwIfAborted(),
+            action,
+            retirement === "signal" ? caller.signal : undefined,
+          ).catch((error: unknown) => error);
+          await entered.promise;
+          if (retired) {
+            caller.abort(canceled);
+          }
+          release.resolve();
+          const result = await pending;
+
+          expect(requests).toEqual(retired ? [] : ["default:Alpha"]);
+          expect(handleAction).toHaveBeenCalledTimes(
+            (action === "broadcast" ? 1 : 0) + (retired ? 0 : 1),
+          );
+          if (action === "broadcast") {
+            expect(result).toMatchObject({
+              kind: "broadcast",
+              payload: {
+                results: [
+                  { ok: true, to: "user:resolved-First" },
+                  retired
+                    ? { ok: false, to: "user:Alpha", attempted: false }
+                    : { ok: true, to: "user:resolved-Alpha" },
+                ],
+              },
+            });
+          } else if (retired) {
+            expect(result).toMatchObject({
+              code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
+              cause:
+                retirement === "signal"
+                  ? expect.objectContaining({ name: "AbortError" })
+                  : canceled,
+            });
+          } else {
+            expect(result).toMatchObject({
+              kind: "action",
+              payload: { ok: true, to: "user:resolved-Alpha" },
+            });
+          }
+        },
+      );
+    });
+
+    it("isolates a retired caller from concurrent directory preparation", async () => {
+      const first = { entered: createDeferred(), release: createDeferred() };
+      const second = { entered: createDeferred(), release: createDeferred() };
+      const caller = new AbortController();
+      const canceled = new Error("first caller retired");
+      const requests: string[] = [];
+      listPeersLive.mockImplementation(async ({ query }) => {
+        const assertCurrent = captureChannelReadAuthority();
+        const gate = query === "Alpha" ? first : second;
+        gate.entered.resolve();
+        await gate.release.promise;
+        assertCurrent?.();
+        requests.push(query ?? "");
+        return [entry(query ?? "")];
+      });
+      const retired = runLookup("Alpha", () => caller.signal.throwIfAborted()).catch(
+        (error: unknown) => error,
+      );
+      await first.entered.promise;
+      const active = runLookup("Beta", () => {});
+      await second.entered.promise;
+      caller.abort(canceled);
+      first.release.resolve();
+      second.release.resolve();
+
+      const retiredResult = await retired;
+      expect(requests).toEqual(["Beta"]);
+      expect(retiredResult).toMatchObject({
+        code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
+        cause: canceled,
+      });
+      expect(await active).toMatchObject({
+        kind: "action",
+        payload: { ok: true, to: "user:resolved-Beta" },
+      });
+      expect(handleAction).toHaveBeenCalledOnce();
+    });
+
+    it("keeps callback-free directory lookup and cached reuse working", async () => {
+      listPeersLive.mockImplementationOnce(async () => {
+        expect(captureChannelReadAuthority()).toBeUndefined();
+        return [entry("Alpha")];
+      });
+      for (const assertCurrent of [undefined, () => {}]) {
+        expect(await runLookup("Alpha", assertCurrent)).toMatchObject({
+          kind: "action",
+          payload: { ok: true, to: "user:resolved-Alpha" },
+        });
+      }
+      expect(listPeers).toHaveBeenCalledOnce();
+      expect(listPeersLive).toHaveBeenCalledOnce();
+      expect(handleAction).toHaveBeenCalledTimes(2);
+    });
+
+    describe.each(["cached directory", "live directory"] as const)("%s miss", (stage) => {
+      it.each([false, true])(
+        "checks the caller before the next lookup (retired=%s)",
+        async (retired) => {
+          const entered = createDeferred();
+          const release = createDeferred();
+          const caller = new AbortController();
+          const canceled = new Error("caller retired during directory miss");
+          const heldLookup = stage === "cached directory" ? listPeers : listPeersLive;
+          const nextLookup = stage === "cached directory" ? listPeersLive : resolveTarget;
+          heldLookup.mockImplementationOnce(async () => {
+            entered.resolve();
+            await release.promise;
+            return [];
+          });
+          const pending = runLookup("Alpha", () => caller.signal.throwIfAborted()).catch(
+            (error: unknown) => error,
+          );
+          await entered.promise;
+          if (retired) {
+            caller.abort(canceled);
+          }
+          release.resolve();
+          const result = await pending;
+
+          expect(nextLookup).toHaveBeenCalledTimes(retired ? 0 : 1);
+          expect(handleAction).toHaveBeenCalledTimes(retired ? 0 : 1);
+          if (retired) {
+            expect(result).toMatchObject({
+              code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
+              cause: canceled,
+            });
+          } else {
+            expect(result).toMatchObject({
+              kind: "action",
+              payload: { ok: true, to: "user:resolved-Alpha" },
+            });
+          }
+        },
+      );
     });
   });
   describe("presentation parsing", () => {

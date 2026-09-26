@@ -62,6 +62,7 @@ export function normalizeStructuredMediaEntryForTranscript(
     ...(contentType ? { contentType } : {}),
     ...(kind ? { kind } : {}),
     ...(fileName ? { fileName } : {}),
+    ...(media.origin === "paste" || media.origin === "file" ? { origin: media.origin } : {}),
     ...(sizeBytes !== undefined ? { sizeBytes } : {}),
     ...(durationMs ? { durationMs } : {}),
     ...(width ? { width } : {}),

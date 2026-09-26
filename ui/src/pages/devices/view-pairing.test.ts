@@ -10,10 +10,6 @@ describe("device pairing dialog", () => {
       href: "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended",
     },
     {
-      access: "limited" as const,
-      href: "https://docs.openclaw.ai/channels/pairing#pair-from-the-control-ui-recommended",
-    },
-    {
       access: "node" as const,
       href: "https://docs.openclaw.ai/gateway/pairing#one-paste-node-pairing",
     },
@@ -35,6 +31,10 @@ describe("device pairing dialog", () => {
       container,
     );
 
+    expect(container.textContent).toContain(
+      "Device capabilities plus complete Gateway controls, including settings and upgrades.",
+    );
+    expect(container.textContent).toContain("Connect a computer as a command and capability host.");
     expect(container.querySelector<HTMLAnchorElement>(".device-pair-setup__footer a")?.href).toBe(
       href,
     );

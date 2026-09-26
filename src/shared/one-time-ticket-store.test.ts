@@ -87,7 +87,34 @@ describe("one-time ticket store", () => {
     expect(store.consume(minted.token)).toBeUndefined();
   });
 
-  it.each(["", " ", "a".repeat(47), "a".repeat(49), "A".repeat(48), "g".repeat(48)])(
+  it("preserves an unclaimed ticket when the requesting owner does not match", () => {
+    const requester = new AbortController();
+    const store = createOneTimeTicketStore<string>({ ttlMs: 100 });
+    const { token } = store.mint("original", { revokeSignal: requester.signal });
+
+    expect(store.consume(token, Date.now(), (owner) => owner === "other")).toBeUndefined();
+    expect(getEventListeners(requester.signal, "abort")).toHaveLength(1);
+    expect(store.consume(token, Date.now(), (owner) => owner === "original")).toBe("original");
+    expect(store.consume(token)).toBeUndefined();
+    expect(getEventListeners(requester.signal, "abort")).toHaveLength(0);
+  });
+
+  it("does not redeem a ticket revoked while its owner is being checked", () => {
+    const requester = new AbortController();
+    const store = createOneTimeTicketStore<string>({ ttlMs: 100 });
+    const { token } = store.mint("original", { revokeSignal: requester.signal });
+
+    expect(
+      store.consume(token, Date.now(), () => {
+        requester.abort();
+        return true;
+      }),
+    ).toBeUndefined();
+    expect(store.size).toBe(0);
+    expect(getEventListeners(requester.signal, "abort")).toHaveLength(0);
+  });
+
+  it.each(["", "a".repeat(47), "a".repeat(49), "A".repeat(48), "g".repeat(48)])(
     "rejects malformed token %j without consuming another ticket",
     (token) => {
       const store = createOneTimeTicketStore<string>({ ttlMs: 60_000 });
@@ -146,5 +173,15 @@ describe("one-time ticket store", () => {
     expect(store.consume(second.token)).toBeUndefined();
     vi.advanceTimersByTime(100);
     expect(onExpire).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases expired payloads when consumption beats a delayed timer", () => {
+    const onExpire = vi.fn();
+    const store = createOneTimeTicketStore<string>({ ttlMs: 100, now: () => 1_000, onExpire });
+    const ticket = store.mint("borrow");
+    expect(store.consume(ticket.token, 1_100)).toBeUndefined();
+    expect(onExpire).toHaveBeenCalledExactlyOnceWith("borrow", ticket.token);
+    vi.advanceTimersByTime(100);
+    expect(onExpire).toHaveBeenCalledTimes(1);
   });
 });

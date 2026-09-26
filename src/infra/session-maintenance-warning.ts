@@ -1,20 +1,19 @@
-// Sends session maintenance warnings before warn-only cleanup.
 import type { SessionMaintenanceWarning } from "../config/sessions/store-maintenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { formatSingleUnitDuration } from "./format-time/format-duration-internal.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
+import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import { enqueueSystemEvent } from "./system-events.js";
 
-// Session maintenance warnings notify an active session before warn-only
-// cleanup would prune it, with per-session dedupe and system-event fallback.
 type WarningParams = {
   cfg: OpenClawConfig;
+  agentId: string;
   sessionKey: string;
   entry: SessionEntry;
   warning: SessionMaintenanceWarning;
@@ -35,18 +34,11 @@ function shouldSuppressWarning(sessionKey: string, contextKey: string): boolean 
 }
 
 const log = createSubsystemLogger("session-maintenance-warning");
-const messageRuntimeLoader = createLazyPromiseLoader(
-  () => import("../channels/message/runtime.js"),
-  { cacheRejections: true },
-);
-const loadDeliverRuntime = messageRuntimeLoader.load;
+const loadDeliverRuntime = createLazyPromiseLoader(() => import("../channels/message/runtime.js"), {
+  cacheRejections: true,
+}).load;
 
-function shouldSendWarning(): boolean {
-  return process.env.NODE_ENV !== "test";
-}
-
-function buildWarningContext(params: WarningParams): string {
-  const { warning } = params;
+function buildWarningContext(warning: SessionMaintenanceWarning): string {
   return [
     warning.activeSessionKey,
     warning.pruneAfterMs,
@@ -78,48 +70,27 @@ function buildWarningText(warning: SessionMaintenanceWarning): string {
   );
 }
 
-function resolveWarningDeliveryTarget(entry: SessionEntry): {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-} {
-  const context = deliveryContextFromSession(entry);
-  const channel = context?.channel
-    ? (normalizeMessageChannel(context.channel) ?? context.channel)
-    : undefined;
-  return {
-    channel: channel && isDeliverableMessageChannel(channel) ? channel : undefined,
-    to: context?.to,
-    accountId: context?.accountId,
-    threadId: context?.threadId,
-  };
-}
-
 /** Deliver or enqueue a warn-only session maintenance notification. */
 export async function deliverSessionMaintenanceWarning(params: WarningParams): Promise<void> {
-  if (!shouldSendWarning()) {
+  if (process.env.NODE_ENV === "test") {
     return;
   }
 
-  const contextKey = buildWarningContext(params);
+  const contextKey = buildWarningContext(params.warning);
+  const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
   // Dedupe by effective warning context so repeated maintenance scans do not
   // spam the same session, but changed limits still produce a fresh warning.
-  if (shouldSuppressWarning(params.sessionKey, contextKey)) {
+  if (shouldSuppressWarning(queueKey, contextKey)) {
     return;
   }
 
   const text = buildWarningText(params.warning);
-  const target = resolveWarningDeliveryTarget(params.entry);
-
-  if (!target.channel || !target.to) {
-    enqueueSystemEvent(text, { sessionKey: params.sessionKey });
-    return;
-  }
-
-  const channel = normalizeMessageChannel(target.channel) ?? target.channel;
-  if (!isDeliverableMessageChannel(channel)) {
-    enqueueSystemEvent(text, { sessionKey: params.sessionKey });
+  const target = deliveryContextFromSession(params.entry);
+  const channel = target?.channel
+    ? (normalizeMessageChannel(target.channel) ?? target.channel)
+    : undefined;
+  if (!channel || !isDeliverableMessageChannel(channel) || !target?.to) {
+    enqueueSystemEvent(text, { sessionKey: queueKey });
     return;
   }
 
@@ -143,6 +114,6 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
     }
   } catch (err) {
     log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);
-    enqueueSystemEvent(text, { sessionKey: params.sessionKey });
+    enqueueSystemEvent(text, { sessionKey: queueKey });
   }
 }

@@ -4,24 +4,27 @@ import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import { isRetainedExecutionOwnerBinding } from "../../audit/execution-owner-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { recordSubagentTerminalState } from "../../sessions/subagent-terminal-state.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   createRunningTaskRun,
   completeTaskRunByRunId,
   failTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
-import { createNextAcpTaskBackingDetail } from "../../tasks/task-backing-authority.js";
+import {
+  createNextAcpTaskBackingDetail,
+  readTaskBackingInstance,
+} from "../../tasks/task-backing-authority.js";
 import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { listTasksForRelatedSessionKey } from "../../tasks/task-registry-query.js";
 import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
-import {
-  deliveryContextFromSession,
-  type DeliveryContext,
-} from "../../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "./manager.turn-timeout.js";
-import type { AcpSessionManagerDeps } from "./manager.types.js";
+import type { AcpRunTurnInput, AcpSessionManagerDeps } from "./manager.types.js";
 import { resolveAcpSessionTarget } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 
@@ -42,6 +45,8 @@ type BackgroundTaskContext = {
 
 type BackgroundTaskRecord = {
   taskId: string;
+  runId: string;
+  childSessionKey: string;
   parentFlowId?: string;
 };
 
@@ -209,6 +214,8 @@ export function createBackgroundTaskRecord(
     }
     return {
       taskId: task.taskId,
+      runId: context.runId,
+      childSessionKey: context.childSessionKey,
       ...(task.parentFlowId ? { parentFlowId: task.parentFlowId } : {}),
     };
   } catch (error) {
@@ -219,16 +226,95 @@ export function createBackgroundTaskRecord(
   }
 }
 
+/** Mirrors a cancelled actor wait without replacing a same-id predecessor's task. */
+export async function recordQueuedBackgroundTaskCancellation(params: {
+  input: AcpRunTurnInput;
+  deps: AcpSessionManagerDeps;
+  sessionKey: string;
+  agentId: string;
+  startedAt: number;
+  assertCurrent: () => void;
+}): Promise<void> {
+  params.assertCurrent();
+  if (params.input.mode !== "prompt") {
+    return;
+  }
+  const { input, sessionKey, agentId } = params;
+  const instanceId = input.admittedRunContext.operationalRunInstance.instanceId;
+  const existing = listTasksForRelatedSessionKey(sessionKey, agentId).filter(
+    (task) =>
+      task.runtime === "acp" &&
+      task.childSessionKey === sessionKey &&
+      task.runId === input.requestId,
+  );
+  // Actor-wait cancellation bypasses serialization. It must not overwrite task
+  // custody retained by an earlier operational instance with the same request id.
+  if (
+    existing.length > 0 &&
+    !existing.some((task) => {
+      const backing = readTaskBackingInstance(task.detail);
+      return backing?.runtime === "acp" && backing.instanceId === instanceId;
+    })
+  ) {
+    return;
+  }
+  const context = resolveBackgroundTaskContext({
+    ...params,
+    cfg: input.cfg,
+    requestId: input.requestId,
+    text: input.text,
+  });
+  const record = context
+    ? createBackgroundTaskRecord(context, params.startedAt, instanceId)
+    : undefined;
+  if (!context || !record) {
+    return;
+  }
+  markBackgroundTaskTerminal(record, {
+    status: "cancelled",
+    endedAt: Date.now(),
+    lastEventAt: Date.now(),
+    progressSummary: null,
+    terminalSummary: null,
+  });
+  await recordSubagentTerminalState(
+    {
+      childSessionKey: sessionKey,
+      runId: context.runId,
+      requesterSessionKey: context.requesterSessionKey,
+      outcomeStatus: "cancelled",
+    },
+    params.assertCurrent,
+  );
+  params.assertCurrent();
+}
+
 /** Links ACP owner rows only when the runtime reaches its prompt-submitted boundary. */
-export function bindBackgroundTaskExecution(
+export async function bindBackgroundTaskExecution(
   record: BackgroundTaskRecord,
   admitted: AdmittedRunContext,
-): void {
+  assertCurrent?: () => void,
+): Promise<void> {
+  const { taskId, parentFlowId } = record;
   try {
-    const taskResult = bindTaskRunExecution({ admitted, taskId: record.taskId });
-    const flowResult = record.parentFlowId
+    if (!admitted.executionIdentityToken) {
+      return;
+    }
+    const context = captureOpenClawStateWorkerContext();
+    const taskResult = await bindTaskRunExecution({
+      admitted,
+      taskId,
+      context,
+      assertCurrent,
+    });
+    const flowResult = parentFlowId
       ? isRetainedExecutionOwnerBinding(taskResult)
-        ? bindTaskFlowExecution({ admitted, flowId: record.parentFlowId })
+        ? await bindTaskFlowExecution({
+            admitted,
+            flowId: parentFlowId,
+            context,
+            assertCurrent,
+          })
         : taskResult
       : undefined;
     if ([taskResult, flowResult].some((result) => result === "mismatch" || result === "missing")) {
@@ -240,30 +326,31 @@ export function bindBackgroundTaskExecution(
 }
 
 export function markBackgroundTaskRunning(
-  runId: string,
+  record: BackgroundTaskRecord,
   params: {
-    sessionKey?: string;
     lastEventAt?: number;
     progressSummary?: string | null;
   },
 ): void {
   try {
     startTaskRunByRunId({
-      runId,
+      runId: record.runId,
+      taskId: record.taskId,
       runtime: "acp",
-      sessionKey: params.sessionKey,
+      sessionKey: record.childSessionKey,
       lastEventAt: params.lastEventAt,
       progressSummary: params.progressSummary,
     });
   } catch (error) {
-    logVerbose(`acp-manager: failed updating background task for ${runId}: ${String(error)}`);
+    logVerbose(
+      `acp-manager: failed updating background task for ${record.runId}: ${String(error)}`,
+    );
   }
 }
 
 export function markBackgroundTaskTerminal(
-  runId: string,
+  record: BackgroundTaskRecord,
   params: {
-    sessionKey?: string;
     status: "succeeded" | "failed" | "timed_out" | "cancelled";
     endedAt: number;
     lastEventAt?: number;
@@ -276,9 +363,10 @@ export function markBackgroundTaskTerminal(
   try {
     if (params.status === "succeeded") {
       completeTaskRunByRunId({
-        runId,
+        runId: record.runId,
+        taskId: record.taskId,
         runtime: "acp",
-        sessionKey: params.sessionKey,
+        sessionKey: record.childSessionKey,
         endedAt: params.endedAt,
         lastEventAt: params.lastEventAt,
         progressSummary: params.progressSummary,
@@ -288,9 +376,10 @@ export function markBackgroundTaskTerminal(
       return;
     }
     failTaskRunByRunId({
-      runId,
+      runId: record.runId,
+      taskId: record.taskId,
       runtime: "acp",
-      sessionKey: params.sessionKey,
+      sessionKey: record.childSessionKey,
       status: params.status,
       endedAt: params.endedAt,
       lastEventAt: params.lastEventAt,
@@ -299,6 +388,8 @@ export function markBackgroundTaskTerminal(
       terminalSummary: params.terminalSummary,
     });
   } catch (error) {
-    logVerbose(`acp-manager: failed updating background task for ${runId}: ${String(error)}`);
+    logVerbose(
+      `acp-manager: failed updating background task for ${record.runId}: ${String(error)}`,
+    );
   }
 }

@@ -15,9 +15,9 @@ import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
-  inspectActiveCronRunReceipt,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { reserveQueuedCronRun } from "./run-admission.js";
 import { createCronServiceState } from "./state.js";
@@ -313,7 +313,7 @@ describe("cron outcome receipt finalization", () => {
     });
     const database = openOpenClawStateDatabase().db;
     database.exec(`
-      CREATE TEMP TRIGGER reject_post_finalization_maintenance
+      CREATE TRIGGER reject_post_finalization_maintenance
       BEFORE UPDATE ON cron_jobs
       WHEN NEW.job_id = '${sibling.id}'
       BEGIN

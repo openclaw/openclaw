@@ -48,6 +48,9 @@ export function createMessageActionContextFixture() {
   const handleWorkspaceAction = vi.fn(async (_ctx: ChannelMessageActionContext) =>
     jsonResult({ ok: true }),
   );
+  const handleForumAction = vi.fn(async (_ctx: ChannelMessageActionContext) =>
+    jsonResult({ ok: true }),
+  );
   const readWorkspaceTestPlugin: ChannelPlugin = {
     ...workspaceTestPlugin,
     actions: {
@@ -114,19 +117,28 @@ export function createMessageActionContextFixture() {
         toolContext.currentMessagingTarget?.replace(/^user:/i, "").toLowerCase(),
     },
   };
+  const forumActionTestPlugin: ChannelPlugin = {
+    ...forumTestPlugin,
+    actions: {
+      describeMessageTool: () => ({ actions: ["topic-create", "topic-edit"] }),
+      handleAction: handleForumAction,
+    },
+  };
   return {
     handleWorkspaceAction,
+    handleForumAction,
     setup(): void {
       setActivePluginRegistry(
         createTestRegistry([
           { pluginId: "workspace", source: "test", plugin: readWorkspaceTestPlugin },
           { pluginId: "directchat", source: "test", plugin: directChatTestPlugin },
-          { pluginId: "forum", source: "test", plugin: forumTestPlugin },
+          { pluginId: "forum", source: "test", plugin: forumActionTestPlugin },
           { pluginId: "localchat", source: "test", plugin: localChatTestPlugin },
           { pluginId: "slackdm", source: "test", plugin: resolvedDmTestPlugin },
         ]),
       );
       handleWorkspaceAction.mockClear();
+      handleForumAction.mockClear();
     },
     cleanup(): void {
       setActivePluginRegistry(createTestRegistry([]));

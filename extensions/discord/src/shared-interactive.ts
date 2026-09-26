@@ -1,4 +1,3 @@
-// Discord plugin module implements shared interactive behavior.
 import {
   legacyInteractiveReplyToPresentation,
   resolveMessagePresentationActionValue,
@@ -6,7 +5,6 @@ import {
   resolveMessagePresentationOptionAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
-  InteractiveButtonStyle,
   LegacyInteractiveReply,
   MessagePresentation,
   MessagePresentationButton,
@@ -24,16 +22,9 @@ import {
 } from "./component-custom-id.js";
 import type {
   DiscordComponentButtonSpec,
-  DiscordComponentButtonStyle,
   DiscordComponentMessageSpec,
 } from "./components.types.js";
 import { buildDiscordQuestionCustomId } from "./question-custom-id.js";
-
-function resolveDiscordInteractiveButtonStyle(
-  style?: InteractiveButtonStyle,
-): DiscordComponentButtonStyle | undefined {
-  return style ?? "secondary";
-}
 
 function resolveDiscordSelectOptionValue(option: MessagePresentationOption): string | undefined {
   return resolveMessagePresentationActionValue(resolveMessagePresentationOptionAction(option));
@@ -68,17 +59,14 @@ function buildDiscordButtonComponent(
   if (!action) {
     return undefined;
   }
+  const component: DiscordComponentButtonSpec = {
+    label: button.label,
+    style: button.style ?? "secondary",
+    ...(button.disabled === true ? { disabled: true } : {}),
+  };
   if (action.type === "approval") {
     const internalCustomId = buildDiscordApprovalCustomId(action);
-    if (!internalCustomId) {
-      return undefined;
-    }
-    return {
-      label: button.label,
-      style: resolveDiscordInteractiveButtonStyle(button.style),
-      internalCustomId,
-      ...(button.disabled === true ? { disabled: true } : {}),
-    };
+    return internalCustomId ? { ...component, internalCustomId } : undefined;
   }
   if (action.type === "question") {
     if ("intent" in action) {
@@ -96,48 +84,25 @@ function buildDiscordButtonComponent(
       questionId: action.questionId,
       optionIndex,
     });
-    return internalCustomId
-      ? {
-          label: button.label,
-          style: resolveDiscordInteractiveButtonStyle(button.style),
-          internalCustomId,
-          ...(button.disabled === true ? { disabled: true } : {}),
-        }
-      : undefined;
+    return internalCustomId ? { ...component, internalCustomId } : undefined;
   }
   if (
     action.type === "web-app" &&
     action.widgetId &&
     isValidDiscordActivityWidgetId(action.widgetId)
   ) {
-    return {
-      label: button.label,
-      style: resolveDiscordInteractiveButtonStyle(button.style),
-      internalCustomId: buildDiscordActivityCustomId(action.widgetId),
-      ...(button.disabled === true ? { disabled: true } : {}),
-      ...(button.reusable === true ? { reusable: true } : {}),
-    };
-  }
-  if (action.type === "web-app" && !action.url) {
-    return undefined;
-  }
-  const component: DiscordComponentButtonSpec = {
-    label: button.label,
-    style:
-      action.type === "url" || action.type === "web-app"
-        ? "link"
-        : resolveDiscordInteractiveButtonStyle(button.style),
-  };
-  if (action.type === "url" || action.type === "web-app") {
+    component.internalCustomId = buildDiscordActivityCustomId(action.widgetId);
+  } else if (action.type === "url" || action.type === "web-app") {
+    if (action.type === "web-app" && !action.url) {
+      return undefined;
+    }
+    component.style = "link";
     component.url = action.url;
   } else {
     component.callbackData = action.type === "command" ? action.command : action.value;
     if (button.action?.type === "command" || button.action?.type === "callback") {
       component.callbackDataKind = button.action.type;
     }
-  }
-  if (button.disabled === true) {
-    component.disabled = true;
   }
   if (button.reusable === true) {
     component.reusable = true;

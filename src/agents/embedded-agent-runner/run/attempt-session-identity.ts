@@ -11,7 +11,7 @@ import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
-type SessionPromptState = ReturnType<typeof createEmbeddedRunSessionPromptState>;
+type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 
 export function applyEmbeddedAttemptSessionIdentity(params: {
   sessionPromptState: Pick<

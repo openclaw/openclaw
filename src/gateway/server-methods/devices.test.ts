@@ -16,30 +16,24 @@ import {
 
 const { deviceHandlers } = await import("./devices.js");
 
+function invokeDeviceHandler(options: ReturnType<typeof createOptions>) {
+  return expectDefined(deviceHandlers[options.req.method], options.req.method)(options);
+}
+
 describe("device management", () => {
   beforeEach(resetDeviceHandlerTestState);
 
+  const pending = [
+    { requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 },
+    { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
+  ];
+  const paired = [
+    { deviceId: "device-1", publicKey: "pk-1", approvedAtMs: 100, createdAtMs: 50 },
+    { deviceId: "device-2", publicKey: "pk-2", approvedAtMs: 200, createdAtMs: 60 },
+  ];
+
   it("filters pairing list to the caller device for non-admin device sessions", async () => {
-    listDevicePairingMock.mockResolvedValue({
-      pending: [
-        { requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 },
-        { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
-      ],
-      paired: [
-        {
-          deviceId: "device-1",
-          publicKey: "pk-1",
-          approvedAtMs: 100,
-          createdAtMs: 50,
-        },
-        {
-          deviceId: "device-2",
-          publicKey: "pk-2",
-          approvedAtMs: 200,
-          createdAtMs: 60,
-        },
-      ],
-    });
+    listDevicePairingMock.mockResolvedValue(structuredClone({ pending, paired }));
     const opts = createOptions(
       "device.pair.list",
       {},
@@ -48,160 +42,43 @@ describe("device management", () => {
       },
     );
 
-    await expectDefined(
-      deviceHandlers["device.pair.list"],
-      'deviceHandlers["device.pair.list"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(opts.respond).toHaveBeenCalledWith(
       true,
       {
-        pending: [{ requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 }],
-        paired: [
-          {
-            deviceId: "device-1",
-            publicKey: "pk-1",
-            approvedAtMs: 100,
-            createdAtMs: 50,
-            tokens: undefined,
-            connected: false,
-          },
-        ],
+        pending: [pending[0]],
+        paired: [{ ...paired[0], tokens: undefined, connected: false }],
       },
       undefined,
     );
   });
 
-  it("preserves the full pairing list for admin device sessions", async () => {
-    listDevicePairingMock.mockResolvedValue({
-      pending: [
-        { requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 },
-        { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
-      ],
-      paired: [
-        { deviceId: "device-1", publicKey: "pk-1", approvedAtMs: 100, createdAtMs: 50 },
-        { deviceId: "device-2", publicKey: "pk-2", approvedAtMs: 200, createdAtMs: 60 },
-      ],
-    });
-    const opts = createOptions(
-      "device.pair.list",
-      {},
-      {
-        client: createClient(["operator.pairing", "operator.admin"], "device-1", {
-          isDeviceTokenAuth: true,
-        }),
-      },
-    );
+  it.each([
+    {
+      name: "admin device sessions",
+      client: createClient(["operator.pairing", "operator.admin"], "device-1", {
+        isDeviceTokenAuth: true,
+      }),
+    },
+    { name: "non-device operator sessions", client: createClient(["operator.pairing"]) },
+    {
+      name: "shared-auth sessions carrying a device identity",
+      client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }),
+    },
+  ])("preserves the full pairing list for $name", async ({ client }) => {
+    listDevicePairingMock.mockResolvedValue(structuredClone({ pending, paired }));
+    const opts = createOptions("device.pair.list", {}, { client });
 
-    await expectDefined(
-      deviceHandlers["device.pair.list"],
-      'deviceHandlers["device.pair.list"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(opts.respond).toHaveBeenCalledWith(
       true,
       {
-        pending: [
-          { requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 },
-          { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
-        ],
+        pending,
         paired: [
-          {
-            deviceId: "device-1",
-            publicKey: "pk-1",
-            approvedAtMs: 100,
-            createdAtMs: 50,
-            tokens: undefined,
-            connected: false,
-          },
-          {
-            deviceId: "device-2",
-            publicKey: "pk-2",
-            approvedAtMs: 200,
-            createdAtMs: 60,
-            tokens: undefined,
-            connected: false,
-          },
-        ],
-      },
-      undefined,
-    );
-  });
-
-  it("preserves the full pairing list for non-device operator sessions", async () => {
-    listDevicePairingMock.mockResolvedValue({
-      pending: [{ requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 }],
-      paired: [{ deviceId: "device-2", publicKey: "pk-2", approvedAtMs: 200, createdAtMs: 60 }],
-    });
-    const opts = createOptions(
-      "device.pair.list",
-      {},
-      {
-        client: createClient(["operator.pairing"]),
-      },
-    );
-
-    await expectDefined(
-      deviceHandlers["device.pair.list"],
-      'deviceHandlers["device.pair.list"] test invariant',
-    )(opts);
-
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      {
-        pending: [{ requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 }],
-        paired: [
-          {
-            deviceId: "device-2",
-            publicKey: "pk-2",
-            approvedAtMs: 200,
-            createdAtMs: 60,
-            tokens: undefined,
-            connected: false,
-          },
-        ],
-      },
-      undefined,
-    );
-  });
-
-  it("preserves the full pairing list for shared-auth sessions carrying a device identity", async () => {
-    listDevicePairingMock.mockResolvedValue({
-      pending: [
-        { requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 },
-        { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
-      ],
-      paired: [{ deviceId: "device-2", publicKey: "pk-2", approvedAtMs: 200, createdAtMs: 60 }],
-    });
-    const opts = createOptions(
-      "device.pair.list",
-      {},
-      {
-        client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }),
-      },
-    );
-
-    await expectDefined(
-      deviceHandlers["device.pair.list"],
-      'deviceHandlers["device.pair.list"] test invariant',
-    )(opts);
-
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      {
-        pending: [
-          { requestId: "req-1", deviceId: "device-1", publicKey: "pk-1", ts: 100 },
-          { requestId: "req-2", deviceId: "device-2", publicKey: "pk-2", ts: 200 },
-        ],
-        paired: [
-          {
-            deviceId: "device-2",
-            publicKey: "pk-2",
-            approvedAtMs: 200,
-            createdAtMs: 60,
-            tokens: undefined,
-            connected: false,
-          },
+          { ...paired[0], tokens: undefined, connected: false },
+          { ...paired[1], tokens: undefined, connected: false },
         ],
       },
       undefined,
@@ -225,10 +102,7 @@ describe("device management", () => {
       opts.context as { hasConnectedClientsForDevice?: (deviceId: string) => boolean }
     ).hasConnectedClientsForDevice = (deviceId) => deviceId === "device-2";
 
-    await expectDefined(
-      deviceHandlers["device.pair.list"],
-      'deviceHandlers["device.pair.list"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     const respond = opts.respond as ReturnType<typeof vi.fn>;
     const payload = respond.mock.calls[0]?.[1] as {
@@ -253,84 +127,81 @@ describe("device management", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
-    await expectDefined(
-      deviceHandlers["device.pair.approve"],
-      'deviceHandlers["device.pair.approve"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(approveDevicePairingMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing approval denied");
   });
 
-  it("allows admins to approve another device", async () => {
-    approveDevicePairingMock.mockResolvedValue({
-      status: "approved",
-      requestId: "req-2",
-      device: {
-        deviceId: "device-2",
-        publicKey: "pk-2",
-        approvedAtMs: 200,
-        createdAtMs: 150,
-      },
-    });
-    const opts = createOptions(
-      "device.pair.approve",
-      { requestId: "req-2" },
-      {
-        client: createClient(["operator.admin"], "device-1", {
-          isDeviceTokenAuth: true,
-        }),
-      },
-    );
-    const captured = captureSecurityEvents();
-
-    try {
-      await expectDefined(
-        deviceHandlers["device.pair.approve"],
-        'deviceHandlers["device.pair.approve"] test invariant',
-      )(opts);
-    } finally {
-      captured.stop();
-    }
-
-    expect(getPendingDevicePairingMock).not.toHaveBeenCalled();
-    expect(approveDevicePairingMock).toHaveBeenCalledWith("req-2", {
-      callerScopes: ["operator.admin"],
-    });
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      {
+  it.each(["req-2", " \treq-2\n "])(
+    "allows admins to approve another device with requestId %j",
+    async (requestId) => {
+      approveDevicePairingMock.mockResolvedValue({
+        status: "approved",
         requestId: "req-2",
         device: {
           deviceId: "device-2",
           publicKey: "pk-2",
           approvedAtMs: 200,
           createdAtMs: 150,
-          tokens: undefined,
         },
-      },
-      undefined,
-    );
-    expect(captured.events).toHaveLength(1);
-    expect(captured.events[0]).toMatchObject({
-      action: "device.pairing.approved",
-      outcome: "success",
-      severity: "low",
-      actor: {
-        kind: "operator",
-        deviceIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u),
-        role: "admin",
-      },
-      target: { kind: "device", idHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u) },
-      policy: { id: "gateway.device-pairing", decision: "allow" },
-      control: { id: "device.pair.approve", family: "auth" },
-      attributes: { role_count: 0, scope_count: 0 },
-    });
-    const serialized = JSON.stringify(captured.events);
-    expect(serialized).not.toContain("device-1");
-    expect(serialized).not.toContain("device-2");
-    expect(serialized).not.toContain("pk-2");
-  });
+      });
+      const opts = createOptions(
+        "device.pair.approve",
+        { requestId },
+        {
+          client: createClient(["operator.admin"], "device-1", {
+            isDeviceTokenAuth: true,
+          }),
+        },
+      );
+      const captured = captureSecurityEvents();
+
+      try {
+        await invokeDeviceHandler(opts);
+      } finally {
+        captured.stop();
+      }
+
+      expect(getPendingDevicePairingMock).not.toHaveBeenCalled();
+      expect(approveDevicePairingMock).toHaveBeenCalledWith("req-2", {
+        callerScopes: ["operator.admin"],
+      });
+      expect(opts.respond).toHaveBeenCalledWith(
+        true,
+        {
+          requestId: "req-2",
+          device: {
+            deviceId: "device-2",
+            publicKey: "pk-2",
+            approvedAtMs: 200,
+            createdAtMs: 150,
+            tokens: undefined,
+          },
+        },
+        undefined,
+      );
+      expect(captured.events).toHaveLength(1);
+      expect(captured.events[0]).toMatchObject({
+        action: "device.pairing.approved",
+        outcome: "success",
+        severity: "low",
+        actor: {
+          kind: "operator",
+          deviceIdHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u),
+          role: "admin",
+        },
+        target: { kind: "device", idHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u) },
+        policy: { id: "gateway.device-pairing", decision: "allow" },
+        control: { id: "device.pair.approve", family: "auth" },
+        attributes: { role_count: 0, scope_count: 0 },
+      });
+      const serialized = JSON.stringify(captured.events);
+      expect(serialized).not.toContain("device-1");
+      expect(serialized).not.toContain("device-2");
+      expect(serialized).not.toContain("pk-2");
+    },
+  );
 
   it("retires the previous node generation before returning reapproval success", async () => {
     approveDevicePairingMock.mockResolvedValue({
@@ -360,62 +231,68 @@ describe("device management", () => {
       expect(disconnect).not.toHaveBeenCalled();
     });
 
-    await expectDefined(
-      deviceHandlers["device.pair.approve"],
-      'deviceHandlers["device.pair.approve"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
     await Promise.resolve();
 
     expect(respond).toHaveBeenCalledTimes(1);
     expect(disconnect).toHaveBeenCalledWith("node-repaired", { role: "node" });
   });
 
-  it("allows approving the caller device from a non-admin device session", async () => {
-    getPendingDevicePairingMock.mockResolvedValue({
-      requestId: "req-1",
-      deviceId: " device-1 ",
-      publicKey: "pk-1",
-      ts: 100,
-    });
-    approveDevicePairingMock.mockResolvedValue({
-      status: "approved",
-      requestId: "req-1",
-      device: {
-        deviceId: "device-1",
-        publicKey: "pk-1",
-        approvedAtMs: 100,
-        createdAtMs: 50,
-      },
-    });
-    const opts = createOptions(
-      "device.pair.approve",
-      { requestId: "req-1" },
-      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
-    );
-
-    await expectDefined(
-      deviceHandlers["device.pair.approve"],
-      'deviceHandlers["device.pair.approve"] test invariant',
-    )(opts);
-
-    expect(approveDevicePairingMock).toHaveBeenCalledWith("req-1", {
-      callerScopes: ["operator.pairing"],
-    });
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      {
+  it.each(["req-1", " \treq-1\n "])(
+    "allows approving the caller device from a non-admin device session with requestId %j",
+    async (requestId) => {
+      getPendingDevicePairingMock.mockImplementation(async (requestedId: string) =>
+        requestedId === "req-1"
+          ? {
+              requestId: "req-1",
+              deviceId: " device-1 ",
+              publicKey: "pk-1",
+              ts: 100,
+            }
+          : null,
+      );
+      approveDevicePairingMock.mockResolvedValue({
+        status: "approved",
         requestId: "req-1",
         device: {
           deviceId: "device-1",
           publicKey: "pk-1",
           approvedAtMs: 100,
           createdAtMs: 50,
-          tokens: undefined,
         },
-      },
-      undefined,
-    );
-  });
+      });
+      const opts = createOptions(
+        "device.pair.approve",
+        { requestId },
+        { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+      );
+
+      await invokeDeviceHandler(opts);
+
+      expect(opts.context.broadcast).toHaveBeenCalledWith(
+        "device.pair.resolved",
+        expect.objectContaining({ requestId: "req-1", deviceId: "device-1", decision: "approved" }),
+        { dropIfSlow: true },
+      );
+      expect(approveDevicePairingMock).toHaveBeenCalledWith("req-1", {
+        callerScopes: ["operator.pairing"],
+      });
+      expect(opts.respond).toHaveBeenCalledWith(
+        true,
+        {
+          requestId: "req-1",
+          device: {
+            deviceId: "device-1",
+            publicKey: "pk-1",
+            approvedAtMs: 100,
+            createdAtMs: 50,
+            tokens: undefined,
+          },
+        },
+        undefined,
+      );
+    },
+  );
 
   it("allows shared-auth operator sessions to approve operator roles within caller scopes", async () => {
     getPendingDevicePairingMock.mockResolvedValue({
@@ -446,10 +323,7 @@ describe("device management", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }) },
     );
 
-    await expectDefined(
-      deviceHandlers["device.pair.approve"],
-      'deviceHandlers["device.pair.approve"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(getPendingDevicePairingMock).toHaveBeenCalledWith("req-1");
     expect(approveDevicePairingMock).toHaveBeenCalledWith("req-1", {
@@ -490,10 +364,7 @@ describe("device management", () => {
     const captured = captureSecurityEvents();
 
     try {
-      await expectDefined(
-        deviceHandlers["device.pair.approve"],
-        'deviceHandlers["device.pair.approve"] test invariant',
-      )(opts);
+      await invokeDeviceHandler(opts);
     } finally {
       captured.stop();
     }
@@ -530,10 +401,7 @@ describe("device management", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }) },
     );
 
-    await expectDefined(
-      deviceHandlers["device.pair.approve"],
-      'deviceHandlers["device.pair.approve"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(approveDevicePairingMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing approval denied");
@@ -555,10 +423,7 @@ describe("device management", () => {
       { client: createClient(["operator.pairing"]) },
     );
 
-    await expectDefined(
-      deviceHandlers["device.pair.approve"],
-      'deviceHandlers["device.pair.approve"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(approveDevicePairingMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing approval denied");
@@ -572,10 +437,7 @@ describe("device management", () => {
       { client: createClient(["operator.pairing"]) },
     );
 
-    await expectDefined(
-      deviceHandlers["device.pair.approve"],
-      'deviceHandlers["device.pair.approve"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(approveDevicePairingMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing approval denied");
@@ -596,97 +458,103 @@ describe("device management", () => {
       },
     );
 
-    await expectDefined(
-      deviceHandlers["device.pair.reject"],
-      'deviceHandlers["device.pair.reject"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(rejectDevicePairingMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing rejection denied");
   });
 
-  it("allows rejecting the caller device from a non-admin device session", async () => {
-    getPendingDevicePairingMock.mockResolvedValue({
-      requestId: "req-1",
-      deviceId: " device-1 ",
-      publicKey: "pk-1",
-      ts: 100,
-    });
-    rejectDevicePairingMock.mockResolvedValue({
-      requestId: "req-1",
-      deviceId: "device-1",
-      rejectedAtMs: 123,
-    });
-    const opts = createOptions(
-      "device.pair.reject",
-      { requestId: "req-1" },
-      {
-        client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }),
-      },
-    );
+  it.each(["req-1", " \treq-1\n "])(
+    "allows rejecting the caller device from a non-admin device session with requestId %j",
+    async (requestId) => {
+      getPendingDevicePairingMock.mockImplementation(async (requestedId: string) =>
+        requestedId === "req-1"
+          ? {
+              requestId: "req-1",
+              deviceId: " device-1 ",
+              publicKey: "pk-1",
+              ts: 100,
+            }
+          : null,
+      );
+      rejectDevicePairingMock.mockResolvedValue({
+        requestId: "req-1",
+        deviceId: "device-1",
+        rejectedAtMs: 123,
+      });
+      const opts = createOptions(
+        "device.pair.reject",
+        { requestId },
+        {
+          client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }),
+        },
+      );
 
-    await expectDefined(
-      deviceHandlers["device.pair.reject"],
-      'deviceHandlers["device.pair.reject"] test invariant',
-    )(opts);
+      await invokeDeviceHandler(opts);
 
-    expect(rejectDevicePairingMock).toHaveBeenCalledWith("req-1");
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      { requestId: "req-1", deviceId: "device-1", rejectedAtMs: 123 },
-      undefined,
-    );
-  });
+      expect(opts.context.broadcast).toHaveBeenCalledWith(
+        "device.pair.resolved",
+        expect.objectContaining({ requestId: "req-1", deviceId: "device-1", decision: "rejected" }),
+        { dropIfSlow: true },
+      );
+      expect(rejectDevicePairingMock).toHaveBeenCalledWith("req-1");
+      expect(opts.respond).toHaveBeenCalledWith(
+        true,
+        { requestId: "req-1", deviceId: "device-1", rejectedAtMs: 123 },
+        undefined,
+      );
+    },
+  );
 
-  it("allows admins to reject another device", async () => {
-    rejectDevicePairingMock.mockResolvedValue({
-      requestId: "req-2",
-      deviceId: "device-2",
-      rejectedAtMs: 456,
-    });
-    const opts = createOptions(
-      "device.pair.reject",
-      { requestId: "req-2" },
-      {
-        client: createClient(["operator.pairing", "operator.admin"], "device-1", {
-          isDeviceTokenAuth: true,
-        }),
-      },
-    );
-    const captured = captureSecurityEvents();
+  it.each(["req-2", " \treq-2\n "])(
+    "allows admins to reject another device with requestId %j",
+    async (requestId) => {
+      rejectDevicePairingMock.mockResolvedValue({
+        requestId: "req-2",
+        deviceId: "device-2",
+        rejectedAtMs: 456,
+      });
+      const opts = createOptions(
+        "device.pair.reject",
+        { requestId },
+        {
+          client: createClient(["operator.pairing", "operator.admin"], "device-1", {
+            isDeviceTokenAuth: true,
+          }),
+        },
+      );
+      const captured = captureSecurityEvents();
 
-    try {
-      await expectDefined(
-        deviceHandlers["device.pair.reject"],
-        'deviceHandlers["device.pair.reject"] test invariant',
-      )(opts);
-    } finally {
-      captured.stop();
-    }
+      try {
+        await invokeDeviceHandler(opts);
+      } finally {
+        captured.stop();
+      }
 
-    expect(rejectDevicePairingMock).toHaveBeenCalledWith("req-2");
-    expect(opts.respond).toHaveBeenCalledWith(
-      true,
-      { requestId: "req-2", deviceId: "device-2", rejectedAtMs: 456 },
-      undefined,
-    );
-    expect(captured.events).toHaveLength(1);
-    expect(captured.events[0]).toMatchObject({
-      action: "device.pairing.rejected",
-      outcome: "success",
-      severity: "low",
-      actor: {
-        kind: "operator",
-        role: "admin",
-      },
-      target: { kind: "device", idHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u) },
-      policy: { id: "gateway.device-pairing", decision: "allow" },
-      control: { id: "device.pair.reject", family: "auth" },
-    });
-    const serialized = JSON.stringify(captured.events);
-    expect(serialized).not.toContain("device-1");
-    expect(serialized).not.toContain("device-2");
-  });
+      expect(rejectDevicePairingMock).toHaveBeenCalledWith("req-2");
+      expect(opts.respond).toHaveBeenCalledWith(
+        true,
+        { requestId: "req-2", deviceId: "device-2", rejectedAtMs: 456 },
+        undefined,
+      );
+      expect(captured.events).toHaveLength(1);
+      expect(captured.events[0]).toMatchObject({
+        action: "device.pairing.rejected",
+        outcome: "success",
+        severity: "low",
+        actor: {
+          kind: "operator",
+          role: "admin",
+        },
+        target: { kind: "device", idHash: expect.stringMatching(/^sha256:[a-f0-9]{12}$/u) },
+        policy: { id: "gateway.device-pairing", decision: "allow" },
+        control: { id: "device.pair.reject", family: "auth" },
+      });
+      const serialized = JSON.stringify(captured.events);
+      expect(serialized).not.toContain("device-1");
+      expect(serialized).not.toContain("device-2");
+    },
+  );
 
   it("renames a paired device with an operator label", async () => {
     updatePairedDeviceMetadataMock.mockResolvedValue(true);
@@ -695,10 +563,7 @@ describe("device management", () => {
       label: "  Kitchen Mac  ",
     });
 
-    await expectDefined(
-      deviceHandlers["device.pair.rename"],
-      'deviceHandlers["device.pair.rename"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("device-1", {
       operatorLabel: "Kitchen Mac",
@@ -725,10 +590,7 @@ describe("device management", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
-    await expectDefined(
-      deviceHandlers["device.pair.rename"],
-      'deviceHandlers["device.pair.rename"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing rename denied");
@@ -741,10 +603,7 @@ describe("device management", () => {
       label: "Ghost",
     });
 
-    await expectDefined(
-      deviceHandlers["device.pair.rename"],
-      'deviceHandlers["device.pair.rename"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("missing-device", {
       operatorLabel: "Ghost",
@@ -759,10 +618,7 @@ describe("device management", () => {
       label: "   ",
     });
 
-    await expectDefined(
-      deviceHandlers["device.pair.rename"],
-      'deviceHandlers["device.pair.rename"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "label required");
@@ -774,10 +630,7 @@ describe("device management", () => {
       label: "x".repeat(65),
     });
 
-    await expectDefined(
-      deviceHandlers["device.pair.rename"],
-      'deviceHandlers["device.pair.rename"] test invariant',
-    )(opts);
+    await invokeDeviceHandler(opts);
 
     expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
     const respond = opts.respond as ReturnType<typeof vi.fn>;

@@ -6,18 +6,20 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  listSessionEntriesReadOnly,
-  type SessionEntrySummary,
-} from "../../config/sessions/session-accessor.js";
+import type { SessionEntrySummary } from "../../config/sessions/session-accessor.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SessionCatalogEntrySnapshot } from "../../plugins/session-catalog.js";
+import type {
+  SessionCatalogEntrySnapshot,
+  SessionCatalogProvider,
+} from "../../plugins/session-catalog.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
+import { prepareSessionRowSelection } from "../session-utils-list.js";
 
 export type SessionCatalogInstances = Map<
   string,
@@ -32,13 +34,20 @@ type SessionCatalogRequestEntrySnapshot = {
   projectHostSessions: (
     host: SessionCatalogHost,
     instances: SessionCatalogInstances,
+    audience?: SessionCatalogProvider["audience"],
   ) => SessionCatalogHost;
 };
 
 export function createSessionCatalogRequestEntrySnapshot(params: {
   cfg: OpenClawConfig;
   fallbackAgentId: string;
+  projection: SessionRowProjection;
+  /** Bound one delivery's lookups; provider planning retains the full snapshot. */
+  sessionKeys?: readonly string[];
 }): SessionCatalogRequestEntrySnapshot {
+  if (params.projection.needsMaterialization) {
+    throw new Error("Await session projection materialization before capturing catalog entries");
+  }
   const entriesByAgentId = new Map<string, readonly SessionEntrySummary[]>();
   const entryIndexByAgentId = new Map<string, ReadonlyMap<string, SessionEntry>>();
   const actorBySessionKey = new Map<string, SessionCatalogSession["createdActor"]>();
@@ -48,6 +57,21 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   let catalogEntries:
     | ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>
     | undefined;
+  const entryAgentId = (sessionKey: string) =>
+    resolveAgentIdFromSessionKey(
+      sessionKey,
+      tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
+    );
+  const selectedKeysByAgentId = params.sessionKeys ? new Map<string, Set<string>>() : undefined;
+  if (selectedKeysByAgentId) {
+    for (const sessionKey of new Set(params.sessionKeys)) {
+      const agentId = entryAgentId(sessionKey);
+      const keys = selectedKeysByAgentId.get(agentId) ?? new Set<string>();
+      keys.add(sessionKey);
+      keys.add(resolveStoredSessionKeyForAgentStore({ cfg: params.cfg, agentId, sessionKey }));
+      selectedKeysByAgentId.set(agentId, keys);
+    }
+  }
 
   const entriesForAgent = (rawAgentId: string): readonly SessionEntrySummary[] => {
     const agentId = normalizeAgentId(rawAgentId);
@@ -55,9 +79,15 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       if (frozen) {
         return [];
       }
+      const entries = selectedKeysByAgentId
+        ? [...(selectedKeysByAgentId.get(agentId) ?? [])].flatMap((key) =>
+            // An empty canonical alias must not become an unscoped projection query.
+            key ? prepareSessionRowSelection(params.projection, { agentId }, { key }).entries : [],
+          )
+        : prepareSessionRowSelection(params.projection, { agentId }).entries;
       entriesByAgentId.set(
         agentId,
-        listSessionEntriesReadOnly({ agentId, clone: false, projection: "list" }),
+        entries.map(([sessionKey, entry]) => ({ sessionKey, entry })),
       );
     }
     return entriesByAgentId.get(agentId) ?? [];
@@ -91,10 +121,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   };
 
   const entryForSession = (sessionKey: string): SessionEntry | undefined => {
-    const agentId = resolveAgentIdFromSessionKey(
-      sessionKey,
-      tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
-    );
+    const agentId = entryAgentId(sessionKey);
     const index = entryIndexForAgent(agentId);
     const canonicalKey = resolveStoredSessionKeyForAgentStore({
       cfg: params.cfg,
@@ -148,13 +175,22 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       }
     },
     entryForSession,
-    projectHostSessions: (host, instances) => ({
+    projectHostSessions: (host, instances, audience) => ({
       ...host,
       sessions: host.sessions.map(
-        ({ createdActor: _providerCreatedActor, sessionKey, color: rawColor, ...session }) => {
+        ({ createdActor: providerCreatedActor, sessionKey, color: rawColor, ...session }) => {
           // Provider-supplied colors are display metadata independent of adoption identity.
           const color = typeof rawColor === "string" ? normalizeSessionColorValue(rawColor) : null;
           const colorProjection = color ? { color } : {};
+          if (audience === "session-viewers") {
+            // Publication attribution belongs to the provider. A source's session key is never
+            // a local adoption claim, even when it happens to match a Gateway session.
+            return {
+              ...session,
+              ...colorProjection,
+              ...(providerCreatedActor ? { createdActor: providerCreatedActor } : {}),
+            };
+          }
           const original = sessionKey ? instances.get(sessionKey) : undefined;
           const current = sessionKey ? entryForSession(sessionKey) : undefined;
           // Native rows remain native if their adoption was replaced or detached. Never project

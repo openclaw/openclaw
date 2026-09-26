@@ -236,39 +236,50 @@ describe("promptRemoteGatewayConfig", () => {
     },
   );
 
-  it("does not retain a saved SSH route when discovery suggests a new manual tunnel", async () => {
-    detectBinary.mockResolvedValue(true);
-    discoverGatewayBeacons.mockResolvedValue([createGatewayDiscoveryBeacon()]);
-    const { next, prompter } = await runRemotePrompt({
-      cfg: {
-        gateway: {
-          remote: {
-            url: "ws://127.0.0.1:18789",
-            transport: "ssh",
-            sshTarget: "operator@old.example",
-            sshIdentity: "/tmp/old-identity",
-            sshHostKeyPolicy: "openssh",
-            remotePort: 19443,
-            token: "old-tunnel-secret",
+  it.each([
+    { port: 18789, sshPort: undefined },
+    { port: 18789, sshPort: 2222 },
+    { port: 29443, sshPort: 2222 },
+  ])(
+    "uses discovered Gateway port $port and SSH port $sshPort without retaining an old route",
+    async ({ port, sshPort }) => {
+      detectBinary.mockResolvedValue(true);
+      discoverGatewayBeacons.mockResolvedValue([
+        { ...createGatewayDiscoveryBeacon(), port, gatewayPort: 41111, sshPort },
+      ]);
+      const { next, prompter } = await runRemotePrompt({
+        cfg: {
+          gateway: {
+            remote: {
+              url: "ws://127.0.0.1:18789",
+              transport: "ssh",
+              sshTarget: "operator@old.example",
+              sshIdentity: "/tmp/old-identity",
+              sshHostKeyPolicy: "openssh",
+              remotePort: 19443,
+              token: "old-tunnel-secret",
+            },
           },
         },
-      },
-      text: vi.fn(async (params) =>
-        params.message === "Gateway WebSocket URL" ? String(params.initialValue) : "",
-      ),
-      confirm: true,
-      selectResponses: {
-        "Select gateway": "0",
-        "Connection method": "ssh",
-      },
-    });
+        text: vi.fn(async (params) =>
+          params.message === "Gateway WebSocket URL" ? String(params.initialValue) : "",
+        ),
+        confirm: true,
+        selectResponses: {
+          "Select gateway": "0",
+          "Connection method": "ssh",
+        },
+      });
 
-    expect(next.gateway?.remote).toEqual({ url: "ws://127.0.0.1:18789" });
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("<user>@gateway.tailnet.ts.net"),
-      "SSH tunnel",
-    );
-  });
+      expect(next.gateway?.remote).toEqual({ url: "ws://127.0.0.1:18789" });
+      expect(prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `ssh -N -L 18789:127.0.0.1:${port} <user>@gateway.tailnet.ts.net${sshPort ? ` -p ${sshPort}` : ""}`,
+        ),
+        "SSH tunnel",
+      );
+    },
+  );
 
   it("falls back to manual URL entry when discovery trust is declined", async () => {
     detectBinary.mockResolvedValue(true);

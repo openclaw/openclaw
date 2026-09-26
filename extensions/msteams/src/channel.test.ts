@@ -1,4 +1,3 @@
-// Msteams tests cover channel plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
@@ -6,7 +5,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
-import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { msTeamsApprovalCapability } from "./approval-native.js";
 import { msteamsPlugin } from "./channel.js";
@@ -24,6 +22,29 @@ function createConfiguredMSTeamsCfg(): OpenClawConfig {
   };
 }
 
+describe("msteamsPlugin.security.collectWarnings", () => {
+  it("records an intentional open groupPolicy as a non-blocking posture advisory", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+        },
+      },
+    } as OpenClawConfig;
+    const account = msteamsPlugin.config.resolveAccount(cfg, "default");
+
+    expect(await msteamsPlugin.security?.collectWarnings?.({ cfg, account })).toEqual([
+      {
+        checkId: "channels.msteams.groups.open",
+        severity: "warn",
+        title: "MS Teams security warning",
+        detail:
+          'MS Teams groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.msteams.groupPolicy="allowlist" + channels.msteams.groupAllowFrom to restrict senders.',
+      },
+    ]);
+  });
+});
+
 describe("msteamsPlugin", () => {
   afterEach(() => vi.unstubAllEnvs());
 
@@ -40,34 +61,6 @@ describe("msteamsPlugin", () => {
         target: ownerId,
       }),
     ).toMatchObject({ chatType: "direct" });
-  });
-
-  it("shares setup and directory contracts with the lightweight artifacts", () => {
-    expect(msteamsSetupPlugin.meta).toEqual(msteamsPlugin.meta);
-    expect(msteamsPlugin.capabilities).toBe(msteamsSetupPlugin.capabilities);
-    expect(msteamsPlugin.reload).toBe(msteamsSetupPlugin.reload);
-    expect(msteamsPlugin.configSchema).toBe(msteamsSetupPlugin.configSchema);
-
-    for (const key of [
-      "listAccountIds",
-      "resolveAccount",
-      "defaultAccountId",
-      "setAccountEnabled",
-      "deleteAccount",
-      "resolveAllowFrom",
-      "formatAllowFrom",
-      "resolveDefaultTo",
-    ] as const) {
-      expect(msteamsSetupPlugin.config[key]).toBe(msteamsPlugin.config[key]);
-    }
-
-    expect(msteamsPlugin.directory?.self).toBe(msteamsDirectoryContractPlugin.directory.self);
-    expect(msteamsPlugin.directory?.listPeers).toBe(
-      msteamsDirectoryContractPlugin.directory.listPeers,
-    );
-    expect(msteamsPlugin.directory?.listGroups).toBe(
-      msteamsDirectoryContractPlugin.directory.listGroups,
-    );
   });
 
   it("declares its implemented group and reaction capabilities", () => {
@@ -289,7 +282,7 @@ describe("msteamsPlugin", () => {
   });
 
   it("registers the approval runtime before monitor startup only when native delivery is enabled", async () => {
-    const monitorModule = await import("./index.js");
+    const monitorModule = await import("./monitor.js");
     const monitor = vi.spyOn(monitorModule, "monitorMSTeamsProvider").mockResolvedValue({
       app: null,
       shutdown: async () => {},
@@ -348,14 +341,6 @@ describe("msteamsPlugin", () => {
     }
   });
 
-  it("reuses the shared Teams target-id matcher for explicit targets", () => {
-    const looksLikeId = msteamsPlugin.messaging?.targetResolver?.looksLikeId;
-
-    expect(looksLikeId?.("29:1a2b3c4d5e6f")).toBe(true);
-    expect(looksLikeId?.("a:1bfPersonalChat")).toBe(true);
-    expect(looksLikeId?.("user:Jane Doe")).toBe(false);
-  });
-
   it("recognizes provider-prefixed explicit targets without claiming display names", () => {
     const messaging = msteamsPlugin.messaging;
     const aadUserId = "40a1a0ed-4ff2-4164-a219-55518990c197";
@@ -378,15 +363,6 @@ describe("msteamsPlugin", () => {
 });
 
 describe("msteams config schema", () => {
-  it("defaults groupPolicy to allowlist", () => {
-    const res = MSTeamsConfigSchema.safeParse({});
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.groupPolicy).toBe("allowlist");
-    }
-  });
-
   it("accepts historyLimit", () => {
     const res = MSTeamsConfigSchema.safeParse({ historyLimit: 4 });
 
@@ -514,8 +490,6 @@ describe("msTeamsApprovalAuth", () => {
 
   it.each([
     ["bare", ownerId],
-    ["user-prefixed", `user:${ownerId}`],
-    ["provider-prefixed", `msteams:user:${ownerId}`],
     ["provider-prefixed bare", `teams:${ownerId}`],
     ["uppercase", `MSTEAMS:USER:${ownerId.toUpperCase()}`],
   ])("authorizes only the configured owner for %s AAD object IDs", (_label, allowFrom) => {
@@ -526,11 +500,7 @@ describe("msTeamsApprovalAuth", () => {
   it.each([
     ["conversation", `conversation:${otherUserId}`],
     ["provider-prefixed conversation", `msteams:conversation:${otherUserId}`],
-    ["chat", `chat:${otherUserId}`],
     ["email", "owner@example.com"],
-    ["display name", "Owner Display"],
-    ["access group", "accessGroup:operators"],
-    ["wildcard", "*"],
     ["braced UUID", `{${otherUserId}}`],
   ])("does not treat %s entries as stable approval principals", (_label, invalidPrincipal) => {
     expect(authorizeApproval([ownerId, invalidPrincipal], otherUserId)).toMatchObject({

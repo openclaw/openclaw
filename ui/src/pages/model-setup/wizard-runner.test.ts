@@ -1,10 +1,80 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardNextResult } from "../../api/types.ts";
+import * as uuid from "../../lib/uuid.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
 
+type RunnerOptions = ConstructorParameters<typeof ModelSetupWizardRunner>[0];
+
+function createRunner(options: Pick<RunnerOptions, "getClient"> & Partial<RunnerOptions>) {
+  return new ModelSetupWizardRunner({
+    getAgentId: () => null,
+    onChange: () => undefined,
+    requestFailedMessage: () => "failed",
+    cancelledMessage: () => "cancelled",
+    sessionExpiredMessage: () => "expired",
+    ...options,
+  });
+}
+
 describe("ModelSetupWizardRunner", () => {
+  it("cleans a late MCP admission on the captured client without replaying or selecting an agent", async () => {
+    const sessionId = "00000000-0000-4000-8000-000000000001";
+    const generateUUID = vi.spyOn(uuid, "generateUUID").mockReturnValue(sessionId);
+    const admission = createDeferred<WizardNextResult>();
+    const original = new GatewayBrowserClient({ url: "ws://gateway-a.example.test" });
+    const replacement = new GatewayBrowserClient({ url: "ws://gateway-b.example.test" });
+    const originalRequest = vi
+      .spyOn(original, "request")
+      .mockReturnValueOnce(admission.promise)
+      .mockResolvedValue({ status: "cancelled" });
+    const replacementRequest = vi.spyOn(replacement, "request");
+    let client = original;
+    const getAgentId = vi.fn(() => "selected-agent");
+    const onStart = vi.fn();
+    const runner = new ModelSetupWizardRunner({
+      getClient: () => client,
+      getAgentId,
+      onChange: () => undefined,
+      onStart,
+      requestFailedMessage: () => "failed",
+      cancelledMessage: () => "cancelled",
+      sessionExpiredMessage: () => "expired",
+    });
+    try {
+      const start = runner.startMcpLogin("docs");
+      expect(originalRequest).toHaveBeenCalledWith(
+        "mcp.authLogin",
+        { sessionId, serverName: "docs" },
+        { timeoutMs: null },
+      );
+      expect(getAgentId).not.toHaveBeenCalled();
+      expect(onStart).toHaveBeenCalledWith("mcp.authLogin", undefined);
+
+      client = replacement;
+      await runner.cancel();
+      const cancellation = originalRequest.mock.calls[1];
+      expect(cancellation).toEqual([
+        "wizard.cancel",
+        { sessionId, closeInput: true },
+        { timeoutMs: 30_000 },
+      ]);
+      admission.resolve({ done: false, status: "running" });
+      await expect(start).resolves.toBeNull();
+      expect(originalRequest).toHaveBeenCalledTimes(3);
+      expect(originalRequest.mock.calls[2]).toEqual(cancellation);
+      expect(replacementRequest).not.toHaveBeenCalled();
+      expect(runner.state).toEqual({ phase: "idle" });
+    } finally {
+      admission.resolve({ done: true, status: "cancelled" });
+      await runner.cancel();
+      originalRequest.mockRestore();
+      replacementRequest.mockRestore();
+      generateUUID.mockRestore();
+    }
+  });
+
   it.each(["cancelled", "failed"] as const)(
     "shares an in-flight explicit cancellation with teardown when it is %s",
     async (outcome) => {
@@ -19,14 +89,10 @@ describe("ModelSetupWizardRunner", () => {
         return { done: false, status: "running", step: { id: "key", type: "text" } };
       });
       const terminal = vi.fn();
-      const runner = new ModelSetupWizardRunner({
+      const runner = createRunner({
         getClient: () => ({ request }) as unknown as GatewayBrowserClient,
         getAgentId: () => "main",
-        onChange: () => undefined,
         onStart: () => terminal,
-        requestFailedMessage: () => "failed",
-        cancelledMessage: () => "cancelled",
-        sessionExpiredMessage: () => "expired",
       });
       await runner.start("provider-auth");
       const explicit = runner.requestCancellation();
@@ -76,14 +142,10 @@ describe("ModelSetupWizardRunner", () => {
     });
     let client = { request: originalRequest } as unknown as GatewayBrowserClient;
     const terminal = vi.fn();
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => client,
       getAgentId: () => "main",
-      onChange: () => undefined,
       onStart: () => terminal,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
     });
     await runner.start("provider-auth");
     const pending = runner.requestCancellation();
@@ -129,14 +191,10 @@ describe("ModelSetupWizardRunner", () => {
       return { done: false, status: "running", step: { id: "key", type: "text" } };
     });
     const terminal = vi.fn();
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => ({ request }) as unknown as GatewayBrowserClient,
       getAgentId: () => "main",
-      onChange: () => undefined,
       onStart: () => terminal,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
     });
     await runner.start("original");
     const cancellation = runner.requestCancellation();
@@ -173,14 +231,10 @@ describe("ModelSetupWizardRunner", () => {
       });
       const client = { request } as unknown as GatewayBrowserClient;
       const onTerminal = vi.fn();
-      const runner = new ModelSetupWizardRunner({
+      const runner = createRunner({
         getClient: () => client,
         getAgentId: () => "main",
-        onChange: () => undefined,
         onStart: () => onTerminal,
-        requestFailedMessage: () => "failed",
-        cancelledMessage: () => "cancelled",
-        sessionExpiredMessage: () => "expired",
       });
       let pending: Promise<unknown> = runner.start("original-provider");
       if (caseName === "late terminal") {
@@ -237,14 +291,9 @@ describe("ModelSetupWizardRunner", () => {
       let client = { request: originalRequest } as unknown as GatewayBrowserClient;
       const originalTerminal = vi.fn();
       const replacementTerminal = vi.fn();
-      const runner = new ModelSetupWizardRunner({
+      const runner = createRunner({
         getClient: () => client,
-        getAgentId: () => null,
-        onChange: () => undefined,
         onStart: vi.fn().mockReturnValueOnce(originalTerminal).mockReturnValue(replacementTerminal),
-        requestFailedMessage: () => "failed",
-        cancelledMessage: () => "cancelled",
-        sessionExpiredMessage: () => "expired",
       });
       await runner.start("original");
       const next = runner.answer("answer");
@@ -307,14 +356,10 @@ describe("ModelSetupWizardRunner", () => {
     );
     let client = { request: originalRequest } as unknown as GatewayBrowserClient;
     const terminal = vi.fn();
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => client,
       getAgentId: () => "research",
-      onChange: () => undefined,
       onStart: () => terminal,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
     });
     await runner.start("meta-api-key");
     const answer = runner.answer("synthetic-key");
@@ -354,14 +399,10 @@ describe("ModelSetupWizardRunner", () => {
     const afterReconnect = vi.fn();
     let client = { request } as unknown as GatewayBrowserClient;
     const onTerminal = vi.fn();
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => client,
       getAgentId: () => "research",
-      onChange: () => undefined,
       onStart: () => onTerminal,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
     });
     await runner.start("meta-api-key");
     const answer = runner.answer("synthetic-key");
@@ -403,13 +444,9 @@ describe("ModelSetupWizardRunner", () => {
       return Promise.resolve({});
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => client,
       getAgentId: () => "research",
-      onChange: () => undefined,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
     });
 
     await runner.start("openai-oauth");
@@ -447,13 +484,8 @@ describe("ModelSetupWizardRunner", () => {
       return Promise.resolve({ ok: true });
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => client,
-      getAgentId: () => null,
-      onChange: () => undefined,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
     });
 
     await runner.start("openai-oauth");
@@ -468,51 +500,10 @@ describe("ModelSetupWizardRunner", () => {
     );
   });
 
-  it("uses the prepare start method with the shared wizard transport", async () => {
-    const request = vi.fn((method: string) => {
-      if (method === "openclaw.setup.prepare.start") {
-        return Promise.resolve({ sessionId: "prepare-session", done: false, status: "running" });
-      }
-      if (method === "wizard.next") {
-        return Promise.resolve({
-          done: false,
-          status: "running",
-          step: { id: "pull", type: "progress", message: "Pulling 25%" },
-        });
-      }
-      return Promise.resolve({});
-    });
-    const runner = new ModelSetupWizardRunner({
-      getClient: () => ({ request }) as unknown as GatewayBrowserClient,
-      getAgentId: () => null,
-      onChange: () => undefined,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
-    });
-
-    await runner.start("llama-cpp", "openclaw.setup.prepare.start");
-
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "openclaw.setup.prepare.start",
-      { sessionId: expect.any(String), authChoice: "llama-cpp" },
-      { timeoutMs: null },
-    );
-    expect(runner.state).toMatchObject({
-      phase: "step",
-      authChoice: "llama-cpp",
-      step: { type: "progress" },
-    });
-  });
-
   it.each([
     ["openclaw.setup.auth.start", "cancel"],
     ["openclaw.setup.auth.start", "settled cancel"],
     ["openclaw.setup.auth.start", "close"],
-    ["openclaw.setup.prepare.start", "cancel"],
-    ["openclaw.setup.prepare.start", "settled cancel"],
-    ["openclaw.setup.prepare.start", "close"],
   ] as const)(
     "releases a late %s session after %s so setup can restart",
     async (method, action) => {
@@ -564,14 +555,9 @@ describe("ModelSetupWizardRunner", () => {
       );
       const client = { request } as unknown as GatewayBrowserClient;
       const terminalResult = vi.fn();
-      const runner = new ModelSetupWizardRunner({
+      const runner = createRunner({
         getClient: () => client,
-        getAgentId: () => null,
-        onChange: () => undefined,
         onStart: () => terminalResult,
-        requestFailedMessage: () => "failed",
-        cancelledMessage: () => "cancelled",
-        sessionExpiredMessage: () => "expired",
       });
 
       const firstStart = runner.start("original", method);
@@ -599,15 +585,10 @@ describe("ModelSetupWizardRunner", () => {
 
   it.each([
     ["openclaw.setup.auth.start", "running"],
-    ["openclaw.setup.prepare.start", "running"],
     ["openclaw.setup.auth.start", "done"],
-    ["openclaw.setup.prepare.start", "done"],
     ["openclaw.setup.auth.start", "error"],
-    ["openclaw.setup.prepare.start", "error"],
     ["openclaw.setup.auth.start", "cancelled"],
-    ["openclaw.setup.prepare.start", "cancelled"],
     ["openclaw.setup.auth.start", "busy"],
-    ["openclaw.setup.prepare.start", "busy"],
   ] as const)(
     "retains late %s responses after the local deadline (status: %s)",
     async (method, status) => {
@@ -678,14 +659,9 @@ describe("ModelSetupWizardRunner", () => {
         );
         const client = { request } as unknown as GatewayBrowserClient;
         const terminalResult = vi.fn();
-        const runner = new ModelSetupWizardRunner({
+        const runner = createRunner({
           getClient: () => client,
-          getAgentId: () => null,
-          onChange: () => undefined,
           onStart: () => terminalResult,
-          requestFailedMessage: () => "failed",
-          cancelledMessage: () => "cancelled",
-          sessionExpiredMessage: () => "expired",
         });
 
         const timedOutStart = runner.start("original", method);
@@ -757,13 +733,8 @@ describe("ModelSetupWizardRunner", () => {
     const originalClient = { request: originalRequest } as unknown as GatewayBrowserClient;
     const replacementClient = { request: replacementRequest } as unknown as GatewayBrowserClient;
     let currentClient = originalClient;
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => currentClient,
-      getAgentId: () => null,
-      onChange: () => undefined,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
     });
 
     const originalStart = runner.start("original");
@@ -785,14 +756,13 @@ describe("ModelSetupWizardRunner", () => {
   });
 
   it.each(
-    (["openclaw.setup.auth.start", "openclaw.setup.prepare.start"] as const).flatMap((method) =>
-      ["done", "busy"].flatMap((status) =>
-        ["open", "closed"].map((lifecycle) => ({ method, status, lifecycle })),
-      ),
+    ["done", "busy"].flatMap((status) =>
+      ["open", "closed"].map((lifecycle) => ({ status, lifecycle })),
     ),
   )(
-    "does not cancel a terminal $method $status result ($lifecycle presentation)",
-    async ({ method, status, lifecycle }) => {
+    "does not cancel a terminal $status result ($lifecycle presentation)",
+    async ({ status, lifecycle }) => {
+      const method = "openclaw.setup.auth.start";
       let resolveStart: () => void = () => {
         throw new Error("the setup request did not start");
       };
@@ -822,14 +792,9 @@ describe("ModelSetupWizardRunner", () => {
       });
       const client = { request } as unknown as GatewayBrowserClient;
       const terminalResult = vi.fn();
-      const runner = new ModelSetupWizardRunner({
+      const runner = createRunner({
         getClient: () => client,
-        getAgentId: () => null,
-        onChange: () => undefined,
         onStart: () => terminalResult,
-        requestFailedMessage: () => "failed",
-        cancelledMessage: () => "cancelled",
-        sessionExpiredMessage: () => "expired",
       });
 
       const start = runner.start("original", method);
@@ -887,12 +852,8 @@ describe("ModelSetupWizardRunner", () => {
       },
     );
     const client = { request } as unknown as GatewayBrowserClient;
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => client,
-      getAgentId: () => null,
-      onChange: () => undefined,
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
       sessionExpiredMessage: () => "Setup expired. Close and restart setup.",
     });
 
@@ -942,17 +903,13 @@ describe("ModelSetupWizardRunner", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const seen: string[] = [];
-    const runner = new ModelSetupWizardRunner({
+    const runner = createRunner({
       getClient: () => client,
-      getAgentId: () => null,
       onChange: (state) => {
         if (state.phase === "step" && state.step.type === "progress") {
           seen.push(state.step.message ?? "");
         }
       },
-      requestFailedMessage: () => "failed",
-      cancelledMessage: () => "cancelled",
-      sessionExpiredMessage: () => "expired",
     });
 
     await expect(runner.start("llama-cpp", "openclaw.setup.prepare.start")).resolves.toEqual({

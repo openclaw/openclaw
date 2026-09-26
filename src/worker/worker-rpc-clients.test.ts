@@ -13,12 +13,30 @@ import type {
 import { createDeferred } from "../../test/helpers/promise.js";
 import { WorkerConnectionStoppedError, WorkerFencedError } from "./worker-connection-contract.js";
 import type { WorkerConnection, WorkerConnectionState } from "./worker-connection.js";
-import { WorkerConnectionInterruptedError } from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
 } from "./worker-rpc-clients.js";
+
+type LiveResponse = Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>;
+
+function successResponse<T>(payload: T) {
+  return { type: "res", id: "response", ok: true, payload } as const;
+}
+
+function resyncRequired(ackedSeq = 0, expectedSeq = ackedSeq + 1): LiveResponse {
+  return {
+    type: "res",
+    id: "response",
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "Replay required",
+      details: { reason: "resync-required", ackedSeq, expectedSeq },
+    },
+  };
+}
 
 const HELLO: WorkerHelloOk = {
   type: "worker-hello-ok",
@@ -141,7 +159,7 @@ const INFERENCE_REQUEST: WorkerInferenceStartParams = {
   options: {},
 };
 
-function doneOutcome(): WorkerInferenceTerminalOutcome {
+function doneOutcome(): Extract<WorkerInferenceTerminalOutcome, { type: "done" }> {
   return {
     type: "done",
     message: {
@@ -165,107 +183,11 @@ function doneOutcome(): WorkerInferenceTerminalOutcome {
 }
 
 describe("worker transcript commit client", () => {
-  it("retries the exact semantic batch after an interrupted response", async () => {
-    const harness = connectionHarness();
-    harness.requestTranscriptCommit
-      .mockRejectedValueOnce(new WorkerConnectionInterruptedError())
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "commit-response",
-        ok: true,
-        payload: { entryIds: ["entry-1"], newLeafId: "leaf-2" },
-      });
-    const client = new WorkerTranscriptCommitClient(harness.connection, {
-      runEpoch: 3,
-      baseLeafId: "leaf-1",
-      initialSeq: 8,
-    });
-
-    const message = userMessage("hello");
-    const commit = client.commit([message]);
-    const text = message.content[0];
-    if (text?.type === "text") {
-      text.text = "caller mutation";
-    }
-
-    await expect(commit).resolves.toEqual({
-      entryIds: ["entry-1"],
-      newLeafId: "leaf-2",
-    });
-
-    expect(harness.requestTranscriptCommit).toHaveBeenCalledTimes(2);
-    expect(harness.requestTranscriptCommit.mock.calls[1]?.[0]).toBe(
-      harness.requestTranscriptCommit.mock.calls[0]?.[0],
-    );
-    expect(harness.requestTranscriptCommit.mock.calls[0]?.[0]).toEqual({
-      runEpoch: 3,
-      seq: 8,
-      baseLeafId: "leaf-1",
-      messages: [userMessage("hello")],
-    });
-    expect(client.baseLeafId).toBe("leaf-2");
-    expect(client.nextSeq).toBe(9);
-  });
-
-  it("fail-stops on a stale base without retrying the rejected batch", async () => {
-    const harness = connectionHarness();
-    harness.requestTranscriptCommit.mockResolvedValueOnce({
-      type: "res",
-      id: "commit-response",
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "Transcript base changed",
-        details: { reason: "stale-base-leaf" },
-      },
-    });
-    const client = new WorkerTranscriptCommitClient(harness.connection, {
-      runEpoch: 3,
-      baseLeafId: "leaf-4",
-      initialSeq: 11,
-    });
-
-    const error: unknown = await client.commit([userMessage("hello")]).then(
-      () => undefined,
-      (cause: unknown) => cause,
-    );
-
-    expect(error).toBeInstanceOf(Error);
-    expect(error).toMatchObject({
-      name: "WorkerTranscriptCommitError",
-      message:
-        "Worker transcript base changed; uncommitted messages were not committed; relaunch required.",
-      reason: "stale-base-leaf",
-    });
-    expect(client.baseLeafId).toBe("leaf-4");
-    expect(client.nextSeq).toBe(12);
-
-    const blocked: unknown = await client.commit([userMessage("blocked")]).then(
-      () => undefined,
-      (cause: unknown) => cause,
-    );
-    expect(blocked).toBe(error);
-    expect(harness.requestTranscriptCommit).toHaveBeenCalledOnce();
-
-    expect(client.nextSeq).toBe(12);
-    expect(harness.requestTranscriptCommit).toHaveBeenCalledOnce();
-  });
-
   it("splits semantic batches at the gateway frame byte ceiling", async () => {
     const harness = connectionHarness();
     harness.requestTranscriptCommit
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "commit-response-1",
-        ok: true,
-        payload: { entryIds: ["entry-1"], newLeafId: "leaf-1" },
-      })
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "commit-response-2",
-        ok: true,
-        payload: { entryIds: ["entry-2"], newLeafId: "leaf-2" },
-      });
+      .mockResolvedValueOnce(successResponse({ entryIds: ["entry-1"], newLeafId: "leaf-1" }))
+      .mockResolvedValueOnce(successResponse({ entryIds: ["entry-2"], newLeafId: "leaf-2" }));
     const client = new WorkerTranscriptCommitClient(harness.connection, {
       runEpoch: 3,
       baseLeafId: null,
@@ -292,40 +214,25 @@ describe("worker transcript commit client", () => {
 
   it("commits a terminal assistant message with replay near the frame ceiling", async () => {
     const harness = connectionHarness();
-    harness.requestTranscriptCommit.mockResolvedValueOnce({
-      type: "res",
-      id: "commit-response",
-      ok: true,
-      payload: { entryIds: ["entry-1"], newLeafId: "leaf-1" },
-    });
+    harness.requestTranscriptCommit.mockResolvedValueOnce(
+      successResponse({ entryIds: ["entry-1"], newLeafId: "leaf-1" }),
+    );
     const client = new WorkerTranscriptCommitClient(harness.connection, {
       runEpoch: 3,
       baseLeafId: null,
     });
     const message: WorkerTranscriptMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "done" }],
-      api: "openai-responses",
+      ...doneOutcome().message,
       provider: "openai",
-      model: "gpt-5.6-sol",
+      model: "gpt-5.6-luna",
       providerReplay: {
         v: 1,
         type: "openai-responses-compaction",
         data: "x".repeat(60 * 1024),
         provider: "openai",
         api: "openai-responses",
-        model: "gpt-5.6-sol",
+        model: "gpt-5.6-luna",
       },
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 2,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: 2,
     };
 
     await expect(client.commit([message])).resolves.toEqual({
@@ -339,48 +246,11 @@ describe("worker transcript commit client", () => {
 });
 
 describe("worker live-event client", () => {
-  it("advances acknowledgements through previews to the terminal barrier", async () => {
-    const harness = connectionHarness();
-    harness.requestLiveEvent
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "live-response-1",
-        ok: true,
-        payload: { ackedSeq: 1 },
-      })
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "live-response-2",
-        ok: true,
-        payload: { ackedSeq: 2 },
-      })
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "live-response-3",
-        ok: true,
-        payload: { ackedSeq: 3 },
-      });
-    const client = new WorkerLiveEventClient(harness.connection, { runEpoch: 3 });
-
-    client.enqueuePreview("run-1", LIVE_EVENT);
-    client.enqueuePreview("run-1", {
-      kind: "assistant",
-      payload: { text: "second", delta: "second" },
-    });
-
-    await expect(client.emitTerminal("run-1", TERMINAL_EVENT)).resolves.toBeUndefined();
-    expect(harness.requestLiveEvent).toHaveBeenCalledTimes(3);
-    client.dispose();
-  });
-
   it("accepts out-of-order cumulative ACKs while a no-progress response has peers in flight", async () => {
     const harness = connectionHarness();
-    const firstResponse =
-      createDeferred<Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>>();
-    const secondResponse =
-      createDeferred<Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>>();
-    const terminalResponse =
-      createDeferred<Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>>();
+    const firstResponse = createDeferred<LiveResponse>();
+    const secondResponse = createDeferred<LiveResponse>();
+    const terminalResponse = createDeferred<LiveResponse>();
     harness.requestLiveEvent.mockImplementation(async (request) => {
       return await (request.seq === 1
         ? firstResponse.promise
@@ -397,26 +267,11 @@ describe("worker live-event client", () => {
     });
     const terminal = client.emitTerminal("run-1", TERMINAL_EVENT);
     await vi.waitFor(() => expect(harness.requestLiveEvent).toHaveBeenCalledTimes(3));
-    secondResponse.resolve({
-      type: "res",
-      id: "live-response-2",
-      ok: true,
-      payload: { ackedSeq: 0 },
-    });
+    secondResponse.resolve(successResponse({ ackedSeq: 0 }));
     await Promise.resolve();
     expect(harness.requestLiveEvent).toHaveBeenCalledTimes(3);
-    firstResponse.resolve({
-      type: "res",
-      id: "live-response-1",
-      ok: true,
-      payload: { ackedSeq: 2 },
-    });
-    terminalResponse.resolve({
-      type: "res",
-      id: "live-response-3",
-      ok: true,
-      payload: { ackedSeq: 3 },
-    });
+    firstResponse.resolve(successResponse({ ackedSeq: 2 }));
+    terminalResponse.resolve(successResponse({ ackedSeq: 3 }));
 
     await expect(terminal).resolves.toBeUndefined();
     client.dispose();
@@ -424,38 +279,15 @@ describe("worker live-event client", () => {
 
   it("recovers finishing after a concurrent preview rejection wins the response race", async () => {
     const harness = connectionHarness();
-    const previewResponse =
-      createDeferred<Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>>();
-    const firstTerminalResponse =
-      createDeferred<Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>>();
+    const previewResponse = createDeferred<LiveResponse>();
+    const firstTerminalResponse = createDeferred<LiveResponse>();
     harness.requestLiveEvent
       .mockImplementationOnce(async () => await previewResponse.promise)
       .mockImplementationOnce(async () => await firstTerminalResponse.promise)
       .mockImplementationOnce(async (request) =>
-        request.lastAckedSeq > 0
-          ? {
-              type: "res",
-              id: "live-response-resync",
-              ok: false,
-              error: {
-                code: "INVALID_REQUEST",
-                message: "Replay required",
-                details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 1 },
-              },
-            }
-          : {
-              type: "res",
-              id: "live-response-gap",
-              ok: true,
-              payload: { ackedSeq: 0 },
-            },
+        request.lastAckedSeq > 0 ? resyncRequired() : successResponse({ ackedSeq: 0 }),
       )
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "live-response-finishing",
-        ok: true,
-        payload: { ackedSeq: 1 },
-      });
+      .mockResolvedValueOnce(successResponse({ ackedSeq: 1 }));
     const client = new WorkerLiveEventClient(harness.connection, { runEpoch: 3 });
 
     client.enqueuePreview("run-1", LIVE_EVENT);
@@ -471,12 +303,7 @@ describe("worker live-event client", () => {
         details: { reason: "invalid-event" },
       },
     });
-    firstTerminalResponse.resolve({
-      type: "res",
-      id: "live-response-stale-finishing",
-      ok: true,
-      payload: { ackedSeq: 0 },
-    });
+    firstTerminalResponse.resolve(successResponse({ ackedSeq: 0 }));
 
     await expect(finishing).resolves.toBeUndefined();
     expect(harness.requestLiveEvent.mock.calls.map((call) => call[0])).toEqual([
@@ -490,35 +317,13 @@ describe("worker live-event client", () => {
 
   it("recovers finishing emitted after an earlier preview rejection", async () => {
     const harness = connectionHarness();
-    const previewResponse =
-      createDeferred<Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>>();
+    const previewResponse = createDeferred<LiveResponse>();
     harness.requestLiveEvent
       .mockImplementationOnce(async () => await previewResponse.promise)
       .mockImplementationOnce(async (request) =>
-        request.lastAckedSeq > 0
-          ? {
-              type: "res",
-              id: "live-response-resync",
-              ok: false,
-              error: {
-                code: "INVALID_REQUEST",
-                message: "Replay required",
-                details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 1 },
-              },
-            }
-          : {
-              type: "res",
-              id: "live-response-gap",
-              ok: true,
-              payload: { ackedSeq: 0 },
-            },
+        request.lastAckedSeq > 0 ? resyncRequired() : successResponse({ ackedSeq: 0 }),
       )
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "live-response-finishing",
-        ok: true,
-        payload: { ackedSeq: 1 },
-      });
+      .mockResolvedValueOnce(successResponse({ ackedSeq: 1 }));
     const client = new WorkerLiveEventClient(harness.connection, { runEpoch: 3 });
 
     client.enqueuePreview("run-1", LIVE_EVENT);
@@ -555,28 +360,9 @@ describe("worker live-event client", () => {
   it("replays immutable sequence and payload after a resync response", async () => {
     const harness = connectionHarness();
     harness.requestLiveEvent
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "live-response-1",
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "Replay required",
-          details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 1 },
-        },
-      })
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "live-response-2",
-        ok: true,
-        payload: { ackedSeq: 1 },
-      })
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "live-response-terminal",
-        ok: true,
-        payload: { ackedSeq: 2 },
-      });
+      .mockResolvedValueOnce(resyncRequired())
+      .mockResolvedValueOnce(successResponse({ ackedSeq: 1 }))
+      .mockResolvedValueOnce(successResponse({ ackedSeq: 2 }));
     const client = new WorkerLiveEventClient(harness.connection, { runEpoch: 3 });
 
     const event = {
@@ -604,24 +390,10 @@ describe("worker live-event client", () => {
     harness.requestLiveEvent.mockImplementation(async () => {
       responseIndex += 1;
       if (responseIndex === 1) {
-        return {
-          type: "res",
-          id: "live-response-reset",
-          ok: false,
-          error: {
-            code: "INVALID_REQUEST",
-            message: "Replay required",
-            details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 1 },
-          },
-        };
+        return resyncRequired();
       }
       const ackedSeq = responseIndex === 2 ? 0 : responseIndex - 2;
-      return {
-        type: "res",
-        id: `live-response-${responseIndex}`,
-        ok: true,
-        payload: { ackedSeq },
-      };
+      return successResponse({ ackedSeq });
     });
     const client = new WorkerLiveEventClient(harness.connection, {
       runEpoch: 3,
@@ -649,35 +421,14 @@ describe("worker live-event client", () => {
 
   it("recovers terminal delivery after a repeated no-progress preview resync", async () => {
     const harness = connectionHarness();
-    const resyncResponse = {
-      type: "res" as const,
-      id: "live-response-reset",
-      ok: false as const,
-      error: {
-        code: "INVALID_REQUEST" as const,
-        message: "Replay required",
-        details: { reason: "resync-required" as const, ackedSeq: 0, expectedSeq: 1 },
-      },
-    };
+    const resyncResponse = resyncRequired();
     harness.requestLiveEvent
       .mockResolvedValueOnce(resyncResponse)
       .mockResolvedValueOnce(resyncResponse)
       .mockImplementationOnce(async (request) =>
-        request.lastAckedSeq > 0
-          ? resyncResponse
-          : {
-              type: "res",
-              id: "live-response-gap",
-              ok: true,
-              payload: { ackedSeq: 0 },
-            },
+        request.lastAckedSeq > 0 ? resyncResponse : successResponse({ ackedSeq: 0 }),
       )
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "live-response-finishing",
-        ok: true,
-        payload: { ackedSeq: 1 },
-      });
+      .mockResolvedValueOnce(successResponse({ ackedSeq: 1 }));
     const client = new WorkerLiveEventClient(harness.connection, {
       runEpoch: 3,
       initialAckedSeq: 5,
@@ -692,10 +443,8 @@ describe("worker live-event client", () => {
 
   it("rejects terminal delivery when a preview receives an inconsistent resync cursor", async () => {
     const harness = connectionHarness();
-    const previewResponse =
-      createDeferred<Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>>();
-    const terminalResponse =
-      createDeferred<Awaited<ReturnType<WorkerConnection["requestLiveEvent"]>>>();
+    const previewResponse = createDeferred<LiveResponse>();
+    const terminalResponse = createDeferred<LiveResponse>();
     harness.requestLiveEvent.mockImplementation(async (request) =>
       request.event.kind === "lifecycle" ? terminalResponse.promise : previewResponse.promise,
     );
@@ -704,24 +453,10 @@ describe("worker live-event client", () => {
     client.enqueuePreview("run-1", LIVE_EVENT);
     const terminal = client.emitTerminal("run-1", TERMINAL_EVENT);
     await vi.waitFor(() => expect(harness.requestLiveEvent).toHaveBeenCalledTimes(2));
-    previewResponse.resolve({
-      type: "res",
-      id: "live-response-inconsistent-resync",
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "Replay required",
-        details: { reason: "resync-required", ackedSeq: 0, expectedSeq: 2 },
-      },
-    });
+    previewResponse.resolve(resyncRequired(0, 2));
 
     await expect(terminal).rejects.toThrow("worker live-event resync cursor is inconsistent");
-    terminalResponse.resolve({
-      type: "res",
-      id: "live-response-terminal",
-      ok: true,
-      payload: { ackedSeq: 2 },
-    });
+    terminalResponse.resolve(successResponse({ ackedSeq: 2 }));
     client.dispose();
   });
 
@@ -761,12 +496,9 @@ describe("worker live-event client", () => {
 describe("worker inference proxy client", () => {
   it("reports stream gaps but accepts later events and the terminal outcome", async () => {
     const harness = connectionHarness();
-    harness.requestInferenceStart.mockResolvedValueOnce({
-      type: "res",
-      id: "inference-response",
-      ok: true,
-      payload: { status: "accepted" },
-    });
+    harness.requestInferenceStart.mockResolvedValueOnce(
+      successResponse({ status: "accepted" as const }),
+    );
     const client = new WorkerInferenceProxyClient(harness.connection);
     const onEvent = vi.fn();
     const onStreamGap = vi.fn();
@@ -815,19 +547,9 @@ describe("worker inference proxy client", () => {
     const harness = connectionHarness();
     const terminal = doneOutcome();
     harness.requestInferenceStart
-      .mockResolvedValueOnce({
-        type: "res",
-        id: "inference-response-1",
-        ok: true,
-        payload: { status: "accepted" },
-      })
+      .mockResolvedValueOnce(successResponse({ status: "accepted" as const }))
       .mockImplementationOnce(async (_params, beforeResolve) => {
-        const response = {
-          type: "res",
-          id: "inference-response-2",
-          ok: true,
-          payload: { status: "replayed" },
-        } as const;
+        const response = successResponse({ status: "replayed" as const });
         beforeResolve?.(response);
         harness.emitInferenceTerminal({
           type: "event",

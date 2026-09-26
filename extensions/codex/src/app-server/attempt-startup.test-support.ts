@@ -19,22 +19,23 @@ import { createCodexTestHostCapabilities } from "./host-capability.test-support.
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
-  resolveCodexAppServerSpawnIdentity,
   type CodexAppServerPreparedAuth,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
-import { createClientHarness, createCodexTestModel } from "./test-support.js";
+import { resolveCodexAppServerSpawnIdentity } from "./spawn-identity.js";
+import {
+  createClientHarness,
+  createCodexTestModel,
+  createInferenceReadyClientHarness,
+} from "./test-support.js";
 
 export type AttemptClientHarness = ReturnType<typeof createClientHarness>;
 export const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
 
 export function createAttemptClientHarness(): AttemptClientHarness {
-  return createClientHarness({
+  return createInferenceReadyClientHarness({
     onWrite: (line, send) => {
       const request = JSON.parse(line) as { id: number; method: string };
-      if (request.method === "config/read") {
-        send({ id: request.id, result: { config: {}, origins: {}, layers: [] } });
-      }
       if (request.method === "configRequirements/read") {
         send({ id: request.id, result: { requirements: null } });
       }

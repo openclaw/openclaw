@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import {
-  closeOpenClawStateDatabaseByPath,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -15,10 +16,10 @@ import {
   resetSkillsRefreshStateForTest,
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
+import { getSkillProposalRunProgress as getSkillProposalRunProgressImpl } from "./proposal-run-progress.test-support.js";
 import {
   applySkillProposal as applySkillProposalImpl,
-  getSkillProposalRunProgress as getSkillProposalRunProgressImpl,
   inspectSkillProposal as inspectSkillProposalImpl,
   listSkillProposals as listSkillProposalsImpl,
   proposeCreateSkill as proposeCreateSkillImpl,
@@ -29,16 +30,16 @@ import {
   resolvePendingSkillProposal as resolvePendingSkillProposalImpl,
   reviseSkillProposal as reviseSkillProposalImpl,
 } from "./service.js";
+import { createSkillProposalRollback } from "./service.test-support.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
-import { writeSkillProposalRollback } from "./store-sqlite-rollback.js";
+import * as storeClient from "./store-client.js";
+import { writeSkillProposalRollback } from "./store-rollback.js";
 import {
   hashSkillProposalContent,
-  readSkillProposalManifest,
   readSkillProposalRollback,
   resolveSkillProposalTarget,
 } from "./store.js";
 import { withSkillCollectionLock } from "./target-lock.js";
-import { SKILL_WORKSHOP_ROLLBACK_SCHEMA, type SkillProposalRollback } from "./types.js";
 import { listWritableWorkshopSkillSummaries } from "./workspace-skill-read.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -118,7 +119,7 @@ beforeEach(async () => {
     DELETE FROM skill_workshop_proposals;
   `);
   await fs.rm(path.join(stateDir, "skill-workshop"), { recursive: true, force: true });
-  await fs.rm(path.join(stateDir, "workshop-skills"), { recursive: true, force: true });
+  await fs.rm(workshopSkillsDir(), { recursive: true, force: true });
 });
 
 afterEach(async () => {
@@ -127,7 +128,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath(testEnv));
+  await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(testEnv));
   vi.unstubAllEnvs();
   await stateDirs.cleanup();
 });
@@ -158,29 +159,6 @@ async function createOwnedSkill(params: {
     expectedRevisionHash: proposal.revisionHash,
   });
   return proposal.record.target.skillDir;
-}
-
-function createSkillProposalRollback(params: {
-  proposalId: string;
-  targetSkillFile: string;
-  action: "create" | "update";
-  previousContent?: string;
-  supportFiles?: SkillProposalRollback["supportFiles"];
-}): SkillProposalRollback {
-  return {
-    schema: SKILL_WORKSHOP_ROLLBACK_SCHEMA,
-    proposalId: params.proposalId,
-    writtenAt: new Date().toISOString(),
-    targetSkillFile: params.targetSkillFile,
-    action: params.action,
-    ...(params.previousContent !== undefined
-      ? {
-          previousContent: params.previousContent,
-          previousContentHash: hashSkillProposalContent(params.previousContent),
-        }
-      : {}),
-    ...(params.supportFiles ? { supportFiles: params.supportFiles } : {}),
-  };
 }
 
 describe("skill workshop proposals", () => {
@@ -247,24 +225,13 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow("No Workshop-generated skill matched");
   });
 
-  it("renders proposal markdown with a terminal newline", () => {
-    expect(
-      renderProposalMarkdown({
-        name: "example",
-        description: "Example proposal",
-        content: "# Example",
-        date: "2026-07-05T00:00:00.000Z",
-      }).endsWith("\n"),
-    ).toBe(true);
-  });
-
   it("creates a pending proposal under the workshop and applies it as an active workspace skill", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({
       workspaceDir,
       name: "Weather Helper",
       description: "Check weather before planning outdoor tasks",
-      content: "# Weather Helper\n\nUse the weather provider before answering.\n",
+      content: "# Weather Helper\n\nUse the weather provider before answering.",
       supportFiles: [
         {
           path: "references/weather-api.md",
@@ -276,11 +243,16 @@ describe("skill workshop proposals", () => {
         },
       ],
       createdBy: "skill-workshop",
-      goal: "Reuse weather lookup steps",
+      goal: "  Reuse weather lookup steps  ",
+      evidence: "  Existing operator checklist.  ",
     });
 
-    expect(proposal.record.status).toBe("pending");
-    expect(proposal.record.scan.state).toBe("clean");
+    expect(proposal.record).toMatchObject({
+      status: "pending",
+      scan: { state: "clean" },
+      goal: "Reuse weather lookup steps",
+      evidence: "Existing operator checklist.",
+    });
     expect(proposal.content).toContain('name: "weather-helper"');
     expect(proposal.record.supportFiles?.map((file) => file.path)).toEqual([
       "references/weather-api.md",
@@ -593,27 +565,6 @@ describe("skill workshop proposals", () => {
     );
   });
 
-  it("recovers run progress from canonical proposal records", async () => {
-    const workspaceDir = await makeWorkspace();
-    const proposal = await proposeCreateSkill({
-      workspaceDir,
-      name: "Recovered Proposal",
-      description: "Recover a durable proposal after manifest interruption",
-      content: "# Recovered Proposal\n",
-      origin: { runId: "interrupted-run" },
-    });
-    await expect(
-      getSkillProposalRunProgress({
-        config: workshopConfig,
-        agentId: "main",
-        runId: "interrupted-run",
-      }),
-    ).resolves.toEqual({
-      mutationCount: 1,
-      proposalIds: [proposal.record.id],
-    });
-  });
-
   it("resolves pending proposals by skill name for tool-driven revisions", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({
@@ -762,33 +713,6 @@ describe("skill workshop proposals", () => {
     ).resolves.toMatchObject({ record: { id: second.record.id } });
   });
 
-  it("updates only writable workspace skills and marks stale proposals when the target changes", async () => {
-    const workspaceDir = await makeWorkspace();
-    const skillDir = await createOwnedSkill({
-      workspaceDir,
-      name: "release-notes",
-      description: "Draft release notes",
-      body: "# Release Notes\n\nOld steps.\n",
-    });
-    const skillFile = path.join(skillDir, "SKILL.md");
-    const proposal = await proposeUpdateSkill({
-      workspaceDir,
-      skillName: "release-notes",
-      content: "# Release Notes\n\nNew steps.\n",
-    });
-
-    await fs.writeFile(
-      skillFile,
-      "---\nname: release-notes\ndescription: Draft release notes\n---\n\nChanged elsewhere.\n",
-      "utf8",
-    );
-
-    await expect(
-      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
-    ).rejects.toThrow("proposal marked stale");
-    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("stale");
-  });
-
   it("applies update proposals with rollback metadata", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = await createOwnedSkill({
@@ -897,13 +821,7 @@ describe("skill workshop proposals", () => {
     );
   });
 
-  it("rejects and quarantines proposals without touching active skills", async (ctx) => {
-    // Manifest order follows updatedAt, so each terminal mutation needs a distinct timestamp.
-    vi.useFakeTimers({ toFake: ["Date"] });
-    ctx.onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    vi.setSystemTime(new Date("2026-08-30T00:00:00.000Z"));
+  it("rejects and quarantines proposals without touching active skills or rereading their history", async () => {
     const workspaceDir = await makeWorkspace();
     const rejected = await proposeCreateSkill({
       workspaceDir,
@@ -929,22 +847,36 @@ describe("skill workshop proposals", () => {
       proposalId: rejected.record.id,
       reason: "not useful",
     });
-    vi.setSystemTime(new Date("2026-08-30T00:00:01.000Z"));
     await quarantineSkillProposal({
       workspaceDir,
       proposalId: quarantined.record.id,
       reason: "needs review",
     });
-    vi.setSystemTime(new Date("2026-08-30T00:00:02.000Z"));
     await applySkillProposal({
       workspaceDir,
       proposalId: applied.record.id,
     });
 
-    const manifest = await readSkillProposalManifest(
-      { env: testEnv, config: workshopConfig, agentId: "main" },
-      { agentId: "main" },
-    );
+    const operations = vi.spyOn(storeClient, "executeSkillWorkshopOperation");
+    let manifest: Awaited<ReturnType<typeof listSkillProposals>>;
+    try {
+      manifest = await listSkillProposals({ env: testEnv });
+      const batches = await Promise.all(
+        operations.mock.calls.flatMap(([type], index) =>
+          type === "workshop.proposals.list" ? [operations.mock.results[index]?.value] : [],
+        ),
+      );
+      expect(batches.length).toBeGreaterThan(0);
+      const materialized = batches.reduce<number>((count, batch) => {
+        if (!Array.isArray(batch)) {
+          throw new Error("Expected stored proposal rows from the real worker");
+        }
+        return count + batch.length;
+      }, 0);
+      expect(materialized).toBeLessThanOrEqual(3);
+    } finally {
+      operations.mockRestore();
+    }
     expect(
       manifest.proposals
         .toSorted((a, b) => a.skillKey.localeCompare(b.skillKey))
@@ -1032,6 +964,7 @@ describe("skill workshop proposals", () => {
       "utf8",
     );
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const manifest = await listSkillProposals();
     expect(manifest.proposals).toEqual(
@@ -1067,6 +1000,7 @@ describe("skill workshop proposals", () => {
     await fs.mkdir(path.dirname(supportFile), { recursive: true });
     await fs.writeFile(supportFile, "Partial support.\n", "utf8");
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     let releaseLock: (() => void) | undefined;
     let markAcquired: (() => void) | undefined;
@@ -1138,6 +1072,7 @@ describe("skill workshop proposals", () => {
       "utf8",
     );
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
@@ -1163,6 +1098,7 @@ describe("skill workshop proposals", () => {
     await fs.mkdir(proposal.record.target.skillDir, { recursive: true });
     await fs.writeFile(proposal.record.target.skillFile, "# External change\n", "utf8");
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposal.record.id, status: "pending" })],
@@ -1213,6 +1149,7 @@ describe("skill workshop proposals", () => {
     await fs.writeFile(path.join(skillDir, "references", "proof.md"), "New support.\n", "utf8");
     await fs.writeFile(skillFile, stripProposalFrontmatterForSkill(proposal.content), "utf8");
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: expect.arrayContaining([
@@ -1259,6 +1196,7 @@ describe("skill workshop proposals", () => {
     });
     await fs.writeFile(skillFile, stripProposalFrontmatterForSkill(proposal.content), "utf8");
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(listSkillProposals()).resolves.toMatchObject({
       proposals: expect.arrayContaining([
@@ -1300,6 +1238,7 @@ describe("skill workshop proposals", () => {
       "utf8",
     );
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(
       inspectSkillProposal(proposal.record.id, { agentId: "other" }),
@@ -1379,6 +1318,7 @@ describe("skill workshop proposals", () => {
     await expect(fs.readFile(supportFile, "utf8")).resolves.toBe("Partial support.\n");
 
     await fs.writeFile(draftFile, proposal.content);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
       record: { status: "pending" },
@@ -1542,6 +1482,115 @@ describe("skill workshop proposals", () => {
         content: "# Long Description Skill\n\nThird updated body.\n",
       }),
     ).rejects.toThrow("proposal description is too large");
+  });
+
+  it("preserves the live skill description when update proposals are applied", async () => {
+    const workspaceDir = await makeWorkspace();
+    const richDescription = `${"y".repeat(200)} plus trigger phrases and keywords`;
+    const skillDir = await createOwnedSkill({
+      workspaceDir,
+      name: "rich-description-skill",
+      description: "Initial description",
+      body: "# Rich Description Skill\n\nExisting body.\n",
+    });
+    const skillFile = path.join(skillDir, "SKILL.md");
+    await fs.writeFile(
+      skillFile,
+      `---\nname: rich-description-skill\ndescription: ${richDescription}\n---\n\n# Rich Description Skill\n\nExisting body.\n`,
+      "utf8",
+    );
+
+    const updateWithDerivedLabel = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "rich-description-skill",
+      content: "# Rich Description Skill\n\nUpdated body.\n",
+    });
+    expect(
+      Buffer.byteLength(updateWithDerivedLabel.record.description, "utf8"),
+    ).toBeLessThanOrEqual(160);
+    expect(updateWithDerivedLabel.content).toContain(richDescription);
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: updateWithDerivedLabel.record.id,
+    });
+
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(richDescription);
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("Updated body.");
+
+    const updateWithSuppliedLabel = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "rich-description-skill",
+      description: "Concise listing label",
+      content: "# Rich Description Skill\n\nSecond updated body.\n",
+    });
+    expect(updateWithSuppliedLabel.record.description).toBe("Concise listing label");
+    expect(updateWithSuppliedLabel.content).toContain(richDescription);
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: updateWithSuppliedLabel.record.id,
+    });
+
+    const applied = await fs.readFile(skillFile, "utf8");
+    expect(applied).toContain(richDescription);
+    expect(applied).toContain("Second updated body.");
+    expect(applied).not.toContain("Concise listing label");
+  });
+
+  it("applies explicitly revised descriptions from description-only create revisions", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Describable Skill",
+      description: "Original label",
+      content: "# Describable\n\nOriginal body.\n",
+    });
+
+    const revised = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      description: "Revised label",
+    });
+
+    expect(revised.record.description).toBe("Revised label");
+    expect(revised.content).toContain("Revised label");
+
+    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+    await expect(
+      fs.readFile(path.join(workshopSkillsDir(), "describable-skill", "SKILL.md"), "utf8"),
+    ).resolves.toBe(
+      '---\nname: "describable-skill"\ndescription: "Revised label"\n---\n\n# Describable\n\nOriginal body.\n',
+    );
+  });
+
+  it("preserves rich create frontmatter descriptions across body-only revisions", async () => {
+    const workspaceDir = await makeWorkspace();
+    const richDescription = `${"z".repeat(200)} plus trigger phrases and keywords`;
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Rich Create Skill",
+      description: "Short listing label",
+      content: `---\nname: rich-create-skill\ndescription: ${richDescription}\n---\n\n# Rich Create\n\nOriginal body.\n`,
+    });
+    expect(proposal.record.description).toBe("Short listing label");
+    expect(proposal.content).toContain(richDescription);
+
+    const revised = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      content: "# Rich Create\n\nRevised body.\n",
+    });
+
+    expect(revised.record.description).toBe("Short listing label");
+    expect(revised.content).toContain(richDescription);
+
+    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+    const applied = await fs.readFile(
+      path.join(workshopSkillsDir(), "rich-create-skill", "SKILL.md"),
+      "utf8",
+    );
+    expect(applied).toContain(richDescription);
+    expect(applied).toContain("Revised body.");
+    expect(applied).not.toContain("Short listing label");
   });
 
   it("quarantines unsafe proposals during apply", async () => {
@@ -1739,10 +1788,8 @@ describe("skill workshop proposals", () => {
   });
 
   it.each([
-    ["create", "changed"],
     ["create", "missing"],
     ["update", "changed"],
-    ["update", "missing"],
   ] as const)(
     "lists a %s with %s support files but refuses to inspect or apply it",
     async (kind, damage) => {

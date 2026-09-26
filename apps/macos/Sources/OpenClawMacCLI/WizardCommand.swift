@@ -61,7 +61,7 @@ enum WizardCliError: Error, CustomStringConvertible {
     }
 }
 
-func runWizardCommand(_ args: [String]) async {
+func runWizardCommand(_ args: [String], configURL: URL) async {
     let opts = WizardCliOptions.parse(args)
     if opts.help {
         print("""
@@ -72,6 +72,7 @@ func runWizardCommand(_ args: [String]) async {
                               [--mode <local|remote>] [--workspace <path>] [--json]
 
         Options:
+          --profile <name>  App profile; overrides OPENCLAW_PROFILE (default: default)
           --url <url>        Gateway WebSocket URL (overrides config)
           --token <token>    Gateway token (if required)
           --password <pw>    Gateway password (if required)
@@ -83,7 +84,7 @@ func runWizardCommand(_ args: [String]) async {
         return
     }
 
-    let config = loadGatewayConfig()
+    let config = loadGatewayConfig(from: configURL)
     do {
         guard isatty(STDIN_FILENO) != 0 else {
             throw WizardCliError.gatewayError("Wizard requires an interactive TTY.")
@@ -92,8 +93,7 @@ func runWizardCommand(_ args: [String]) async {
         let client = GatewayWizardClient(
             url: endpoint.url,
             token: endpoint.token,
-            password: endpoint.password,
-            json: opts.json)
+            password: endpoint.password)
         try await client.connect()
         defer { Task { await client.close() } }
         try await runWizard(client: client, opts: opts)
@@ -163,18 +163,16 @@ actor GatewayWizardClient {
     private let url: URL
     private let token: String?
     private let password: String?
-    private let json: Bool
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let session = URLSession(configuration: .default)
     private let connectChallengeTimeoutSeconds: Double = 0.75
     private var task: URLSessionWebSocketTask?
 
-    init(url: URL, token: String?, password: String?, json: Bool) {
+    init(url: URL, token: String?, password: String?) {
         self.url = url
         self.token = token
         self.password = password
-        self.json = json
     }
 
     func connect() async throws {
@@ -388,6 +386,7 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
             // Gateway-executed steps (download/install progress) take no answer;
             // echo the frame and poll, or the run stalls on input that can never
             // advance the session.
+            var nextParams = ["sessionId": ProtoAnyCodable(sessionId)]
             if let step = nextResult.step, wizardStepExecutor(step) != "gateway" {
                 let answer = try promptAnswer(for: step)
                 var answerPayload: [String: ProtoAnyCodable] = [
@@ -396,27 +395,14 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
                 if !(answer is NSNull) {
                     answerPayload["value"] = ProtoAnyCodable(answer)
                 }
-                let response = try await client.request(
-                    method: "wizard.next",
-                    params: [
-                        "sessionId": ProtoAnyCodable(sessionId),
-                        "answer": ProtoAnyCodable(answerPayload),
-                    ])
-                nextResult = try await client.decodePayload(response, as: WizardNextResult.self)
-                if opts.json {
-                    dumpResult(response)
-                }
-            } else {
-                if let step = nextResult.step, !opts.json {
-                    printWizardStepHeader(step)
-                }
-                let response = try await client.request(
-                    method: "wizard.next",
-                    params: ["sessionId": ProtoAnyCodable(sessionId)])
-                nextResult = try await client.decodePayload(response, as: WizardNextResult.self)
-                if opts.json {
-                    dumpResult(response)
-                }
+                nextParams["answer"] = ProtoAnyCodable(answerPayload)
+            } else if let step = nextResult.step, !opts.json {
+                printWizardStepHeader(step)
+            }
+            let response = try await client.request(method: "wizard.next", params: nextParams)
+            nextResult = try await client.decodePayload(response, as: WizardNextResult.self)
+            if opts.json {
+                dumpResult(response)
             }
         }
     } catch WizardCliError.cancelled {
@@ -453,10 +439,7 @@ private func promptAnswer(for step: WizardStep) throws -> Any {
     printWizardStepHeader(step)
 
     switch type {
-    case "note":
-        _ = try readLineWithPrompt("Continue? (enter)")
-        return NSNull()
-    case "progress":
+    case "note", "progress":
         _ = try readLineWithPrompt("Continue? (enter)")
         return NSNull()
     case "action":

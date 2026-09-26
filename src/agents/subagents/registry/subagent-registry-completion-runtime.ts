@@ -1,6 +1,6 @@
 import {
   isGatewayRestartDraining,
-  runWithGatewayIndependentRootWorkContinuation,
+  runWithGatewayDetachedWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
@@ -23,11 +23,15 @@ export function createSubagentRegistryCompletionRuntime(config: {
   async function completeSubagentRunWithRecoveryAttempt(
     params: SubagentCompletionRequest,
     source: string,
+    isCurrent: () => boolean,
   ) {
     for (const message of [
       "failed to complete subagent run; retrying completion",
       "failed to complete subagent run after retry; retrying ended cleanup",
     ]) {
+      if (!isCurrent()) {
+        return;
+      }
       try {
         await completeSubagentRun(params);
         return;
@@ -39,12 +43,15 @@ export function createSubagentRegistryCompletionRuntime(config: {
           childSessionKey: current?.childSessionKey,
           error,
         });
-        if (!current) {
+        if (!isCurrent()) {
           return;
         }
       }
     }
 
+    if (!isCurrent()) {
+      return;
+    }
     const latest = runs.get(params.runId);
     if (latest && typeof latest.execution.endedAt !== "number") {
       // The durable write rolled the in-memory entry back. Preserve the original
@@ -71,6 +78,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     expectedEntry: SubagentRunRecord,
   ) {
     const expectedGeneration = expectedEntry.generation;
+    const ownedParams = { ...params, expectedEntry };
     const timer = setTimeout(() => {
       retryTimers.delete(timer);
       const current = runs.get(params.runId);
@@ -78,7 +86,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         return;
       }
       completeSubagentRunInBackground(
-        params,
+        ownedParams,
         source,
         "failed to retry subagent completion after gateway restart",
       );
@@ -91,13 +99,27 @@ export function createSubagentRegistryCompletionRuntime(config: {
     params: SubagentCompletionRequest,
     source: string,
   ) {
+    const entry = runs.get(params.runId);
+    if (!entry || (params.expectedEntry && params.expectedEntry !== entry)) {
+      return;
+    }
+    const generation = entry.generation;
+    const runId = params.runId;
+    const isCurrent = () =>
+      runs.get(runId) === entry &&
+      entry.generation === generation &&
+      params.isRecoveryCurrent?.() !== false;
+    const ownedParams = { ...params, expectedEntry: entry, isRecoveryCurrent: isCurrent };
     // Each controller attempt owns its terminal transition, while this outer
-    // lease closes the gap between failed attempts and fallback cleanup.
+    // lease outlives the launch scope and spans retries and fallback cleanup.
     try {
-      await runWithGatewayIndependentRootWorkContinuation(async () => {
-        await completeSubagentRunWithRecoveryAttempt(params, source);
+      await runWithGatewayDetachedWorkContinuation(async () => {
+        await completeSubagentRunWithRecoveryAttempt(ownedParams, source, isCurrent);
       }, "subagents:completion");
     } catch (error) {
+      if (!isCurrent()) {
+        return;
+      }
       if (!isGatewayRestartDraining()) {
         throw error;
       }
@@ -105,10 +127,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
         source,
         runId: params.runId,
       });
-      const current = runs.get(params.runId);
-      if (current) {
-        scheduleSubagentCompletionRetryAfterRestart(params, source, current);
-      }
+      scheduleSubagentCompletionRetryAfterRestart(params, source, entry);
     }
   }
 
@@ -142,6 +161,8 @@ export function createSubagentRegistryCompletionRuntime(config: {
   async function finalizeInterruptedSubagentRun(params: {
     runId: string;
     expectedEntry?: SubagentRunRecord;
+    isRecoveryCurrent?: () => boolean;
+    isChildSessionEffectsCurrent?: () => boolean;
     error: string;
     endedAt?: number;
     suppressSessionEffects?: boolean;
@@ -156,7 +177,11 @@ export function createSubagentRegistryCompletionRuntime(config: {
         ? params.endedAt
         : Date.now();
     const entry = runs.get(runId);
-    if (!entry || (params.expectedEntry && entry !== params.expectedEntry)) {
+    if (
+      !entry ||
+      (params.expectedEntry && entry !== params.expectedEntry) ||
+      params.isRecoveryCurrent?.() === false
+    ) {
       return 0;
     }
     pendingLifecycle.clear(runId);
@@ -179,6 +204,8 @@ export function createSubagentRegistryCompletionRuntime(config: {
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
       recoverInterrupted: true,
+      isRecoveryCurrent: params.isRecoveryCurrent,
+      isChildSessionEffectsCurrent: params.isChildSessionEffectsCurrent,
       suppressSessionEffects: params.suppressSessionEffects,
     };
     try {

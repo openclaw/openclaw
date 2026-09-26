@@ -5,17 +5,18 @@ import path from "node:path";
 // attachments, and channel/plugin media source aliases.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
-import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   messageActionRunnerMocks as channelResolutionMocks,
+  createWorkspaceMediaTestPlugin,
   resetMessageActionMediaMocks,
   runMessageAction,
   setMessageActionTestPlugin as setTestPlugin,
 } from "./message-action-runner.test-helpers.js";
+
+const maybeIt = process.platform === "win32" ? it.skip : it;
 
 const workspaceConfig = {
   channels: {
@@ -71,36 +72,7 @@ const runDrySend = (params: {
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
-const workspacePlugin: ChannelPlugin = {
-  ...createChannelTestPluginBase({
-    id: "workspace",
-    label: "Workspace",
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: (cfg) => cfg.channels?.workspace ?? {},
-      isConfigured: async (account) =>
-        typeof (account as { botToken?: unknown }).botToken === "string" &&
-        (account as { botToken?: string }).botToken!.trim() !== "" &&
-        typeof (account as { appToken?: unknown }).appToken === "string" &&
-        (account as { appToken?: string }).appToken!.trim() !== "",
-    },
-  }),
-  outbound: {
-    deliveryMode: "direct",
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim() ?? "";
-      if (!trimmed) {
-        return {
-          ok: false,
-          error: new Error("missing target for workspace"),
-        };
-      }
-      return { ok: true, to: trimmed };
-    },
-    sendText: async () => ({ channel: "workspace", messageId: "msg-test" }),
-    sendMedia: async () => ({ channel: "workspace", messageId: "msg-test" }),
-  },
-};
+const workspacePlugin = createWorkspaceMediaTestPlugin();
 
 describe("runMessageAction media behavior", () => {
   beforeEach(async () => {
@@ -320,4 +292,125 @@ describe("runMessageAction media behavior", () => {
       ]);
     });
   });
+
+  maybeIt.each([
+    { name: "Docker", containerWorkdir: "/workspace" },
+    { name: "OpenShell", containerWorkdir: "/sandbox" },
+  ])(
+    "dedupes resolved $name media while retaining first-entry metadata",
+    async ({ containerWorkdir }) => {
+      setTestPlugin(workspacePlugin, "workspace");
+
+      await withSandbox(async (sandboxDir) => {
+        await runDrySend({
+          cfg: workspaceConfig,
+          actionParams: {
+            channel: "workspace",
+            target: "12345678",
+            message: "attachments ready",
+            media: `file://${containerWorkdir}/assets/photo.png`,
+            filename: "first.png",
+            contentType: "image/png",
+            mediaUrls: [
+              ` file://${containerWorkdir}/assets/photo.png `,
+              `${containerWorkdir}/assets/photo.png`,
+              "buffer://message-send/attachment",
+              " ",
+            ],
+            attachments: [
+              {
+                path: `${containerWorkdir}/assets/photo.png`,
+                name: "later.bin",
+                mimeType: "application/octet-stream",
+                type: "file",
+              },
+              {
+                path: `${containerWorkdir}/last.txt`,
+                name: "last.txt",
+                mimeType: "text/plain",
+                type: "file",
+              },
+            ],
+          },
+          sandboxRoot: ` ${sandboxDir} `,
+          sandboxContainerWorkdir: containerWorkdir,
+        });
+
+        expect(channelResolutionMocks.executeSendAction).toHaveBeenCalledTimes(1);
+        const sendArgs = firstMockArg(
+          channelResolutionMocks.executeSendAction,
+          "executeSendAction",
+        );
+        const mediaUrls = [
+          path.join(sandboxDir, "assets", "photo.png"),
+          "buffer://message-send/attachment",
+          path.join(sandboxDir, "last.txt"),
+        ];
+        expect(sendArgs.mediaUrls).toEqual(mediaUrls);
+        expect(requireRecord(sendArgs.payload).mediaUrls).toEqual(mediaUrls);
+        expect(requireRecord(sendArgs.payload).attachments).toEqual([
+          { path: mediaUrls[0], type: "file", name: "first.png", mimeType: "image/png" },
+          { path: mediaUrls[1] },
+          { path: mediaUrls[2], type: "file", name: "last.txt", mimeType: "text/plain" },
+        ]);
+      });
+    },
+  );
+
+  it.each([
+    { name: "omitted", sandboxRoot: undefined },
+    { name: "blank", sandboxRoot: "   " },
+  ])("preserves ordered remote media when the sandbox root is $name", async ({ sandboxRoot }) => {
+    setTestPlugin(workspacePlugin, "workspace");
+    const mediaUrls = [
+      "https://example.com/first.png?sig=1",
+      "http://example.com/second.png",
+      "mxc://matrix.org/opaque-media",
+      "buffer://message-send/attachment",
+    ];
+
+    await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "12345678",
+        message: "attachments ready",
+        mediaUrls: [` ${mediaUrls[0]} `, mediaUrls[0], ...mediaUrls.slice(1), " "],
+      },
+      sandboxRoot,
+    });
+
+    expect(channelResolutionMocks.executeSendAction).toHaveBeenCalledTimes(1);
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    expect(sendArgs.mediaUrls).toEqual(mediaUrls);
+    expect(requireRecord(sendArgs.payload).mediaUrls).toEqual(mediaUrls);
+    expect(requireRecord(sendArgs.payload)).not.toHaveProperty("attachments");
+  });
+
+  it.each([false, true])(
+    "rejects a later invalid media hint before any dispatch (sandbox=%s)",
+    async (sandboxed) => {
+      setTestPlugin(workspacePlugin, "workspace");
+      await withSandbox(async (sandboxDir) => {
+        await expect(
+          runDrySend({
+            cfg: workspaceConfig,
+            actionParams: {
+              channel: "workspace",
+              target: "12345678",
+              message: "must not send partially",
+              mediaUrls: [
+                "https://example.com/first.png",
+                " data:text/plain;base64,QQ== ",
+                "https://example.com/last.png",
+              ],
+            },
+            sandboxRoot: sandboxed ? sandboxDir : undefined,
+          }),
+        ).rejects.toThrow("data: URLs are not supported for media. Use buffer instead.");
+        expect(channelResolutionMocks.executeSendAction).not.toHaveBeenCalled();
+        expect(channelResolutionMocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+      });
+    },
+  );
 });

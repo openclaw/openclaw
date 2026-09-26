@@ -18,6 +18,7 @@ defineDiscordVoiceTests(
     createAgentProxyManager,
     expectConnectedStatus,
     getSessionEntry,
+    getSessionConnection,
     getVoiceReceive,
     createJoinedAgentProxyFixture,
     startTranscripts,
@@ -358,12 +359,12 @@ defineDiscordVoiceTests(
           await vi.waitFor(() =>
             expect(captureEntry.receiveRecovery.decryptRecoveryInFlight).toBe(false),
           );
-          captureEntry.stop();
+          await captureEntry.stop();
           if (manualSucceeded) {
             expect(connection.destroy).not.toHaveBeenCalled();
             expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
             expectConnectedStatus(manager, channelId);
-            expect(getSessionEntry(manager).connection).toBe(connection);
+            expect(getSessionConnection(getSessionEntry(manager))).toBe(connection);
             expect(getSessionEntry(manager).realtimeLifecycle.status).toBe("active");
             await receiveRecordedSpeech(manager, "newer conversation");
             expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
@@ -651,7 +652,7 @@ defineDiscordVoiceTests(
       await vi.waitFor(() => expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1));
       expect(entry.realtimeLifecycle.status).toBe("starting");
 
-      entry.stop();
+      const stopped = entry.stop();
       expect(realtimeSessionMock.close).toHaveBeenCalled();
       expect(entry.realtimeLifecycle.status).toBe("stopped");
 
@@ -661,6 +662,7 @@ defineDiscordVoiceTests(
       expect(result.ok).toBe(false);
       expect(result.message).toContain("stopped before startup completed");
       expect(entry.realtimeLifecycle.status).toBe("stopped");
+      await stopped;
     });
 
     it.each(["bootstrap", "connect"])(

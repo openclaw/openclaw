@@ -1,4 +1,5 @@
 // Msteams tests cover monitor handler.feedback authz plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
@@ -43,6 +44,7 @@ function createRuntimeStub(readAllowFromStore: ReturnType<typeof vi.fn>): Plugin
       shouldLogVerbose: () => false,
     },
     channel: {
+      inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress },
       debounce: {
         resolveInboundDebounceMs: () => 0,
         createInboundDebouncer: () => ({
@@ -221,6 +223,31 @@ describe("msteams feedback invoke authz", () => {
             event: expect.objectContaining({ comment: "allowed dm feedback" }),
           }),
         );
+      },
+    });
+  });
+
+  it("does not record feedback when personal scope contradicts team metadata", async () => {
+    await withFeedbackHandler({
+      cfg: {
+        channels: {
+          msteams: {
+            dmPolicy: "allowlist",
+            allowFrom: ["owner-aad"],
+          },
+        },
+      } as OpenClawConfig,
+      context: {
+        reaction: "like",
+        conversationId: "a:personal-chat;messageid=bot-msg-1",
+        conversationType: "personal",
+        senderId: "owner-aad",
+        teamId: "unexpected-team",
+        comment: "must not cross scope",
+      },
+      assertResult: async () => {
+        expect(channelInboundMockState.recordChannelFeedbackEvent).not.toHaveBeenCalled();
+        expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
       },
     });
   });

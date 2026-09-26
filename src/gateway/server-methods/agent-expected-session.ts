@@ -2,12 +2,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   consumeSessionWorkAdmissionHandoff,
+  type SessionWorkAdmissionInterrupt,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 
 export type ExpectedExistingSessionConstraint = {
   handoffId?: string;
   sessionId: string;
+  lifecycleRevision?: string | null;
 };
 
 export class ExpectedExistingSessionChangedError extends Error {
@@ -20,10 +22,17 @@ export class ExpectedExistingSessionChangedError extends Error {
 export function resolveExpectedExistingSessionConstraint(params: {
   canUseInternalRuntimeHandoff: boolean;
   expectedExistingSessionId?: unknown;
+  expectedExistingSessionLifecycleRevision?: string | null;
   internalRuntimeHandoffId?: unknown;
 }): { ok: true; constraint?: ExpectedExistingSessionConstraint } | { ok: false; error: string } {
   const sessionId = normalizeOptionalString(params.expectedExistingSessionId);
   if (!sessionId) {
+    if (params.expectedExistingSessionLifecycleRevision !== undefined) {
+      return {
+        ok: false,
+        error: "expectedExistingSessionLifecycleRevision requires expectedExistingSessionId.",
+      };
+    }
     return { ok: true };
   }
   if (!params.canUseInternalRuntimeHandoff) {
@@ -35,7 +44,11 @@ export function resolveExpectedExistingSessionConstraint(params: {
   const handoffId = normalizeOptionalString(params.internalRuntimeHandoffId);
   return {
     ok: true,
-    constraint: { sessionId, ...(handoffId ? { handoffId } : {}) },
+    constraint: {
+      sessionId,
+      lifecycleRevision: params.expectedExistingSessionLifecycleRevision,
+      ...(handoffId ? { handoffId } : {}),
+    },
   };
 }
 
@@ -61,7 +74,12 @@ export function assertExpectedExistingSession(params: {
   entry?: SessionEntry;
   message: string;
 }): void {
-  if (params.constraint && params.entry?.sessionId !== params.constraint.sessionId) {
+  if (
+    params.constraint &&
+    (params.entry?.sessionId !== params.constraint.sessionId ||
+      (params.constraint.lifecycleRevision !== undefined &&
+        (params.entry?.lifecycleRevision ?? null) !== params.constraint.lifecycleRevision))
+  ) {
     throw new ExpectedExistingSessionChangedError(params.message);
   }
 }
@@ -69,7 +87,7 @@ export function assertExpectedExistingSession(params: {
 export function consumeExpectedSessionWorkAdmission(params: {
   constraint?: ExpectedExistingSessionConstraint;
   identities: Iterable<string | undefined>;
-  onInterrupt: (reason?: Error) => void;
+  onInterrupt: SessionWorkAdmissionInterrupt;
   scope: string;
 }): SessionWorkAdmissionLease | undefined {
   const handoffId = params.constraint?.handoffId;

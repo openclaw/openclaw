@@ -59,6 +59,7 @@ public final class ChatModelPickerStore {
         recents: [String],
         defaultProvider: String? = nil) -> ChatModelPickerSections
     {
+        let choices = choices.filter { $0.manualSelectionAllowed != false }
         var choicesByID: [String: OpenClawChatModelChoice] = [:]
         for choice in choices where choicesByID[choice.selectionID] == nil {
             choicesByID[choice.selectionID] = choice
@@ -75,13 +76,7 @@ public final class ChatModelPickerStore {
         }
         let remaining = choices.filter { included.insert($0.selectionID).inserted }
         let normalizedDefaultProvider = self.normalizedProviderIfPresent(defaultProvider)
-        let grouped = Dictionary(grouping: remaining) { choice in
-            let metadataProvider = self.normalizedProvider(choice.provider)
-            if metadataProvider != "other" {
-                return metadataProvider
-            }
-            return self.providerFromQualifiedModelID(choice.modelID) ?? metadataProvider
-        }
+        let grouped = Dictionary(grouping: remaining) { self.effectiveProvider($0) }
         let providers = grouped.map { provider, models in
             ChatModelProviderSection(
                 id: provider,

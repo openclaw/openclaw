@@ -1,10 +1,10 @@
 /** Shared Playwright download capture and output handling. */
 import crypto from "node:crypto";
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
-import { sanitizeUntrustedFileName } from "./safe-filename.js";
 
 type BrowserDownloadCaptureState = {
   downloadWaiterDepth: number;
@@ -17,6 +17,7 @@ type BrowserDownloadPage = {
 
 export type BrowserDownloadCaptureOptions = {
   beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
+  cancelOnBeforeSaveError?: (error: unknown) => boolean;
   mode?: "passive" | "explicit";
   outputPath?: string;
   outputRoot?: string;
@@ -48,7 +49,14 @@ export async function saveBrowserDownload(
     url: download.url?.() || "",
     suggestedFilename,
   };
-  await opts.beforeSave?.(candidate);
+  try {
+    await opts.beforeSave?.(candidate);
+  } catch (error) {
+    if (!opts.signal?.aborted && opts.cancelOnBeforeSaveError?.(error)) {
+      await download.cancel?.().catch(() => {});
+    }
+    throw error;
+  }
   opts.signal?.throwIfAborted();
   const saveAs = download.saveAs?.bind(download);
   if (!saveAs) {

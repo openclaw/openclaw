@@ -1,10 +1,10 @@
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
 import { resolveJsonSaveTarget } from "../../infra/json-file.js";
-import { replaceFileAtomicSync } from "../../infra/replace-file.js";
 import type { Transport } from "../../llm/types.js";
-import { CONFIG_DIR_NAME } from "../config.js";
+import { CONFIG_DIR_NAME } from "../package-metadata.js";
 
 interface CompactionSettings {
   enabled?: boolean; // default: true

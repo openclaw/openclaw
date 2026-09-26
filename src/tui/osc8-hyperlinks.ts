@@ -12,7 +12,7 @@ const URL_PATH_WITH_PARENS =
  *  URLs, while preserving balanced parentheses and exact authored Markdown
  *  destinations. `(see https://example.com/path).` must link only the URL,
  *  but `[label](https://example.com/path.)` must retain its authored dot. */
-function trimUrlTrailingPunctuation(url: string, knownUrls?: string[]): string {
+function trimUrlTrailingPunctuation(url: string, knownUrls?: ReadonlySet<string>): string {
   let open = 0;
   for (let index = 0; index < url.length; index++) {
     const ch = url[index];
@@ -21,7 +21,7 @@ function trimUrlTrailingPunctuation(url: string, knownUrls?: string[]): string {
     } else if (ch === ")") {
       if (open === 0) {
         const authoredUrl = url.slice(0, index);
-        return knownUrls?.includes(authoredUrl)
+        return knownUrls?.has(authoredUrl)
           ? authoredUrl
           : trimUrlTrailingPunctuation(authoredUrl, knownUrls);
       }
@@ -29,7 +29,7 @@ function trimUrlTrailingPunctuation(url: string, knownUrls?: string[]): string {
     }
   }
   const trimmed = url.replace(/[?!.,:;*_~]+$/u, "");
-  return knownUrls?.includes(url) && !knownUrls.includes(trimmed) ? url : trimmed;
+  return knownUrls?.has(url) && !knownUrls.has(trimmed) ? url : trimmed;
 }
 
 function hasUrlContent(url: string): boolean {
@@ -44,7 +44,7 @@ function hasUrlContent(url: string): boolean {
  * Extract all unique URLs from raw markdown text.
  * Finds both bare URLs and markdown link hrefs [text](url).
  */
-export function extractUrls(markdown: string): string[] {
+export function extractUrls(markdown: string): ReadonlySet<string> {
   const urls = new Set<string>();
 
   // Markdown link hrefs: [text](url), with optional <...> and optional title.
@@ -52,15 +52,15 @@ export function extractUrls(markdown: string): string[] {
     `\\[(?:[^\\]]*)\\]\\(\\s*<?(${URL_PATH_WITH_PARENS.source})>?(?:\\s+["'][^"']*["'])?\\s*\\)`,
     "g",
   );
-  let m: RegExpExecArray | null;
-  while ((m = mdLinkRe.exec(markdown)) !== null) {
-    if (hasUrlContent(expectDefined(m[1], "m capture group 1"))) {
-      urls.add(expectDefined(m[1], "m capture group 1"));
+  const stripped = markdown.replace(mdLinkRe, (_match, url: string) => {
+    if (hasUrlContent(url)) {
+      urls.add(url);
     }
-  }
+    return "";
+  });
 
-  // Bare URLs (remove markdown links first to avoid double-matching)
-  const stripped = markdown.replace(mdLinkRe, "");
+  // Bare URLs (markdown links were removed above to avoid double-matching)
+  let m: RegExpExecArray | null;
   const bareRe =
     /https?:\/\/(?:\[[0-9a-f:.]+\](?::\d+)?[^\s\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]*|[^\s[\]>\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+)/gi;
   while ((m = bareRe.exec(stripped)) !== null) {
@@ -70,7 +70,7 @@ export function extractUrls(markdown: string): string[] {
     }
   }
 
-  return [...urls];
+  return urls;
 }
 
 interface UrlRange {
@@ -84,7 +84,7 @@ interface UrlRange {
  */
 function findUrlRanges(
   visibleText: string,
-  knownUrls: string[],
+  knownUrls: ReadonlySet<string>,
   pending: { url: string; consumed: number } | null,
   nextVisibleText?: string,
 ): { ranges: UrlRange[]; pending: { url: string; consumed: number } | null } {
@@ -165,7 +165,7 @@ function findUrlRanges(
       }
     }
 
-    if (!found && knownUrls.includes(fragment)) {
+    if (!found && knownUrls.has(fragment)) {
       found = true;
     }
     if (!found) {
@@ -275,14 +275,14 @@ function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
 }
 
 /**
- * Add OSC 8 hyperlinks to rendered lines using a pre-extracted URL list.
+ * Add OSC 8 hyperlinks to rendered lines using a pre-extracted URL set.
  *
  * For each line, finds URL-like substrings in the visible text, matches them
  * against known URLs, and wraps each fragment with OSC 8 escape sequences.
  * Handles URLs broken across multiple lines by pi-tui's word wrapping.
  */
-export function addOsc8Hyperlinks(lines: string[], urls: string[]): string[] {
-  if (urls.length === 0) {
+export function addOsc8Hyperlinks(lines: string[], urls: ReadonlySet<string>): string[] {
+  if (urls.size === 0) {
     return lines;
   }
 

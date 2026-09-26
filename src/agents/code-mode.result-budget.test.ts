@@ -138,12 +138,46 @@ async function dispatch(
   }
 }
 
-afterEach(() => {
-  resetCodeModeTestState();
+afterEach(async () => {
+  await resetCodeModeTestState();
   clearEmbeddedSessionPromptStates([sessionId]);
 });
 
 describe("fresh producer results through persistence and model guards", () => {
+  it("retains structured values that fit the compact result budget", async () => {
+    const context = 4_096;
+    const value = Array.from({ length: 80 }, (_, id) => ({ id, ok: true }));
+    const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+      config: { tools: { codeMode: { enabled: true } } },
+      model,
+      contextTokenBudget: context,
+      modelToolsEnabled: true,
+      sessionId,
+      executeTool: async () => {
+        throw new Error("This fixture has no catalog tools");
+      },
+    });
+    try {
+      const [exec] = runtime.compactTools([]).tools;
+      const frame = message(
+        await exec!.execute("compact-value", { code: `return ${JSON.stringify(value)};` }),
+        "exec",
+      );
+      const sent = await dispatch([frame], context);
+      expect(JSON.parse(text(toolResult(sent, 0)))).toMatchObject({
+        status: "completed",
+        value,
+        output: [],
+        replaySafe: false,
+        telemetry: { callCount: 0 },
+      });
+      expect(text(toolResult(sent, 0))).toBe(text(frame));
+      expect(resultDetails(frame).value).toEqual(value);
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
   it.each([
     { name: "default accented", first: "🦞".repeat(9000), last: "é".repeat(18000) },
     { name: "ASCII", first: "a".repeat(40_000), last: "b".repeat(40_000) },
@@ -242,7 +276,20 @@ describe("fresh producer results through persistence and model guards", () => {
         } else if (value === true) {
           expect(details.value).toBe(true);
         } else {
-          expectOriginalCodeModeMarker(details.value, value);
+          if (value === undefined) {
+            throw new Error("Expected the structured-value fixture");
+          }
+          expect(details.value).toMatchObject({
+            truncated: true,
+            reference: { id: expect.any(String), bytes: Buffer.byteLength(JSON.stringify(value)) },
+          });
+          const reference = (details.value as { reference: { id: string } }).reference;
+          const loaded = resultDetails(
+            await tools[0]!.execute("retained", {
+              code: `return (await results.load(${JSON.stringify(reference.id)})).text.length;`,
+            }),
+          );
+          expect(loaded).toMatchObject({ status: "completed", value: value.text.length });
         }
 
         const scope = {
@@ -372,7 +419,7 @@ describe("fresh producer results through persistence and model guards", () => {
         expect(final.terminate).toBe(true);
         for (const result of [first, final]) {
           const rendered = text(result);
-          expect(rendered).toContain("SECURITY NOTICE");
+          expect(rendered).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
           expect(rendered).not.toContain("\n[truncated]");
           const body = rendered
             .split("\n---\n")[1]

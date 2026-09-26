@@ -21,7 +21,11 @@ export class SessionOwnerFilterController implements ReactiveController {
 
   constructor(
     private readonly host: ReactiveControllerHost & {
-      sessionData: { resetSessionList(): void; refreshSidebarSessions(): Promise<void> };
+      sessionData: {
+        resetSessionList(): void;
+        refreshSidebarSessions(): Promise<void>;
+        scheduleSidebarSessions(): Promise<void>;
+      };
     },
     private readonly getContext: () => SessionOwnerFilterContext | undefined,
   ) {
@@ -64,7 +68,8 @@ export class SessionOwnerFilterController implements ReactiveController {
       );
     }
     this.host.requestUpdate();
-    void this.refresh();
+    this.host.sessionData.resetSessionList();
+    void this.host.sessionData.refreshSidebarSessions();
   }
 
   private restore(): void {
@@ -91,7 +96,8 @@ export class SessionOwnerFilterController implements ReactiveController {
     if (previousScope !== null || this.ownerId || this.involvingMe) {
       this.ownerFacetResolved = false;
       this.ownerOptions = [];
-      const pending = this.refresh();
+      this.host.sessionData.resetSessionList();
+      const pending = this.host.sessionData.scheduleSidebarSessions();
       this.pendingFacetRefresh = pending;
       void pending.finally(() => {
         if (this.pendingFacetRefresh === pending) {
@@ -100,11 +106,6 @@ export class SessionOwnerFilterController implements ReactiveController {
         }
       });
     }
-  }
-
-  private refresh(): Promise<void> {
-    this.host.sessionData.resetSessionList();
-    return this.host.sessionData.refreshSidebarSessions();
   }
 
   private currentFilter() {

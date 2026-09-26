@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 describe("Doctor plugin index persistence built CLI proof", () => {
-  it("starts after linking an empty legacy state dir to the canonical root", async () => {
+  it("preserves an empty legacy state dir until Doctor links it to the canonical root", async () => {
     const instance = await createOpenClawTestInstance({
       name: "doctor-empty-legacy-state-dir",
       env: {
@@ -42,9 +42,14 @@ describe("Doctor plugin index persistence built CLI proof", () => {
 
     await instance.startGateway();
 
-    expect(fs.realpathSync(legacyDir), instance.logs()).toBe(fs.realpathSync(instance.stateDir));
+    expect(fs.lstatSync(legacyDir).isDirectory(), instance.logs()).toBe(true);
+    expect(fs.readdirSync(legacyDir)).toEqual([]);
 
     await instance.stopGateway();
+    const repaired = await instance.cli(["doctor", "--repair", "--yes", "--non-interactive"]);
+    expect(repaired.code, repaired.stderr).toBe(0);
+    expect(repaired.signal).toBeNull();
+    expect(fs.realpathSync(legacyDir), repaired.stdout).toBe(fs.realpathSync(instance.stateDir));
     await instance.startGateway();
     expect(fs.realpathSync(legacyDir), instance.logs()).toBe(fs.realpathSync(instance.stateDir));
   }, 120_000);
@@ -122,16 +127,6 @@ describe("Doctor plugin index persistence built CLI proof", () => {
 
     clearPluginMetadataLifecycleCaches();
     closeOpenClawStateDatabaseForTest();
-    const reread = loadPluginMetadataSnapshot({
-      config,
-      env: instance.env,
-      stateDir: instance.stateDir,
-      workspaceDir,
-      allowCurrent: false,
-    });
-    expect(reread.registrySource, instance.logs()).toBe("persisted");
-    expect(reread.registryDiagnostics, instance.logs()).toStrictEqual([]);
-
     const persisted = readPersistedInstalledPluginIndexSync({ env: instance.env });
     const persistedPlugin = persisted?.plugins.find((plugin) => plugin.pluginId === pluginId);
     expect(persistedPlugin, instance.logs()).toMatchObject({
@@ -143,5 +138,20 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       doctorContractHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
       packageBuild: { bundledDist: false },
     });
+
+    // Source readers intentionally select different bundled Doctor contracts.
+    // Observe the repaired index through the same built host as the Gateway.
+    const listed = await instance.cli(["plugins", "list", "--json"]);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect(listed.signal).toBeNull();
+    const reread = JSON.parse(listed.stdout) as {
+      registry: { source: string; diagnostics: unknown[] };
+    };
+    expect(reread.registry.source, instance.logs()).toBe("persisted");
+    expect(reread.registry.diagnostics, instance.logs()).toStrictEqual([]);
+
+    clearPluginMetadataLifecycleCaches();
+    closeOpenClawStateDatabaseForTest();
+    expect(readPersistedInstalledPluginIndexSync({ env: instance.env })).toEqual(persisted);
   }, 120_000);
 });

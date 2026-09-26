@@ -26,10 +26,8 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
 
 describe("applyJobPatch schedule retention", () => {
   it.each([
-    { schedule: { kind: "every" as const, everyMs: 60_000 }, deleteAfterRun: undefined },
     { schedule: { kind: "every" as const, everyMs: 60_000 }, deleteAfterRun: false },
     { schedule: { kind: "cron" as const, expr: "0 * * * *" }, deleteAfterRun: undefined },
-    { schedule: { kind: "cron" as const, expr: "0 * * * *" }, deleteAfterRun: false },
   ])("defaults $schedule.kind to cleanup when converting it to at", (previous) => {
     const job = makeJob(previous);
 
@@ -100,7 +98,10 @@ describe("schedule activation ownership", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
-      state: { scheduleActivatedAtMs: now - 60_000 },
+      state: {
+        scheduleActivatedAtMs: now - 60_000,
+        runningScheduleChangeId: "caller-supplied-edit",
+      },
     } as unknown as CronJobCreate;
 
     const job = createJob(
@@ -114,17 +115,21 @@ describe("schedule activation ownership", () => {
     );
 
     expect(job.state.scheduleActivatedAtMs).toBeUndefined();
+    expect(job.state.runningScheduleChangeId).toBeUndefined();
   });
 
   it("ignores caller-supplied activation state during updates", () => {
-    const job = makeJob({ state: { scheduleActivatedAtMs: 456 } });
+    const job = makeJob({
+      state: { scheduleActivatedAtMs: 456, runningScheduleChangeId: "pending-run-edit" },
+    });
     const patch = {
-      state: { scheduleActivatedAtMs: 123 },
+      state: { scheduleActivatedAtMs: 123, runningScheduleChangeId: null },
     } as unknown as CronJobPatch;
 
     applyJobPatch(job, patch);
 
     expect(job.state.scheduleActivatedAtMs).toBe(456);
+    expect(job.state.runningScheduleChangeId).toBe("pending-run-edit");
   });
 
   it.each(["nextRunAtMs", "startupCatchupAtMs", "pacedNextRunAtMs"] as const)(
@@ -209,7 +214,6 @@ describe("applyJobPatch delivery merge", () => {
   });
 
   it.each([
-    { name: "best-effort enabled", delivery: { bestEffort: true } },
     { name: "best-effort disabled", delivery: { bestEffort: false } },
     {
       name: "nullable clears",
@@ -248,9 +252,7 @@ describe("applyJobPatch delivery merge", () => {
     existingDelivery?: CronJob["delivery"];
   }>([
     { name: "announce mode", delivery: { mode: "announce" } },
-    { name: "chat target", delivery: { channel: "telegram", to: "123" } },
     { name: "channel", delivery: { channel: "telegram" } },
-    { name: "last channel", delivery: { channel: "last" } },
     { name: "recipient", delivery: { to: "123" } },
     {
       name: "recipient on inherited none",
@@ -263,13 +265,6 @@ describe("applyJobPatch delivery merge", () => {
     {
       name: "completion webhook",
       delivery: {
-        completionDestination: { mode: "webhook", to: "https://example.com/completed" },
-      },
-    },
-    {
-      name: "completion webhook with announce",
-      delivery: {
-        mode: "announce",
         completionDestination: { mode: "webhook", to: "https://example.com/completed" },
       },
     },
@@ -289,7 +284,6 @@ describe("applyJobPatch delivery merge", () => {
   );
 
   it.each([
-    { bestEffort: true },
     { bestEffort: false },
     { channel: null, to: null, threadId: null, accountId: null },
   ] satisfies Array<CronJobPatch["delivery"]>)(

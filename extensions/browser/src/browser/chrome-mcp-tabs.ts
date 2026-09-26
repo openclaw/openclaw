@@ -17,21 +17,14 @@ import {
   type ChromeMcpOperationOptions,
   type ChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
-import { cacheKeyMatchesProfileName } from "./chrome-mcp-options.js";
-import { cleanupTarget } from "./chrome-mcp-process.js";
 import { extractStructuredPages } from "./chrome-mcp-result.js";
 import {
   callTool,
-  clearChromeMcpSnapshotRefsForTarget,
   getChromeMcpRoutingState,
   listChromeMcpTargetsWithLease,
   registerChromeMcpTargets,
   withChromeMcpLease,
 } from "./chrome-mcp-routing.js";
-import {
-  chromeMcpSessions as sessions,
-  retainedChromeMcpCleanupSessions as retainedCleanupSessions,
-} from "./chrome-mcp-state.js";
 import type { BrowserOpenResult, BrowserTab, BrowserTabOwnership } from "./client.types.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
@@ -59,24 +52,6 @@ export async function ensureChromeMcpAvailable(
   });
 }
 
-/** Return the cached Chrome MCP process pid for a profile, when present. */
-export function getChromeMcpPid(profileName: string): number | null {
-  for (const [key, session] of sessions.entries()) {
-    if (cacheKeyMatchesProfileName(key, profileName)) {
-      return session.transport.pid ?? null;
-    }
-  }
-  for (const [key, retained] of retainedCleanupSessions) {
-    if (cacheKeyMatchesProfileName(key, profileName)) {
-      const session = retained.values().next().value;
-      const target = session?.processCleanup ? cleanupTarget(session.processCleanup) : undefined;
-      return target?.root.pid ?? session?.transport.pid ?? null;
-    }
-  }
-  return null;
-}
-
-/** Close every cached Chrome MCP session. */
 async function readChromeMcpTabs(
   profileName: string,
   profileOptions?: string | ChromeMcpProfileOptions,
@@ -278,7 +253,7 @@ export async function openChromeMcpTab(
               );
               const routing = getChromeMcpRoutingState(lease.session);
               routing.targetIdByPageId.delete(created.page.id);
-              clearChromeMcpSnapshotRefsForTarget(routing, created.targetId);
+              routing.snapshotsByTarget.delete(created.targetId);
               return;
             }
           } catch (error) {
@@ -302,7 +277,7 @@ export async function openChromeMcpTab(
         );
         const routing = getChromeMcpRoutingState(lease.session);
         routing.targetIdByPageId.delete(created.page.id);
-        clearChromeMcpSnapshotRefsForTarget(routing, created.targetId);
+        routing.snapshotsByTarget.delete(created.targetId);
       };
       try {
         const captured = await captureChromeMcpTabOwnership({
@@ -375,5 +350,3 @@ export async function openChromeMcpTab(
     },
   );
 }
-
-/** Bring a Chrome MCP page to the foreground. */

@@ -1,12 +1,10 @@
-import fs from "node:fs";
 // Resolves agent-specific config and workspace directories.
 import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries, resolveAgentConfig } from "../agents/agent-scope-config.js";
+import { listAgentEntries, resolveEffectiveAgentDir } from "../agents/agent-scope-config.js";
 import { isPathCaseInsensitive } from "../infra/path-case.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveUserPath } from "../utils.js";
-import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
 
 type DuplicateAgentDir = {
@@ -25,42 +23,14 @@ export class DuplicateAgentDirError extends Error {
   }
 }
 
-function realpathAgentDir(agentDir: string, seen = new Set<string>()): string {
-  const resolved = path.resolve(agentDir);
-  if (seen.has(resolved)) {
-    return resolved;
-  }
-  seen.add(resolved);
-  const missingSegments: string[] = [];
-  let cursor = resolved;
-  for (;;) {
-    try {
-      return path.join(fs.realpathSync.native(cursor), ...missingSegments.toReversed());
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") {
-        return resolved;
-      }
-      try {
-        if (fs.lstatSync(cursor).isSymbolicLink()) {
-          const target = path.resolve(path.dirname(cursor), fs.readlinkSync(cursor));
-          return realpathAgentDir(path.join(target, ...missingSegments.toReversed()), seen);
-        }
-      } catch {
-        // This component is missing; continue with its parent.
-      }
-      const parent = path.dirname(cursor);
-      if (parent === cursor) {
-        return resolved;
-      }
-      missingSegments.push(path.basename(cursor));
-      cursor = parent;
-    }
-  }
-}
-
 function canonicalizeAgentDir(agentDir: string): string {
-  const resolved = realpathAgentDir(agentDir);
+  let resolved = path.resolve(agentDir);
+  try {
+    const prefix = resolvePathPrefixSync(resolved);
+    resolved = path.join(prefix.existingPath, ...prefix.unresolvedSegments);
+  } catch {
+    // Unreadable paths keep their configured spelling for best-effort comparison.
+  }
   return isPathCaseInsensitive(resolved) ? normalizeLowercaseStringOrEmpty(resolved) : resolved;
 }
 
@@ -92,30 +62,18 @@ function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {
   return [...ids];
 }
 
-function resolveEffectiveAgentDir(
-  cfg: OpenClawConfig,
-  agentId: string,
-  deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
-): string {
-  const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.agentDir;
-  const trimmed = configured?.trim();
-  const env = deps?.env ?? process.env;
-  if (trimmed) {
-    return resolveUserPath(trimmed, env, deps?.homedir);
-  }
-  const root = resolveStateDir(env, deps?.homedir);
-  return path.join(root, "agents", id, "agent");
-}
-
 /** Finds agent ids whose effective agentDir would share auth/session state. */
 export function findDuplicateAgentDirs(
   cfg: OpenClawConfig,
   deps?: { env?: NodeJS.ProcessEnv; homedir?: () => string },
 ): DuplicateAgentDir[] {
+  const agentIds = collectReferencedAgentIds(cfg);
+  if (agentIds.length < 2) {
+    return [];
+  }
   const byDir = new Map<string, { agentDir: string; agentIds: string[] }>();
 
-  for (const agentId of collectReferencedAgentIds(cfg)) {
+  for (const agentId of agentIds) {
     const agentDir = resolveEffectiveAgentDir(cfg, agentId, deps);
     const key = canonicalizeAgentDir(agentDir);
     const entry = byDir.get(key);

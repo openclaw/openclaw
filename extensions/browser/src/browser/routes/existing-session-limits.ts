@@ -1,3 +1,5 @@
+import type { BrowserActRequest } from "../client-actions.types.js";
+
 /**
  * Existing-session browser capability-limit messages.
  *
@@ -10,9 +12,13 @@ export const EXISTING_SESSION_LIMITS = {
     clickSelector: "existing-session click does not support selector targeting yet; use ref.",
     clickButtonOrModifiers:
       "existing-session click currently supports left-click only (no button overrides/modifiers).",
+    coordinateButtonOrDelay:
+      "existing-session coordinate clicks support left-click only and no delayMs; use a managed browser profile for other buttons or click delays.",
     typeSelector: "existing-session type does not support selector targeting yet; use ref.",
     typeSlowly: "existing-session type does not support slowly=true; use fill/press instead.",
     typeTimeout: "existing-session type does not support timeoutMs overrides.",
+    insertText:
+      "Paste is not supported for existing-session browser profiles. Use a managed browser profile.",
     pressDelay: "existing-session press does not support delayMs.",
     hoverSelector: "existing-session hover does not support selector targeting yet; use ref.",
     hoverTimeout: "existing-session hover does not support timeoutMs overrides.",
@@ -57,3 +63,94 @@ export const EXISTING_SESSION_LIMITS = {
   emulation:
     "emulate is not supported for existing-session profiles; use a managed browser profile for device, media, timezone, or locale settings.",
 } as const;
+
+type ExistingSessionAction = Exclude<BrowserActRequest, { kind: "batch" | "insertText" }>;
+
+type ExistingSessionActionAdmission =
+  | { ok: true; action: ExistingSessionAction }
+  | { ok: false; error: string };
+
+/** Validate existing-session support before admitting a narrowed action to dispatch. */
+export function admitExistingSessionAction(
+  action: BrowserActRequest,
+): ExistingSessionActionAdmission {
+  let error: string | undefined;
+  switch (action.kind) {
+    case "click":
+      if (action.selector) {
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.clickSelector };
+      }
+      if (
+        (action.button && action.button !== "left") ||
+        (Array.isArray(action.modifiers) && action.modifiers.length > 0)
+      ) {
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.clickButtonOrModifiers };
+      }
+      break;
+    case "clickCoords":
+      error =
+        (action.button && action.button !== "left") || action.delayMs
+          ? EXISTING_SESSION_LIMITS.act.coordinateButtonOrDelay
+          : undefined;
+      break;
+    case "type":
+      if (action.selector) {
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.typeSelector };
+      }
+      if (action.slowly) {
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.typeSlowly };
+      }
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.typeTimeout : undefined;
+      break;
+    case "insertText":
+      return { ok: false, error: EXISTING_SESSION_LIMITS.act.insertText };
+    case "press":
+      error = action.delayMs ? EXISTING_SESSION_LIMITS.act.pressDelay : undefined;
+      break;
+    case "hover":
+      if (action.selector) {
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.hoverSelector };
+      }
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.hoverTimeout : undefined;
+      break;
+    case "scrollIntoView":
+      if (action.selector) {
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.scrollSelector };
+      }
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.scrollTimeout : undefined;
+      break;
+    case "drag":
+      if (action.startSelector || action.endSelector) {
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.dragSelector };
+      }
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.dragTimeout : undefined;
+      break;
+    case "select":
+      if (action.selector) {
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.selectSelector };
+      }
+      if (action.values.length !== 1) {
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act.selectSingleValue };
+      }
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.selectTimeout : undefined;
+      break;
+    case "fill":
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.fillTimeout : undefined;
+      break;
+    case "wait":
+      error =
+        action.loadState === "networkidle"
+          ? EXISTING_SESSION_LIMITS.act.waitNetworkIdle
+          : undefined;
+      break;
+    case "batch":
+      return { ok: false, error: EXISTING_SESSION_LIMITS.act.batch };
+    case "evaluate":
+    case "resize":
+    case "close":
+      break;
+    default:
+      throw new Error("Unsupported browser act kind");
+  }
+  return error ? { ok: false, error } : { ok: true, action };
+}

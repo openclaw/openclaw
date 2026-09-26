@@ -1,10 +1,8 @@
-// Signal plugin module implements install signal cli behavior.
-import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Readable, Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
+import { extractErrorCode, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -34,8 +32,7 @@ type SignalCliRelease = {
 };
 
 const MAX_SIGNAL_CLI_ARCHIVE_BYTES = 256 * 1024 * 1024;
-/** @internal Exported for testing. */
-export const MAX_SIGNAL_CLI_EXTRACTED_BYTES = 384 * 1024 * 1024;
+const MAX_SIGNAL_CLI_EXTRACTED_BYTES = 384 * 1024 * 1024;
 const SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 const SIGNAL_CLI_RELEASE_INFO_TIMEOUT_MS = 30_000;
 const CONTENT_LENGTH_RE = /^\d+$/;
@@ -71,24 +68,6 @@ export async function extractSignalCliArchive(
 /** @internal Exported for testing. */
 export function looksLikeArchive(name: string): boolean {
   return name.endsWith(".tar.gz") || name.endsWith(".tgz") || name.endsWith(".zip");
-}
-
-function isNodeReadableStream(value: unknown): value is Readable {
-  return Boolean(value && typeof (value as { pipe?: unknown }).pipe === "function");
-}
-
-function chunkByteLength(chunk: unknown): number {
-  if (typeof chunk === "string") {
-    return Buffer.byteLength(chunk);
-  }
-  if (chunk instanceof Uint8Array) {
-    return chunk.byteLength;
-  }
-  return Buffer.byteLength(String(chunk));
-}
-
-async function cancelUnusedResponseBody(response: Response): Promise<void> {
-  await response.body?.cancel().catch(() => undefined);
 }
 
 function normalizeReleaseAsset(value: unknown): NamedAsset | undefined {
@@ -135,7 +114,6 @@ export function pickAsset(
     Boolean(asset.name && asset.browser_download_url),
   );
 
-  // Archives only, excluding signature files (.asc)
   const archives = withName.filter((a) =>
     looksLikeArchive(normalizeLowercaseStringOrEmpty(a.name)),
   );
@@ -150,7 +128,6 @@ export function pickAsset(
     if (arch === "x64") {
       return byName(/linux-native/) || byName(/linux/) || archives[0];
     }
-    // No native release for this arch — caller should fall back.
     return undefined;
   }
 
@@ -172,7 +149,6 @@ export async function downloadToFile(
   maxRedirects = 5,
   maxBytes = MAX_SIGNAL_CLI_ARCHIVE_BYTES,
 ): Promise<void> {
-  let completed = false;
   const { response, release } = await fetchWithSsrFGuard({
     url,
     maxRedirects,
@@ -183,7 +159,6 @@ export async function downloadToFile(
   });
   try {
     if (!response.ok || !response.body) {
-      await cancelUnusedResponseBody(response);
       throw new Error(`HTTP ${response.status || "?"} downloading file`);
     }
 
@@ -194,61 +169,44 @@ export async function downloadToFile(
         ? Number(trimmedLength)
         : Number.NaN;
       if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-        await cancelUnusedResponseBody(response);
         throw new Error(
           `signal-cli archive exceeds the ${maxBytes}-byte download cap (declared ${declaredLength}).`,
         );
       }
     }
 
-    let totalBytes = 0;
     const body = response.body;
-    const readable = isNodeReadableStream(body) ? body : Readable.fromWeb(body as never);
-    const limiter = new Transform({
-      transform(chunk: unknown, _encoding, callback) {
-        totalBytes += chunkByteLength(chunk);
-        if (totalBytes > maxBytes) {
-          callback(new Error(`signal-cli archive exceeded the ${maxBytes}-byte download cap.`));
-          return;
-        }
-        callback(null, chunk);
-      },
+    async function* chunks() {
+      // Acquire the reader only after path admission; the fetch guard owns abort/cancel.
+      yield* body.values({ preventCancel: true });
+    }
+    const destination = await fsRoot(path.dirname(dest));
+    await destination.create(path.basename(dest), chunks(), {
+      maxBytes,
+      mkdir: false,
+      durable: false,
+      mode: 0o666 & ~process.umask(),
     });
-
-    const out = createWriteStream(dest);
-    await pipeline(readable, limiter, out);
-    completed = true;
+  } catch (error) {
+    if (extractErrorCode(error) === "too-large") {
+      throw new Error(`signal-cli archive exceeded the ${maxBytes}-byte download cap.`, {
+        cause: error,
+      });
+    }
+    throw error;
   } finally {
     await release();
-    if (!completed) {
-      await fs.rm(dest, { force: true }).catch(() => undefined);
-    }
   }
 }
 
 async function findSignalCliBinary(root: string): Promise<string | null> {
-  const candidates: string[] = [];
-  const enqueue = async (dir: string, depth: number) => {
-    if (depth > 3) {
-      return;
-    }
-    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await enqueue(full, depth + 1);
-      } else if (entry.isFile() && entry.name === "signal-cli") {
-        candidates.push(full);
-      }
-    }
-  };
-  await enqueue(root, 0);
-  return candidates[0] ?? null;
+  const { entries } = await walkDirectory(root, {
+    maxDepth: 4,
+    symlinks: "skip",
+    include: (entry) => entry.kind === "file" && entry.name === "signal-cli",
+  });
+  return entries[0]?.path ?? null;
 }
-
-// ---------------------------------------------------------------------------
-// Brew-based install (used on architectures without an official native build)
-// ---------------------------------------------------------------------------
 
 async function resolveBrewSignalCliPath(brewExe: string): Promise<string | null> {
   try {
@@ -306,7 +264,6 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
     };
   }
 
-  // Extract version from the installed binary.
   let version: string | undefined;
   try {
     const vResult = await runPluginCommandWithTimeout({
@@ -321,10 +278,6 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
 
   return { ok: true, cliPath, version };
 }
-
-// ---------------------------------------------------------------------------
-// Direct download install (used when an official native asset is available)
-// ---------------------------------------------------------------------------
 
 /** @internal Exported for testing. */
 export async function installSignalCliFromRelease(
@@ -349,7 +302,6 @@ export async function installSignalCliFromRelease(
   let releaseInfo: SignalCliRelease;
   try {
     if (!response.ok) {
-      await cancelUnusedResponseBody(response);
       return {
         ok: false,
         error: `Failed to fetch release info (${response.status})`,
@@ -391,9 +343,6 @@ export async function installSignalCliFromRelease(
       const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", releaseInfo.version);
       await fs.mkdir(installRoot, { recursive: true });
 
-      if (!looksLikeArchive(normalizeLowercaseStringOrEmpty(asset.name))) {
-        return { ok: false, error: `Unsupported archive type: ${asset.name}` };
-      }
       try {
         await extractSignalCliArchive(archivePath, installRoot, 60_000);
       } catch (err) {
@@ -422,10 +371,6 @@ export async function installSignalCliFromRelease(
     },
   );
 }
-
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
 
 export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInstallResult> {
   if (process.platform === "win32") {

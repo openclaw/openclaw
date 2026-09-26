@@ -1,17 +1,18 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Msteams plugin module implements setup core behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   createSetupTranslator,
+  patchTopLevelChannelConfigSection,
   setSetupChannelEnabled,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { normalizeSecretInputString } from "./secret-input.js";
 import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
 
 const t = createSetupTranslator();
@@ -124,19 +125,12 @@ export function createMSTeamsSetupWizardBase(): Pick<
       }
 
       if (appId && appPassword && tenantId) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            msteams: {
-              ...next.channels?.msteams,
-              enabled: true,
-              appId,
-              appPassword,
-              tenantId,
-            },
-          },
-        };
+        next = patchTopLevelChannelConfigSection({
+          cfg: next,
+          channel,
+          enabled: true,
+          patch: { appId, appPassword, tenantId },
+        });
       }
 
       return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 usage() {
@@ -235,17 +239,24 @@ restore_device_timezone() {
   fi
 }
 
-cleanup_emulator_log() {
-  if [[ -n "$EMULATOR_LOG" && -f "$EMULATOR_LOG" ]]; then
-    rm -f "$EMULATOR_LOG"
-  fi
-}
-
 cleanup() {
+  local status=$?
+  set +e
+  if [[ "$DRY_RUN" != "1" && -d "$ARTIFACT_DIR" ]]; then
+    {
+      printf 'exit_status=%s\n' "$status"
+      printf 'form_factor=%s\n' "$FORM_FACTOR"
+      printf 'avd=%s\n' "$AVD"
+      printf 'serial=%s\n' "${ADB_SERIAL:-}"
+      if [[ -n "$EMULATOR_PID" ]]; then
+        ps -p "$EMULATOR_PID" -o pid=,ppid=,stat=,etime=,command=
+      fi
+    } >"$ARTIFACT_DIR/process-status.txt" 2>&1
+  fi
   restore_device_display
   restore_device_timezone
   cleanup_started_emulator
-  cleanup_emulator_log
+  return "$status"
 }
 
 trap cleanup EXIT
@@ -496,13 +507,15 @@ boot_emulator() {
 
   ensure_screenshot_avd "$avd"
   emulator="$(emulator_bin)"
-  EMULATOR_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-android-screenshot-emulator.XXXXXX.log")"
+  EMULATOR_LOG="$ARTIFACT_DIR/emulator.log"
   echo "No connected Android device found. Booting AVD '${avd}'." >&2
   emulator_args=(-avd "$avd" -no-window -no-audio -no-boot-anim)
   if [[ -n "${ANDROID_SCREENSHOT_EMULATOR_ARGS:-}" ]]; then
     read -r -a extra_args <<<"$ANDROID_SCREENSHOT_EMULATOR_ARGS"
-    emulator_args+=("${extra_args[@]}")
+    emulator_args+=(${extra_args[@]+"${extra_args[@]}"})
   fi
+  printf '%q ' "$emulator" "${emulator_args[@]}" >"$ARTIFACT_DIR/emulator-args.txt"
+  printf '\n' >>"$ARTIFACT_DIR/emulator-args.txt"
   "$emulator" "${emulator_args[@]}" >"$EMULATOR_LOG" 2>&1 &
   EMULATOR_PID="$!"
   STARTED_EMULATOR=1
@@ -565,7 +578,8 @@ latest_debug_apk() {
 scene_ready_text() {
   if [[ "$FORM_FACTOR" == "wear" ]]; then
     case "$1" in
-      chat) printf '%s\n' "Release planning" ;;
+      # Chat follows the latest reply, so the session title can be outside the viewport.
+      chat) printf '%s\n' "Ready after the final store checks." ;;
       voice) printf '%s\n' "Dictate" ;;
       controls) printf '%s\n' "Gateway connected" ;;
       *)
@@ -701,6 +715,8 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
+rm -rf "$ARTIFACT_DIR"
+mkdir -p "$ARTIFACT_DIR/screenshots" "$ARTIFACT_DIR/ui-dumps" "$ARTIFACT_DIR/activity-start"
 ADB_BIN="$(adb_bin)"
 resolve_device "$ADB_BIN"
 require_emulator_device "$ADB_BIN" "$ADB_SERIAL"
@@ -708,8 +724,6 @@ stabilize_device_for_screenshots "$ADB_BIN" "$ADB_SERIAL"
 configure_screenshot_display "$ADB_BIN" "$ADB_SERIAL"
 mkdir -p "$OUTPUT_DIR"
 rm -f "$OUTPUT_DIR"/*.png "$OUTPUT_DIR"/*.jpg "$OUTPUT_DIR"/*.jpeg
-rm -rf "$ARTIFACT_DIR"
-mkdir -p "$ARTIFACT_DIR/screenshots" "$ARTIFACT_DIR/ui-dumps" "$ARTIFACT_DIR/activity-start"
 
 if [[ "$SKIP_INSTALL" != "1" ]]; then
   if [[ "$SKIP_BUILD" != "1" ]]; then
@@ -757,9 +771,6 @@ for scene in "${SCENES[@]}"; do
 done
 
 "$ADB_BIN" -s "$ADB_SERIAL" logcat -d >"$ARTIFACT_DIR/logcat.txt" 2>&1 || true
-if [[ -n "$EMULATOR_LOG" && -f "$EMULATOR_LOG" ]]; then
-  cp "$EMULATOR_LOG" "$ARTIFACT_DIR/emulator.log"
-fi
 write_artifact_manifest "$ADB_SERIAL"
 
 echo "Android screenshots written to ${OUTPUT_DIR}"

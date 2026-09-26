@@ -37,6 +37,7 @@ export {
   applyAnthropicRefusal,
   isAnthropicOAuthApiKey,
   resolveAnthropicServerCompactionPlan,
+  resolveAnthropicThinkingEffort,
 } from "@openclaw/ai/internal/anthropic";
 export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
 export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
@@ -157,14 +158,6 @@ function wrapPlainTextToolCallStream(
   const output = createAssistantMessageEventStream();
 
   void (async () => {
-    let ended = false;
-    const endStream = () => {
-      if (!ended) {
-        ended = true;
-        output.end();
-      }
-    };
-
     try {
       const normalizedEvents = normalizePlainTextToolCallStreamEvents(source, {
         createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
@@ -205,7 +198,7 @@ function wrapPlainTextToolCallStream(
         },
       });
     } finally {
-      endStream();
+      output.end();
     }
   })();
 
@@ -289,13 +282,15 @@ export function createPayloadPatchStreamWrapper(
 export function createOpenAICompatibleCompletionsThinkingOffWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
+  /** Original wire API when the runtime uses a dispatch alias. */
+  sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  if (thinkingLevel !== "off") {
-    return underlying;
-  }
   return (model, context, options) => {
-    if (model.api !== "openai-completions") {
+    if (
+      (options?.reasoning ?? thinkingLevel) !== "off" ||
+      (sourceApi ?? model.api) !== "openai-completions"
+    ) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
@@ -304,10 +299,10 @@ export function createOpenAICompatibleCompletionsThinkingOffWrapper(
       }
       const disabled = resolveOpenAIReasoningEffortForModel({
         model,
-        effort: "none",
+        effort: "off",
         fallbackMap: resolveOpenAIReasoningEffortMap({
-          provider: typeof model.provider === "string" ? model.provider : null,
-          id: typeof model.id === "string" ? model.id : null,
+          provider: model.provider,
+          id: model.id,
           compat: model.compat,
         }),
       });
@@ -540,8 +535,9 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
       return underlying(model, context, options);
     }
 
+    const thinkingLevel = options?.reasoning ?? params.thinkingLevel;
     return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
-      if (isDisabledDeepSeekV4ThinkingLevel(params.thinkingLevel)) {
+      if (isDisabledDeepSeekV4ThinkingLevel(thinkingLevel)) {
         payload.thinking = { type: "disabled" };
         delete payload.reasoning_effort;
         delete payload.reasoning;
@@ -550,7 +546,7 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
       }
 
       payload.thinking = { type: "enabled" };
-      payload.reasoning_effort = resolveReasoningEffort(params.thinkingLevel);
+      payload.reasoning_effort = resolveReasoningEffort(thinkingLevel);
       normalizeOpenAICompatibleReasoningReplay(payload, {
         thinkingEnabled: true,
         shouldBackfillAssistantMessage: params.shouldBackfillAssistantReasoningContent,

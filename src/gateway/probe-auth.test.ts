@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigForRead } from "../config/io.read-helpers.js";
+import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   resolveGatewayProbeAuthSafe,
@@ -168,6 +169,23 @@ describe("resolveGatewayProbeTarget", () => {
 });
 
 describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
+  it.each(["config-first", "env-first"] as const)(
+    "reports a redacted SecretRef with its identity and remedy under %s precedence",
+    async (localPrecedence) => {
+      const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+        cfg: configWithDefaultEnvProvider({ auth: tokenAuthConfig("GATEWAY_SECRET") }),
+        mode: "local",
+        localPrecedence,
+        env: { GATEWAY_SECRET: REDACTED_SENTINEL, OPENCLAW_GATEWAY_TOKEN: "ambient-token" },
+      });
+      expect(result.auth).toEqual({});
+      expect(result.warningCode).toBe("SECRET_REF_REDACTED_VALUE");
+      expect(result.warning).toContain("env:default:GATEWAY_SECRET");
+      expect(result.warning).toContain("redaction placeholder");
+      expect(result.warning).toContain("openclaw doctor --fix");
+    },
+  );
+
   it.each([
     { mode: "token" as const, value: "configured-token", expected: "ambient-token" },
     { mode: "password" as const, value: "configured-password", expected: "ambient-password" },

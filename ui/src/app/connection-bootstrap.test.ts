@@ -1,13 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 describe("connection bootstrap coordinator", () => {
   it("deduplicates bootstrap work and caps its connection concurrency", async () => {
@@ -15,10 +8,10 @@ describe("connection bootstrap coordinator", () => {
     coordinator.synchronize({ client: {}, connected: true });
     let active = 0;
     let maximum = 0;
-    const first = deferred();
-    const second = deferred();
-    const third = deferred();
-    const run = (completion: ReturnType<typeof deferred>) => async () => {
+    const first = createDeferred();
+    const second = createDeferred();
+    const third = createDeferred();
+    const run = (completion: ReturnType<typeof createDeferred<void>>) => async () => {
       active += 1;
       maximum = Math.max(maximum, active);
       await completion.promise;
@@ -45,12 +38,12 @@ describe("connection bootstrap coordinator", () => {
     async (boundary) => {
       const coordinator = createConnectionBootstrapCoordinator();
       coordinator.synchronize({ client: {}, connected: true });
-      const first = deferred();
-      const second = deferred();
+      const first = createDeferred();
+      const second = createDeferred();
       let boundaryReturned = false;
       let startedAfterBoundary = false;
       let staleStarted = false;
-      const block = (completion: ReturnType<typeof deferred>) => async () => {
+      const block = (completion: ReturnType<typeof createDeferred<void>>) => async () => {
         startedAfterBoundary ||= boundaryReturned;
         await completion.promise;
       };
@@ -78,31 +71,125 @@ describe("connection bootstrap coordinator", () => {
     },
   );
 
-  it("keeps a new connection's active task deduplicated after the old task finishes", async () => {
+  it("starts a replacement connection while both old tasks remain pending and retains its concurrency", async () => {
     const coordinator = createConnectionBootstrapCoordinator();
     coordinator.synchronize({ client: {}, connected: true });
-    const previous = deferred();
-    const current = deferred();
-    const runPrevious = vi.fn(async () => await previous.promise);
-    const runCurrent = vi.fn(async () => await current.promise);
+    const previous = [createDeferred(), createDeferred()];
+    const current = [createDeferred(), createDeferred(), createDeferred()];
+    const started: string[] = [];
+    const run = (name: string, deferred: ReturnType<typeof createDeferred<void>>) => async () => {
+      started.push(name);
+      await deferred.promise;
+    };
     const runDuplicate = vi.fn(async () => {});
-    const previousTask = coordinator.run("runtime-config", runPrevious);
+    const previousTasks = previous.map((deferred, index) =>
+      coordinator.run(`task-${index}`, run(`old-${index}`, deferred)),
+    );
 
-    await vi.waitFor(() => expect(runPrevious).toHaveBeenCalledOnce());
+    expect(started).toEqual(["old-0", "old-1"]);
     coordinator.synchronize({ client: {}, connected: true });
-    const currentTask = coordinator.run("runtime-config", runCurrent);
-    await vi.waitFor(() => expect(runCurrent).toHaveBeenCalledOnce());
+    const currentTasks = current.map((deferred, index) =>
+      coordinator.run(`task-${index}`, run(`new-${index}`, deferred)),
+    );
+    expect(started).toEqual(["old-0", "old-1", "new-0", "new-1"]);
 
-    previous.resolve();
-    await previousTask;
-    const duplicateTask = coordinator.run("runtime-config", runDuplicate);
+    previous.forEach((deferred) => deferred.resolve());
+    await Promise.all(previousTasks);
+    const duplicateTask = coordinator.run("task-0", runDuplicate);
     expect(runDuplicate).not.toHaveBeenCalled();
+    expect(started).toEqual(["old-0", "old-1", "new-0", "new-1"]);
 
-    current.resolve();
-    await Promise.all([currentTask, duplicateTask]);
-    await coordinator.run("runtime-config", runDuplicate);
+    current[0]!.resolve();
+    await vi.waitFor(() => expect(started).toEqual(["old-0", "old-1", "new-0", "new-1", "new-2"]));
+    current.forEach((deferred) => deferred.resolve());
+    await Promise.all([...currentTasks, duplicateTask]);
+    await coordinator.run("task-0", runDuplicate);
 
     expect(runDuplicate).toHaveBeenCalledOnce();
+  });
+
+  it("pauses only background work until the selected transcript is authoritative, then drains it in order", async () => {
+    const coordinator = createConnectionBootstrapCoordinator();
+    const client = {};
+    const pane = {};
+    const retiredPane = {};
+    const sessionKey = "agent:main:selected";
+    const started: string[] = [];
+    const completion = [createDeferred(), createDeferred(), createDeferred()];
+    coordinator.setForegroundRoute(undefined);
+    coordinator.synchronize({ client, connected: true });
+    const background = completion.map((deferred, index) =>
+      coordinator.run(
+        `background-${index}`,
+        async () => {
+          started.push(`background-${index}`);
+          await deferred.promise;
+        },
+        { background: true },
+      ),
+    );
+    await coordinator.run("route-prerequisite", async () => {
+      started.push("route-prerequisite");
+    });
+    expect(started).toEqual(["route-prerequisite"]);
+
+    coordinator.setForegroundPane(retiredPane, { sessionKey, client, ready: true });
+    expect(started, "an unresolved route has not selected that transcript").toEqual([
+      "route-prerequisite",
+    ]);
+    coordinator.setForegroundPane(retiredPane, null);
+    coordinator.setForegroundRoute(sessionKey);
+    expect(started, "a retired pane cannot satisfy the newly resolved route").toEqual([
+      "route-prerequisite",
+    ]);
+    for (const state of [
+      { sessionKey, client: null, ready: true },
+      { sessionKey, client: {}, ready: true },
+      { sessionKey, client, ready: false },
+      { sessionKey: "agent:main:other", client, ready: true },
+    ]) {
+      coordinator.setForegroundPane(pane, state);
+      expect(
+        started,
+        "cached, old, pending, and other-session facts cannot release bulk reads",
+      ).toEqual(["route-prerequisite"]);
+    }
+    coordinator.setForegroundPane(retiredPane, null);
+    coordinator.setForegroundPane(pane, { sessionKey, client, ready: true });
+    await vi.waitFor(() =>
+      expect(started).toEqual(["route-prerequisite", "background-0", "background-1"]),
+    );
+    completion[0]!.resolve();
+    await vi.waitFor(() =>
+      expect(started).toEqual([
+        "route-prerequisite",
+        "background-0",
+        "background-1",
+        "background-2",
+      ]),
+    );
+    completion.forEach((deferred) => deferred.resolve());
+    await Promise.all(background);
+  });
+
+  it("releases bulk work when navigation leaves or rejects the native chat route", async () => {
+    const coordinator = createConnectionBootstrapCoordinator();
+    const client = {};
+    const pane = {};
+    coordinator.setForegroundRoute("agent:main:selected");
+    coordinator.synchronize({ client, connected: true });
+    coordinator.setForegroundPane(pane, {
+      sessionKey: "agent:main:selected",
+      client,
+      ready: false,
+    });
+    const hydrate = vi.fn(async () => {});
+    const background = coordinator.run("roster", hydrate, { background: true });
+    expect(hydrate).not.toHaveBeenCalled();
+
+    coordinator.setForegroundRoute(null);
+    await background;
+    expect(hydrate).toHaveBeenCalledOnce();
   });
 
   it("runs connected bootstrap work queued by an earlier subscription", async () => {

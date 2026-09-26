@@ -1,7 +1,6 @@
 /**
  * Prepares Google prompt-cache payloads for embedded-agent stream calls.
  */
-import crypto from "node:crypto";
 import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
@@ -9,6 +8,7 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "@openclaw/ai/transports";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -105,10 +105,6 @@ function resolveGooglePromptCacheRefreshWindowMs(cacheRetention: CacheRetention)
   return cacheRetention === "long"
     ? GOOGLE_PROMPT_CACHE_LONG_REFRESH_WINDOW_MS
     : GOOGLE_PROMPT_CACHE_SHORT_REFRESH_WINDOW_MS;
-}
-
-function digestSystemPrompt(systemPrompt: string): string {
-  return crypto.createHash("sha256").update(systemPrompt).digest("hex");
 }
 
 function resolveExplicitCachedContent(
@@ -291,28 +287,19 @@ function resolveGooglePromptCacheAuthHeaders(params: {
   apiKey: string;
   provider: string;
 }): Record<string, string> {
-  if (!looksLikeSecretSentinel(params.apiKey)) {
-    const headers = parseGeminiAuth(params.apiKey).headers;
-    if (!isSecretValueRegisteredForRedaction(params.apiKey)) {
-      return headers;
-    }
-    return Object.fromEntries(
-      Object.entries(headers).map(([name, value]) => [
-        name,
-        name.toLowerCase() === "authorization" || name.toLowerCase() === "x-goog-api-key"
-          ? mintSecretSentinel(value, { label: `model-auth:${params.provider}` })
-          : value,
-      ]),
-    );
-  }
-  const resolved = resolveSecretSentinel(params.apiKey);
-  if (resolved === undefined) {
+  const sentinel = looksLikeSecretSentinel(params.apiKey);
+  const apiKey = sentinel ? resolveSecretSentinel(params.apiKey) : params.apiKey;
+  if (apiKey === undefined) {
     throw new Error(
       `Secret sentinel ${params.apiKey} is not registered in this process; refusing Google prompt-cache auth`,
     );
   }
+  const headers = parseGeminiAuth(apiKey).headers;
+  if (!sentinel && !isSecretValueRegisteredForRedaction(params.apiKey)) {
+    return headers;
+  }
   return Object.fromEntries(
-    Object.entries(parseGeminiAuth(resolved).headers).map(([name, value]) => {
+    Object.entries(headers).map(([name, value]) => {
       const isCredentialHeader =
         name.toLowerCase() === "authorization" || name.toLowerCase() === "x-goog-api-key";
       return [
@@ -440,7 +427,7 @@ async function ensureGooglePromptCache(
   if (now === undefined) {
     return null;
   }
-  const systemPromptDigest = digestSystemPrompt(params.systemPrompt);
+  const systemPromptDigest = sha256Hex(params.systemPrompt);
   const matchKey = buildGooglePromptCacheMatchKey({
     provider: params.provider,
     modelId: params.model.id,
@@ -562,7 +549,9 @@ export async function prepareGooglePromptCacheStreamFn(
   const inner = params.streamFn;
   return async (model, context, options) => {
     const split = splitSystemPromptCacheBoundary(context.systemPrompt ?? "");
-    const systemPrompt = sanitizeTransportPayloadText(split?.stablePrefix ?? "");
+    const systemPrompt = sanitizeTransportPayloadText(
+      stripSystemPromptCacheBoundary(split?.stablePrefix ?? ""),
+    );
     if (!split || !systemPrompt.trim()) {
       return inner(model, context, options);
     }

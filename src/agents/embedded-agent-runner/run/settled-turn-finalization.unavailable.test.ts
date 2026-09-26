@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
+import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../../config/sessions/test-helpers.js";
 import {
@@ -30,13 +31,15 @@ describe("unavailable finalization through the real core backend", () => {
   afterEach(() => admission.close());
 
   it.each([
-    { terminal: "ok", context: "unavailable", toolFailed: false },
-    { terminal: "failed", context: "unavailable", toolFailed: false },
-    { terminal: "failed", context: "openclaw-transcript", toolFailed: false },
-    { terminal: "ok", context: "unavailable", toolFailed: true },
+    { trigger: "user", terminal: "ok", context: "unavailable", toolFailed: false },
+    { trigger: "user", terminal: "failed", context: "unavailable", toolFailed: false },
+    { trigger: "user", terminal: "failed", context: "openclaw-transcript", toolFailed: false },
+    { trigger: "user", terminal: "ok", context: "unavailable", toolFailed: true },
+    { trigger: "cron", terminal: "ok", context: "unavailable", toolFailed: false },
   ] as const)(
-    "preserves settled work when finalization is unavailable ($terminal/$context/toolFailed=$toolFailed)",
-    async ({ terminal, context, toolFailed }) => {
+    "preserves settled work when finalization is unavailable ($trigger/$terminal/$context/toolFailed=$toolFailed)",
+    async ({ trigger, terminal, context, toolFailed }) => {
+      const expectedText = trigger === "cron" ? SILENT_REPLY_TOKEN : FALLBACK;
       const admittedRunContext = await admission.admit("embedded");
       const assistant = buildEmbeddedRunnerAssistant({
         provider: "openai",
@@ -92,7 +95,7 @@ describe("unavailable finalization through the real core backend", () => {
       }
       const prefix = await readVisibleSessionTranscriptMessageEntries(target);
       const input = createSettledFinalizationTestInput(attempt, admittedRunContext);
-      input.terminalBase.runParams.trigger = "user";
+      input.terminalBase.runParams.trigger = trigger;
       input.terminalBase.runParams.sessionKey = target.sessionKey;
       Object.assign(
         input.finalization.preparedAttempt,
@@ -121,7 +124,7 @@ describe("unavailable finalization through the real core backend", () => {
       expect(finalize).toHaveBeenCalledOnce();
       expect(finalize).toHaveBeenCalledWith(expect.objectContaining({ settledAttempt: attempt }));
       expect(runAttempt).not.toHaveBeenCalled();
-      expect(result.finalizationOutcome).toBe("failed");
+      expect(result.finalizationOutcome).toBe(trigger === "cron" ? "silent-fallback" : "failed");
       expect(result.prepared.failureSignal).toBeUndefined();
       if (toolFailed) {
         expect(result.attempt).toBe(attempt);
@@ -132,16 +135,25 @@ describe("unavailable finalization through the real core backend", () => {
         return;
       }
       expect(result.prepared.payloadsWithToolMedia?.[0]?.isError).not.toBe(true);
-      expect(result.prepared.payloadsWithToolMedia).toEqual([
-        expect.objectContaining({ text: FALLBACK }),
-      ]);
-      expect(
-        getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia?.[0] ?? {}),
-      ).toMatchObject({
-        assistantTranscriptOwned: true,
-        assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
-        deliverDespiteSourceReplySuppression: true,
-      });
+      expect(result.prepared.payloadsWithToolMedia).toEqual(
+        trigger === "cron" ? [] : [expect.objectContaining({ text: expectedText })],
+      );
+      expect(result.attempt.assistantTexts).toEqual([expectedText]);
+      expect(result.attempt.assistantTranscriptOwned).toBe(true);
+      if (trigger === "user") {
+        expect(
+          getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia?.[0] ?? {}),
+        ).toMatchObject({
+          assistantTranscriptOwned: true,
+          assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
+        });
+        expect(
+          getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia?.[0] ?? {})
+            ?.deliverDespiteSourceReplySuppression,
+        ).not.toBe(true);
+      }
+      expect(result.prepared.finalAssistantVisibleText).toBe("");
+      expect(result.prepared.finalAssistantRawText).toBe("");
       expect(result.attempt.currentAttemptAssistant).toMatchObject({
         provider: assistant.provider,
         model: assistant.model,
@@ -155,7 +167,7 @@ describe("unavailable finalization through the real core backend", () => {
           message: {
             provider: "openclaw",
             model: "delivery-mirror",
-            content: [{ type: "text", text: FALLBACK }],
+            content: [{ type: "text", text: expectedText }],
           },
         },
       ]);

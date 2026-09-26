@@ -2,7 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { AssistantMessage, Context, Model, Tool } from "../types.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
+} from "../utils/system-prompt-cache-boundary.js";
+import { anthropicServerSideFallbackCases } from "./anthropic-server-fallback.test-support.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -24,6 +29,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
   },
 }));
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
 
@@ -306,7 +312,7 @@ describe("Anthropic provider", () => {
     expect((capturedPayload as { system?: unknown }).system).toEqual([
       {
         type: "text",
-        text: "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;",
+        text: "x-anthropic-billing-header: cc_version=2.1.280; cc_entrypoint=sdk-cli;",
       },
       {
         type: "text",
@@ -396,107 +402,133 @@ describe("Anthropic provider", () => {
     expect(result.usage.cost.total).toBeCloseTo(1.469044, 6);
   });
 
-  it("captures and replays streamed Anthropic compaction blocks", async () => {
-    const firstClient = createAnthropicSseClient([
-      {
-        type: "message_start",
-        message: {
-          id: "msg_compaction",
-          model: "claude-sonnet-4-6",
-          usage: { input_tokens: 50_001, output_tokens: 0 },
+  it.each(["opaque-final-compaction", null])(
+    "captures streamed Anthropic compaction deltas and replays final opaque metadata %s",
+    async (encryptedContent) => {
+      const firstClient = createAnthropicSseClient([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_compaction",
+            model: "claude-sonnet-4-6",
+            usage: { input_tokens: 50_001, output_tokens: 0 },
+          },
         },
-      },
-      {
-        type: "content_block_start",
-        index: 0,
-        content_block: { type: "compaction", content: null },
-      },
-      {
-        type: "content_block_delta",
-        index: 0,
-        delta: { type: "compaction_delta", content: "summary checkpoint" },
-      },
-      { type: "content_block_stop", index: 0 },
-      {
-        type: "content_block_start",
-        index: 1,
-        content_block: { type: "text", text: "" },
-      },
-      {
-        type: "content_block_delta",
-        index: 1,
-        delta: { type: "text_delta", text: "Done." },
-      },
-      { type: "content_block_stop", index: 1 },
-      {
-        type: "message_delta",
-        delta: { stop_reason: "compaction" },
-        usage: { input_tokens: 1, output_tokens: 1 },
-      },
-      { type: "message_stop" },
-    ]);
-    const replayOptions = {
-      anthropicServerCompaction: true,
-      authProfileId: "anthropic:work",
-      sessionId: "session-1",
-    } as const;
-    const firstUser = { role: "user" as const, content: "old question", timestamp: 0 };
-    const first = await streamAnthropic(
-      makeAnthropicModel(),
-      { messages: [firstUser] },
-      {
-        apiKey: "sk-ant-provider",
-        client: firstClient as never,
-        ...replayOptions,
-      },
-    ).result();
-
-    expect(first.stopReason).toBe("stop");
-    expect(first.providerReplay).toMatchObject({
-      type: "anthropic-compaction",
-      data: "summary checkpoint",
-      replayIndex: 0,
-    });
-
-    let replayPayload: Record<string, unknown> | undefined;
-    const secondClient = createAnthropicSseClient([
-      {
-        type: "message_start",
-        message: {
-          id: "msg_replay",
-          model: "claude-sonnet-4-6",
-          usage: { input_tokens: 1 },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "compaction",
+            content: null,
+            encrypted_content: "opaque-initial-compaction",
+          },
         },
-      },
-      {
-        type: "message_delta",
-        delta: { stop_reason: "end_turn" },
-        usage: { input_tokens: 1, output_tokens: 1 },
-      },
-      { type: "message_stop" },
-    ]);
-    await streamAnthropic(
-      makeAnthropicModel(),
-      {
-        messages: [firstUser, first, { role: "user", content: "new question", timestamp: 2 }],
-      },
-      {
-        apiKey: "sk-ant-provider",
-        client: secondClient as never,
-        ...replayOptions,
-        onPayload: (payload) => {
-          replayPayload = payload as Record<string, unknown>;
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "compaction_delta",
+            content: "summary ",
+            encrypted_content: "opaque-partial-compaction",
+          },
         },
-      },
-    ).result();
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "compaction_delta",
+            content: "checkpoint",
+            encrypted_content: encryptedContent,
+          },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "text_delta", text: "Done." },
+        },
+        { type: "content_block_stop", index: 1 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "compaction" },
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ]);
+      const replayOptions = {
+        anthropicServerCompaction: true,
+        authProfileId: "anthropic:work",
+        sessionId: "session-1",
+      } as const;
+      const firstUser = { role: "user" as const, content: "old question", timestamp: 0 };
+      const first = await streamAnthropic(
+        makeAnthropicModel(),
+        { messages: [firstUser] },
+        {
+          apiKey: "sk-ant-provider",
+          client: firstClient as never,
+          ...replayOptions,
+        },
+      ).result();
 
-    const replayMessages = replayPayload?.messages as Array<Record<string, unknown>>;
-    expect(replayMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
-    expect(replayMessages[0]?.content).toEqual([
-      { type: "compaction", content: "summary checkpoint" },
-      { type: "text", text: "Done." },
-    ]);
-  });
+      expect(first.stopReason).toBe("stop");
+      expect(first.providerReplay).toMatchObject({
+        type: "anthropic-compaction",
+        data: "summary checkpoint",
+        replayIndex: 0,
+      });
+
+      let replayPayload: Record<string, unknown> | undefined;
+      const secondClient = createAnthropicSseClient([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_replay",
+            model: "claude-sonnet-4-6",
+            usage: { input_tokens: 1 },
+          },
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+        { type: "message_stop" },
+      ]);
+      // oxlint-disable-next-line unicorn/prefer-structured-clone -- Verify persisted provider replay after JSON transcript reload.
+      const savedMessages: Context["messages"] = JSON.parse(
+        JSON.stringify([firstUser, first, { role: "user", content: "new question", timestamp: 2 }]),
+      );
+      await streamAnthropic(
+        makeAnthropicModel(),
+        { messages: savedMessages },
+        {
+          apiKey: "sk-ant-provider",
+          client: secondClient as never,
+          ...replayOptions,
+          onPayload: (payload) => {
+            replayPayload = payload as Record<string, unknown>;
+          },
+        },
+      ).result();
+
+      const replayMessages = replayPayload?.messages as Array<Record<string, unknown>>;
+      expect(replayMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
+      expect(replayMessages[0]?.content).toEqual([
+        {
+          type: "compaction",
+          content: "summary checkpoint",
+          encrypted_content: encryptedContent,
+        },
+        { type: "text", text: "Done." },
+      ]);
+    },
+  );
 
   it("ignores a message_delta whose usage object is omitted", async () => {
     const client = createAnthropicSseClient([
@@ -900,14 +932,7 @@ describe("Anthropic provider", () => {
             ],
             { stopReason: "toolUse" },
           ),
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "42" }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("call_1", "lookup", "42", false, 0),
         ],
       },
     );
@@ -957,77 +982,79 @@ describe("Anthropic provider", () => {
     expect((capturedPayload as { max_tokens?: number }).max_tokens).toBe(model.maxTokens);
   });
 
-  it("clamps an excessive output request to the model limit", async () => {
-    const model = makeAnthropicModel({
-      id: "claude-opus-4-5",
-      name: "Claude Opus 4.5",
-      contextWindow: 4_000,
-      maxTokens: 512,
-    });
-    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
-      model,
-      { apiKey: "test-api-key", maxTokens: 5_000, reasoning: "off", stopBeforeNetwork: true },
-      {
-        messages: [
-          makeAnthropicAssistantMessage(
-            [
-              {
-                type: "thinking",
-                thinking: "private reasoning ".repeat(1_000),
-                thinkingSignature: "sig_old",
-              },
-              { type: "text", text: "Visible answer." },
-            ],
-            { model: model.id },
-          ),
-          { role: "user", content: "again", timestamp: 0 },
-        ],
-      },
-    );
+  it.each([
+    { modelMaxTokens: 512, expectedMaxTokens: 512 },
+    { modelMaxTokens: undefined, expectedMaxTokens: 5_000 },
+  ])(
+    "resolves explicit output requests with model limit $modelMaxTokens",
+    async ({ modelMaxTokens, expectedMaxTokens }) => {
+      const model = makeAnthropicModel({
+        id: "claude-opus-4-5",
+        name: "Claude Opus 4.5",
+        contextWindow: 4_000,
+        maxTokens: modelMaxTokens,
+      });
+      const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+        model,
+        { apiKey: "test-api-key", maxTokens: 5_000, reasoning: "off", stopBeforeNetwork: true },
+        {
+          messages: [
+            makeAnthropicAssistantMessage(
+              [
+                {
+                  type: "thinking",
+                  thinking: "private reasoning ".repeat(1_000),
+                  thinkingSignature: "sig_old",
+                },
+                { type: "text", text: "Visible answer." },
+              ],
+              { model: model.id },
+            ),
+            { role: "user", content: "again", timestamp: 0 },
+          ],
+        },
+      );
 
-    expect((capturedPayload as { max_tokens?: number }).max_tokens).toBe(model.maxTokens);
-  });
+      expect(capturedPayload.max_tokens).toBe(expectedMaxTokens);
+    },
+  );
 
-  it("restores the caller output cap when thinking cannot fit", async () => {
-    const model = makeAnthropicModel({
-      id: "claude-haiku-4-5",
-      name: "Claude Haiku 4.5",
-      contextWindow: 4_000,
-      maxTokens: 500,
-    });
-    const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
-      model,
-      { apiKey: "test-api-key", maxTokens: 32, reasoning: "low", stopBeforeNetwork: true },
-      {
-        messages: [
-          makeAnthropicAssistantMessage(
-            [
-              {
-                type: "thinking",
-                thinking: "private reasoning ".repeat(1_000),
-                thinkingSignature: "sig_tool",
-              },
-              { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
-            ],
-            { model: model.id, stopReason: "toolUse" },
-          ),
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "lookup",
-            content: [{ type: "text", text: "42" }],
-            isError: false,
-            timestamp: 0,
-          },
-        ],
-      },
-    );
+  it.each([500, undefined])(
+    "restores the caller output cap when thinking cannot fit with model limit %s",
+    async (maxTokens) => {
+      const model = makeAnthropicModel({
+        id: "claude-haiku-4-5",
+        name: "Claude Haiku 4.5",
+        contextWindow: 4_000,
+        maxTokens,
+      });
+      const { payload: capturedPayload } = await captureSimpleAnthropicPayload(
+        model,
+        { apiKey: "test-api-key", maxTokens: 32, reasoning: "low", stopBeforeNetwork: true },
+        {
+          messages: [
+            makeAnthropicAssistantMessage(
+              [
+                {
+                  type: "thinking",
+                  thinking: "private reasoning ".repeat(1_000),
+                  thinkingSignature: "sig_tool",
+                },
+                { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+              ],
+              { model: model.id, stopReason: "toolUse" },
+            ),
+            makeTextToolResult("call_1", "lookup", "42", false, 0),
+          ],
+        },
+      );
 
-    expect(capturedPayload as { max_tokens?: number; thinking?: unknown }).toMatchObject({
-      max_tokens: 32,
-    });
-    expect((capturedPayload as { thinking?: unknown }).thinking).toEqual({ type: "disabled" });
-  });
+      expect(capturedPayload as { max_tokens?: number; thinking?: unknown }).toMatchObject({
+        max_tokens: 32,
+      });
+      expect((capturedPayload as { thinking?: unknown }).thinking).toEqual({ type: "disabled" });
+    },
+  );
 
   it("preserves mixed text and image tool-result order", async () => {
     const imageData = Buffer.from("image").toString("base64");
@@ -1322,25 +1349,23 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it.each([
-    { id: "claude-fable-5", name: "Claude Fable 5" },
-    { id: "claude-opus-5", name: "Claude Opus 5" },
-  ])(
+  it.each(anthropicServerSideFallbackCases)(
     "sends default server-side fallback params for direct $name API-key requests",
-    async (model) => {
+    async ({ optionHeaders, customBeta, ...model }) => {
       const { payload: capturedPayload } = await captureSimpleAnthropicPayload(model, {
         mode: "raw",
-        stopBeforeNetwork: true,
+        headers: optionHeaders,
       });
 
       expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toBe("default");
-      await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
-      const config = anthropicMockState.configs[0] as {
-        defaultHeaders?: Record<string, string>;
+      const requestOptions = anthropicMockState.requestOptions[0] as {
+        headers?: Record<string, string>;
       };
-      expect(config.defaultHeaders?.["anthropic-beta"]).toContain(
-        "server-side-fallback-2026-07-01",
-      );
+      const betas = requestOptions.headers?.["anthropic-beta"]?.split(",");
+      expect(betas).toContain("server-side-fallback-2026-07-01");
+      if (customBeta) {
+        expect(betas).toContain("files-api-2025-04-14");
+      }
     },
   );
 
@@ -1933,6 +1958,20 @@ describe("Anthropic provider", () => {
     },
   );
 
+  it.each([undefined, "low", "medium", "high", "xhigh", "max"] as const)(
+    "sends pooled Fable %s effort and preserves its routed model id",
+    async (reasoning) => {
+      const id = "Claude Gateway/claude-fable-5-1";
+      const { payload } = await captureSimpleAnthropicPayload(
+        { id, name: "Pooled Fable", provider: "proxy" },
+        { reasoning },
+      );
+      expect(payload.model).toBe(id);
+      expect(payload.thinking).toMatchObject({ type: "adaptive" });
+      expect(payload.output_config).toEqual({ effort: reasoning ?? "medium" });
+    },
+  );
+
   const adaptiveThinkingCases: AnthropicAdaptiveThinkingTestCase[] = [
     {
       name: "uses the Claude Opus 5 adaptive-thinking request contract",
@@ -1972,7 +2011,7 @@ describe("Anthropic provider", () => {
       options: { temperature: 0.2 },
       expected: {
         thinking: { type: "adaptive", display: "summarized" },
-        output_config: { effort: "high" },
+        output_config: { effort: "medium" },
       },
       absent: ["temperature"],
     },
@@ -2222,20 +2261,24 @@ describe("Anthropic provider", () => {
     }
   });
 
-  it("honors provider effort restrictions for Claude Fable 5", async () => {
+  it.each([
+    { reasoning: "xhigh", thinkingLevelMap: { xhigh: null, max: null }, effort: "high" },
+    { reasoning: undefined, thinkingLevelMap: { medium: null }, effort: "high" },
+    { reasoning: undefined, thinkingLevelMap: { medium: "low" }, effort: "low" },
+  ] as const)("honors provider effort restrictions for Claude Fable 5: %j", async (testCase) => {
     const { payload } = await captureSimpleAnthropicPayload(
       {
         id: "claude-fable-5",
         name: "Claude Fable 5",
         provider: "github-copilot",
         reasoning: false,
-        thinkingLevelMap: { xhigh: null, max: null },
+        thinkingLevelMap: testCase.thinkingLevelMap,
       },
-      { apiKey: "copilot-token", reasoning: "xhigh" },
+      { apiKey: "copilot-token", reasoning: testCase.reasoning },
     );
     expect(payload).toMatchObject({
       thinking: { type: "adaptive", display: "summarized" },
-      output_config: { effort: "high" },
+      output_config: { effort: testCase.effort },
     });
   });
 
@@ -2415,7 +2458,37 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("anchors the message cache breakpoint on an append-only runtime-context carrier", async () => {
+  it("keeps the relocatable marker out of native Anthropic system blocks", async () => {
+    // Native Anthropic relocates nothing, so the marker must not survive into
+    // the payload while the cache breakpoint still lands on the stable prefix.
+    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
+      {},
+      { stopBeforeNetwork: true },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime: session=alpha${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+    );
+
+    expect(result.stopReason).toBe("error");
+    const system = (capturedPayload as { system?: unknown }).system;
+    const serialized = JSON.stringify(system);
+    expect(serialized).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
+    expect(serialized).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+    expect(system).toEqual([
+      {
+        type: "text",
+        text: "Stable prefix",
+        cache_control: { type: "ephemeral" },
+      },
+      {
+        type: "text",
+        text: "Reactions guidance\nRuntime: session=alpha",
+      },
+    ]);
+  });
+
+  it("anchors the message cache breakpoint before transient runtime context", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
       {},
       { stopBeforeNetwork: true },
@@ -2425,7 +2498,7 @@ describe("Anthropic provider", () => {
           { role: "user", content: "stable question", timestamp: 0 },
           {
             role: "user",
-            content: "retained current-turn metadata",
+            content: "transient current-turn metadata",
             timestamp: 1,
             runtimeContextCarrier: true,
           },
@@ -2435,14 +2508,14 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
-    expect(messages[0]?.content).toBe("stable question");
-    expect(messages[1]?.content).toEqual([
+    expect(messages[0]?.content).toEqual([
       {
         type: "text",
-        text: "retained current-turn metadata",
+        text: "stable question",
         cache_control: { type: "ephemeral" },
       },
     ]);
+    expect(messages[1]?.content).toBe("transient current-turn metadata");
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

@@ -1,132 +1,72 @@
-// Control UI tests cover collapsed tool-group summary labels.
 import { describe, expect, it } from "vitest";
 import { summarizeToolGroup } from "./tool-call-grouping.ts";
 
 type ToolGroupSummaryInput = Parameters<typeof summarizeToolGroup>[0][number];
 
 describe("summarizeToolGroup", () => {
-  it.each<[string, ToolGroupSummaryInput[], string]>([
-    ["a single command", [{ name: "bash", args: { command: "ls" } }], "Ran a command"],
-    [
-      "distinct paths over call count",
-      [
-        { name: "read", args: { path: "/repo/a.ts" } },
-        { name: "read", args: { path: "/repo/a.ts" } },
-        { name: "read", args: { path: "/repo/b.ts" } },
-      ],
-      "Read 2 files",
-    ],
-    [
-      "call count when reads carry no paths",
-      [
-        { name: "read", args: {} },
-        { name: "read", args: {} },
-      ],
-      "Read 2 files",
-    ],
-    [
-      "multiple searches",
-      [
-        { name: "grep", args: { pattern: "a" } },
-        { name: "glob", args: { pattern: "b" } },
-      ],
-      "Ran 2 searches",
-    ],
-    [
-      "command-discriminated text editor calls",
-      [
-        {
-          name: "str_replace_editor",
-          args: { command: "view", file_path: "/repo/a.ts", view_range: [1, 20] },
-        },
-        {
-          name: "str_replace_based_edit_tool",
-          args: {
-            command: "str_replace",
-            file: "/repo/a.ts",
-            old_str: "old",
-            new_str: "new",
-          },
-        },
-        {
-          name: "str_replace_editor",
-          args: { command: "insert", filepath: "/repo/a.ts", insert_text: "line" },
-        },
-        {
-          name: "str_replace_based_edit_tool",
-          args: { command: "create", filename: "/repo/new.ts", file_text: "new" },
-        },
-      ],
-      "Read a file, edited a file, created a file",
-    ],
-    [
-      "text editor calls without a recognized command",
-      [
-        { name: "str_replace_editor", args: { path: "/repo/a.ts" } },
-        { name: "str_replace_based_edit_tool", args: { command: "rename" } },
-      ],
-      "Used Str Replace Editor, Str Replace Based Edit Tool",
-    ],
-    [
-      "multi-file apply_patch targets",
-      [
-        {
-          name: "apply_patch",
-          args: {
-            patch: [
-              "*** Begin Patch",
-              "*** Update File: src/a.ts",
-              "@@",
-              "-old",
-              "+new",
-              "*** Add File: src/b.ts",
-              "+new",
-              "*** End Patch",
-            ].join("\n"),
-          },
-        },
-      ],
-      "Edited a file, created a file",
-    ],
-    [
-      "structured Codex change targets",
-      [
-        {
-          name: "apply_patch",
-          args: {
-            changes: [
-              { path: "src/a.ts", kind: { type: "update" } },
-              { path: "src/b.ts", kind: { type: "add" } },
-            ],
-          },
-        },
-      ],
-      "Edited a file, created a file",
-    ],
-    [
-      "deleted Codex targets",
-      [
-        {
-          name: "apply_patch",
-          args: {
-            changes: [{ path: "src/obsolete.ts", kind: { type: "delete" } }],
-          },
-        },
-      ],
-      "Deleted a file",
-    ],
-    ["one generic tool by name", [{ name: "mcp__linear" }], "Used Mcp Linear"],
-    [
-      "repeat generic tool with a multiplier",
-      [{ name: "heartbeat_respond" }, { name: "heartbeat_respond" }],
-      "Used Heartbeat Respond ×2",
-    ],
-    [
-      "many distinct generic tools as a count",
-      [{ name: "alpha" }, { name: "beta" }, { name: "gamma" }],
-      "Used 3 tools",
-    ],
-  ])("summarizes %s", (_label, cards, expected) => {
-    expect(summarizeToolGroup(cards)).toBe(expected);
+  const prepared = (
+    itemId: string,
+    title: string,
+    extra: Partial<ToolGroupSummaryInput> = {},
+  ): ToolGroupSummaryInput => ({
+    itemId,
+    title,
+    kind: "tool",
+    phase: "end",
+    status: "completed",
+    ...extra,
+  });
+
+  it("counts prepared operations without copying their free-form titles", () => {
+    expect(
+      summarizeToolGroup([
+        prepared("first", "Check samples", { name: "custom_tool" }),
+        prepared("second", "Edit report", { name: "edit" }),
+        prepared("third", "Check samples"),
+      ]),
+    ).toBe("1 edit · 2 other operations");
+  });
+
+  it("replaces running state with the same operation's outcome without counting suppressed siblings", () => {
+    expect(
+      summarizeToolGroup([
+        prepared("tool:call", "Inspect", { toolCallId: "call", status: "running", phase: "start" }),
+        prepared("tool:call", "Inspect", { toolCallId: "call", status: "failed" }),
+        prepared("command:call", "Command", { toolCallId: "call", suppressChannelProgress: true }),
+      ]),
+    ).toBe("1 other operation · 1 failed");
+  });
+
+  it("keeps failure, approval, and unknown outcomes while quiet work stays out", () => {
+    expect(
+      summarizeToolGroup([
+        prepared("quiet", "Wait", { hideFromChannelProgress: true }),
+        prepared("failure", "Check process", { status: "failed" }),
+        prepared("approval", "Write report", { status: "blocked" }),
+        prepared("unknown", "Outcome unknown", { status: undefined }),
+      ]),
+    ).toBe("3 other operations · 1 failed · 1 blocked · 1 unknown");
+  });
+
+  it("keeps the diagnostic disclosure label when all prepared work is quiet", () => {
+    expect(summarizeToolGroup([])).toBe(
+      summarizeToolGroup([prepared("quiet", "Wait", { hideFromChannelProgress: true })]),
+    );
+    expect(summarizeToolGroup([])).not.toBe("");
+  });
+
+  it("bounds dense summaries independently of command, title, and custom-name length", () => {
+    const items = Array.from({ length: 500 }, (_, index) =>
+      prepared(`call-${index}`, `print text → ${"/workspace/deep/path ".repeat(100)}`, {
+        name: index % 2 === 0 ? "exec" : `custom_${"long".repeat(100)}_${index}`,
+      }),
+    );
+    expect(summarizeToolGroup(items)).toBe("250 commands · 250 other operations");
+    expect(summarizeToolGroup([prepared("custom", "constructor", { name: "constructor" })])).toBe(
+      "1 other operation",
+    );
+    expect(
+      summarizeToolGroup([prepared("command", "Native command", { commandBearing: true })]),
+    ).toBe("1 command");
   });
 });

@@ -4,19 +4,27 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDashboardTool } from "../agents/tools/dashboard-tool.js";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
 import type { BoardReport } from "../boards/board-report.js";
-import { createTestBoardStore } from "../boards/board-store.test-support.js";
+import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
 import { createBoardHarness } from "../gateway/server-methods/board.test-support.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
 import { registerTestWidgetContentKind } from "./widget-tool.content-kinds.test-support.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 import { createBoardPutCaller } from "./widget-tool.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetPluginRuntimeStateForTest();
 });
@@ -84,7 +92,7 @@ describe("native report authoring", () => {
         sessionKey: "global",
         agentId: target.agentId === "main" ? "research" : "main",
       };
-      const siblingBefore = store.getSnapshot(sibling);
+      const siblingBefore = await store.getSnapshot(sibling);
       const { invoke } = createBoardHarness(undefined, {}, store, {
         getRuntimeConfig: () => ({
           agents: { ownership: "explicit", entries: { main: {}, research: {} } },
@@ -117,7 +125,7 @@ describe("native report authoring", () => {
         status: "pinned",
         boardWidgetName: "community-pulse",
       });
-      expect(store.getSnapshot(target).widgets[0]).toMatchObject({
+      expect((await store.getSnapshot(target)).widgets[0]).toMatchObject({
         name: "community-pulse",
         contentKind: "plugin",
         contentOwner: "plugin",
@@ -137,16 +145,20 @@ describe("native report authoring", () => {
         pluginKind: "session:report",
         props: updated,
       });
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
-      expect(store.getSnapshot(target).widgets[0]).toMatchObject({ props: updated, revision: 2 });
+      expect((await store.getSnapshot(target)).widgets[0]).toMatchObject({
+        props: updated,
+        revision: 2,
+      });
       const view = await invoke("board.get", target);
       expect(view.mock.calls[0]?.[0]).toBe(true);
       const snapshot = view.mock.calls[0]?.[1] as { widgets: Array<Record<string, unknown>> };
       expect(snapshot.widgets[0]).toMatchObject({ pluginKind: "session:report", props: updated });
       expect(snapshot.widgets[0]).not.toHaveProperty("frameUrl");
       expect(snapshot.widgets[0]).not.toHaveProperty("viewTicket");
-      expect(store.readWidgetHtml(target, "community-pulse")).toBeUndefined();
-      expect(store.getSnapshot(sibling)).toEqual(siblingBefore);
+      expect(await readBoardHtml(store, target, "community-pulse")).toBeUndefined();
+      expect(await store.getSnapshot(sibling)).toEqual(siblingBefore);
       await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
     },
   );
@@ -184,16 +196,17 @@ describe("native report authoring", () => {
         blocks: Array.from({ length: 3 }, () => ({ type: "text", text: "é".repeat(2_000) })),
       },
     },
-  ])("rejects $label at the storage owner without changing the saved report", ({ props }) => {
+  ])("rejects $label at the storage owner without changing the saved report", async ({ props }) => {
     const store = createTestBoardStore();
     const target = { sessionKey: "agent:main:report" };
     const content = { kind: "plugin" as const, pluginKind: "session:report", props: report };
-    store.putWidget({ ...target, name: "report", content });
-    const before = store.getSnapshot(target);
-    expect(() =>
-      store.putWidget({ ...target, name: "report", content: { ...content, props } }),
-    ).toThrow();
-    expect(store.getSnapshot(target)).toEqual(before);
+    await store.putWidget({ ...target, name: "report", content });
+    const before = await store.getSnapshot(target);
+    await expect(
+      (async () =>
+        await store.putWidget({ ...target, name: "report", content: { ...content, props } }))(),
+    ).rejects.toThrow();
+    expect(await store.getSnapshot(target)).toEqual(before);
   });
 
   it.each([
@@ -214,5 +227,39 @@ describe("native report authoring", () => {
       }),
     ).rejects.toThrow("Reports require pin=true");
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("accepts HTML widget payload when report is an empty object", async () => {
+    const { mock, callGateway } = createBoardPutCaller();
+    const tool = createShowWidgetTool({
+      stateDir: tempDirs.make("openclaw-empty-report-html-"),
+      agentSessionKey: "agent:main:dashboard:empty-report",
+      callGateway,
+    });
+    const result = await tool.execute("empty-report-with-html", {
+      title: "SaaS Operations",
+      pin: true,
+      report: {},
+      widget_code: "<main>dashboard</main>",
+      kind: "html",
+      capabilities: {},
+      presentation: {
+        target: "assistant_message",
+        frame: "card",
+      },
+    });
+    expect(result.details).toMatchObject({
+      kind: "canvas",
+      view: { boardWidgetName: "saas-operations" },
+    });
+    expect(mock).toHaveBeenCalledWith(
+      "board.widget.put",
+      expect.objectContaining({
+        content: expect.objectContaining({
+          kind: "html",
+          html: "<main>dashboard</main>",
+        }),
+      }),
+    );
   });
 });

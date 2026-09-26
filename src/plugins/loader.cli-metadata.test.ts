@@ -200,12 +200,7 @@ describe("plugin loader CLI metadata", () => {
     const plugin = writePlugin({
       id: "runtime-dependent",
       filename: "runtime-dependent.cjs",
-      body: `module.exports = {
-  id: "runtime-dependent",
-  register(api) {
-    api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });
-  },
-};`,
+      registration: `api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });`,
     });
 
     const registry = await loadOpenClawPluginCliRegistry({
@@ -280,20 +275,15 @@ module.exports = { id: "packaged-cli-metadata", register() {} };`,
       id: "rogue",
       dir: globalDir,
       filename: "index.cjs",
-      body: `module.exports = {
-  id: "rogue",
-  register(api) {
-    api.registerCli(() => {}, {
-      descriptors: [
-        {
-          name: "rogue",
-          description: "Rogue CLI metadata",
-          hasSubcommands: true,
-        },
-      ],
-    });
-  },
-};`,
+      registration: `api.registerCli(() => {}, {
+        descriptors: [
+          {
+            name: "rogue",
+            description: "Rogue CLI metadata",
+            hasSubcommands: true,
+          },
+        ],
+      });`,
     });
 
     const warnings: string[] = [];
@@ -321,23 +311,18 @@ module.exports = { id: "packaged-cli-metadata", register() {} };`,
     const plugin = writePlugin({
       id: "Config-Cli",
       filename: "config-cli.cjs",
-      body: `module.exports = {
-  id: "Config-Cli",
-  register(api) {
-    if (!api.pluginConfig || api.pluginConfig.token !== "ok") {
-      throw new Error("missing plugin config");
-    }
-    api.registerCli(() => {}, {
-      descriptors: [
-        {
-          name: "cfg",
-          description: "Config-backed CLI command",
-          hasSubcommands: true,
-        },
-      ],
-    });
-  },
-};`,
+      registration: `if (!api.pluginConfig || api.pluginConfig.token !== "ok") {
+        throw new Error("missing plugin config");
+      }
+      api.registerCli(() => {}, {
+        descriptors: [
+          {
+            name: "cfg",
+            description: "Config-backed CLI command",
+            hasSubcommands: true,
+          },
+        ],
+      });`,
     });
     fs.writeFileSync(
       path.join(plugin.dir, "openclaw.plugin.json"),
@@ -929,30 +914,25 @@ module.exports = {
     const plugin = writePlugin({
       id: "machine-output-cli",
       filename: "machine-output-cli.cjs",
-      body: `module.exports = {
-  id: "machine-output-cli",
-  register(api) {
-    api.registerCli(() => {}, {
-      commands: [" machine-output-cli ", "machine-output-cli", "additional-cli"],
-      descriptors: [{
-        name: "machine-output-cli",
-        description: "Machine output CLI",
-        hasSubcommands: true,
-        machineOutput: ({ argv, stdoutIsTTY }) => argv.includes("--machine") || !stdoutIsTTY,
-      }],
-    });
-    api.registerCli(() => {}, {
-      parentPath: ["nodes"],
-      commands: ["nested-machine-output", " nested-machine-output "],
-      descriptors: [{
-        name: "nested-machine-output",
-        description: "Nested metadata",
-        hasSubcommands: false,
-        machineOutput: () => true,
-      }],
-    });
-  },
-};`,
+      registration: `api.registerCli(() => {}, {
+        commands: [" machine-output-cli ", "machine-output-cli", "additional-cli"],
+        descriptors: [{
+          name: "machine-output-cli",
+          description: "Machine output CLI",
+          hasSubcommands: true,
+          machineOutput: ({ argv, stdoutIsTTY }) => argv.includes("--machine") || !stdoutIsTTY,
+        }],
+      });
+      api.registerCli(() => {}, {
+        parentPath: ["nodes"],
+        commands: ["nested-machine-output", " nested-machine-output "],
+        descriptors: [{
+          name: "nested-machine-output",
+          description: "Nested metadata",
+          hasSubcommands: false,
+          machineOutput: () => true,
+        }],
+      });`,
     });
     const config = {
       plugins: {

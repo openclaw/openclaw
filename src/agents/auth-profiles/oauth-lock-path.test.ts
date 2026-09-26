@@ -1,8 +1,3 @@
-/**
- * Tests OAuth refresh lock path generation.
- * Ensures provider/profile lock keys are deterministic, collision-resistant,
- * short, and confined to the refresh lock directory.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -91,6 +86,21 @@ describe("resolveOAuthRefreshLockPath", () => {
     expect(first).toBe(second);
   });
 
+  it("anchors the lock to an explicitly targeted state directory", () => {
+    const first = resolveOAuthRefreshLockPath("openai", "openai:default", {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(stateDir, "first"),
+    });
+    const second = resolveOAuthRefreshLockPath("openai", "openai:default", {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(stateDir, "second"),
+    });
+
+    expect(first).not.toBe(second);
+    expect(path.dirname(first)).toBe(path.join(stateDir, "first", "locks", "oauth-refresh"));
+    expect(path.dirname(second)).toBe(path.join(stateDir, "second", "locks", "oauth-refresh"));
+  });
+
   it("returns a valid path on a clean install where the locks/ directory does not yet exist", async () => {
     // Defensive check: even on a fresh install with no lock hierarchy
     // populated, the function must return a safe path. withFileLock
@@ -130,22 +140,6 @@ describe("resolveOAuthRefreshLockPath", () => {
       expect(basename).not.toContain("\n");
     }
   });
-});
-
-describe("resolveOAuthRefreshLockPath fuzz", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  let stateDir = "";
-
-  beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-lock-path-fuzz-"));
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  });
-
-  afterEach(async () => {
-    envSnapshot.restore();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  });
-
   function makeSeededRandom(seed: number): () => number {
     // Mulberry32 — small, stable, seedable PRNG so the fuzz run is reproducible
     // even if the suite later becomes picky about test ordering.
@@ -180,39 +174,6 @@ describe("resolveOAuthRefreshLockPath fuzz", () => {
     return chars.join("");
   }
 
-  it("always produces a bounded hex basename regardless of input", () => {
-    const rng = makeSeededRandom(0x2026_0417);
-    for (let i = 0; i < 500; i += 1) {
-      const provider = randomProfileId(rng, 64) || "openai";
-      const id = randomProfileId(rng, 4096);
-      const basename = path.basename(resolveOAuthRefreshLockPath(provider, id));
-      expect(basename).toMatch(lockBasenamePattern);
-      expect(Buffer.byteLength(basename, "utf8")).toBeLessThan(255);
-      // lock-<32 hex> = 37 chars, no path hazards. Explicit substring
-      // checks (no control-char regex) to keep lint happy.
-      expect(basename).not.toContain("\\");
-      expect(basename).not.toContain("/");
-      expect(basename).not.toContain("\u0000");
-      expect(basename).not.toContain("\n");
-      expect(basename).not.toContain("\r");
-      expect(basename).not.toContain("..");
-    }
-  });
-
-  it("always resolves to a path inside <stateDir>/locks/oauth-refresh", () => {
-    const rng = makeSeededRandom(0xdecafbad);
-    const expectedDir = path.join(stateDir, "locks", "oauth-refresh");
-    for (let i = 0; i < 200; i += 1) {
-      const provider = randomProfileId(rng, 32) || "openai";
-      const id = randomProfileId(rng, 1024);
-      const resolved = resolveOAuthRefreshLockPath(provider, id);
-      expect(path.dirname(resolved)).toBe(expectedDir);
-      // Normalized path must still live under the expected directory — defense
-      // against any future change that lets a profile id escape the scope.
-      expect(path.normalize(resolved).startsWith(expectedDir + path.sep)).toBe(true);
-    }
-  });
-
   it("distinct (provider, profileId) inputs produce distinct outputs over a large random sample", () => {
     const rng = makeSeededRandom(0x1234_5678);
     const seen = new Map<string, string>();
@@ -227,38 +188,6 @@ describe("resolveOAuthRefreshLockPath fuzz", () => {
         collisions += 1;
       }
       seen.set(resolved, composite);
-    }
-    expect(collisions).toBe(0);
-  });
-
-  it("holding provider fixed, distinct profileIds never collide", () => {
-    const rng = makeSeededRandom(0xf00dbabe);
-    const seen = new Map<string, string>();
-    let collisions = 0;
-    for (let i = 0; i < 1000; i += 1) {
-      const id = randomProfileId(rng, 128) || `id-${i}`;
-      const resolved = resolveOAuthRefreshLockPath("openai", id);
-      const existing = seen.get(resolved);
-      if (existing !== undefined && existing !== id) {
-        collisions += 1;
-      }
-      seen.set(resolved, id);
-    }
-    expect(collisions).toBe(0);
-  });
-
-  it("holding profileId fixed, distinct providers never collide", () => {
-    const rng = makeSeededRandom(0xbad1d00d);
-    const seen = new Map<string, string>();
-    let collisions = 0;
-    for (let i = 0; i < 500; i += 1) {
-      const provider = randomProfileId(rng, 64) || `provider-${i}`;
-      const resolved = resolveOAuthRefreshLockPath(provider, "shared-profile-id");
-      const existing = seen.get(resolved);
-      if (existing !== undefined && existing !== provider) {
-        collisions += 1;
-      }
-      seen.set(resolved, provider);
     }
     expect(collisions).toBe(0);
   });

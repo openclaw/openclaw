@@ -1,9 +1,3 @@
-/**
- * Non-interactive onboarding command dispatcher.
- *
- * This module validates the existing config snapshot, routes local/remote
- * setup, and handles explicit migration imports without interactive prompts.
- */
 import { isDeepStrictEqual } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ConfigMutationConflictError, replaceConfigFile } from "../config/config.js";
@@ -47,14 +41,14 @@ async function runNonInteractiveMigrationImport(params: {
   }
   const { detectSetupMigrationSources, runSetupMigrationImport } =
     await import("../wizard/setup.migration-import.js");
-  const detections = await detectSetupMigrationSources({
+  const discovery = await detectSetupMigrationSources({
     config: params.baseConfig,
     runtime: params.runtime,
   });
   const outcome = await runSetupMigrationImport({
     opts: { ...params.opts, importFrom: providerId, nonInteractive: true },
     baseConfig: params.baseConfig,
-    detections,
+    ...discovery,
     prompter: createNonInteractiveLoggingPrompter(
       params.runtime,
       (message) =>
@@ -64,21 +58,25 @@ async function runNonInteractiveMigrationImport(params: {
     async readConfigFile() {
       const snapshot = await readConfigFileSnapshot();
       if (!snapshot.valid) {
-        throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+        throw new Error(
+          "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
+        );
       }
       return snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
     },
     async commitConfigFile(config, expectedConfig) {
       const latest = await readConfigFileSnapshot();
       if (!latest.valid) {
-        throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+        throw new Error(
+          "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
+        );
       }
       const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
       if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
         throw new ConfigMutationConflictError("config changed during migration promotion");
       }
       const committed = await replaceConfigFile({
-        nextConfig: config,
+        sourceConfig: config,
         snapshot: latest,
         ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
         writeOptions: { allowConfigSizeDrop: true },
@@ -101,16 +99,13 @@ async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: Ru
     rejectOnboardingOption(
       opts,
       runtime,
-      `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
+      `Config invalid. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
     );
     return;
   }
 
-  const baseConfig: OpenClawConfig = snapshot.valid
-    ? snapshot.exists
-      ? (snapshot.sourceConfig ?? snapshot.config)
-      : {}
-    : {};
+  const baseConfig: OpenClawConfig =
+    snapshot.valid && snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const mode = opts.mode ?? "local";
   if (mode !== "local" && mode !== "remote") {
     rejectOnboardingOption(
@@ -164,10 +159,7 @@ export async function runNonInteractiveSetup(
         leaseLabel: "non-interactive onboarding lease",
         operationLabel: "onboarding.non-interactive.lease",
       },
-      async () =>
-        await withPluginLifecycleLease({}, async () =>
-          runNonInteractiveSetupExclusive(opts, runtime),
-        ),
+      () => withPluginLifecycleLease({}, () => runNonInteractiveSetupExclusive(opts, runtime)),
     );
   });
 }

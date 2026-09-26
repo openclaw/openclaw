@@ -9,6 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionCatalogTerminalPlan } from "openclaw/plugin-sdk/session-catalog";
 import { resolveCodexAppServerLocalHomeDir } from "./app-server/auth-start-options.js";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import type { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import { lookupNodeCodexCatalogRecord } from "./session-catalog-node-lookup.js";
@@ -20,7 +21,10 @@ import {
   isInteractiveThreadSource,
 } from "./session-catalog-parsing.js";
 import { resolveNodeHostExecutable, runNodePtyCommand } from "./session-catalog-pty.runtime.js";
-import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
+import type {
+  CodexSessionCatalogControl,
+  CodexSessionCatalogControlFactory,
+} from "./session-catalog-types.js";
 
 export const CODEX_TERMINAL_RESUME_COMMAND = "codex.terminal.resume.v1";
 export const CODEX_TERMINAL_START_COMMAND = "codex.terminal.start.v1";
@@ -31,6 +35,7 @@ export function createCodexTerminalStartNodeHostCommand(): OpenClawPluginNodeHos
     cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
     dangerous: false,
     duplex: true,
+    hasActiveWork: () => false,
     isAvailable: ({ env }) =>
       Boolean(resolveNodeHostExecutable("codex", { env, strategy: "direct" })),
     handle: async (paramsJSON, io) => {
@@ -69,6 +74,7 @@ export type CodexTerminalConfigSources = {
 function resolveCodexCatalogTerminalHome(
   sources: CodexTerminalConfigSources & { agentId?: string; source?: CodexCatalogHome },
 ): string {
+  sources.source?.assertCurrent();
   const runtimeConfig = sources.getRuntimeConfig();
   if (!runtimeConfig) {
     throw new Error("OpenClaw runtime config is unavailable");
@@ -83,6 +89,9 @@ function resolveCodexCatalogTerminalHome(
     sources.resolveRuntimeOptions({
       pluginConfig: sources.getPluginConfig(),
     }).start;
+  if (startOptions.transport !== "stdio") {
+    throw new CatalogParamsError("Native terminal requires a local Codex source");
+  }
   return resolveCodexAppServerLocalHomeDir(startOptions, agentDir);
 }
 
@@ -116,19 +125,23 @@ export function codexNodeTerminalCapability(node: {
 }
 
 export function createCodexTerminalNodeHostCommand(
-  bindRequest: (paramsJSON?: string | null) => {
-    agentId: string;
+  bindRequest: (paramsJSON?: string | null) => Promise<{
+    assertCurrent(): void;
+    codexHome: string;
     control: CodexSessionCatalogControl;
+    transport: Awaited<ReturnType<CodexSessionCatalogControlFactory["forNode"]>>["transport"];
     paramsJSON: string;
-  },
-  configSources: CodexTerminalConfigSources,
+  }>,
 ): OpenClawPluginNodeHostCommand {
   return {
     command: CODEX_TERMINAL_RESUME_COMMAND,
     cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
     dangerous: false,
     duplex: true,
-    isAvailable: ({ env }) =>
+    hasActiveWork: () => false,
+    isAvailable: ({ config, env }) =>
+      (readCodexPluginConfig(config.plugins?.entries?.codex?.config).appServer?.transport ??
+        "stdio") === "stdio" &&
       Boolean(
         resolveNodeHostExecutable("codex", {
           env,
@@ -140,7 +153,10 @@ export function createCodexTerminalNodeHostCommand(
       if (!io) {
         throw new Error("Codex terminal command requires duplex transport");
       }
-      const request = bindRequest(paramsJSON);
+      const request = await bindRequest(paramsJSON);
+      if (request.transport !== "stdio") {
+        throw new CatalogParamsError("Native terminal requires a local Codex source");
+      }
       const resume = decodeNodePtyResumeParams(request.paramsJSON, (value) => {
         if (
           typeof value !== "string" ||
@@ -159,17 +175,16 @@ export function createCodexTerminalNodeHostCommand(
       if (!resolution) {
         throw new Error("Codex CLI is unavailable");
       }
+      request.assertCurrent();
       return JSON.stringify(
         await runNodePtyCommand(
           {
             file: resolution.executable,
             args: ["resume", resume.threadId],
+            assertCurrent: () => request.assertCurrent(),
             ...(record.cwd ? { cwd: record.cwd } : {}),
             env: {
-              CODEX_HOME: resolveCodexCatalogTerminalHome({
-                ...configSources,
-                agentId: request.agentId,
-              }),
+              CODEX_HOME: request.codexHome,
             },
             cols: resume.cols,
             rows: resume.rows,
@@ -188,6 +203,7 @@ export async function openCodexCatalogTerminal(
     control: CodexSessionCatalogControl;
     hostId: string;
     threadId: string;
+    sourceHomeId?: string;
     source?: CodexCatalogHome;
   } & CodexTerminalConfigSources,
 ): Promise<SessionCatalogTerminalPlan> {
@@ -233,6 +249,7 @@ export async function openCodexCatalogTerminal(
     runtime: params.api.runtime,
     nodeId,
     threadId: params.threadId,
+    sourceHomeId: params.sourceHomeId,
   });
   if (lookup.kind !== "found" || !isInteractiveThreadSource(lookup.record.source)) {
     throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
@@ -242,7 +259,12 @@ export async function openCodexCatalogTerminal(
     kind: "node",
     nodeId,
     command: CODEX_TERMINAL_RESUME_COMMAND,
-    paramsJSON: JSON.stringify({ agentId: params.agentId, threadId: params.threadId }),
+    uploadPathStyle: "native",
+    paramsJSON: JSON.stringify({
+      agentId: params.agentId,
+      threadId: params.threadId,
+      ...(lookup.sourceHomeId ? { sourceHomeId: lookup.sourceHomeId } : {}),
+    }),
     ...(record.cwd ? { cwd: record.cwd } : {}),
     title,
   };
@@ -262,6 +284,7 @@ export async function startCodexCatalogTerminal(
       kind: "node",
       nodeId: params.nodeId,
       command: CODEX_TERMINAL_START_COMMAND,
+      uploadPathStyle: "native",
       paramsJSON: JSON.stringify({ cwd: params.cwd, initialMessage: params.initialMessage }),
       cwd: params.cwd,
       title: "codex",

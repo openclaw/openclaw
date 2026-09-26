@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
-import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
+import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -13,8 +14,9 @@ import {
   normalizeAssistantFinalDeliveryText,
 } from "./agent-runner-core.js";
 import { scheduleReplySessionMaintenance } from "./agent-runner-maintenance.js";
-import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
+import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
+import type { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
 import {
@@ -29,19 +31,11 @@ import {
   buildStrandedReplyDeliveryFailurePayload,
   resolveStrandedReplyRecovery,
 } from "./stranded-reply-recovery.js";
-type ReplyAgentAccounting = Awaited<ReturnType<typeof accountAgentTurn>>;
-type PreparedReplyAgentPayloads = {
-  kind: "continue";
-  activeSessionEntry: SessionEntry | undefined;
-  completedSourceReplyDelivery: boolean;
-  guardedReplyPayloads: ReplyPayload[];
-  responseUsageLine: string | undefined;
-};
 
 export async function completeReplyAgentRun(input: {
   context: FinalizeReplyAgentRunInput;
-  accounting: ReplyAgentAccounting;
-  prepared: PreparedReplyAgentPayloads;
+  accounting: AccountedAgentTurn;
+  prepared: Extract<Awaited<ReturnType<typeof prepareReplyAgentPayloads>>, { kind: "continue" }>;
 }) {
   const { context, accounting, prepared } = input;
   const {
@@ -98,7 +92,10 @@ export async function completeReplyAgentRun(input: {
         agentId: followupRun.run.agentId,
       });
       if (contextContent) {
-        enqueueSystemEvent(contextContent, { sessionKey });
+        enqueueSystemEvent(
+          contextContent,
+          withSystemEventOwner({ sessionKey }, followupRun.run.agentId),
+        );
       }
     }
 
@@ -107,7 +104,6 @@ export async function completeReplyAgentRun(input: {
       prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
     }
   }
-  const prefixPayloads = [...prefixNotices];
   const trailingPluginStatusPayload = await buildReplyDiagnosticsPayload({
     activeSessionEntry,
     followupRun,
@@ -123,8 +119,8 @@ export async function completeReplyAgentRun(input: {
   const rawAssistantText = isHookBlockedRun
     ? undefined
     : (runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText);
-  if (prefixPayloads.length > 0) {
-    finalPayloads = [...prefixPayloads, ...finalPayloads];
+  if (prefixNotices.length > 0) {
+    finalPayloads = [...prefixNotices, ...finalPayloads];
   }
   if (trailingPluginStatusPayload) {
     finalPayloads = [...finalPayloads, trailingPluginStatusPayload];
@@ -161,6 +157,7 @@ export async function completeReplyAgentRun(input: {
     // recovering here would duplicate that message.
     const recovery = resolveStrandedReplyRecovery({
       base: followupRun,
+      payloads: finalPayloads,
       finalText: assistantFinalText,
       sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
       sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
@@ -217,12 +214,18 @@ export async function completeReplyAgentRun(input: {
           (payload) => normalizePendingFinalDeliveryPayloads([payload]).length > 0,
         );
     if (sendableFinalPayloads.length > 0) {
+      const commandOwner = getCommandOwnerAuthority(followupRun.run);
+      const commandOwnerReference = commandOwner
+        ? (commandOwner.recoveryReference ?? null)
+        : undefined;
       const pendingFinalDeliveryIntentId = crypto.randomUUID();
       const expectedSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
       const pendingFinalDeliveries = sendableFinalPayloads.map((payload) => {
         const deliveryId = crypto.randomUUID();
         setReplyPayloadMetadata(payload, {
           pendingFinalDeliveryCompletion: {
+            commandOwnerReference,
+            agentId: followupRun.run.agentId,
             deliveryId,
             intentId: pendingFinalDeliveryIntentId,
             ...(activeSessionEntry?.restartRecoveryDeliveryRunId
@@ -246,12 +249,12 @@ export async function completeReplyAgentRun(input: {
       // A reset can rebind the key while the model runs; its replacement must
       // never inherit the old run's final or advertise an uncommitted intent.
       const persistedPendingFinalDelivery = await updateSessionEntry(
-        { storePath, sessionKey },
+        { agentId: followupRun.run.agentId, storePath, sessionKey },
         (entry) =>
           entry.sessionId === expectedSessionId
             ? {
                 pendingFinalDelivery: {
-                  ...(resolvedPendingText
+                  ...(resolvedPendingText && commandOwnerReference === undefined
                     ? { kind: "replayable" as const, text: resolvedPendingText }
                     : { kind: "transport-only" as const }),
                   intentId: pendingFinalDeliveryIntentId,

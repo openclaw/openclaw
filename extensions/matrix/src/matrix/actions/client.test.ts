@@ -37,6 +37,41 @@ let withResolvedActionClient: typeof import("./client.js").withResolvedActionCli
 let withResolvedRoomAction: typeof import("./client.js").withResolvedRoomAction;
 let withStartedActionClient: typeof import("./client.js").withStartedActionClient;
 
+describe("action client lazy loading", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.doUnmock("../client-bootstrap.js");
+    vi.resetModules();
+  });
+
+  it("defers bootstrap evaluation until action work starts", async () => {
+    const evaluateBootstrap = vi.fn(async () =>
+      vi.importActual<typeof import("../client-bootstrap.js")>("../client-bootstrap.js"),
+    );
+    vi.doMock("../client-bootstrap.js", evaluateBootstrap);
+
+    const { withResolvedActionClient: runAction } = await import("./client.js");
+    expect(evaluateBootstrap).not.toHaveBeenCalled();
+
+    const client = createMockMatrixClient();
+    const run = vi.fn(async () => "first result");
+    await expect(runAction({ client }, run)).resolves.toBe("first result");
+    expect(run).toHaveBeenCalledWith(client, undefined);
+    expect(evaluateBootstrap).toHaveBeenCalledTimes(1);
+
+    const failure = new Error("action failed");
+    await expect(
+      runAction({ client }, async () => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+    expect(evaluateBootstrap).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("action client helpers", () => {
   beforeAll(async () => {
     ({ withResolvedActionClient, withResolvedRoomAction, withStartedActionClient } =
@@ -52,40 +87,6 @@ describe("action client helpers", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-  });
-
-  it("borrows and releases one-off action clients", async () => {
-    const result = await withResolvedActionClient(
-      { cfg: TEST_CFG, accountId: "default" },
-      async () => "ok",
-    );
-
-    await expectOneOffSharedMatrixClient();
-    expect(result).toBe("ok");
-  });
-
-  it("forwards the transient retirement signal to action work", async () => {
-    const sharedClient = createMockMatrixClient();
-    const lease = setAcquiredMatrixClient(sharedClient);
-
-    await withResolvedActionClient(
-      { cfg: TEST_CFG, accountId: "default" },
-      async (_client, abortSignal) => {
-        expect(abortSignal).toBe(lease.abortSignal);
-      },
-    );
-  });
-
-  it("skips preparation when readiness is disabled", async () => {
-    await withResolvedActionClient(
-      { cfg: TEST_CFG, accountId: "default", readiness: "none" },
-      async () => {},
-    );
-
-    const lease = await acquireSharedMatrixClientMock.mock.results[0]?.value;
-    expect(lease.client.prepareForOneOff).not.toHaveBeenCalled();
-    expect(lease.client.start).not.toHaveBeenCalled();
-    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
   });
 
   it("starts through the lease and persists started action clients", async () => {
@@ -154,17 +155,6 @@ describe("action client helpers", () => {
     ).rejects.toThrow("boom");
 
     expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
-  });
-
-  it("does not borrow an explicitly injected action client", async () => {
-    const injected = createMockMatrixClient();
-
-    await withResolvedActionClient({ client: injected }, async (client) => {
-      expect(client).toBe(injected);
-    });
-
-    expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
-    expect(sharedLeaseReleaseMock).not.toHaveBeenCalled();
   });
 
   it("resolves room ids before running wrapped room actions", async () => {

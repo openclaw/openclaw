@@ -15,24 +15,14 @@ import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-st
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
-  normalizeStringEntries,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  normalizeSessionIngestionState,
   SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION,
   type SessionIngestionFileState,
-  type SessionIngestionState,
 } from "./dreaming-ingestion-state.js";
-import {
-  DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-  DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-  readMemoryCoreWorkspaceEntries,
-  SESSION_SEEN_HASHES_PER_CHUNK,
-  writeMemoryCoreWorkspaceEntries,
-} from "./dreaming-state.js";
 import { listMemorySessionTombstones } from "./memory-entry-origins.js";
-
-export type { SessionIngestionState } from "./dreaming-ingestion-state.js";
+import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 
 export const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
 export const SESSION_INGESTION_SCORE = 0.58;
@@ -155,16 +145,10 @@ export function resolveAdmissionPolicy(
   if (!exclusions) {
     return undefined;
   }
-  const values = (key: keyof SessionAdmissionPolicy): string[] =>
-    Array.isArray(exclusions[key])
-      ? normalizeStringEntries(
-          exclusions[key].filter((value): value is string => typeof value === "string"),
-        )
-      : [];
   const policy = {
-    hookExternalContentSources: values("hookExternalContentSources"),
-    channels: values("channels"),
-    chatTypes: values("chatTypes"),
+    hookExternalContentSources: normalizeTrimmedStringList(exclusions.hookExternalContentSources),
+    channels: normalizeTrimmedStringList(exclusions.channels),
+    chatTypes: normalizeTrimmedStringList(exclusions.chatTypes),
   };
   return Object.values(policy).some((entries) => entries.length > 0) ? policy : undefined;
 }
@@ -242,7 +226,10 @@ async function statSessionSource(source: SessionIngestionSource) {
     try {
       const stat = statSessionEntrySync(source.absolutePath, source.buildOptions);
       return stat
-        ? { mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)), size: Math.floor(stat.size) }
+        ? {
+            mtimeMs: Math.floor(Math.max(0, stat.revisionMs ?? stat.mtimeMs)),
+            size: Math.floor(stat.size),
+          }
         : null;
     } catch {
       return undefined;
@@ -299,7 +286,7 @@ export async function scanSessionIngestionSource(params: {
     return emptyScan("unavailable", params.previous);
   }
   const fileFingerprint = {
-    mtimeMs: Math.floor(Math.max(0, entry.mtimeMs)),
+    mtimeMs: Math.floor(Math.max(0, entry.revisionMs ?? entry.mtimeMs)),
     size: Math.floor(Math.max(0, entry.size)),
   };
   const lines = entry.content ? entry.content.split("\n") : [];
@@ -420,67 +407,6 @@ export function trimTrackedSessionScopes(seenMessages: Record<string, string[]>)
   return Object.fromEntries(Object.entries(seenMessages).filter(([scope]) => keep.has(scope)));
 }
 
-export async function readSessionIngestionState(
-  workspaceDir: string,
-): Promise<SessionIngestionState> {
-  const [files, seenChunks] = await Promise.all([
-    readMemoryCoreWorkspaceEntries<SessionIngestionFileState>({
-      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-      workspaceDir,
-    }),
-    readMemoryCoreWorkspaceEntries<{ scope: string; index: number; hashes: string[] }>({
-      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-      workspaceDir,
-    }),
-  ]);
-  const seenMessages: Record<string, string[]> = {};
-  for (const { value } of seenChunks.toSorted((a, b) => a.value.index - b.value.index)) {
-    if (!value.scope.trim()) {
-      continue;
-    }
-    seenMessages[value.scope] = [...(seenMessages[value.scope] ?? []), ...value.hashes];
-  }
-  return normalizeSessionIngestionState({
-    version: 3,
-    files: Object.fromEntries(files.map((entry) => [entry.key, entry.value])),
-    seenMessages,
-  });
-}
-
-export async function writeSessionIngestionState(
-  workspaceDir: string,
-  state: SessionIngestionState,
-): Promise<void> {
-  const seenEntries = Object.entries(state.seenMessages).flatMap(([scope, hashes]) =>
-    Array.from(
-      { length: Math.ceil(hashes.length / SESSION_SEEN_HASHES_PER_CHUNK) },
-      (_, index) => ({
-        key: `${scope}:${index}`,
-        value: {
-          scope,
-          index,
-          hashes: hashes.slice(
-            index * SESSION_SEEN_HASHES_PER_CHUNK,
-            (index + 1) * SESSION_SEEN_HASHES_PER_CHUNK,
-          ),
-        },
-      }),
-    ),
-  );
-  await Promise.all([
-    writeMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-      workspaceDir,
-      entries: Object.entries(state.files).map(([key, value]) => ({ key, value })),
-    }),
-    writeMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-      workspaceDir,
-      entries: seenEntries,
-    }),
-  ]);
-}
-
 export async function appendSessionCorpusLines(params: {
   workspaceDir: string;
   day: string;
@@ -495,22 +421,11 @@ export async function appendSessionCorpusLines(params: {
     SESSION_CORPUS_RELATIVE_DIR,
     `${params.day}.txt`,
   );
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  const existing = await fs.readFile(absolutePath, "utf-8").catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return "";
-    }
-    throw error;
-  });
-  const normalized = existing.replace(/\r\n/g, "\n");
-  const existingLines = normalized
-    ? (normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized).split("\n").length
-    : 0;
-  await appendRegularFile({
-    filePath: absolutePath,
-    content: `${params.lines.map((entry) => entry.rendered).join("\n")}\n`,
-    rejectSymlinkParents: true,
-  });
+  const content = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
+  const files = getMemoryWorkspaceMaintenance(params.workspaceDir);
+  const existingLines = files
+    ? await files.appendCorpus(absolutePath, content)
+    : await appendSessionCorpusText(absolutePath, content);
   return params.lines.map((entry, index) => ({
     path: relativePath,
     startLine: existingLines + index + 1,
@@ -521,4 +436,25 @@ export async function appendSessionCorpusLines(params: {
     provenance: entry.provenance,
     ...(entry.sessionOrigin ? { sessionOrigin: entry.sessionOrigin } : {}),
   }));
+}
+
+/** Native file append; session admission and checkpoints stay with the caller. */
+export async function appendSessionCorpusText(filePath: string, content: string): Promise<number> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const existing = await fs.readFile(filePath, "utf-8").catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  });
+  const normalized = existing.replace(/\r\n/g, "\n");
+  const existingLines = normalized
+    ? (normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized).split("\n").length
+    : 0;
+  await appendRegularFile({
+    filePath,
+    content,
+    rejectSymlinkParents: true,
+  });
+  return existingLines;
 }

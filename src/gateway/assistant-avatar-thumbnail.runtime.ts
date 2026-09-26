@@ -1,21 +1,19 @@
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { fileTypeFromBuffer } from "file-type";
-import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { createImageProcessor } from "../media/image-ops.js";
+import { createImageProcessor, isAnimatedWebpBuffer } from "../media/image-ops.js";
 import { isAvatarImageMimeType, isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
-import {
-  gatewayAvatarImageRevision,
-  type GatewayAvatarImageSource,
-} from "./assistant-avatar-cache.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import type { GatewayAvatarImageSource } from "./assistant-avatar-cache.js";
 import {
   createHttpImageRepresentation,
   type HttpImageRepresentation,
 } from "./http-image-response.js";
 
 const AVATAR_THUMBNAIL_SIDE = 128;
-const thumbnailCache = new Map<string, Promise<HttpImageRepresentation>>();
+const thumbnailCache = new Map<string, HttpImageRepresentation>();
+const pendingThumbnails = new Map<string, Promise<HttpImageRepresentation>>();
 
 async function createAvatarThumbnail(
   source: GatewayAvatarImageSource,
@@ -23,7 +21,10 @@ async function createAvatarThumbnail(
   let body: Buffer;
   let contentType: string;
   if ("file" in source) {
-    body = await readFileDescriptorBounded(source.file.fd, AVATAR_MAX_BYTES);
+    if (!source.file.body) {
+      throw new Error("Avatar bytes were not prepared");
+    }
+    body = source.file.body;
     contentType = resolveAvatarMime(source.file.path);
   } else {
     if (!isRenderableAvatarImageDataUrl(source.dataUrl)) {
@@ -45,14 +46,7 @@ async function createAvatarThumbnail(
   // Preserve animation/vector bytes; Rastermill's PNG output contains only one frame.
   if (["image/png", "image/jpeg", "image/webp"].includes(mime)) {
     const detectedMime = (await fileTypeFromBuffer(body))?.mime;
-    // Rastermill's probe has no animation flag. RFC 9649 §2.7 puts the WebP
-    // VP8X animation bit at byte 20: https://www.rfc-editor.org/rfc/rfc9649.html#section-2.7
-    const animatedWebp =
-      detectedMime === "image/webp" &&
-      body.length >= 21 &&
-      body.toString("ascii", 12, 16) === "VP8X" &&
-      (body.readUInt8(20) & 0x02) !== 0;
-    if (detectedMime === "image/apng" || animatedWebp) {
+    if (detectedMime === "image/apng" || isAnimatedWebpBuffer(body)) {
       return createHttpImageRepresentation(body, contentType);
     }
     body = (
@@ -66,23 +60,26 @@ async function createAvatarThumbnail(
   return createHttpImageRepresentation(body, contentType);
 }
 
-/** Caller retains descriptor ownership until this shared read has settled. */
 export async function readGatewayAvatarThumbnail(
   source: GatewayAvatarImageSource,
 ): Promise<HttpImageRepresentation> {
-  const revision = gatewayAvatarImageRevision(source);
-  const pending = thumbnailCache.get(revision) ?? createAvatarThumbnail(source);
-  thumbnailCache.delete(revision);
-  thumbnailCache.set(revision, pending);
-  // Original animation/vector bytes remain bounded by AVATAR_MAX_BYTES; limit
-  // both retained representations and concurrent same-source encoding work.
-  pruneMapToMaxSize(thumbnailCache, 4);
-  try {
-    return await pending;
-  } catch (error) {
-    if (thumbnailCache.get(revision) === pending) {
-      thumbnailCache.delete(revision);
-    }
-    throw error;
+  const { revision } = source;
+  const cached = thumbnailCache.get(revision);
+  if (cached) {
+    thumbnailCache.delete(revision);
+    thumbnailCache.set(revision, cached);
+    return cached;
   }
+  return getOrCreatePromise(
+    pendingThumbnails,
+    revision,
+    async () => {
+      const image = await createAvatarThumbnail(source);
+      thumbnailCache.set(revision, image);
+      // Pending jobs retain their own custody until settlement, independently of the LRU.
+      pruneMapToMaxSize(thumbnailCache, 4);
+      return image;
+    },
+    { evictOnSettled: true },
+  );
 }

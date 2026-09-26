@@ -39,7 +39,7 @@ import {
 } from "./doctor-state-integrity.test-support.js";
 
 const WORKSPACE_BACKUP_TIP =
-  "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended";
+  "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
 
 describe("workspace backup tip", () => {
   it("recognizes direct, deeply nested, and symlinked Git workspaces without duplicate tips", async () => {
@@ -257,6 +257,59 @@ describe("structured state integrity findings", () => {
     );
   });
 
+  it.each([undefined, "~/custom-store/sessions.json"])(
+    "checks the source session store when process state is isolated (store=%s)",
+    (store) => {
+      const sourceHome = path.join(tempHome, "source-home");
+      const sourceState = path.join(sourceHome, ".openclaw");
+      const storeDir = store
+        ? path.join(sourceHome, "custom-store")
+        : path.join(sourceState, "agents", "main", "sessions");
+      fs.mkdirSync(sourceState, { recursive: true, mode: 0o700 });
+      fs.mkdirSync(storeDir, { recursive: true, mode: 0o700 });
+      const accessSync = fs.accessSync;
+      const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((target, mode) => {
+        if (target === storeDir) {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        }
+        return accessSync(target, mode);
+      });
+      const readFileSync = fs.readFileSync;
+      const mountInfo = vi.spyOn(fs, "readFileSync");
+      try {
+        // Source isolation is independent of the temporary directory's backing filesystem.
+        mountInfo.mockImplementation(
+          (target, options?: fs.ReadFileSyncOptions | BufferEncoding | null) => {
+            if (typeof options === "string") {
+              if (target === "/proc/self/mountinfo" && options === "utf8") {
+                return "22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw";
+              }
+              return readFileSync(target, options);
+            }
+            if (options == null) {
+              return readFileSync(target, options);
+            }
+            return readFileSync(target, options);
+          },
+        );
+        const issues = detectStateIntegrityHealthIssues(
+          withMainAgentRoster({ session: { store } }),
+          { env: { HOME: sourceHome, OPENCLAW_STATE_DIR: sourceState } },
+        );
+        expect(issues).toEqual([
+          expect.objectContaining({
+            kind: "runtime-dir-not-writable",
+            label: "Session store dir",
+            path: storeDir,
+          }),
+        ]);
+      } finally {
+        mountInfo.mockRestore();
+        accessSpy.mockRestore();
+      }
+    },
+  );
+
   it("reports an existing session directory that is not writable", () => {
     const stateDir = path.join(tempHome, ".openclaw");
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
@@ -353,6 +406,21 @@ describe("doctor state integrity oauth dir checks", () => {
     };
     const confirmRuntimeRepair = await runStateIntegrity(cfg);
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(true);
+    expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
+  });
+
+  it("does not require the oauth dir for a pairing channel with no registered plugin", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        icenter: {
+          enabled: true,
+          dmPolicy: "pairing",
+        },
+      },
+    };
+    const confirmRuntimeRepair = await runStateIntegrity(cfg);
+    expect(hasRepairPromptMessage(confirmRuntimeRepair, "Create OAuth dir at")).toBe(false);
+    expect(stateIntegrityText()).not.toContain("CRITICAL: OAuth dir missing");
   });
 
   it("prompts for oauth dir when OPENCLAW_OAUTH_DIR is explicitly configured", async () => {
@@ -363,19 +431,32 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
   });
 
-  it("warns about orphaned on-disk agent directories missing from agents.list", async () => {
-    createAgentDir("big-brain");
-    createAgentDir("cerebro");
+  it.each([
+    {
+      name: "list",
+      roster: { list: [{ id: "main", default: true }] },
+      path: "agents.list",
+      otherPath: "agents.entries",
+      orphanIds: ["big-brain", "cerebro"],
+    },
+    {
+      name: "keyed",
+      roster: { entries: { main: { default: true } } },
+      path: "agents.entries",
+      otherPath: "agents.list",
+      orphanIds: ["orphan"],
+    },
+  ])("preserves $name roster paths in orphaned agent recovery advice", async (testCase) => {
+    for (const agentId of testCase.orphanIds) {
+      createAgentDir(agentId);
+    }
+    const text = await runStateIntegrityText({ agents: testCase.roster });
 
-    const text = await runStateIntegrityText({
-      agents: {
-        list: [{ id: "main", default: true }],
-      },
-    });
-
-    expect(text).toContain("without a matching agents.list entry");
-    expect(text).toContain("Examples: big-brain, cerebro");
+    expect(text).toContain(`without a matching ${testCase.path} entry`);
+    expect(text).toContain(`Restore the missing ${testCase.path} entries`);
+    expect(text).toContain(`Examples: ${testCase.orphanIds.join(", ")}`);
     expect(text).toContain("config-driven routing, identity, and model selection will ignore them");
+    expect(text).not.toContain(testCase.otherPath);
   });
 
   it("detects orphaned agent dirs even when the on-disk folder casing differs", async () => {
@@ -406,6 +487,20 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain("Examples:");
   });
 
+  it("ignores reserved system agent dirs that can never appear in agents.list", async () => {
+    createAgentDir("openclaw");
+    createAgentDir("crestodian");
+
+    const text = await runStateIntegrityText({
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    });
+
+    expect(text).not.toContain("without a matching agents.list entry");
+    expect(text).not.toContain("Examples:");
+  });
+
   it("protects the shared legacy main auth-store dir for an ops-only roster", async () => {
     createAgentDir("main");
 
@@ -429,7 +524,7 @@ describe("doctor state integrity oauth dir checks", () => {
       },
     });
 
-    expect(text).toContain("without a matching agents.list entry");
+    expect(text).toContain("without a matching agents.entries entry");
     expect(text).toContain("Examples: main");
   });
 

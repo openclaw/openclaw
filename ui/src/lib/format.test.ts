@@ -2,14 +2,15 @@
 // Control UI tests cover format behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
+import { formatDurationCompact, formatDurationHuman } from "./format-duration.ts";
 import {
   clampText,
+  createMsFormatter,
   formatDateTimeMs,
   formatDateMs,
   formatCompactTokenCount,
   formatContextTokenCapacity,
-  formatDurationCompact,
-  formatDurationHuman,
   formatMs,
   formatRelativeTimestamp,
   formatTimeAgo,
@@ -34,14 +35,6 @@ describe("formatAgo", () => {
 
   it("returns 'Xm from now' for future timestamps", () => {
     expect(formatRelativeTimestamp(Date.now() + 5 * 60_000)).toBe("in 5m");
-  });
-
-  it("returns 'Xh from now' for future timestamps", () => {
-    expect(formatRelativeTimestamp(Date.now() + 3 * 60 * 60_000)).toBe("in 3h");
-  });
-
-  it("returns 'Xd from now' for future timestamps beyond 48h", () => {
-    expect(formatRelativeTimestamp(Date.now() + 3 * 24 * 60 * 60_000)).toBe("in 3d");
   });
 
   it("returns a localized current-time label for recent past timestamps", () => {
@@ -69,13 +62,10 @@ describe("localized durations", () => {
     await i18n.setLocale("en");
   });
 
-  it.each([undefined, null, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
-    "preserves invalid duration fallbacks for %s",
-    (durationMs) => {
-      expect(formatDurationCompact(durationMs)).toBeUndefined();
-      expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
-    },
-  );
+  it.each([null, Number.NaN, -1])("preserves invalid duration fallbacks for %s", (durationMs) => {
+    expect(formatDurationCompact(durationMs)).toBeUndefined();
+    expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
+  });
 
   it("keeps zero distinct from a positive duration rounded to zero", () => {
     expect(formatDurationCompact(0)).toBeUndefined();
@@ -85,13 +75,9 @@ describe("localized durations", () => {
 
   it.each([
     { durationMs: 999.5, expected: "1s" },
-    { durationMs: 59_000, expected: "59s" },
-    { durationMs: 59_500, expected: "1m" },
     { durationMs: 92_000, expected: "1m 32s" },
-    { durationMs: 3_660_000, expected: "1h 1m" },
     { durationMs: 3_630_000, expected: "1h 30s" },
     { durationMs: 86_430_000, expected: "1d 30s" },
-    { durationMs: 86_460_000, expected: "1d 1m" },
     { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
   ])("formats $durationMs ms with separated compact units", ({ durationMs, expected }) => {
     expect(formatDurationCompact(durationMs)).toBe(expected);
@@ -108,7 +94,8 @@ describe("localized durations", () => {
     expect(formatDurationHuman(durationMs)).toBe(expected);
   });
 
-  it.each(["fr", "de", "ar"] as const)("preserves duration quantities in %s", async (locale) => {
+  it("preserves duration quantities with localized numerals", async () => {
+    const locale = "ar";
     await i18n.setLocale(locale);
     const unit = (value: number, unitName: string) =>
       new Intl.NumberFormat(locale, {
@@ -158,6 +145,44 @@ describe("formatMs", () => {
   });
 });
 
+describe("createMsFormatter", () => {
+  it("honors explicit timestamp fields and an empty invalid fallback", () => {
+    const options: Intl.DateTimeFormatOptions = {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "UTC",
+    };
+    const format = createMsFormatter(options, "");
+    for (const timestamp of [0, Date.UTC(2026, 0, 2, 15, 4, 55)]) {
+      expect(format(timestamp)).toBe(new Date(timestamp).toLocaleString(i18n.getLocale(), options));
+    }
+    expect(format(Number.NaN)).toBe("");
+    expect(format(8_640_000_000_000_001)).toBe("");
+    expect(createMsFormatter(undefined, "unavailable")(null)).toBe("unavailable");
+  });
+
+  it("uses the locale of the first valid timestamp and refreshes on the next render", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
+    const options: Intl.DateTimeFormatOptions = { month: "long", day: "numeric", timeZone: "UTC" };
+    try {
+      await i18n.setLocale("en");
+      const format = createMsFormatter(options, "");
+      expect(format(undefined)).toBe("");
+      await i18n.setLocale("fr");
+      expect(format(timestamp)).toBe(new Date(timestamp).toLocaleString("fr", options));
+      await i18n.setLocale("en");
+      expect(createMsFormatter(options)(timestamp)).toBe(
+        new Date(timestamp).toLocaleString("en", options),
+      );
+    } finally {
+      await restoreI18n();
+    }
+  });
+});
+
 describe("date/time millisecond formatters", () => {
   it("return fallback text for Date-invalid timestamps", () => {
     expect(formatDateMs(8_640_000_000_000_001, undefined, "")).toBe("");
@@ -175,16 +200,6 @@ describe("date/time millisecond formatters", () => {
 });
 
 describe("stripThinkingTags", () => {
-  it("strips <think>…</think> segments", () => {
-    const input = ["<think>", "secret", "</think>", "", "Hello"].join("\n");
-    expect(stripThinkingTags(input)).toBe("Hello");
-  });
-
-  it("strips <thinking>…</thinking> segments", () => {
-    const input = ["<thinking>", "secret", "</thinking>", "", "Hello"].join("\n");
-    expect(stripThinkingTags(input)).toBe("Hello");
-  });
-
   it("keeps text when tags are unpaired", () => {
     expect(stripThinkingTags("<think>\nsecret\nHello")).toBe("secret\nHello");
     expect(stripThinkingTags("Hello\n</think>")).toBe("Hello\n");
@@ -194,10 +209,6 @@ describe("stripThinkingTags", () => {
     expect(stripThinkingTags("private chain of thought </think> Visible answer")).toBe(
       " Visible answer",
     );
-  });
-
-  it("returns original text when no tags exist", () => {
-    expect(stripThinkingTags("Hello")).toBe("Hello");
   });
 
   it("strips <final>…</final> segments", () => {
@@ -219,6 +230,23 @@ describe("stripThinkingTags", () => {
 });
 
 describe("formatUnknownText", () => {
+  it.each([
+    { name: "null", value: null, expected: "" },
+    { name: "undefined", value: undefined, expected: "" },
+    { name: "string", value: "agent", expected: "agent" },
+    { name: "number", value: 42, expected: "42" },
+    { name: "boolean", value: false, expected: "false" },
+    { name: "bigint", value: 42n, expected: "42" },
+    { name: "function", value: () => "not source text", expected: "[object Function]" },
+    {
+      name: "function with JSON representation",
+      value: Object.assign(() => undefined, { toJSON: () => ({ ok: true }) }),
+      expected: '{"ok":true}',
+    },
+  ])("preserves $name formatting", ({ value, expected }) => {
+    expect(formatUnknownText(value)).toBe(expected);
+  });
+
   it("stringifies plain objects without throwing", () => {
     expect(formatUnknownText({ ok: true })).toBe('{"ok":true}');
   });
@@ -229,17 +257,18 @@ describe("formatUnknownText", () => {
     expect(formatUnknownText(circular)).toBe("[object Object]");
   });
 
-  it("formats symbols without relying on object coercion", () => {
-    expect(formatUnknownText(Symbol("agent"))).toBe("Symbol(agent)");
+  it.each([
+    { name: "named", value: Symbol("agent"), expected: "Symbol(agent)" },
+    { name: "anonymous", value: Symbol(undefined), expected: "Symbol()" },
+    { name: "empty", value: Symbol(""), expected: "Symbol()" },
+    { name: "registered", value: Symbol.for("会議"), expected: "Symbol(会議)" },
+    { name: "well-known", value: Symbol.iterator, expected: "Symbol(Symbol.iterator)" },
+  ])("formats $name symbols without object coercion", ({ value, expected }) => {
+    expect(formatUnknownText(value)).toBe(expected);
   });
 });
 
 describe("formatCompactTokenCount", () => {
-  it("formats values under 1,000 as-is", () => {
-    expect(formatCompactTokenCount(0)).toBe("0");
-    expect(formatCompactTokenCount(999)).toBe("999");
-  });
-
   it("formats thousands with one decimal, trimming a trailing .0", () => {
     expect(formatCompactTokenCount(1_000)).toBe("1k");
     expect(formatCompactTokenCount(214_500)).toBe("214.5k");

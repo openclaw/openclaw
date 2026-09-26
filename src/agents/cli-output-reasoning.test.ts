@@ -32,6 +32,14 @@ function claudeBlockStop(index?: number) {
   });
 }
 
+function claudeTextDelta(text: string, index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_delta",
+    ...(index === undefined ? {} : { index }),
+    delta: { type: "text_delta", text },
+  });
+}
+
 function claudeThinkingDelta(thinking: string, index?: number | string) {
   return claudeStreamEvent({
     type: "content_block_delta",
@@ -74,25 +82,16 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
 
     parser.push(
-      [
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: {
-              type: "text_delta",
-              text: "<thinking>Private analysis.</thinking>Visible answer.",
-            },
-          },
-        }),
-        JSON.stringify({
+      joinJsonlFrames(
+        claudeMessageStart(),
+        claudeTextDelta("<thinking>Private analysis.</thinking>Visible answer."),
+        {
           type: "result",
           session_id: "session-tagged",
           result: "<thinking>Private analysis.</thinking>Visible answer.",
-        }),
+        },
         "",
-      ].join("\n"),
+      ),
     );
     parser.finish();
 
@@ -118,23 +117,18 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     });
   });
 
-  it("holds chunk-split tagged reasoning until its close tag is complete", () => {
+  it.each([
+    { name: "tag name", chunks: ["<thi", "nking>Private "] },
+    { name: "quoted attribute", chunks: ['<thinking note="', "x>y", '">Private '] },
+  ])("holds reasoning with a split $name until its close tag is complete", ({ chunks }) => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
-    const pushText = (text: string) =>
-      parser.push(
-        `${JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text },
-          },
-        })}\n`,
-      );
+    const pushText = (text: string) => parser.push(`${JSON.stringify(claudeTextDelta(text))}\n`);
 
-    pushText("<thi");
-    pushText("nking>Private ");
-    expect(assistant).toEqual([]);
-    expect(thinking).toEqual([]);
+    for (const chunk of chunks) {
+      pushText(chunk);
+      expect(assistant).toEqual([]);
+      expect(thinking).toEqual([]);
+    }
     pushText("analysis.</think");
     expect(assistant).toEqual([]);
     expect(thinking).toEqual([]);
@@ -148,22 +142,22 @@ describe("createCliJsonlStreamingParser reasoning", () => {
 
   it("streams rejected angle prefixes while valid split reasoning stays buffered", () => {
     const visible = createClaudeTaggedReasoningHarness();
+    const split = createClaudeTaggedReasoningHarness();
     const mixed = createClaudeTaggedReasoningHarness();
     const tagged = createClaudeTaggedReasoningHarness();
     const pushText = (parser: ReturnType<typeof createCliJsonlStreamingParser>, text: string) =>
-      parser.push(
-        `${JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            delta: { type: "text_delta", text },
-          },
-        })}\n`,
-      );
+      parser.push(`${JSON.stringify(claudeTextDelta(text))}\n`);
 
     pushText(visible.parser, "<div>Visible prefix <thi");
     expect(visible.assistant.at(-1)?.text).toBe("<div>Visible prefix <thi");
     expect(visible.parser.getOutput()?.text).toBe("<div>Visible prefix <thi");
+
+    pushText(split.parser, "<thi");
+    expect(split.assistant).toEqual([]);
+    pushText(split.parser, "s");
+    expect(split.assistant.at(-1)?.text).toBe("<this");
+    pushText(split.parser, ">Visible");
+    expect(split.assistant.at(-1)?.text).toBe("<this>Visible");
 
     pushText(mixed.parser, "<div>Visible prefix ");
     pushText(mixed.parser, "<thi");
@@ -183,20 +177,16 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
 
     parser.push(
-      `${JSON.stringify({
-        type: "stream_event",
-        event: {
-          type: "content_block_delta",
-          delta: {
-            type: "text_delta",
-            text: [
-              "<think>First.</think>",
-              "<reasoning>Second.</reasoning>",
-              "Answer with <think>literal</think> markup.",
-            ].join("\n"),
-          },
-        },
-      })}\n`,
+      joinJsonlFrames(
+        claudeTextDelta(
+          [
+            "<think>First.</think>",
+            "<reasoning>Second.</reasoning>",
+            "Answer with <think>literal</think> markup.",
+          ].join("\n"),
+        ),
+        "",
+      ),
     );
     parser.finish();
 
@@ -209,32 +199,12 @@ describe("createCliJsonlStreamingParser reasoning", () => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
 
     parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "thinking_delta", thinking: "Native analysis." },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 1,
-            delta: {
-              type: "text_delta",
-              text: "<thinking>Native analysis.</thinking>Visible answer.",
-            },
-          },
-        }),
-        JSON.stringify({
-          type: "result",
-          result: "<thinking>Native analysis.</thinking>Visible answer.",
-        }),
+      joinJsonlFrames(
+        claudeThinkingDelta("Native analysis.", 0),
+        claudeTextDelta("<thinking>Native analysis.</thinking>Visible answer.", 1),
+        { type: "result", result: "<thinking>Native analysis.</thinking>Visible answer." },
         "",
-      ].join("\n"),
+      ),
     );
     parser.finish();
 
@@ -255,15 +225,7 @@ describe("createCliJsonlStreamingParser reasoning", () => {
   ])("preserves $name on the visible path", ({ text }) => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
 
-    parser.push(
-      `${JSON.stringify({
-        type: "stream_event",
-        event: {
-          type: "content_block_delta",
-          delta: { type: "text_delta", text },
-        },
-      })}\n`,
-    );
+    parser.push(joinJsonlFrames(claudeTextDelta(text), ""));
     parser.finish();
 
     expect(thinking).toEqual([]);
@@ -273,32 +235,17 @@ describe("createCliJsonlStreamingParser reasoning", () => {
 
   it("resets tagged reasoning across Claude tool-round assistant messages", () => {
     const { assistant, parser, thinking } = createClaudeTaggedReasoningHarness();
-    const textEvent = (text: string) =>
-      JSON.stringify({
-        type: "stream_event",
-        event: {
-          type: "content_block_delta",
-          delta: { type: "text_delta", text },
-        },
-      });
-
     parser.push(
-      [
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        textEvent("<think>First thought.</think>Before tool."),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            content_block: { type: "tool_use", id: "tool-1", name: "Read" },
-          },
-        }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_stop" } }),
-        JSON.stringify({ type: "stream_event", event: { type: "message_start" } }),
-        textEvent("<reasoning>Second thought.</reasoning>Final answer."),
-        JSON.stringify({ type: "result", result: "Final answer." }),
+      joinJsonlFrames(
+        claudeMessageStart(),
+        claudeTextDelta("<think>First thought.</think>Before tool."),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "Read" }),
+        claudeStreamEvent({ type: "message_stop" }),
+        claudeMessageStart(),
+        claudeTextDelta("<reasoning>Second thought.</reasoning>Final answer."),
+        { type: "result", result: "Final answer." },
         "",
-      ].join("\n"),
+      ),
     );
     parser.finish();
 
@@ -329,18 +276,36 @@ describe("createCliJsonlStreamingParser reasoning", () => {
       ],
     },
     {
-      name: "emits snapshot thinking blocks when no thinking deltas streamed",
+      name: "keeps snapshot-only thinking blocks ordered when later deltas arrive",
       frames: [
         claudeAssistantSnapshot("msg-1", [
           { type: "thinking", thinking: "Snapshot-only reasoning.", signature: "sig" },
           { type: "redacted_thinking", data: "opaque-blob" },
+          { type: "thinking", thinking: " Next block." },
           { type: "text", text: "Answer." },
         ]),
+        claudeThinkingDelta(" Revised.", 0),
+        claudeThinkingDelta(" Done.", 2),
       ],
       expected: [
         {
           text: "Snapshot-only reasoning.",
           delta: "Snapshot-only reasoning.",
+          isReasoningSnapshot: true,
+        },
+        {
+          text: "Snapshot-only reasoning. Next block.",
+          delta: " Next block.",
+          isReasoningSnapshot: true,
+        },
+        {
+          text: "Snapshot-only reasoning. Revised. Next block.",
+          delta: " Revised.",
+          isReasoningSnapshot: true,
+        },
+        {
+          text: "Snapshot-only reasoning. Revised. Next block. Done.",
+          delta: " Done.",
           isReasoningSnapshot: true,
         },
       ],
@@ -353,10 +318,16 @@ describe("createCliJsonlStreamingParser reasoning", () => {
           { type: "thinking", thinking: "revised thought", signature: "sig" },
           { type: "text", text: "Answer." },
         ]),
+        claudeAssistantSnapshot("msg-1", [
+          { type: "thinking", thinking: "revised thought", signature: "sig" },
+          { type: "text", text: "Answer." },
+        ]),
+        claudeThinkingDelta(" continued", 0),
       ],
       expected: [
         { text: "rough draft", delta: "rough draft", isReasoningSnapshot: true },
         { text: "revised thought", delta: "revised thought", isReasoningSnapshot: true },
+        { text: "revised thought continued", delta: " continued", isReasoningSnapshot: true },
       ],
     },
     {
@@ -368,10 +339,58 @@ describe("createCliJsonlStreamingParser reasoning", () => {
           { type: "thinking", thinking: "A", signature: "sig-a" },
           { type: "thinking", thinking: "B", signature: "sig-b" },
         ]),
+        claudeThinkingDelta("C", 0),
+        claudeThinkingDelta("D", 1),
       ],
       expected: [
         { text: "A", delta: "A", isReasoningSnapshot: true },
         { text: "AB", delta: "B", isReasoningSnapshot: true },
+        { text: "ACB", delta: "C", isReasoningSnapshot: true },
+        { text: "ACBD", delta: "D", isReasoningSnapshot: true },
+      ],
+    },
+    {
+      name: "orders new earlier thinking blocks before appending to the greatest index",
+      frames: [
+        claudeThinkingDelta("C", 2),
+        claudeThinkingDelta("A", 0),
+        claudeThinkingDelta("B", 1),
+        claudeThinkingDelta("D", 2),
+        claudeThinkingDelta("E", 0),
+      ],
+      expected: [
+        { text: "C", delta: "C", isReasoningSnapshot: true },
+        { text: "AC", delta: "A", isReasoningSnapshot: true },
+        { text: "ABC", delta: "B", isReasoningSnapshot: true },
+        { text: "ABCD", delta: "D", isReasoningSnapshot: true },
+        { text: "AEBCD", delta: "E", isReasoningSnapshot: true },
+      ],
+    },
+    {
+      name: "preserves negative, infinite, and signed-zero thinking indexes",
+      // Raw JSON preserves overflowed numeric exponents and negative zero.
+      frames: [
+        { index: "-1e400", thinking: "L" },
+        { index: "-1e400", thinking: "!" },
+        { index: "-2", thinking: "N" },
+        { index: "-0", thinking: "Z" },
+        { index: "0", thinking: "+" },
+        { index: "1e400", thinking: "H" },
+        { index: "1e400", thinking: "!" },
+        { index: "-2", thinking: "?" },
+      ].map(
+        ({ index, thinking }) =>
+          `{"type":"stream_event","event":{"type":"content_block_delta","index":${index},"delta":{"type":"thinking_delta","thinking":${JSON.stringify(thinking)}}}}`,
+      ),
+      expected: [
+        { text: "L", delta: "L", isReasoningSnapshot: true },
+        { text: "L!", delta: "!", isReasoningSnapshot: true },
+        { text: "L!N", delta: "N", isReasoningSnapshot: true },
+        { text: "L!NZ", delta: "Z", isReasoningSnapshot: true },
+        { text: "L!NZ+", delta: "+", isReasoningSnapshot: true },
+        { text: "L!NZ+H", delta: "H", isReasoningSnapshot: true },
+        { text: "L!NZ+H!", delta: "!", isReasoningSnapshot: true },
+        { text: "L!N?Z+H!", delta: "?", isReasoningSnapshot: true },
       ],
     },
     {

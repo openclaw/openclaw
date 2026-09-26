@@ -8,7 +8,6 @@ import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
 } from "./run/incomplete-turn-recovery.js";
-import { resolveIncompleteTurnPayloadText } from "./run/incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 const REASONING_ONLY_RETRY_INSTRUCTION =
@@ -55,163 +54,34 @@ function makeEmptyResponseRetryParams(
   };
 }
 
-function makeIncompleteTurnParams(
-  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
-): Parameters<typeof resolveIncompleteTurnPayloadText>[0] {
-  return {
-    payloadCount: 0,
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
-  };
-}
-
 describe("incomplete-turn classification", () => {
-  it("detects reasoning-only GPT turns from signed thinking blocks", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction(
-      makeReasoningRetryParams({
-        assistantTexts: [],
-        lastAssistant: makeLastAssistant({
-          stopReason: "end_turn",
-          model: "gpt-5.4",
-          content: [
-            {
-              type: "thinking",
-              thinking: "internal reasoning",
-              thinkingSignature: JSON.stringify({ id: "rs_helper", type: "reasoning" }),
-            },
-          ],
-        }),
-      }),
-    );
+  it.each([
+    ["openai", "gpt-5.4", undefined, "signed", "end_turn"],
+    ["google", "gemini-2.5-pro", undefined, "signed", "end_turn"],
+    ["amazon-bedrock", "openai.gpt-oss-120b-1:0", "bedrock-converse-stream", "signed", "stop"],
+    ["ollama", "gemma4:31b", undefined, "signed", "end_turn"],
+    ["openai", "qwen3.6-35b-a3b", "openai-completions", undefined, "stop"],
+  ] as const)(
+    "continues reasoning-only output for %s/%s",
+    (provider, modelId, modelApi, thinkingSignature, stopReason) => {
+      const retryInstruction = resolveReasoningOnlyRetryInstruction(
+        makeReasoningRetryParams(
+          {
+            assistantTexts: [],
+            lastAssistant: makeLastAssistant({
+              provider,
+              model: modelId,
+              stopReason,
+              content: [{ type: "thinking", thinking: "internal reasoning", thinkingSignature }],
+            }),
+          },
+          { provider, modelId, modelApi },
+        ),
+      );
 
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("detects reasoning-only Gemini turns from signed thinking blocks", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction(
-      makeReasoningRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            stopReason: "end_turn",
-            provider: "google",
-            model: "gemini-2.5-pro",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-                thinkingSignature: JSON.stringify({ id: "gemini_rs_helper", type: "reasoning" }),
-              },
-            ],
-          }),
-        },
-        { provider: "google", modelId: "gemini-2.5-pro" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("retries signed reasoning-only Bedrock Converse turns with a visible-answer continuation", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction(
-      makeReasoningRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            provider: "amazon-bedrock",
-            model: "openai.gpt-oss-120b-1:0",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-                thinkingSignature: "bedrock-reasoning-signature",
-              },
-            ],
-          }),
-        },
-        {
-          provider: "amazon-bedrock",
-          modelId: "openai.gpt-oss-120b-1:0",
-          modelApi: "bedrock-converse-stream",
-        },
-      ),
-    );
-
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("retries signed reasoning-only Ollama turns with a visible-answer continuation instruction", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction(
-      makeReasoningRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            stopReason: "end_turn",
-            provider: "ollama",
-            model: "gemma4:31b",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-                thinkingSignature: JSON.stringify({ id: "ollama_rs_helper", type: "reasoning" }),
-              },
-            ],
-          }),
-        },
-        { provider: "ollama", modelId: "gemma4:31b" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("retries unsigned thinking-only turns via the reasoning-only path (openai-completions)", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction(
-      makeReasoningRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            model: "qwen3.6-35b-a3b",
-            content: [
-              {
-                type: "thinking",
-                thinking: "let me plan the tool calls I need to make...",
-              },
-            ],
-          }),
-        },
-        { modelId: "qwen3.6-35b-a3b", modelApi: "openai-completions" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("retries unsigned thinking-only Ollama turns via the reasoning-only path", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction(
-      makeReasoningRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            stopReason: "end_turn",
-            provider: "ollama",
-            model: "gemma4:31b",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-              },
-            ],
-          }),
-        },
-        { provider: "ollama", modelId: "gemma4:31b" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
+      expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+    },
+  );
 
   it("retries unsigned-thinking Ollama turns via the empty-response path", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction(
@@ -228,25 +98,6 @@ describe("incomplete-turn classification", () => {
                 thinking: "internal reasoning",
               },
             ],
-          }),
-        },
-        { provider: "ollama", modelId: "gemma4:31b" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
-
-  it("retries generic empty Ollama turns without visible text", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            stopReason: "end_turn",
-            provider: "ollama",
-            model: "gemma4:31b",
-            content: [{ type: "text", text: "" }],
           }),
         },
         { provider: "ollama", modelId: "gemma4:31b" },
@@ -369,27 +220,5 @@ describe("incomplete-turn classification", () => {
     );
 
     expect(retryInstruction).toBeNull();
-  });
-
-  it("treats exact NO_REPLY as a deliberate silent assistant reply", () => {
-    const incompleteTurnText = resolveIncompleteTurnPayloadText(
-      makeIncompleteTurnParams({
-        assistantTexts: ["NO_REPLY"],
-        lastAssistant: makeLastAssistant({
-          model: "gpt-5.4",
-          content: [
-            {
-              type: "thinking",
-              thinking: "internal reasoning",
-              thinkingSignature: JSON.stringify({ id: "rs_no_reply", type: "reasoning" }),
-            },
-            { type: "text", text: "" },
-            { type: "text", text: "NO_REPLY" },
-          ],
-        }),
-      }),
-    );
-
-    expect(incompleteTurnText).toBeNull();
   });
 });

@@ -21,7 +21,6 @@ import {
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
 } from "../../skills/discovery/chat-command-invocation.js";
-import type { SkillCommandSpec } from "../../skills/types.js";
 import { isExplicitCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
@@ -33,27 +32,27 @@ import type {
 import {
   normalizeThinkLevel,
   type ElevatedLevel,
-  type FastMode,
   type ReasoningLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
-import { type InlineDirectives, resolveReplyDirectiveCommand } from "./directive-handling.parse.js";
+import { resolveReplyDirectiveCommand } from "./directive-handling.parse.js";
 import {
   reserveSkillCommandNames,
   resolveConfiguredDirectiveAliases,
 } from "./get-reply-directive-aliases.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
-import { type ReplyExecOverrides, resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
+import { resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
+import { createReplyModelLevelResolver } from "./reply-model-levels.js";
 import {
   recordReplyPreRunRejection,
   resolveReplyOperationRunState,
@@ -69,57 +68,6 @@ const commandsRegistryLoader = createLazyImportLoader(
 const skillCommandsLoader = createLazyImportLoader(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
-
-type ReplyDirectiveContinuation = {
-  commandSource: string;
-  command: ReturnType<typeof buildCommandContext>;
-  allowTextCommands: boolean;
-  skillCommands?: SkillCommandSpec[];
-  directives: InlineDirectives;
-  cleanedBody: string;
-  inlineCommand?: string;
-  messageProviderKey: string;
-  elevatedEnabled: boolean;
-  elevatedAllowed: boolean;
-  elevatedFailures: Array<{ gate: string; key: string }>;
-  defaultActivation: ReturnType<typeof defaultGroupActivation>;
-  resolvedThinkLevel: ThinkLevel | undefined;
-  resolvedFastMode: FastMode;
-  resolvedFastModeAutoOnSeconds: number;
-  resolvedFastModeOverride: boolean;
-  resolvedFastModeAutoOnSecondsOverride: boolean;
-  resolvedVerboseLevel: VerboseLevel | undefined;
-  resolvedReasoningLevel: ReasoningLevel;
-  resolvedElevatedLevel: ElevatedLevel;
-  execOverrides?: ReplyExecOverrides;
-  blockStreamingEnabled: boolean;
-  blockReplyChunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-    flushOnParagraph?: boolean;
-  };
-  resolvedBlockStreamingBreak: "text_end" | "message_end";
-  provider: string;
-  model: string;
-  requestedRouteResolution: Awaited<
-    ReturnType<typeof createModelSelectionState>
-  >["requestedRouteResolution"];
-  modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
-  contextTokens: number;
-  inlineStatusRequested: boolean;
-  directiveAck?: ReplyPayload;
-  perMessageQueueMode?: InlineDirectives["queueMode"];
-  perMessageQueueOptions?: {
-    debounceMs?: number;
-    cap?: number;
-    dropPolicy?: InlineDirectives["dropPolicy"];
-  };
-};
-
-type ReplyDirectiveResult =
-  | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
-  | { kind: "continue"; result: ReplyDirectiveContinuation };
 
 export async function resolveReplyDirectives(params: {
   ctx: FinalizedRuntimeMsgContext;
@@ -150,10 +98,10 @@ export async function resolveReplyDirectives(params: {
   skipStoredModelOverride?: boolean;
   hasResolvedHeartbeatModelOverride: boolean;
   typing: TypingController;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   skillFilter?: string[];
   preparedModelCatalog?: ModelCatalogSnapshot;
-}): Promise<ReplyDirectiveResult> {
+}) {
   const {
     ctx,
     cfg,
@@ -242,11 +190,14 @@ export async function resolveReplyDirectives(params: {
     sessionKey,
   };
 
-  // Only load workspace skill commands when aliases or explicit skill references need them.
-  // This avoids scanning skills for ordinary text, paths, and built-in slash directives.
+  // Every directive parser requires a whitespace/start slash, including directives
+  // whose removal exposes a model alias. URLs alone do not need skill-name reservation.
   const skillCommands =
-    canInterpretTextDirectives && (rawAliases.length > 0 || hasSkillReferences)
-      ? (await skillCommandsLoader.load()).listSkillCommandsForWorkspace({
+    canInterpretTextDirectives &&
+    ((rawAliases.length > 0 && /(?:^|\s)\//u.test(commandText)) || hasSkillReferences)
+      ? await (
+          await skillCommandsLoader.load()
+        ).prepareSkillCommandsForWorkspace({
           ...skillCommandContext,
           skillFilter,
         })
@@ -255,7 +206,9 @@ export async function resolveReplyDirectives(params: {
 
   const allSkillCommands =
     hasSkillReferences && skillFilter !== undefined
-      ? (await skillCommandsLoader.load()).listSkillCommandsForWorkspace({
+      ? await (
+          await skillCommandsLoader.load()
+        ).prepareSkillCommandsForWorkspace({
           ...skillCommandContext,
           includeAllowlistHidden: true,
         })
@@ -270,7 +223,7 @@ export async function resolveReplyDirectives(params: {
   if (explicitSkillReferences?.error) {
     typing.cleanup();
     return {
-      kind: "reply",
+      kind: "reply" as const,
       reply: markCommandReplyForDelivery({ text: explicitSkillReferences.error }),
     };
   }
@@ -353,7 +306,7 @@ export async function resolveReplyDirectives(params: {
       }),
     }).sandboxed;
     return {
-      kind: "reply",
+      kind: "reply" as const,
       reply: {
         text: formatElevatedUnavailableMessage({
           runtimeSandboxed,
@@ -453,6 +406,7 @@ export async function resolveReplyDirectives(params: {
       hasResolvedHeartbeatModelOverride,
       isHeartbeat: opts?.isHeartbeat === true,
       preparedModelCatalog: params.preparedModelCatalog,
+      operatorAuthority: opts?.operatorAuthority,
     });
   } catch (error) {
     if (
@@ -465,7 +419,7 @@ export async function resolveReplyDirectives(params: {
     if (error instanceof ModelSelectionLockedError) {
       recordReplyPreRunRejection(resolveReplyOperationRunState(opts), "model-selection-locked");
     }
-    return { kind: "reply", reply: { text: error.message, isError: true } };
+    return { kind: "reply" as const, reply: { text: error.message, isError: true } };
   }
   provider = modelState.provider;
   model = modelState.model;
@@ -510,7 +464,6 @@ export async function resolveReplyDirectives(params: {
     allowTextCommands,
     command,
     directives,
-    messageProviderKey,
     elevatedEnabled,
     elevatedAllowed,
     elevatedFailures,
@@ -530,7 +483,7 @@ export async function resolveReplyDirectives(params: {
   });
   if (applyResult.kind === "reply") {
     recordReplyPreRunRejection(resolveReplyOperationRunState(opts), applyResult.preRunRejection);
-    return { kind: "reply", reply: markCommandReplyForDelivery(applyResult.reply) };
+    return { kind: "reply" as const, reply: markCommandReplyForDelivery(applyResult.reply) };
   }
   directives = applyResult.directives;
   provider = applyResult.provider;
@@ -544,15 +497,6 @@ export async function resolveReplyDirectives(params: {
     sessionKey: resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey }),
     sessionEntry: targetSessionEntry,
   });
-  const resolvedThinkLevelWithDefault =
-    resolvedThinkLevel ??
-    (await modelState.resolveDefaultThinkingLevel({
-      provider,
-      model,
-      agentRuntime: thinkingRuntime,
-    })) ??
-    configuredThinkingDefault;
-
   const thinkingExplicitlySet =
     thinkingLevelOverride !== undefined ||
     directives.thinkLevel !== undefined ||
@@ -572,15 +516,6 @@ export async function resolveReplyDirectives(params: {
     blockedSessionReasoningLevel ||
     (sessionReasoningLevel !== undefined && sessionReasoningLevel !== null) ||
     hasAgentReasoningDefault;
-  const thinkingActive = resolvedThinkLevelWithDefault !== "off";
-  if (
-    !reasoningExplicitlySet &&
-    resolvedReasoningLevel === "off" &&
-    !thinkingActive &&
-    !thinkingExplicitlySet
-  ) {
-    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel({ provider, model });
-  }
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
   const resolvedFastModeState = resolveFastModeState({
     cfg,
@@ -603,7 +538,7 @@ export async function resolveReplyDirectives(params: {
   });
 
   return {
-    kind: "continue",
+    kind: "continue" as const,
     result: {
       commandSource: commandText,
       command,
@@ -617,13 +552,23 @@ export async function resolveReplyDirectives(params: {
       elevatedAllowed,
       elevatedFailures,
       defaultActivation,
-      resolvedThinkLevel: resolvedThinkLevelWithDefault,
+      resolveModelLevels: createReplyModelLevelResolver({
+        modelState,
+        selection: {
+          provider,
+          model,
+          agentRuntime: thinkingRuntime,
+          thinkLevel: resolvedThinkLevel,
+          thinkingExplicit: thinkingExplicitlySet,
+          reasoningLevel: resolvedReasoningLevel,
+          reasoningExplicit: reasoningExplicitlySet,
+        },
+      }),
       resolvedFastMode,
       resolvedFastModeAutoOnSeconds,
       resolvedFastModeOverride,
       resolvedFastModeAutoOnSecondsOverride,
       resolvedVerboseLevel,
-      resolvedReasoningLevel,
       resolvedElevatedLevel,
       execOverrides,
       blockStreamingEnabled,
@@ -632,7 +577,7 @@ export async function resolveReplyDirectives(params: {
       provider,
       model,
       requestedRouteResolution: effectiveModelDirective
-        ? "resolved"
+        ? ("resolved" as const)
         : modelState.requestedRouteResolution,
       modelState,
       contextTokens,

@@ -19,37 +19,11 @@ import {
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
+import { getProviderEnvVarsCore } from "../../secrets/provider-env-vars.js";
 import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { CapabilityTransport } from "./metadata.js";
-import { emitJsonOrText } from "./output.js";
-
-export function registerLocalProvidersCommand<T>(
-  parent: Command,
-  description: string,
-  collect: (cfg: OpenClawConfig, agentId: string) => T | Promise<T>,
-  format: (value: T) => string,
-): void {
-  parent
-    .command("providers")
-    .description(description)
-    .option("--agent <id>", "Agent whose provider state should be inspected")
-    .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(
-          cfg,
-          resolveCapabilityAgentOption(command, opts.agent),
-        );
-        const result = await collect(cfg, agentId);
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, format);
-      });
-    });
-}
 
 export function resolveTransport(opts: {
   local?: boolean;
@@ -76,9 +50,7 @@ export function resolveTransport(opts: {
 }
 
 function hasOwnKeys(value: unknown): boolean {
-  return Boolean(
-    value && typeof value === "object" && Object.keys(value as Record<string, unknown>).length > 0,
-  );
+  return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
 }
 
 export function resolveSelectedProviderFromModelRef(
@@ -128,12 +100,12 @@ export function providerHasGenericConfig(params: {
   agentId?: string;
   envVars?: string[];
 }): boolean {
-  const modelsProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
-  const pluginEntries = (params.cfg.plugins?.entries ?? {}) as Record<string, { config?: unknown }>;
-  const ttsProviders = (params.cfg.tts?.providers ?? {}) as Record<string, unknown>;
+  const modelsProviders = params.cfg.models?.providers ?? {};
+  const pluginEntries = params.cfg.plugins?.entries ?? {};
+  const ttsProviders = params.cfg.tts?.providers ?? {};
   const envVars =
     params.envVars ??
-    getProviderEnvVars(params.providerId, {
+    getProviderEnvVarsCore(params.providerId, {
       config: params.cfg,
       includeUntrustedWorkspacePlugins: false,
     });
@@ -208,11 +180,14 @@ export function parseOptionalPositiveInteger(raw: unknown, label: string): numbe
   return value;
 }
 
-export function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
+export function parseOptionalTimeoutMs(
+  raw: string | number | undefined,
+  flagName = "--timeout-ms",
+): number | undefined {
   if (raw === undefined) {
     return undefined;
   }
-  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error" });
+  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error", flagName });
 }
 
 export async function resolveLocalCapabilityRuntimeConfig(params: {

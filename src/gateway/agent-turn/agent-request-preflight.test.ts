@@ -1,6 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import * as acpSessionMeta from "../../acp/runtime/session-meta-readonly.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import {
+  enqueueSwarmRun,
+  reserveSwarmRun,
+  closeSwarmScheduler,
+} from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { testing as swarmScheduler } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import * as sessionStoreLookup from "../session-utils-store-lookup.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { createAgentTurnIo } from "./io.js";
@@ -111,10 +120,103 @@ function runPreflight(
 }
 
 describe("agent request Swarm preflight", () => {
+  afterEach(async () => {
+    await closeSwarmScheduler();
+    swarmScheduler.reset();
+  });
   beforeEach(() => {
     subagentRuns.clear();
     vi.spyOn(sessionAccessor, "loadSessionEntry").mockReturnValue(undefined);
+    vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntry").mockReturnValue(undefined);
   });
+
+  it("carries the admitted scheduler group and its live cap without trusting saved launch settings", async () => {
+    const launched = createDeferred();
+    enqueueSwarmRun({
+      groupId: '["main","agent:main:main","restored-group"]',
+      runId: "collector-run",
+      maxConcurrent: 32,
+      activeRunIds: [],
+      start: async () => {
+        launched.resolve();
+      },
+      onStartFailure: () => true,
+    });
+    await launched.promise;
+    const { result } = runPreflight(undefined, true, { backend: true, register: true });
+    expect(result?.request.lane).toBe("subagent");
+    expect(result?.swarmExecutionLane).toEqual({
+      lane: 'subagent:swarm:["main","agent:main:main","restored-group"]',
+      maxConcurrent: 32,
+    });
+    reserveSwarmRun({
+      groupId: '["main","agent:main:main","restored-group"]',
+      runId: "next-child",
+      maxConcurrent: 8,
+      activeRunIds: [],
+    });
+    expect(result?.swarmExecutionLane?.maxConcurrent).toBe(8);
+  });
+
+  it.each([
+    {
+      entry: { sessionId: "source", updatedAt: 1, spawnDepth: 1 },
+      sourceAcp: undefined,
+      expectedRole: "subagent",
+    },
+    {
+      entry: { sessionId: "source", updatedAt: 1, parentSessionKey: "agent:main:root" },
+      sourceAcp: undefined,
+      expectedRole: undefined,
+    },
+    {
+      entry: {
+        sessionId: "source",
+        updatedAt: 1,
+        parentSessionKey: "agent:main:root",
+        spawnDepth: 0,
+      },
+      sourceAcp: {
+        backend: "acpx",
+        agent: "worker",
+        runtimeSessionName: "worker",
+        mode: "persistent" as const,
+        state: "idle" as const,
+        lastActivityAt: 1,
+      },
+      expectedRole: "subagent",
+    },
+  ])(
+    "derives coordination source role from canonical spawn lineage ($expectedRole)",
+    ({ entry, sourceAcp, expectedRole }) => {
+      const sourceKey = "agent:main:visible-worker";
+      vi.spyOn(sessionStoreLookup, "resolveGatewaySessionStoreTargetWithStore").mockReturnValue({
+        agentId: "main",
+        canonicalKey: sourceKey,
+        storePath: "/source-store",
+        storeKeys: [sourceKey],
+        store: { [sourceKey]: entry },
+      });
+      vi.mocked(acpSessionMeta.readAcpSessionMetaForEntry).mockReturnValue(sourceAcp);
+      const result = prepareAgentRequestPreflight({
+        request: {
+          message: "Worker progress",
+          sessionKey: "agent:main:root",
+          idempotencyKey: "coordination-run",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: sourceKey,
+            sourceTool: "sessions_send",
+            sourceRole: "subagent",
+          },
+        },
+        context: { getRuntimeConfig: () => ({}), dedupe: new Map() },
+        client: null,
+        io: createAgentTurnIo(vi.fn()),
+      } as never);
+      expect(result?.inputProvenance?.sourceRole).toBe(expectedRole);
+    },
+  );
 
   it("rejects malformed and non-object structured output schemas", () => {
     for (const schema of [

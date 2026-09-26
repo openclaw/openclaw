@@ -5,7 +5,7 @@ import { isImplicitSameChatApprovalAuthorization } from "../plugin-sdk/approval-
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 
-type ApprovalCommandAuthorization = {
+export type ApprovalCommandAuthorization = {
   authorized: boolean;
   reason?: string;
   explicit: boolean;

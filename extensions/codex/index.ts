@@ -9,13 +9,18 @@ import {
   resolveLivePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { registerCodexCliMetadata } from "./cli-metadata.js";
 import {
   createCodexAppServerAgentHarness,
   createCodexAppServerNativeCompaction,
 } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import codexProviderDiscovery from "./provider-discovery.js";
+import { registerCodexAccountUsage } from "./src/account-usage.js";
 import { createCodexAuthProfileSelection } from "./src/app-server/auth-profile-selection.js";
 import { createCodexAppServerConfig } from "./src/app-server/config-options.js";
 import { readCodexPluginConfig } from "./src/app-server/config-parsing.js";
@@ -35,7 +40,8 @@ import {
 } from "./src/app-server/session-binding-store.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./src/app-server/shared-client-lifecycle.js";
 import { createCodexAppServerProcessReaperService } from "./src/app-server/transport-process-registration.js";
-import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.js";
+import { codexNativeProfileRecoveryService } from "./src/auth-profile-health.js";
+import type { CodexPluginsConfigBlock } from "./src/command-plugin-config.js";
 import { createCodexCommand } from "./src/commands.js";
 import {
   handleCodexConversationBindingResolved,
@@ -55,6 +61,11 @@ import {
   createCodexNodeExecServerCommand,
   createCodexNodeExecServerInvokePolicy,
 } from "./src/node-exec-server.js";
+import {
+  CODEX_CATALOG_STATE_NAMESPACE,
+  type StoredCodexCatalogEntry,
+} from "./src/session-catalog-index-state.js";
+import { CODEX_CATALOG_MAX_ROWS } from "./src/session-catalog-limits.js";
 import {
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
@@ -77,9 +88,12 @@ export default definePluginEntry({
     noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
   },
   register(api) {
+    registerCodexAccountUsage(api);
+    api.registerService(codexNativeProfileRecoveryService);
     // Bundled modules may execute from a shared dist chunk, so import.meta.url
     // cannot identify the owning plugin package or its pinned dependencies.
     setManagedCodexPluginRoot(api.rootDir);
+    api.registerProvider(codexProviderDiscovery);
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
     const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) => {
@@ -128,31 +142,41 @@ export default definePluginEntry({
       );
     }
     let bindingStateStore: PluginStateSyncKeyedStore<StoredCodexAppServerBinding> | undefined;
-    let managedThreadStateStore: PluginStateSyncKeyedStore<StoredCodexManagedThread> | undefined;
+    let bindingMutationStore: PluginStateKeyedStore<StoredCodexAppServerBinding> | undefined;
+    let managedThreadStateStore: PluginStateKeyedStore<StoredCodexManagedThread> | undefined;
+    const bindingStateOptions = {
+      namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+      maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+      overflowPolicy: "reject-new" as const,
+    };
     const openBindingStateStore = () =>
-      (bindingStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
-        namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
-        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      }));
+      (bindingStateStore ??=
+        api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>(bindingStateOptions));
+    const openBindingMutationStore = () =>
+      (bindingMutationStore ??=
+        api.runtime.state.openKeyedStore<StoredCodexAppServerBinding>(bindingStateOptions));
     // The base registration runtime deliberately rejects state access. Open the
     // store only when a proxied runtime performs the first binding operation.
-    const lazyBindingStateStore: Pick<
-      PluginStateSyncKeyedStore<StoredCodexAppServerBinding>,
-      "deleteIf" | "entries" | "lookup" | "registerIfAbsent" | "update"
-    > = {
+    const lazyBindingStateStore: Parameters<typeof createLazyCodexAppServerBindingStore>[0] = {
       deleteIf: (key, predicate) => openBindingStateStore().deleteIf!(key, predicate),
       entries: () => openBindingStateStore().entries(),
       lookup: (key) => openBindingStateStore().lookup(key),
+      get lookupMany() {
+        const store = openBindingStateStore();
+        return store.lookupMany?.bind(store);
+      },
       registerIfAbsent: (key, value, options) =>
         openBindingStateStore().registerIfAbsent(key, value, options),
-      get update() {
-        const store = openBindingStateStore();
-        return store.update?.bind(store);
+      withCurrent: (authority) => {
+        const store = openBindingMutationStore();
+        if (!store.withCurrent) {
+          throw new Error("Codex bindings require action-bound plugin-state mutations");
+        }
+        return store.withCurrent(authority);
       },
     };
     const openManagedThreadStateStore = () =>
-      (managedThreadStateStore ??= api.runtime.state.openSyncKeyedStore<StoredCodexManagedThread>({
+      (managedThreadStateStore ??= api.runtime.state.openKeyedStore<StoredCodexManagedThread>({
         namespace: CODEX_MANAGED_THREAD_NAMESPACE,
         maxEntries: CODEX_MANAGED_THREAD_MAX_ENTRIES,
         // Catalog-only ownership may evict its oldest row. Modern rollouts/transcripts are
@@ -160,7 +184,7 @@ export default definePluginEntry({
         overflowPolicy: "evict-oldest",
       }));
     const lazyManagedThreadStateStore: Pick<
-      PluginStateSyncKeyedStore<StoredCodexManagedThread>,
+      PluginStateKeyedStore<StoredCodexManagedThread>,
       "entries" | "lookup" | "registerIfAbsent"
     > = {
       entries: () => openManagedThreadStateStore().entries(),
@@ -181,9 +205,20 @@ export default definePluginEntry({
       config: api.config as OpenClawConfig,
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
+      openResidentState: (homeId) =>
+        api.runtime.state.openKeyedStore<StoredCodexCatalogEntry>({
+          namespace: `${CODEX_CATALOG_STATE_NAMESPACE}.${homeId.replaceAll(":", "-")}`,
+          maxEntries: CODEX_CATALOG_MAX_ROWS + 1,
+          overflowPolicy: "reject-new",
+        }),
     });
     const sessionCatalogEnabled =
       readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
+    api.registerService({
+      id: "codex-session-catalog",
+      start: () => (sessionCatalogEnabled ? sessionCatalogControlFactory.start() : undefined),
+      stop: () => sessionCatalogControlFactory.stop(),
+    });
     if (sessionCatalogEnabled) {
       codexSessionCatalogRuntime.register({
         api,
@@ -195,11 +230,6 @@ export default definePluginEntry({
       });
       for (const command of createCodexSessionCatalogNodeHostCommands(
         sessionCatalogControlFactory,
-        {
-          getPluginConfig: resolveCurrentPluginConfig,
-          getRuntimeConfig: () => resolveCurrentConfig() ?? (api.config as OpenClawConfig),
-          resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-        },
         bindingStore,
       )) {
         api.registerNodeHostCommand(command);
@@ -213,22 +243,26 @@ export default definePluginEntry({
         api.runtime.modelAuth,
       );
       api.registerTool(
-        (context) => {
-          if (context.senderIsOwner !== true) {
-            return [];
-          }
-          const resolveToolRuntimeConfig = () =>
-            context.getRuntimeConfig?.() ??
-            context.runtimeConfig ??
-            context.config ??
-            resolveCurrentConfig();
-          return createCodexSupervisionTools({
-            getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
-            getRuntimeConfig: resolveToolRuntimeConfig,
-            resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
-            resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-            senderIsOwner: context.senderIsOwner,
-          });
+        {
+          contextVersion: 2,
+          create: (context) => {
+            if (context.senderIsOwner !== true) {
+              return [];
+            }
+            const resolveToolRuntimeConfig = () =>
+              context.getRuntimeConfig?.() ??
+              context.runtimeConfig ??
+              context.config ??
+              resolveCurrentConfig();
+            return createCodexSupervisionTools({
+              getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
+              getRuntimeConfig: resolveToolRuntimeConfig,
+              resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
+              resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+              senderIsOwner: context.senderIsOwner,
+              assertInvocationCurrent: context.assertInvocationCurrent,
+            });
+          },
         },
         { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] },
       );
@@ -251,13 +285,16 @@ export default definePluginEntry({
     );
     api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
     api.registerTool(
-      (context) =>
-        createCodexThreadsTool({
-          bindingStore,
-          context,
-          runtime: api.runtime,
-          getPluginConfig: resolveCurrentPluginConfig,
-        }),
+      {
+        contextVersion: 2,
+        create: (context) =>
+          createCodexThreadsTool({
+            bindingStore,
+            context,
+            runtime: api.runtime,
+            getPluginConfig: resolveCurrentPluginConfig,
+          }),
+      },
       { name: "codex_threads" },
     );
     api.registerToolMetadata({
@@ -268,12 +305,15 @@ export default definePluginEntry({
       tags: ["codex", "sessions"],
     });
     api.registerTool(
-      (context) =>
-        createCodexPluginsTool({
-          bindingStore,
-          context,
-          getPluginConfig: resolveCurrentPluginConfig,
-        }),
+      {
+        contextVersion: 2,
+        create: (context) =>
+          createCodexPluginsTool({
+            bindingStore,
+            context,
+            getPluginConfig: resolveCurrentPluginConfig,
+          }),
+      },
       { name: "codex_plugins" },
     );
     api.registerToolMetadata({
@@ -283,7 +323,9 @@ export default definePluginEntry({
       risk: "low",
       tags: ["codex", "plugins", "discovery"],
     });
-    for (const command of createCodexCliSessionNodeHostCommands()) {
+    for (const command of createCodexCliSessionNodeHostCommands((agentId) =>
+      sessionCatalogControlFactory.forNode(agentId),
+    )) {
       api.registerNodeHostCommand(command);
     }
     for (const policy of createCodexCliSessionNodeInvokePolicies()) {
@@ -335,9 +377,10 @@ export default definePluginEntry({
                 plugins: declared as Record<string, never>,
               });
             },
-            mutate: async (update) => {
+            mutate: async (update, assertCurrent) => {
               const { mutateConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
               await mutateConfigFile({
+                writeOptions: { assertCurrent },
                 mutate: (draft) => {
                   // Create the nested plugin config path on demand so codex
                   // plugin commands can enable/update Codex-managed plugins.

@@ -1,7 +1,9 @@
 // Status JSON command tests cover runtime invocation and structured status JSON output.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runStatusJsonCommand } from "./status-json-command.ts";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { createStatusScanResultFixture } from "./status.test-support.ts";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   writeRuntimeJson: vi.fn(),
@@ -19,14 +21,15 @@ vi.mock("./status-json-runtime.ts", () => ({
 describe("runStatusJsonCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(performance, "now").mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("shares the fast-json scan and output flow", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as never;
+    const runtime = createTestRuntime();
     const scan = createStatusScanResultFixture({
       cfg: { gateway: {} },
       sourceConfig: { gateway: {} },
@@ -53,7 +56,13 @@ describe("runStatusJsonCommand", () => {
     const scanStatusJsonFast = vi.fn(async () => scan);
 
     await runStatusJsonCommand({
-      opts: { deep: true, usage: true, agent: "beta", timeoutMs: 1234, all: true },
+      opts: {
+        ...createStatusGatewayProbeBudget(1234),
+        deep: true,
+        usage: true,
+        agent: "beta",
+        all: true,
+      },
       runtime,
       scanStatusJsonFast,
       includeSecurityAudit: true,
@@ -61,10 +70,19 @@ describe("runStatusJsonCommand", () => {
       suppressHealthErrors: true,
     });
 
-    expect(scanStatusJsonFast).toHaveBeenCalledWith({ timeoutMs: 1234, all: true }, runtime);
+    expect(scanStatusJsonFast).toHaveBeenCalledWith(
+      { timeoutMs: 1234, gatewayProbeDeadlineMs: 1234, all: true },
+      runtime,
+    );
     expect(mocks.resolveStatusJsonOutput).toHaveBeenCalledWith({
       scan,
-      opts: { deep: true, usage: true, agent: "beta", timeoutMs: 1234, all: true },
+      opts: {
+        ...createStatusGatewayProbeBudget(1234),
+        deep: true,
+        usage: true,
+        agent: "beta",
+        all: true,
+      },
       includeSecurityAudit: true,
       includePluginCompatibility: true,
       suppressHealthErrors: true,
@@ -73,7 +91,13 @@ describe("runStatusJsonCommand", () => {
       built: true,
       input: {
         scan,
-        opts: { deep: true, usage: true, agent: "beta", timeoutMs: 1234, all: true },
+        opts: {
+          ...createStatusGatewayProbeBudget(1234),
+          deep: true,
+          usage: true,
+          agent: "beta",
+          all: true,
+        },
         includeSecurityAudit: true,
         includePluginCompatibility: true,
         suppressHealthErrors: true,
@@ -82,16 +106,12 @@ describe("runStatusJsonCommand", () => {
   });
 
   it("rejects --agent when usage is not requested", async () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as never;
+    const runtime = createTestRuntime();
     const scanStatusJsonFast = vi.fn();
 
     await expect(
       runStatusJsonCommand({
-        opts: { agent: "beta" },
+        opts: { ...createStatusGatewayProbeBudget(), agent: "beta" },
         runtime,
         scanStatusJsonFast,
         includeSecurityAudit: false,

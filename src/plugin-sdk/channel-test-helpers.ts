@@ -57,3 +57,7 @@ export {
 } from "./test-helpers/envelope-timestamp.js";
 export { expectPairingReplyText, extractPairingCode } from "./test-helpers/pairing-reply.js";
 export { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+export {
+  createNativeApprovalTestFixture,
+  createLocalApprovalPromptTestFixture,
+} from "./test-helpers/native-approval.js";

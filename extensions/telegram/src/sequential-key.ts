@@ -1,4 +1,3 @@
-// Telegram plugin module implements sequential key behavior.
 import type { Message, UserFromGetMe } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
@@ -19,20 +18,27 @@ import {
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
-import type { TelegramPollRegistryEntry } from "./poll-registry.js";
 import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
 
-const TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS = new Set([
+const TELEGRAM_READ_ONLY_COMMAND_KEYS = new Set([
+  "agents",
   "commands",
   "context",
   "help",
+  "models",
   "status",
+  "subagents",
   "tasks",
   "tools",
   "whoami",
 ]);
 
-const TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS = new Set(["queue", "steer"]);
+// Control-lane admission is an inspection/interrupt privilege, not a restatement of
+// `activeRunSafe`. `activeRunSafe` only says a command may execute while a turn is
+// active; it also covers session-mutating commands (`/new`, `/reset`, `/think`) whose
+// writes must stay ordered behind their own topic's pending input. `/approve` belongs
+// here because the run that requested the approval is holding its own lane.
+const TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS = new Set(["approve", "queue", "steer"]);
 
 type TelegramSequentialKeyContext = {
   chat?: { id?: number };
@@ -66,15 +72,7 @@ function getTelegramMessageReactionSequentialKey(
   ) {
     return `telegram:${reaction.chat.id}:message:${reaction.message_id}`;
   }
-  const msg =
-    ctx.message ??
-    ctx.channelPost ??
-    ctx.editedMessage ??
-    ctx.editedChannelPost ??
-    ctx.update?.message ??
-    ctx.update?.edited_message ??
-    ctx.update?.channel_post ??
-    ctx.update?.edited_channel_post;
+  const msg = getTelegramSequentialMessage(ctx);
   const isForum = resolveTelegramMessageForumFlagHint({
     chatType: msg?.chat?.type,
     isForum: msg?.chat?.is_forum,
@@ -86,56 +84,43 @@ function getTelegramMessageReactionSequentialKey(
     : undefined;
 }
 
+/** Registry key for a text command, or undefined when the text is not one. */
+function resolveTelegramCommandKeyForControlLane(params: {
+  rawText?: string;
+  botUsername?: string;
+}): string | undefined {
+  const trimmed = params.rawText?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const alias = maybeResolveTextAlias(
+    normalizeCommandBody(
+      trimmed,
+      params.botUsername ? { botUsername: params.botUsername } : undefined,
+    ),
+  );
+  if (!alias) {
+    return undefined;
+  }
+  return listChatCommands().find((entry) =>
+    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
+  )?.key;
+}
+
 export function isTelegramReadOnlyControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
 }): boolean {
-  // Only read-only status commands should bypass the per-topic lane.
-  // Diagnostics and export commands materialize state and should not interleave with an active turn.
-  const normalizedBody = normalizeCommandBody(
-    params.rawText?.trim() ?? "",
-    params.botUsername ? { botUsername: params.botUsername } : undefined,
-  );
-  const alias = maybeResolveTextAlias(normalizedBody);
-  if (!alias) {
-    return false;
-  }
-  const command = listChatCommands().find((entry) =>
-    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
-  );
-  return command?.category === "status" && TELEGRAM_READ_ONLY_STATUS_COMMAND_KEYS.has(command.key);
+  // Read-only commands must not supersede pending work when they enter the control lane.
+  // Diagnostics and export commands materialize state and remain on the ordinary lane.
+  const key = resolveTelegramCommandKeyForControlLane(params);
+  return key !== undefined && TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key);
 }
 
-function resolveTelegramCommandAliasForControlLane(
-  rawText?: string,
-  botUsername?: string,
-): string | undefined {
-  const trimmed = rawText?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return (
-    maybeResolveTextAlias(
-      normalizeCommandBody(trimmed, botUsername ? { botUsername } : undefined),
-    ) ?? undefined
-  );
-}
-
-function isTelegramActiveRunControlLaneText(params: {
+export function isTelegramControlLaneText(params: {
   rawText?: string;
   botUsername?: string;
 }): boolean {
-  const alias = resolveTelegramCommandAliasForControlLane(params.rawText, params.botUsername);
-  if (!alias) {
-    return false;
-  }
-  const command = listChatCommands().find((entry) =>
-    entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
-  );
-  return command ? TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(command.key) : false;
-}
-
-function isTelegramControlLaneText(params: { rawText?: string; botUsername?: string }): boolean {
   // Live polling and webhook admission already have bot identity. In defensive pre-identity
   // paths, accepting every @target admits foreign-bot commands; only canonical aborts fence.
   const abortCommandOptions = params.botUsername
@@ -144,10 +129,24 @@ function isTelegramControlLaneText(params: { rawText?: string; botUsername?: str
   if (isAbortRequestText(params.rawText, abortCommandOptions)) {
     return true;
   }
-  if (isTelegramActiveRunControlLaneText(params)) {
-    return true;
-  }
-  return isTelegramReadOnlyControlLaneText(params);
+  const key = resolveTelegramCommandKeyForControlLane(params);
+  return (
+    key !== undefined &&
+    (TELEGRAM_ACTIVE_RUN_CONTROL_COMMAND_KEYS.has(key) || TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key))
+  );
+}
+
+function getTelegramSequentialMessage(ctx: TelegramSequentialKeyContext): Message | undefined {
+  return (
+    ctx.message ??
+    ctx.channelPost ??
+    ctx.editedMessage ??
+    ctx.editedChannelPost ??
+    ctx.update?.message ??
+    ctx.update?.edited_message ??
+    ctx.update?.channel_post ??
+    ctx.update?.edited_channel_post
+  );
 }
 
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
@@ -161,22 +160,16 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     const prepared = getPreparedTelegramPollAnswer(update);
     const entry = prepared?.entry;
     if (entry) {
-      return getTelegramPollAnswerSequentialKey(entry);
+      const threadId = "id" in entry.threadSpec ? entry.threadSpec.id : undefined;
+      return threadId == null
+        ? `telegram:${entry.chat.id}`
+        : `telegram:${entry.chat.id}:topic:${threadId}`;
     }
     // Missing historical registry entries do no work, but keep duplicate answers
     // for the same unknown poll together while the handler records the miss.
     return `telegram:poll:${pollId}`;
   }
-  const msg =
-    ctx.message ??
-    ctx.channelPost ??
-    ctx.editedMessage ??
-    ctx.editedChannelPost ??
-    ctx.update?.message ??
-    ctx.update?.edited_message ??
-    ctx.update?.channel_post ??
-    ctx.update?.edited_channel_post ??
-    ctx.update?.callback_query?.message;
+  const msg = getTelegramSequentialMessage(ctx) ?? ctx.update?.callback_query?.message;
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
@@ -248,13 +241,6 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
   }
   return "telegram:unknown";
-}
-
-function getTelegramPollAnswerSequentialKey(entry: TelegramPollRegistryEntry): string {
-  const threadId = "id" in entry.threadSpec ? entry.threadSpec.id : undefined;
-  return threadId == null
-    ? `telegram:${entry.chat.id}`
-    : `telegram:${entry.chat.id}:topic:${threadId}`;
 }
 
 export function getTelegramSequentialConstraints(

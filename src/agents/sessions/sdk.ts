@@ -8,10 +8,20 @@ import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withSessionMetadataPublication,
+  withSessionTranscriptWriteAssertion,
+  type SessionMetadataChange,
+  type SessionMetadataCommit,
+} from "../../config/sessions/transcript-write-context.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { registerResolvedAgentDir } from "../agent-dir-registry.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
-import { getAgentDir } from "../config.js";
+import { getAgentDirResolution } from "../config.js";
 import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
 import {
   Agent,
@@ -40,6 +50,9 @@ import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
+import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
+import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
+import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
@@ -48,7 +61,7 @@ import type { ToolName } from "./tools/index.js";
 export interface CreateAgentSessionOptions {
   /** Working directory for project-local discovery. Default: process.cwd() */
   cwd?: string;
-  /** Global config directory. Default: ~/.openclaw/agents/default */
+  /** Agent config directory. Defaults to the configured installation owner. */
   agentDir?: string;
 
   /** Auth storage for credentials. Default: canonical per-agent SQLite auth profiles. */
@@ -60,8 +73,6 @@ export interface CreateAgentSessionOptions {
   model?: Model;
   /** Thinking level. Default: from settings, else 'medium' (clamped to model capabilities) */
   thinkingLevel?: ThinkingLevel;
-  /** Models available for cycling (Ctrl+P in interactive mode) */
-  scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 
   /**
    * Optional default tool suppression mode when no explicit allowlist is provided.
@@ -87,7 +98,7 @@ export interface CreateAgentSessionOptions {
   /** Resource loader. When omitted, DefaultResourceLoader is used. */
   resourceLoader?: ResourceLoader;
 
-  /** Session manager. Default: a new SQLite-backed main-agent SDK session. */
+  /** Session manager. Defaults to a new SQLite-backed session for the selected agent. */
   sessionManager?: SessionManager;
 
   /** Settings manager. Default: SettingsManager.create(cwd, agentDir) */
@@ -113,20 +124,7 @@ interface CreateAgentSessionResult {
   modelFallbackMessage?: string;
 }
 
-// Re-exports
-
-export type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionFactory,
-  ToolDefinition,
-} from "./extensions/index.js";
-
 // Helper Functions
-
-function getDefaultAgentDir(): string {
-  return getAgentDir();
-}
 
 function createSessionPrepareNextTurnWithContext(
   getAgent: () => Agent,
@@ -275,26 +273,46 @@ async function createAgentSessionImpl(
   cleanupProviderSessionResourcesOnDispose = true,
 ): Promise<CreateAgentSessionResult> {
   const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
-  const agentDir = options.agentDir ?? getDefaultAgentDir();
+  const install = getAgentDirResolution(options.agentDir);
+  const { dir: agentDir } = install.directory;
+  if (options.agentDir === undefined && install.directory.owner) {
+    registerResolvedAgentDir({ agentId: install.directory.owner, agentDir, env: install.env });
+  }
   let resourceLoader = options.resourceLoader;
 
   // Use provided or create AuthStorage and ModelRegistry
-  const modelsPath = options.agentDir ? join(agentDir, "models.json") : undefined;
-  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir);
-  const modelRegistry = options.modelRegistry ?? ModelRegistry.create(authStorage, modelsPath);
+  const config = options.authStorage && options.modelRegistry ? undefined : install.config;
+  const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir, config);
+  const modelRegistry =
+    options.modelRegistry ??
+    ModelRegistry.create(authStorage, join(agentDir, "models.json"), { config, workspaceDir: cwd });
 
   const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
   const sessionManager =
-    options.sessionManager ?? (await createDefaultSdkSessionManager(cwd, agentDir));
+    options.sessionManager ?? (await createDefaultSdkSessionManager(cwd, install));
+
+  const initialTarget = sessionManager.getSessionTarget();
+  const initialSessionId = sessionManager.getSessionId();
+  const assertInitialSessionCurrent = () => {
+    const current = sessionManager.getSessionTarget();
+    if (
+      sessionManager.getSessionId() !== initialSessionId ||
+      !sameSessionTranscriptTargetBinding(initialTarget, current)
+    ) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+  };
 
   if (!resourceLoader) {
     resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
     await resourceLoader.reload();
+    assertInitialSessionCurrent();
     modelRegistry.refresh();
   }
 
   // Check if session has existing data to restore
-  const existingSession = sessionManager.buildSessionContext();
+  const existingSession = await sessionManager[sessionManagerReadInitialContext]();
+  assertInitialSessionCurrent();
   const hasExistingSession = existingSession.messages.length > 0;
   const hasThinkingEntry = sessionManager
     .getBranch()
@@ -438,6 +456,7 @@ async function createAgentSessionImpl(
       ? await options.withSessionWriteSettlement(run)
       : await run();
 
+  assertInitialSessionCurrent();
   const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {
@@ -452,6 +471,9 @@ async function createAgentSessionImpl(
       if (!auth.ok) {
         throw new Error(auth.error);
       }
+      // Isolated session streams bypass the process-default stream facade.
+      await import("../ai-transport-runtime-host.js");
+      optionsLocal?.signal?.throwIfAborted();
       const providerRetrySettings = settingsManager.getProviderRetrySettings();
       const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
       return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, {
@@ -490,7 +512,7 @@ async function createAgentSessionImpl(
           }),
       );
     },
-    sessionId: sessionManager.getSessionId(),
+    sessionId: initialSessionId,
     transformContext: async (messages) => {
       const runner = extensionRunnerRef.current;
       if (!runner) {
@@ -511,18 +533,67 @@ async function createAgentSessionImpl(
     bindStreamLlmRuntime(agent.streamFn, modelRegistryRuntime.llmRuntime);
   }
 
-  // Restore messages if session has existing data
-  if (hasExistingSession) {
-    agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
-    if (!hasThinkingEntry) {
-      sessionManager.appendThinkingLevelChange(thinkingLevel);
+  let metadataCommit: SessionMetadataCommit | undefined;
+  const appendInitialMetadata = (change: SessionMetadataChange, append: () => Promise<string>) =>
+    withSessionMetadataPublication(
+      sessionManager,
+      change,
+      (commit) => {
+        metadataCommit = commit;
+      },
+      append,
+    );
+  const appendInitialThinking = () =>
+    appendInitialMetadata({ type: "thinking_level_change", thinkingLevel }, () =>
+      sessionManager.appendThinkingLevelChange(thinkingLevel),
+    );
+  const initializeMetadata = () => {
+    // Prepared history needs no write permit when its initial metadata already exists.
+    // Otherwise restoration waits behind unrelated writes, including reclamation.
+    if (hasExistingSession && hasThinkingEntry) {
+      return Promise.resolve();
     }
-  } else {
-    // Save initial model and thinking level for new sessions so they can be restored on resume
-    if (model) {
-      sessionManager.appendModelChange(model.provider, model.id);
+    return withSessionManagerWrite(sessionManager, async () => {
+      assertInitialSessionCurrent();
+      if (hasExistingSession) {
+        await appendInitialThinking();
+        assertInitialSessionCurrent();
+      } else {
+        // Persist initial settings before exposing the new session to callers.
+        if (model) {
+          await appendInitialMetadata(
+            { type: "model_change", provider: model.provider, modelId: model.id },
+            () => sessionManager.appendModelChange(model.provider, model.id),
+          );
+          assertInitialSessionCurrent();
+        }
+        await appendInitialThinking();
+      }
+    });
+  };
+  try {
+    await (initialTarget
+      ? withSessionTranscriptWriteAssertion(
+          initialTarget,
+          assertInitialSessionCurrent,
+          initializeMetadata,
+        )
+      : initializeMetadata());
+    // Cleanup can yield after the last append, before this factory exposes its session.
+    assertInitialSessionCurrent();
+    if (hasExistingSession) {
+      agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
     }
-    sessionManager.appendThinkingLevelChange(thinkingLevel);
+  } catch (cause) {
+    if (cause instanceof SessionMetadataCommittedError || !metadataCommit) {
+      throw cause;
+    }
+    throw new SessionMetadataCommittedError(
+      metadataCommit.entry,
+      metadataCommit.version,
+      cause,
+      metadataCommit.target,
+    );
   }
 
   const session = new AgentSession({
@@ -530,7 +601,6 @@ async function createAgentSessionImpl(
     sessionManager,
     settingsManager,
     cwd,
-    scopedModels: options.scopedModels,
     resourceLoader,
     customTools: options.customTools,
     modelRegistry,
@@ -554,15 +624,23 @@ async function createAgentSessionImpl(
 
 async function createDefaultSdkSessionManager(
   cwd: string,
-  agentDir: string,
+  install: ReturnType<typeof getAgentDirResolution>,
 ): Promise<SessionManager> {
+  const { dir: agentDir, owner: agentId } = install.directory;
+  if (!agentId) {
+    throw new Error(
+      "Select an agent owner or provide a sessionManager before creating an SDK session.",
+    );
+  }
   const sessionId = randomUUID();
   const target = {
-    agentId: "main",
+    agentId,
     sessionId,
-    sessionKey: `agent:main:sdk:${sessionId}`,
+    sessionKey: `agent:${agentId}:sdk:${sessionId}`,
     storePath: join(agentDir, "openclaw-agent.sqlite"),
+    env: install.env,
   };
+  openOpenClawAgentDatabase({ agentId, env: install.env, path: target.storePath });
   const created = await createSessionEntryWithTranscript(
     target,
     () => ({

@@ -13,10 +13,7 @@ vi.mock("./model-selection.runtime.js", () => ({
   resolveQaRuntimeModelPair,
 }));
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
-import {
-  resolveQaRunProfileExecutionSelection,
-  resolveQaRunProfileMembership,
-} from "./profile-planning.js";
+import { resolveQaRunProfileExecutionSelection } from "./profile-planning.js";
 import { resolveQaLiveFrontierAlternateModel } from "./providers/live-frontier/model-selection.runtime.js";
 import {
   createIdleQaRunnerSnapshot,
@@ -109,6 +106,9 @@ const scenarios = [
 ];
 
 describe("qa run config", () => {
+  const catalog = readQaScenarioPack();
+  const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
+
   beforeEach(() => {
     defaultQaRuntimeModelForMode.mockImplementation(
       (mode: string, options?: { alternate?: boolean }) =>
@@ -155,33 +155,10 @@ describe("qa run config", () => {
       evidenceMode: "full",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-sol",
+      alternateModel: "openai/gpt-5.6-terra",
       fastMode: true,
       runtimePair: null,
       runtimePairLane: null,
-      scenarioIds: ["thread-lifecycle"],
-    });
-  });
-
-  it("applies the canonical profile execution defaults to explicit scenario requests", () => {
-    expect(
-      normalizeQaRunSelection(
-        { profile: "all", scenarioIds: ["thread-lifecycle"] },
-        scenarios,
-        profiles,
-      ),
-    ).toMatchObject({
-      profile: "all",
-      channelDriver: "live",
-      evidenceMode: "full",
-      scenarioIds: ["thread-lifecycle"],
-    });
-    expect(
-      normalizeQaRunSelection({ scenarioIds: ["thread-lifecycle"] }, scenarios, profiles),
-    ).toMatchObject({
-      profile: "all",
-      channelDriver: "live",
-      evidenceMode: "full",
       scenarioIds: ["thread-lifecycle"],
     });
   });
@@ -247,31 +224,6 @@ describe("qa run config", () => {
     }
   });
 
-  it("normalizes the channel driver independently from the provider lane", () => {
-    expect(
-      normalizeQaRunSelection(
-        {
-          channelDriver: "crabline",
-          providerMode: "live-frontier",
-          scenarioIds: ["dm-chat-baseline"],
-        },
-        scenarios,
-        profiles,
-      ),
-    ).toMatchObject({ channelDriver: "crabline", providerMode: "live-frontier" });
-    expect(
-      normalizeQaRunSelection(
-        {
-          channelDriver: "live",
-          providerMode: "mock-openai",
-          scenarioIds: ["dm-chat-baseline"],
-        },
-        scenarios,
-        profiles,
-      ),
-    ).toMatchObject({ channelDriver: "live", providerMode: "mock-openai" });
-  });
-
   it("normalizes every server-owned control-plane axis", () => {
     expect(
       normalizeQaRunSelection(
@@ -313,32 +265,7 @@ describe("qa run config", () => {
     ).toThrow('runtimePair must be ["openclaw", "codex"]');
   });
 
-  it("shares implicit profile membership and eligibility with the canonical profile planner", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
-    const selection = normalizeQaRunSelection({}, catalog.scenarios, scorecardReport.profiles);
-    const membership = resolveQaRunProfileMembership(
-      { profile: selection.profile },
-      { scenarios: catalog.scenarios, scorecardReport },
-    );
-    const expected = resolveQaRunProfileExecutionSelection({
-      scenarios: membership.selectedScenarios,
-      providerMode: selection.providerMode,
-      primaryModel: selection.primaryModel,
-      channelDriver: selection.channelDriver,
-      channel: selection.channel,
-    });
-
-    const plan = resolveQaLabRunPlan({ selection, scenarios: catalog.scenarios, scorecardReport });
-
-    expect(plan.status).toBe("ready");
-    expect(plan.selectedScenarios.map((scenario) => scenario.id)).toEqual(
-      expected.selectedScenarios.map((scenario) => scenario.id),
-    );
-  });
-
   it("keeps portable thread scenarios in unpinned live profiles", () => {
-    const catalog = readQaScenarioPack();
     const scenarioIds = new Set(["thread-follow-up", "thread-isolation"]);
     const selected = catalog.scenarios.filter((scenario) => scenarioIds.has(scenario.id));
 
@@ -357,7 +284,6 @@ describe("qa run config", () => {
   });
 
   it("selects a supported declared transport for portable live scenarios", () => {
-    const catalog = readQaScenarioPack();
     const scenario = catalog.scenarios.find((entry) => entry.id === "thread-follow-up");
     if (!scenario) {
       throw new Error("thread-follow-up scenario is missing from the QA catalog");
@@ -376,7 +302,6 @@ describe("qa run config", () => {
   });
 
   it("keeps portable threads but excludes module flows from Crabline plans", () => {
-    const catalog = readQaScenarioPack();
     const scenarioIds = new Set([
       "matrix-approval-channel-target-both",
       "matrix-approval-deny-reaction",
@@ -441,8 +366,6 @@ describe("qa run config", () => {
   });
 
   it("resolves mixed execution kinds and reports runtime-pair-lane exclusions", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const mixedSelection = normalizeQaRunSelection(
       {
         profile: "all",
@@ -492,8 +415,6 @@ describe("qa run config", () => {
   });
 
   it("validates explicit runtime-pair-lane selections without expanding them", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const selectedId = "runtime-first-hour-20-turn";
     const selection = normalizeQaRunSelection(
       {
@@ -542,8 +463,6 @@ describe("qa run config", () => {
   });
 
   it("does not apply live-adapter eligibility to non-flow executions", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const selection = normalizeQaRunSelection(
       {
         profile: "all",
@@ -572,8 +491,6 @@ describe("qa run config", () => {
   });
 
   it("preserves canonical unresolved live dispatch and rejects unsupported driver channels", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const liveSelection = normalizeQaRunSelection(
       {
         profile: "all",
@@ -625,8 +542,6 @@ describe("qa run config", () => {
   });
 
   it("fails closed when an explicit scenario conflicts with execution.channel", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const scenario = catalog.scenarios.find(
       (entry) => entry.execution.channel && entry.execution.channel !== "qa-channel",
     );
@@ -652,8 +567,6 @@ describe("qa run config", () => {
   });
 
   it("returns an invalid resolved plan for a qa-channel execution override", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const selection = normalizeQaRunSelection(
       {
         profile: "all",
@@ -683,8 +596,6 @@ describe("qa run config", () => {
   });
 
   it("distinguishes declared constraints from the suite-resolved effective channel", () => {
-    const catalog = readQaScenarioPack();
-    const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
     const selection = normalizeQaRunSelection(
       {
         profile: "all",
@@ -754,33 +665,6 @@ describe("qa run config", () => {
     ).toThrow("unknown QA run profile: all");
   });
 
-  it("normalizes aimock selections", () => {
-    expect(
-      normalizeQaRunSelection(
-        {
-          providerMode: "aimock",
-          primaryModel: "",
-          alternateModel: "",
-          scenarioIds: ["dm-chat-baseline"],
-        },
-        scenarios,
-        profiles,
-      ),
-    ).toEqual({
-      profile: "all",
-      channel: null,
-      channelDriver: "live",
-      evidenceMode: "full",
-      providerMode: "aimock",
-      primaryModel: "aimock/gpt-5.6-luna",
-      alternateModel: "aimock/gpt-5.6-luna-alt",
-      fastMode: false,
-      runtimePair: null,
-      runtimePairLane: null,
-      scenarioIds: ["dm-chat-baseline"],
-    });
-  });
-
   it("anchors generated run output dirs under the provided repo root", () => {
     const repoRoot = path.resolve("/tmp/openclaw-repo");
     const outputDir = createQaRunOutputDir(repoRoot);
@@ -818,7 +702,7 @@ describe("qa run config", () => {
       evidenceMode: "full",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-sol",
+      alternateModel: "openai/gpt-5.6-terra",
       fastMode: true,
       runtimePair: null,
       runtimePairLane: null,

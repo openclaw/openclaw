@@ -11,6 +11,7 @@ import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
 import { icons } from "./icons.ts";
+import { searchablePeopleMenu } from "./searchable-people-menu.ts";
 import {
   renderSessionOwnerAvatar,
   sessionSelfOwner,
@@ -30,6 +31,7 @@ export class SessionOwnerMenu {
   private readonly context;
   private readonly profiles;
   private opened = false;
+  private searchGeneration = 0;
 
   constructor(host: ReactiveControllerHost & HTMLElement) {
     this.context = new ContextConsumer(host, { context: applicationContext, subscribe: true });
@@ -37,6 +39,9 @@ export class SessionOwnerMenu {
     // retire stale directory replies before the menu renders.
     const connection = new GatewayPageController(host, {
       getGateway: () => this.context.value?.gateway,
+      invalidateRequests: () => {
+        this.searchGeneration += 1;
+      },
     });
     this.profiles = new Task(host, {
       args: () => [connection.epoch, this.opened, connection.capture()?.client] as const,
@@ -46,6 +51,7 @@ export class SessionOwnerMenu {
   }
 
   readonly load = () => {
+    this.searchGeneration += 1;
     this.opened = true;
     void this.profiles.run();
   };
@@ -95,33 +101,45 @@ export class SessionOwnerMenu {
     }
     const slot = inline ? nothing : "submenu";
     return html`
-      ${owners.map((owner) => {
-        const checked = owner.type === currentOwner?.type && owner.id === currentOwnerId;
-        return html`<wa-dropdown-item
-          slot=${slot}
-          class="session-menu__item"
-          value=${`assign-owner:${owner.type}:${encodeURIComponent(owner.id)}`}
-          role="menuitemradio"
-          aria-checked=${String(checked)}
-          ${ref((element) => syncDropdownItemRadio(element, checked))}
-          ?disabled=${params.disabled || checked}
-          title=${params.disabledReason ?? nothing}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true"
-            >${renderSessionOwnerAvatar(owner)}</span
-          >
-          <span class="session-menu__text"
-            >${owner === self ? t("sessionsView.assignToMe") : (owner.label ?? owner.id)}</span
-          >
-          ${
-            checked
-              ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
-                  >${icons.check}</span
-                >`
-              : nothing
-          }
-        </wa-dropdown-item>`;
-      })}
+      ${searchablePeopleMenu(
+        owners.map((owner) => ({
+          text: [
+            owner.label,
+            owner.id,
+            owner.type,
+            owner === self ? t("sessionsView.assignToMe") : "",
+          ].join(" "),
+          render: () => {
+            const checked = owner.type === currentOwner?.type && owner.id === currentOwnerId;
+            return html`<wa-dropdown-item
+              slot=${slot}
+              class="session-menu__item"
+              value=${`assign-owner:${owner.type}:${encodeURIComponent(owner.id)}`}
+              role="menuitemradio"
+              aria-checked=${String(checked)}
+              ${ref((element) => syncDropdownItemRadio(element, checked))}
+              ?disabled=${params.disabled || checked}
+              title=${params.disabledReason ?? nothing}
+            >
+              <span slot="icon" class="session-menu__avatar" aria-hidden="true"
+                >${renderSessionOwnerAvatar(owner)}</span
+              >
+              <span class="session-menu__text"
+                >${owner === self ? t("sessionsView.assignToMe") : (owner.label ?? owner.id)}</span
+              >
+              ${
+                checked
+                  ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+                      >${icons.check}</span
+                    >`
+                  : nothing
+              }
+            </wa-dropdown-item>`;
+          },
+        })),
+        this.searchGeneration,
+        inline ? undefined : "submenu",
+      )}
       ${this.profiles.render({
         pending: () =>
           html`<wa-dropdown-item slot=${slot} disabled>${t("common.loading")}</wa-dropdown-item>`,

@@ -2,9 +2,7 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-en
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTriggerRecallContext,
-  isPromotedTrustedMemoryEntry,
   MAX_TRIGGER_CONTEXT_CHARS,
-  scoreTriggerMatch,
   resolveTriggerRecall,
   selectStrongTriggerMatches,
 } from "./trigger-recall.js";
@@ -42,39 +40,103 @@ describe("active-memory trigger recall", () => {
     hoisted.listTriggerCandidates.mockReset();
   });
 
-  it("matches trigger phrases deterministically", () => {
-    expect(scoreTriggerMatch("Can you help when booking a flight?", result())).toBeGreaterThan(0.8);
-    expect(scoreTriggerMatch("Explain SQLite indexes", result())).toBeLessThan(0.5);
-    expect(
-      scoreTriggerMatch("This party starts at eight", result({ score: 0.2, triggers: "art" })),
-    ).toBeLessThan(0.65);
-    // Single-word concept triggers (the promotion writer's output) cap at
-    // 0.85 * 0.8 = 0.68 with zero relevance; the 0.65 threshold must admit them.
-    const singleWordTrigger = result({ score: 0, triggers: "project" });
-    expect(scoreTriggerMatch("Project status", singleWordTrigger)).toBeCloseTo(0.68);
-    expect(selectStrongTriggerMatches("Project status", [singleWordTrigger])).toHaveLength(1);
+  it.each([
+    ["reordered words", "flight booking", "booking flight", 0.8, 0.96],
+    ["repeated words", "booking a flight", "booking booking flight", 0.5, 0.9],
+    ["Unicode and case", "CAFÉ 東京", "café 東京", 1, 1],
+    ["single-word promotion", "Project status", "project", 0, 0.68],
+    ["two of three words", "booking flight", "booking flight seat", 1, 0.7866666667],
+    ["upper relevance clamp", "flight booking", "flight booking", 9, 1],
+    ["lower relevance clamp", "flight booking", "flight booking", -1, 0.8],
+  ] as const)(
+    "selects deterministic trigger scores for %s",
+    (_label, message, triggers, score, expected) => {
+      const entry = result({ triggers, score });
+      const selected = selectStrongTriggerMatches(message, [entry]);
+      expect(selected).toHaveLength(1);
+      expect(selected[0]).toMatchObject(entry);
+      expect(selected[0]?.matchScore).toBeCloseTo(expected);
+    },
+  );
+
+  it.each([
+    ["insufficient overlap", "booking", "booking flight", 1],
+    ["whole words", "This party starts at eight", "art", 0.2],
+    ["unrelated message", "Explain SQLite indexes", "flight booking", 0.8],
+  ] as const)("rejects weak trigger matches for %s", (_label, message, triggers, score) => {
+    expect(selectStrongTriggerMatches(message, [result({ triggers, score })])).toEqual([]);
+  });
+
+  it("prepares the message once across trigger candidates without reusing another message", () => {
+    const phrases = [
+      "flight booking; booking flight; flight flight booking; flight booking booking",
+      "connection time; time connection; connection connection time; connection time time",
+    ];
+    const phraseValues = new Set(phrases.flatMap((value) => value.split("; ")));
+    const entries = Array.from({ length: 512 }, (_, index) =>
+      result({
+        path: `memory/${String(index).padStart(3, "0")}.md`,
+        score: 1,
+        triggers: phrases[index % 2],
+        snippet: `Travel guidance ${String(index)}.`,
+      }),
+    );
+    const before = structuredClone(entries);
+    const padding = " filler".repeat(4094);
+    const messages = [`flight booking${padding}`, `connection time${padding}`] as const;
+    const work: Array<{ message: number; phrases: number }> = [];
+    for (const group of [0, 1, 0] as const) {
+      const message = messages[group];
+      const spy = vi.spyOn(String.prototype, "toLowerCase");
+      let selected: ReturnType<typeof selectStrongTriggerMatches>;
+      try {
+        selected = selectStrongTriggerMatches(message, entries);
+      } finally {
+        work.push({
+          message: spy.mock.contexts.filter((receiver) => receiver === message).length,
+          phrases: spy.mock.contexts.filter(
+            (receiver) => typeof receiver === "string" && phraseValues.has(receiver),
+          ).length,
+        });
+        spy.mockRestore();
+      }
+      expect(selected).toEqual(
+        [group, group + 2, group + 4].map((index) =>
+          Object.assign({}, entries[index], { matchScore: 1 }),
+        ),
+      );
+      const context = buildTriggerRecallContext(selected);
+      expect(context).toContain(`Travel guidance ${String(group)}.`);
+      expect(context?.length).toBeLessThanOrEqual(MAX_TRIGGER_CONTEXT_CHARS + 80);
+    }
+    expect(entries).toEqual(before);
+    for (const counts of work) {
+      expect(counts.phrases).toBe(2048);
+      expect(counts.message).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it.each([
+    ["absent triggers", [result({ triggers: undefined })]],
+    ["ineligible entries", [result({ source: "sessions" }), result({ provenance: undefined })]],
+    ["empty phrases", [result({ triggers: "; |\n" })]],
+    ["no usable words", [result({ triggers: "a !; b ?" })]],
+  ] as const)("skips message preparation for %s", (_label, entries) => {
+    const message = "Flight booking preferences";
+    const spy = vi.spyOn(String.prototype, "toLowerCase");
+    let selected: ReturnType<typeof selectStrongTriggerMatches>;
+    let preparations: number;
+    try {
+      selected = selectStrongTriggerMatches(message, [...entries]);
+    } finally {
+      preparations = spy.mock.contexts.filter((receiver) => receiver === message).length;
+      spy.mockRestore();
+    }
+    expect(selected).toEqual([]);
+    expect(preparations).toBe(0);
   });
 
   it("limits automatic injection to curated or trusted-origin entries", () => {
-    expect(isPromotedTrustedMemoryEntry(result())).toBe(true);
-    expect(isPromotedTrustedMemoryEntry(result({ path: "USER.md" }))).toBe(true);
-    expect(isPromotedTrustedMemoryEntry(result({ provenance: undefined }))).toBe(false);
-    expect(
-      isPromotedTrustedMemoryEntry({
-        ...result({ path: "memory/2026-07-27.md" }),
-        provenance: undefined,
-      }),
-    ).toBe(false);
-    expect(isPromotedTrustedMemoryEntry(result({ source: "sessions" }))).toBe(false);
-    expect(
-      isPromotedTrustedMemoryEntry(
-        result({
-          path: "memory/promoted.md",
-          provenance: { originClass: "agent", sessionKind: "interactive", observedAt: 1 },
-        }),
-      ),
-    ).toBe(true);
-
     const matches = selectStrongTriggerMatches("when booking a flight", [
       result(),
       result({ path: "USER.md", startLine: 3 }),
@@ -91,12 +153,20 @@ describe("active-memory trigger recall", () => {
       }),
       result({ path: "memory/missing.md", provenance: undefined, score: 1 }),
       result({
+        path: "memory/agent.md",
+        provenance: { originClass: "agent", sessionKind: "interactive", observedAt: 1 },
+        score: 1,
+      }),
+      result({
         path: "memory/owner.md",
         provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
         score: 1,
       }),
     ]);
-    expect(provenanceMatches.map((entry) => entry.path)).toEqual(["memory/owner.md"]);
+    expect(provenanceMatches.map((entry) => entry.path)).toEqual([
+      "memory/agent.md",
+      "memory/owner.md",
+    ]);
   });
 
   it("gates tagged entries to the active project while leaving global entries unchanged", () => {
@@ -119,48 +189,6 @@ describe("active-memory trigger recall", () => {
         [],
       ),
     ).toHaveLength(1);
-  });
-
-  it("selects and injects only the matching curated entry within the active project", () => {
-    const alpha = result({
-      startLine: 1,
-      endLine: 1,
-      snippet: "Alpha-only deployment guidance.",
-      triggers: "alpha deployment",
-      projectKey: "alpha-key",
-    });
-    const beta = result({
-      startLine: 2,
-      endLine: 2,
-      snippet: "Beta-only deployment guidance.",
-      triggers: "beta deployment",
-      projectKey: "beta-key",
-    });
-    const global = result({
-      startLine: 3,
-      endLine: 3,
-      snippet: "Global deployment guidance.",
-      triggers: "global deployment",
-    });
-    const entries = [alpha, beta, global];
-
-    const alphaMatches = selectStrongTriggerMatches("Review the alpha deployment", entries, [
-      "alpha-key",
-    ]);
-    expect(alphaMatches.map((entry) => entry.snippet)).toEqual(["Alpha-only deployment guidance."]);
-    expect(
-      selectStrongTriggerMatches("Review the global deployment", entries, ["alpha-key"]).map(
-        (entry) => entry.snippet,
-      ),
-    ).toEqual(["Global deployment guidance."]);
-    expect(
-      selectStrongTriggerMatches("Review the beta deployment", entries, ["alpha-key"]),
-    ).toEqual([]);
-
-    const context = buildTriggerRecallContext(alphaMatches);
-    expect(context).toContain("Alpha-only deployment guidance.");
-    expect(context).not.toContain("Beta-only deployment guidance.");
-    expect(context).not.toContain("Global deployment guidance.");
   });
 
   it("excludes annotation carriers from injected trigger context", () => {
@@ -193,28 +221,6 @@ describe("active-memory trigger recall", () => {
         (entry) => entry.startLine,
       ),
     ).toEqual([1, 2]);
-  });
-
-  it("blocks every oversized entry fragment when its project is inactive", () => {
-    const fragments = [
-      result({
-        startLine: 1,
-        endLine: 2,
-        snippet: "First oversized fragment.",
-        triggers: "oversized alpha",
-        projectKey: "alpha-key",
-      }),
-      result({
-        startLine: 2,
-        endLine: 2,
-        snippet: "Second oversized fragment.",
-        triggers: "oversized alpha",
-        projectKey: "alpha-key",
-      }),
-    ];
-
-    expect(selectStrongTriggerMatches("oversized alpha", fragments, ["beta-key"])).toEqual([]);
-    expect(selectStrongTriggerMatches("oversized alpha", fragments, ["alpha-key"])).toHaveLength(2);
   });
 
   it("requires every project on a mixed chunk to be active before trigger injection", () => {

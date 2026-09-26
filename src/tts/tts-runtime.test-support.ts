@@ -35,8 +35,12 @@ const prepareSynthesisMock = vi.hoisted(() =>
   vi.fn(async (_ctx: SpeechProviderPrepareSynthesisContext) => undefined),
 );
 
-const listSpeechProvidersMock = vi.hoisted(() => vi.fn());
-const getSpeechProviderMock = vi.hoisted(() => vi.fn());
+const listSpeechProvidersMock = vi.hoisted(() =>
+  vi.fn<(cfg?: OpenClawConfig) => SpeechProviderPlugin[]>(),
+);
+const getSpeechProviderMock = vi.hoisted(() =>
+  vi.fn<(providerId: string, cfg?: OpenClawConfig) => SpeechProviderPlugin | null | undefined>(),
+);
 const transcodeAudioBufferMock = vi.hoisted(() =>
   // Default off: most tests rely on the synthesized buffer reaching the
   // channel unchanged. Tests that exercise the pre-transcode branch override
@@ -108,6 +112,29 @@ vi.mock("./provider-registry.js", async () => {
       providerId?.trim().toLowerCase() || undefined,
     getSpeechProvider: getSpeechProviderMock,
     listSpeechProviders: listSpeechProvidersMock,
+  };
+});
+
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/capability-provider-runtime.js")>(
+    "../plugins/capability-provider-runtime.js",
+  );
+  return {
+    ...actual,
+    preparePluginCapabilityProviderResolution: ({ cfg }: { cfg?: OpenClawConfig }) => ({
+      load: undefined,
+      resolve: () => listSpeechProvidersMock(cfg),
+    }),
+    preparePluginCapabilityProviderLookup: ({
+      providerId,
+      cfg,
+    }: {
+      providerId: string;
+      cfg?: OpenClawConfig;
+    }) => ({
+      load: undefined,
+      resolve: () => getSpeechProviderMock(providerId, cfg) ?? undefined,
+    }),
   };
 });
 

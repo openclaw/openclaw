@@ -13,6 +13,81 @@ import { createPreauthConnectionBudget } from "./server/preauth-connection-budge
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 
 describe("Gateway closing connection admission", () => {
+  it("flushes HTTP 503 before closing when a WebSocket upgrade throws", async () => {
+    const clients = new Set<never>();
+    const resolvedAuth = { mode: "none" as const, allowTailscale: false };
+    const server = createGatewayHttpServer({
+      clients,
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+      handleHooksRequest: async () => false,
+    });
+    const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PREAUTH_PAYLOAD_BYTES });
+    const connected = vi.fn();
+    wss.on("connection", connected);
+    const failUpgrade = vi.fn(() => {
+      throw new Error("upgrade failed");
+    });
+    wss.once("headers", failUpgrade);
+    const warn = vi.fn();
+    attachGatewayUpgradeHandler({
+      httpServer: server,
+      wss,
+      clients,
+      resolvedAuth,
+      preauthConnectionBudget: createPreauthConnectionBudget(),
+      log: { warn },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing listener");
+    }
+    const socket = connect({ host: "127.0.0.1", port: address.port });
+    const chunks: Buffer[] = [];
+    const errors: string[] = [];
+    let ended = false;
+    socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+    socket.on("error", (error) => errors.push(error.message));
+    socket.once("end", () => {
+      ended = true;
+    });
+    const closed = new Promise<void>((resolve) => {
+      socket.once("close", resolve);
+    });
+    const deadline = setTimeout(() => {
+      errors.push("client deadline");
+      socket.destroy();
+    }, 3000);
+    try {
+      socket.write(
+        "GET /socket HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGVzdC1rZXktMDEyMzQ1Ng==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+      );
+      await closed;
+      expect(failUpgrade).toHaveBeenCalledOnce();
+      expect(connected).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("gateway websocket upgrade failed"),
+      );
+      expect(errors).toEqual([]);
+      expect(Buffer.concat(chunks).toString()).toBe(
+        "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n",
+      );
+      expect(ended).toBe(true);
+    } finally {
+      clearTimeout(deadline);
+      socket.destroy();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      wss.close();
+    }
+  });
+
   it("delivers an upgrade rejection after an ordinary response on a reused connection", async () => {
     const clients = new Set<never>();
     const resolvedAuth = { mode: "none" as const, allowTailscale: false };

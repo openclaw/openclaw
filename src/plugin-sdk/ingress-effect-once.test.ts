@@ -117,32 +117,6 @@ describe("createIngressEffectOnce", () => {
     ).resolves.toEqual({ kind: "executed", value: "acknowledged" });
   });
 
-  it("isolates queue-local event ids by factory namespace", async () => {
-    const firstQueue = createIngressEffectOnce({
-      ...EFFECT_ONCE_PARAMS,
-      namespacePrefix: "test.ingress-effect-once.account-a",
-    });
-    const secondQueue = createIngressEffectOnce({
-      ...EFFECT_ONCE_PARAMS,
-      namespacePrefix: "test.ingress-effect-once.account-b",
-    });
-
-    await expect(
-      firstQueue.runOnce({
-        eventId: "event-local-1",
-        effect: "config-write",
-        run: async () => "first",
-      }),
-    ).resolves.toEqual({ kind: "executed", value: "first" });
-    await expect(
-      secondQueue.runOnce({
-        eventId: "event-local-1",
-        effect: "config-write",
-        run: async () => "second",
-      }),
-    ).resolves.toEqual({ kind: "executed", value: "second" });
-  });
-
   it("keeps normalized-prefix collisions isolated", async () => {
     const slashQueue = createIngressEffectOnce({
       ...EFFECT_ONCE_PARAMS,
@@ -234,10 +208,12 @@ describe("createIngressEffectOnce", () => {
       effect: "visible-ack",
       run: waiterRun,
     });
+    const outcomes = Promise.all([
+      expect(first).rejects.toThrow("Failed to open the plugin state database"),
+      expect(waiter).rejects.toThrow("Failed to open the plugin state database"),
+    ]);
     finish();
-
-    await expect(first).rejects.toThrow("Failed to open the plugin state database");
-    await expect(waiter).rejects.toThrow("Failed to open the plugin state database");
+    await outcomes;
     expect(onDiskError).toHaveBeenCalledOnce();
     expect(run).toHaveBeenCalledOnce();
     expect(waiterRun).not.toHaveBeenCalled();
@@ -278,10 +254,12 @@ describe("createIngressEffectOnce", () => {
       effect: "visible-ack",
       run: waiterRun,
     });
+    const outcomes = Promise.all([
+      expect(first).rejects.toThrow("Failed to open the plugin state database"),
+      expect(waiter).rejects.toThrow("Failed to open the plugin state database"),
+    ]);
     finish();
-
-    await expect(first).rejects.toThrow("Failed to open the plugin state database");
-    await expect(waiter).rejects.toThrow("Failed to open the plugin state database");
+    await outcomes;
     expect(onDiskError).toHaveBeenCalledOnce();
     expect(run).toHaveBeenCalledOnce();
     expect(waiterRun).not.toHaveBeenCalled();

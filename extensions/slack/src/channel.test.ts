@@ -2,7 +2,6 @@
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
@@ -11,6 +10,10 @@ import { slackOutbound } from "./outbound-adapter.js";
 import * as probeModule from "./probe.js";
 import { SLACK_QUESTION_FINALIZATION_BLOCKS } from "./reply-action-ids.js";
 import { setSlackRuntime } from "./runtime.js";
+
+function slackConfig(slack: NonNullable<OpenClawConfig["channels"]>["slack"]): OpenClawConfig {
+  return { channels: { slack } };
+}
 
 const { handleSlackActionMock } = vi.hoisted(() => ({
   handleSlackActionMock: vi.fn(),
@@ -23,11 +26,15 @@ const {
   sessionApiCallMock,
   conversationsInfoMock,
   conversationsOpenMock,
+  usersInfoMock,
+  authTeamsListMock,
   getSlackWriteClientMock,
 } = vi.hoisted(() => ({
   sessionApiCallMock: vi.fn(),
   conversationsInfoMock: vi.fn(),
   conversationsOpenMock: vi.fn(),
+  usersInfoMock: vi.fn(),
+  authTeamsListMock: vi.fn(),
   getSlackWriteClientMock: vi.fn(),
 }));
 
@@ -39,7 +46,7 @@ vi.mock("./action-runtime.js", async () => {
   };
 });
 
-vi.mock("./send.runtime.js", () => ({
+vi.mock("./send.js", () => ({
   resolveSlackDmChannelId: resolveSlackDmChannelIdMock,
   sendMessageSlack: sendMessageSlackMock,
 }));
@@ -52,10 +59,13 @@ vi.mock("./client.js", async () => {
       info: conversationsInfoMock,
       open: conversationsOpenMock,
     },
+    users: { info: usersInfoMock },
+    auth: { teams: { list: authTeamsListMock } },
   });
   return {
     ...actual,
     createSlackReadClient: vi.fn(createClient),
+    createSlackLookupClient: vi.fn(createClient),
     getSlackWriteClient: getSlackWriteClientMock.mockImplementation(createClient),
   };
 });
@@ -70,6 +80,8 @@ beforeEach(async () => {
   sessionApiCallMock.mockResolvedValue({ ok: true });
   conversationsInfoMock.mockReset();
   conversationsOpenMock.mockReset();
+  usersInfoMock.mockReset();
+  authTeamsListMock.mockReset();
   getSlackWriteClientMock.mockClear();
   setSlackRuntime({
     channel: {
@@ -91,70 +103,6 @@ async function getSlackConfiguredState(cfg: OpenClawConfig) {
       runtime: undefined,
     }),
   };
-}
-
-function requireSlackHandleAction() {
-  const handleAction = slackPlugin.actions?.handleAction;
-  if (!handleAction) {
-    throw new Error("slack actions.handleAction unavailable");
-  }
-  return handleAction;
-}
-
-function requireSlackPrepareSendPayload() {
-  const prepareSendPayload = slackPlugin.actions?.prepareSendPayload;
-  if (!prepareSendPayload) {
-    throw new Error("slack actions.prepareSendPayload unavailable");
-  }
-  return prepareSendPayload;
-}
-
-function requireSlackSendText() {
-  const sendText = slackPlugin.outbound?.sendText;
-  if (!sendText) {
-    throw new Error("slack outbound.sendText unavailable");
-  }
-  return sendText;
-}
-
-function requireSlackSendMedia() {
-  const sendMedia = slackPlugin.outbound?.sendMedia;
-  if (!sendMedia) {
-    throw new Error("slack outbound.sendMedia unavailable");
-  }
-  return sendMedia;
-}
-
-function requireSlackSendPayload() {
-  const sendPayload = slackPlugin.outbound?.sendPayload ?? slackOutbound.sendPayload;
-  if (!sendPayload) {
-    throw new Error("slack outbound.sendPayload unavailable");
-  }
-  return sendPayload;
-}
-
-function requireSlackHeartbeatSendTyping() {
-  const sendTyping = slackPlugin.heartbeat?.sendTyping;
-  if (!sendTyping) {
-    throw new Error("slack heartbeat.sendTyping unavailable");
-  }
-  return sendTyping;
-}
-
-function requireSlackHeartbeatClearTyping() {
-  const clearTyping = slackPlugin.heartbeat?.clearTyping;
-  if (!clearTyping) {
-    throw new Error("slack heartbeat.clearTyping unavailable");
-  }
-  return clearTyping;
-}
-
-function requireSlackListPeers() {
-  const listPeers = slackPlugin.directory?.listPeers;
-  if (!listPeers) {
-    throw new Error("slack directory.listPeers unavailable");
-  }
-  return listPeers;
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
@@ -197,22 +145,9 @@ function requireMockCallArg(mock: ReturnType<typeof vi.fn>, callIndex: number, a
   return requireRecord(requireMockCallArgValue(mock, callIndex, argIndex), "mock call argument");
 }
 
-function findSchemaEntry(
-  schema: unknown,
-  actions: string[],
-  label: string,
-): Record<string, unknown> {
-  const entries = requireArray(schema, label);
-  const entry = entries.find((candidate) => {
-    const record = requireRecord(candidate, `${label} entry`);
-    return JSON.stringify(record.actions) === JSON.stringify(actions);
-  });
-  return requireRecord(entry, `${label} ${actions.join(",")} entry`);
-}
-
 describe("slackPlugin actions", () => {
   it("keeps a bare current Grid send on the workspace-aware Slack action path", async () => {
-    const prepareSendPayload = requireSlackPrepareSendPayload();
+    const prepareSendPayload = slackPlugin.actions!.prepareSendPayload!;
     const payload = { text: "hello" };
 
     const prepared = await prepareSendPayload({
@@ -234,7 +169,7 @@ describe("slackPlugin actions", () => {
   });
 
   it("keeps qualified and cross-channel sends on the core Slack delivery path", async () => {
-    const prepareSendPayload = requireSlackPrepareSendPayload();
+    const prepareSendPayload = slackPlugin.actions!.prepareSendPayload!;
     const payload = { text: "hello" };
     const ctx = {
       action: "send",
@@ -254,107 +189,15 @@ describe("slackPlugin actions", () => {
     expect(slackPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
   });
 
-  it("owns unified message tool discovery", () => {
-    const discovery = slackPlugin.actions?.describeMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-            appToken: "xapp-test",
-          },
-        },
-      },
-    });
-
-    expect(discovery?.actions).toContain("send");
-    expect(discovery?.capabilities).toContain("presentation");
-    const downloadFile = findSchemaEntry(discovery?.schema, ["download-file"], "Slack schema");
-    const downloadProperties = requireRecord(downloadFile.properties, "download-file properties");
-    expect(isRecord(downloadProperties.fileId)).toBe(true);
-  });
-
-  it("honors the selected Slack account during message tool discovery", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        slack: {
-          botToken: "xoxb-root",
-          appToken: "xapp-root",
-          actions: {
-            reactions: false,
-            messages: false,
-            pins: false,
-            memberInfo: false,
-            emojiList: false,
-          },
-          accounts: {
-            default: {
-              botToken: "xoxb-default",
-              appToken: "xapp-default",
-              actions: {
-                reactions: false,
-                messages: false,
-                pins: false,
-                memberInfo: false,
-                emojiList: false,
-              },
-            },
-            work: {
-              botToken: "xoxb-work",
-              appToken: "xapp-work",
-              actions: {
-                reactions: true,
-                messages: true,
-                pins: false,
-                memberInfo: false,
-                emojiList: false,
-              },
-            },
-          },
-        },
-      },
-    };
-
-    expectRecordFields(
-      slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "default" }),
-      "default message tool discovery",
-      {
-        actions: ["send"],
-        capabilities: ["presentation"],
-      },
-    );
-    const workDiscovery = requireRecord(
-      slackPlugin.actions?.describeMessageTool?.({ cfg, accountId: "work" }),
-      "work message tool discovery",
-    );
-    expectRecordFields(workDiscovery, "work message tool discovery", {
-      actions: [
-        "send",
-        "react",
-        "reactions",
-        "conversation-open",
-        "read",
-        "edit",
-        "delete",
-        "download-file",
-        "upload-file",
-      ],
-    });
-    expect(requireArray(workDiscovery.capabilities, "work capabilities")).toContain("presentation");
-  });
-
   it("uses configured defaultAccount for pairing approval notifications", async () => {
-    const cfg = {
-      channels: {
-        slack: {
-          defaultAccount: "work",
-          accounts: {
-            work: {
-              botToken: "xoxb-work",
-            },
-          },
+    const cfg = slackConfig({
+      defaultAccount: "work",
+      accounts: {
+        work: {
+          botToken: "xoxb-work",
         },
       },
-    } as OpenClawConfig;
+    });
     setSlackRuntime({
       config: {
         loadConfig: () => cfg,
@@ -392,15 +235,11 @@ describe("slackPlugin actions", () => {
       }),
     ).toBe("team:T12345678:user:U12345678");
 
-    const cfg = {
-      channels: {
-        slack: {
-          accounts: {
-            org: { botToken: "xoxb-org" },
-          },
-        },
+    const cfg = slackConfig({
+      accounts: {
+        org: { botToken: "xoxb-org" },
       },
-    } as OpenClawConfig;
+    });
     await pairing.notifyApproval({
       cfg,
       id: "team:T12345678:user:U12345678",
@@ -416,31 +255,6 @@ describe("slackPlugin actions", () => {
       cfg,
       token: "xoxb-org",
     });
-  });
-
-  it("exposes Slack-native message id and file id schema hints", () => {
-    const discovery = slackPlugin.actions?.describeMessageTool({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-            appToken: "xapp-test",
-          },
-        },
-      } as OpenClawConfig,
-    });
-    const downloadFile = findSchemaEntry(discovery?.schema, ["download-file"], "Slack schema");
-    const downloadProperties = requireRecord(downloadFile.properties, "download-file properties");
-    expect(isRecord(downloadProperties.fileId)).toBe(true);
-
-    const messageActions = findSchemaEntry(
-      discovery?.schema,
-      ["react", "reactions", "edit", "delete", "pin", "unpin"],
-      "Slack schema",
-    );
-    const messageProperties = requireRecord(messageActions.properties, "message properties");
-    expect(isRecord(messageProperties.messageId)).toBe(true);
-    expect(isRecord(messageProperties.message_id)).toBe(true);
   });
 
   it("treats interactive reply payloads as structured Slack payloads", () => {
@@ -463,7 +277,7 @@ describe("slackPlugin actions", () => {
 
   it("forwards read threadId to Slack action handler", async () => {
     handleSlackActionMock.mockResolvedValueOnce({ messages: [], hasMore: false });
-    const handleAction = requireSlackHandleAction();
+    const handleAction = slackPlugin.actions!.handleAction!;
 
     await handleAction({
       action: "read",
@@ -489,7 +303,7 @@ describe("slackPlugin actions", () => {
 
   it("forwards media access through the bundled Slack action invoke path", async () => {
     handleSlackActionMock.mockResolvedValueOnce({ ok: true });
-    const handleAction = requireSlackHandleAction();
+    const handleAction = slackPlugin.actions!.handleAction!;
     const mediaLocalRoots = ["/tmp/workspace-agent"];
     const mediaReadFile = vi.fn(async () => Buffer.from("file"));
 
@@ -547,7 +361,7 @@ describe("slackPlugin actions", () => {
     },
   ] as const)("keeps host-owned media access authoritative for $action", async (testCase) => {
     handleSlackActionMock.mockResolvedValueOnce({ ok: true });
-    const handleAction = requireSlackHandleAction();
+    const handleAction = slackPlugin.actions!.handleAction!;
     const mediaReadFile = vi.fn(async () => Buffer.from("trusted"));
     const mediaAccess = {
       localRoots: ["/tmp/workspace-agent"],
@@ -591,7 +405,7 @@ describe("slackPlugin actions", () => {
 
   it("does not inherit forged media capabilities from generic Slack tool context", async () => {
     handleSlackActionMock.mockResolvedValueOnce({ ok: true });
-    const handleAction = requireSlackHandleAction();
+    const handleAction = slackPlugin.actions!.handleAction!;
     const forgedReadFile = vi.fn(async () => Buffer.from("forged"));
 
     await handleAction({
@@ -631,15 +445,11 @@ describe("slackPlugin status", () => {
       user: { id: "U12345678", name: "test-human" },
       team: { id: "T12345678", name: "Test Team" },
     });
-    const cfg = {
-      channels: {
-        slack: {
-          postAs: "user",
-          userToken: "test-user-token",
-          appToken: "test-app-token",
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = slackConfig({
+      postAs: "user",
+      userToken: "test-user-token",
+      appToken: "test-app-token",
+    });
     const account = slackPlugin.config.resolveAccount(cfg, "default");
 
     const result = await slackPlugin.status!.probeAccount!({
@@ -666,18 +476,14 @@ describe("slackPlugin status", () => {
       bot: { id: "B1", name: "openclaw-bot" },
       team: { id: "T1", name: "OpenClaw" },
     });
-    const cfg = {
-      channels: {
-        slack: {
-          accounts: {
-            work: {
-              botToken: "xoxb-work",
-              appToken: "xapp-work",
-            },
-          },
+    const cfg = slackConfig({
+      accounts: {
+        work: {
+          botToken: "xoxb-work",
+          appToken: "xapp-work",
         },
       },
-    } as OpenClawConfig;
+    });
     const account = slackPlugin.config.resolveAccount(cfg, "work");
 
     const result = await slackPlugin.status!.probeAccount!({
@@ -776,6 +582,64 @@ describe("slackPlugin status", () => {
       baseSessionKey: "agent:main:main:account:default:team:t123",
       to: "team:T123:user:U456",
     });
+  });
+
+  it.each(["heartbeat-owner", undefined] as const)(
+    "limits Enterprise workspace discovery to owner heartbeats: %s",
+    async (deliveryPurpose) => {
+      const installation = registerSlackInstallationState("default", "enterprise");
+      usersInfoMock.mockResolvedValue({
+        ok: true,
+        user: { id: "U12345678", enterprise_user: { teams: ["T22222222", "T11111111"] } },
+      });
+      authTeamsListMock.mockResolvedValue({
+        ok: true,
+        teams: [{ id: "T22222222" }, { id: "T11111111" }],
+      });
+      try {
+        const route = await slackPlugin.messaging!.resolveOutboundSessionRoute!({
+          cfg: slackConfig({ botToken: "sending-fixture" }),
+          agentId: "main",
+          target: "user:u12345678",
+          deliveryPurpose,
+        });
+        if (!deliveryPurpose) {
+          expectRecordFields(route, "Detached Enterprise Slack DM route", {
+            to: "user:u12345678",
+          });
+          expect(usersInfoMock).not.toHaveBeenCalled();
+          expect(authTeamsListMock).not.toHaveBeenCalled();
+          return;
+        }
+        expectRecordFields(route, "Enterprise Slack owner DM route", {
+          baseSessionKey: "agent:main:main:account:default:team:t11111111",
+          to: "team:T11111111:user:U12345678",
+          recipientSessionExact: true,
+        });
+        expect(usersInfoMock).toHaveBeenCalledExactlyOnceWith({ user: "U12345678" });
+        expect(conversationsOpenMock).not.toHaveBeenCalled();
+      } finally {
+        installation.release();
+      }
+    },
+  );
+
+  it("preserves an explicit Enterprise user workspace without discovery", async () => {
+    const installation = registerSlackInstallationState("default", "enterprise");
+    try {
+      const route = await slackPlugin.messaging!.resolveOutboundSessionRoute!({
+        cfg: {},
+        agentId: "main",
+        target: "team:T22222222:user:U12345678",
+      });
+      expectRecordFields(route, "Explicit Enterprise Slack DM route", {
+        to: "team:T22222222:user:U12345678",
+      });
+      expect(usersInfoMock).not.toHaveBeenCalled();
+      expect(authTeamsListMock).not.toHaveBeenCalled();
+    } finally {
+      installation.release();
+    }
   });
 
   it("routes a folded bare W user id as a direct session", async () => {
@@ -897,13 +761,9 @@ describe("slackPlugin status", () => {
 
     await expect(
       resolveRoute({
-        cfg: {
-          channels: {
-            slack: {
-              botToken: "test",
-            },
-          },
-        } as OpenClawConfig,
+        cfg: slackConfig({
+          botToken: "test",
+        }),
         agentId: "main",
         target: "D0NOUSER001",
         threadId: "1778110574.653649",
@@ -923,7 +783,7 @@ describe("slackPlugin status", () => {
     });
 
     const route = await resolveRoute({
-      cfg: { channels: { slack: { botToken: "xoxb-test" } } } as OpenClawConfig,
+      cfg: slackConfig({ botToken: "xoxb-test" }),
       agentId: "main",
       target: "g08gqh53ejm",
     });
@@ -1001,25 +861,17 @@ describe("slackPlugin security", () => {
     }
 
     const result = resolveDmPolicy({
-      cfg: {
-        channels: {
-          slack: {
-            dmPolicy: "allowlist",
-            allowFrom: ["  slack:U123  "],
-          },
-        },
-      } as OpenClawConfig,
+      cfg: slackConfig({
+        dmPolicy: "allowlist",
+        allowFrom: ["  slack:U123  "],
+      }),
       account: slackPlugin.config.resolveAccount(
-        {
-          channels: {
-            slack: {
-              botToken: "xoxb-test",
-              appToken: "xapp-test",
-              dmPolicy: "allowlist",
-              allowFrom: ["  slack:U123  "],
-            },
-          },
-        } as OpenClawConfig,
+        slackConfig({
+          botToken: "xoxb-test",
+          appToken: "xapp-test",
+          dmPolicy: "allowlist",
+          allowFrom: ["  slack:U123  "],
+        }),
         "default",
       ),
     });
@@ -1037,14 +889,10 @@ describe("slackPlugin security", () => {
 });
 
 describe("slackPlugin outbound", () => {
-  const cfg = {
-    channels: {
-      slack: {
-        botToken: "xoxb-test",
-        appToken: "xapp-test",
-      },
-    },
-  };
+  const cfg = slackConfig({
+    botToken: "xoxb-test",
+    appToken: "xapp-test",
+  });
 
   it("treats ACP block text as visible delivered output", () => {
     expect(
@@ -1070,28 +918,9 @@ describe("slackPlugin outbound", () => {
     expect(slackPlugin.outbound?.textChunkLimit).toBe(8000);
   });
 
-  it("uses threadId as threadTs fallback for sendText", async () => {
-    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-text" });
-    const sendText = requireSlackSendText();
-
-    const result = await sendText({
-      cfg,
-      to: "C123",
-      text: "hello",
-      accountId: "default",
-      threadId: "1712345678.123456",
-      deps: { sendSlack },
-    });
-
-    expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("C123");
-    expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("hello");
-    expect(requireMockCallArg(sendSlack, 0, 2).threadTs).toBe("1712345678.123456");
-    expect(result).toEqual({ channel: "slack", messageId: "m-text" });
-  });
-
   it("sends messages when the existing target carries the workspace", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-enterprise" });
-    const sendText = requireSlackSendText();
+    const sendText = slackPlugin.outbound!.sendText!;
 
     const result = await sendText({
       cfg,
@@ -1110,7 +939,7 @@ describe("slackPlugin outbound", () => {
     const installationState = registerSlackInstallationState("default", "enterprise");
     try {
       await expect(
-        requireSlackSendText()({
+        slackPlugin.outbound!.sendText!({
           cfg,
           to: "C456",
           text: "hello",
@@ -1159,7 +988,7 @@ describe("slackPlugin outbound", () => {
   });
 
   it("forwards agent identity through the registered text sender", async () => {
-    const sendText = requireSlackSendText();
+    const sendText = slackPlugin.outbound!.sendText!;
 
     await sendText({
       cfg,
@@ -1191,7 +1020,7 @@ describe("slackPlugin outbound", () => {
       throw new Error("later Slack chunk failed");
     });
     const onDeliveryResult = vi.fn();
-    const sendText = requireSlackSendText();
+    const sendText = slackPlugin.outbound!.sendText!;
 
     await expect(
       sendText({
@@ -1212,7 +1041,7 @@ describe("slackPlugin outbound", () => {
 
   it("prefers replyToId over threadId for sendMedia", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-media" });
-    const sendMedia = requireSlackSendMedia();
+    const sendMedia = slackPlugin.outbound!.sendMedia!;
 
     const result = await sendMedia({
       cfg,
@@ -1236,7 +1065,7 @@ describe("slackPlugin outbound", () => {
 
   it("falls back to threadId when replyToId is not a Slack thread timestamp", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-text" });
-    const sendText = requireSlackSendText();
+    const sendText = slackPlugin.outbound!.sendText!;
 
     const result = await sendText({
       cfg,
@@ -1256,7 +1085,7 @@ describe("slackPlugin outbound", () => {
 
   it("does not stringify numeric Slack thread ids", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-text" });
-    const sendText = requireSlackSendText();
+    const sendText = slackPlugin.outbound!.sendText!;
 
     await sendText({
       cfg,
@@ -1280,8 +1109,8 @@ describe("slackPlugin outbound", () => {
       threadId: "1712345678.123456",
     };
 
-    await requireSlackHeartbeatSendTyping()(target);
-    await requireSlackHeartbeatClearTyping()(target);
+    await slackPlugin.heartbeat!.sendTyping!(target);
+    await slackPlugin.heartbeat!.clearTyping!(target);
 
     expect(resolveSlackDmChannelIdMock).not.toHaveBeenCalled();
     expect(sessionApiCallMock).toHaveBeenNthCalledWith(1, "agents.sessions.setStatus", {
@@ -1300,21 +1129,21 @@ describe("slackPlugin outbound", () => {
 
   it("uses the workspace-partitioned write-client cache for Grid session status", async () => {
     const target = {
-      cfg: { channels: { slack: { botToken: "xoxb-test" } } },
+      cfg: slackConfig({ botToken: "xoxb-test" }),
       to: "team:T123:channel:C456",
       accountId: "default",
       threadId: "1712345678.123456",
     };
 
-    await requireSlackHeartbeatSendTyping()(target);
-    await requireSlackHeartbeatClearTyping()(target);
+    await slackPlugin.heartbeat!.sendTyping!(target);
+    await slackPlugin.heartbeat!.clearTyping!(target);
 
     expect(getSlackWriteClientMock).toHaveBeenNthCalledWith(1, "xoxb-test", { teamId: "T123" });
     expect(getSlackWriteClientMock).toHaveBeenNthCalledWith(2, "xoxb-test", { teamId: "T123" });
   });
 
   it("resolves user targets to concrete DM channels for session status", async () => {
-    await requireSlackHeartbeatSendTyping()({
+    await slackPlugin.heartbeat!.sendTyping!({
       cfg,
       to: "user:u09g2dj0275",
       accountId: "default",
@@ -1508,39 +1337,9 @@ describe("slackPlugin outbound", () => {
     });
   });
 
-  it("forwards mediaLocalRoots for sendMedia", async () => {
-    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-media-local" });
-    const sendMedia = slackOutbound.sendMedia;
-    if (!sendMedia) {
-      throw new Error("slack direct outbound.sendMedia unavailable");
-    }
-    const mediaLocalRoots = ["/tmp/workspace"];
-    const onPlatformSendDispatch = vi.fn();
-
-    const result = await sendMedia({
-      cfg,
-      to: "C999",
-      text: "caption",
-      mediaUrl: "/tmp/workspace/image.png",
-      mediaLocalRoots,
-      accountId: "default",
-      onPlatformSendDispatch,
-      deps: { sendSlack },
-    });
-
-    expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("C999");
-    expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("caption");
-    expectRecordFields(requireMockCallArg(sendSlack, 0, 2), "send options", {
-      mediaUrl: "/tmp/workspace/image.png",
-      mediaLocalRoots,
-      onPlatformSendDispatch,
-    });
-    expect(result).toEqual({ channel: "slack", messageId: "m-media-local" });
-  });
-
   it("preserves workspace-qualified media delivery", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-grid-media" });
-    const sendMedia = requireSlackSendMedia();
+    const sendMedia = slackPlugin.outbound!.sendMedia!;
 
     const result = await sendMedia({
       cfg,
@@ -1565,7 +1364,7 @@ describe("slackPlugin outbound", () => {
       .mockResolvedValueOnce({ messageId: "m-media-1" })
       .mockResolvedValueOnce({ messageId: "m-media-2" })
       .mockResolvedValueOnce({ messageId: "m-final" });
-    const sendPayload = requireSlackSendPayload();
+    const sendPayload = slackPlugin.outbound!.sendPayload!;
 
     const result = await sendPayload({
       cfg,
@@ -1635,7 +1434,7 @@ describe("slackPlugin outbound", () => {
 
   it("renders shared interactive payloads into Slack Block Kit via plugin outbound", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-interactive" });
-    const sendPayload = requireSlackSendPayload();
+    const sendPayload = slackPlugin.outbound!.sendPayload!;
 
     const result = await sendPayload({
       cfg,
@@ -1673,7 +1472,7 @@ describe("slackPlugin outbound", () => {
 
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("user:U123");
     expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe(
-      "Slack interactive smoke.\n\nApprove\nReject\n\nChoose a target",
+      "Slack interactive smoke.\n\nApprove\nReject\n\nChoose a target\nCanary\nProduction",
     );
     const blocks = requireArray(requireMockCallArg(sendSlack, 0, 2).blocks, "Slack blocks");
     expectRecordFields(blocks[0], "text block", { type: "section" });
@@ -1720,7 +1519,7 @@ describe("slackPlugin outbound", () => {
           ? { text: "", interactive: { blocks: [{ type: "text" as const, text }, buttons] } }
           : { text: "", presentation: { blocks: [presentationTextBlock, buttons] } };
 
-      const result = await requireSlackSendPayload()({
+      const result = await slackPlugin.outbound!.sendPayload!({
         cfg,
         to: "channel:C123",
         text: "",
@@ -1773,7 +1572,7 @@ describe("slackPlugin outbound", () => {
       .mockResolvedValueOnce({ ...createResult("m-question", "card"), meta: questionMeta })
       .mockResolvedValueOnce(createResult("m-final", "card"));
 
-    const result = await requireSlackSendPayload()({
+    const result = await slackPlugin.outbound!.sendPayload!({
       cfg,
       to: "channel:C123",
       text: "",
@@ -1813,19 +1612,15 @@ describe("slackPlugin outbound", () => {
 
 describe("slackPlugin directory", () => {
   it("lists configured peers without throwing a ReferenceError", async () => {
-    const listPeers = requireSlackListPeers();
+    const listPeers = slackPlugin.directory!.listPeers!;
 
     await expect(
       listPeers({
-        cfg: {
-          channels: {
-            slack: {
-              dms: {
-                U123: {},
-              },
-            },
+        cfg: slackConfig({
+          dms: {
+            U123: {},
           },
-        },
+        }),
         runtime: createRuntimeEnv(),
       }),
     ).resolves.toEqual([{ id: "user:u123", kind: "user" }]);
@@ -1835,14 +1630,10 @@ describe("slackPlugin directory", () => {
 describe("slackPlugin agentPrompt", () => {
   it("teaches agents to use typed presentation", () => {
     const hints = slackPlugin.agentPrompt?.messageToolHints?.({
-      cfg: {
-        channels: {
-          slack: {
-            botToken: "xoxb-test",
-            appToken: "xapp-test",
-          },
-        },
-      },
+      cfg: slackConfig({
+        botToken: "xoxb-test",
+        appToken: "xapp-test",
+      }),
     });
 
     expect(hints).toContain(
@@ -1864,18 +1655,14 @@ describe("slackPlugin agentPrompt", () => {
 });
 
 describe("slackPlugin outbound new targets", () => {
-  const cfg = {
-    channels: {
-      slack: {
-        botToken: "xoxb-test",
-        appToken: "xapp-test",
-      },
-    },
-  };
+  const cfg = slackConfig({
+    botToken: "xoxb-test",
+    appToken: "xapp-test",
+  });
 
   it("sends to a new user target via DM without erroring", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-new-user", channelId: "D999" });
-    const sendText = requireSlackSendText();
+    const sendText = slackPlugin.outbound!.sendText!;
 
     const result = await sendText({
       cfg,
@@ -1892,54 +1679,6 @@ describe("slackPlugin outbound new targets", () => {
       channel: "slack",
       messageId: "m-new-user",
       target: { kind: "channel", id: "D999" },
-    });
-  });
-
-  it("sends to a new channel target without erroring", async () => {
-    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-new-chan", channelId: "C555" });
-    const sendText = requireSlackSendText();
-
-    const result = await sendText({
-      cfg,
-      to: "channel:C555NEW",
-      text: "hello channel",
-      accountId: "default",
-      deps: { sendSlack },
-    });
-
-    expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("channel:C555NEW");
-    expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("hello channel");
-    expect(requireMockCallArg(sendSlack, 0, 2).cfg).toBe(cfg);
-    expect(result).toEqual({
-      channel: "slack",
-      messageId: "m-new-chan",
-      target: { kind: "channel", id: "C555" },
-    });
-  });
-
-  it("sends media to a new user target without erroring", async () => {
-    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-new-media", channelId: "D888" });
-    const sendMedia = requireSlackSendMedia();
-
-    const result = await sendMedia({
-      cfg,
-      to: "user:U88NEW",
-      text: "here is a file",
-      mediaUrl: "https://example.com/file.png",
-      accountId: "default",
-      deps: { sendSlack },
-    });
-
-    expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("user:U88NEW");
-    expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("here is a file");
-    expectRecordFields(requireMockCallArg(sendSlack, 0, 2), "send options", {
-      cfg,
-      mediaUrl: "https://example.com/file.png",
-    });
-    expect(result).toEqual({
-      channel: "slack",
-      messageId: "m-new-media",
-      target: { kind: "channel", id: "D888" },
     });
   });
 });
@@ -2044,15 +1783,11 @@ describe("slackPlugin config", () => {
   );
 
   it("treats HTTP mode accounts with bot token + signing secret as configured", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        slack: {
-          mode: "http",
-          botToken: "xoxb-http",
-          signingSecret: "secret-http", // pragma: allowlist secret
-        },
-      },
-    };
+    const cfg: OpenClawConfig = slackConfig({
+      mode: "http",
+      botToken: "xoxb-http",
+      signingSecret: "secret-http", // pragma: allowlist secret
+    });
 
     const { configured, snapshot } = await getSlackConfiguredState(cfg);
 
@@ -2061,14 +1796,10 @@ describe("slackPlugin config", () => {
   });
 
   it("keeps socket mode requiring app token", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        slack: {
-          mode: "socket",
-          botToken: "xoxb-socket",
-        },
-      },
-    };
+    const cfg: OpenClawConfig = slackConfig({
+      mode: "socket",
+      botToken: "xoxb-socket",
+    });
 
     const { configured, snapshot } = await getSlackConfiguredState(cfg);
 

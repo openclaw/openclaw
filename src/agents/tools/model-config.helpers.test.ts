@@ -7,7 +7,6 @@ import {
   hasProviderAuthForTool,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
-import { hasDirectProviderApiKeyAuthForTool } from "./model-config.helpers.test-support.js";
 
 vi.mock("../auth-profiles/external-cli-sync.js", () => ({
   listExternalCliSyncProviderIds: () => [],
@@ -96,17 +95,6 @@ const resolveMedia = (
     ...overrides,
   });
 
-const hasDirectOpenAiKey = (
-  overrides: Partial<Parameters<typeof hasDirectProviderApiKeyAuthForTool>[0]> = {},
-) =>
-  hasDirectProviderApiKeyAuthForTool({
-    provider: "openai",
-    agentDir: AGENT_DIR,
-    authStore: store({}),
-    modelApi: "openai-responses",
-    ...overrides,
-  });
-
 beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", "");
   authMocks.resolveEnvApiKey.mockReset();
@@ -123,23 +111,15 @@ afterEach(() => {
 });
 
 describe("hasProviderAuthForTool", () => {
-  it("threads cfg/workspaceDir into config-aware env-key resolution", () => {
-    // Regression: hasProviderAuthForTool used to call the env resolver without
-    // cfg/workspaceDir, so config-scoped (non-bundled) provider plugins whose
-    // env candidates are only visible with config were reported as unauthed.
-    const cfg = { models: { providers: {} } } as OpenClawConfig;
-    hasProviderAuthForTool({ provider: "acme", cfg, workspaceDir: "/ws" });
-    expect(authMocks.resolveEnvApiKey).toHaveBeenCalledWith("acme", undefined, {
-      config: cfg,
-      workspaceDir: "/ws",
-    });
-  });
-
   it("accepts env-key plugin provider auth only when config reaches env resolution", () => {
     // "acme" is not in models.json, so custom-provider auth is false; the only
     // path to true is the config-aware env lookup.
     const cfg = { models: { providers: {} } } as OpenClawConfig;
-    expect(hasProviderAuthForTool({ provider: "acme", cfg })).toBe(true);
+    expect(hasProviderAuthForTool({ provider: "acme", cfg, workspaceDir: "/ws" })).toBe(true);
+    expect(authMocks.resolveEnvApiKey).toHaveBeenCalledWith("acme", undefined, {
+      config: cfg,
+      workspaceDir: "/ws",
+    });
     expect(hasProviderAuthForTool({ provider: "acme" })).toBe(false);
   });
 
@@ -252,40 +232,40 @@ describe("hasProviderAuthForTool", () => {
       }),
     ).toBe(true);
   });
+});
 
-  it("hides inline provider keys during billing cooldown from direct API-key tool auth", () => {
-    const cfg = {
+describe("resolveOpenAiImageMediaCandidate", () => {
+  it("drops an implicit OpenAI image candidate while its inline key is in billing cooldown", () => {
+    const cfg: OpenClawConfig = {
       models: {
         providers: {
-          hatchery: {
-            baseUrl: "https://example.com/v1",
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
             apiKey: "sk-configured", // pragma: allowlist secret
             models: [],
           },
         },
       },
-    } as OpenClawConfig;
+    };
 
+    expect(resolveMedia({ cfg })).toEqual(openAiKeep);
     expect(
-      hasDirectProviderApiKeyAuthForTool({
-        provider: "hatchery",
+      resolveMedia({
         cfg,
         authStore: {
           version: 1,
           profiles: {},
           usageStats: {
-            "inline-api-key:hatchery": {
+            "inline-api-key:openai": {
               disabledUntil: Date.now() + 60_000,
               disabledReason: "billing" as const,
             },
           },
         },
       }),
-    ).toBe(false);
+    ).toEqual(drop);
   });
-});
 
-describe("resolveOpenAiImageMediaCandidate", () => {
   const cases: Array<[string, AuthProfileStore, Decision]> = [
     [
       "canonical OpenAI OAuth-only media auth",
@@ -317,7 +297,6 @@ describe("resolveOpenAiImageMediaCandidate", () => {
   it("keeps OpenAI media when a direct API key profile exists", () => {
     const authStore = store({ "openai:api-key": apiKey("openai") });
 
-    expect(hasDirectOpenAiKey({ authStore })).toBe(true);
     expect(resolveMedia({ authStore })).toEqual(openAiKeep);
   });
 
@@ -327,7 +306,6 @@ describe("resolveOpenAiImageMediaCandidate", () => {
       "openai:chatgpt": oauth("openai"),
     });
 
-    expect(hasDirectOpenAiKey({ authStore })).toBe(false);
     expect(resolveMedia({ authStore })).toEqual(codexSubstitute);
   });
 
@@ -344,7 +322,6 @@ describe("resolveOpenAiImageMediaCandidate", () => {
       "openai:chatgpt": oauth("openai"),
     });
 
-    expect(hasDirectOpenAiKey({ cfg, authStore })).toBe(false);
     expect(resolveMedia({ cfg, authStore })).toEqual(codexSubstitute);
   });
 
@@ -367,14 +344,12 @@ describe("resolveOpenAiImageMediaCandidate", () => {
   it("does not treat provider apiKey OAuth profile references as direct OpenAI media auth", () => {
     const authStore = store({ "openai:default": oauth("openai") });
 
-    expect(hasDirectOpenAiKey({ cfg: openAiRefCfg, authStore })).toBe(false);
     expect(resolveMedia({ cfg: openAiRefCfg, authStore })).toEqual(codexSubstitute);
   });
 
   it("treats provider apiKey API-key profile references as direct OpenAI media auth", () => {
     const authStore = store({ "openai:default": apiKey("openai") });
 
-    expect(hasDirectOpenAiKey({ cfg: openAiRefCfg, authStore })).toBe(true);
     expect(resolveMedia({ cfg: openAiRefCfg, authStore })).toEqual(openAiKeep);
   });
 
@@ -384,7 +359,6 @@ describe("resolveOpenAiImageMediaCandidate", () => {
       "openai:chatgpt": oauth("openai"),
     });
 
-    expect(hasDirectOpenAiKey({ cfg: openAiRefCfg, authStore })).toBe(false);
     expect(resolveMedia({ cfg: openAiRefCfg, authStore })).toEqual(codexSubstitute);
   });
 });

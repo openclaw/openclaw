@@ -1,4 +1,3 @@
-// Matrix plugin module implements crypto facade behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { ensureMatrixCryptoRuntime } from "../deps.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
@@ -6,64 +5,11 @@ import type { EncryptedFile } from "./types.js";
 import type {
   MatrixVerificationCryptoApi,
   MatrixVerificationManager,
-  MatrixVerificationMethod,
-  MatrixVerificationSummary,
 } from "./verification-manager.js";
 
 type MatrixCryptoFacadeClient = {
   getCrypto: () => unknown;
   getUserId: () => string | null;
-};
-
-export type MatrixCryptoFacade = {
-  prepare: (joinedRooms: string[]) => Promise<void>;
-  updateSyncData: (
-    toDeviceMessages: unknown,
-    otkCounts: unknown,
-    unusedFallbackKeyAlgs: unknown,
-    changedDeviceLists: unknown,
-    leftDeviceLists: unknown,
-  ) => Promise<void>;
-  isRoomEncrypted: (roomId: string) => Promise<boolean>;
-  requestOwnUserVerification: () => Promise<MatrixVerificationSummary | null>;
-  encryptMedia: (buffer: Buffer) => Promise<{ buffer: Buffer; file: Omit<EncryptedFile, "url"> }>;
-  decryptMedia: (
-    file: EncryptedFile,
-    opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
-  ) => Promise<Buffer>;
-  getRecoveryKey: () => Promise<{
-    encodedPrivateKey?: string;
-    keyId?: string | null;
-    createdAt?: string;
-  } | null>;
-  listVerifications: () => Promise<MatrixVerificationSummary[]>;
-  ensureVerificationDmTracked: (params: {
-    roomId: string;
-    userId: string;
-  }) => Promise<MatrixVerificationSummary | null>;
-  requestVerification: (params: {
-    ownUser?: boolean;
-    userId?: string;
-    deviceId?: string;
-    roomId?: string;
-  }) => Promise<MatrixVerificationSummary>;
-  acceptVerification: (id: string) => Promise<MatrixVerificationSummary>;
-  cancelVerification: (
-    id: string,
-    params?: { reason?: string; code?: string },
-  ) => Promise<MatrixVerificationSummary>;
-  startVerification: (
-    id: string,
-    method?: MatrixVerificationMethod,
-  ) => Promise<MatrixVerificationSummary>;
-  generateVerificationQr: (id: string) => Promise<{ qrDataBase64: string }>;
-  scanVerificationQr: (id: string, qrDataBase64: string) => Promise<MatrixVerificationSummary>;
-  confirmVerificationSas: (id: string) => Promise<MatrixVerificationSummary>;
-  mismatchVerificationSas: (id: string) => Promise<MatrixVerificationSummary>;
-  confirmVerificationReciprocateQr: (id: string) => Promise<MatrixVerificationSummary>;
-  getVerificationSas: (
-    id: string,
-  ) => Promise<{ decimal?: [number, number, number]; emoji?: Array<[string, string]> }>;
 };
 
 type MatrixCryptoNodeRuntime = typeof import("./crypto-node.runtime.js");
@@ -87,20 +33,6 @@ async function loadMatrixCryptoNodeBindings() {
   return runtime.loadMatrixCryptoNodeBindings();
 }
 
-function trackInProgressToDeviceVerifications(deps: {
-  client: MatrixCryptoFacadeClient;
-  verificationManager: MatrixVerificationManager;
-}) {
-  const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
-  const userId = deps.client.getUserId();
-  if (!userId || typeof crypto?.getVerificationRequestsToDeviceInProgress !== "function") {
-    return;
-  }
-  for (const request of crypto.getVerificationRequestsToDeviceInProgress(userId)) {
-    deps.verificationManager.trackVerificationRequest(request);
-  }
-}
-
 export function createMatrixCryptoFacade(deps: {
   client: MatrixCryptoFacadeClient;
   verificationManager: MatrixVerificationManager;
@@ -110,20 +42,24 @@ export function createMatrixCryptoFacade(deps: {
     mxcUrl: string,
     opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
   ) => Promise<Buffer>;
-}): MatrixCryptoFacade {
+}) {
+  const manager = deps.verificationManager;
+  function withTrackedVerifications<TArgs extends unknown[], TResult>(
+    run: (...args: TArgs) => TResult,
+  ) {
+    return async (...args: TArgs): Promise<Awaited<TResult>> => {
+      const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
+      const userId = deps.client.getUserId();
+      if (userId && typeof crypto?.getVerificationRequestsToDeviceInProgress === "function") {
+        for (const request of crypto.getVerificationRequestsToDeviceInProgress(userId)) {
+          manager.trackVerificationRequest(request);
+        }
+      }
+      return await run(...args);
+    };
+  }
+
   return {
-    prepare: async (_joinedRooms: string[]) => {
-      // matrix-js-sdk performs crypto prep during startup; no extra work required here.
-    },
-    updateSyncData: async (
-      _toDeviceMessages: unknown,
-      _otkCounts: unknown,
-      _unusedFallbackKeyAlgs: unknown,
-      _changedDeviceLists: unknown,
-      _leftDeviceLists: unknown,
-    ) => {
-      // compatibility no-op
-    },
     isRoomEncrypted: deps.isRoomEncrypted,
     requestOwnUserVerification: async () => {
       const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
@@ -172,11 +108,8 @@ export function createMatrixCryptoFacade(deps: {
     getRecoveryKey: async () => {
       return deps.recoveryKeyStore.getRecoveryKeySummary();
     },
-    listVerifications: async () => {
-      trackInProgressToDeviceVerifications(deps);
-      return deps.verificationManager.listVerifications();
-    },
-    ensureVerificationDmTracked: async ({ roomId, userId }) => {
+    listVerifications: withTrackedVerifications(manager.listVerifications.bind(manager)),
+    ensureVerificationDmTracked: async ({ roomId, userId }: { roomId: string; userId: string }) => {
       const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
       const request =
         typeof crypto?.findVerificationRequestDMInProgress === "function"
@@ -187,45 +120,29 @@ export function createMatrixCryptoFacade(deps: {
       }
       return deps.verificationManager.trackVerificationRequest(request);
     },
-    requestVerification: async (params) => {
+    requestVerification: async (params: {
+      ownUser?: boolean;
+      userId?: string;
+      deviceId?: string;
+      roomId?: string;
+    }) => {
       const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
       return await deps.verificationManager.requestVerification(crypto, params);
     },
-    acceptVerification: async (id) => {
-      trackInProgressToDeviceVerifications(deps);
-      return await deps.verificationManager.acceptVerification(id);
-    },
-    cancelVerification: async (id, params) => {
-      trackInProgressToDeviceVerifications(deps);
-      return await deps.verificationManager.cancelVerification(id, params);
-    },
-    startVerification: async (id, method = "sas") => {
-      trackInProgressToDeviceVerifications(deps);
-      return await deps.verificationManager.startVerification(id, method);
-    },
-    generateVerificationQr: async (id) => {
-      trackInProgressToDeviceVerifications(deps);
-      return await deps.verificationManager.generateVerificationQr(id);
-    },
-    scanVerificationQr: async (id, qrDataBase64) => {
-      trackInProgressToDeviceVerifications(deps);
-      return await deps.verificationManager.scanVerificationQr(id, qrDataBase64);
-    },
-    confirmVerificationSas: async (id) => {
-      trackInProgressToDeviceVerifications(deps);
-      return await deps.verificationManager.confirmVerificationSas(id);
-    },
-    mismatchVerificationSas: async (id) => {
-      trackInProgressToDeviceVerifications(deps);
-      return deps.verificationManager.mismatchVerificationSas(id);
-    },
-    confirmVerificationReciprocateQr: async (id) => {
-      trackInProgressToDeviceVerifications(deps);
-      return deps.verificationManager.confirmVerificationReciprocateQr(id);
-    },
-    getVerificationSas: async (id) => {
-      trackInProgressToDeviceVerifications(deps);
-      return deps.verificationManager.getVerificationSas(id);
-    },
+    acceptVerification: withTrackedVerifications(manager.acceptVerification.bind(manager)),
+    cancelVerification: withTrackedVerifications(manager.cancelVerification.bind(manager)),
+    startVerification: withTrackedVerifications(manager.startVerification.bind(manager)),
+    generateVerificationQr: withTrackedVerifications(manager.generateVerificationQr.bind(manager)),
+    scanVerificationQr: withTrackedVerifications(manager.scanVerificationQr.bind(manager)),
+    confirmVerificationSas: withTrackedVerifications(manager.confirmVerificationSas.bind(manager)),
+    mismatchVerificationSas: withTrackedVerifications(
+      manager.mismatchVerificationSas.bind(manager),
+    ),
+    confirmVerificationReciprocateQr: withTrackedVerifications(
+      manager.confirmVerificationReciprocateQr.bind(manager),
+    ),
+    getVerificationSas: withTrackedVerifications(manager.getVerificationSas.bind(manager)),
   };
 }
+
+export type MatrixCryptoFacade = ReturnType<typeof createMatrixCryptoFacade>;

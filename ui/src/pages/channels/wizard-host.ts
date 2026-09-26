@@ -126,7 +126,7 @@ export class ChannelWizardHost {
       return;
     }
     // The wizard rewrote openclaw.json on the gateway; resync the local draft.
-    await context.runtimeConfig.refresh({ discardPendingChanges: true });
+    await context.runtimeConfig.discardDraft({ reloadOnly: true });
     await context.channels.refresh(true);
     const whatsapp = accounts.find((entry) => entry.channel === "whatsapp");
     if (whatsapp) {

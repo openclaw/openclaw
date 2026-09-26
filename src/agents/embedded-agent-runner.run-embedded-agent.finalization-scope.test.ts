@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -103,14 +104,7 @@ describe("nested settled-turn finalization ownership", () => {
       const messages = [
         { role: "user" as const, content: "Write once and summarize.", timestamp: 1 },
         completedTool,
-        {
-          role: "toolResult" as const,
-          toolCallId: "write-once",
-          toolName: "write",
-          content: [{ type: "text" as const, text: "written" }],
-          isError: false,
-          timestamp: 3,
-        },
+        makeTextToolResult("write-once", "write", "written", false, 3),
       ];
       let toolRuns = 0;
       let finalizerRuns = 0;

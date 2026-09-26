@@ -19,11 +19,11 @@ import {
 import { DesktopConfigSchema } from "./zod-schema.desktop.js";
 import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
+import { DiagnosticsConfigSchema, LoggingConfigSchema } from "./zod-schema.logging.js";
 import { BrowserSnapshotDefaultsSchema } from "./zod-schema.node-host.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import {
   AccessGroupsSchema,
-  LoggingLevelSchema,
   McpConfigSchema,
   MemorySchema,
   NodeHostSchema,
@@ -36,13 +36,6 @@ import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
 import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
 
-// OpenTelemetry instrument names start with an ASCII letter and allow only these characters.
-// The 128-character prefix cap leaves ample room within the dependency's 255-character name cap.
-const MetricNamePrefixSchema = z
-  .string()
-  .max(128)
-  .regex(/^(?:[A-Za-z][A-Za-z0-9_./-]*)?$/);
-
 export const OpenClawSchemaShape = {
   $schema: z.string().optional(),
   meta: z
@@ -51,6 +44,7 @@ export const OpenClawSchemaShape = {
       migrations: z
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
+          utilityModelSeparation: z.literal(true).optional(),
         })
         .optional(),
     })
@@ -79,52 +73,8 @@ export const OpenClawSchemaShape = {
       securityAcknowledgedAt: z.string().optional(),
     })
     .optional(),
-  diagnostics: z
-    .strictObject({
-      enabled: z.boolean().optional(),
-      flags: z.array(z.string()).optional(),
-      otel: z
-        .strictObject({
-          enabled: z.boolean().optional(),
-          endpoint: z.string().optional(),
-          tracesEndpoint: z.string().optional(),
-          metricsEndpoint: z.string().optional(),
-          logsEndpoint: z.string().optional(),
-          protocol: z.literal("http/protobuf").optional(),
-          headers: z.record(z.string(), z.string()).optional(),
-          serviceName: z.string().optional(),
-          metricNamePrefix: MetricNamePrefixSchema.optional(),
-          traces: z.boolean().optional(),
-          metrics: z.boolean().optional(),
-          logs: z.boolean().optional(),
-          logsExporter: z
-            .union([z.literal("otlp"), z.literal("stdout"), z.literal("both")])
-            .optional(),
-          sampleRate: z.number().min(0).max(1).optional(),
-          flushIntervalMs: z.number().int().nonnegative().optional(),
-          captureContent: z.boolean().optional(),
-        })
-        .optional(),
-      cacheTrace: z.strictObject({ enabled: z.boolean().optional() }).optional(),
-    })
-    .optional(),
-  logging: z
-    .strictObject({
-      level: LoggingLevelSchema.optional(),
-      file: z.string().optional(),
-      maxFileBytes: z.number().int().positive().optional(),
-      consoleLevel: LoggingLevelSchema.optional(),
-      consoleStyle: z.union([z.literal("pretty"), z.literal("json")]).optional(),
-      redactPatterns: z.array(z.string()).optional(),
-      audit: z
-        .strictObject({
-          enabled: z.boolean().optional(),
-          executionIdentity: z.boolean().optional(),
-          messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
-        })
-        .optional(),
-    })
-    .optional(),
+  diagnostics: DiagnosticsConfigSchema,
+  logging: LoggingConfigSchema,
   update: z
     .strictObject({
       channel: z
@@ -147,26 +97,47 @@ export const OpenClawSchemaShape = {
   browser: z
     .strictObject({
       enabled: z.boolean().optional(),
+      /** Allow importing cookies from the user's real Chrome-family profile into a managed profile (macOS). Default: true. */
       allowSystemProfileImport: z.boolean().optional(),
+      /** If false, disable browser act:evaluate (arbitrary JS). Default: true */
       evaluateEnabled: z.boolean().optional(),
+      /** Base URL of the CDP endpoint (for remote browsers). Default: loopback CDP on the derived port. */
       cdpUrl: z.string().optional(),
+      /** Override the browser executable path (all platforms). */
       executablePath: z.string().optional(),
+      /** Start Chrome headless (best-effort). Default: false */
       headless: z.boolean().optional(),
+      /** Pass --no-sandbox to Chrome (Linux containers). Default: false */
       noSandbox: z.boolean().optional(),
+      /** If true: never launch; only attach to an existing browser. Default: false */
       attachOnly: z.boolean().optional(),
+      /** Default profile to use when profile param is omitted. Default: "openclaw" */
       defaultProfile: z.string().optional(),
+      /** Default snapshot options (applied by the browser tool/CLI when unset). */
       snapshotDefaults: BrowserSnapshotDefaultsSchema,
+      /** SSRF policy for browser navigation/open-tab operations. */
       ssrfPolicy: SsrFPolicyConfigSchema.optional(),
       profiles: z
         .record(
           z.string().regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
           z
             .strictObject({
+              /** Browser engine capability preset. Lightpanda is an external, semantic-only CDP service. */
+              engine: z.enum(["chromium", "lightpanda"]).optional(),
+              /** CDP port for this profile. Allocated once at creation, persisted permanently. */
               cdpPort: z.number().int().min(1).max(65535).optional(),
+              /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
               cdpUrl: z.string().optional(),
+              /** Explicit user data directory for existing-session Chrome MCP attachment. */
               userDataDir: z.string().optional(),
+              /** Override the Chrome MCP command for existing-session profiles. */
               mcpCommand: z.string().optional(),
+              /** Extra Chrome MCP arguments for existing-session profiles. */
               mcpArgs: z.array(z.string()).optional(),
+              /**
+               * Profile driver (default: openclaw). "extension" attaches to the user's
+               * signed-in browser through the OpenClaw Chrome extension relay.
+               */
               driver: z
                 .union([
                   z.literal("openclaw"),
@@ -175,8 +146,11 @@ export const OpenClawSchemaShape = {
                   z.literal("extension"),
                 ])
                 .optional(),
+              /** If true, launch this profile in headless mode. Falls back to browser.headless. */
               headless: z.boolean().optional(),
+              /** Browser executable path for this profile. Falls back to browser.executablePath. */
               executablePath: z.string().optional(),
+              /** If true, never launch a browser for this profile; only attach. Falls back to browser.attachOnly. */
               attachOnly: z.boolean().optional(),
             })
             .refine(
@@ -195,20 +169,91 @@ export const OpenClawSchemaShape = {
             .refine((value) => value.driver !== "extension" || !value.cdpUrl, {
               message:
                 'Profile cdpUrl is not supported with driver="extension" (the relay owns the endpoint)',
+            })
+            .superRefine((value, ctx) => {
+              if (value.engine !== "lightpanda") {
+                return;
+              }
+              const endpoint = value.cdpUrl ? URL.parse(value.cdpUrl) : null;
+              if (!endpoint || !["ws:", "wss:"].includes(endpoint.protocol)) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["cdpUrl"],
+                  message: "Lightpanda requires an explicit ws:// or wss:// CDP endpoint",
+                });
+              }
+              if (value.attachOnly !== true) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["attachOnly"],
+                  message: "Lightpanda requires attachOnly: true; OpenClaw does not launch it",
+                });
+              }
+              if (value.driver !== undefined && value.driver !== "openclaw") {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["driver"],
+                  message: 'Lightpanda requires the default "openclaw" CDP driver',
+                });
+              }
+              for (const key of [
+                "cdpPort",
+                "userDataDir",
+                "mcpCommand",
+                "mcpArgs",
+                "headless",
+                "executablePath",
+              ] as const) {
+                if (value[key] !== undefined) {
+                  ctx.addIssue({
+                    code: "custom",
+                    path: [key],
+                    message: `Lightpanda does not support the profile ${key} setting`,
+                  });
+                }
+              }
             }),
         )
         .optional(),
+      /**
+       * Additional Chrome launch arguments.
+       * Useful for stealth flags, window size overrides, or custom user-agent strings.
+       * Example: ["--window-size=1920,1080", "--disable-infobars"]
+       */
       extraArgs: z.array(z.string()).optional(),
+      /** Best-effort cleanup policy for tabs opened by primary-agent browser sessions. */
       tabCleanup: z
         .strictObject({
+          /** Enable best-effort cleanup for tracked primary-agent browser tabs. Default: true */
           enabled: z.boolean().optional(),
         })
         .optional(),
+      /** Chrome extension relay authentication compatibility settings. */
       extensionRelay: z
         .strictObject({
+          /** Temporarily accept legacy relay bearer/basic/subprotocol auth. Default: true. */
           allowLegacyAuth: z.boolean().optional(),
         })
         .optional(),
+    })
+    .superRefine((value, ctx) => {
+      const endpoints = new Map<string, { name: string; engine?: string }>();
+      for (const [name, profile] of Object.entries(value.profiles ?? {})) {
+        const endpoint = profile.cdpUrl ? URL.parse(profile.cdpUrl) : null;
+        if (!endpoint) {
+          continue;
+        }
+        const key = endpoint.toString().replace(/\/$/, "");
+        const previous = endpoints.get(key);
+        if (previous && (previous.engine === "lightpanda" || profile.engine === "lightpanda")) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["profiles", name, "cdpUrl"],
+            message: `Lightpanda requires a dedicated CDP endpoint; also used by profile "${previous.name}"`,
+          });
+        }
+        endpoints.set(key, { name, engine: profile.engine });
+      }
     })
     .optional(),
   ui: z
@@ -238,7 +283,7 @@ export const OpenClawSchemaShape = {
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])
             .optional(),
-          accent: HexColorSchema.startsWith("#").optional(),
+          accent: z.union([z.literal("theme"), HexColorSchema.startsWith("#")]).optional(),
           locale: z.string().max(20).optional(),
           chatShowThinking: z.boolean().optional(),
           chatShowToolCalls: z.boolean().optional(),
@@ -315,6 +360,7 @@ export const OpenClawSchemaShape = {
       "worktreeRoot must be an absolute path or a path starting with ~",
     )
     .optional(),
+  worktreeAcceleration: z.boolean().optional(),
   tools: ToolsSchema,
   security: SecuritySchema,
   bindings: BindingsSchema,
@@ -337,14 +383,23 @@ export const OpenClawSchemaShape = {
   cron: z
     .strictObject({
       enabled: z.boolean().optional(),
+      /** Skip missed recurring slots at startup; one-shot catch-up is unchanged. Default: false. */
       skipMissedJobs: z.boolean().optional(),
       triggers: z
         .strictObject({
           enabled: z.boolean().optional(),
         })
         .optional(),
+      /** Bearer token for cron webhook POST delivery. */
       webhookToken: SecretInputSchema.optional().register(sensitive),
+      /** SSRF policy for all outbound cron webhook deliveries. */
       webhookSsrfPolicy: SsrFPolicyConfigSchema.optional(),
+      /**
+       * How long to retain completed cron run sessions before automatic pruning.
+       * Accepts a duration string (e.g. "24h", "7d", "1h30m") or `false` to disable pruning.
+       * A zero duration (e.g. "0h") also disables pruning; negative durations are invalid.
+       * Default: "24h".
+       */
       sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
       failureAlert: z
         .strictObject({
@@ -455,11 +510,21 @@ export const OpenClawSchemaShape = {
   mcp: McpConfigSchema,
   skills: z
     .strictObject({
+      /** Optional bundled-skill allowlist (only affects bundled skills). */
       allowBundled: z.array(z.string()).optional(),
       load: z
         .strictObject({
+          /**
+           * Additional skill folders to scan (lowest precedence).
+           * Each directory should contain skill subfolders with `SKILL.md`.
+           */
           extraDirs: z.array(z.string()).optional(),
+          /**
+           * Real target directories that skill symlinks may resolve into even when they
+           * sit outside the configured source root.
+           */
           allowSymlinkTargets: z.array(z.string()).optional(),
+          /** Watch skill folders for changes and refresh the skills snapshot. */
           watch: z.boolean().optional(),
         })
         .optional(),
@@ -469,27 +534,38 @@ export const OpenClawSchemaShape = {
           nodeManager: z
             .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
             .optional(),
+          /** Allow gateway clients to install zip archives staged through skills.upload.*. */
           allowUploadedArchives: z.boolean().optional(),
         })
         .optional(),
       limits: z
         .strictObject({
+          /** Max number of immediate child directories to consider under a skills root before treating it as suspicious. */
           maxCandidatesPerRoot: z.number().int().min(1).optional(),
+          /** Max number of skills to load per skills source (bundled/managed/workspace/extra). */
           maxSkillsLoadedPerSource: z.number().int().min(1).optional(),
+          /** Max number of skills to include in the model-facing skills prompt. */
           maxSkillsInPrompt: z.number().int().min(0).optional(),
+          /** Max characters for the model-facing skills prompt block (approx). */
           maxSkillsPromptChars: z.number().int().min(0).optional(),
+          /** Max size (bytes) allowed for a SKILL.md file to be considered. */
           maxSkillFileBytes: z.number().int().min(0).optional(),
         })
         .optional(),
       workshop: z
         .strictObject({
+          /** Autonomous Skill Workshop behavior controlled separately from user-prompted proposals. */
           autonomous: z
             .strictObject({
+              /** Capture policy for durable conversation signals and substantial completed work. */
               mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
             })
             .optional(),
+          /** Whether proposal lifecycle actions need explicit approval. */
           approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
+          /** Maximum pending/quarantined proposals retained per workspace. */
           maxPending: z.number().int().min(1).optional(),
+          /** Maximum generated skill proposal size in bytes. */
           maxSkillBytes: z.number().int().min(1).optional(),
         })
         .optional(),
@@ -498,17 +574,23 @@ export const OpenClawSchemaShape = {
     .optional(),
   plugins: z
     .strictObject({
+      /** Enable or disable plugin loading. */
       enabled: z.boolean().optional(),
+      /** Optional plugin allowlist (plugin ids). */
       allow: z.array(z.string()).optional(),
+      /** Optional plugin denylist (plugin ids). */
       deny: z.array(z.string()).optional(),
       load: z
         .strictObject({
+          /** Additional plugin/extension paths to load. */
           paths: z.array(z.string()).optional(),
         })
         .optional(),
       slots: z
         .strictObject({
+          /** Select which plugin owns the memory slot ("none" disables memory plugins). */
           memory: z.string().optional(),
+          /** Select which plugin owns the context-engine slot. */
           contextEngine: z.string().optional(),
         })
         .optional(),

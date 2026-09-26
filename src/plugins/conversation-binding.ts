@@ -1,5 +1,6 @@
 // Binds plugin conversations to stable channel and agent identifiers.
 import crypto from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
@@ -28,8 +29,8 @@ import {
 import {
   addPersistentApproval,
   hasPersistentApproval,
+  withPluginBindingApprovalOperation,
   pluginBindingGlobalState,
-  type PluginBindingApprovalEntry,
 } from "./conversation-binding-state.js";
 import type {
   PluginConversationBinding,
@@ -94,10 +95,7 @@ function normalizeConversation(params: PluginBindingConversation): PluginBinding
 }
 
 function normalizeBindingData(data: unknown): Record<string, unknown> | undefined {
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    return undefined;
-  }
-  return { ...(data as Record<string, unknown>) };
+  return isRecord(data) ? { ...data } : undefined;
 }
 
 function toConversationRef(params: PluginBindingConversation): ConversationRef {
@@ -204,11 +202,6 @@ function buildApprovalInteractiveReply(
   };
 }
 
-function createApprovalRequestId(): string {
-  // Keep approval ids compact so Telegram callback_data stays under its 64-byte limit.
-  return crypto.randomBytes(9).toString("base64url");
-}
-
 function buildBindingMetadata(params: {
   pluginId: string;
   pluginName?: string;
@@ -295,23 +288,6 @@ function resolveOwnedPluginConversationBinding(params: {
   return withConversationBindingContext(state.binding, params.conversation);
 }
 
-function buildApprovalEntryFromRequest(
-  request: Pick<
-    PendingPluginBindingRequest,
-    "pluginRoot" | "pluginId" | "pluginName" | "conversation"
-  >,
-  approvedAt = Date.now(),
-): PluginBindingApprovalEntry {
-  return {
-    pluginRoot: request.pluginRoot,
-    pluginId: request.pluginId,
-    pluginName: request.pluginName,
-    channel: request.conversation.channel,
-    accountId: request.conversation.accountId,
-    approvedAt,
-  };
-}
-
 export async function bindConversationNow(params: {
   identity: PluginBindingIdentity;
   conversation: PluginBindingConversation;
@@ -320,7 +296,9 @@ export async function bindConversationNow(params: {
   detachHint?: string;
   data?: Record<string, unknown>;
   bindingAttemptId?: string;
+  assertCurrent?: () => void;
 }): Promise<PluginConversationBinding> {
+  const assertCurrent = params.assertCurrent;
   const ref = toConversationRef(params.conversation);
   const targetSessionKey =
     normalizeOptionalString(params.targetSessionKey) ??
@@ -335,6 +313,7 @@ export async function bindConversationNow(params: {
     targetKind: "session",
     conversation: ref,
     placement: "current",
+    ...(assertCurrent ? { assertCurrent } : {}),
     metadata: buildBindingMetadata({
       pluginId: params.identity.pluginId,
       pluginName: params.identity.pluginName,
@@ -422,13 +401,6 @@ export function markPluginBindingFallbackNoticeShown(
   );
 }
 
-function buildPendingReply(request: PendingPluginBindingRequest): ReplyPayload {
-  return {
-    text: buildApprovalMessage(request),
-    interactive: buildApprovalInteractiveReply(request.id),
-  };
-}
-
 function decodeCustomIdValue(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -479,6 +451,19 @@ export function parsePluginBindingApprovalCustomId(
   };
 }
 
+function pluginBindingOwnershipConflict(
+  state: ReturnType<typeof resolvePluginConversationBindingState>,
+  pluginRoot: string,
+): string | undefined {
+  if (state.record && !state.binding && !state.isLegacyForeignBinding) {
+    return "This conversation is already bound by core routing and cannot be claimed by a plugin.";
+  }
+  if (state.binding && state.binding.pluginRoot !== pluginRoot) {
+    return `This conversation is already bound by plugin "${state.binding.pluginName ?? state.binding.pluginId}".`;
+  }
+  return undefined;
+}
+
 export async function requestPluginConversationBinding(params: {
   pluginId: string;
   pluginName?: string;
@@ -486,76 +471,95 @@ export async function requestPluginConversationBinding(params: {
   conversation: PluginBindingConversation;
   requestedBySenderId?: string;
   binding: PluginConversationBindingRequestParams | undefined;
+  assertCurrent?: () => void;
 }): Promise<PluginConversationBindingRequestResult> {
-  const conversation = normalizeConversation(params.conversation);
-  const state = resolvePluginConversationBindingState(conversation);
-  if (state.record && !state.binding) {
+  const assertCallerCurrent = params.assertCurrent;
+  const requestParams = {
+    ...params,
+    binding: params.binding
+      ? { ...params.binding, data: normalizeBindingData(params.binding.data) }
+      : undefined,
+  };
+  return await withPluginBindingApprovalOperation(async (assertCurrent) => {
+    const assertBindingCurrent = () => {
+      assertCurrent();
+      assertCallerCurrent?.();
+    };
+    assertBindingCurrent();
+    const conversation = normalizeConversation(requestParams.conversation);
+    let state = resolvePluginConversationBindingState(conversation);
+    const initialConflict = pluginBindingOwnershipConflict(state, requestParams.pluginRoot);
+    if (initialConflict) {
+      return { status: "error", message: initialConflict };
+    }
+    const approved = state.binding
+      ? false
+      : await hasPersistentApproval({
+          pluginRoot: requestParams.pluginRoot,
+          channel: state.ref.channel,
+          accountId: state.ref.accountId,
+        });
+    assertBindingCurrent();
+    if (!state.binding) {
+      state = resolvePluginConversationBindingState(conversation);
+      const conflict = pluginBindingOwnershipConflict(state, requestParams.pluginRoot);
+      if (conflict) {
+        return { status: "error", message: conflict };
+      }
+    }
     if (state.isLegacyForeignBinding) {
       logPluginBindingLifecycleEvent({
         event: "migrating legacy record",
-        identity: params,
+        identity: requestParams,
         conversation: state.ref,
       });
-    } else {
-      return {
-        status: "error",
-        message:
-          "This conversation is already bound by core routing and cannot be claimed by a plugin.",
-      };
     }
-  }
-  if (state.binding && state.binding.pluginRoot !== params.pluginRoot) {
-    return {
-      status: "error",
-      message: `This conversation is already bound by plugin "${state.binding.pluginName ?? state.binding.pluginId}".`,
-    };
-  }
 
-  if (
-    state.binding ||
-    hasPersistentApproval({
-      pluginRoot: params.pluginRoot,
-      channel: state.ref.channel,
-      accountId: state.ref.accountId,
-    })
-  ) {
-    const bound = await bindConversationNow({
-      identity: params,
+    if (state.binding || approved) {
+      const bound = await bindConversationNow({
+        identity: requestParams,
+        conversation,
+        summary: requestParams.binding?.summary,
+        detachHint: requestParams.binding?.detachHint,
+        data: requestParams.binding?.data,
+        ...(assertCallerCurrent ? { assertCurrent: assertBindingCurrent } : {}),
+      });
+      logPluginBindingLifecycleEvent({
+        event: state.binding ? "auto-refresh" : "auto-approved",
+        identity: requestParams,
+        conversation: state.ref,
+      });
+      return { status: "bound", binding: bound };
+    }
+
+    const request: PendingPluginBindingRequest = {
+      // Keep approval ids compact so Telegram callback_data stays under its 64-byte limit.
+      id: crypto.randomBytes(9).toString("base64url"),
+      pluginId: requestParams.pluginId,
+      pluginName: requestParams.pluginName,
+      pluginRoot: requestParams.pluginRoot,
       conversation,
-      summary: params.binding?.summary,
-      detachHint: params.binding?.detachHint,
-      data: params.binding?.data,
-    });
+      requestedBySenderId: normalizeOptionalString(requestParams.requestedBySenderId),
+      summary: normalizeOptionalString(requestParams.binding?.summary),
+      detachHint: normalizeOptionalString(requestParams.binding?.detachHint),
+      data: normalizeBindingData(requestParams.binding?.data),
+    };
+    assertBindingCurrent();
+    addPendingPluginBindingRequest(request);
     logPluginBindingLifecycleEvent({
-      event: state.binding ? "auto-refresh" : "auto-approved",
-      identity: params,
+      event: "requested",
+      identity: requestParams,
       conversation: state.ref,
     });
-    return { status: "bound", binding: bound };
-  }
-
-  const request: PendingPluginBindingRequest = {
-    id: createApprovalRequestId(),
-    pluginId: params.pluginId,
-    pluginName: params.pluginName,
-    pluginRoot: params.pluginRoot,
-    conversation,
-    requestedBySenderId: normalizeOptionalString(params.requestedBySenderId),
-    summary: normalizeOptionalString(params.binding?.summary),
-    detachHint: normalizeOptionalString(params.binding?.detachHint),
-    data: normalizeBindingData(params.binding?.data),
-  };
-  addPendingPluginBindingRequest(request);
-  logPluginBindingLifecycleEvent({
-    event: "requested",
-    identity: params,
-    conversation: state.ref,
+    return {
+      status: "pending",
+      approvalId: request.id,
+      reply: {
+        text: buildApprovalMessage(request),
+        interactive: buildApprovalInteractiveReply(request.id),
+      },
+    };
   });
-  return {
-    status: "pending",
-    approvalId: request.id,
-    reply: buildPendingReply(request),
-  };
 }
 
 export async function getCurrentPluginConversationBinding(params: {
@@ -591,59 +595,74 @@ export async function resolvePluginConversationBindingApproval(params: {
   decision: PluginBindingApprovalDecision;
   senderId?: string;
 }): Promise<PluginBindingResolveResult> {
-  const request = takePluginBindingRequestForApproval(params);
-  if (!request) {
-    return { status: "expired" };
-  }
-  if (params.decision === "deny") {
-    dispatchPluginConversationBindingResolved({
-      status: "denied",
-      decision: "deny",
-      request,
-    });
-    logPluginBindingLifecycleEvent({
-      event: "denied",
+  const resolution = { ...params };
+  return await withPluginBindingApprovalOperation(async (assertCurrent) => {
+    const request = takePluginBindingRequestForApproval(resolution);
+    if (!request) {
+      return { status: "expired" };
+    }
+    if (resolution.decision === "deny") {
+      dispatchPluginConversationBindingResolved({
+        status: "denied",
+        decision: "deny",
+        request,
+      });
+      logPluginBindingLifecycleEvent({
+        event: "denied",
+        identity: request,
+        conversation: request.conversation,
+      });
+      return { status: "denied", request };
+    }
+    if (resolution.decision === "allow-always") {
+      await addPersistentApproval({
+        pluginRoot: request.pluginRoot,
+        pluginId: request.pluginId,
+        pluginName: request.pluginName,
+        channel: request.conversation.channel,
+        accountId: request.conversation.accountId,
+        approvedAt: Date.now(),
+      });
+      assertCurrent();
+      const conflict = pluginBindingOwnershipConflict(
+        resolvePluginConversationBindingState(request.conversation),
+        request.pluginRoot,
+      );
+      if (conflict) {
+        throw new Error(conflict);
+      }
+    }
+    const binding = await bindConversationNow({
       identity: request,
       conversation: request.conversation,
+      summary: request.summary,
+      detachHint: request.detachHint,
+      data: request.data,
     });
-    return { status: "denied", request };
-  }
-  if (params.decision === "allow-always") {
-    addPersistentApproval(buildApprovalEntryFromRequest(request));
-  }
-  const binding = await bindConversationNow({
-    identity: request,
-    conversation: request.conversation,
-    summary: request.summary,
-    detachHint: request.detachHint,
-    data: request.data,
+    logPluginBindingLifecycleEvent({
+      event: "approved",
+      identity: request,
+      conversation: request.conversation,
+      decision: resolution.decision,
+    });
+    dispatchPluginConversationBindingResolved({
+      status: "approved",
+      binding,
+      decision: resolution.decision,
+      request,
+    });
+    return {
+      status: "approved",
+      binding,
+      request,
+      decision: resolution.decision,
+    };
   });
-  logPluginBindingLifecycleEvent({
-    event: "approved",
-    identity: request,
-    conversation: request.conversation,
-    decision: params.decision,
-  });
-  dispatchPluginConversationBindingResolved({
-    status: "approved",
-    binding,
-    decision: params.decision,
-    request,
-  });
-  return {
-    status: "approved",
-    binding,
-    request,
-    decision: params.decision,
-  };
 }
 
-function dispatchPluginConversationBindingResolved(params: {
-  status: "approved" | "denied";
-  binding?: PluginConversationBinding;
-  decision: PluginConversationBindingResolutionDecision;
-  request: PendingPluginBindingRequest;
-}): void {
+function dispatchPluginConversationBindingResolved(
+  params: PluginConversationBindingResolvedEvent & { request: PendingPluginBindingRequest },
+): void {
   // Keep platform interaction acks fast even if the plugin does slow post-bind work.
   queueMicrotask(() => {
     void notifyPluginConversationBindingResolved(params).catch((error: unknown) => {
@@ -652,12 +671,9 @@ function dispatchPluginConversationBindingResolved(params: {
   });
 }
 
-async function notifyPluginConversationBindingResolved(params: {
-  status: "approved" | "denied";
-  binding?: PluginConversationBinding;
-  decision: PluginConversationBindingResolutionDecision;
-  request: PendingPluginBindingRequest;
-}): Promise<void> {
+async function notifyPluginConversationBindingResolved(
+  params: PluginConversationBindingResolvedEvent & { request: PendingPluginBindingRequest },
+): Promise<void> {
   const registrations = getActivePluginRegistry()?.conversationBindingResolvedHandlers ?? [];
   for (const registration of registrations) {
     if (registration.pluginId !== params.request.pluginId) {

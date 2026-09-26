@@ -6,6 +6,7 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session section visibility", () => {
@@ -81,7 +82,7 @@ describe("AppSidebar session section visibility", () => {
     const filter = toolbar?.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     expect(filter).not.toBeNull();
     expect(filter?.getAttribute("aria-label")).toBe("Filter & sort");
-    expect(toolbar?.querySelector('[aria-label="New session"]')).not.toBeNull();
+    expect(toolbar?.querySelector('[aria-label="New conversation"]')).not.toBeNull();
     filter?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).not.toBeNull();
@@ -180,26 +181,24 @@ describe("AppSidebar session section visibility", () => {
       [...sidebar.querySelectorAll("[data-session-section^='category:']")].map((group) =>
         group.getAttribute("data-session-section"),
       );
-    const toggleEmptyGroups = async (checked: boolean) => {
+    const chooseEmptyGroups = async (mode: "filtering" | "always" | "never") => {
       sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
       await sidebar.updateComplete;
       const menu = sidebar.querySelector(".sidebar-session-sort-menu")!;
-      const toggle = menu.querySelector<HTMLElement & { checked: boolean }>(
-        '[value="hide-empty-groups"]',
-      );
-      expect(toggle?.textContent).toContain("Hide empty groups");
-      expect(toggle?.checked).toBe(checked);
+      const choice = menu.querySelector(`[value="empty-groups:${mode}"]`);
+      expect(choice).not.toBeNull();
+      await waitForFast(() => expect(choice?.getAttribute("role")).toBe("menuitemradio"));
       menu.dispatchEvent(
         new CustomEvent("wa-select", {
           bubbles: true,
-          detail: { item: { value: "hide-empty-groups" } },
+          detail: { item: { value: `empty-groups:${mode}` } },
         }),
       );
       await sidebar.updateComplete;
     };
 
     expect(groupNames()).toEqual(["category:Empty", "category:Alpha"]);
-    await toggleEmptyGroups(false);
+    await chooseEmptyGroups("always");
     expect(groupNames()).toEqual(["category:Alpha"]);
 
     mounted.provider.remove();
@@ -212,7 +211,7 @@ describe("AppSidebar session section visibility", () => {
     harness.publish({ groups: ["Empty", "Alpha"] });
     await sidebar.updateComplete;
     expect(groupNames()).toEqual(["category:Empty"]);
-    await toggleEmptyGroups(true);
+    await chooseEmptyGroups("never");
     expect(groupNames()).toEqual(["category:Empty", "category:Alpha"]);
   });
 

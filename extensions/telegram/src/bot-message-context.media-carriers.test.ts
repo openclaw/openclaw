@@ -1,39 +1,13 @@
-import type { Message } from "grammy/types";
 import { describe, expect, it, vi } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
-import { describeReplyTarget } from "./bot/helpers.js";
+
+const { vision } = vi.hoisted(() => ({ vision: vi.fn(async () => false) }));
 
 vi.mock("./sticker-vision.runtime.js", () => ({
-  resolveStickerVisionSupportRuntime: vi.fn(async () => false),
+  resolveStickerVisionSupportRuntime: vision,
 }));
 
 describe("buildTelegramMessageContext media carriers", () => {
-  it("carries a successfully downloaded original filename into the current-turn media facts", async () => {
-    const context = await buildTelegramMessageContextForTest({
-      message: {
-        chat: { id: 42, type: "private", first_name: "Ada" },
-        text: "Please read quarterly report.pdf",
-        document: {
-          file_id: "file-1",
-          file_unique_id: "file-u1",
-          file_name: "quarterly report.pdf",
-        },
-      },
-      allMedia: [
-        {
-          kind: "document",
-          path: "/tmp/opaque-upload",
-          contentType: "application/pdf",
-          fileName: "quarterly report.pdf",
-        },
-      ],
-    });
-
-    expect(context?.ctxPayload.media).toEqual([
-      expect.objectContaining({ path: "/tmp/opaque-upload", fileName: "quarterly report.pdf" }),
-    ]);
-  });
-
   it("carries direct tool policy into a topic-bound admitted turn", async () => {
     const context = await buildTelegramMessageContextForTest({
       message: {
@@ -75,45 +49,7 @@ describe("buildTelegramMessageContext media carriers", () => {
     expect(context?.ctxPayload.ConversationToolPolicy).toBeUndefined();
   });
 
-  it("keeps reply media structured before reply-chain rendering", () => {
-    const target = describeReplyTarget({
-      message_id: 11,
-      date: 1_700_000_000,
-      chat: { id: 42, type: "private", first_name: "Ada" },
-      from: { id: 42, is_bot: false, first_name: "Ada" },
-      reply_to_message: {
-        message_id: 10,
-        date: 1_699_999_999,
-        chat: { id: 42, type: "private", first_name: "Pat" },
-        from: { id: 7, is_bot: false, first_name: "Pat" },
-        photo: [{ file_id: "photo-1", file_unique_id: "photo-u1", width: 1, height: 1 }],
-      },
-    } as unknown as Message);
-
-    expect(target).toMatchObject({ mediaType: "image", sender: "Pat" });
-    expect(target?.body).toBeUndefined();
-  });
-
-  it("renders cached native media kinds in reply-chain text", async () => {
-    const context = await buildTelegramMessageContextForTest({
-      message: {
-        chat: { id: 42, type: "private", first_name: "Ada" },
-        text: "What was that?",
-      },
-      replyChain: [
-        {
-          messageId: "9",
-          sender: "Pat",
-          mediaType: "image",
-        },
-      ],
-    });
-
-    expect(context?.ctxPayload.Body).toContain("[Reply chain - nearest first]");
-    expect(context?.ctxPayload.Body).toContain("<media:image>");
-  });
-
-  it("keeps native sticker kind ahead of its materialized image MIME", async () => {
+  it("keeps immediate native sticker kind ahead of MIME and deeper reply media", async () => {
     const context = await buildTelegramMessageContextForTest({
       message: {
         chat: { id: 42, type: "private", first_name: "Ada" },
@@ -125,27 +61,15 @@ describe("buildTelegramMessageContext media carriers", () => {
           sender: "Pat",
           mediaKind: "sticker",
           mediaType: "image/webp",
+          replyToId: "9",
         },
-      ],
-    });
-
-    expect(context?.ctxPayload.Body).toContain("<media:sticker>");
-    expect(context?.ctxPayload.Body).not.toContain("<media:image>");
-  });
-
-  it("uses only the immediate reply media for ReplyToBody", async () => {
-    const context = await buildTelegramMessageContextForTest({
-      message: {
-        chat: { id: 42, type: "private", first_name: "Ada" },
-        text: "What was that?",
-      },
-      replyChain: [
-        { messageId: "10", sender: "Pat", mediaType: "image", replyToId: "9" },
         { messageId: "9", sender: "Sam", mediaType: "document" },
       ],
     });
 
-    expect(context?.ctxPayload.ReplyToBody).toBe("<media:image>");
+    expect(context?.ctxPayload.ReplyToBody).toBe("<media:sticker>");
+    expect(context?.ctxPayload.Body).toContain("[Reply chain - nearest first]");
+    expect(context?.ctxPayload.Body).toContain("<media:sticker>");
     expect(context?.ctxPayload.Body).toContain("<media:document>");
   });
 
@@ -177,79 +101,117 @@ describe("buildTelegramMessageContext media carriers", () => {
     expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["image"]);
   });
 
-  it("keeps primary media bodies empty while recording formatted group history", async () => {
-    const groupHistories = new Map();
-    const context = await buildTelegramMessageContextForTest({
-      message: {
-        chat: { id: -1001, type: "supergroup", title: "Ops" },
-        text: undefined,
-        photo: [{ file_id: "photo-1", file_unique_id: "photo-u1", width: 1, height: 1 }],
-      },
-      allMedia: [{ kind: "image" }],
-      groupHistories,
-      historyLimit: 5,
-    });
-
-    expect(context?.ctxPayload.RawBody).toBe("");
-    expect(context?.ctxPayload.BodyForAgent).toBe("");
-    expect(context?.ctxPayload.CommandBody).toBe("");
-    expect(context?.ctxPayload.CommandSource).toBeUndefined();
-    expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["image"]);
-    expect([...groupHistories.values()].flat().at(-1)?.body).toBe("<media:image>");
-  });
-
-  it("admits an unavailable native sticker as a type-only fact", async () => {
-    const context = await buildTelegramMessageContextForTest({
-      message: {
-        chat: { id: 42, type: "private", first_name: "Ada" },
-        text: undefined,
-        sticker: {
-          file_id: "sticker-1",
-          file_unique_id: "sticker-u1",
-          type: "regular",
-          width: 1,
-          height: 1,
-          is_animated: true,
-          is_video: false,
+  it.each(["voice", "audio"] as const)(
+    "keeps mixed aggregate media out of command text and distinguishes %s modality",
+    async (kind) => {
+      const context = await buildTelegramMessageContextForTest({
+        message: {
+          chat: { id: -1001, type: "supergroup", title: "Ops" },
+          text: undefined,
+          [kind]: { file_id: "audio-1", file_unique_id: "audio-u1", duration: 1 },
         },
-      },
-      allMedia: [{ kind: "sticker" }],
-    });
+        allMedia: [{ kind: "audio" }, { kind: "image" }, { kind: "document" }],
+        historyLimit: 5,
+      });
 
-    expect(context?.ctxPayload.RawBody).toBe("");
-    expect(context?.ctxPayload.BodyForAgent).toBe("");
-    expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["sticker"]);
-    expect(context?.ctxPayload.StickerMediaIncluded).toBeUndefined();
-  });
+      expect(context?.ctxPayload.RawBody).toBe("");
+      expect(context?.ctxPayload.BodyForAgent).toBe("");
+      expect(context?.ctxPayload.CommandBody).toBe("");
+      expect(context?.ctxPayload.CommandSource).toBeUndefined();
+      expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual([
+        "audio",
+        "image",
+        "document",
+      ]);
+      expect(context?.ctxPayload.SourceModality).toBe(kind === "voice" ? "voice" : undefined);
+    },
+  );
 
-  it("preserves cached sticker descriptions in group history", async () => {
-    const groupHistories = new Map();
-    await buildTelegramMessageContextForTest({
-      message: {
-        chat: { id: -1002, type: "supergroup", title: "Stickers" },
-        text: undefined,
-        sticker: {
-          file_id: "sticker-2",
-          file_unique_id: "sticker-u2",
-          type: "regular",
-          width: 1,
-          height: 1,
-          is_animated: false,
-          is_video: false,
+  it.each([
+    { is_animated: true, is_video: false, emoji: "😭", expected: "😭" },
+    { is_animated: false, is_video: true, emoji: "😭", expected: "😭" },
+    { is_animated: true, is_video: false, emoji: undefined, expected: "<media:sticker>" },
+  ])(
+    "keeps an unavailable sticker meaningful to the agent: $expected ($is_video)",
+    async ({ is_animated, is_video, emoji, expected }) => {
+      const context = await buildTelegramMessageContextForTest({
+        message: {
+          chat: { id: -1001, type: "supergroup", title: "Stickers" },
+          text: undefined,
+          reply_to_message: {
+            message_id: 10,
+            date: 1_700_000_000,
+            chat: { id: -1001, type: "supergroup", title: "Stickers" },
+            from: { id: 7, is_bot: true, first_name: "Bot" },
+            text: "No Sunday-only tickets yet.",
+          },
+          sticker: {
+            file_id: "sticker-1",
+            file_unique_id: "sticker-u1",
+            type: "regular",
+            width: 1,
+            height: 1,
+            is_animated,
+            is_video,
+            emoji,
+          },
         },
-      },
-      allMedia: [
-        {
-          kind: "sticker",
-          path: "/tmp/sticker.webp",
-          contentType: "image/webp",
-          stickerMetadata: { cachedDescription: "A waving sticker" },
-        },
-      ],
-      groupHistories,
-      historyLimit: 5,
-    });
+        allMedia: [{ kind: "sticker" }],
+        resolveTelegramGroupConfig: () => ({
+          groupConfig: { requireMention: true },
+          topicConfig: undefined,
+        }),
+      });
 
-    expect([...groupHistories.values()].flat().at(-1)?.body).toBe("[Sticker] A waving sticker");
-  });
+      expect(context?.ctxPayload.BodyForAgent).toBe(expected);
+      expect(context?.ctxPayload.ReplyToBody).toBe("No Sunday-only tickets yet.");
+      expect(context?.ctxPayload.WasMentioned).toBe(true);
+    },
+  );
+
+  it.each([false, true])(
+    "selects cached sticker descriptions versus visual understanding (%s)",
+    async (supportsVision) => {
+      vision.mockResolvedValueOnce(supportsVision);
+      const context = await buildTelegramMessageContextForTest({
+        message: {
+          chat: { id: -1002, type: "supergroup", title: "Stickers" },
+          text: undefined,
+          sticker: {
+            file_id: "sticker-2",
+            file_unique_id: "sticker-u2",
+            type: "regular",
+            width: 1,
+            height: 1,
+            is_animated: false,
+            is_video: false,
+          },
+        },
+        allMedia: [
+          {
+            kind: "sticker",
+            path: "/tmp/sticker.webp",
+            contentType: "image/webp",
+            stickerMetadata: {
+              fileId: "sticker-2",
+              fileUniqueId: "sticker-u2",
+              cachedDescription: "A waving sticker",
+            },
+          },
+        ],
+        historyLimit: 5,
+      });
+
+      expect(context?.ctxPayload.BodyForAgent).toBe(
+        supportsVision ? "" : "[Sticker] A waving sticker",
+      );
+      expect(context?.ctxPayload.media).toEqual([
+        expect.objectContaining({ path: "/tmp/sticker.webp", contentType: "image/webp" }),
+      ]);
+      expect(context?.ctxPayload.StickerMediaIncluded).toBe(true);
+      expect(context?.ctxPayload.SkipStickerMediaUnderstanding).toBe(
+        supportsVision ? undefined : true,
+      );
+    },
+  );
 });

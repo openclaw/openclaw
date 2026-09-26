@@ -121,7 +121,7 @@ view renders these sections:
 
 Every field includes `present`, `absent`, `unknown`, or `unsupported`; the CLI
 does not infer a user from a session key, device id, display name, or shared
-credential. A direct local run currently shows authoritative `local-cli`
+credential. A direct local run shows authoritative `local-cli`
 ingress, an absent invoker, and
 `unattributed` coverage. Its admission receipt says `not-applicable` because no
 identity-aware policy or grant evaluation was proven.
@@ -159,7 +159,7 @@ attribution-only.
 
 For channel ingress, `unknown` means a supported integration could not supply
 valid host-bound evidence; it never means allowed. `unsupported` is reserved
-for a named path with no authoritative Phase 0 integration. A plugin-provided
+for a named path with no authoritative ingress integration. A plugin-provided
 sender or structurally copied resolver result cannot upgrade either state.
 
 A terminal approval display shows `allowed` or `denied`, its stable reason

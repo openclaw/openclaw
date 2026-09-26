@@ -20,7 +20,7 @@ describe("computer screenshot dimensions", () => {
           displayFrameId: "display-frame",
           ...(reportsDimensions ? { width, height } : {}),
         },
-        target: { nodeId: "desktop-node", screenIndex: 0 },
+        target: { host: "node", nodeId: "desktop-node", screenIndex: 0 },
         action: "screenshot",
         noteLines: [],
         referenceWidth,

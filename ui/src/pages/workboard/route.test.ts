@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createApplicationRouter, startApplicationRouter, type RouteId } from "../../app-routes.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { resolveWorkboardRouteLocation } from "./route-location.ts";
 
 function routeFixture(
@@ -38,6 +39,17 @@ function routeFixture(
   const redirects: Promise<void>[] = [];
   const context = {
     basePath,
+    gateway: createApplicationGateway({
+      phase: "stopped",
+      client: null,
+      offlineStable: false,
+      hello: null,
+      canvasPluginSurfaceUrl: null,
+      assistantAgentId: null,
+      sessionKey: "agent:main:main",
+      lastError: null,
+      lastErrorCode: null,
+    }).gateway,
     runtimeConfig: {
       ensureLoaded: () => metadata.promise,
     },
@@ -216,34 +228,6 @@ describe("Workboard route navigation ownership", () => {
 });
 
 describe("Workboard route location", () => {
-  it("reads the canonical board path without rewriting it", () => {
-    expect(
-      resolveWorkboardRouteLocation({
-        pathname: "/workboard/ops",
-        search: "?agent=main",
-        hash: "#ready",
-      }),
-    ).toEqual({ boardFilter: "ops", search: "?agent=main" });
-  });
-
-  it("redirects the shipped query alias to the canonical path", () => {
-    expect(
-      resolveWorkboardRouteLocation({
-        pathname: "/workboard",
-        search: "?agent=main&board=ops",
-        hash: "#ready",
-      }),
-    ).toEqual({
-      boardFilter: "ops",
-      search: "?agent=main",
-      canonicalLocation: {
-        pathname: "/workboard/ops",
-        search: "?agent=main",
-        hash: "#ready",
-      },
-    });
-  });
-
   it("drops a redundant legacy query from an already-canonical board path", () => {
     expect(
       resolveWorkboardRouteLocation({

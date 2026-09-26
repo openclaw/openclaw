@@ -35,6 +35,27 @@ export function readSessionMessageDisplayContent(message: unknown): {
   return { text: fallback ?? texts.join("\n"), hasNonText, usesFallbackText: fallback !== null };
 }
 
+/** Status notices remain visible but do not define the terminal reply they accompany. */
+export function projectSessionTerminalReplyMessage(message: unknown): unknown {
+  const record = readRecord(message);
+  if (!record || !Array.isArray(record.content)) {
+    return message;
+  }
+  const content = record.content.filter(
+    (block) => readRecord(block)?.openclawStatusNotice !== true,
+  );
+  if (content.length === record.content.length || content.length === 0) {
+    return message;
+  }
+  return { ...record, content, text: undefined };
+}
+
+/** Check whether a projected message has text or another displayable block. */
+export function hasDisplayableSessionMessage(message: unknown): boolean {
+  const { text, hasNonText } = readSessionMessageDisplayContent(message);
+  return Boolean(text) || hasNonText;
+}
+
 function normalizeChatErrorComparisonText(text: string): string {
   return text
     .trim()

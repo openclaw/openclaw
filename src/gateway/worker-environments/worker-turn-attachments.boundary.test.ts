@@ -52,7 +52,7 @@ describe("current attachments in an active remote placement", () => {
         await writeFile(path.join(directory, "remote-edits.txt"), "preserve me");
       }
       const base = await readActualWorkspaceManifest({ root: local, baseCommit: null });
-      seedActivePlacement(executionMode, remote);
+      await seedActivePlacement(executionMode, remote);
       // These arrive after placement: the initial workspace snapshot cannot include them.
       const pdf = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(220_000, 65)]);
       const image = Buffer.from(
@@ -260,6 +260,7 @@ describe("current attachments in an active remote placement", () => {
             currentManifestRef: manifestRef,
             base: base.manifest,
             current,
+            acceptance: { kind: "reconcile" },
             journal: request.source.journal,
           });
           workerManifestPaths = JSON.parse(raw).entries.map(
@@ -282,7 +283,7 @@ describe("current attachments in an active remote placement", () => {
           ...unusedEnvironments(),
           get: () => attachedEnvironment(),
           acquireTurnCredential: async () => credential(),
-          acknowledgeCredentialDelivery: () => true,
+          acknowledgeCredentialDelivery: async () => true,
           startTunnel: async () => tunnel,
         },
       });

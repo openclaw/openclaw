@@ -84,6 +84,24 @@ describe("ChannelsStatusResultSchema", () => {
   /** Compiled validator for channel status diagnostics. */
   const validate = Compile(ChannelsStatusResultSchema);
 
+  it("keeps channel sampling intervals integral while accepting fractional metrics", () => {
+    const eventLoop = Compile(ChannelsStatusResultSchema.properties.eventLoop);
+    for (const intervalMs of [0, 1, 0.5, -1]) {
+      expect(
+        eventLoop.Check({
+          degraded: false,
+          reasons: [],
+          intervalMs,
+          delayP99Ms: 1.25,
+          delayMaxMs: 2.5,
+          utilization: 0.2,
+          cpuCoreRatio: 1.5,
+        }),
+        `intervalMs=${intervalMs}`,
+      ).toBe(intervalMs === 0 || intervalMs === 1);
+    }
+  });
+
   it("accepts gateway event-loop diagnostics emitted by channels.status", () => {
     expect(
       validate.Check({

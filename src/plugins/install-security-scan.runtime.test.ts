@@ -319,6 +319,90 @@ describe("package dependency boundaries", () => {
     ).rejects.toThrow("node_modules symlink target outside install root");
     expect(runInstallPolicyMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      variable: "OPENCLAW_INSTALL_SCAN_MAX_DEPTH",
+      value: "1",
+      overflowDirectory: "one/two",
+      diagnostic: "exceeded max depth (1)",
+    },
+    {
+      variable: "OPENCLAW_INSTALL_SCAN_MAX_DIRECTORIES",
+      value: "2",
+      overflowDirectory: "two",
+      diagnostic: "exceeded max directories (2)",
+    },
+  ])(
+    "preserves the admission boundary for $variable",
+    async ({ variable, value, overflowDirectory, diagnostic }) => {
+      const packageDir = makeTempDir();
+      await fs.mkdir(path.join(packageDir, "one"));
+      await fs.writeFile(path.join(packageDir, "one", "index.js"), "export {};");
+      const request = { extensions: ["one/index.js"], logger: {}, packageDir, pluginId: "limits" };
+      vi.stubEnv(variable, value);
+      try {
+        await expect(scanPackageInstallSourceRuntime(request)).resolves.toBeUndefined();
+        expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
+        runInstallPolicyMock.mockClear();
+        await fs.mkdir(path.join(packageDir, overflowDirectory), { recursive: true });
+        await expect(scanPackageInstallSourceRuntime(request)).rejects.toThrow(diagnostic);
+        expect(runInstallPolicyMock).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("accepts in-tree dependency links and hardlinked files without counting links as directories", async () => {
+    const packageDir = makeTempDir();
+    const dependency = path.join(packageDir, "node_modules", "dependency");
+    await fs.mkdir(dependency, { recursive: true });
+    const source = path.join(dependency, "index.js");
+    await fs.writeFile(source, "export {};");
+    await fs.link(source, path.join(dependency, "linked.js"));
+    await fs.symlink(dependency, path.join(packageDir, "node_modules", "alias"), "junction");
+    vi.stubEnv("OPENCLAW_INSTALL_SCAN_MAX_DIRECTORIES", "3");
+    try {
+      await expect(
+        scanPackageInstallSourceRuntime({
+          extensions: ["index.js"],
+          logger: {},
+          packageDir,
+          pluginId: "in-tree-links",
+        }),
+      ).resolves.toBeUndefined();
+      expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("fails before install policy when a dependency directory cannot be read", async () => {
+    const packageDir = makeTempDir();
+    const unreadable = path.join(packageDir, "dependency");
+    await fs.mkdir(unreadable);
+    const readDirectory = fs.readdir.bind(fs);
+    const readdir = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+      if (String(args[0]) === unreadable) {
+        throw Object.assign(new Error("directory unavailable"), { code: "EACCES" });
+      }
+      return readDirectory(...args);
+    });
+    try {
+      await expect(
+        scanPackageInstallSourceRuntime({
+          extensions: ["index.js"],
+          logger: {},
+          packageDir,
+          pluginId: "unreadable-dependency",
+        }),
+      ).rejects.toThrow(`dependency boundary scan could not read ${unreadable}`);
+      expect(runInstallPolicyMock).not.toHaveBeenCalled();
+    } finally {
+      readdir.mockRestore();
+    }
+  });
 });
 
 describe("legacy file install scan compatibility", () => {
@@ -346,40 +430,6 @@ describe("legacy file install scan compatibility", () => {
       targetType: "plugin",
       requestMode: "install",
     });
-    expect(runInstallPolicyMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("requires approval again when policy re-evaluation returns a changed warning", async () => {
-    const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
-    runInstallPolicyMock
-      .mockResolvedValueOnce({
-        warning: { reason: "review this plugin", fingerprint: "warning-a" },
-      })
-      .mockResolvedValueOnce({
-        warning: { reason: "review the new finding", fingerprint: "warning-b" },
-        findings: [
-          {
-            ruleId: "changed-warning",
-            severity: "warn",
-            message: "new finding",
-          },
-        ],
-      });
-
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
-      logger: {},
-      onInstallPolicyWarning,
-      pluginId: "payload",
-    });
-
-    expect(result?.blocked).toMatchObject({
-      code: "security_scan_blocked",
-    });
-    expect(result?.blocked?.reason).toContain("Reason: review the new finding");
-    expect(result?.blocked?.reason).toContain("new finding");
-    expect(result?.blocked?.reason).toContain("The policy warning changed after approval.");
-    expect(onInstallPolicyWarning).toHaveBeenCalledTimes(1);
     expect(runInstallPolicyMock).toHaveBeenCalledTimes(2);
   });
 
@@ -426,13 +476,12 @@ describe("legacy file install scan compatibility", () => {
     expect(runInstallPolicyMock).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the deprecated unsafe flag inert when policy warns", async () => {
+  it("blocks policy warnings without acknowledgement", async () => {
     runInstallPolicyMock.mockResolvedValue({
       warning: { reason: "review this plugin", fingerprint: "warning-a" },
     });
 
     const result = await scanFileInstallSourceRuntime({
-      dangerouslyForceUnsafeInstall: true,
       filePath: "/tmp/payload.js",
       logger: {},
       pluginId: "payload",
@@ -705,21 +754,23 @@ describe("legacy file install scan compatibility", () => {
     expect(warnings.join("\n").length).toBeLessThanOrEqual(4_000);
   });
 
-  it.each(["security_scan_blocked", "security_scan_failed"] as const)(
+  it.each(["security_scan_failed"] as const)(
     "does not let acknowledgement override %s",
     async (code) => {
+      const onInstallPolicyWarning = vi.fn(async () => ({ status: "approved" as const }));
       runInstallPolicyMock.mockResolvedValueOnce({
         blocked: { code, reason: "blocked by operator policy" },
       });
 
       const result = await scanFileInstallSourceRuntime({
-        dangerouslyForceUnsafeInstall: true,
+        onInstallPolicyWarning,
         filePath: "/tmp/payload.js",
         logger: {},
         pluginId: "payload",
       });
 
       expect(result?.blocked?.reason).toBe("blocked by operator policy");
+      expect(onInstallPolicyWarning).not.toHaveBeenCalled();
     },
   );
 

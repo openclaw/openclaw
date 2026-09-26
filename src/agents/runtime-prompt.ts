@@ -1,14 +1,12 @@
 import os from "node:os";
 import type { ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareActiveNodeContext } from "../infra/active-node-context.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../infra/os-summary.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import {
-  listChannelSupportedActions,
-  resolveChannelMessageToolHints,
-  resolveChannelReactionGuidance,
-} from "./channel-tools.js";
+import { resolveChannelMessageToolHints, resolveChannelReactionGuidance } from "./channel-tools.js";
+import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
 import { detectRuntimeShell } from "./shell-utils.js";
@@ -20,17 +18,13 @@ export async function resolveAgentRuntimePrompt(params: {
   workspaceDir?: string;
   cwd?: string;
   preparedRepoRoot?: string | null;
+  preparedGitCoauthorPrompt?: string | null;
   sessionKey?: string;
   sessionId?: string;
   model: string;
   channel?: string;
   accountId?: string | null;
   chatType?: ChatType;
-  currentChannelId?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
-  senderId?: string | null;
-  senderIsOwner?: boolean | null;
 }) {
   const runtimeChannel = normalizeMessageChannel(params.channel);
   const channelPromptContext = {
@@ -46,27 +40,20 @@ export async function resolveAgentRuntimePrompt(params: {
   const messageToolHints = runtimeChannel
     ? resolveChannelMessageToolHints(channelPromptContext)
     : undefined;
-  const channelActions = runtimeChannel
-    ? listChannelSupportedActions({
-        cfg: params.config,
-        channel: runtimeChannel,
-        chatType: params.chatType,
-        currentChannelId: params.currentChannelId ?? undefined,
-        currentThreadTs: params.currentThreadTs ?? undefined,
-        currentMessageId: params.currentMessageId ?? undefined,
-        accountId: params.accountId ?? undefined,
-        sessionKey: params.sessionKey ?? undefined,
-        sessionId: params.sessionId ?? undefined,
-        agentId: params.agentId ?? undefined,
-        requesterSenderId: params.senderId ?? undefined,
-        senderIsOwner: params.senderIsOwner ?? undefined,
-      })
-    : undefined;
   const defaultModel = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
   });
   const machineName = await getMachineDisplayName();
+  await prepareActiveNodeContext();
+  const preparedGitCoauthorPrompt = Object.hasOwn(params, "preparedGitCoauthorPrompt")
+    ? params.preparedGitCoauthorPrompt
+    : await resolveSessionGitCoauthorPrompt({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      });
   const systemPromptParams = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
@@ -75,6 +62,7 @@ export async function resolveAgentRuntimePrompt(params: {
     ...(Object.hasOwn(params, "preparedRepoRoot")
       ? { preparedRepoRoot: params.preparedRepoRoot }
       : {}),
+    preparedGitCoauthorPrompt,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
@@ -88,7 +76,6 @@ export async function resolveAgentRuntimePrompt(params: {
       channel: runtimeChannel,
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
-      channelActions,
     },
   });
 

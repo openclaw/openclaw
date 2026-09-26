@@ -4,9 +4,8 @@
 # ///
 """Record every observable Telegram event as the QA user, not just new messages.
 
-`user-driver.py` handles only updateNewMessage, and no bot can observe deletions
-at all. Progress drafts are built on edit-in-place plus delete-on-cleanup, so
-proving them needs the full update stream:
+`user-driver.py` serves normalized message/edit snapshots. Progress drafts also
+need raw revisions and delete-on-cleanup evidence from the full update stream:
 
   updateNewMessage      -> message
   updateMessageContent  -> edit      (carries the new body; one per revision)
@@ -38,52 +37,13 @@ def formatted_text(value):
     return value.get("text", "") if isinstance(value, dict) else ""
 
 
-def rich_text(value):
-    if not isinstance(value, dict):
-        return ""
-    kind = value.get("@type", "")
-    if kind == "richTextPlain":
-        return value.get("text", "")
-    if kind == "richTextCustomEmoji":
-        return value.get("alternative_text", "")
-    if kind == "richTextMathematicalExpression":
-        return value.get("expression", "")
-    if kind == "richTexts":
-        return "".join(rich_text(item) for item in value.get("texts") or [])
-    return rich_text(value.get("text"))
-
-
-def rich_message_text(value):
-    if not isinstance(value, dict):
-        return ""
-    parts = []
-
-    def visit(node):
-        if isinstance(node, list):
-            for item in node:
-                visit(item)
-            return
-        if not isinstance(node, dict):
-            return
-        if str(node.get("@type", "")).startswith("richText"):
-            text = rich_text(node)
-            if text:
-                parts.append(text)
-            return
-        for child in node.values():
-            visit(child)
-
-    visit(value.get("blocks") or [])
-    return "\n".join(parts)
-
-
 def content_text(content):
     for key in ("text", "caption"):
         value = content.get(key)
         if isinstance(value, dict) and isinstance(value.get("text"), str):
             return value["text"]
     if content.get("@type") == "messageRichMessage":
-        return rich_message_text(content.get("message") or {})
+        return driver.rich_message_text(content.get("message") or {})
     return ""
 
 
@@ -120,8 +80,8 @@ class EventRecorder:
             "elapsedMs": int((time.time() - self.started_at) * 1000),
             "kind": kind,
             "messageId": message_id,
-            # Bot API ids are TDLib ids >> 20; keep both so bot-lane and
-            # userbot-lane recordings can be correlated by message.
+            # Historical field name: this is the observing account's server ID,
+            # not another account's Bot API receipt in DMs or basic groups.
             "botApiMessageId": (message_id >> 20) if isinstance(message_id, int) else None,
             **fields,
         }
@@ -159,7 +119,7 @@ class EventRecorder:
             "isOutgoing": bool(message.get("is_outgoing")),
             **self._reply_fields(message),
         }
-        self.messages[message_id] = message
+        self.messages[message_id] = dict(message)
 
     def _known_message_fields(self, message_id):
         return self.message_fields.get(message_id, {})
@@ -170,17 +130,10 @@ class EventRecorder:
             self.record_handle = None
 
     def ingest(self, update):
-        if self._chat_id_of(update) != self.chat_id:
+        if driver.update_chat_id(update) != self.chat_id:
             return
         for kind, message_id, fields in self._events_for(update):
             self._append(kind, message_id, **fields)
-
-    def _chat_id_of(self, update):
-        """updateNewMessage nests chat_id under message; the rest keep it top level."""
-        message = update.get("message")
-        if isinstance(message, dict) and "chat_id" in message:
-            return message["chat_id"]
-        return update.get("chat_id")
 
     def _events_for(self, update):
         """One update yields zero or more events; a delete batch yields many."""
@@ -213,6 +166,8 @@ class EventRecorder:
         elif kind == "updateMessageContent":
             content = update.get("new_content") or {}
             message_id = update.get("message_id")
+            if message_id in self.messages:
+                self.messages[message_id]["content"] = content
             text = content_text(content)
             rich_message = content.get("message") if content.get("@type") == "messageRichMessage" else None
             yield (
@@ -419,7 +374,42 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
             ):
                 if action["type"] == "send":
                     text, _run = driver.apply_template(action["text"], sut)
-                    result = driver_obj.send_text(recorder.chat_id, text)
+                    # replyToPrevious targets the newest message this scenario sent.
+                    reply_to = sent_ids[-1] if action.get("replyToPrevious") and sent_ids else None
+                    photo = action.get("photo")
+                    try:
+                        if photo:
+                            results = driver_obj.send_photos(
+                                recorder.chat_id,
+                                [photo],
+                                text,
+                                reply_to=reply_to,
+                                forum_topic_id=action.get("forumTopicId"),
+                            )
+                            result = results[0] if results else None
+                        else:
+                            result = driver_obj.send_text(
+                                recorder.chat_id,
+                                text,
+                                reply_to=reply_to,
+                                forum_topic_id=action.get("forumTopicId"),
+                            )
+                    except driver.DriverError as error:
+                        failure = recorder._append(
+                            "action",
+                            None,
+                            actionType="send",
+                            actionIndex=action_index,
+                            status="failed",
+                            sendOutcome="unknown",
+                            error=str(error),
+                        )
+                        if barrier_dir:
+                            publish_recorder_state(Path(barrier_dir) / "action-failure.json", failure)
+                        # A confirmation timeout can follow an accepted send. Keep
+                        # observing without resending or claiming a sent receipt.
+                        recorder.pump(max(0, deadline - time.time()))
+                        raise
                     message_id = (result or {}).get("id")
                     sent_ids.append(message_id)
                     recorder._append(
@@ -428,6 +418,8 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
                         actionType="send",
                         status="completed",
                         text=text,
+                        **({"photo": photo} if photo else {}),
+                        **({"replyToMessageId": reply_to} if reply_to else {}),
                     )
                     next_action += 1
                     continue
@@ -481,12 +473,23 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
     return sent_ids
 
 
-def publish_recorder_ready(path, recorder, require_dm_peer=False):
+def publish_recorder_state(path, payload):
     if not path:
         return
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     pending = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    with pending.open("w") as handle:
+        json.dump(payload, handle)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(pending, target)
+
+
+def publish_recorder_ready(path, recorder, require_dm_peer=False):
+    if not path:
+        return
     payload = {
         "schemaVersion": 1,
         "startedAtUnixMs": int(recorder.started_at * 1000),
@@ -499,12 +502,7 @@ def publish_recorder_ready(path, recorder, require_dm_peer=False):
             raise driver.DriverError("Proof recorder requires the selected SUT private chat")
         payload["chatType"] = "private"
         payload["peerUserId"] = chat_type["user_id"]
-    with pending.open("w") as handle:
-        json.dump(payload, handle)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(pending, target)
+    publish_recorder_state(path, payload)
 
 
 def main():
@@ -556,6 +554,7 @@ def main():
     publish_recorder_ready(args.ready_file, recorder, args.proof_dm_peer)
 
     sent_ids = []
+    action_error = None
     try:
         if args.scenario:
             scenario = json.loads(Path(args.scenario).read_text())
@@ -579,6 +578,17 @@ def main():
             sent_ids.extend(message.get("id") for message in results)
         if not args.scenario:
             recorder.pump(args.seconds)
+    except driver.DriverError as error:
+        if not args.scenario:
+            raise
+        action_error = str(error)
+        sent_ids = [
+            event["messageId"]
+            for event in recorder.events
+            if event["kind"] == "action"
+            and event.get("actionType") == "send"
+            and event.get("status") == "completed"
+        ]
     finally:
         recorder.close()
 
@@ -598,6 +608,8 @@ def main():
         else None
     )
     summary["recordPath"] = str(args.record)
+    if action_error:
+        summary["actionError"] = action_error
 
     payload = json.dumps(summary, indent=2)
     if args.output:
@@ -605,7 +617,7 @@ def main():
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(f"{payload}\n")
     print(payload)
-    return 0
+    return 1 if action_error else 0
 
 
 if __name__ == "__main__":

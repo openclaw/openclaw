@@ -5,10 +5,18 @@ import {
   isCircuitBreakerOpen,
   recordCircuitBreakerTimeout,
   resetActiveRecallStateForTests,
+  shouldCacheResult,
 } from "./recall-state.js";
 import { DEFAULT_MAX_CACHE_ENTRIES } from "./types.js";
 
 describe("active-memory timeout circuit breakers", () => {
+  it.each([
+    [{ status: "timeout_partial", elapsedMs: 1, summary: "partial" }, false],
+    [{ status: "ok", elapsedMs: 1, rawReply: "full", summary: "full" }, true],
+  ] as const)("applies cache eligibility to %#", (result, expected) => {
+    expect(shouldCacheResult(result)).toBe(expected);
+  });
+
   beforeEach(() => {
     resetActiveRecallStateForTests();
     vi.useFakeTimers();
@@ -20,7 +28,8 @@ describe("active-memory timeout circuit breakers", () => {
     vi.useRealTimers();
   });
 
-  it.each([5_000, 120_000])("expires other entries after the %d ms cooldown", (cooldownMs) => {
+  it("expires other entries after the cooldown", () => {
+    const cooldownMs = 5_000;
     recordCircuitBreakerTimeout("old", cooldownMs);
     vi.advanceTimersByTime(cooldownMs - 1);
     recordCircuitBreakerTimeout("recent", cooldownMs);

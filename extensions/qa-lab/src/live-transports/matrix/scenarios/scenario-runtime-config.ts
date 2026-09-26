@@ -180,14 +180,15 @@ export async function runMatrixQaAllowlistHotReloadScenario(
       timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
       token,
     });
-    const { body: triggerBody, ...acceptedArtifacts } = accepted;
 
     return {
       artifacts: {
         accepted: {
           actorUserId: context.observerUserId,
-          ...acceptedArtifacts,
-          triggerBody,
+          driverEventId: accepted.driverEventId,
+          reply: accepted.reply,
+          token: accepted.token,
+          triggerBody: accepted.body,
         },
         blocked: blocked.artifacts,
       },

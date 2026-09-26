@@ -364,7 +364,10 @@ if (!customElements.get("openclaw-mermaid")) {
 
 export function mountMermaidBlocks(root: Element): boolean {
   let mounted = false;
-  for (const block of root.querySelectorAll(".markdown-mermaid")) {
+  const blocks = root.matches(".markdown-mermaid")
+    ? [root]
+    : root.querySelectorAll(".markdown-mermaid");
+  for (const block of blocks) {
     const code = block.querySelector("pre code");
     if (!code) {
       continue;

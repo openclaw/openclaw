@@ -301,16 +301,16 @@ describe("sessionsCommand model resolution", () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
+          model: { primary: "openai/gpt-5.6-luna" },
           models: {
-            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
           },
         },
       },
       models: {
         providers: {
           openai: {
-            models: [{ id: "gpt-5.6-sol", contextTokens: 1_000_000, contextWindow: 1_050_000 }],
+            models: [{ id: "gpt-5.6-luna", contextTokens: 1_000_000, contextWindow: 1_050_000 }],
           },
         },
       },
@@ -322,7 +322,7 @@ describe("sessionsCommand model resolution", () => {
           sessionId: "stale-openclaw-window",
           updatedAt: Date.now() - 60_000,
           modelProvider: "openai",
-          model: "gpt-5.6-sol",
+          model: "gpt-5.6-luna",
           agentHarnessId: "openclaw",
           contextTokens: 272_000,
           contextTokensSource: "runtime",
@@ -342,15 +342,15 @@ describe("sessionsCommand model resolution", () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
+          model: { primary: "openai/gpt-5.6-luna" },
           models: {
-            "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
           },
         },
       },
       models: {
         providers: {
-          openai: { models: [{ id: "gpt-5.6-sol", contextWindow: 1_000_000 }] },
+          openai: { models: [{ id: "gpt-5.6-luna", contextWindow: 1_000_000 }] },
         },
       },
     }));
@@ -361,7 +361,7 @@ describe("sessionsCommand model resolution", () => {
           sessionId: "matching-codex-window",
           updatedAt: Date.now() - 60_000,
           modelProvider: "openai",
-          model: "gpt-5.6-sol",
+          model: "gpt-5.6-luna",
           agentHarnessId: "codex",
           contextTokens: 272_000,
           contextTokensSource: "runtime",
@@ -413,15 +413,15 @@ describe("sessionsCommand model resolution", () => {
     setMockSessionsConfig(() => ({
       agents: {
         defaults: {
-          model: { primary: "openai/gpt-5.6-sol" },
+          model: { primary: "openai/gpt-5.6-luna" },
           models: {
-            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
       models: {
         providers: {
-          openai: { models: [{ id: "gpt-5.6-sol", contextTokens: 272_000 }] },
+          openai: { models: [{ id: "gpt-5.6-luna", contextTokens: 272_000 }] },
         },
       },
     }));
@@ -432,7 +432,7 @@ describe("sessionsCommand model resolution", () => {
           sessionId: "locked-codex-window",
           updatedAt: Date.now() - 60_000,
           modelProvider: "openai",
-          model: "gpt-5.6-sol",
+          model: "gpt-5.6-luna",
           agentHarnessId: "codex",
           contextTokens: 1_000_000,
           modelSelectionLocked: true,

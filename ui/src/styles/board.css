@@ -136,6 +136,11 @@ openclaw-board-view {
   position: relative;
 }
 
+.board-grid[hidden],
+openclaw-board-widget-cell[hidden] {
+  display: none;
+}
+
 @container (max-width: 560px) {
   /* Keep desktop sizes canonical; only placement changes on narrow boards.
      CSS order preserves the keyed frame nodes when persisted order changes. */
@@ -349,12 +354,15 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__mcp-app {
-  display: grid;
-  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
 .board-widget__mcp-app > .board-widget__grant {
   border-bottom: 1px solid var(--board-line);
+  flex: 0 0 auto;
   height: auto;
   max-height: 112px;
   min-height: 0;
@@ -364,7 +372,8 @@ openclaw-board-widget-cell {
 
 .board-widget__mcp-app-view {
   display: block;
-  min-height: 160px;
+  flex: 1 1 0;
+  min-height: 0;
   width: 100%;
 }
 
@@ -557,6 +566,92 @@ openclaw-board-widget-cell {
 
   .board-widget__body {
     border-radius: 11px;
+  }
+}
+
+/* Page controls live in the task header on mouse and touch alike. */
+.board-widget--page-chrome {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.board-widget__page-menu-heading {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.board-widget__page-menu-heading strong {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-widget__menu-capabilities {
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  padding: 0 12px 8px;
+}
+
+.board-widget__menu-capabilities ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+
+/* A lone full-width widget becomes the focused dashboard's page. Keep the
+   regular grid sizing, subtracting only the shell removed from auto heights. */
+:is(.sidebar-region--expanded, .sidebar-region:not(.sidebar-region--open), .board-document__content)
+  openclaw-board-view:has(> .board-view--single-full-width) {
+  padding: 0;
+
+  > .board-view {
+    padding: 0;
+  }
+
+  .board-tabs {
+    padding-left: 16px;
+  }
+
+  .board-widget:not(.board-widget--dragging) {
+    --board-widget-height-trim: 2px;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+
+    .board-widget__body {
+      border-radius: 0;
+    }
+  }
+
+  &:has(> .board-view--page) {
+    height: 100%;
+    overflow: hidden;
+
+    > .board-view {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+    }
+
+    .board-grid {
+      flex: 1 1 0;
+      min-height: 0;
+      grid-auto-rows: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+    }
+
+    .board-widget:not(.board-widget--dragging) {
+      grid-area: 1 / 1 / -1 / -1 !important;
+    }
   }
 }
 

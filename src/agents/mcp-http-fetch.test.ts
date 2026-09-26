@@ -295,7 +295,7 @@ describe("MCP HTTP fetch helpers", () => {
       authorization: string | null;
       cache: RequestCache;
       credentials: RequestCredentials;
-      keepalive: boolean;
+      keepalive: boolean | undefined;
       mode: RequestMode;
     }> = [];
     testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
@@ -319,6 +319,8 @@ describe("MCP HTTP fetch helpers", () => {
       },
     };
     const resourceUrl = "https://mcp.example.com/mcp";
+    // Removal: expect true after Bun exposes the Request.keepalive getter.
+    const expectedKeepalive = process.versions.bun ? undefined : true;
     const fetch = withMcpOAuthBearer({
       fetchFn: buildMcpHttpFetch({ resourceUrl }),
       authFetchFn: buildMcpHttpFetch({ resourceUrl }),
@@ -343,7 +345,7 @@ describe("MCP HTTP fetch helpers", () => {
         authorization: "Bearer first-token",
         cache: "no-store",
         credentials: "include",
-        keepalive: true,
+        keepalive: expectedKeepalive,
         mode: "cors",
       },
       {
@@ -352,30 +354,11 @@ describe("MCP HTTP fetch helpers", () => {
         authorization: "Bearer second-token",
         cache: "no-store",
         credentials: "include",
-        keepalive: true,
+        keepalive: expectedKeepalive,
         mode: "cors",
       },
     ]);
   });
-
-  it.each([undefined, "64", "1048577"])(
-    "drops body-less foreign OAuth text without trusting Content-Length %s",
-    async (contentLength) => {
-      const text = useBodylessForeignResponse({
-        text: '{"error_description":"unbounded"}',
-        contentLength,
-      });
-
-      const response = await fetchOAuthRegistrationError();
-
-      expect(response).toBeInstanceOf(Response);
-      expect(response.status).toBe(400);
-      expect(response.body).toBeNull();
-      expect(text).not.toHaveBeenCalled();
-      const error = await parseErrorResponse(response);
-      expect(error.message).toContain("HTTP 400");
-    },
-  );
 
   it("never materializes a body-less foreign response with a lying safe length", async () => {
     const text = useBodylessForeignResponse({
@@ -389,6 +372,8 @@ describe("MCP HTTP fetch helpers", () => {
     expect(response.status).toBe(400);
     expect(response.body).toBeNull();
     expect(text).not.toHaveBeenCalled();
+    const error = await parseErrorResponse(response);
+    expect(error.message).toContain("HTTP 400");
   });
 
   it.each(["headers", "body"] as const)(

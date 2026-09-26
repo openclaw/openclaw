@@ -1,10 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { prepareSecretsRuntimeFastPathSnapshot } from "../../secrets/runtime-fast-path.js";
 import { activateSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { withEnv } from "../../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import {
   assertAuthProfileMigrationReady,
   AuthProfileMigrationRequiredError,
@@ -14,7 +20,8 @@ import {
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreStateMutationToken,
 } from "./mutation-lineage.js";
-import { loadPersistedSharedAuthProfileStore } from "./persisted.js";
+import { createOAuthRefreshFence } from "./oauth-refresh-marker.js";
+import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import {
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -31,6 +38,7 @@ import {
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
+import { authProfileScopeCwdEntrypoint } from "./store-scope-cwd-runtime.test-support.js";
 import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
 import {
   captureAuthProfileStorePersistenceSnapshot,
@@ -147,6 +155,100 @@ describe("auth publication owner receipts", () => {
     );
     expect(snapshotAt(root.agentPath)?.runtimePersistedProfileIds).toEqual(["local", "shared"]);
   });
+
+  it.each(["shared", "agent-local"] as const)(
+    "keeps runtime-only rows out of unrelated %s batch persistence",
+    async (scope) => {
+      const root = await seedRoot("original");
+      const agentDir = scope === "agent-local" ? root.agentDir : undefined;
+      const databasePath = scope === "agent-local" ? root.agentPath : root.sharedPath;
+      const durableProfileId = scope === "agent-local" ? "local" : "shared";
+      const durableCredential = apiKey(scope === "agent-local" ? "original-local" : "original");
+      const staleProfileId = "openai:removed";
+      const staleFenceId = "openai:stale-fence";
+      const externalProfileId = "anthropic:runtime-external";
+      const expiredOAuth = {
+        type: "oauth",
+        provider: "openai",
+        access: "expired-access",
+        refresh: "consumed-refresh",
+        expires: Date.now() - 60_000,
+      } satisfies AuthProfileCredential;
+      const staleFence = createOAuthRefreshFence({
+        profileId: staleFenceId,
+        credential: expiredOAuth,
+      });
+
+      withEnv(root.env, () => {
+        writePersistedAuthProfileStoreRaw(
+          {
+            version: 1,
+            profiles: {
+              [durableProfileId]: durableCredential,
+              [staleProfileId]: apiKey("removed"),
+              [staleFenceId]: staleFence,
+            },
+          },
+          agentDir,
+        );
+        setRuntimeAuthProfileStoreSnapshot(
+          loadAuthProfileStoreWithoutExternalProfiles(agentDir),
+          agentDir,
+        );
+        writePersistedAuthProfileStoreRaw(
+          { version: 1, profiles: { [durableProfileId]: durableCredential } },
+          agentDir,
+        );
+
+        const runtimeStore = snapshotAt(databasePath);
+        if (!runtimeStore) {
+          throw new Error("missing runtime auth profile snapshot");
+        }
+        setRuntimeAuthProfileStoreSnapshot(
+          {
+            ...runtimeStore,
+            profiles: {
+              ...runtimeStore.profiles,
+              [externalProfileId]: {
+                type: "oauth",
+                provider: "anthropic",
+                access: "external-access",
+                refresh: "external-refresh",
+                expires: Date.now() + 60_000,
+              },
+            },
+            runtimeExternalProfileIds: [externalProfileId],
+          },
+          agentDir,
+        );
+      });
+
+      await persistAuthProfileBatch({
+        stateDir: root.stateDir,
+        agentDir,
+        profiles: [{ profileId: "openai:unrelated", credential: apiKey("unrelated") }],
+      });
+
+      const persisted =
+        scope === "agent-local"
+          ? loadPersistedAuthProfileStore(root.agentDir)
+          : loadPersistedSharedAuthProfileStore(root.env);
+      expect(persisted?.profiles).toEqual({
+        [durableProfileId]: durableCredential,
+        "openai:unrelated": apiKey("unrelated"),
+      });
+      expect(snapshotAt(databasePath)?.profiles).toMatchObject({
+        [durableProfileId]: durableCredential,
+        "openai:unrelated": apiKey("unrelated"),
+        [externalProfileId]: {
+          access: "external-access",
+          refresh: "external-refresh",
+        },
+      });
+      expect(snapshotAt(databasePath)?.profiles[staleProfileId]).toBeUndefined();
+      expect(snapshotAt(databasePath)?.profiles[staleFenceId]).toBeUndefined();
+    },
+  );
 
   it.each([
     { unreadableLocal: false, populated: false },
@@ -467,8 +569,8 @@ describe("auth publication owner receipts", () => {
   it("keeps the original shared owner after a bounded temporary-state exec save", async () => {
     const original = await seedRoot("original");
     const temporary = tempDirs.make("openclaw-auth-owner-bounded-temp-");
-    withEnv({ ...original.env, OPENCLAW_STATE_DIR: temporary }, () => {
-      withAuthProfileStoreAgentDir(original.agentDir, original.stateDir, () => {
+    await withEnvAsync({ ...original.env, OPENCLAW_STATE_DIR: temporary }, async () => {
+      await withAuthProfileStoreAgentDir(original.agentDir, original.stateDir, () => {
         const current = ensureAuthProfileStoreWithoutExternalProfiles();
         saveAuthProfileStore(current, undefined, saveOptions);
       });
@@ -478,6 +580,32 @@ describe("auth publication owner receipts", () => {
       profiles: [{ profileId: "shared", credential: apiKey("updated-original") }],
     });
     expect(snapshotAt(original.agentPath)?.profiles.shared).toEqual(apiKey("updated-original"));
+  });
+
+  it("keeps relative scope paths bound to their original working directory during preparation", async ({
+    signal,
+  }) => {
+    const stateDir = tempDirs.make("openclaw-auth-scope-state-");
+    const agentDir = tempDirs.make("openclaw-auth-scope-agent-");
+    const entryCwd = tempDirs.make("openclaw-auth-scope-entry-cwd-");
+    const laterCwd = path.join(tempDirs.make("openclaw-auth-scope-later-cwd-"), "nested");
+    fs.mkdirSync(laterCwd);
+    const result = await runNodeScript(
+      [
+        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(authProfileScopeCwdEntrypoint)),
+        stateDir,
+        agentDir,
+        laterCwd,
+      ],
+      {
+        ...process.env,
+        TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)),
+      },
+      undefined,
+      { cwd: entryCwd, signal, requireProcessTreeExit: process.platform !== "win32" },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it("retains shared OAuth in the owner snapshot but excludes it from bounded exec", async () => {
@@ -495,8 +623,8 @@ describe("auth publication owner receipts", () => {
     });
     expect(snapshotAt(original.agentPath)?.profiles["shared-oauth"]).toEqual(oauth);
     const temporary = tempDirs.make("openclaw-auth-owner-bounded-oauth-");
-    withEnv({ ...original.env, OPENCLAW_STATE_DIR: temporary }, () => {
-      withAuthProfileStoreAgentDir(original.agentDir, original.stateDir, () => {
+    await withEnvAsync({ ...original.env, OPENCLAW_STATE_DIR: temporary }, async () => {
+      await withAuthProfileStoreAgentDir(original.agentDir, original.stateDir, () => {
         const current = ensureAuthProfileStoreWithoutExternalProfiles();
         expect(current.profiles["shared-oauth"]).toBeUndefined();
         saveAuthProfileStore(current, undefined, saveOptions);

@@ -2,6 +2,23 @@
  * Public SDK type surface for model provider and model definition config.
  */
 import type { ModelApi } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+
+/** Private selected-request facts; omission means the host cannot establish applicability. */
+export type ProviderFastModePolicyContext = {
+  provider: string;
+  modelId: string;
+  api?: string;
+  baseUrl?: string;
+  authMode?: string;
+  runtimeId?: string;
+  modelParams?: Record<string, unknown>;
+  params?: Record<string, unknown>;
+  requestCapabilities: {
+    endpointClass: string;
+    allowsAnthropicServiceTier: boolean;
+  };
+};
 
 export type {
   BedrockDiscoveryConfig,
@@ -18,6 +35,21 @@ export type ProviderModelRouteSource = {
 
 /** A concrete provider route. Order expresses provider default, never credential precedence. */
 export type ProviderModelRouteAuthRequirement = "api-key" | "subscription";
+/** Secret-free credential facts used by the provider to select and constrain its route. */
+export type ProviderModelAuthPolicyContext = {
+  provider: string;
+  mode?: string;
+  authFlow?: string;
+  api?: string;
+  baseUrl?: string;
+};
+
+export type ProviderModelAuthPolicy = {
+  /** Null means this credential has no inference authorization. */
+  authRequirement: ProviderModelRouteAuthRequirement | null;
+  compatible: boolean;
+  incompatibilityReason?: string;
+};
 export type ProviderRouteOverridePresence = "none" | "present";
 export type ProviderModelRouteRuntimePolicy = {
   /** Agent runtime ids that can reproduce this route without losing transport behavior. */
@@ -38,6 +70,8 @@ export type ProviderModelRouteResolution =
   | {
       kind: "routes";
       routes: readonly [ProviderModelRouteCandidate, ...ProviderModelRouteCandidate[]];
+      /** Preference for automatic selection only when both authentication classes are eligible. */
+      preferredAuthRequirement?: ProviderModelRouteAuthRequirement;
       /** Advisory only; authored agentRuntime policy remains authoritative. */
       defaultRuntimeId?: string;
     }
@@ -59,6 +93,12 @@ export type ProviderResolveModelRoutesContext = {
   requestTransportOverrides?: ProviderRouteOverridePresence;
   configuredModel?: ProviderModelRouteSource;
   configuredProvider?: ProviderModelRouteSource;
+  /** Prepared consumer intent; credentials and runtime compatibility remain independently owned. */
+  routeIntent?: {
+    runtimeId?: string;
+    authRequirement?: ProviderModelRouteAuthRequirement;
+    source: "explicit" | "inherited";
+  };
   /** Environment view; the provider owns interpretation of its variables. */
   env?: Readonly<Record<string, string | undefined>>;
   /** Physical route facts for one logical model; input order is not preference. */
@@ -82,5 +122,14 @@ export type ProviderToolSearchPolicyContext = {
   provider: string;
   modelId: string;
   api: string;
+  baseUrl?: string;
+};
+
+/** Provider-owned hosted search eligibility for one resolved inference route. */
+export type ProviderNativeWebSearchPolicyContext = {
+  config?: OpenClawConfig;
+  provider: string;
+  modelId?: string;
+  api?: string;
   baseUrl?: string;
 };

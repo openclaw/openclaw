@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
@@ -11,8 +12,7 @@ import {
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
-import { parseLaunchdPlistLabel } from "./launchd-plist.js";
-import { readLaunchDaemonPlistLabel } from "./launchd-system.js";
+import { decodeLaunchdPlistMetadata } from "./launchd-plist.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import { parseSystemdExecStart, splitSystemdLogicalLines } from "./systemd-unit.js";
@@ -32,10 +32,6 @@ export type FindExtraGatewayServicesOptions = {
 
 const EXTRA_MARKERS = ["openclaw", "clawdbot"] as const;
 
-function quotePosixCleanupArgument(value: string): string {
-  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
-}
-
 export function renderGatewayServiceCleanupHints(
   services: readonly ExtraGatewayService[] = [],
 ): string[] {
@@ -54,27 +50,18 @@ export function renderGatewayServiceCleanupHints(
             ? "system"
             : "gui/$UID";
         const launchctlCommand = domain === "system" ? "sudo launchctl" : "launchctl";
-        hints.push(
-          `${launchctlCommand} bootout ${domain}/${quotePosixCleanupArgument(service.label)}`,
-        );
+        hints.push(`${launchctlCommand} bootout ${domain}/${quoteCliArg(service.label)}`);
         if (plistPath) {
           const removeCommand = service.scope === "system" ? "sudo rm" : "rm";
-          hints.push(`${removeCommand} ${quotePosixCleanupArgument(plistPath)}`);
+          hints.push(`${removeCommand} ${quoteCliArg(plistPath)}`);
         }
         break;
       }
       case "linux": {
-        const systemctlCommand = service.scope === "user" ? "systemctl --user" : "sudo systemctl";
-        hints.push(
-          `${systemctlCommand} disable --now -- ${quotePosixCleanupArgument(service.label)}`,
-        );
-        if (service.detail.startsWith("unit:")) {
-          const unitPath = service.detail.slice("unit:".length).trim();
-          if (unitPath) {
-            const removeCommand = service.scope === "system" ? "sudo rm" : "rm";
-            hints.push(`${removeCommand} ${quotePosixCleanupArgument(unitPath)}`);
-          }
-        }
+        const systemctlCommand = `systemctl --${service.scope}`;
+        const unit = quoteCliArg(service.label);
+        // A discovered unit may be the only running Gateway; inspect before removal.
+        hints.push(`${systemctlCommand} status -- ${unit}`, `${systemctlCommand} cat -- ${unit}`);
         break;
       }
       case "win32":
@@ -131,78 +118,27 @@ export function detectMarkerLineWithGateway(contents: string): Marker | null {
 
 function hasGatewayServiceMarker(content: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(content);
-  const markerKeys = ["openclaw_service_marker"];
-  const kindKeys = ["openclaw_service_kind"];
-  const markerValues = [normalizeLowercaseStringOrEmpty(GATEWAY_SERVICE_MARKER)];
-  const hasMarkerKey = markerKeys.some((key) => lower.includes(key));
-  const hasKindKey = kindKeys.some((key) => lower.includes(key));
-  const hasMarkerValue = markerValues.some((value) => lower.includes(value));
   return (
-    hasMarkerKey &&
-    hasKindKey &&
-    hasMarkerValue &&
+    lower.includes("openclaw_service_marker") &&
+    lower.includes("openclaw_service_kind") &&
+    lower.includes(normalizeLowercaseStringOrEmpty(GATEWAY_SERVICE_MARKER)) &&
     lower.includes(normalizeLowercaseStringOrEmpty(GATEWAY_SERVICE_KIND))
   );
 }
 
-function extractPlistKeyBlock(
-  contents: string,
-  key: string,
-  tag: "array" | "string",
-): string | null {
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(
-    `<key>${escapedKey}<\\/key>\\s*<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`,
-    "i",
-  );
-  const match = contents.match(pattern);
-  return match?.[1]?.trim() || null;
-}
-
-function extractPlistStringValues(
-  contents: string,
-  key: string,
-  tag: "array" | "string",
-): string[] {
-  const block = extractPlistKeyBlock(contents, key, tag);
-  if (!block) {
-    return [];
-  }
-  if (tag === "string") {
-    return [block];
-  }
-  return Array.from(block.matchAll(/<string>([\s\S]*?)<\/string>/gi))
-    .map((match) => match[1]?.trim() ?? "")
-    .filter(Boolean);
-}
-
-function detectLaunchdGatewayExecutionMarker(contents: string): Marker | null {
-  const program = extractPlistStringValues(contents, "Program", "string");
-  const programArguments = extractPlistStringValues(contents, "ProgramArguments", "array");
+function detectLaunchdGatewayExecutionMarker(plist: Record<string, unknown>): Marker | null {
+  const programArguments = Array.isArray(plist.ProgramArguments)
+    ? plist.ProgramArguments.filter((arg): arg is string => typeof arg === "string")
+    : [];
   if (!hasGatewaySubcommandArg(programArguments)) {
     return null;
   }
   // Only execution command fields identify gateway jobs; labels alone catch too
   // many unrelated helper jobs.
   const launchCommand = normalizeLowercaseStringOrEmpty(
-    [...program, ...programArguments].filter(Boolean).join("\n"),
+    [typeof plist.Program === "string" ? plist.Program : "", ...programArguments].join("\n"),
   );
-  for (const marker of EXTRA_MARKERS) {
-    if (launchCommand.includes(marker)) {
-      return marker;
-    }
-  }
-  return null;
-}
-
-function isOpenClawGatewayLaunchdService(label: string, contents: string): boolean {
-  if (hasGatewayServiceMarker(contents)) {
-    return true;
-  }
-  if (detectLaunchdGatewayExecutionMarker(contents) !== "openclaw") {
-    return false;
-  }
-  return label.startsWith("ai.openclaw.");
+  return EXTRA_MARKERS.find((marker) => launchCommand.includes(marker)) ?? null;
 }
 
 function isOpenClawGatewaySystemdService(name: string, contents: string): boolean {
@@ -243,26 +179,18 @@ function isLegacyLabel(label: string): boolean {
 }
 
 async function readDirEntries(dir: string): Promise<string[]> {
-  try {
-    return await fs.readdir(dir);
-  } catch {
-    return [];
-  }
+  return fs.readdir(dir).catch(() => []);
 }
 
-async function readUtf8File(filePath: string): Promise<string | null> {
-  try {
-    return await fs.readFile(filePath, "utf8");
-  } catch {
-    return null;
-  }
+async function readServiceFile(filePath: string): Promise<Buffer | null> {
+  return fs.readFile(filePath).catch(() => null);
 }
 
 type ServiceFileEntry = {
   entry: string;
   name: string;
   fullPath: string;
-  contents: string;
+  contents: Buffer;
 };
 
 async function collectServiceFiles(params: {
@@ -281,7 +209,7 @@ async function collectServiceFiles(params: {
       continue;
     }
     const fullPath = path.join(params.dir, entry);
-    const contents = await readUtf8File(fullPath);
+    const contents = await readServiceFile(fullPath);
     if (contents === null) {
       continue;
     }
@@ -304,23 +232,18 @@ async function scanLaunchdDir(params: {
   });
 
   for (const { name: labelFromName, fullPath, contents } of candidates) {
-    const nativeLabel = params.includeManagedOpenClaw
-      ? await readLaunchDaemonPlistLabel(fullPath)
-      : null;
-    const label =
-      nativeLabel?.status === "ok"
-        ? nativeLabel.label
-        : (parseLaunchdPlistLabel(contents) ?? labelFromName);
+    const plist = await decodeLaunchdPlistMetadata(contents).catch(() => undefined);
+    if (!plist) {
+      continue;
+    }
+    const label = typeof plist.Label === "string" && plist.Label ? plist.Label : labelFromName;
+    const executionMarker = detectLaunchdGatewayExecutionMarker(plist);
+    const serviceMarker = hasGatewayServiceMarker(JSON.stringify(plist.EnvironmentVariables) ?? "");
     const legacyLabel = isLegacyLabel(labelFromName) || isLegacyLabel(label);
-    const executionMarker = detectLaunchdGatewayExecutionMarker(contents);
     const marker =
-      label === params.managedLabel ||
-      hasGatewayServiceMarker(contents) ||
-      executionMarker === "openclaw"
+      label === params.managedLabel || serviceMarker
         ? "openclaw"
-        : executionMarker === "clawdbot" || legacyLabel
-          ? "clawdbot"
-          : null;
+        : (executionMarker ?? (legacyLabel ? "clawdbot" : null));
     if (!marker) {
       continue;
     }
@@ -332,7 +255,7 @@ async function scanLaunchdDir(params: {
     if (
       !params.includeManagedOpenClaw &&
       marker === "openclaw" &&
-      isOpenClawGatewayLaunchdService(label, contents)
+      (serviceMarker || (executionMarker === "openclaw" && label.startsWith("ai.openclaw.")))
     ) {
       continue;
     }
@@ -361,7 +284,8 @@ async function scanSystemdDir(params: {
     isIgnoredName: params.includeManagedOpenClaw ? () => false : isIgnoredSystemdName,
   });
 
-  for (const { entry, name, fullPath, contents } of candidates) {
+  for (const { entry, name, fullPath, contents: bytes } of candidates) {
+    const contents = bytes.toString("utf8");
     const marker = hasGatewayServiceMarker(contents)
       ? "openclaw"
       : detectMarkerLineWithGateway(contents);
@@ -525,7 +449,7 @@ export async function findExtraGatewayServices(
           continue;
         }
         const backupPath = path.join(userDir, `${name}.service.bak`);
-        if ((await readUtf8File(backupPath)) !== null) {
+        if ((await readServiceFile(backupPath)) !== null) {
           push({
             platform: "linux",
             label,
@@ -575,13 +499,9 @@ export async function findExtraGatewayServices(
       }
       const lowerName = normalizeLowercaseStringOrEmpty(name);
       const lowerCommand = normalizeLowercaseStringOrEmpty(task.taskToRun ?? "");
-      let marker: Marker | null = null;
-      for (const candidate of EXTRA_MARKERS) {
-        if (lowerName.includes(candidate) || lowerCommand.includes(candidate)) {
-          marker = candidate;
-          break;
-        }
-      }
+      const marker = EXTRA_MARKERS.find(
+        (candidate) => lowerName.includes(candidate) || lowerCommand.includes(candidate),
+      );
       if (!marker) {
         continue;
       }

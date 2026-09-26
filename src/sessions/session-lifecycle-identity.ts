@@ -17,7 +17,7 @@ export function normalizeSessionIdentities(
     .toSorted();
 }
 
-export function decodeSessionIdentity(
+function decodeSessionIdentity(
   normalizedIdentity: string,
 ): { scope: string; identity: string } | undefined {
   try {
@@ -34,4 +34,21 @@ export function decodeSessionIdentity(
   } catch {
     return undefined;
   }
+}
+
+/** Group a snapshot of owner-held identity keys without sharing its mutable indexes. */
+export function collectSessionIdentityTargets(
+  identities: Iterable<string>,
+): Map<string, Set<string>> {
+  const targets = new Map<string, Set<string>>();
+  for (const identity of identities) {
+    const decoded = decodeSessionIdentity(identity);
+    if (!decoded) {
+      continue;
+    }
+    const scoped = targets.get(decoded.scope) ?? new Set<string>();
+    scoped.add(decoded.identity);
+    targets.set(decoded.scope, scoped);
+  }
+  return targets;
 }

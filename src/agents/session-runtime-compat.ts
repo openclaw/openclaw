@@ -6,8 +6,14 @@
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  isManifestPluginAvailableForControlPlane,
+  loadManifestMetadataSnapshot,
+} from "../plugins/manifest-contract-eligibility.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { isCliRuntimeAliasForProvider } from "./model-runtime-aliases.js";
 
 /** Persisted runtime fields used to recover session runtime compatibility. */
@@ -20,7 +26,6 @@ type ManualCompactionRuntimeEntry = Pick<
   | "agentHarnessId"
   | "agentRuntimeOverride"
   | "cliSessionBindings"
-  | "claudeCliSessionId"
   | "cliSessionIds"
   | "modelSelectionLocked"
   | "pluginOwnerId"
@@ -60,8 +65,22 @@ export function resolveCompatibleAgentRuntimeForProvider(params: {
     return runtime;
   }
   const provider = params.provider?.trim().toLowerCase() ?? "";
-  // The Codex harness owns both OpenClaw's virtual Codex namespace and canonical OpenAI routes.
-  if (runtime === "codex" && (provider === "codex" || provider === "openai")) {
+  if (runtime === "codex") {
+    return provider === "codex" || provider === "openai" ? runtime : undefined;
+  }
+  if (getRegisteredAgentHarness(runtime)) {
+    return runtime;
+  }
+  const snapshot =
+    getCurrentPluginMetadataSnapshot({ config: params.cfg, allowWorkspaceScopedSnapshot: true }) ??
+    loadManifestMetadataSnapshot({ config: params.cfg });
+  if (
+    snapshot.plugins.some(
+      (plugin) =>
+        plugin.activation?.onAgentHarnesses?.includes(runtime) &&
+        isManifestPluginAvailableForControlPlane({ snapshot, plugin, config: params.cfg }),
+    )
+  ) {
     return runtime;
   }
   return isCliRuntimeAliasForProvider({ provider, runtime, cfg: params.cfg }) ? runtime : undefined;
@@ -135,7 +154,6 @@ export function resolveManualCompactionCliTarget(params: {
   const boundRuntimeIds = new Set([
     ...Object.keys(params.entry?.cliSessionBindings ?? {}),
     ...Object.keys(params.entry?.cliSessionIds ?? {}),
-    ...(params.entry?.claudeCliSessionId ? ["claude-cli"] : []),
   ]);
   const compatibleBindings = [...boundRuntimeIds].flatMap((runtime) => {
     const compatibleRuntime = resolveCompatibleAgentRuntimeForProvider({

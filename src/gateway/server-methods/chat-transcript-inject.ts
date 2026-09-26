@@ -1,7 +1,7 @@
-// Chat transcript injection appends gateway-authored assistant rows while
-// preserving agent-session parent links and transcript update notifications.
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { appendAbortedSessionTranscriptPartial } from "../../config/sessions/session-accessor.sqlite-transcript-reports.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -16,18 +16,20 @@ import {
   retainAssistantModelContent,
 } from "../../shared/assistant-display-content.js";
 import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
+import type { ChatAbortOrigin } from "./chat-aborted-partial.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
 /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
 type GatewayInjectedAbortMeta = {
   aborted: true;
-  origin: "rpc" | "stop-command" | "placement-abandon";
+  origin: ChatAbortOrigin;
   runId: string;
+  /** The registered native producer has finished its canonical transcript writes. */
+  producerSettled?: true;
 };
 
-/** Result shape returned after appending an assistant row to a session transcript. */
-type GatewayInjectedTranscriptAppendResult = {
+export type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
@@ -54,12 +56,7 @@ function resolveInjectedAssistantContent(params: {
       return params.content;
     }
     const first = params.content[0];
-    if (
-      first &&
-      typeof first === "object" &&
-      first.type === "text" &&
-      typeof first.text === "string"
-    ) {
+    if (first?.type === "text" && typeof first.text === "string") {
       return [{ ...first, text: `${labelPrefix}${first.text}` }, ...params.content.slice(1)];
     }
     return [{ type: "text", text: labelPrefix.trim() }, ...params.content];
@@ -84,29 +81,12 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   stopReason?: "stop" | "aborted";
   abortMeta?: GatewayInjectedAbortMeta;
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
+  contextFreeCommand?: true;
   now?: number;
   config?: OpenClawConfig;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
   const now = params.now ?? Date.now();
-  const usage = {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
-    },
-  };
-  const resolvedContent = resolveInjectedAssistantContent({
-    message: params.message,
-    label: params.label,
-    content: params.content,
-  });
+  const resolvedContent = resolveInjectedAssistantContent(params);
   const displayMessage: {
     role: "assistant";
     content: Array<Record<string, unknown>>;
@@ -128,13 +108,16 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     // Runtime projections retain their terminal state; host-authored partials
     // keep their replayable default and carry cancellation in openclawAbort.
     stopReason: params.stopReason ?? "stop",
-    usage,
+    usage: makeZeroUsageSnapshot(),
     // Make these explicit so downstream tooling never treats this as model output.
     api: "openai-responses",
     provider: "openclaw",
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
+    ...(params.contextFreeCommand === true
+      ? { excludeFromContext: true, __openclaw: { contextFreeCommand: true } }
+      : {}),
     ...(params.abortMeta
       ? {
           openclawAbort: {
@@ -152,6 +135,36 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   try {
     if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {
       return { ok: false, error: "transcript identity not resolved" };
+    }
+    if (params.abortMeta?.producerSettled) {
+      if (!params.storePath || !params.sessionId || !params.sessionKey) {
+        return { ok: false, error: "settled producer transcript identity not resolved" };
+      }
+      const scope = {
+        storePath: params.storePath,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+      };
+      const result = await appendAbortedSessionTranscriptPartial(scope, {
+        runId: params.abortMeta.runId,
+        message: messageBody,
+        expectedLifecycleRevision: params.expectedLifecycleRevision,
+        now,
+        config: params.config,
+      });
+      if (!result.ok) {
+        return { ok: false, error: result.error.code };
+      }
+      if (result.value.skipped) {
+        return { ok: true, skipped: true };
+      }
+      const { append } = result.value;
+      return {
+        ok: true,
+        messageId: append.messageId,
+        message: projectAssistantDisplayContent(append.message),
+      };
     }
     let predicateDeclined = false;
     const turn = await persistSessionTranscriptTurn(

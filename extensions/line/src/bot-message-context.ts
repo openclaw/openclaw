@@ -1,4 +1,3 @@
-// Line plugin module implements bot message context behavior.
 import type { webhook } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
@@ -32,9 +31,10 @@ import {
   readNonEmptyStringPreservingWhitespace,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { normalizeAllowFrom } from "./bot-access.js";
+import { normalizeLineAllowEntry } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { resolveLineMentionStrippedText } from "./mentions.js";
+import { readLineQuoteToken, recordLineQuoteToken } from "./quote-tokens.js";
 import { getLineGroupName, getUserProfile } from "./send.js";
 import type { ResolvedLineAccount } from "./types.js";
 
@@ -53,6 +53,8 @@ interface BuildLineMessageContextParams {
   event: MessageEvent;
   allMedia: MediaRef[];
   mediaUnavailable?: boolean;
+  /** Parts LINE announced for this send but never delivered. */
+  missingParts?: number;
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
@@ -256,16 +258,15 @@ function extractNativeMediaKind(
 type LineRouteInfo = ReturnType<typeof resolveAgentRoute>;
 type LineSourceInfoWithPeerId = LineSourceInfo & { peerId: string };
 
-async function finalizeLineInboundContext(params: {
+async function finalizeLineInboundContext<Event extends MessageEvent | PostbackEvent>(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
-  event: MessageEvent | PostbackEvent;
+  event: Event;
   route: LineRouteInfo;
   source: LineSourceInfoWithPeerId;
   rawBody: string;
   agentBody?: string;
   commandBody?: string;
-  timestamp: number;
   messageSid: string;
   commandAuthorized: boolean;
   channelIngress?: ResolvedChannelMessageIngress;
@@ -330,7 +331,7 @@ async function finalizeLineInboundContext(params: {
   const body = formatInboundEnvelope({
     channel: "LINE",
     from: conversationLabel,
-    timestamp: params.timestamp,
+    timestamp: params.event.timestamp,
     body: agentBody,
     chatType: params.source.isGroup ? "group" : "direct",
     sender: {
@@ -346,7 +347,7 @@ async function finalizeLineInboundContext(params: {
     channel: "line",
     accountId: params.route.accountId,
     messageId: params.messageSid,
-    timestamp: params.timestamp,
+    timestamp: params.event.timestamp,
     from: address,
     sender: { id: senderId, name: senderName },
     conversation: {
@@ -355,9 +356,7 @@ async function finalizeLineInboundContext(params: {
       label: conversationLabel,
     },
     route: {
-      agentId: params.route.agentId,
-      dmScope: params.route.dmScope,
-      accountId: params.route.accountId,
+      ...params.route,
       routeSessionKey: params.route.sessionKey,
     },
     reply: { to: address, originatingTo: address },
@@ -383,7 +382,7 @@ async function finalizeLineInboundContext(params: {
     ? resolvePinnedMainDmOwnerFromAllowlist({
         dmScope: params.cfg.session?.dmScope,
         allowFrom: params.account.config.allowFrom,
-        normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
+        normalizeEntry: (entry) => normalizeLineAllowEntry(entry) || undefined,
       })
     : null;
   const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
@@ -404,7 +403,14 @@ async function finalizeLineInboundContext(params: {
 
   return {
     ctxPayload,
-    replyToken: (params.event as { replyToken: string }).replyToken,
+    event: params.event,
+    userId: params.source.userId,
+    groupId: params.source.groupId,
+    roomId: params.source.roomId,
+    isGroup: params.source.isGroup,
+    route: params.route,
+    replyToken: params.event.replyToken,
+    accountId: params.account.accountId,
     // A group's configured skill scope belongs to the turn that answers it.
     skillFilter: groupConfig?.skills,
     turn: {
@@ -459,7 +465,6 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
 
   const message = event.message;
   const messageId = message.id;
-  const timestamp = event.timestamp;
 
   const textContent = extractMessageText(message);
   const nativeMediaKind = extractNativeMediaKind(message);
@@ -470,16 +475,33 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
         ? [{ kind: nativeMediaKind }]
         : [];
   const rawBody = textContent;
+  // The turn answers what arrived. Saying so keeps the agent from describing a
+  // short set as the whole send.
+  const shortfallNotice = params.missingParts
+    ? `[line: ${params.missingParts === 1 ? "1 more image in this send was" : `${params.missingParts} more images in this send were`} not delivered]`
+    : undefined;
+  const withShortfall = shortfallNotice
+    ? formatInboundMediaUnavailableText({ body: rawBody, notice: shortfallNotice })
+    : rawBody;
   const agentBody = mediaUnavailable
     ? formatInboundMediaUnavailableText({
-        body: rawBody,
+        body: withShortfall,
         notice: "[line attachment unavailable]",
       })
-    : rawBody;
+    : withShortfall;
 
   if (!agentBody && mediaFacts.length === 0) {
     return null;
   }
+
+  // Quoting a message back needs the token that arrived with it, and only a
+  // message the agent is given can later be named as the one being answered.
+  recordLineQuoteToken({
+    accountId: account.accountId,
+    chatId: peerId,
+    messageId,
+    quoteToken: readLineQuoteToken(message),
+  });
 
   let locationContext: ReturnType<typeof toLocationContext> | undefined;
   if (message.type === "location") {
@@ -492,7 +514,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     });
   }
 
-  const finalized = await finalizeLineInboundContext({
+  return finalizeLineInboundContext({
     cfg,
     account,
     event,
@@ -504,10 +526,9 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     // mention, which LINE requires before a group message reaches the bot.
     commandBody: resolveLineMentionStrippedText(message) || rawBody,
     mentions: params.mentions,
-    timestamp,
     messageSid: messageId,
     commandAuthorized,
-    // Configured conversation bindings can replace the base route; bind only to the final route.
+    // Conversation bindings can replace the base route; bind only to the final route.
     channelIngress: await params.resolveChannelIngress?.({
       agentId: route.agentId,
       sessionKey: route.sessionKey,
@@ -520,20 +541,6 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     verboseLog: { kind: "inbound", mediaCount: allMedia.length },
     inboundHistory,
   });
-
-  return {
-    ctxPayload: finalized.ctxPayload,
-    turn: finalized.turn,
-    skillFilter: finalized.skillFilter,
-    event,
-    userId,
-    groupId,
-    roomId,
-    isGroup,
-    route,
-    replyToken: event.replyToken,
-    accountId: account.accountId,
-  };
 }
 
 export async function buildLinePostbackContext(params: {
@@ -579,7 +586,7 @@ export async function buildLinePostbackContext(params: {
   }
 
   const messageSid = event.replyToken ? `postback:${event.replyToken}` : `postback:${timestamp}`;
-  const finalized = await finalizeLineInboundContext({
+  return finalizeLineInboundContext({
     cfg,
     account,
     event,
@@ -587,10 +594,8 @@ export async function buildLinePostbackContext(params: {
     source: { userId, groupId, roomId, isGroup, peerId },
     rawBody,
     agentBody,
-    timestamp,
     messageSid,
     commandAuthorized,
-    // Configured conversation bindings can replace the base route; bind only to the final route.
     channelIngress: await params.resolveChannelIngress?.({
       agentId: route.agentId,
       sessionKey: route.sessionKey,
@@ -601,20 +606,6 @@ export async function buildLinePostbackContext(params: {
     media: [],
     verboseLog: { kind: "postback" },
   });
-
-  return {
-    ctxPayload: finalized.ctxPayload,
-    turn: finalized.turn,
-    skillFilter: finalized.skillFilter,
-    event,
-    userId,
-    groupId,
-    roomId,
-    isGroup,
-    route,
-    replyToken: event.replyToken,
-    accountId: account.accountId,
-  };
 }
 
 type LineMessageContext = NonNullable<Awaited<ReturnType<typeof buildLineMessageContext>>>;

@@ -13,6 +13,12 @@ OpenClaw. Operator and node clients (CLI, web UI, macOS app, iOS/Android nodes,
 headless nodes) connect over WebSocket and declare a **role** and **scope** at
 handshake time.
 
+Agent tools running inside a Gateway dispatch requests directly through that
+Gateway's router. They retain method scopes, agent and approval authority,
+request deadlines, and cancellation without opening another WebSocket. Explicit
+Gateway URL or token overrides, standalone agents, and separate client processes
+continue to use the WebSocket transport.
+
 ## Scope
 
 This protocol exposes the full gateway API: status, channels, models, chat,
@@ -84,6 +90,11 @@ Every section heading from the previous single-page version keeps its anchor her
 
 ## Related
 
-- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
-- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
+- [Building a Gateway client](/gateway/clients)
+- [Embedding OpenClaw](/gateway/embedding)
 - [Gateway runbook](/gateway)
+- [Operator scopes](/gateway/operator-scopes) — the scopes protocol methods are authorized against
+- [Audit history](/gateway/audit) — metadata-only activity history and decision receipts
+- [Pairing](/channels/pairing) — approve who can DM you and which nodes can join
+- [Cloud Workers](/gateway/cloud-workers) — worker sessions driven over this protocol
+- [Tools invoke API](/gateway/tools-invoke-http-api) — invoke a single tool directly via the Gateway HTTP endpoint

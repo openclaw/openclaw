@@ -1,5 +1,6 @@
 // Microsoft Foundry tests cover bounded connection-test error reads.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 import * as cli from "./cli.js";
 import { promptTenantId, testFoundryConnection } from "./onboard.js";
 import {
@@ -70,28 +71,6 @@ const foundryConnectionRequestCases: FoundryConnectionRequestCase[] = [
   },
 ];
 
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
-
 describe("testFoundryConnection", () => {
   beforeEach(() => {
     vi.spyOn(cli, "getAccessTokenResult").mockReturnValue({ accessToken: "token" });
@@ -137,7 +116,7 @@ describe("testFoundryConnection", () => {
 
   it("bounds connection-test error bodies without using response.text()", async () => {
     const note = vi.fn();
-    const tracked = cancelTrackedResponse(`${"foundry failure ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"foundry failure ".repeat(1024)}tail`, {
       status: 503,
       headers: { "content-type": "text/plain" },
     });

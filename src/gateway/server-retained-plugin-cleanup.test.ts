@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "../plugins/managed-npm-retention-contract.js";
 import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "../plugins/managed-npm-retention.js";
+import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupRetainedPluginInstallGenerations } from "./server-retained-plugin-cleanup.js";
@@ -51,7 +51,7 @@ it.each(["project", "legacy"] as const)(
       const desiredPackage = writePlugin("desired-plugin");
       const obsoletePackage = writePlugin("obsolete-plugin");
       const startupInstallPaths = [path.join(startupPackage, "dist", "index.js")];
-      await writePersistedInstalledPluginIndexInstallRecords(
+      await seedInstalledPluginIndex(
         {
           "desired-plugin": {
             source: "npm",

@@ -161,7 +161,7 @@ describe("direct-channel silent-reply prompt contract", () => {
     expect(request.outcome).toBe("success");
     const instructions = promptInstructions(request);
     expect(instructions).toContain("## Tooling");
-    expect(instructions).toContain("## Safety");
+    expect(instructions).toContain("## Care");
     const visible = state
       .getSnapshot()
       .messages.filter(
@@ -183,7 +183,7 @@ describe("direct-channel silent-reply prompt contract", () => {
       visibleReplies: visible.length,
       reply: outbound.text,
       hasTooling: instructions.includes("## Tooling"),
-      hasSafety: instructions.includes("## Safety"),
+      hasCare: instructions.includes("## Care"),
       hasGenericSilentReplies: instructions.includes("## Silent Replies"),
     };
     await fs.mkdir(artifactDir, { recursive: true });

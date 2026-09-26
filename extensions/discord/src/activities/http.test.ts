@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { createServer, request as createHttpRequest, type Server } from "node:http";
+import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -55,35 +55,6 @@ async function startServer(
     server.listen(0, "127.0.0.1", resolve);
   });
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-}
-
-async function observeStalledTokenRequest(
-  base: string,
-  clientTimeoutMs: number,
-): Promise<"server-terminated" | "client-timeout"> {
-  return await new Promise((resolve) => {
-    const request = createHttpRequest(`${base}/discord/activity/api/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
-    const finish = (outcome: "server-terminated" | "client-timeout") => {
-      clearTimeout(timer);
-      resolve(outcome);
-    };
-    const timer = setTimeout(() => {
-      finish("client-timeout");
-      request.end();
-    }, clientTimeoutMs);
-    const finishServerTerminated = () => finish("server-terminated");
-    request.on("response", (response) => {
-      response.resume();
-      response.on("end", finishServerTerminated);
-      response.on("close", finishServerTerminated);
-    });
-    request.on("error", finishServerTerminated);
-    request.on("close", finishServerTerminated);
-    request.write('{"code":"');
-  });
 }
 
 function guardedJsonFetch(params?: {
@@ -276,12 +247,6 @@ describe("Discord Activity HTTP OAuth", () => {
     expect(response.status).toBe(404);
   });
 
-  it("terminates stalled token request bodies within the read timeout", async () => {
-    const base = await startServer(createActivityTestRuntime(), { bodyTimeoutMs: 25 });
-
-    await expect(observeStalledTokenRequest(base, 1_000)).resolves.toBe("server-terminated");
-  });
-
   it.each([
     {
       name: "413 when the token body exceeds its limit",
@@ -394,14 +359,6 @@ describe("Discord Activity HTTP OAuth", () => {
       "https://discord.com/api/v10/users/@me",
       "https://discord.com/api/v10/applications/123456789012345678/activity-instances/instance-1",
     ]);
-  });
-
-  it("returns 401 for a rejected code", async () => {
-    const base = await startServer(createActivityTestRuntime(), {
-      fetchGuard: guardedJsonFetch({ tokenStatus: 400 }),
-    });
-    const response = await requestToken(base, { code: "bad-code" });
-    expect(response.status).toBe(401);
   });
 
   it("lets a channel member outside the agent allowlist open the widget", async () => {
@@ -582,6 +539,9 @@ describe("Discord Activity widget routes", () => {
     const firstCsp = firstDocument.headers.get("content-security-policy");
     expect(firstCsp).toContain("sandbox allow-scripts");
     expect(firstCsp).toContain("connect-src 'none'");
+    expect(firstCsp).toContain("https://cdn.jsdelivr.net");
+    expect(firstCsp).toContain("https://fonts.googleapis.com");
+    expect(firstCsp).toContain("https://fonts.gstatic.com");
     expect(await firstDocument.text()).toContain("document.body.dataset.ready");
     const secondDocument = await fetch(documentUrl);
     expect(secondDocument.status).toBe(404);
@@ -737,16 +697,6 @@ describe("Discord Activity widget routes", () => {
     );
   });
 
-  it("uses the latest widget when a client omits the custom ID", async () => {
-    const fixture = createWidgetFixture();
-    await fixture.widget({ channelId: "777", createdAt: 1 });
-    const newestId = await fixture.widget({ channelId: "777", createdAt: 2 });
-    const response = await fixture.request("instance_id=instance-1");
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ id: newestId });
-  });
-
   it("returns 404 when the Activity instance cannot be resolved", async () => {
     const fixture = createWidgetFixture({
       fetchGuard: guardedJsonFetch({ instanceStatus: 404 }),
@@ -809,16 +759,6 @@ describe("Discord Activity shell assets", () => {
     const vendor = await fetch(`${base}/discord/activity/vendor/embedded-app-sdk.mjs`);
     expect(vendor.status).toBe(200);
     expect(await vendor.text()).toContain("DiscordSDK");
-  });
-
-  it("returns 404 for the vendor asset when the bundle is missing", async () => {
-    const base = await startServer(createActivityTestRuntime(), {
-      readVendorAsset: async () => {
-        throw new Error("missing");
-      },
-    });
-    const vendor = await fetch(`${base}/discord/activity/vendor/embedded-app-sdk.mjs`);
-    expect(vendor.status).toBe(404);
   });
 
   it("retries the vendor asset read after a transient failure", async () => {

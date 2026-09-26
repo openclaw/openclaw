@@ -1,6 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { publishSessionCostUsageUpdated } from "../../infra/session-cost-usage-events.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "./types.js";
@@ -30,9 +36,10 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   };
 });
 
-import { testApi, usageHandlers } from "./usage.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { usageHandlers } from "./usage.js";
 
-const config = {
+let config = {
   agents: { list: [{ id: "main", default: true }, { id: "opus" }] },
   session: {},
 } as OpenClawConfig;
@@ -91,7 +98,7 @@ describe("sessions.usage result cache", () => {
     now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     vi.clearAllMocks();
-    testApi.sessionsUsageCache.clear();
+    config = { ...config };
     mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
       targetsBySessionKey: new Map(),
       durableTargets: [],
@@ -132,7 +139,7 @@ describe("sessions.usage result cache", () => {
   });
 
   it("keeps context availability in lightweight rows without caching away requested details", async () => {
-    const contextWeight = {
+    const contextWeight: SessionSystemPromptReport = {
       source: "run",
       generatedAt: 1,
       systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
@@ -140,47 +147,55 @@ describe("sessions.usage result cache", () => {
       skills: { promptChars: 0, entries: [] },
       tools: { listChars: 0, schemaChars: 0, entries: [] },
     };
-    mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
-      targetsBySessionKey: new Map([
-        [
-          "agent:main:main",
-          {
-            agentId: "main",
-            storeTarget: {
-              agentId: "main",
-              storePath: "/tmp/agents/main/agent/openclaw-agent.sqlite",
+    await withOpenClawTestState({ label: "usage-cached-context" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "session-main",
+        updatedAt: 100,
+        systemPromptReport: contextWeight,
+      });
+      const entry = expectDefined(
+        loadSessionEntryReadOnly({ ...scope, projection: "list" }),
+        "lightweight stored context row",
+      );
+      expect(entry.systemPromptReport).toBeUndefined();
+      mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+        targetsBySessionKey: new Map([
+          [
+            scope.sessionKey,
+            {
+              agentId: scope.agentId,
+              storeTarget: { agentId: scope.agentId, storePath: scope.storePath },
             },
-          },
+          ],
+        ]),
+        durableTargets: [],
+        storePath: "(multiple)",
+        store: { [scope.sessionKey]: entry },
+      });
+      const lean = await runSessionsUsage({ ...baseParams, agentScope: "all" });
+      expect(lean).toMatchObject({
+        sessions: [
+          { agentId: "main", hasContextWeight: true },
+          { agentId: "opus", hasContextWeight: false },
         ],
-      ]),
-      durableTargets: [],
-      storePath: "(multiple)",
-      store: {
-        "agent:main:main": {
-          sessionId: "session-main",
-          updatedAt: 100,
-          systemPromptReport: contextWeight,
-        },
-      },
-    });
-    const lean = await runSessionsUsage({ ...baseParams, agentScope: "all" });
-    expect(lean).toMatchObject({
-      sessions: [
-        { agentId: "main", hasContextWeight: true },
-        { agentId: "opus", hasContextWeight: false },
-      ],
-    });
-    expect(JSON.stringify(lean)).not.toContain('"contextWeight":');
+      });
+      expect(JSON.stringify(lean)).not.toContain('"contextWeight":');
 
-    const detailed = await runSessionsUsage({
-      ...baseParams,
-      agentScope: "all",
-      includeContextWeight: true,
+      const detailed = await runSessionsUsage({
+        ...baseParams,
+        agentScope: "all",
+        includeContextWeight: true,
+      });
+      expect(detailed).toMatchObject({
+        sessions: [{ contextWeight }, { contextWeight: null }],
+      });
+      expect(await runSessionsUsage({ ...baseParams, agentScope: "all" })).toEqual(lean);
     });
-    expect(detailed).toMatchObject({
-      sessions: [{ contextWeight }, { contextWeight: null }],
-    });
-    expect(await runSessionsUsage({ ...baseParams, agentScope: "all" })).toEqual(lean);
   });
 
   it("does not share entries across result-shaping query parameters", async () => {
@@ -197,9 +212,9 @@ describe("sessions.usage result cache", () => {
 
     for (const params of variants) {
       await runSessionsUsage(params);
+      await runSessionsUsage(params);
     }
 
-    expect(testApi.sessionsUsageCache.size).toBe(variants.length);
     // The all-agent variant discovers both configured agents and aggregates
     // each agent cache once; every other variant has one effective agent.
     expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(variants.length + 1);
@@ -207,7 +222,7 @@ describe("sessions.usage result cache", () => {
 
     const storeLoads = mocks.loadCombinedSessionStoreForGatewayCore.mock.calls.length;
     await runSessionsUsage({ ...baseParams, key: "agent:main:missing" });
-    expect(testApi.sessionsUsageCache.size).toBe(variants.length + 1);
+    await runSessionsUsage({ ...baseParams, key: "agent:main:missing" });
     expect(mocks.loadCombinedSessionStoreForGatewayCore).toHaveBeenCalledTimes(storeLoads + 1);
   });
 
@@ -326,23 +341,30 @@ describe("sessions.usage result cache", () => {
         sessions: Array<{ key: string }>;
         totals: { totalTokens: number };
       };
+      expect(await runSessionsUsage(baseParams, roleConfig, systemClient)).toEqual(unrestricted);
       const first = (await runSessionsUsage(
         baseParams,
         roleConfig,
         identifiedClient(firstProfile.id),
       )) as typeof unrestricted;
+      expect(
+        await runSessionsUsage(baseParams, roleConfig, identifiedClient(firstProfile.id)),
+      ).toEqual(first);
       const second = (await runSessionsUsage(
         baseParams,
         roleConfig,
         identifiedClient(secondProfile.id),
       )) as typeof unrestricted;
+      expect(
+        await runSessionsUsage(baseParams, roleConfig, identifiedClient(secondProfile.id)),
+      ).toEqual(second);
 
       expect(unrestricted.totals.totalTokens).toBe(20);
       expect(first.sessions.map((session) => session.key)).toEqual(["agent:main:first"]);
       expect(second.sessions.map((session) => session.key)).toEqual(["agent:main:second"]);
       expect(first.totals.totalTokens).toBe(10);
       expect(second.totals.totalTokens).toBe(10);
-      expect(testApi.sessionsUsageCache.size).toBe(3);
+      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(3);
 
       const deniedCost = await runSessionsUsage(
         baseParams,
@@ -358,14 +380,8 @@ describe("sessions.usage result cache", () => {
   });
 
   it("coalesces concurrent cold misses into one transcript aggregation", async () => {
-    let release!: () => void;
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let started!: () => void;
-    const aggregationStarted = new Promise<void>((resolve) => {
-      started = resolve;
-    });
+    const { promise: blocked, resolve: release } = createDeferred();
+    const { promise: aggregationStarted, resolve: started } = createDeferred();
     mocks.loadSessionCostSummariesFromCache.mockImplementationOnce(
       async (params: { sessions: unknown[] }) => {
         started();
@@ -384,111 +400,79 @@ describe("sessions.usage result cache", () => {
 
     const first = runSessionsUsage(baseParams);
     const second = runSessionsUsage(baseParams);
-    await aggregationStarted;
-
-    expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(1);
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
-    release();
-
-    const [firstResult, secondResult] = await Promise.all([first, second]);
-    expect(JSON.stringify(secondResult)).toBe(JSON.stringify(firstResult));
+    try {
+      await aggregationStarted;
+      expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(1);
+      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
+      release();
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      expect(JSON.stringify(secondResult)).toBe(JSON.stringify(firstResult));
+    } finally {
+      release();
+      await Promise.allSettled([first, second]);
+    }
   });
 
-  it("does not give a partial lower-cache snapshot the 30s freshness TTL", async () => {
-    mocks.loadSessionCostSummariesFromCache
-      .mockResolvedValueOnce({
-        summaries: [null],
-        cacheStatus: {
-          status: "refreshing",
-          cachedFiles: 0,
-          pendingFiles: 1,
-          staleFiles: 1,
-        },
-      })
-      .mockResolvedValueOnce({
-        summaries: [sessionSummary(20)],
-        cacheStatus: {
-          status: "fresh",
-          cachedFiles: 1,
-          pendingFiles: 0,
-          staleFiles: 0,
-        },
-      });
-
-    const partial = (await runSessionsUsage(baseParams)) as {
-      totals: { totalTokens: number };
-    };
-    const refreshed = (await runSessionsUsage(baseParams)) as {
-      totals: { totalTokens: number };
-    };
-
-    expect(partial.totals.totalTokens).toBe(0);
-    expect(refreshed.totals.totalTokens).toBe(20);
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
-  });
-
-  it("preserves a complete stale result when a refresh is partial", async () => {
-    const first = (await runSessionsUsage(baseParams)) as {
-      totals: { totalTokens: number };
-    };
-    expect(first.totals.totalTokens).toBe(10);
-
-    mocks.loadSessionCostSummariesFromCache.mockResolvedValueOnce({
-      summaries: [null],
-      cacheStatus: {
-        status: "refreshing",
-        cachedFiles: 0,
-        pendingFiles: 1,
-        staleFiles: 1,
-      },
-    });
-    now = 31_000;
-    await runSessionsUsage(baseParams);
-    await vi.waitFor(() => {
-      expect(
-        Array.from(testApi.sessionsUsageCache.values()).every((entry) => !entry.inFlight),
-      ).toBe(true);
-    });
-
-    let release!: () => void;
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let started!: () => void;
-    const aggregationStarted = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    mocks.loadSessionCostSummariesFromCache.mockImplementationOnce(
-      async (params: { sessions: unknown[] }) => {
-        started();
-        await blocked;
-        return {
-          summaries: params.sessions.map(() => sessionSummary(20)),
+  it.each(["cold", "stale"])(
+    "does not give a %s lower-cache snapshot the 30s freshness TTL",
+    async (kind) => {
+      mocks.loadSessionCostSummariesFromCache
+        .mockResolvedValueOnce({
+          summaries: [
+            kind === "cold"
+              ? null
+              : { ...sessionSummary(10), computedAt: 100, staleSince: 200, refreshing: true },
+          ],
+          cacheStatus: {
+            status: "refreshing",
+            cachedFiles: kind === "cold" ? 0 : 1,
+            pendingFiles: 1,
+            staleFiles: 1,
+          },
+        })
+        .mockResolvedValueOnce({
+          summaries: [sessionSummary(20)],
           cacheStatus: {
             status: "fresh",
-            cachedFiles: params.sessions.length,
+            cachedFiles: 1,
             pendingFiles: 0,
             staleFiles: 0,
           },
-        };
-      },
-    );
+        });
 
-    let returned = false;
-    const next = runSessionsUsage(baseParams).then((result) => {
-      returned = true;
-      return result as { totals: { totalTokens: number } };
+      const partial = (await runSessionsUsage(baseParams)) as {
+        totals: { totalTokens: number };
+        sessions: Array<{ usage: unknown; computing?: boolean }>;
+      };
+      const refreshed = (await runSessionsUsage(baseParams)) as {
+        totals: { totalTokens: number };
+      };
+
+      expect(partial.totals.totalTokens).toBe(kind === "cold" ? 0 : 10);
+      if (kind === "cold") {
+        expect(partial.sessions[0]).toMatchObject({ usage: null, computing: true });
+      } else {
+        expect(partial.sessions[0]?.usage).toMatchObject({
+          computedAt: 100,
+          staleSince: 200,
+          refreshing: true,
+        });
+      }
+      expect(refreshed.totals.totalTokens).toBe(20);
+      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("invalidates a fresh response immediately when a rollup commits", async () => {
+    await runSessionsUsage(baseParams);
+    mocks.loadSessionCostSummariesFromCache.mockResolvedValueOnce({
+      summaries: [sessionSummary(20)],
+      cacheStatus: { status: "fresh", cachedFiles: 1, pendingFiles: 0, staleFiles: 0 },
     });
-    await aggregationStarted;
-    await Promise.resolve();
-    expect(returned).toBe(true);
-    expect((await next).totals.totalTokens).toBe(10);
-    release();
-    await vi.waitFor(() => {
-      expect(
-        Array.from(testApi.sessionsUsageCache.values()).every((entry) => !entry.inFlight),
-      ).toBe(true);
-    });
+    publishSessionCostUsageUpdated("main");
+    const result = await runSessionsUsage(baseParams);
+    expect(result.totals.totalTokens).toBe(20);
+    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
   });
 
   it("serves stale data while one 30s refresh replaces it", async () => {

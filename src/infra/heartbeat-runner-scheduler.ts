@@ -4,21 +4,23 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { formatErrorMessage } from "./errors.js";
-import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
+import { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
 import {
-  heartbeatLog,
   isHeartbeatOwnerUnresolved,
   resolveHeartbeatAgents,
   resolveHeartbeatForWake,
   resolveHeartbeatIntervalMs,
-  tryResolveAmbientHeartbeatAgentId,
   type HeartbeatConfig,
-} from "./heartbeat-runner-config.js";
-import { runHeartbeatOnce } from "./heartbeat-runner-run.js";
+} from "./heartbeat-config.js";
+import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
+import { heartbeatLog as log } from "./heartbeat-log.js";
+import type { runHeartbeatOnce } from "./heartbeat-runner-run.js";
 import { isConfiguredHeartbeatAgent, isTargetedUnscheduledWake } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
+  getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
@@ -26,8 +28,9 @@ import {
   isRetryableHeartbeatSkipReason,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import { isSessionEventWakePollDeferred } from "./session-event-wake.js";
 
-const log = heartbeatLog;
+const loadHeartbeatExecution = createLazyRuntimeModule(() => import("./heartbeat-runner-run.js"));
 
 type HeartbeatAgentState = {
   agentId: string;
@@ -55,7 +58,7 @@ export function startHeartbeatRunner(opts: {
   runOnce?: typeof runHeartbeatOnce;
 }): HeartbeatRunner {
   const runtime = opts.runtime ?? defaultRuntime;
-  const runOnce = opts.runOnce ?? runHeartbeatOnce;
+  const runOnce = opts.runOnce;
   // Cron owns monitor anchors and due slots; local cooldown only limits event
   // follow-ups. Persisted monitor ticks bypass it.
   const state = {
@@ -173,13 +176,7 @@ export function startHeartbeatRunner(opts: {
   };
 
   const run: HeartbeatWakeHandler = async (params) => {
-    if (state.stopped) {
-      return {
-        status: "skipped",
-        reason: "disabled",
-      } satisfies HeartbeatRunResult;
-    }
-    if (!areHeartbeatsEnabled()) {
+    if (state.stopped || !areHeartbeatsEnabled()) {
       return {
         status: "skipped",
         reason: "disabled",
@@ -187,6 +184,7 @@ export function startHeartbeatRunner(opts: {
     }
 
     const reason = params.reason;
+    const wakeSignal = getHeartbeatWakeAbortSignal();
     const intent = params.intent;
     const execEventWake = params.source === "exec-event";
     const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
@@ -253,7 +251,7 @@ export function startHeartbeatRunner(opts: {
         ((isInterval || authoritativeScheduledTick) && !requestedSessionKey && !requestedHeartbeat);
       let res: HeartbeatRunResult;
       try {
-        res = await runOnce({
+        const runOptions: Parameters<typeof runHeartbeatOnce>[0] = {
           cfg: wakeConfig,
           agentId,
           heartbeat: useEnrolledHeartbeat
@@ -272,7 +270,19 @@ export function startHeartbeatRunner(opts: {
           ...(targeted ? { sessionKey: requestedSessionKey } : {}),
           tasks: requestedTasks,
           deps: { runtime: state.runtime },
-        });
+        };
+        const execute = runOnce ?? (await loadHeartbeatExecution()).runHeartbeatOnce;
+        // Import can outlive this runner or its wake generation. The wake owner
+        // retains/requeues canceled work; a late loader must not dispatch it too.
+        if (
+          state.stopped ||
+          opts.abortSignal?.aborted ||
+          wakeSignal?.aborted ||
+          !areHeartbeatsEnabled()
+        ) {
+          return { ran: false, result: { status: "skipped", reason: "disabled" } };
+        }
+        res = await execute(runOptions);
       } catch (err) {
         const errMsg = formatErrorMessage(err);
         log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, {
@@ -281,6 +291,11 @@ export function startHeartbeatRunner(opts: {
         });
         recordRunBookkeeping(agent, now);
         return { ran: false, result: { status: "failed", reason: errMsg } };
+      }
+      if (res.status === "skipped" && isSessionEventWakePollDeferred()) {
+        // This occurrence ended before admission; the next persisted poll owns the next turn.
+        recordRunBookkeeping(agent, now);
+        return { ran: false, result: res };
       }
       if (res.status === "skipped" && isRetryableHeartbeatSkipReason(res.reason)) {
         // Retryable busy attempts own no cooldown; the wake layer retains them.
@@ -349,6 +364,7 @@ export function startHeartbeatRunner(opts: {
     const agentOutcomes = await Promise.all(enrolledAgents.map((agent) => runOneAgent(agent)));
     let ran = false;
     let firstResult: HeartbeatRunResult | undefined;
+    let firstFailure: Extract<HeartbeatRunResult, { status: "failed" }> | undefined;
     let firstGuardSkip: Extract<HeartbeatRunResult, { status: "skipped" }> | undefined;
     for (const outcome of agentOutcomes) {
       if (outcome.retryableSkip) {
@@ -359,6 +375,9 @@ export function startHeartbeatRunner(opts: {
       ran ||= outcome.ran;
       firstResult ??= outcome.result;
       const result = outcome.result;
+      if (result?.status === "failed") {
+        firstFailure ??= result;
+      }
       if (
         !ran &&
         result?.status === "skipped" &&
@@ -371,10 +390,11 @@ export function startHeartbeatRunner(opts: {
       }
     }
     if (ran) {
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return firstFailure ?? { status: "ran", durationMs: Date.now() - startedAt };
     }
     return (
       firstGuardSkip ??
+      firstFailure ??
       firstResult ?? {
         status: "skipped",
         reason: isInterval ? "not-due" : "disabled",

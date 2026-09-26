@@ -8,6 +8,7 @@ import { resolveModelRuntimePolicy } from "../../agents/model-runtime-policy.js"
 import { resolveAllowedModelRefCore } from "../../agents/model-selection-resolve.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import type { ResolvedPublishedModelCatalogOwner } from "../../agents/prepared-model-catalog.types.js";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -37,6 +38,129 @@ function resolveCronPayloadModel(cfg: OpenClawConfig, raw: string) {
 }
 
 describe("resolveCronAgentConfig model policy preservation", () => {
+  it.each(
+    ["string", "object"].flatMap((shape) =>
+      [undefined, [], ["native/agent-backup"]].map((fallbacks) => ({ shape, fallbacks })),
+    ),
+  )(
+    "keeps ACP harness models out of $shape cron defaults with fallbacks $fallbacks",
+    async ({ shape, fallbacks }) => {
+      const primary = "native/primary@native:test-profile";
+      const defaultModel =
+        shape === "string" ? primary : { primary, fallbacks: ["native/default-backup"] };
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: {
+          defaults: { model: defaultModel },
+          entries: {
+            worker: {
+              runtime: { type: "acp" },
+              model: {
+                primary: "harness-only[reasoning=medium]",
+                ...(fallbacks ? { fallbacks } : {}),
+              },
+            },
+          },
+        },
+      };
+      const owner = {
+        config: cfg,
+        agentId: "worker",
+        agentDir: "/tmp/cron-acp-agent",
+        workspaceDir: "/tmp/cron-acp-workspace",
+        metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+        modelCatalog: { entries: [], routeVariants: [] },
+      };
+      const result = await resolveCronModelSelection({
+        cfg,
+        owner,
+        agentConfigOverride: resolveAgentConfig(cfg, owner.agentId),
+        agentId: owner.agentId,
+        agentDir: owner.agentDir,
+        workspaceDir: owner.workspaceDir,
+        payload: { kind: "agentTurn", message: "scheduled work" },
+        sessionEntry: {},
+        isGmailHook: false,
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        provider: "native",
+        model: "primary",
+        modelSource: "default",
+        configuredProfileId: "native:test-profile",
+        cfgWithAgentDefaults: {
+          agents: {
+            defaults: {
+              model: fallbacks === undefined ? defaultModel : { primary, fallbacks },
+            },
+          },
+        },
+      });
+    },
+  );
+
+  it("keeps an agent utility alias out of the implicit cron primary without flattening its model map", async () => {
+    const cfg: OpenClawConfig = {
+      meta: { migrations: { utilityModelSeparation: true } },
+      agents: {
+        ownership: "explicit",
+        entries: {
+          worker: {
+            utilityModel: "helper@local:utility",
+            models: { "local-utility/small": { alias: "helper" } },
+          },
+        },
+      },
+      models: {
+        providers: Object.fromEntries(
+          ["local-utility", "ordinary"].map((provider) => [
+            provider,
+            {
+              baseUrl: "http://127.0.0.1:9/v1",
+              models: [
+                makeProviderModelFixture({
+                  id: provider === "local-utility" ? "small" : "large",
+                  provider,
+                  api: "openai-completions",
+                  baseUrl: "http://127.0.0.1:9/v1",
+                }),
+              ],
+            },
+          ]),
+        ),
+      },
+    };
+    const owner = {
+      config: cfg,
+      agentId: "worker",
+      agentDir: "/tmp/cron-utility-agent",
+      workspaceDir: "/tmp/cron-utility-workspace",
+      metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+      modelCatalog: { entries: [], routeVariants: [] },
+    };
+    const result = await resolveCronModelSelection({
+      cfg,
+      owner,
+      agentConfigOverride: resolveAgentConfig(cfg, owner.agentId),
+      agentId: owner.agentId,
+      agentDir: owner.agentDir,
+      workspaceDir: owner.workspaceDir,
+      payload: { kind: "agentTurn", message: "scheduled work" },
+      sessionEntry: {},
+      isGmailHook: false,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      provider: "ordinary",
+      model: "large",
+      modelSource: "default",
+    });
+    if (result.ok) {
+      expect(result.cfgWithAgentDefaults.agents?.defaults?.models).toBeUndefined();
+      expect(result.cfgWithAgentDefaults.agents?.entries).toEqual(cfg.agents?.entries);
+    }
+  });
+
   it.each<{ models: Record<string, AgentModelEntryConfig>; expectedRuntime: string }>([
     { models: {}, expectedRuntime: "openclaw" },
     { models: { "openai/other": { alias: "other" } }, expectedRuntime: "openclaw" },

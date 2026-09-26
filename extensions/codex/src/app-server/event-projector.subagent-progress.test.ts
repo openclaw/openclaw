@@ -49,7 +49,7 @@ it.each([false, true])(
           status: kind === "interrupted" ? "failed" : kind === "started" ? "running" : "completed",
         });
         expect(progress.getSnapshot().lines).toHaveLength(
-          toolProgress ? (kind === "interacted" ? 2 : 1) : kind === "interrupted" ? 1 : 0,
+          toolProgress ? (kind === "interacted" ? 2 : 1) : 0,
         );
         expect(update.mock.lastCall?.[0]).toContain("Working");
         if (toolProgress) {
@@ -57,6 +57,8 @@ it.each([false, true])(
           expect(update.mock.lastCall?.[0]).toContain(
             kind === "interacted" ? "message sent" : kind,
           );
+        } else {
+          expect(update.mock.lastCall?.[0]).toBe("Working");
         }
       }
       expect(new Set(events.slice(0, -1).map((event) => event.itemId)).size).toBe(1);
@@ -97,4 +99,30 @@ it("projects native collaboration calls without exposing their prompts", async (
     }),
   );
   expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain(item.prompt);
+  onAgentEvent.mockClear();
+  const wait = { ...item, id: "wait-1", tool: "wait" };
+  await projector.handleNotification(forCurrentTurn("item/started", { item: wait }));
+  await projector.handleNotification(
+    forCurrentTurn("item/completed", { item: { ...wait, status: "completed" } }),
+  );
+  expect(
+    onAgentEvent.mock.calls
+      .filter(([event]) => event.stream === "item")
+      .map(([event]) => event.data.hideFromChannelProgress),
+  ).toEqual([true, true]);
+  onAgentEvent.mockClear();
+  await projector.handleNotification(
+    forCurrentTurn("item/completed", { item: { ...wait, id: "failed-wait", status: "failed" } }),
+  );
+  expect(onAgentEvent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      stream: "item",
+      data: expect.objectContaining({ status: "failed", name: "subagents" }),
+    }),
+  );
+  expect(
+    onAgentEvent.mock.calls
+      .filter(([event]) => event.stream === "item")
+      .every(([event]) => !event.data.hideFromChannelProgress),
+  ).toBe(true);
 });

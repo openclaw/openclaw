@@ -71,7 +71,7 @@ describe("node worker workspace seeds", () => {
     const result = await execSeed({ action: "apply", key });
 
     expect(result).toMatchObject({ workspaceDir: workspace, code: 0, stdout: "applied\n" });
-    expect(await fsp.readdir(workspace)).toEqual([".git", "link.txt", "tracked.txt"]);
+    expect((await fsp.readdir(workspace)).toSorted()).toEqual([".git", "link.txt", "tracked.txt"]);
     expect(await fsp.readFile(path.join(workspace, "tracked.txt"), "utf8")).toBe("original");
     expect(await fsp.readlink(path.join(workspace, "link.txt"))).toBe("tracked.txt");
     // Apply leaves the store-freshness clock untouched so a used seed still refreshes.

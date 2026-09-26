@@ -1,4 +1,3 @@
-// Telegram plugin module implements native command registration behavior.
 import type { Bot, Context } from "grammy";
 import {
   findCommandByNativeName,
@@ -18,6 +17,7 @@ import type {
   TelegramNativeCommandCallbackDispatcher,
   TelegramResolvedGroupConfig,
 } from "./bot-handlers.types.js";
+import type { TelegramBuiltinCommandResult } from "./bot-native-command-builtins.js";
 import {
   defaultTelegramNativeCommandDeps,
   type TelegramNativeCommandDeps,
@@ -71,7 +71,6 @@ type RegisterTelegramNativeCommandsParams = {
     | "groupAllowFrom"
     | "replyToMode"
     | "accountAbortSignal"
-    | "dispatchReplyFromConfig"
   >;
 };
 
@@ -89,7 +88,10 @@ export const registerTelegramNativeCommands = ({
   shouldSkipUpdate,
   telegramDeps = defaultTelegramNativeCommandDeps,
   opts,
-}: RegisterTelegramNativeCommandsParams): TelegramNativeCommandCallbackDispatcher | undefined => {
+}: RegisterTelegramNativeCommandsParams): {
+  nativeCommandNames: ReadonlyMap<string, string>;
+  nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher;
+} => {
   const boundRoute =
     nativeEnabled && nativeSkillsEnabled
       ? resolveAgentRoute({ cfg, channel: "telegram", accountId })
@@ -195,6 +197,14 @@ export const registerTelegramNativeCommands = ({
     : loginCommand
       ? [loginCommand]
       : [];
+  const nativeCommandNames = new Map<string, string>(
+    nativeEnabled
+      ? nativeCommandsToHandle.map((command) => [
+          normalizeTelegramCommandName(command.name),
+          command.name,
+        ])
+      : [],
+  );
   const {
     commandsToRegister,
     totalCommands,
@@ -253,7 +263,7 @@ export const registerTelegramNativeCommands = ({
         botUser: Context["me"],
         msg: NonNullable<Context["message"]>,
         rawText: string,
-      ) => Promise<boolean>)
+      ) => Promise<TelegramBuiltinCommandResult>)
     | undefined;
   for (const command of nativeCommandsToHandle) {
     const normalizedCommandName = normalizeTelegramCommandName(command.name);
@@ -261,23 +271,30 @@ export const registerTelegramNativeCommands = ({
       botUser: Context["me"],
       msg: NonNullable<Context["message"]>,
       rawText: string,
-    ): Promise<boolean> => {
+      shouldSkip?: () => boolean,
+    ): Promise<TelegramBuiltinCommandResult> => {
       const { executeTelegramBuiltinCommand } = await loadTelegramBuiltinCommandExecutor();
       return await executeTelegramBuiltinCommand({
         ...buildExecutorParams({ botUser, msg, rawText }),
         commandName: command.name,
+        shouldSkip,
       });
     };
     if (nativeEnabled) {
-      bot.command(normalizedCommandName, async (ctx) => {
-        if (shouldSkipUpdate(ctx) || !ctx.message) {
+      bot.command(normalizedCommandName, async (ctx, next) => {
+        if (!ctx.message) {
+          await next();
           return;
         }
-        await handleNativeCommand(
+        const result = await handleNativeCommand(
           ctx.me,
           ctx.message,
           typeof ctx.match === "string" ? ctx.match.trim() : "",
+          () => shouldSkipUpdate(ctx),
         );
+        if (result === "fall-through") {
+          await next();
+        }
       });
     }
     if (
@@ -307,9 +324,13 @@ export const registerTelegramNativeCommands = ({
   }
 
   if (!handleLoginCallback) {
-    return undefined;
+    return { nativeCommandNames };
   }
-  return async ({ botUser, callbackQuery, commandText }) => {
+  const nativeCommandCallbackDispatcher: TelegramNativeCommandCallbackDispatcher = async ({
+    botUser,
+    callbackQuery,
+    commandText,
+  }) => {
     const commandBody = commandText.slice(1).trim();
     const separatorIndex = commandBody.search(/\s/u);
     const commandName = (separatorIndex === -1 ? commandBody : commandBody.slice(0, separatorIndex))
@@ -329,7 +350,7 @@ export const registerTelegramNativeCommands = ({
       return { handled: true, clearButtons: false };
     }
     const rawText = separatorIndex === -1 ? "" : commandBody.slice(separatorIndex + 1).trim();
-    const clearButtons = await handleLoginCallback(
+    const result = await handleLoginCallback(
       botUser,
       {
         ...callbackMessage,
@@ -339,6 +360,7 @@ export const registerTelegramNativeCommands = ({
       },
       rawText,
     );
-    return { handled: true, clearButtons };
+    return { handled: true, clearButtons: result === "handled-clear-buttons" };
   };
+  return { nativeCommandNames, nativeCommandCallbackDispatcher };
 };

@@ -17,15 +17,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
-
 jobs:
   dispatch:
     runs-on: ubuntu-latest
     if: >-
-      ${{
+      ${{ (
+        (github.event.action != 'edited' ||
+          (github.event_name != 'issues' && github.event_name != 'pull_request_target') ||
+          !github.event.changes || toJSON(github.event.changes) != '{}') &&
         (github.event_name != 'issue_comment' ||
           (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')) &&
         !(
@@ -39,7 +38,12 @@ jobs:
             (github.actor_id == '257215752' || github.actor_id == '264559031')
           )
         )
-      }}
+      ) }}
+    # Admission runs before job concurrency, so an empty metadata edit cannot
+    # cancel a useful dispatch. Other changes retain the receiver's policy.
+    concurrency:
+      group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
     env:
       HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
       CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
@@ -62,8 +66,9 @@ jobs:
               if output="$(gh api "$@" 2>&1)"; then
                 printf '%s\n' "$output"
                 return 0
+              else
+                status=$?
               fi
-              status=$?
               lower_output="${output,,}"
               if [[ "$lower_output" != *"rate limit"* && "$output" != *"HTTP 429"* ]]; then
                 printf '%s\n' "$output" >&2
@@ -283,6 +288,13 @@ jobs:
           else
             echo "::warning::Skipping GitHub activity dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
           fi
+
+      - name: Setup supported Node runtime
+        if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
 
       - name: Dispatch exact ClawSweeper review
         if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}

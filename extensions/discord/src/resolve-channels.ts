@@ -1,13 +1,8 @@
-// Discord plugin module implements resolve channels behavior.
 import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, DiscordApiError, fetchDiscord } from "./api.js";
 import { isDiscordThreadChannelType } from "./channel-type.js";
 import { listGuilds } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
-import {
-  buildDiscordUnresolvedResults,
-  filterDiscordGuilds,
-  resolveDiscordAllowlistToken,
-} from "./resolve-allowlist-common.js";
+import { filterDiscordGuilds, resolveDiscordAllowlistToken } from "./resolve-allowlist-common.js";
 
 type DiscordChannelSummary = {
   id: string;
@@ -162,7 +157,7 @@ export async function resolveDiscordChannelAllowlist(params: {
 }): Promise<DiscordChannelResolution[]> {
   const token = resolveDiscordAllowlistToken(params.token);
   if (!token) {
-    return buildDiscordUnresolvedResults(params.entries, (input) => ({
+    return params.entries.map((input) => ({
       input,
       resolved: false,
     }));

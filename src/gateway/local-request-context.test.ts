@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -17,6 +17,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
@@ -43,32 +44,6 @@ const asPublishedOwner = (value: PublishedModelCatalogOwnerCandidate): Published
   value as unknown as PublishedOwnerSnapshot;
 
 describe("local gateway request context", () => {
-  let response: Awaited<ReturnType<typeof dispatchGatewayMethodInProcessRaw>>;
-
-  beforeAll(async () => {
-    const cfg = {
-      agents: {
-        defaults: {},
-      },
-    } as OpenClawConfig;
-
-    response = await withLocalGatewayRequestScope(
-      {
-        deps: {} as CliDeps,
-        getRuntimeConfig: () => cfg,
-      },
-      () =>
-        dispatchGatewayMethodInProcessRaw("agent.identity.get", {
-          agentId: "main",
-        }),
-    );
-  });
-
-  it("lets embedded local runs dispatch gateway methods in-process", () => {
-    expect(response.ok).toBe(true);
-    expect(response.payload).toMatchObject({ agentId: "main" });
-  });
-
   it("keeps local RPC available without claiming Gateway routing or readiness", async () => {
     await withLocalGatewayRequestScope(
       { deps: {} as CliDeps, getRuntimeConfig: () => ({ gateway: { port: 19970 } }) },
@@ -142,8 +117,9 @@ describe("local gateway request context", () => {
   });
 
   it("binds typed agent turns to the embedded context", async () => {
+    const cfg = {};
     await withLocalGatewayRequestScope(
-      { deps: {} as CliDeps, getRuntimeConfig: () => ({}) },
+      { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
       async () => {
         const context = getPluginRuntimeGatewayRequestScope()?.context;
         if (!context) {
@@ -152,6 +128,7 @@ describe("local gateway request context", () => {
         const payload = { runId: "local-turn", status: "accepted" };
         createAgentTurnService.mockReturnValue({
           startTurn: async ({ io }) => io.emitAcceptance([true, payload, undefined]),
+          prepareWaitForTurn: vi.fn(),
           waitForTurn: vi.fn(),
         });
 
@@ -196,7 +173,7 @@ describe("local gateway request context", () => {
           isCurrent: () => true,
           authModes: {},
           authStore: { version: 1, profiles: {} },
-          metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
+          metadataSnapshot: createPluginMetadataSnapshotFixture(),
           modelCatalog: { entries: [], routeVariants: [] },
         }),
       );
@@ -252,7 +229,7 @@ describe("local gateway request context", () => {
       isCurrent: () => true,
       authModes: {},
       authStore: { version: 1 as const, profiles: {} },
-      metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [model], routeVariants: [model] },
     } satisfies PublishedModelCatalogOwnerCandidate;
     const refreshAuth = vi
@@ -271,15 +248,20 @@ describe("local gateway request context", () => {
         },
       })
       .mockResolvedValueOnce({ authModes: {}, authStore: { version: 1, profiles: {} } });
+    let published: PublishedOwnerSnapshot | undefined;
+    const readOwner = vi
+      .spyOn(preparedModelCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
+      .mockImplementation(() => published);
     const loadOwner = vi
       .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
       .mockImplementation(async () => {
         const auth = await refreshAuth({ providerIds: ["local-auth-provider"] });
-        return asPublishedOwner({
+        published = asPublishedOwner({
           ...candidate,
           authModes: auth.authModes,
           authStore: auth.authStore,
         });
+        return published;
       });
 
     const list = () =>
@@ -312,9 +294,10 @@ describe("local gateway request context", () => {
       expect.objectContaining({ readOnly: false, refreshFullCatalog: true }),
     );
     loadOwner.mockRestore();
+    readOwner.mockRestore();
   });
 
-  it("uses the prepared local owner when a catalog read times out", async () => {
+  it("uses the prepared local owner without starting a catalog load", async () => {
     const cfg = {
       agents: {
         list: [
@@ -337,7 +320,7 @@ describe("local gateway request context", () => {
       isCurrent: () => true,
       authModes: {},
       authStore: { version: 1 as const, profiles: {} },
-      metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [], routeVariants: [] },
     } satisfies PublishedModelCatalogOwnerCandidate;
     const loadOwner = vi
@@ -353,7 +336,7 @@ describe("local gateway request context", () => {
     );
 
     expect(result).toMatchObject({ ok: true, payload: { models: [] } });
-    expect(loadOwner).toHaveBeenCalledOnce();
+    expect(loadOwner).not.toHaveBeenCalled();
     expect(readOwner).toHaveBeenCalledOnce();
     loadOwner.mockRestore();
     readOwner.mockRestore();
@@ -420,13 +403,15 @@ describe("local gateway request context", () => {
 
 it("keeps standalone embedded RPC available inside its session admission", async () => {
   const { beginSessionWorkAdmission } = await import("../sessions/session-lifecycle-admission.js");
+  const cfg = { agents: { defaults: {} } };
   await withLocalGatewayRequestScope(
-    { deps: {} as CliDeps, getRuntimeConfig: () => ({ agents: { defaults: {} } }) },
+    { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
     async () => {
       const before = await dispatchGatewayMethodInProcessRaw("agent.identity.get", {
         agentId: "main",
       });
       expect(before.ok).toBe(true);
+      expect(before.payload).toMatchObject({ agentId: "main" });
       const admission = await beginSessionWorkAdmission({
         scope: "local-rpc-admission-regression",
         identities: ["agent:main:local-rpc"],

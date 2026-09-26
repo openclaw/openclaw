@@ -146,19 +146,31 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
   };
   const releaseEmptyRuntimeSlot = async (runtimeKey: string, runtime: SessionMcpRuntime) => {
     const slot = store.runtimeSlots.get(runtime);
-    if (!slot || !store.liveRuntimeSlots.has(slot)) {
+    if (!slot) {
       return;
     }
     if (!runtime.joinCleanup) {
       throw new Error("MCP runtime does not expose cleanup ownership");
     }
     await runtime.joinCleanup();
+    const owner = sessionMcpRuntimeOwners.get(runtime);
     // Replacement transfers the slot before cleanup yields; only its current owner may release it.
-    if (
-      store.runtimesBySessionId.get(runtimeKey) === runtime &&
-      sessionMcpRuntimeOwners.get(runtime)?.hasServers() !== true
-    ) {
+    if (store.runtimesBySessionId.get(runtimeKey) === runtime && owner?.hasServers() !== true) {
       store.liveRuntimeSlots.delete(slot);
+      // A drained transport releases capacity, but a retained handle still owns
+      // its binding. Final handle release reaps it; sign-in capabilities stay owned.
+      if (
+        owner?.hasServers() === false &&
+        (runtime.activeLeases ?? 0) === 0 &&
+        Object.keys(runtime.requesterConnect?.catalog.servers ?? {}).length === 0
+      ) {
+        store.runtimesBySessionId.delete(runtimeKey);
+        store.connectionMetaByRuntimeKey.delete(runtimeKey);
+        store.runtimeSlots.delete(runtime);
+        if (runtimeKeysForSessionId(runtime.sessionId).length === 0) {
+          forgetSessionKeysForSessionId(runtime.sessionId);
+        }
+      }
     }
   };
   const disposeRuntime = async (runtime: SessionMcpRuntime, releaseSlot = true) => {
@@ -193,6 +205,12 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
             store.pendingDisposals.delete(runtimeKey);
           }
         }
+        // A pending close can outlive the last empty runtime or queued acquisition.
+        for (const sessionId of new Set(runtimeKeys.map(parseRuntimeCacheSessionId))) {
+          if (runtimeKeysForSessionId(sessionId).length === 0) {
+            forgetSessionKeysForSessionId(sessionId);
+          }
+        }
       });
     for (const runtimeKey of runtimeKeys) {
       const pending = store.pendingDisposals.get(runtimeKey) ?? new Set<Promise<void>>();
@@ -217,6 +235,11 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
       }
     }
     for (const runtimeKey of store.runtimeWorkChains.keys()) {
+      if (parseRuntimeCacheSessionId(runtimeKey) === sessionId) {
+        keys.add(runtimeKey);
+      }
+    }
+    for (const runtimeKey of store.pendingDisposals.keys()) {
       if (parseRuntimeCacheSessionId(runtimeKey) === sessionId) {
         keys.add(runtimeKey);
       }
@@ -251,6 +274,12 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
       for (const key of runtimeKeys) {
         if (store.runtimeWorkChains.get(key) === settled) {
           store.runtimeWorkChains.delete(key);
+        }
+      }
+      // A full admission may install a requester after discarding its empty static partition.
+      for (const sessionId of new Set(runtimeKeys.map(parseRuntimeCacheSessionId))) {
+        if (runtimeKeysForSessionId(sessionId).length === 0) {
+          forgetSessionKeysForSessionId(sessionId);
         }
       }
     });
@@ -353,13 +382,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
               ...store.runtimeWorkChains.keys(),
               ...store.pendingDisposals.keys(),
             ]
-          : [
-              sessionId,
-              ...runtimeKeysForSessionId(sessionId),
-              ...[...store.pendingDisposals.keys()].filter(
-                (key) => parseRuntimeCacheSessionId(key) === sessionId,
-              ),
-            ],
+          : [sessionId, ...runtimeKeysForSessionId(sessionId)],
       ),
     ];
     // Capture before queuing: the previous owner may unpublish and settle before

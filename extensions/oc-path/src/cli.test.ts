@@ -114,7 +114,7 @@ function optionArgs(options: PathCommandOptions): string[] {
 
 async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void> {
   const previousExitCode = process.exitCode;
-  process.exitCode = undefined;
+  process.exitCode = 0;
   const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
     runtime.writeStdout(String(chunk));
     return true;
@@ -141,7 +141,9 @@ async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void
   } finally {
     stdoutWrite.mockRestore();
     stderrWrite.mockRestore();
-    process.exitCode = previousExitCode;
+    // oxlint-disable-next-line no-warning-comments -- replace the pending link after Bun ships the fix.
+    // TODO(bun#42607): Assign undefined once Bun clears a nonzero process.exitCode.
+    process.exitCode = previousExitCode ?? 0;
   }
 }
 

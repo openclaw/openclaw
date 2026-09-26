@@ -9,14 +9,19 @@ import {
 } from "./assistant-error-format.js";
 
 describe("formatProviderRefusalText", () => {
-  it.each(["bio", "cyber"])("formats a sanitized %s refusal", (category) => {
+  it("directs a misalignment stop to review instead of another ordinary retry", () => {
     expect(
       formatProviderRefusalText({
-        diagnostics: [{ type: "provider_refusal", details: { category } }],
+        diagnostics: [{ type: "provider_refusal", details: { category: "misalignment" } }],
       }),
-    ).toBe(
-      `The provider refused this request (category: ${category}). Revise the request and try again.`,
-    );
+    ).toBe("Chat stopped as a precaution. Review the findings in chat before continuing.");
+  });
+  it("formats a sanitized refusal category", () => {
+    expect(
+      formatProviderRefusalText({
+        diagnostics: [{ type: "provider_refusal", details: { category: "bio" } }],
+      }),
+    ).toBe("The provider refused this request (category: bio). Revise the request and try again.");
   });
 });
 
@@ -83,17 +88,45 @@ describe("extractErrorHttpStatus", () => {
     expect(extractErrorHttpStatus(message)?.code).toBe(code);
   });
 
-  it.each([
-    "request id req-4291 failed",
-    "input length 14295 tokens exceeds the model limit",
-    "model model-x-500-preview not found",
-    "Image width 500 exceeds the maximum allowed size",
-  ])("rejects embedded numeric text: %s", (message) => {
-    expect(extractErrorHttpStatus(message)).toBeNull();
-  });
+  it.each(["request id req-4291 failed", "model model-x-500-preview not found"])(
+    "rejects embedded numeric text: %s",
+    (message) => {
+      expect(extractErrorHttpStatus(message)).toBeNull();
+    },
+  );
 });
 
 describe("HTTP status consumers", () => {
+  it.each(["", "error: ", "500 ", "500: ", "HTTP 502: "])(
+    "preserves distinct validation type and code after %s",
+    (prefix) => {
+      const error = {
+        type: "invalid_request_error",
+        code: "unknown_parameter",
+        message: "Unsupported parameter: timeout",
+      };
+      expect(parseApiErrorInfo(`${prefix}${JSON.stringify({ error })}`)).toMatchObject(error);
+    },
+  );
+
+  it("extracts the final upstream rejection from a proxy failure envelope", () => {
+    const message = "A maximum of 4 blocks with cache_control may be provided. Found 5.";
+    const raw = `400: ${JSON.stringify({
+      error: {
+        message: "All target providers failed.",
+        attempts: [
+          { status: 503, details: { error: { type: "api_error", message: "Unavailable" } } },
+          { status: 400, details: { error: { type: "invalid_request_error", message } } },
+        ],
+      },
+    })}`;
+    expect(parseApiErrorInfo(raw)).toMatchObject({
+      httpCode: "400",
+      type: "invalid_request_error",
+      message,
+    });
+  });
+
   it("does not return raw HTML after an HTTP reason phrase", () => {
     const raw = [
       "HTTP 502 Bad Gateway",

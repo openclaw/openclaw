@@ -1,4 +1,3 @@
-// Memory Core plugin module implements concept vocabulary behavior.
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -450,20 +449,9 @@ export function summarizeConceptTagScriptCoverage(
     let hasOther = false;
     for (const tag of conceptTags) {
       const family = classifyConceptTagScript(tag);
-      if (family === "mixed") {
-        hasLatin = true;
-        hasCjk = true;
-        continue;
-      }
-      if (family === "latin") {
-        hasLatin = true;
-        continue;
-      }
-      if (family === "cjk") {
-        hasCjk = true;
-        continue;
-      }
-      hasOther = true;
+      hasLatin ||= family === "latin" || family === "mixed";
+      hasCjk ||= family === "cjk" || family === "mixed";
+      hasOther ||= family === "other";
     }
 
     if (hasLatin && hasCjk) {

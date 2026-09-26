@@ -561,6 +561,14 @@ extension TalkModeRuntime {
         guard let session = realtimeSession,
               ownsRealtimeRelay(relayGeneration, session)
         else { return }
+        if case let .outputCancelled(reason) = termination, reason != "pause" {
+            await self.setEnabled(false)
+            guard !self.isEnabled, self.realtimeSession == nil else { return }
+            _ = await self.projectRealtimeRelay(self.realtimeRelayGeneration, nil) {
+                TalkModeController.shared.exitTalkMode()
+            }
+            return
+        }
         logger.warning(
             "talk realtime terminated=\(String(describing: termination), privacy: .public)")
         let activeDuration = realtimeSessionReadyAt.map { Date().timeIntervalSince($0) } ?? 0
@@ -609,16 +617,10 @@ extension TalkModeRuntime {
               isEnabled,
               !self.isPaused
         else { return }
-        if speaking {
-            phase = .speaking
-            _ = await self.projectRealtimeRelay(relayGeneration, session) {
-                TalkModeController.shared.updatePhase(.speaking)
-            }
-        } else if !isPaused {
-            phase = .listening
-            _ = await self.projectRealtimeRelay(relayGeneration, session) {
-                TalkModeController.shared.updatePhase(.listening)
-            }
+        let phase: TalkModePhase = speaking ? .speaking : .listening
+        self.phase = phase
+        _ = await self.projectRealtimeRelay(relayGeneration, session) {
+            TalkModeController.shared.updatePhase(phase)
         }
     }
 

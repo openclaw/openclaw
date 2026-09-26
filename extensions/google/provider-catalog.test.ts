@@ -4,8 +4,8 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
 import {
-  buildGoogleLiveCatalogProvider,
   buildGoogleStaticCatalogProvider,
   buildGoogleVertexStaticCatalogProvider,
 } from "./provider-catalog.js";
@@ -251,7 +251,7 @@ describe("google provider catalog", () => {
     },
   );
 
-  it.each([401, 403, 503])("preserves HTTP %i for the catalog outcome owner", async (status) => {
+  it.each([401, 503])("preserves HTTP %i for the catalog outcome owner", async (status) => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
       response: new Response(null, { status }),

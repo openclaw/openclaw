@@ -1,6 +1,7 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -19,7 +20,6 @@ import {
 } from "./send-context.js";
 import type { TelegramSendOpts, TelegramSendResult } from "./send-message-types.js";
 import type { TelegramPreparedSender } from "./send-prepared.js";
-import type { OpenClawConfig } from "./send.runtime.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
 import { resolveTelegramTextChunkLimit } from "./text-chunk-limit.js";
@@ -188,7 +188,7 @@ export function createTelegramTextSender(config: {
       if (sender.parts.length === start + 1) {
         await beforeFirstAccepted?.();
       }
-      recordSentMessage(chatId, messageId, cfg, {
+      await recordSentMessage(chatId, messageId, cfg, {
         accountId: account.accountId,
         agentId: ownerAgentId,
       });
@@ -293,13 +293,19 @@ export function createTelegramTextSender(config: {
       partialDeliveryResult: delivery.partialDeliveryResult,
     };
     const alreadyUsed = options.replyToAlreadyUsed === true;
-    const maxChars = useRichMessages
-      ? resolveTelegramTextChunkLimit({ cfg, accountId: account.accountId })
-      : 4000;
+    const maxChars = Math.min(
+      opts.textLimit ?? Number.POSITIVE_INFINITY,
+      resolveTelegramTextChunkLimit({
+        cfg,
+        accountId: account.accountId,
+        ...(textMode === "html" ? { formatting: { parseMode: "HTML" } } : {}),
+      }),
+    );
     const pages = planTelegramTextDeliveryPages({
       text: textMode === "html" ? renderHtmlText(rawText) : rawText,
       maxChars,
       tableMode,
+      chunkMode: opts.chunkMode ?? resolveChunkMode(cfg, "telegram", account.accountId),
       richMessages: useRichMessages,
       skipEntityDetection: account.config.linkPreview === false,
       ...(textMode === "html" ? { textMode: "html" as const } : {}),

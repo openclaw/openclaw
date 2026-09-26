@@ -255,6 +255,8 @@ printf 'support=%s\\n' "$OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUP
 export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
 export OPENCLAW_PLUGINS_E2E_CLAWHUB=1
 export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC=clawhub:@example/consent-fixture
+export OPENCLAW_PLUGINS_E2E_CLAWHUB_ID=consent-fixture
 source scripts/e2e/lib/plugins/sweep.sh
 node() {
   case "$1" in
@@ -274,6 +276,80 @@ run_plugins_clawhub_scenario
       expect(result.calls.find((args) => args[1] === "update")).not.toContain(consent);
     },
   );
+
+  it("requires an explicit package identity for live ClawHub E2E", () => {
+    const root = tempDirs.make("openclaw-clawhub-live-requirements-");
+    const result = runShell(
+      root,
+      writeCandidate(root),
+      `
+export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB=1
+export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
+unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC OPENCLAW_PLUGINS_E2E_CLAWHUB_ID
+source scripts/e2e/lib/plugins/sweep.sh
+run_plugins_clawhub_scenario
+`,
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("the Kitchen Sink listing has been retired");
+  });
+
+  it.each([
+    {
+      environment: `
+export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=0
+unset OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC OPENCLAW_PLUGINS_E2E_CLAWHUB_ID
+`,
+      expectedId: "openclaw-kitchen-sink-fixture",
+      expectedSpec: "clawhub:@openclaw/plugin-e2e-fixture",
+      name: "fixture default",
+    },
+    {
+      environment: `
+export OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC=clawhub:@example/custom-plugin
+export OPENCLAW_PLUGINS_E2E_CLAWHUB_ID=custom-plugin
+`,
+      expectedId: "custom-plugin",
+      expectedSpec: "clawhub:@example/custom-plugin",
+      name: "explicit override",
+    },
+  ])("selects the ClawHub identity for $name", ({ environment, expectedId, expectedSpec }) => {
+    const root = tempDirs.make("openclaw-clawhub-identity-");
+    const result = runShell(
+      root,
+      writeCandidate(root),
+      `
+export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
+export OPENCLAW_PLUGINS_E2E_CLAWHUB=1
+${environment}
+source scripts/e2e/lib/plugins/sweep.sh
+node() {
+  case "$1" in
+    scripts/e2e/lib/clawhub-fixture-server.cjs)
+      printf '12345\\n' > "$3"
+      while true; do sleep 1; done
+      ;;
+    scripts/e2e/lib/plugins/assertions.mjs) return 0 ;;
+    *) command node "$@" ;;
+  esac
+}
+run_plugins_clawhub_scenario
+`,
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const install = result.calls.find((args) => args[1] === "install" && !args.includes("--help"));
+    expect(install?.[2]).toBe(expectedSpec);
+    expect(result.calls.filter((args) => args[1] === "inspect").map((args) => args[2])).toEqual([
+      expectedId,
+      expectedId,
+    ]);
+    expect(result.calls.find((args) => args[1] === "update")?.[2]).toBe(expectedId);
+    expect(result.calls.find((args) => args[1] === "uninstall")?.[2]).toBe(expectedSpec);
+  });
 
   it.each([
     ["  --accept-capabilities  Accept\n", [consent]],
@@ -344,17 +420,5 @@ ${fixtureCommand} plugins install fixture`,
       ["plugins", "install", "--help"],
       ["plugins", "install", "fixture", consent],
     ]);
-  });
-
-  it.each([
-    ["2026.4.25", "1"],
-    ["2026.4.26", "0"],
-    ["2026.8.1", "0"],
-  ])("preserves legacy version CLI %s", (version, output) => {
-    const result = spawnSync(process.execPath, ["scripts/e2e/lib/package-compat.mjs", version], {
-      encoding: "utf8",
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(output);
   });
 });

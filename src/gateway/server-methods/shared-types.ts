@@ -13,19 +13,24 @@ import type {
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
+import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
+import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalRequestPayload,
 } from "../../infra/plugin-approvals.js";
-import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
+import type {
+  SystemAgentApprovalRequest,
+  SystemAgentApprovalRequestPayload,
+  SystemAgentApprovalResolved,
+} from "../../infra/system-agent-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
-import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { InternalAgentTurnFacadeFactory } from "../agent-turn/internal-facade.types.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import type {
   GatewayDeferredChannelReload,
   GatewayHotReloadStatus,
@@ -45,6 +50,7 @@ import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-
 import type {
   ChannelAccountStartOutcome,
   ChannelRuntimeSnapshot,
+  ChannelRuntimeSnapshotOptions,
   StartChannelOptions,
 } from "../server-channel-runtime.types.js";
 import type { ChatRunEntry, ChatRunRegistration, ChatRunState } from "../server-chat-state.js";
@@ -56,6 +62,7 @@ import type {
 import type {
   GatewayModelCatalogSnapshot,
   PreparedGatewayModelCatalog,
+  PreparedGatewayModelCatalogReadResult,
 } from "../server-model-catalog.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
@@ -96,6 +103,14 @@ export type {
 export type { GatewayOperatorRoleActor };
 
 export type { RespondFn } from "./response-types.js";
+
+export type PreparedSessionApprovalReplay = {
+  replay: SessionApprovalReplay;
+  /** Check in the response frame; a publication may race promise delivery. */
+  isCurrent: () => boolean;
+  /** Retain publication fencing through the response, then release the replay scope. */
+  release: () => void;
+};
 
 /** Minimal hosted OpenClaw contract retained by the gateway request router. */
 /**
@@ -157,6 +172,10 @@ export type GatewaySystemAgentSession = {
     dispose: () => Promise<void>;
   };
   welcome: string;
+  /** Recorded with the welcome; external-edit notices and setup are not optional. */
+  optionalWelcome?: boolean;
+  /** Passive creation entry, retained so reconnects do not append duplicate history. */
+  newAgentWelcome?: string;
   welcomeQuestion?: SystemAgentChatQuestion;
   /** Audit cursor captured with the pending caretaker welcome; cleared after delivery. */
   welcomeAuditSequence?: number;
@@ -185,12 +204,18 @@ type GatewayKernelContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
+  /** Last serving policy committed by this Gateway, excluding tentative secret activation. */
+  getCommittedRuntimeConfig?: () => OpenClawConfig;
+  sessionRowProjectionOwner?: object;
+  ensureSessionRowProjection?: () => Promise<void>;
   /** Live reload owner, including same-config restart work and shutdown. */
   isConfigReloadSettled: () => boolean;
   /** Prepared listener certificate pin; undefined when Gateway TLS is disabled. */
   gatewayTlsFingerprint?: string;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
   sessionObserver?: SessionObserverService;
+  sessionActivitySummaries?: import("../session-activity-summaries.js").SessionActivitySummaryService;
   /** Temporary profile-owned mentions for this exact Gateway lifetime. */
   mentionInbox?: MentionInbox;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
@@ -199,11 +224,24 @@ type GatewayKernelContext = {
   questionManager?: QuestionManager;
   scopeUpgradeCoordinator?: ScopeUpgradeCoordinator;
   /** Exact authority cancels bound approvals; legacy run ids cancel only unbound exec requests. */
-  cancelRunBoundApprovals?: (target: string | AgentRunDelegatedAuthority) => number;
+  cancelRunBoundApprovals?: (target: string | AgentRunDelegatedAuthority) => Promise<number>;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   placementStandingGrants?: PlacementStandingGrantRuntime;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
+  forwardExecApprovalRequest?: (request: ExecApprovalRequest) => Promise<boolean>;
+  forwardSystemAgentApprovalRequest?: (request: SystemAgentApprovalRequest) => Promise<boolean>;
+  forwardSystemAgentApprovalResolved?: (resolved: SystemAgentApprovalResolved) => Promise<void>;
+  execApprovalIosPushDelivery?: {
+    handleRequested?: (
+      request: ExecApprovalRequest,
+      opts?: {
+        isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+      },
+    ) => Promise<boolean>;
+    handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
+    handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
+  };
   approvalWebPushDelivery?: {
     handleRequested: <TPayload>(record: ExecApprovalRecord<TPayload>) => boolean | Promise<boolean>;
     handleResolved: (resolved: { id: string }) => Promise<void>;
@@ -221,7 +259,7 @@ type GatewayKernelContext = {
   listSessionPendingApprovals?: (
     sessionKey: string,
     client: GatewayClient | null,
-  ) => SessionApprovalReplay;
+  ) => Promise<PreparedSessionApprovalReplay>;
   loadGatewayModelCatalog: (params?: {
     agentId?: string;
     agentDir?: string;
@@ -239,6 +277,9 @@ type GatewayKernelContext = {
     agentDir?: string;
     workspaceDir?: string;
   }) => Promise<PreparedGatewayModelCatalog | undefined>;
+  readPreparedGatewayModelCatalogBatch?: (
+    agentIds: readonly string[],
+  ) => Promise<PreparedGatewayModelCatalogReadResult[]>;
   readChatMetadata: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
   readChatStartupProjection?: (
     params: ChatStartupProjectionReadParams,
@@ -246,8 +287,7 @@ type GatewayKernelContext = {
   getHealthCache: () => HealthSummary | null;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
-  incrementPresenceVersion: () => number;
-  getHealthVersion: () => number;
+  publishPresence: () => void;
   /** Instance-local native approval subscribers; never derived from a network client. */
   approvalEvents?: GatewayApprovalEventPublisher;
   recoveryRuntime?: GatewayRecoveryRuntime;
@@ -311,7 +351,7 @@ type GatewayTransportContext = {
     opts?: { role?: string; reason?: string },
   ) => void;
   hasConnectedClientsForDevice?: (deviceId: string) => boolean;
-  refreshConnectedUserProfile?: (profile: {
+  refreshConnectedUserProfile?: (profile?: {
     id: string;
     displayName: string | null;
     avatarRevision: string;
@@ -344,7 +384,7 @@ type GatewayResidentBridgeContext = {
   sessionViewerPresence?: ReturnType<
     typeof import("../session-viewer-presence.js").createSessionViewerPresenceDeclarations
   >;
-  notifyPluginMetadataChanged: () => void;
+  applyPluginLifecycleChange?: import("../../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
   refreshHealthSnapshot: (opts?: {
     probe?: boolean;
     includeSensitive?: boolean;
@@ -353,6 +393,8 @@ type GatewayResidentBridgeContext = {
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
   /** Gateway-host desktop acquisition and observation; present only after enabled startup. */
   hostDesktopService?: import("../desktop/host-source.js").HostDesktopService;
+  /** Local computer provider shared with the node host, owned by this Gateway lifetime. */
+  gatewayComputerService?: import("../desktop/computer-service.js").GatewayComputerService;
   /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
   workerSessionPlacementService?: WorkerSessionPlacementReader &
     Partial<WorkerSessionPlacementRetirementService>;
@@ -374,7 +416,7 @@ type GatewayResidentBridgeContext = {
   modelAccountConnectService?: ReturnType<
     typeof import("../model-account-connect.js").createModelAccountConnectService
   >;
-  getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
+  getRuntimeSnapshot: (options?: ChannelRuntimeSnapshotOptions) => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   getDeferredChannelReloads?: () => readonly GatewayDeferredChannelReload[];
@@ -425,6 +467,8 @@ export type GatewayRequestOptions = {
   respond: RespondFn;
   context: GatewayRequestContext;
   methodRegistry?: GatewayMethodRegistryView;
+  /** Shared entry/publication precondition; never retained as accepted-run authority. */
+  expectedProfileBinding?: import("../expected-profile.js").ExpectedProfileBinding;
   /** In-process Gateway lifetime guard composed into durable session mutations. */
   sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */
@@ -435,8 +479,20 @@ export type GatewayRequestOptions = {
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
-  talkSessionTarget?: import("../talk-session-target.types.js").PreparedTalkSessionTarget;
+  talkSessionTarget?: import("../talk/session-target.types.js").PreparedTalkSessionTarget;
+  /** Original materialized target; Stop must match producer facts, not a later row lookup. */
+  admittedTarget?: Readonly<{ agentId: string; sessionKey: string; sessionId: string }>;
   assertCurrent: () => void;
+  /** Original host/session authority for committed input custody, without the selection precondition. */
+  assertAdmittedInputCurrent?: () => void;
+  /** Creation-owner notification after COMMIT; binds only this request's previously absent row. */
+  recordCreatedSession?: (target: {
+    agentId: string;
+    sessionKey: string;
+    storePath: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  }) => void;
   assertTargetCurrent: (target: {
     sessionKey: string;
     agentId?: string;
@@ -455,6 +511,8 @@ export type GatewayRequestHandlerOptions = {
   context: GatewayRequestContext;
   sessionMutationCommitGuard?: () => void;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  /** Host-prepared session resource authority; services explicitly retain their own borrow. */
+  sessionAccessAuthority?: import("../session-access-authority.js").GatewaySessionAccessAuthority;
   /** In-process caller lifetime; absent for ordinary transport requests. */
   signal?: AbortSignal;
   /** Live transport authority; in-process only and never derived from request data. */

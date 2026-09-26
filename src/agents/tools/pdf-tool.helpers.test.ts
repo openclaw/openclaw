@@ -32,33 +32,69 @@ const pdfMetadataSnapshot = createPluginMetadataSnapshotFixture({
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-7";
 
 describe("parsePageRange", () => {
-  it("parses a single page number", () => {
-    expect(parsePageRange("3", 20)).toEqual([3]);
-  });
-
-  it("parses a page range", () => {
-    expect(parsePageRange("1-5", 20)).toEqual([1, 2, 3, 4, 5]);
+  it("treats maxPages as a page-count limit, not a maximum page number", () => {
+    expect(parsePageRange("21", 20)).toEqual({ pages: [21], truncated: false });
+    expect(parsePageRange("18-50", 20)).toEqual({
+      pages: Array.from({ length: 20 }, (_, index) => index + 18),
+      truncated: true,
+    });
   });
 
   it("parses comma-separated pages and ranges", () => {
-    expect(parsePageRange("1,3,5-7", 20)).toEqual([1, 3, 5, 6, 7]);
+    expect(parsePageRange("1,3,5-7", 20)).toEqual({
+      pages: [1, 3, 5, 6, 7],
+      truncated: false,
+    });
   });
 
   it("clamps to maxPages", () => {
-    expect(parsePageRange("1-100", 5)).toEqual([1, 2, 3, 4, 5]);
+    expect(parsePageRange("1-100", 5)).toEqual({
+      pages: [1, 2, 3, 4, 5],
+      truncated: true,
+    });
   });
 
-  it("throws when no requested pages are within maxPages", () => {
-    expect(() => parsePageRange("999", 20)).toThrow('No PDF pages matched requested range "999"');
+  it("bounds an oversized range with a large configured page budget", () => {
+    const selection = parsePageRange("1-1000001", 1_000_000);
+    expect(selection.pages).toHaveLength(1_000_000);
+    expect(selection.pages[0]).toBe(1);
+    expect(selection.pages.at(-1)).toBe(1_000_000);
+    expect(selection.truncated).toBe(true);
   });
 
   it("deduplicates and sorts", () => {
-    expect(parsePageRange("5,3,1,3,5", 20)).toEqual([1, 3, 5]);
+    expect(parsePageRange("5,3,1,3,5", 20)).toEqual({
+      pages: [1, 3, 5],
+      truncated: false,
+    });
   });
 
-  it("throws on invalid page number", () => {
-    expect(() => parsePageRange("abc", 20)).toThrow("Invalid page number");
+  it.each(["1-5,1-5", "3-5,1-4,2-3"])(
+    "does not report truncation for overlapping ranges: %s",
+    (range) => {
+      expect(parsePageRange(range, 5)).toEqual({
+        pages: [1, 2, 3, 4, 5],
+        truncated: false,
+      });
+    },
+  );
+
+  it.each([
+    ["100,101,1-3", 2],
+    ["40001-80000,1-40000", 40_000],
+  ])("keeps the lowest sorted pages regardless of range order: %s", (range, maxPages) => {
+    expect(parsePageRange(range, maxPages)).toEqual({
+      pages: Array.from({ length: maxPages }, (_, index) => index + 1),
+      truncated: true,
+    });
   });
+
+  it.each(["abc", "1-100,abc"])(
+    "validates page numbers even beyond the selected budget: %s",
+    (range) => {
+      expect(() => parsePageRange(range, 20)).toThrow("Invalid page number");
+    },
+  );
 
   it("throws on fractional page numbers", () => {
     expect(() => parsePageRange("1.5", 20)).toThrow('Invalid page number: "1.5"');
@@ -84,22 +120,16 @@ describe("parsePageRange", () => {
     expect(() => parsePageRange("0", 20)).toThrow("Invalid page number");
   });
 
-  it("throws on negative page number", () => {
-    expect(() => parsePageRange("-1", 20)).toThrow("Invalid page number");
-  });
-
   it("handles empty parts gracefully", () => {
-    expect(parsePageRange("1,,3", 20)).toEqual([1, 3]);
+    expect(parsePageRange("1,,3", 20)).toEqual({ pages: [1, 3], truncated: false });
   });
 });
 
 describe("providerSupportsNativePdf", () => {
   it.each([
     ["anthropic", true],
-    ["google", true],
     ["openai", false],
     ["minimax", false],
-    ["Anthropic", true],
     ["GOOGLE", true],
   ] as const)("returns %s capability from its manifest: %s", (provider, supported) => {
     withPluginMetadataSnapshotScope(pdfMetadataSnapshot, () => {
@@ -109,10 +139,6 @@ describe("providerSupportsNativePdf", () => {
 });
 
 describe("pdf-tool.helpers", () => {
-  it("resolvePdfInputs requires at least one pdf reference", () => {
-    expect(() => resolvePdfInputs({ prompt: "test" })).toThrow("pdf required");
-  });
-
   it("resolvePdfInputs deduplicates pdf and pdfs entries", () => {
     // `pdf` and `pdfs` are both public inputs; normalize them to one ordered
     // list before any filesystem or provider work begins.

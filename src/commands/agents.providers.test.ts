@@ -1,7 +1,14 @@
 // Agents provider tests cover provider status index construction for configured agents.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAccountListHelpers } from "../plugin-sdk/account-helpers.js";
+import { createScopedChannelConfigAdapter } from "../plugin-sdk/channel-config-helpers.js";
 import type { OfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
+import { normalizeAccountId } from "../routing/account-id.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import {
   buildProviderStatusIndex,
   buildProviderSummaryMetadataIndex,
@@ -57,11 +64,123 @@ vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
     mocks.resolveMissingOfficialExternalChannelPluginRepairHints,
 }));
 
+function createAccountSelectionFixture(): ChannelPlugin<ChannelAccountSnapshot> {
+  const accounts = new Map<string, ChannelAccountSnapshot>([
+    ["default", { accountId: "default", name: "Default", configured: false, enabled: true }],
+    ["alpha", { accountId: "alpha", name: "Alpha", configured: false, enabled: true }],
+    ["beta", { accountId: "beta", name: "Beta", configured: false, enabled: false }],
+  ]);
+  const resolveAccount = (_cfg: OpenClawConfig, accountId?: string | null) => {
+    const account = accounts.get(accountId ?? "alpha");
+    if (!account) {
+      throw new Error("Unexpected fixture account");
+    }
+    return account;
+  };
+  return {
+    id: "telegram",
+    meta: {
+      id: "telegram",
+      label: "Telegram",
+      selectionLabel: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Fixture channel",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [...accounts.keys()],
+      defaultAccountId: () => "alpha",
+      resolveAccount,
+      inspectAccount: resolveAccount,
+      describeAccount: (account) => account,
+    },
+  };
+}
+
+function createRawListedAccountFixture() {
+  const helpers = createAccountListHelpers("imessage");
+  const calls: Array<string | null | undefined> = [];
+  const resolveAccount = (cfg: OpenClawConfig, requestedId?: string | null) => {
+    calls.push(requestedId);
+    const accountId = normalizeAccountId(requestedId);
+    const account = resolveAccountEntry(cfg.channels?.imessage?.accounts, accountId);
+    return {
+      accountId,
+      name: account?.name,
+      enabled: account?.enabled !== false,
+      configured: true,
+    };
+  };
+  const plugin: ChannelPlugin<ReturnType<typeof resolveAccount>> = {
+    id: "imessage",
+    meta: {
+      id: "imessage",
+      label: "iMessage",
+      selectionLabel: "iMessage",
+      docsPath: "/channels/imessage",
+      blurb: "Fixture channel",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      ...createScopedChannelConfigAdapter({
+        sectionKey: "imessage",
+        listAccountIds: helpers.listAccountIds,
+        defaultAccountId: helpers.resolveDefaultAccountId,
+        resolveAccount,
+        clearBaseFields: [],
+        resolveAllowFrom: () => [],
+        formatAllowFrom: (values) => values.map(String),
+      }),
+      describeAccount: (account) => account,
+    },
+  };
+  return { plugin, calls };
+}
+
+function missingFeishuMetadata() {
+  return new Map([
+    [
+      "feishu",
+      {
+        label: "Feishu",
+        defaultAccountId: "default",
+        visibleInConfiguredLists: true,
+        repairHint:
+          "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+      },
+    ],
+  ]);
+}
+
 describe("buildProviderStatusIndex", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listExplicitConfiguredChannelIdsForConfig.mockReturnValue([]);
     mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([]);
+  });
+
+  it("uses prepared accounts when read-only inspection is unavailable", async () => {
+    const plugin = createAccountSelectionFixture();
+    plugin.config.inspectAccount = undefined;
+    plugin.config.listAccountIds = () => ["work"];
+    plugin.config.resolveAccount = () => {
+      throw new Error("legacy account resolution");
+    };
+    plugin.config.resolveAccountAsync = async () => ({
+      accountId: "work",
+      name: "Prepared work account",
+      configured: true,
+      enabled: true,
+    });
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+
+    const statuses = await buildProviderStatusIndex({});
+
+    expect(statuses.get("telegram:work")).toMatchObject({
+      accountId: "work",
+      name: "Prepared work account",
+      state: "configured",
+    });
   });
 
   it("prefers inspectAccount for read-only status surfaces", async () => {
@@ -196,89 +315,67 @@ describe("buildProviderStatusIndex", () => {
     ).toEqual(["Telegram default: configured unavailable"]);
   });
 
-  it("does not mark a healthy Slack account unavailable for an optional unresolved user token", async () => {
-    const account = {
-      accountId: "default",
-      enabled: true,
+  it.each([
+    {
+      name: "optional unavailable token",
       configured: true,
-      botTokenStatus: "available" as const,
-      appTokenStatus: "available" as const,
-      userTokenStatus: "configured_unavailable" as const,
-    };
-    const plugin = {
-      id: "slack",
-      meta: { label: "Slack" },
-      config: {
-        listAccountIds: () => ["default"],
-        inspectAccount: () => account,
-        resolveAccount: () => account,
-        describeAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-        isConfigured: () => true,
-      },
-      status: {},
-    } as never;
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
-
-    expect(
-      (await buildProviderStatusIndex({} as OpenClawConfig)).get("slack:default"),
-    ).toMatchObject({ configured: true, state: "configured" });
-  });
-
-  it("does not treat an incomplete Slack account as configured when a required token is missing", async () => {
-    const account = {
-      accountId: "default",
-      enabled: true,
+      bot: "available",
+      app: "available",
+      user: "configured_unavailable",
+      usable: true,
+      described: true,
+      state: "configured",
+    },
+    {
+      name: "missing required token",
       configured: false,
-      botTokenStatus: "configured_unavailable" as const,
-      appTokenStatus: "missing" as const,
-      userTokenStatus: "missing" as const,
-    };
-    const plugin = {
-      id: "slack",
-      meta: { label: "Slack" },
-      config: {
-        listAccountIds: () => ["default"],
-        inspectAccount: () => account,
-        resolveAccount: () => account,
-        describeAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-        isConfigured: () => false,
-      },
-      status: {},
-    } as never;
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
-
-    expect(
-      (await buildProviderStatusIndex({} as OpenClawConfig)).get("slack:default"),
-    ).toMatchObject({ configured: false, state: "not configured" });
-  });
-
-  it("keeps a fully configured Slack account visible when a required token is unavailable", async () => {
-    const account = {
-      accountId: "default",
-      enabled: true,
+      bot: "configured_unavailable",
+      app: "missing",
+      user: "missing",
+      usable: false,
+      described: true,
+      state: "not configured",
+    },
+    {
+      name: "unavailable required token",
       configured: true,
-      botTokenStatus: "configured_unavailable" as const,
-      appTokenStatus: "available" as const,
-      userTokenStatus: "missing" as const,
-    };
-    const plugin = {
-      id: "slack",
-      meta: { label: "Slack" },
-      config: {
-        listAccountIds: () => ["default"],
-        inspectAccount: () => account,
-        resolveAccount: () => account,
-        describeAccount: () => ({ accountId: "default", enabled: true, configured: false }),
-        isConfigured: () => false,
-      },
-      status: {},
-    } as never;
-    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+      bot: "configured_unavailable",
+      app: "available",
+      user: "missing",
+      usable: false,
+      described: false,
+      state: "configured unavailable",
+    },
+  ] as const)(
+    "classifies Slack accounts with $name",
+    async ({ configured, bot, app, user, usable, described, state }) => {
+      const account = {
+        accountId: "default",
+        enabled: true,
+        configured,
+        botTokenStatus: bot,
+        appTokenStatus: app,
+        userTokenStatus: user,
+      };
+      const plugin = {
+        id: "slack",
+        meta: { label: "Slack" },
+        config: {
+          listAccountIds: () => ["default"],
+          inspectAccount: () => account,
+          resolveAccount: () => account,
+          describeAccount: () => ({ accountId: "default", enabled: true, configured: described }),
+          isConfigured: () => usable,
+        },
+        status: {},
+      } as never;
+      mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
 
-    expect(
-      (await buildProviderStatusIndex({} as OpenClawConfig)).get("slack:default"),
-    ).toMatchObject({ configured: true, state: "configured unavailable" });
-  });
+      expect(
+        (await buildProviderStatusIndex({} as OpenClawConfig)).get("slack:default"),
+      ).toMatchObject({ configured, state });
+    },
+  );
 
   it("does not inspect linkage for an unconfigured account", async () => {
     const isLinked = vi.fn(() => {
@@ -396,24 +493,287 @@ describe("buildProviderStatusIndex", () => {
     });
   });
 
+  it.each([
+    { selector: undefined, ids: ["default"], route: "default" },
+    { selector: " \t ", ids: ["default"], route: "default" },
+    { selector: "default", ids: ["default"], route: "default" },
+    { selector: " ALPHA ", ids: ["alpha"], route: "alpha" },
+    { selector: " * ", ids: ["default", "alpha", "beta"], route: "*" },
+    { selector: "absent", ids: ["absent"], route: "absent" },
+  ])("renders canonical account selector $selector", async ({ selector, ids, route }) => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([createAccountSelectionFixture()]);
+    const cfg: OpenClawConfig = {};
+    const providerStatus = await buildProviderStatusIndex(cfg);
+    const providerMetadata = new Map([
+      [
+        "telegram",
+        { label: "Telegram", defaultAccountId: "alpha", visibleInConfiguredLists: true },
+      ],
+    ]);
+    const bindings = [{ agentId: "proof", match: { channel: "telegram", accountId: selector } }];
+    const lines = new Map([
+      ["default", "Telegram default (Default): not configured"],
+      ["alpha", "Telegram alpha (Alpha): not configured"],
+      ["beta", "Telegram beta (Beta): disabled"],
+      ["absent", "Telegram absent: unknown"],
+    ]);
+    expect(
+      listProvidersForAgent({
+        summaryIsDefault: false,
+        cfg,
+        bindings,
+        providerStatus,
+        providerMetadata,
+      }),
+    ).toEqual(ids.map((id) => lines.get(id)));
+    expect(summarizeBindings(cfg, bindings, providerMetadata)).toEqual(["Telegram " + route]);
+  });
+
+  it("keeps configured-scope inventory separate from mixed-owner route precedence", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([createAccountSelectionFixture()]);
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { fallback: {}, specific: {}, defaultscope: {}, idle: {} },
+      },
+      bindings: [
+        { agentId: "fallback", match: { channel: "telegram", accountId: " * " } },
+        { agentId: "specific", match: { channel: "telegram", accountId: " ALPHA " } },
+        { agentId: "defaultscope", match: { channel: "telegram", accountId: " " } },
+        {
+          agentId: "fallback",
+          match: { channel: "telegram", accountId: "*", peer: { kind: "direct", id: "vip" } },
+        },
+      ],
+    };
+    const providerStatus = await buildProviderStatusIndex(cfg);
+    const providerMetadata = new Map([
+      [
+        "telegram",
+        { label: "Telegram", defaultAccountId: "alpha", visibleInConfiguredLists: true },
+      ],
+    ]);
+    for (const [accountId, peerId, agentId, matchedBy] of [
+      [undefined, "ordinary", "defaultscope", "binding.account"],
+      [" ", "ordinary", "defaultscope", "binding.account"],
+      ["default", "ordinary", "defaultscope", "binding.account"],
+      ["alpha", "ordinary", "specific", "binding.account"],
+      ["beta", "ordinary", "fallback", "binding.channel"],
+      ["alpha", "vip", "fallback", "binding.peer"],
+    ] as const) {
+      expect(
+        resolveAgentRoute({
+          cfg,
+          channel: "telegram",
+          accountId,
+          peer: { kind: "direct", id: peerId },
+        }),
+      ).toMatchObject({ agentId, matchedBy });
+    }
+    expect(
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        accountId: "alpha",
+        defaultAgentId: "fallback",
+        peer: { kind: "direct", id: "ordinary" },
+      }),
+    ).toMatchObject({ agentId: "fallback", matchedBy: "default" });
+    expect(() =>
+      resolveAgentRoute({
+        cfg,
+        channel: "discord",
+        accountId: "alpha",
+        peer: { kind: "direct", id: "ordinary" },
+      }),
+    ).toThrow("Multiple agents are configured");
+    const rows = (agentId: string) =>
+      listProvidersForAgent({
+        summaryIsDefault: false,
+        cfg,
+        bindings: cfg.bindings!.filter((binding) => binding.agentId === agentId),
+        providerStatus,
+        providerMetadata,
+      });
+    expect(rows("fallback")).toEqual([
+      "Telegram default (Default): not configured",
+      "Telegram alpha (Alpha): not configured",
+      "Telegram beta (Beta): disabled",
+    ]);
+    expect(rows("specific")).toEqual(["Telegram alpha (Alpha): not configured"]);
+    expect(rows("defaultscope")).toEqual(["Telegram default (Default): not configured"]);
+    expect(rows("idle")).toEqual([]);
+  });
+
+  it.each([false, true])("preserves unbound default=%s filtering", async (summaryIsDefault) => {
+    const plugin = createAccountSelectionFixture();
+    plugin.config.isConfigured = (account) => account.accountId === "alpha";
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+    expect(
+      listProvidersForAgent({
+        summaryIsDefault,
+        cfg: {},
+        bindings: [],
+        providerStatus: await buildProviderStatusIndex({}),
+        providerMetadata: new Map(),
+      }),
+    ).toEqual(summaryIsDefault ? ["Telegram alpha (Alpha): configured"] : []);
+  });
+
+  it.each([
+    { repairHint: undefined, expected: "Telegram *: unknown" },
+    { repairHint: "Install Telegram.", expected: "Telegram *: missing plugin - Install Telegram." },
+  ])("preserves empty wildcard diagnostic $expected", async ({ repairHint, expected }) => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+    expect(
+      listProvidersForAgent({
+        summaryIsDefault: false,
+        cfg: {},
+        bindings: [{ agentId: "proof", match: { channel: "telegram", accountId: " * " } }],
+        providerStatus: await buildProviderStatusIndex({}),
+        providerMetadata: new Map([
+          [
+            "telegram",
+            {
+              label: "Telegram",
+              defaultAccountId: "alpha",
+              visibleInConfiguredLists: true,
+              repairHint,
+            },
+          ],
+        ]),
+      }),
+    ).toEqual([expected]);
+  });
+
+  it.each(
+    [[" ALPHA "], ["Alpha", "*"], ["*", "alpha", "Alpha"]].map((selectors) => ({ selectors })),
+  )("joins raw listed Alpha through canonical selectors $selectors", async ({ selectors }) => {
+    const cfg: OpenClawConfig = {
+      channels: { imessage: { accounts: { Alpha: { name: "Work", enabled: true } } } },
+    };
+    const { plugin, calls } = createRawListedAccountFixture();
+    expect(plugin.config.listAccountIds(cfg)).toEqual(["Alpha"]);
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+    const providerStatus = await buildProviderStatusIndex(cfg);
+    expect(calls).toEqual(["Alpha"]);
+    expect(
+      listProvidersForAgent({
+        summaryIsDefault: false,
+        cfg,
+        bindings: selectors.map((accountId) => ({
+          agentId: "proof",
+          match: { channel: "imessage", accountId },
+        })),
+        providerStatus,
+        providerMetadata: new Map([
+          [
+            "imessage",
+            { label: "iMessage", defaultAccountId: "default", visibleInConfiguredLists: true },
+          ],
+        ]),
+      }),
+    ).toEqual(["iMessage Alpha (Work): configured"]);
+  });
+
+  it("canonicalizes raw listed ids for unavailable account status records", async () => {
+    const cfg: OpenClawConfig = {
+      channels: { imessage: { accounts: { Alpha: { enabled: true } } } },
+    };
+    const { plugin, calls } = createRawListedAccountFixture();
+    plugin.config.resolveAccount = (_cfg, requestedId) => {
+      calls.push(requestedId);
+      throw new Error("unresolved SecretRef: synthetic fixture");
+    };
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+    const providerStatus = await buildProviderStatusIndex(cfg);
+    expect(calls).toEqual(["Alpha"]);
+    expect(
+      listProvidersForAgent({
+        summaryIsDefault: false,
+        cfg,
+        bindings: [{ agentId: "proof", match: { channel: "imessage", accountId: "alpha" } }],
+        providerStatus,
+        providerMetadata: new Map([
+          [
+            "imessage",
+            { label: "iMessage", defaultAccountId: "default", visibleInConfiguredLists: true },
+          ],
+        ]),
+      }),
+    ).toEqual(["iMessage Alpha: configured unavailable"]);
+  });
+
+  it("prefers the exact canonical record when listed account aliases collide", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        imessage: {
+          accounts: {
+            Alpha: { name: "Alias", enabled: true },
+            alpha: { name: "Exact", enabled: true },
+          },
+        },
+      },
+    };
+    const { plugin, calls } = createRawListedAccountFixture();
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([plugin]);
+    const providerStatus = await buildProviderStatusIndex(cfg);
+    expect(calls).toEqual(plugin.config.listAccountIds(cfg));
+    expect(
+      listProvidersForAgent({
+        summaryIsDefault: false,
+        cfg,
+        bindings: ["*", "Alpha", "alpha"].map((accountId) => ({
+          agentId: "proof",
+          match: { channel: "imessage", accountId },
+        })),
+        providerStatus,
+        providerMetadata: new Map([
+          [
+            "imessage",
+            { label: "iMessage", defaultAccountId: "default", visibleInConfiguredLists: true },
+          ],
+        ]),
+      }),
+    ).toEqual(["iMessage alpha (Exact): configured"]);
+    expect(cfg.channels?.imessage?.accounts?.Alpha?.name).toBe("Alias");
+  });
+
+  it("keeps wildcard scope diagnostics distinct from the concrete default key", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+    const cfg: OpenClawConfig = {};
+    const bindings = ["*", "default"].map((accountId) => ({
+      agentId: "proof",
+      match: { channel: "imessage", accountId },
+    }));
+    const providerMetadata = new Map([
+      [
+        "imessage",
+        { label: "iMessage", defaultAccountId: "default", visibleInConfiguredLists: true },
+      ],
+    ]);
+    expect(summarizeBindings(cfg, bindings, providerMetadata)).toEqual([
+      "iMessage *",
+      "iMessage default",
+    ]);
+    expect(
+      listProvidersForAgent({
+        summaryIsDefault: false,
+        cfg,
+        bindings,
+        providerMetadata,
+        providerStatus: await buildProviderStatusIndex(cfg),
+      }),
+    ).toEqual(["iMessage *: unknown", "iMessage default: unknown"]);
+  });
+
   it("uses repair hints instead of unknown for bound missing external channels", () => {
     const lines = listProvidersForAgent({
       summaryIsDefault: false,
       cfg: { channels: { feishu: { appId: "cli_xxx" } } } as never,
       bindings: [{ match: { channel: "feishu" } }] as never,
       providerStatus: new Map(),
-      providerMetadata: new Map([
-        [
-          "feishu",
-          {
-            label: "Feishu",
-            defaultAccountId: "default",
-            visibleInConfiguredLists: true,
-            repairHint:
-              "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
-          },
-        ],
-      ]),
+      providerMetadata: missingFeishuMetadata(),
     });
 
     expect(lines).toEqual([
@@ -429,18 +789,7 @@ describe("buildProviderStatusIndex", () => {
       cfg: { channels: { feishu: { appId: "cli_xxx" } } } as never,
       bindings: [{ match: { channel: "feishu" } }] as never,
       providerStatus: new Map(),
-      providerMetadata: new Map([
-        [
-          "feishu",
-          {
-            label: "Feishu",
-            defaultAccountId: "default",
-            visibleInConfiguredLists: true,
-            repairHint:
-              "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
-          },
-        ],
-      ]),
+      providerMetadata: missingFeishuMetadata(),
     });
 
     expect(lines).toEqual([
@@ -454,18 +803,7 @@ describe("buildProviderStatusIndex", () => {
       cfg: { channels: { feishu: { appId: "cli_xxx" } } } as never,
       bindings: [],
       providerStatus: new Map(),
-      providerMetadata: new Map([
-        [
-          "feishu",
-          {
-            label: "Feishu",
-            defaultAccountId: "default",
-            visibleInConfiguredLists: true,
-            repairHint:
-              "Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
-          },
-        ],
-      ]),
+      providerMetadata: missingFeishuMetadata(),
     });
 
     expect(lines).toEqual([

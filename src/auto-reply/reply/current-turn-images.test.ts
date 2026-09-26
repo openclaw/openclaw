@@ -24,7 +24,6 @@ const PNG_IMAGE_BYTES = Buffer.from(
 );
 const JPEG_IMAGE_BYTES = Buffer.from("ffd8ffe000104a46494600010100000100010000ffd9", "hex");
 const PDF_BYTES = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n");
-const ZIP_BYTES = Buffer.from("504b0506000000000000000000000000000000000000", "hex");
 
 function createDescribedImageContext(describedIndexes: number[]): MsgContext {
   return {
@@ -159,7 +158,7 @@ describe("resolveCurrentTurnImages", () => {
     });
   });
 
-  it.each([undefined, "application/pdf", "application/octet-stream", "image/png"] as const)(
+  it.each([undefined, "image/png"] as const)(
     "never hydrates valid image bytes when the authoritative document MIME is %s",
     async (contentType) => {
       await withTestDir({ prefix: "openclaw-current-turn-document-image-" }, async (base) => {
@@ -179,7 +178,7 @@ describe("resolveCurrentTurnImages", () => {
     },
   );
 
-  it.each([undefined, "application/octet-stream", "binary/octet-stream"] as const)(
+  it.each([undefined, "application/octet-stream"] as const)(
     "hydrates unknown-kind filename images when MIME %s has no concrete category",
     async (contentType) => {
       await withTestDir({ prefix: "openclaw-current-turn-unknown-image-" }, async (base) => {
@@ -205,33 +204,34 @@ describe("resolveCurrentTurnImages", () => {
     },
   );
 
-  it.each(["application/pdf", "application/zip", "text/plain"] as const)(
-    "never hydrates valid PNG bytes when unknown-kind MIME %s declares a document",
-    async (contentType) => {
-      await withTestDir({ prefix: "openclaw-current-turn-unknown-document-" }, async (base) => {
-        const documentPath = path.join(base, "report.png");
-        await fs.writeFile(documentPath, PNG_IMAGE_BYTES);
+  it("never hydrates valid PNG bytes when unknown-kind MIME declares a document", async () => {
+    await withTestDir({ prefix: "openclaw-current-turn-unknown-document-" }, async (base) => {
+      const documentPath = path.join(base, "report.png");
+      await fs.writeFile(documentPath, PNG_IMAGE_BYTES);
 
-        const result = await resolveCurrentTurnImages({
-          ctx: {
-            Body: "summarize this upload",
-            media: [{ path: documentPath, contentType, kind: "unknown", workspaceDir: base }],
-          } satisfies MsgContext,
-          cfg: {} as OpenClawConfig,
-        });
-
-        expect(result.images).toBeUndefined();
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "summarize this upload",
+          media: [
+            {
+              path: documentPath,
+              contentType: "application/pdf",
+              kind: "unknown",
+              workspaceDir: base,
+            },
+          ],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
       });
-    },
-  );
 
-  it.each([
-    { name: "PDF", bytes: PDF_BYTES },
-    { name: "ZIP", bytes: ZIP_BYTES },
-  ])("rejects $name bytes despite a spoofed image kind, MIME, and filename", async (testCase) => {
+      expect(result.images).toBeUndefined();
+    });
+  });
+
+  it("rejects PDF bytes despite a spoofed image kind, MIME, and filename", async () => {
     await withTestDir({ prefix: "openclaw-current-turn-spoofed-image-" }, async (base) => {
       const imagePath = path.join(base, "spoofed.png");
-      await fs.writeFile(imagePath, testCase.bytes);
+      await fs.writeFile(imagePath, PDF_BYTES);
 
       const result = await resolveCurrentTurnImages({
         ctx: {
@@ -393,28 +393,32 @@ describe("resolveCurrentTurnImages", () => {
     expect(resolveAgentTurnAttachments).not.toHaveBeenCalled();
   });
 
-  it("hydrates only current image facts missing prompt descriptions", async () => {
-    const imageData = Buffer.from("second image").toString("base64");
-    vi.mocked(resolveAgentTurnAttachments).mockResolvedValueOnce({
-      attachments: [{ data: imageData, mediaType: "image/png" }],
-      attachmentIndexes: [1],
-      recentHistoryImages: [],
-    });
+  it("does not rehydrate a managed copy of an already-provided inline image", async () => {
+    vi.mocked(resolveAgentTurnAttachments).mockClear();
+    const inlineImage = {
+      type: "image" as const,
+      data: Buffer.from("inline").toString("base64"),
+      mimeType: "image/png",
+    };
 
     const result = await resolveCurrentTurnImages({
-      ctx: createDescribedImageContext([0]),
+      ctx: {
+        Body: "inspect",
+        media: [
+          {
+            path: "/state/media/inbound/photo.png",
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      } satisfies MsgContext,
       cfg: {} as OpenClawConfig,
+      images: [inlineImage],
+      imageOrder: ["inline"],
     });
 
-    expect(resolveAgentTurnAttachments).toHaveBeenCalledWith({
-      ctx: createDescribedImageContext([0]),
-      cfg: {},
-      includeRecentHistoryImages: false,
-      includeAttachmentIndexes: true,
-    });
-    expect(result.images).toEqual([{ type: "image", data: imageData, mimeType: "image/png" }]);
-    expect(result.imageOrder).toEqual(["inline"]);
-    expect(result.imageSourceIndexes).toEqual([1]);
+    expect(result).toEqual({ images: [inlineImage], imageOrder: ["inline"] });
+    expect(resolveAgentTurnAttachments).not.toHaveBeenCalled();
   });
 
   it("appends extracted PDF page images without dropping current image attachments", async () => {

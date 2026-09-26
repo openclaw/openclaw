@@ -86,7 +86,7 @@ defineDiscordVoiceTests(
         | (() => void)
         | undefined;
       idleHandler?.();
-      expectUserMessageIncludes("second answer");
+      await vi.waitFor(() => expectUserMessageIncludes("second answer"));
       expectUserMessageNotIncludes("third answer");
 
       bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
@@ -99,12 +99,12 @@ defineDiscordVoiceTests(
       expectUserMessageNotIncludes("third answer");
 
       idleHandler?.();
-      expectUserMessageIncludes("third answer");
+      await vi.waitFor(() => expectUserMessageIncludes("third answer"));
     });
 
     it("isolates a speaker whose retained Unicode speech exceeds the byte budget", async () => {
       const { bridgeParams, entry, manager } = await createJoinedAgentProxyFixture();
-      const destroyConnection = vi.spyOn(entry.connection, "destroy");
+      const destroyConnection = vi.spyOn(entry.audio, "stop");
       const accepted = "😀".repeat(8 * 1024);
       agentCommandMock
         .mockResolvedValueOnce({ payloads: [{ text: accepted }] })
@@ -143,7 +143,7 @@ defineDiscordVoiceTests(
 
     it("retires an overflowing speech lane and admits the speaker again", async () => {
       const { bridgeParams, entry, manager } = await createJoinedAgentProxyFixture();
-      const destroyConnection = vi.spyOn(entry.connection, "destroy");
+      const destroyConnection = vi.spyOn(entry.audio, "stop");
       try {
         beginSpeakerTurn(entry);
         for (let index = 0; index < 32; index += 1) {
@@ -203,7 +203,7 @@ defineDiscordVoiceTests(
         | (() => void)
         | undefined;
       idleHandler?.();
-      expectUserMessageIncludes("second answer");
+      await vi.waitFor(() => expectUserMessageIncludes("second answer"));
     });
 
     it("drains queued exact speech after cancelled prebuffered output is discarded", async () => {
@@ -377,14 +377,11 @@ defineDiscordVoiceTests(
       await vi.waitFor(() => expectUserMessageIncludes("local retry answer"));
     });
 
-    it.each(
-      ["Error", "TimeoutError"].flatMap((name) =>
-        ["native", "forced-suppressed", "forced-unsuppressed"].map((delivery) => ({
-          name,
-          delivery,
-        })),
-      ),
-    )(
+    it.each([
+      { name: "TimeoutError", delivery: "native" },
+      { name: "Error", delivery: "forced-suppressed" },
+      { name: "TimeoutError", delivery: "forced-unsuppressed" },
+    ])(
       "preserves $name failure reporting through $delivery consult delivery",
       async ({ name, delivery }) => {
         const hostTurn = createDeferred<{ payloads: Array<{ text: string }> }>();
@@ -436,8 +433,9 @@ defineDiscordVoiceTests(
             expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalled();
           }
         } finally {
-          entry.stop();
+          const stopped = entry.stop();
           hostTurn.resolve({ payloads: [] });
+          await stopped;
           await submission;
           await new Promise<void>((resolve) => {
             setImmediate(resolve);

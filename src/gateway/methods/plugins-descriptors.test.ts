@@ -1,7 +1,7 @@
 // Plugin management descriptor tests keep read/admin scopes and write budgets explicit.
 import { describe, expect, it } from "vitest";
 import type { GatewayRequestHandler } from "../server-methods/types.js";
-import { createCoreGatewayMethodDescriptors } from "./core-descriptors.js";
+import { createCoreGatewayMethodDescriptors } from "./core-method-policy.js";
 
 const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true });
 
@@ -10,6 +10,8 @@ describe("plugin management gateway descriptors", () => {
     const descriptors = createCoreGatewayMethodDescriptors({
       "plugins.list": handler,
       "plugins.inspect": handler,
+      "plugins.credentials.inspect": handler,
+      "plugins.skills.read": handler,
       "plugins.search": handler,
       "plugins.install": handler,
       "plugins.setEnabled": handler,
@@ -19,7 +21,11 @@ describe("plugin management gateway descriptors", () => {
     const byName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
 
     expect(byName.get("plugins.list")?.scope).toBe("operator.read");
+    expect(byName.get("plugins.skills.read")?.scope).toBe("operator.read");
+    expect(byName.get("plugins.skills.read")?.controlPlaneWrite).not.toBe(true);
     expect(byName.get("plugins.inspect")?.scope).toBe("operator.read");
+    expect(byName.get("plugins.credentials.inspect")?.scope).toBe("operator.admin");
+    expect(byName.get("plugins.credentials.inspect")?.controlPlaneWrite).not.toBe(true);
     expect(byName.get("plugins.search")?.scope).toBe("operator.read");
     expect(byName.get("plugins.install")).toMatchObject({
       scope: "operator.admin",

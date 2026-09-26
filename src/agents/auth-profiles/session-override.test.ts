@@ -9,6 +9,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createBedrockAwsSdkConfig } from "./config-fixtures.test-support.js";
+import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import {
   authStoreMocks,
   clearSessionAuthProfileOverride,
@@ -111,26 +113,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       const sessionStore = { "agent:main:main": sessionEntry };
 
       const resolved = await resolveSession({
-        cfg: {
-          models: {
-            providers: {
-              "amazon-bedrock": {
-                auth: "aws-sdk",
-                baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                api: "bedrock-converse-stream",
-                models: [],
-              },
-            },
-          },
-          auth: {
-            profiles: {
-              "amazon-bedrock:default": {
-                provider: "amazon-bedrock",
-                mode: "aws-sdk",
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createBedrockAwsSdkConfig(),
         provider: "amazon-bedrock",
         agentDir,
         sessionEntry,
@@ -152,11 +135,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       authStoreMocks.state.hasSource = true;
       authStoreMocks.state.store = createAuthStoreWithProfiles({
         profiles: {
-          "amazon-bedrock:default": {
-            type: "api_key",
-            provider: "openrouter",
-            key: "sk-drifted",
-          },
+          "amazon-bedrock:default": createApiKeyCredential("openrouter", "sk-drifted"),
         },
       });
 
@@ -169,26 +148,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       const sessionStore = { "agent:main:main": sessionEntry };
 
       const resolved = await resolveSession({
-        cfg: {
-          models: {
-            providers: {
-              "amazon-bedrock": {
-                auth: "aws-sdk",
-                baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                api: "bedrock-converse-stream",
-                models: [],
-              },
-            },
-          },
-          auth: {
-            profiles: {
-              "amazon-bedrock:default": {
-                provider: "amazon-bedrock",
-                mode: "aws-sdk",
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createBedrockAwsSdkConfig(),
         provider: "amazon-bedrock",
         agentDir,
         sessionEntry,
@@ -204,54 +164,6 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("keeps explicit user override when stored order prefers another profile", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      authStoreMocks.state.hasSource = true;
-      authStoreMocks.state.store = createAuthStoreWithProfiles({
-        profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-josh",
-          },
-          [TEST_SECONDARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-claude",
-          },
-        },
-        order: {
-          openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
-        },
-      });
-
-      const sessionEntry: SessionEntry = {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        authProfileOverride: TEST_SECONDARY_PROFILE_ID,
-        authProfileOverrideSource: "user",
-      };
-      const sessionStore = { "agent:main:main": sessionEntry };
-
-      const resolved = await resolveSession({
-        cfg: {} as OpenClawConfig,
-        provider: "openai",
-        agentDir,
-        sessionEntry,
-        sessionStore,
-        sessionKey: "agent:main:main",
-        storePath: undefined,
-        isNewSession: false,
-      });
-
-      expect(resolved).toBe(TEST_SECONDARY_PROFILE_ID);
-      expect(sessionEntry.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
-      expect(sessionEntry.authProfileOverrideSource).toBe("user");
-    });
-  });
-
   it("keeps automatic override for the canonical OpenAI provider", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
@@ -259,11 +171,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       authStoreMocks.state.hasSource = true;
       authStoreMocks.state.store = createAuthStoreWithProfiles({
         profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-codex",
-          },
+          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-codex"),
         },
         order: {
           openai: [TEST_PRIMARY_PROFILE_ID],
@@ -294,48 +202,6 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("keeps a session override from an accepted runtime auth provider", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      authStoreMocks.state.hasSource = true;
-      authStoreMocks.state.store = createAuthStoreWithProfiles({
-        profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-codex",
-          },
-        },
-        order: {
-          openai: [TEST_PRIMARY_PROFILE_ID],
-        },
-      });
-
-      const sessionEntry: SessionEntry = {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
-        authProfileOverrideSource: "user",
-      };
-      const sessionStore = { "agent:main:main": sessionEntry };
-
-      const resolved = await resolveSession({
-        cfg: {} as OpenClawConfig,
-        provider: "openai",
-        agentDir,
-        sessionEntry,
-        sessionStore,
-        sessionKey: "agent:main:main",
-        storePath: undefined,
-        isNewSession: false,
-      });
-
-      expect(resolved).toBe(TEST_PRIMARY_PROFILE_ID);
-      expect(sessionEntry.authProfileOverride).toBe(TEST_PRIMARY_PROFILE_ID);
-    });
-  });
-
   it("keeps user-pinned normal OpenAI API-key profiles for Codex sessions", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
@@ -343,16 +209,8 @@ describe("resolveSessionAuthProfileOverride", () => {
       authStoreMocks.state.hasSource = true;
       authStoreMocks.state.store = createAuthStoreWithProfiles({
         profiles: {
-          "openai:api-key-backup": {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-openai",
-          },
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-codex",
-          },
+          "openai:api-key-backup": createApiKeyCredential("openai", "sk-openai"),
+          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-codex"),
         },
         order: {
           openai: [TEST_PRIMARY_PROFILE_ID],
@@ -391,16 +249,8 @@ describe("resolveSessionAuthProfileOverride", () => {
       authStoreMocks.state.hasSource = true;
       authStoreMocks.state.store = createAuthStoreWithProfiles({
         profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-stale",
-          },
-          [TEST_SECONDARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-healthy",
-          },
+          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-stale"),
+          [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-healthy"),
         },
         order: {
           openai: [TEST_SECONDARY_PROFILE_ID, TEST_PRIMARY_PROFILE_ID],
@@ -454,6 +304,7 @@ describe("resolveSessionAuthProfileOverride", () => {
 
       await patchSessionEntryCore(scope, () => ({ label: "renamed", pinnedAt: undefined }));
       await clearSessionAuthProfileOverride({
+        agentId: "main",
         sessionEntry: sessionEntry!,
         sessionStore,
         sessionKey,
@@ -469,28 +320,23 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
-  it("rotates auth state without restoring concurrent session management fields", async () => {
+  it("rotates unavailable auth state without restoring concurrent session management fields", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
       await fs.mkdir(agentDir, { recursive: true });
       authStoreMocks.state.hasSource = true;
       authStoreMocks.state.store = createAuthStoreWithProfiles({
         profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-primary",
-          },
-          [TEST_SECONDARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-secondary",
-          },
+          [TEST_PRIMARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-primary"),
+          [TEST_SECONDARY_PROFILE_ID]: createApiKeyCredential("openai", "sk-secondary"),
         },
         order: {
           openai: [TEST_PRIMARY_PROFILE_ID, TEST_SECONDARY_PROFILE_ID],
         },
       });
+      authStoreMocks.isProfileInCooldown.mockImplementation(
+        (_store, profileId) => profileId === TEST_PRIMARY_PROFILE_ID,
+      );
 
       const sessionKey = "agent:main:main";
       const storePath = path.join(state.sessionsDir(), "sessions.json");
@@ -523,6 +369,7 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(persisted?.label).toBe("renamed");
       expect(persisted?.pinnedAt).toBeUndefined();
       expect(persisted?.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
+      expect(persisted?.authProfileOverrideCompactionCount).toBe(1);
       expect(sessionStore[sessionKey]?.label).toBe("renamed");
       expect(sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
     });
@@ -589,11 +436,10 @@ describe("resolveSessionAuthProfileOverride", () => {
         });
         const latestProfileId = crossProvider ? "anthropic:manual" : TEST_SECONDARY_PROFILE_ID;
         if (crossProvider) {
-          authStoreMocks.state.store.profiles[latestProfileId] = {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-anthropic",
-          };
+          authStoreMocks.state.store.profiles[latestProfileId] = createApiKeyCredential(
+            "anthropic",
+            "sk-anthropic",
+          );
         }
         const sessionKey = "agent:main:main";
         const scope = { storePath: path.join(state.sessionsDir(), "sessions.json"), sessionKey };

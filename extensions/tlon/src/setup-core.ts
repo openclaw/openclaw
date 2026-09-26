@@ -1,5 +1,4 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Tlon plugin module implements setup core behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
@@ -24,10 +23,6 @@ import { validateUrbitBaseUrl } from "./urbit/base-url.js";
 
 const t = createSetupTranslator();
 
-function tlonChannelId() {
-  return "tlon" as const;
-}
-
 type TlonSetupInput = ChannelSetupInput & TlonAccountFieldsInput;
 
 function isConfigured(account: TlonResolvedAccount): boolean {
@@ -49,7 +44,7 @@ type TlonSetupWizardBaseParams = {
 
 export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): ChannelSetupWizard {
   return {
-    channel: tlonChannelId(),
+    channel: "tlon",
     status: {
       configuredLabel: t("wizard.channels.statusConfigured"),
       unconfiguredLabel: t("wizard.channels.statusNeedsSetup"),
@@ -164,32 +159,18 @@ export function applyTlonSetupConfig(params: {
   const useDefault = accountId === DEFAULT_ACCOUNT_ID;
   const namedConfig = prepareScopedSetupConfig({
     cfg,
-    channelKey: tlonChannelId(),
+    channelKey: "tlon",
     accountId,
     name: input.name,
   });
   const base = namedConfig.channels?.tlon ?? {};
   const payload = buildTlonAccountFields(input);
 
-  if (useDefault) {
-    return {
-      ...namedConfig,
-      channels: {
-        ...namedConfig.channels,
-        tlon: {
-          ...base,
-          enabled: true,
-          ...payload,
-        },
-      },
-    };
-  }
-
   return patchScopedAccountConfig({
     cfg: namedConfig,
-    channelKey: tlonChannelId(),
+    channelKey: "tlon",
     accountId,
-    patch: { enabled: base.enabled ?? true },
+    patch: useDefault ? { enabled: true, ...payload } : { enabled: base.enabled ?? true },
     accountPatch: {
       enabled: true,
       ...payload,
@@ -214,7 +195,7 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
   applyAccountName: ({ cfg, accountId, name }) =>
     prepareScopedSetupConfig({
       cfg,
-      channelKey: tlonChannelId(),
+      channelKey: "tlon",
       accountId,
       name,
     }),

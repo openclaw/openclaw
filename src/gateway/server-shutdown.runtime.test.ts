@@ -7,8 +7,9 @@ const state = vi.hoisted(() => ({
   completeClose: vi.fn(),
   flushSessionChanges: vi.fn(),
   stopPlugins: vi.fn(),
-  clearPluginRegistry: vi.fn(),
   preparePluginRegistryShutdown: vi.fn(async () => undefined),
+  artifactsAvailable: true,
+  waitForPluginCacheRetirement: vi.fn(async () => undefined),
 }));
 
 vi.mock("./server-close.runtime.js", () => {
@@ -66,8 +67,18 @@ vi.mock("../agents/provider-transport-dispatcher-pool.js", () => {
 vi.mock("../plugins/runtime.js", () => {
   state.loaded.push("plugin-runtime");
   return {
-    clearActivePluginRegistry: state.clearPluginRegistry,
     prepareActivePluginRegistryShutdown: state.preparePluginRegistryShutdown,
+  };
+});
+vi.mock("../plugins/plugin-cache.js", () => {
+  state.loaded.push("plugin-cache");
+  return {
+    get waitForPluginCacheRetirement() {
+      if (!state.artifactsAvailable) {
+        throw new Error("installed plugin-cache chunk was removed");
+      }
+      return state.waitForPluginCacheRetirement;
+    },
   };
 });
 
@@ -91,6 +102,7 @@ describe("gateway shutdown runtime", () => {
         "code-mode",
         "provider-transports",
         "plugin-runtime",
+        "plugin-cache",
       ].toSorted(),
     );
     expect(runtime.prepareGatewayClose).toBe(state.prepareClose);
@@ -98,7 +110,14 @@ describe("gateway shutdown runtime", () => {
     expect(runtime.completeGatewayClose).toBe(state.completeClose);
     expect(runtime.flushPendingSessionsChangedEvents).toBe(state.flushSessionChanges);
     expect(runtime.runGlobalGatewayStopSafely).toBe(state.stopPlugins);
-    expect(runtime.clearActivePluginRegistry).toBe(state.clearPluginRegistry);
     expect(state.preparePluginRegistryShutdown).toHaveBeenCalledOnce();
+    expect(state.waitForPluginCacheRetirement).not.toHaveBeenCalled();
+    state.artifactsAvailable = false;
+    try {
+      await runtime.waitForPluginCacheRetirement();
+      expect(state.waitForPluginCacheRetirement).toHaveBeenCalledOnce();
+    } finally {
+      state.artifactsAvailable = true;
+    }
   });
 });

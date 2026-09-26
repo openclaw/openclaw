@@ -5,6 +5,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { ConfigMachineStateDatabase } from "../state/config-machine-state.js";
@@ -143,15 +144,27 @@ export function writeMentionStoreChanges(
   const next = headSchema.parse({ ...head, revision: head.revision + 1 });
   const db = getNodeSqliteKysely<ConfigMachineStateDatabase>(database);
   const updatedAtMs = Date.now();
+  const deletedKeys: string[] = [];
+  const flushDeletes = () => {
+    if (deletedKeys.length === 0) {
+      return;
+    }
+    const deletion = db.deleteFrom("config_machine_state");
+    executeSqliteQuerySync(
+      database,
+      deletedKeys.length === 1
+        ? deletion.where("state_key", "=", deletedKeys[0]!)
+        : deletion.where("state_key", "in", sqliteStringSet(deletedKeys)),
+    );
+    deletedKeys.length = 0;
+  };
   for (const [key, source] of changes) {
     const stateKey = `${SOURCE_PREFIX}${key}`;
     if (!source) {
-      executeSqliteQuerySync(
-        database,
-        db.deleteFrom("config_machine_state").where("state_key", "=", stateKey),
-      );
+      deletedKeys.push(stateKey);
       continue;
     }
+    flushDeletes();
     const valueJson = JSON.stringify(source);
     executeSqliteQuerySync(
       database,
@@ -166,6 +179,7 @@ export function writeMentionStoreChanges(
         ),
     );
   }
+  flushDeletes();
   executeSqliteQuerySync(
     database,
     db

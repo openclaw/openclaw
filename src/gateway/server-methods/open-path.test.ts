@@ -11,6 +11,7 @@ vi.mock("../../process/exec.js", () => ({
   spawnCommand: spawnCommandMock,
 }));
 
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { execOpenPath, isHeadlessOpenPathError, resolveOpenPathCommand } from "./open-path.js";
 
 function fakeChild(result: Promise<unknown>) {
@@ -92,10 +93,7 @@ describe("execOpenPath", () => {
 
   it("returns after startup observation without killing a foreground Linux handler", async () => {
     vi.useFakeTimers();
-    let settleChild: (value: unknown) => void = () => {};
-    const childResult = new Promise<unknown>((resolve) => {
-      settleChild = resolve;
-    });
+    const { promise: childResult, resolve: settleChild } = createDeferred<unknown>();
     const spawned = fakeChild(childResult);
     spawnCommandMock.mockReturnValue(spawned.child);
     let settled = false;

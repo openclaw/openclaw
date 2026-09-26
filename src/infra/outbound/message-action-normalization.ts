@@ -11,11 +11,11 @@ import {
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { applyTargetToParams } from "./channel-target.js";
 import {
   actionHasResourceReference,
   actionHasTarget,
   actionRequiresTarget,
+  applyTargetToParams,
   resolveActionDeliveryTargetAlias,
   type ActionDeliveryTargetAliasSpec,
 } from "./message-action-spec.js";
@@ -47,7 +47,7 @@ export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
-  targetAliasSpec?: ActionDeliveryTargetAliasSpec;
+  targetAliasSpec?: ActionDeliveryTargetAliasSpec | null;
   allowResourceOnly?: boolean;
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
@@ -60,26 +60,30 @@ export function normalizeMessageActionInput(params: {
   const hasExplicitTargets = Object.hasOwn(normalizedArgs, "targets");
   const hasLegacyTargetFields =
     typeof normalizedArgs.to === "string" || typeof normalizedArgs.channelId === "string";
-  const hasLegacyTarget =
-    (normalizeOptionalString(normalizedArgs.to) ?? "").length > 0 ||
-    (normalizeOptionalString(normalizedArgs.channelId) ?? "").length > 0;
   const legacyTarget =
     normalizeOptionalString(normalizedArgs.to) ??
     normalizeOptionalString(normalizedArgs.channelId) ??
     "";
-  const deliveryAliasTarget = resolveActionDeliveryTargetAlias(action, normalizedArgs, {
+  const targetAliasOptions = {
     channel: inferredChannel,
     aliasSpec: params.targetAliasSpec,
-  });
-  const hasResourceReference = actionHasResourceReference(action, normalizedArgs, {
-    channel: inferredChannel,
-    aliasSpec: params.targetAliasSpec,
-  });
+  };
+  const deliveryAliasTarget = resolveActionDeliveryTargetAlias(
+    action,
+    normalizedArgs,
+    targetAliasOptions,
+  );
+  const hasResourceReference = actionHasResourceReference(
+    action,
+    normalizedArgs,
+    targetAliasOptions,
+  );
 
-  if (deliveryAliasTarget && explicitTarget && deliveryAliasTarget !== explicitTarget) {
-    throw new Error(`Action ${action} received conflicting target and delivery alias values.`);
-  }
-  if (deliveryAliasTarget && legacyTarget && deliveryAliasTarget !== legacyTarget) {
+  if (
+    deliveryAliasTarget &&
+    ((explicitTarget && deliveryAliasTarget !== explicitTarget) ||
+      (legacyTarget && deliveryAliasTarget !== legacyTarget))
+  ) {
     throw new Error(`Action ${action} received conflicting target and delivery alias values.`);
   }
 
@@ -89,17 +93,17 @@ export function normalizeMessageActionInput(params: {
     delete normalizedArgs.channelId;
   }
 
-  if (!explicitTarget && !hasLegacyTarget && deliveryAliasTarget) {
+  if (!explicitTarget && !legacyTarget && deliveryAliasTarget) {
     normalizedArgs.target = deliveryAliasTarget;
   }
 
   if (
     !explicitTarget &&
     !hasExplicitTargets &&
-    !hasLegacyTarget &&
+    !legacyTarget &&
     !deliveryAliasTarget &&
     actionRequiresTarget(action) &&
-    (hasResourceReference || !actionHasTarget(action, normalizedArgs, { channel: inferredChannel }))
+    (hasResourceReference || !actionHasTarget(action, normalizedArgs, targetAliasOptions))
   ) {
     const inferredTarget = resolveImplicitMessageActionTarget(toolContext);
     if (inferredTarget) {
@@ -107,18 +111,14 @@ export function normalizeMessageActionInput(params: {
     }
   }
 
-  if (!explicitTarget && actionRequiresTarget(action) && hasLegacyTarget) {
-    if (legacyTarget) {
-      normalizedArgs.target = legacyTarget;
-      delete normalizedArgs.to;
-      delete normalizedArgs.channelId;
-    }
+  if (!explicitTarget && actionRequiresTarget(action) && legacyTarget) {
+    normalizedArgs.target = legacyTarget;
+    delete normalizedArgs.to;
+    delete normalizedArgs.channelId;
   }
 
-  if (!explicitChannel) {
-    if (inferredChannel && isDeliverableMessageChannel(inferredChannel)) {
-      normalizedArgs.channel = inferredChannel;
-    }
+  if (!explicitChannel && inferredChannel && isDeliverableMessageChannel(inferredChannel)) {
+    normalizedArgs.channel = inferredChannel;
   }
 
   applyTargetToParams({ action, args: normalizedArgs });
@@ -129,7 +129,7 @@ export function normalizeMessageActionInput(params: {
   ].some((value) => Boolean(normalizeOptionalString(value)));
   if (
     actionRequiresTarget(action) &&
-    (!actionHasTarget(action, normalizedArgs, { channel: inferredChannel }) ||
+    (!actionHasTarget(action, normalizedArgs, targetAliasOptions) ||
       (hasResourceReference && !hasCanonicalTarget && !params.allowResourceOnly))
   ) {
     throw missingMessageActionTargetError(action);

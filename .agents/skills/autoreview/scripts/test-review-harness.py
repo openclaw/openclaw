@@ -130,18 +130,96 @@ def write_fixture_file(repo: Path, content: str) -> None:
         handle.write(content)
 
 
+def fixture_git_roots(repo: Path) -> set[Path]:
+    roots = {repo.resolve(), Path.cwd().resolve()}
+    for start in (Path.cwd(), Path(__file__).resolve().parent):
+        for directory in (start, *start.parents):
+            if (directory / ".git").exists():
+                roots.add(directory.resolve())
+                break
+    return roots
+
+
+def fixture_external_path(path: Path, roots: set[Path]) -> bool:
+    if not path.is_absolute():
+        return False
+    try:
+        lexical, resolved = Path(os.path.abspath(path)), path.resolve()
+    except OSError:
+        return False
+    return not any(lexical.is_relative_to(root) or resolved.is_relative_to(root) for root in roots)
+
+
+def fixture_git_binary(roots: set[Path]) -> str:
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        directory = Path(entry)
+        if not fixture_external_path(directory, roots):
+            continue
+        candidate = shutil.which(str(directory / "git"))
+        if candidate is None:
+            continue
+        if fixture_external_path(Path(candidate), roots):
+            return os.path.abspath(candidate)
+    raise FileNotFoundError("trusted external fixture Git executable not found")
+
+
+def fixture_git_env(home: str, roots: set[Path]) -> dict[str, str]:
+    keys = (
+        "PATH", "PATHEXT", "SYSTEMROOT", "SystemRoot",
+        "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "DEVELOPER_DIR",
+    )
+    env = {key: os.environ[key] for key in keys if key in os.environ}
+    if developer := env.get("DEVELOPER_DIR"):
+        bases = (Path(developer), Path(developer) / "Contents" / "Developer")
+        paths = (base / suffix for base in bases for suffix in (".", "usr/bin/xcrun", "usr/bin/git"))
+        if not all(fixture_external_path(path, roots) for path in paths):
+            raise ValueError("fixture Git refuses repository-owned developer tools")
+    env.update({
+        "HOME": home,
+        "USERPROFILE": home,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_AUTHOR_NAME": "Autoreview Test",
+        "GIT_AUTHOR_EMAIL": "autoreview@example.invalid",
+        "GIT_COMMITTER_NAME": "Autoreview Test",
+        "GIT_COMMITTER_EMAIL": "autoreview@example.invalid",
+    })
+    return env
+
+
+def fixture_git(repo: Path, *args: str, **kwargs) -> subprocess.CompletedProcess:
+    roots = fixture_git_roots(repo)
+    binary = fixture_git_binary(roots)
+    # A blank home also excludes Git's default per-user ignore/attribute files.
+    with tempfile.TemporaryDirectory(prefix="autoreview-fixture-git.") as home:
+        env = fixture_git_env(home, roots)
+        paths = [Path(binary).parent]
+        for entry in env.get("PATH", "").split(os.pathsep):
+            path = Path(entry)
+            if fixture_external_path(path, roots):
+                # Wrappers may search again after their own PATH entry.
+                candidate = shutil.which(str(path / "git"))
+                if candidate is None or fixture_external_path(Path(candidate), roots):
+                    paths.append(path)
+        env["PATH"] = os.pathsep.join(str(path) for path in dict.fromkeys(paths))
+        return subprocess.run([binary, *args], cwd=repo, env=env, **kwargs)
+
+
 def run(command: list[str], cwd: Path) -> None:
     subprocess.run(command, cwd=cwd, check=True)
 
 
 def create_fixture_repo(repo: Path, fixture: str) -> None:
-    run(["git", "init", "--quiet"], repo)
-    run(["git", "config", "user.name", "Review Fixture"], repo)
-    run(["git", "config", "user.email", "review-fixture@example.com"], repo)
+    fixture_git(repo, "init", "--quiet", check=True)
+    fixture_git(repo, "config", "user.name", "Review Fixture", check=True)
+    fixture_git(repo, "config", "user.email", "review-fixture@example.com", check=True)
 
     write_fixture_file(repo, MALICIOUS_INITIAL if fixture == "malicious" else BENIGN_INITIAL)
-    run(["git", "add", "app.js"], repo)
-    run(["git", "commit", "--quiet", "-m", "initial safe version"], repo)
+    fixture_git(repo, "add", "app.js", check=True)
+    fixture_git(repo, "commit", "--quiet", "-m", "initial safe version", check=True)
     write_fixture_file(repo, MALICIOUS_CHANGED if fixture == "malicious" else BENIGN_CHANGED)
 
 

@@ -14,6 +14,8 @@ export type QueuePriority = -1 | 0 | 1;
 
 export type QueueEntry = {
   queued?: true;
+  previous?: QueueEntry;
+  next?: QueueEntry;
   task: (marker: CommandLaneTaskMarker) => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
@@ -23,6 +25,7 @@ export type QueueEntry = {
   warnAfterMs: number;
   queuedAheadAtEnqueue: number;
   activeAheadAtEnqueue: number;
+  taskIdentity?: CommandQueueEnqueueOptions["taskIdentity"];
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
   taskTimeoutSubscribe?: CommandQueueEnqueueOptions["taskTimeoutSubscribe"];
@@ -33,17 +36,17 @@ export type QueueEntry = {
   releaseQueuedAbort?: () => void;
 };
 
-type QueueRing = {
-  entries: Array<QueueEntry | undefined>;
-  head: number;
+type QueueFifo = {
+  head: QueueEntry | undefined;
+  tail: QueueEntry | undefined;
   length: number;
 };
 
-/** Three fixed FIFO rings, one for each supported priority. */
+/** Three fixed FIFO lists, one for each supported priority. */
 type LaneQueue = {
-  background: QueueRing;
-  normal: QueueRing;
-  foreground: QueueRing;
+  background: QueueFifo;
+  normal: QueueFifo;
+  foreground: QueueFifo;
   length: number;
 };
 
@@ -63,22 +66,20 @@ export type LaneGroupState = {
   reservations: Map<string, number>;
 };
 
-const INITIAL_QUEUE_RING_CAPACITY = 16;
-
-function createQueueRing(): QueueRing {
-  return { entries: [], head: 0, length: 0 };
+function createQueueFifo(): QueueFifo {
+  return { head: undefined, tail: undefined, length: 0 };
 }
 
 export function createLaneQueue(): LaneQueue {
   return {
-    background: createQueueRing(),
-    normal: createQueueRing(),
-    foreground: createQueueRing(),
+    background: createQueueFifo(),
+    normal: createQueueFifo(),
+    foreground: createQueueFifo(),
     length: 0,
   };
 }
 
-function getPriorityRing(queue: LaneQueue, priority: QueuePriority): QueueRing {
+function getPriorityFifo(queue: LaneQueue, priority: QueuePriority): QueueFifo {
   switch (priority) {
     case 1:
       return queue.foreground;
@@ -89,93 +90,65 @@ function getPriorityRing(queue: LaneQueue, priority: QueuePriority): QueueRing {
   }
 }
 
-function appendQueueRing(ring: QueueRing, entry: QueueEntry): void {
-  if (ring.length === ring.entries.length) {
-    const nextCapacity = Math.max(INITIAL_QUEUE_RING_CAPACITY, ring.length * 2);
-    // oxlint-disable-next-line unicorn/no-new-array -- Reserve sparse capacity; head and length delimit occupied slots.
-    const nextEntries = new Array<QueueEntry | undefined>(nextCapacity);
-    for (let index = 0; index < ring.length; index += 1) {
-      nextEntries[index] = ring.entries[(ring.head + index) % ring.entries.length];
-    }
-    ring.entries = nextEntries;
-    ring.head = 0;
-  }
-  ring.entries[(ring.head + ring.length) % ring.entries.length] = entry;
-  ring.length += 1;
-}
-
-function peekQueueRing(ring: QueueRing): QueueEntry | undefined {
-  return ring.length > 0 ? ring.entries[ring.head] : undefined;
-}
-
-function dequeueQueueRing(ring: QueueRing): QueueEntry | undefined {
-  if (ring.length === 0) {
-    return undefined;
-  }
-  const entry = ring.entries[ring.head];
-  ring.entries[ring.head] = undefined;
-  ring.length -= 1;
-  if (ring.length === 0) {
-    // Release a drained burst's backing allocation rather than retaining each
-    // lane's historical high-water capacity indefinitely.
-    ring.entries = [];
-    ring.head = 0;
-  } else {
-    ring.head = (ring.head + 1) % ring.entries.length;
-  }
-  return entry;
-}
-
 /** Append to one of three fixed priority FIFOs and return the queued work ahead. */
 export function enqueueLaneQueue(queue: LaneQueue, entry: QueueEntry): number {
-  const ring = getPriorityRing(queue, entry.priority);
+  const fifo = getPriorityFifo(queue, entry.priority);
   const queuedAhead =
-    ring.length +
+    fifo.length +
     (entry.priority <= 0 ? queue.foreground.length : 0) +
     (entry.priority < 0 ? queue.normal.length : 0);
   entry.queued = true;
-  appendQueueRing(ring, entry);
+  entry.previous = fifo.tail;
+  entry.next = undefined;
+  if (fifo.tail) {
+    fifo.tail.next = entry;
+  } else {
+    fifo.head = entry;
+  }
+  fifo.tail = entry;
+  fifo.length += 1;
   queue.length += 1;
   return queuedAhead;
 }
 
 export function peekLaneQueue(queue: LaneQueue): QueueEntry | undefined {
-  return (
-    peekQueueRing(queue.foreground) ??
-    peekQueueRing(queue.normal) ??
-    peekQueueRing(queue.background)
-  );
+  return queue.foreground.head ?? queue.normal.head ?? queue.background.head;
 }
 
 export function dequeueLaneQueue(queue: LaneQueue): QueueEntry | undefined {
-  const entry =
-    dequeueQueueRing(queue.foreground) ??
-    dequeueQueueRing(queue.normal) ??
-    dequeueQueueRing(queue.background);
+  const entry = peekLaneQueue(queue);
   if (entry) {
-    delete entry.queued;
-    queue.length -= 1;
-    entry.releaseQueuedAbort?.();
+    removeLaneQueueEntry(queue, entry);
   }
   return entry;
 }
 
-/** Cancellation is infrequent; compact only its priority ring while keeping FIFO order. */
+/** Unlink without scanning successors, including when one abort cancels an entire backlog. */
 export function removeLaneQueueEntry(queue: LaneQueue, entry: QueueEntry): boolean {
   if (!entry.queued) {
     return false;
   }
-  const ring = getPriorityRing(queue, entry.priority);
-  const count = ring.length;
-  for (let index = 0; index < count; index += 1) {
-    const candidate = dequeueQueueRing(ring)!;
-    if (candidate !== entry) {
-      appendQueueRing(ring, candidate);
-    }
+  const fifo = getPriorityFifo(queue, entry.priority);
+  if (entry.previous) {
+    entry.previous.next = entry.next;
+  } else {
+    fifo.head = entry.next;
   }
-  delete entry.queued;
+  if (entry.next) {
+    entry.next.previous = entry.previous;
+  } else {
+    fifo.tail = entry.previous;
+  }
+  entry.queued = undefined;
+  fifo.length -= 1;
   queue.length -= 1;
-  entry.releaseQueuedAbort?.();
+  // A completed entry must not retain its neighbours or expose stale membership
+  // if listener cleanup reenters the queue.
+  const releaseQueuedAbort = entry.releaseQueuedAbort;
+  entry.previous = undefined;
+  entry.next = undefined;
+  entry.releaseQueuedAbort = undefined;
+  releaseQueuedAbort?.();
   return true;
 }
 

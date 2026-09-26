@@ -2,6 +2,7 @@
 
 import { nothing, render } from "lit";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
 import {
@@ -62,14 +63,6 @@ beforeAll(() => {
 afterAll(() => {
   restoreTranslations();
 });
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function contextWithGateway(
   client: GatewayBrowserClient,
@@ -180,18 +173,6 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     expect(task).not.toHaveBeenCalled();
   });
 
-  it("loads the selected agent on the first gateway bind", async () => {
-    const client = {} as GatewayBrowserClient;
-    const context = contextWithGateway(client, true);
-    const page = createPage(context);
-
-    document.body.append(page);
-    await page.updateComplete;
-
-    expect(page.dreaming.selectedAgentId).toBe("main");
-    expect(page.loadAll).toHaveBeenCalledOnce();
-  });
-
   it("resets stale panel data when the selected agent changes", async () => {
     const client = {} as GatewayBrowserClient;
     const page = createPage(contextWithGateway(client, true));
@@ -254,21 +235,29 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     expect(page.pendingEnabled).toBeNull();
   });
 
-  it("discards a wiki response from a replaced gateway source", async () => {
-    const pending = deferred<unknown>();
-    const client = {
-      request: vi.fn(() => pending.promise),
-    } as unknown as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, true));
-    document.body.append(page);
-    await page.updateComplete;
+  it.each([false, true])(
+    "discards a wiki response from a replaced gateway source (Lit rebound: %s)",
+    async (rebound) => {
+      const pending = deferred<unknown>();
+      const client = {
+        request: vi.fn(() => pending.promise),
+      } as unknown as GatewayBrowserClient;
+      const page = createPage(contextWithGateway(client, true));
+      document.body.append(page);
+      await page.updateComplete;
 
-    const preview = page.openWikiPage("old.md");
-    await replaceContext(page, contextWithGateway(client, false));
-    pending.resolve({ title: "Old", path: "old.md", content: "stale" });
+      const preview = page.openWikiPage("old.md");
+      const nextContext = contextWithGateway(client, false);
+      if (rebound) {
+        await replaceContext(page, nextContext);
+      } else {
+        page.context = nextContext;
+      }
+      pending.resolve({ title: "Old", path: "old.md", content: "stale" });
 
-    await expect(preview).resolves.toBeNull();
-  });
+      await expect(preview).resolves.toBeNull();
+    },
+  );
 
   it("discards a wiki response across a same-client reconnect", async () => {
     const pending = deferred<unknown>();

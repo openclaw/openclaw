@@ -1,3 +1,4 @@
+import type { ProviderRefusalReview } from "@openclaw/llm-core/diagnostics";
 /**
  * Shared metadata and result types for embedded-agent runner surfaces.
  */
@@ -12,7 +13,7 @@ import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
 import type { AgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
-import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -21,6 +22,7 @@ import type { McpConnectAction } from "../mcp-connect-action.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { ModelRef } from "../model-ref-shared.js";
+import type { ReplyDeliveryState } from "../reply-completion.js";
 import type { AgentRuntimeCredentialSource } from "../runtime-plan/types.js";
 import type { NormalizedUsage } from "../usage.js";
 
@@ -50,6 +52,14 @@ export type EmbeddedAgentMeta = {
   contextTokens?: number;
   contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
   agentHarnessId?: string;
+  /** Sanitized provider-policy refusal attached to this physical attempt. */
+  providerRefusal?: {
+    provider?: string;
+    category?: string;
+    review?: ProviderRefusalReview;
+    nativeThreadId?: string;
+    nativeTurnId?: string;
+  };
   /** Runtime-owned selection, independent of the final response or credential source. */
   runtimeModelSelection?: ModelRef;
   /** Redacted credential source selected for the terminal physical model attempt. */
@@ -131,6 +141,11 @@ type ExecutionTrace = {
   attempts?: TraceAttempt[];
   fallbackUsed?: boolean;
   runner?: "embedded" | "cli";
+  providerPolicyRetry?: {
+    category: "cyber";
+    provider: string;
+    model: string;
+  };
 };
 
 type RequestShapingTrace = {
@@ -152,6 +167,8 @@ export type ToolSummaryTrace = {
   calls: number;
   tools: string[];
   failures?: number;
+  /** Latest tool failure not cleared by same-tool success, independent of reply presentation. */
+  unresolvedError?: { toolName: string };
   totalToolTimeMs?: number;
 };
 
@@ -197,6 +214,11 @@ export type EmbeddedAgentRunMeta = {
   livenessState?: EmbeddedRunLivenessState;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  /** Producer-owned terminal cause; the fallback owner decides whether a chain was stopped. */
+  modelFallbackStopReason?:
+    | "agent_run_terminal_timeout"
+    | "idle_timeout_circuit_breaker"
+    | "provider_review_continuation";
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
   /** An exact, successfully settled tool batch intentionally completed the turn without a reply. */
@@ -266,6 +288,8 @@ export type EmbeddedAgentRunResult = {
   // True if message_tool_only delivered a visible reply to the current source conversation.
   didDeliverSourceReplyViaMessageTool?: boolean;
   sourceReplyDelivered?: true;
+  /** Current-input custody; unlike aggregate sends, this is reset when another input is admitted. */
+  sourceReplyDeliveryState?: ReplyDeliveryState;
   // True if a deterministic approval prompt was sent through the tool-result channel.
   didSendDeterministicApprovalPrompt?: boolean;
   // Texts successfully sent via messaging tools during the run.
@@ -278,6 +302,8 @@ export type EmbeddedAgentRunResult = {
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   // Child sessions successfully accepted by sessions_spawn during the run.
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
+  /** An asynchronous tool task started during this run; its owner tracks completion. */
+  asyncWorkStarted?: true;
   /** Completed core yield settlement, not a requester-visible final reply. */
   requesterContinuationSettled?: true;
   // Structured heartbeat outcome recorded by the heartbeat response tool.

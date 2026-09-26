@@ -1,5 +1,6 @@
 // First-run onboarding welcome: state findings, propose setup, wait for "yes".
 import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, normalizeSecretInputString } from "../config/types.secrets.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import type { SystemAgentChatEngine } from "./chat-engine.js";
@@ -64,21 +65,19 @@ async function loadAuthoredSetupConfig(params: {
   configExists: boolean;
   configValid: boolean;
 }): Promise<{
-  authoredConfig?: import("../config/types.openclaw.js").OpenClawConfig;
+  authoredConfig?: OpenClawConfig;
   hasAuthoredSetup: boolean;
 }> {
-  const authoredConfig = await (async () => {
-    if (!params.configExists || !params.configValid) {
-      return undefined;
-    }
+  let authoredConfig: OpenClawConfig | undefined;
+  if (params.configExists && params.configValid) {
     try {
       const { readConfigFileSnapshot } = await import("../config/config.js");
       const snapshot = await readConfigFileSnapshot();
-      return snapshot.sourceConfig ?? snapshot.config ?? {};
+      authoredConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     } catch {
-      return undefined;
+      // An unreadable config must keep onboarding available.
     }
-  })();
+  }
   const auth = authoredConfig?.gateway?.auth;
   const hasAuthMode = normalizeSecretInputString(auth?.mode) !== undefined;
   const hasAuthSecret =
@@ -116,7 +115,7 @@ export async function buildOnboardingWelcome(params: {
         )
       : undefined;
   const pendingSetup = localSetup?.status === "pending" ? localSetup : undefined;
-  const defaultModel = overview.defaultModel?.trim();
+  const setupModel = (overview.defaultModel ?? overview.setupModel)?.trim();
   const requestedWorkspace = params.workspace?.trim()
     ? resolveUserPath(params.workspace.trim())
     : undefined;
@@ -126,14 +125,14 @@ export async function buildOnboardingWelcome(params: {
   if (
     hasAuthoredSetup &&
     !pendingSetup &&
-    defaultModel &&
+    setupModel &&
     (!requestedWorkspace || requestedWorkspace === authoredWorkspace)
   ) {
     const welcome = formatSystemAgentOnboardingWelcome(overview);
     params.engine.noteAssistantMessage(welcome);
     return { text: welcome, question: READY_WELCOME_QUESTION };
   }
-  if (!defaultModel) {
+  if (!setupModel) {
     throw new Error(
       "OpenClaw onboarding requires working inference first. Run `openclaw onboard` on the machine running OpenClaw to configure and verify a default model.",
     );
@@ -152,18 +151,24 @@ export async function buildOnboardingWelcome(params: {
     ...(params.agentName ? { agentName: params.agentName } : {}),
   });
   const welcome = [
-    "## Hi, I'm OpenClaw — let's hatch your agent.",
+    overview.defaultModel
+      ? "## Hi, I'm OpenClaw — let's hatch your agent."
+      : "## Hi, I'm OpenClaw — let's get you set up.",
     "",
     "No menus here: tell me what you want and I'll do the configuring. I looked around this machine:",
     "",
-    `- AI: ${defaultModel} — already verified with a real reply; switching later is one sentence.`,
+    overview.defaultModel
+      ? `- AI: ${setupModel} — already verified with a real reply; switching later is one sentence.`
+      : `- Setup AI: ${setupModel} — verified with a real reply.`,
     `- Workspace: ${shortenHomePath(workspace)}`,
     "- Gateway: runs locally, private to this machine (token auth).",
     "",
     "Say **yes** and I'll set all of that up now.",
     "",
     "Heads up: your agent gets real access to this machine — https://docs.openclaw.ai/security",
-    "Afterwards: `talk to agent` to meet your agent right here. Channels are optional: use `connect discord`, `connect slack`, `connect telegram`, `connect whatsapp` (or `channels` for the full list) if you want to chat from another service.",
+    overview.defaultModel
+      ? "Afterwards: `talk to agent` to meet your agent right here. Channels are optional: use `connect discord`, `connect slack`, `connect telegram`, `connect whatsapp` (or `channels` for the full list) if you want to chat from another service."
+      : "This model handles setup and utility tasks. Choose a primary model in Model Setup or run `openclaw onboard` before regular agent chat. You can continue setup here and connect channels when ready.",
   ].join("\n");
   params.engine.noteAssistantMessage(welcome);
   return { text: welcome, question: SETUP_WELCOME_QUESTION };

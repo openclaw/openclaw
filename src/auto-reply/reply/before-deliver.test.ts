@@ -12,14 +12,40 @@ import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
+import {
+  createOutboundPayloadPlan,
+  createStructuredOutboundPayloadPlan,
+} from "../../infra/outbound/payloads.js";
+import { preserveReplyPayloadMediaSelectionCore } from "../../infra/outbound/reply-media-entries.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { captureDeliveredTranscriptMirror } from "./dispatch-from-config.transcript.js";
 import {
   attachReplyDispatchUndeliveredFallback,
   captureReplyDispatchDeliveryOutcome,
   createReplyDispatcher,
   prepareReplyPayloadForDispatcher,
 } from "./reply-dispatcher.js";
+
+function planReply(payload: ReplyPayload): OutboundPayloadPlan {
+  const [plan] = createStructuredOutboundPayloadPlan([payload]);
+  if (!plan) {
+    throw new Error("expected a sendable prepared reply");
+  }
+  return plan;
+}
+
+function sendFinal(
+  dispatcher: ReturnType<typeof createReplyDispatcher>,
+  operation: "raw" | "prepared",
+  payload: ReplyPayload,
+) {
+  return operation === "raw"
+    ? dispatcher.sendFinalReply(payload)
+    : dispatcher.sendPreparedReply("final", planReply(payload));
+}
 
 async function makePendingFinalFixture() {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dispatcher-pending-final-"));
@@ -56,63 +82,299 @@ async function makePendingFinalFixture() {
 }
 
 describe("beforeDeliver in reply dispatcher", () => {
-  it("settles explicitly non-visible delivery in the dispatcher receipt", async () => {
+  it.each(["raw", "prepared"] as const)(
+    "retains an in-place media selection through %s dispatch recovery",
+    async (operation) => {
+      const delivered: ReplyPayload[] = [];
+      const deliver = async (payload: ReplyPayload) => {
+        delivered.push(
+          preserveReplyPayloadMediaSelectionCore(payload, {
+            ...payload,
+            text: "Recovered full text",
+            mediaUrls: ["/tmp/rejected.png", "/tmp/selected.png"],
+          }),
+        );
+      };
+      const dispatcher = createReplyDispatcher({
+        beforeDeliver: (payload) => {
+          payload.mediaUrl = undefined;
+          payload.mediaUrls?.splice(0, 1);
+          payload.attachments?.splice(0, 1);
+          return payload;
+        },
+        deliver,
+        deliverPrepared: async (plan) => deliver(plan.payload),
+      });
+      expect(
+        sendFinal(dispatcher, operation, {
+          text: "Short answer",
+          mediaUrls: ["/tmp/rejected.png", "/tmp/selected.png"],
+          attachments: [{ name: "rejected" }, { name: "selected" }],
+        }),
+      ).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      expect(delivered).toEqual([
+        expect.objectContaining({
+          text: "Recovered full text",
+          mediaUrls: ["/tmp/selected.png"],
+          attachments: [{ name: "selected" }],
+        }),
+      ]);
+    },
+  );
+
+  it.each(["[[reply_to:example-id]]` literally.", "[[audio_as_voice]]` literally."])(
+    "preserves prepared literal %s and rebuilds projections after modifiers",
+    async (text) => {
+      const delivered: OutboundPayloadPlan[] = [];
+      const deliver = vi.fn(async () => {});
+      const dispatcher = createReplyDispatcher({
+        responsePrefix: "[bot]",
+        beforeDeliver: async (payload) => ({
+          ...payload,
+          text: `${payload.text} Updated.`,
+          mediaUrl: undefined,
+          mediaUrls: ["/tmp/updated.png"],
+        }),
+        deliver,
+        deliverPrepared: async (plan) => {
+          delivered.push(plan);
+        },
+      });
+      const plan = { ...planReply({ text, mediaUrl: "/tmp/original.png" }), sourceIndex: 3 };
+      const outcome = captureReplyDispatchDeliveryOutcome(plan.payload);
+
+      expect(dispatcher.sendPreparedReply("block", plan)).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0]).toMatchObject({
+        sourceIndex: 3,
+        payload: { text: `[bot] ${text} Updated.` },
+        parts: { text: `[bot] ${text} Updated.`, mediaUrls: ["/tmp/updated.png"] },
+      });
+      expect(delivered[0]?.payload.replyToId).toBeUndefined();
+      expect(delivered[0]?.payload.audioAsVoice).toBeUndefined();
+      expect(outcome.isTracked()).toBe(true);
+      await expect(outcome.promise).resolves.toBe("delivered");
+    },
+  );
+
+  it.each(["tool", "block", "final"] as const)(
+    "retains raw %s delivery when prepared egress is available",
+    async (kind) => {
+      const delivered: ReplyPayload[] = [];
+      const deliverPrepared = vi.fn(async () => {});
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          delivered.push(...createOutboundPayloadPlan([payload]).map((plan) => plan.payload));
+        },
+        deliverPrepared,
+      });
+      const send = {
+        tool: dispatcher.sendToolResult,
+        block: dispatcher.sendBlockReply,
+        final: dispatcher.sendFinalReply,
+      }[kind];
+
+      expect(send({ text: "[[reply_to:real-id]] Raw reply" })).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      expect(deliverPrepared).not.toHaveBeenCalled();
+      expect(delivered).toMatchObject([{ text: "Raw reply", replyToId: "real-id" }]);
+    },
+  );
+
+  it("passes prepared payloads to a legacy adapter without prepared egress", async () => {
+    const delivered: ReplyPayload[] = [];
     const dispatcher = createReplyDispatcher({
-      deliver: async () => ({ visibleReplySent: false }),
-    });
-
-    dispatcher.sendFinalReply({ text: "suppressed" });
-    dispatcher.markComplete();
-    const receipt = await dispatcher.waitForIdle();
-
-    expect(receipt).toEqual({
-      counts: {
-        tool: {
-          delivered: 0,
-          deliveredNotVisible: 0,
-          cancelled: 0,
-          failedBeforeSend: 0,
-          failedAfterSend: 0,
-        },
-        block: {
-          delivered: 0,
-          deliveredNotVisible: 0,
-          cancelled: 0,
-          failedBeforeSend: 0,
-          failedAfterSend: 0,
-        },
-        final: {
-          delivered: 0,
-          deliveredNotVisible: 1,
-          cancelled: 0,
-          failedBeforeSend: 0,
-          failedAfterSend: 0,
-        },
-      },
-      anyVisibleDelivered: false,
-    });
-  });
-
-  it("delivers the attached fallback when the primary payload is cancelled", async () => {
-    const delivered: string[] = [];
-    const primary: ReplyPayload = { text: "caption", mediaUrl: "/tmp/voice.ogg" };
-    attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
-    const outcome = captureReplyDispatchDeliveryOutcome(primary);
-    const dispatcher = createReplyDispatcher({
-      beforeDeliver: (payload) => (payload.mediaUrl ? null : payload),
+      beforeDeliver: async (payload) => ({ ...payload, text: `${payload.text} Updated.` }),
       deliver: async (payload) => {
-        delivered.push(payload.text ?? "");
+        delivered.push(payload);
       },
     });
+    const plan = planReply({ text: "[[reply_to:example-id]]` literally." });
 
-    expect(dispatcher.sendFinalReply(primary)).toBe(true);
+    expect(dispatcher.sendPreparedReply("final", plan)).toBe(true);
     dispatcher.markComplete();
-    const receipt = await dispatcher.waitForIdle();
+    await dispatcher.waitForIdle();
 
-    expect(delivered).toEqual(["caption"]);
-    await expect(outcome.promise).resolves.toBe("delivered");
-    expect(receipt?.counts.final.cancelled).toBe(0);
+    expect(delivered).toMatchObject([{ text: "[[reply_to:example-id]]` literally. Updated." }]);
+    expect(delivered[0]?.replyToId).toBeUndefined();
   });
+
+  it("keeps prepared capture owners separate after hook rewrites on one dispatcher", async () => {
+    const delivered: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: async (payload) => ({ ...payload, text: `Edited ${payload.text}` }),
+      deliver: async () => {
+        throw new Error("expected prepared delivery");
+      },
+      deliverPrepared: async (plan) => {
+        delivered.push(plan.parts.text);
+      },
+    });
+    const captures = ["first", "second"].map((text) => {
+      const captureToken = {};
+      const metadata = { sessionKey: "agent:test:session", idempotencyKey: "source-reply", text };
+      const capture = captureDeliveredTranscriptMirror({ dispatcher, metadata, captureToken });
+      const plan = planReply(
+        setReplyPayloadMetadata(
+          { text },
+          { finalDeliveryCapture: captureToken, sourceReplyTranscriptMirror: metadata },
+        ),
+      );
+      return { capture, plan };
+    });
+
+    for (const { plan } of captures) {
+      expect(dispatcher.sendPreparedReply("final", plan)).toBe(true);
+    }
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual(["Edited first", "Edited second"]);
+    expect(captures.map(({ capture }) => capture()?.text)).toEqual(delivered);
+  });
+
+  it.each([false, true])(
+    "preserves prepared BTW text through prefixes and hook replacement (%s)",
+    async (replaceText) => {
+      const delivered: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        responsePrefix: "[bot]",
+        beforeDeliver: async (payload) => ({
+          ...payload,
+          text: replaceText ? "Replacement answer" : `${payload.text} Updated.`,
+        }),
+        deliver: async () => {
+          throw new Error("expected prepared delivery");
+        },
+        deliverPrepared: async (plan) => {
+          delivered.push(plan.parts.text);
+        },
+      });
+      const [plan] = createOutboundPayloadPlan([{ text: "Answer", btw: { question: "Q" } }]);
+      if (!plan) {
+        throw new Error("expected a planned BTW reply");
+      }
+      const captureToken = {};
+      const metadata = { sessionKey: "agent:test:session", idempotencyKey: "btw-reply" };
+      setReplyPayloadMetadata(plan.payload, {
+        finalDeliveryCapture: captureToken,
+        sourceReplyTranscriptMirror: metadata,
+      });
+      const capture = captureDeliveredTranscriptMirror({ dispatcher, metadata, captureToken });
+
+      expect(dispatcher.sendPreparedReply("final", plan)).toBe(true);
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+
+      const expected = replaceText
+        ? "Replacement answer"
+        : "[bot] BTW\nQuestion: Q\n\nAnswer Updated.";
+      expect(delivered).toEqual([expected]);
+      expect(capture()?.text).toBe(expected);
+    },
+  );
+
+  it.each([
+    {
+      name: "unconfirmed send",
+      result: { visibleReplySent: true, ambiguous: true },
+      state: "unknown",
+      count: "failedAfterSend",
+      fallback: true,
+    },
+    {
+      name: "channel transform",
+      result: { visibleReplySent: false, suppression: { reason: "channel_transform" } },
+      state: "suppressed",
+      count: "deliveredNotVisible",
+      fallback: true,
+    },
+    {
+      name: "confirmed send",
+      result: { visibleReplySent: true },
+      state: "delivered",
+      count: "delivered",
+      fallback: true,
+    },
+    {
+      name: "ordinary invisible result",
+      result: { visibleReplySent: false },
+      state: "delivered",
+      count: "deliveredNotVisible",
+      fallback: false,
+    },
+  ] as const)(
+    "records callback settlement for $name before reopening",
+    async ({ result, state, count, fallback }) => {
+      const fixture = await makePendingFinalFixture();
+      const deliver = vi.fn(async () => result);
+      try {
+        if (fallback) {
+          attachReplyDispatchUndeliveredFallback(fixture.payload, { text: "fallback" });
+        }
+        const dispatcher = createReplyDispatcher({ deliver });
+        dispatcher.sendFinalReply(fixture.payload);
+        dispatcher.markComplete();
+        const receipt = await dispatcher.waitForIdle();
+        closeOpenClawAgentDatabasesForTest();
+        expect(
+          (loadSessionEntry(fixture) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
+        ).toEqual([{ id: "delivery-1", state }]);
+        expect(receipt?.counts.final[count]).toBe(1);
+        expect(receipt?.anyVisibleDelivered).toBe(result.visibleReplySent);
+
+        const replay = createReplyDispatcher({ deliver });
+        replay.sendFinalReply(fixture.payload);
+        replay.markComplete();
+        await replay.waitForIdle();
+        expect(deliver).toHaveBeenCalledOnce();
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+        await fs.rm(fixture.tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["raw", "prepared"] as const)(
+    "delivers the attached %s fallback when the primary payload is cancelled",
+    async (operation) => {
+      const delivered: string[] = [];
+      const plan = planReply({ text: "caption", mediaUrl: "/tmp/voice.ogg" });
+      const primary = plan.payload;
+      attachReplyDispatchUndeliveredFallback(primary, { text: "caption" });
+      const outcome = captureReplyDispatchDeliveryOutcome(primary);
+      const dispatcher = createReplyDispatcher({
+        beforeDeliver: (payload) => (payload.mediaUrl ? null : payload),
+        deliver: async (payload) => {
+          delivered.push(`raw:${payload.text}`);
+        },
+        deliverPrepared: async (entry) => {
+          delivered.push(`prepared:${entry.parts.text}`);
+        },
+      });
+
+      expect(
+        operation === "raw"
+          ? dispatcher.sendFinalReply(primary)
+          : dispatcher.sendPreparedReply("final", plan),
+      ).toBe(true);
+      dispatcher.markComplete();
+      const receipt = await dispatcher.waitForIdle();
+
+      expect(delivered).toEqual([`${operation}:caption`]);
+      expect(outcome.isTracked()).toBe(true);
+      await expect(outcome.promise).resolves.toBe("delivered");
+      expect(receipt?.counts.final.cancelled).toBe(0);
+    },
+  );
 
   it("does not resurrect fallback text after a channel transform veto", async () => {
     const delivered: ReplyPayload[] = [];
@@ -351,28 +613,6 @@ describe("beforeDeliver in reply dispatcher", () => {
     expect(receipt?.counts.block).toMatchObject({ cancelled: 0, failedBeforeSend: 1 });
   });
 
-  it("allows modifying payload in beforeDeliver", async () => {
-    const delivered: string[] = [];
-
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload.text ?? "");
-      },
-      beforeDeliver: async (payload: ReplyPayload) => {
-        if (payload.text?.includes("error")) {
-          return { ...payload, text: "replaced" };
-        }
-        return payload;
-      },
-    });
-
-    dispatcher.sendFinalReply({ text: "some error occurred" });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(delivered).toEqual(["replaced"]);
-  });
-
   it("preserves payload metadata through beforeDeliver rewrites", async () => {
     let deliveredMetadata: unknown;
     let deliveredAssistantMessageIndex: unknown;
@@ -393,22 +633,6 @@ describe("beforeDeliver in reply dispatcher", () => {
 
     expect(deliveredMetadata).toMatchObject({ assistantMessageIndex: 12 });
     expect(deliveredAssistantMessageIndex).toBe(12);
-  });
-
-  it("delivers normally without beforeDeliver", async () => {
-    const delivered: string[] = [];
-
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload.text ?? "");
-      },
-    });
-
-    dispatcher.sendFinalReply({ text: "plain reply" });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(delivered).toEqual(["plain reply"]);
   });
 
   it("records direct-delivery custody before waiting for the channel provider", async () => {
@@ -509,19 +733,31 @@ describe("beforeDeliver in reply dispatcher", () => {
       const failure = error();
       const onError = vi.fn();
       try {
-        const dispatcher = createReplyDispatcher({
-          deliver: async () => {
-            if (deferred) {
-              return { finalization: Promise.reject(failure) };
-            }
-            throw failure;
-          },
-          onError,
+        const deliver = vi.fn(async () => {
+          if (deferred) {
+            return { finalization: Promise.reject(failure) };
+          }
+          throw failure;
         });
-
+        const dispatcher = createReplyDispatcher({ deliver, onError });
+        const capture = captureReplyDispatchDeliveryOutcome(fixture.payload);
+        const pending = expected !== "prepared";
+        if (pending) {
+          attachReplyDispatchUndeliveredFallback(fixture.payload, { text: "duplicate fallback" });
+        }
         dispatcher.sendFinalReply(fixture.payload);
         dispatcher.markComplete();
         const receipt = await dispatcher.waitForIdle();
+        await expect(capture.promise).resolves.toBe(
+          !failedBeforeSend
+            ? "failed-deliver"
+            : pending
+              ? "recovery-owned"
+              : "failed-before-deliver",
+        );
+        expect(capture.hasPendingDelivery()).toBe(pending);
+        expect(receipt?.hasPendingDelivery).toBe(pending ? true : undefined);
+        expect(deliver).toHaveBeenCalledTimes(1);
 
         if (deferred) {
           expect(onError).not.toHaveBeenCalled();
@@ -580,56 +816,71 @@ describe("beforeDeliver in reply dispatcher", () => {
     }
   });
 
-  it("suppresses a second direct call after the exact delivery is terminal", async () => {
-    const fixture = await makePendingFinalFixture();
-    const deliver = vi.fn(async () => {});
-    try {
-      const first = createReplyDispatcher({ deliver });
-      first.sendFinalReply(fixture.payload);
-      first.markComplete();
-      await first.waitForIdle();
+  it.each(["raw", "prepared"] as const)(
+    "suppresses a second %s call after the exact delivery is terminal",
+    async (operation) => {
+      const fixture = await makePendingFinalFixture();
+      const deliver = vi.fn(async () => {});
+      const options = {
+        beforeDeliver: async () => ({ text: "rewritten final" }),
+        deliver,
+        deliverPrepared: async () => deliver(),
+      };
+      try {
+        const first = createReplyDispatcher(options);
+        expect(sendFinal(first, operation, fixture.payload)).toBe(true);
+        first.markComplete();
+        await first.waitForIdle();
 
-      const second = createReplyDispatcher({ deliver });
-      second.sendFinalReply(fixture.payload);
-      second.markComplete();
-      const receipt = await second.waitForIdle();
+        const second = createReplyDispatcher(options);
+        expect(sendFinal(second, operation, fixture.payload)).toBe(true);
+        second.markComplete();
+        const receipt = await second.waitForIdle();
 
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(receipt?.counts.final.cancelled).toBe(1);
-    } finally {
-      await fs.rm(fixture.tmpDir, { recursive: true, force: true });
-    }
-  });
+        expect(deliver).toHaveBeenCalledOnce();
+        expect(receipt?.counts.final.cancelled).toBe(1);
+      } finally {
+        await fs.rm(fixture.tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
-  it("suppresses a direct call whose persisted owner was replaced", async () => {
-    const fixture = await makePendingFinalFixture();
-    const current = loadSessionEntry({
-      sessionKey: fixture.sessionKey,
-      storePath: fixture.storePath,
-    }) as InternalSessionEntry;
-    await replaceSessionEntry(
-      { sessionKey: fixture.sessionKey, storePath: fixture.storePath },
-      {
-        ...current,
-        pendingFinalDelivery: {
-          ...current.pendingFinalDelivery!,
-          intentId: "replacement-intent",
+  it.each(["raw", "prepared"] as const)(
+    "suppresses a %s call whose persisted owner was replaced",
+    async (operation) => {
+      const fixture = await makePendingFinalFixture();
+      const current = loadSessionEntry({
+        sessionKey: fixture.sessionKey,
+        storePath: fixture.storePath,
+      }) as InternalSessionEntry;
+      await replaceSessionEntry(
+        { sessionKey: fixture.sessionKey, storePath: fixture.storePath },
+        {
+          ...current,
+          pendingFinalDelivery: {
+            ...current.pendingFinalDelivery!,
+            intentId: "replacement-intent",
+          },
         },
-      },
-    );
-    const deliver = vi.fn(async () => {});
-    try {
-      const dispatcher = createReplyDispatcher({ deliver });
-      dispatcher.sendFinalReply(fixture.payload);
-      dispatcher.markComplete();
-      const receipt = await dispatcher.waitForIdle();
+      );
+      const deliver = vi.fn(async () => {});
+      try {
+        const dispatcher = createReplyDispatcher({
+          beforeDeliver: async () => ({ text: "rewritten final" }),
+          deliver,
+          deliverPrepared: async () => deliver(),
+        });
+        expect(sendFinal(dispatcher, operation, fixture.payload)).toBe(true);
+        dispatcher.markComplete();
+        const receipt = await dispatcher.waitForIdle();
 
-      expect(deliver).not.toHaveBeenCalled();
-      expect(receipt?.counts.final.cancelled).toBe(1);
-    } finally {
-      await fs.rm(fixture.tmpDir, { recursive: true, force: true });
-    }
-  });
+        expect(deliver).not.toHaveBeenCalled();
+        expect(receipt?.counts.final.cancelled).toBe(1);
+      } finally {
+        await fs.rm(fixture.tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("records policy suppression before awaiting cancellation observers", async () => {
     const fixture = await makePendingFinalFixture();

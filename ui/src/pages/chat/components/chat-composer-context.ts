@@ -16,7 +16,8 @@ import {
   type QuotaBudgetSummary,
   type QuotaLimitSummary,
 } from "../../../lib/provider-quota-summary.ts";
-import { handleChatComposerDetailsToggle } from "./chat-picker-overlay.ts";
+import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget.ts";
+import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 
@@ -32,13 +33,6 @@ type ProviderCostStats = {
   cacheWrite?: number;
 };
 
-function readCostValue(
-  cost: Record<string, unknown> | null,
-  key: "input" | "output" | "cacheRead" | "cacheWrite",
-) {
-  return asNonNegativeFiniteNumber(cost?.[key]);
-}
-
 function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostStats | null {
   for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
     const message = readCostRecord(messages?.[index]);
@@ -52,14 +46,13 @@ function latestProviderCostStats(messages: unknown[] | undefined): ProviderCostS
     const usageCost = readCostRecord(readCostRecord(message.usage)?.cost);
     const stats: ProviderCostStats = {};
     for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
-      const cost = readCostValue(directCost, key) ?? readCostValue(usageCost, key);
+      const cost =
+        asNonNegativeFiniteNumber(directCost?.[key]) ?? asNonNegativeFiniteNumber(usageCost?.[key]);
       if (cost !== undefined) {
         stats[key] = cost;
       }
     }
-    if (
-      [stats.input, stats.output, stats.cacheRead, stats.cacheWrite].some((value) => value != null)
-    ) {
+    if (Object.keys(stats).length > 0) {
       return stats;
     }
   }
@@ -90,8 +83,6 @@ function parseHexRgb(hex: string): [number, number, number] | null {
 }
 
 let cachedThemeNoticeColors: {
-  warnHex: string;
-  dangerHex: string;
   warnRgb: [number, number, number];
   dangerRgb: [number, number, number];
 } | null = null;
@@ -104,8 +95,6 @@ function getThemeNoticeColors() {
   const warnHex = rootStyle.getPropertyValue("--warn").trim() || "#f59e0b";
   const dangerHex = rootStyle.getPropertyValue("--danger").trim() || "#ef4444";
   cachedThemeNoticeColors = {
-    warnHex,
-    dangerHex,
     warnRgb: parseHexRgb(warnHex) ?? [245, 158, 11],
     dangerRgb: parseHexRgb(dangerHex) ?? [239, 68, 68],
   };
@@ -127,9 +116,13 @@ function getContextNoticeViewModel(
   bg: string;
   warning: boolean;
   approximate: boolean;
+  fromLastPrompt: boolean;
 } | null {
   const used = session?.totalTokens;
-  const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
+  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(
+    session,
+    defaultContextTokens,
+  );
   if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
     return null;
   }
@@ -149,6 +142,7 @@ function getContextNoticeViewModel(
       ? session.estimatedCostUsd
       : null;
   const usage = {
+    fromLastPrompt,
     used,
     limit,
     input,
@@ -368,20 +362,21 @@ export function renderContextNotice(
             <dd>${formatCost(value)}</dd>
           </div>
         `;
-  const hasProviderCosts = providerCosts
-    ? [
-        providerCosts.input,
-        providerCosts.output,
-        providerCosts.cacheRead,
-        providerCosts.cacheWrite,
-      ].some((value) => value !== undefined && value > 0)
-    : false;
+  const hasProviderCosts = providerCosts && Object.values(providerCosts).some((value) => value > 0);
   return html`
     <div
       class="context-usage"
       style=${model ? `--ctx-color:${model.color};--ctx-bg:${model.bg}` : ""}
     >
-      <details @toggle=${handleChatComposerDetailsToggle}>
+      <details
+        @toggle=${(event: Event) => {
+          handleChatComposerDetailsToggle(event);
+          const details = event.currentTarget;
+          if (details instanceof HTMLDetailsElement) {
+            syncChatPickerOverlay(details);
+          }
+        }}
+      >
         <summary
           class="context-ring ${model?.warning ? "context-ring--warning" : ""}"
           aria-label=${summary}
@@ -405,75 +400,82 @@ export function renderContextNotice(
             />
           </svg>
         </summary>
-        <section class="context-usage__popover" aria-label=${t("chat.composer.contextUsage.title")}>
-          ${
-            model
-              ? html`
-                  <div class="context-usage__header">
-                    <span class="context-usage__title"
-                      >${t("chat.composer.contextUsage.contextWindow")}</span
-                    >
-                    <strong class="context-usage__context-value"
-                      >${model.detail} · ${percentage}</strong
-                    >
-                  </div>
-                  <div
-                    class="context-usage__bar"
-                    role="progressbar"
-                    aria-label=${summary}
-                    aria-valuemin="0"
-                    aria-valuemax="100"
-                    aria-valuenow=${model.pct}
-                  >
-                    <span style="width: ${model.pct}%"></span>
-                  </div>
-                `
-              : nothing
-          }
-          ${
-            model
-              ? html`
-                  <div class="context-usage__section-label">
-                    ${t("chat.composer.contextUsage.latestRunTokens")}
-                  </div>
-                  <dl class="context-usage__stats">
-                    <div>
-                      <dt>${t("usage.breakdown.input")}</dt>
-                      <dd>${formatStat(model.input)}</dd>
+        <wa-popup data-anchored-overlay>
+          <section
+            class="context-usage__popover"
+            aria-label=${t("chat.composer.contextUsage.title")}
+          >
+            ${
+              model
+                ? html`
+                    <div class="context-usage__header">
+                      <span class="context-usage__title"
+                        >${t(model.fromLastPrompt ? "chat.composer.contextUsage.promptBudget" : "chat.composer.contextUsage.contextWindow")}</span
+                      >
+                      <strong class="context-usage__context-value"
+                        >${model.detail} · ${percentage}</strong
+                      >
                     </div>
-                    <div>
-                      <dt>${t("usage.breakdown.output")}</dt>
-                      <dd>${formatStat(model.output)}</dd>
+                    <div
+                      class="context-usage__bar"
+                      role="progressbar"
+                      aria-label=${summary}
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow=${model.pct}
+                    >
+                      <span style="width: ${model.pct}%"></span>
                     </div>
-                    ${
-                      !showCosts || model.cost === null
-                        ? nothing
-                        : html`
-                            <div>
-                              <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
-                              <dd>${formatCost(model.cost)}</dd>
-                            </div>
-                          `
-                    }
-                  </dl>
-                `
-              : nothing
-          }
-          ${
-            showCosts && providerCosts && hasProviderCosts
-              ? html`
-                  <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
-                  <dl class="context-usage__stats">
-                    ${renderCostStat(t("usage.breakdown.input"), providerCosts.input)}
-                    ${renderCostStat(t("usage.breakdown.output"), providerCosts.output)}
-                    ${renderCostStat(t("usage.breakdown.cacheRead"), providerCosts.cacheRead)}
-                    ${renderCostStat(t("usage.breakdown.cacheWrite"), providerCosts.cacheWrite)}
-                  </dl>
-                `
-              : nothing
-          }
-          ${currentGroup ? renderQuotaGroup(currentGroup, usageHref) : nothing}
-        </section>
+                  `
+                : nothing
+            }
+            ${
+              model
+                ? html`
+                    <div class="context-usage__section-label">
+                      ${t("chat.composer.contextUsage.latestRunTokens")}
+                    </div>
+                    <dl class="context-usage__stats">
+                      <div>
+                        <dt>${t("usage.breakdown.input")}</dt>
+                        <dd>${formatStat(model.input)}</dd>
+                      </div>
+                      <div>
+                        <dt>${t("usage.breakdown.output")}</dt>
+                        <dd>${formatStat(model.output)}</dd>
+                      </div>
+                      ${
+                        !showCosts || model.cost === null
+                          ? nothing
+                          : html`
+                              <div>
+                                <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
+                                <dd>${formatCost(model.cost)}</dd>
+                              </div>
+                            `
+                      }
+                    </dl>
+                  `
+                : nothing
+            }
+            ${
+              showCosts && providerCosts && hasProviderCosts
+                ? html`
+                    <div class="context-usage__section-label">
+                      ${t("usage.breakdown.costByType")}
+                    </div>
+                    <dl class="context-usage__stats">
+                      ${renderCostStat(t("usage.breakdown.input"), providerCosts.input)}
+                      ${renderCostStat(t("usage.breakdown.output"), providerCosts.output)}
+                      ${renderCostStat(t("usage.breakdown.cacheRead"), providerCosts.cacheRead)}
+                      ${renderCostStat(t("usage.breakdown.cacheWrite"), providerCosts.cacheWrite)}
+                    </dl>
+                  `
+                : nothing
+            }
+            ${currentGroup ? renderQuotaGroup(currentGroup, usageHref) : nothing}
+          </section>
+        </wa-popup>
       </details>
     </div>
   `;

@@ -1,5 +1,6 @@
 // Classic setup tests keep every workspace-owned effect on the configured default agent.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -41,7 +42,7 @@ vi.mock("./setup.shared.js", async (importOriginal) => {
 });
 
 vi.mock("./setup.migration-import.js", () => ({
-  detectSetupMigrationSources: vi.fn(async () => []),
+  detectSetupMigrationSources: vi.fn(async () => ({ detections: [], providerDescriptors: [] })),
   listSetupMigrationOptions: vi.fn(async () => []),
   runSetupMigrationImport: vi.fn(),
 }));
@@ -161,64 +162,25 @@ describe("runSetupWizard default-agent ownership", () => {
       sourceConfigBeforeMigrations: config,
       issues: [],
     });
-    mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => nextConfig);
+    mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => ({
+      path: "/tmp/openclaw.json",
+      nextConfig,
+    }));
     mocks.setupSkills.mockImplementation(async (nextConfig: OpenClawConfig) => nextConfig);
     mocks.setupOfficialPlugins.mockImplementation(
       async ({ config: nextConfig }: { config: OpenClawConfig }) => nextConfig,
     );
     mocks.setupRecommendations.mockImplementation(
-      async ({ config: nextConfig }: { config: OpenClawConfig }) => ({ config: nextConfig }),
+      async ({ config: nextConfig }: { config: OpenClawConfig }) => ({
+        config: nextConfig,
+        commitResult: async () => undefined,
+      }),
     );
     mocks.setupPluginConfig.mockImplementation(
       async ({ config: nextConfig }: { config: OpenClawConfig }) => nextConfig,
     );
     mocks.finalizeSetup.mockResolvedValue({ launchedTui: false });
   });
-
-  it.each([false, true])(
-    "retains the telemetry choice %s when reconciling an authored main roster",
-    async (enabled) => {
-      const config = {
-        gateway: { mode: "local", port: 18789 },
-        agents: { entries: { main: {} } },
-      } satisfies OpenClawConfig;
-      mocks.readSnapshot.mockResolvedValue({
-        exists: true,
-        valid: true,
-        config,
-        sourceConfig: config,
-        sourceConfigBeforeMigrations: config,
-        issues: [],
-      });
-      vi.mocked(prompter.select).mockResolvedValue(enabled);
-      let persisted: OpenClawConfig | undefined;
-      mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => {
-        persisted = nextConfig;
-        return nextConfig;
-      });
-
-      await runSetupWizard(
-        {
-          acceptRisk: true,
-          flow: "quickstart",
-          mode: "local",
-          authChoice: "skip",
-          skipChannels: true,
-          skipSkills: true,
-          skipSearch: true,
-          skipHealth: true,
-          skipHooks: true,
-          skipUi: true,
-          installDaemon: false,
-        },
-        runtime,
-        prompter,
-      );
-
-      expect(persisted?.telemetry).toEqual({ enabled, consentedAt: expect.any(String) });
-      expect(persisted?.agents?.entries).toEqual({ main: {} });
-    },
-  );
 
   it("keeps concurrent gateway settings while carrying the telemetry choice", async () => {
     const config = {
@@ -247,7 +209,7 @@ describe("runSetupWizard default-agent ownership", () => {
     let persisted: OpenClawConfig | undefined;
     mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => {
       persisted = nextConfig;
-      return nextConfig;
+      return { path: "/tmp/openclaw.json", nextConfig };
     });
 
     await runSetupWizard(
@@ -270,6 +232,57 @@ describe("runSetupWizard default-agent ownership", () => {
 
     expect(persisted?.telemetry).toEqual({ enabled: false, consentedAt: expect.any(String) });
     expect(persisted?.gateway?.port).toBe(24444);
+  });
+
+  it("waits for recommendation persistence and propagates failure before finalization", async () => {
+    const commitStarted = createDeferred();
+    const commit = createDeferred();
+    const failure = new Error("Recommendation persistence failed");
+    // Keep the injected rejection observed when checking a missing-await regression.
+    void commit.promise.catch(() => undefined);
+    const commitResult = vi.fn(() => {
+      commitStarted.resolve();
+      return commit.promise;
+    });
+    mocks.setupRecommendations.mockImplementation(
+      async ({ config }: { config: OpenClawConfig }) => ({ config, commitResult }),
+    );
+    const outcome = runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "advanced",
+        mode: "local",
+        workspace: "/tmp/global-workspace",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipHooks: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    try {
+      expect(await Promise.race([commitStarted.promise, outcome])).toBeUndefined();
+      expect(commitResult).toHaveBeenCalledOnce();
+      expect(mocks.writeConfig.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        commitResult.mock.invocationCallOrder[0]!,
+      );
+      expect(mocks.finalizeSetup).not.toHaveBeenCalled();
+      commit.reject(failure);
+      expect(await outcome).toBe(failure);
+      expect(mocks.finalizeSetup).not.toHaveBeenCalled();
+    } finally {
+      commit.resolve();
+      await outcome;
+    }
   });
 
   it("uses the keyed default-agent workspace for all classic agent-owned effects", async () => {

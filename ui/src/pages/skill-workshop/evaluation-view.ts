@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type {
@@ -7,6 +8,8 @@ import type {
   SkillWorkshopEvaluationFinding,
   SkillWorkshopEvaluationOutcome,
 } from "../../lib/skill-workshop/index.ts";
+
+registerSkillWorkshopEnglish();
 
 export function renderSkillWorkshopEvaluation(evaluation: SkillWorkshopEvaluation) {
   const completedAt = Date.parse(evaluation.completedAt);

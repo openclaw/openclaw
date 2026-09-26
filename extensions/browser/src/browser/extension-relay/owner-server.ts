@@ -1,7 +1,7 @@
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import type { WebSocket } from "ws";
+import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import { randomRelayId } from "./auth-v2-crypto.js";
-import { parseStrictJsonObject } from "./auth-v2.js";
 import {
   RELAY_OPERATION_TTL_MS,
   RELAY_OWNER_LIMIT,

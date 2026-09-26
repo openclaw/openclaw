@@ -1,12 +1,12 @@
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import type { RawData, WebSocket } from "ws";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import type { BrowserRelayProofFields } from "./auth-v2-crypto.js";
 import {
   BROWSER_RELAY_CHALLENGE_TTL_MS,
   parseRelayAuthHello,
   parseRelayAuthResponse,
-  parseStrictJsonObject,
   type BrowserRelayAuthV2Authority,
 } from "./auth-v2.js";
 import {

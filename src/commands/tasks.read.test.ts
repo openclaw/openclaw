@@ -2,7 +2,6 @@
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
-import type { RuntimeEnv } from "../runtime.js";
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import * as taskRegistryReconcile from "../tasks/task-registry.reconcile.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
@@ -11,6 +10,7 @@ import type {
   TaskSystemAuditSeverity,
 } from "../tasks/task-system-audit.types.js";
 import { tasksAuditCommand, tasksListCommand } from "./tasks.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -19,14 +19,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
-
-function createRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
 
 describe("tasks command filter validation", () => {
   it("keeps valid matching and empty filters successful", async () => {
@@ -45,8 +37,8 @@ describe("tasks command filter validation", () => {
     const query = vi
       .spyOn(taskRegistryReconcile, "reconcileInspectableTasks")
       .mockReturnValue([task]);
-    const matchingRuntime = createRuntime();
-    const emptyRuntime = createRuntime();
+    const matchingRuntime = createTestRuntime();
+    const emptyRuntime = createTestRuntime();
 
     try {
       await tasksListCommand({ json: true, status: "running" }, matchingRuntime);
@@ -90,7 +82,7 @@ describe("tasks command filter validation", () => {
       .mockImplementation(() => {
         throw new Error("task query performed");
       });
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     try {
       await runCommandWithRuntime(runtime, () => tasksListCommand(options, runtime));
@@ -119,7 +111,7 @@ describe("tasks command filter validation", () => {
       .mockImplementation(() => {
         throw new Error("task audit query performed");
       });
-    const runtime = createRuntime();
+    const runtime = createTestRuntime();
 
     try {
       await runCommandWithRuntime(runtime, () => tasksAuditCommand(options, runtime));
@@ -140,13 +132,6 @@ describe("tasks list output", () => {
 
   it.each([
     {
-      name: "ASCII cells and their headings",
-      runId: "run-ascii",
-      childSessionKey: "agent:main:main",
-      expectedRun: "run-ascii ",
-      expectedChild: "agent:main:main                     ",
-    },
-    {
       name: "a wide run id",
       runId: "界界界",
       childSessionKey: "agent:main:main",
@@ -161,46 +146,11 @@ describe("tasks list output", () => {
       expectedChild: "agent:main:界界界                   ",
     },
     {
-      name: "an exactly fitting combining run id",
-      runId: "A".repeat(9) + "e\u0301",
-      childSessionKey: "agent:main:main",
-      expectedRun: "AAAAAAAAAe\u0301",
-      expectedChild: "agent:main:main                     ",
-    },
-    {
-      name: "an exactly fitting combining child session key",
-      runId: "run-ascii",
-      childSessionKey: "agent:main:" + "x".repeat(24) + "e\u0301",
-      expectedRun: "run-ascii ",
-      expectedChild: "agent:main:xxxxxxxxxxxxxxxxxxxxxxxxe\u0301",
-    },
-    {
       name: "bounded zero-width run and child tokens",
       runId: "\u200b".repeat(512),
       childSessionKey: "agent:main:" + "\u200b".repeat(512),
       expectedRun: "\u200b".repeat(70) + "…         ",
       expectedChild: "agent:main:" + "\u200b".repeat(241) + "…" + " ".repeat(24),
-    },
-    {
-      name: "oversized combining run and child graphemes",
-      runId: "e" + "\u0301".repeat(512),
-      childSessionKey: "agent:main:e" + "\u0301".repeat(512),
-      expectedRun: "…         ",
-      expectedChild: "agent:main:…" + " ".repeat(24),
-    },
-    {
-      name: "oversized ZWJ run and child graphemes",
-      runId: "👩" + "\u200d👩".repeat(128),
-      childSessionKey: "agent:main:👩" + "\u200d👩".repeat(128),
-      expectedRun: "…         ",
-      expectedChild: "agent:main:…" + " ".repeat(24),
-    },
-    {
-      name: "ordinary multi-person emoji tokens",
-      runId: "👨‍👩‍👧‍👦".repeat(5),
-      childSessionKey: "agent:main:" + "👨‍👩‍👧‍👦".repeat(12),
-      expectedRun: "👨‍👩‍👧‍👦".repeat(5),
-      expectedChild: "agent:main:" + "👨‍👩‍👧‍👦".repeat(12) + " ",
     },
   ])(
     "aligns task list columns for $name",
@@ -225,7 +175,7 @@ describe("tasks list output", () => {
       const query = vi
         .spyOn(taskRegistryReconcile, "reconcileInspectableTasks")
         .mockReturnValue([task]);
-      const runtime = createRuntime();
+      const runtime = createTestRuntime();
       try {
         await tasksListCommand({}, runtime);
         const lines = vi

@@ -1,6 +1,5 @@
-// Telegram plugin module implements native plugin command behavior.
 import { randomUUID } from "node:crypto";
-import type { Bot, Context } from "grammy";
+import type { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
@@ -13,17 +12,14 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   prepareTelegramCommandDispatch,
+  resolveTelegramNativeCommandThreadContext,
   type TelegramCommandExecutorParams,
 } from "./bot-native-command-dispatch.js";
 import {
   buildTelegramRoutingTarget,
   buildTelegramGroupFrom,
   buildTelegramThreadParams,
-  extractTelegramForumFlag,
-  resolveTelegramForumFlag,
-  resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
-import type { TelegramGetChat } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -101,29 +97,6 @@ async function cleanupTelegramProgressPlaceholder(params: {
   }
 }
 
-async function resolveTelegramPluginThreadParams(params: {
-  msg: NonNullable<Context["message"]>;
-  bot: Bot;
-}) {
-  const isGroup = params.msg.chat.type === "group" || params.msg.chat.type === "supergroup";
-  const getChat =
-    typeof params.bot.api.getChat === "function"
-      ? (params.bot.api.getChat.bind(params.bot.api) as TelegramGetChat)
-      : undefined;
-  const isForum =
-    params.msg.chat.is_direct_messages === true
-      ? false
-      : await resolveTelegramForumFlag({
-          chatId: params.msg.chat.id,
-          chatType: params.msg.chat.type,
-          isGroup,
-          isForum: extractTelegramForumFlag(params.msg.chat),
-          isTopicMessage: params.msg.is_topic_message,
-          getChat,
-        });
-  return buildTelegramThreadParams(resolveTelegramMessageThreadSpec(params.msg, isForum));
-}
-
 async function resolveTelegramCommandTranscriptContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -165,7 +138,7 @@ export async function executeTelegramPluginCommand(
         await params.bot.api.sendMessage(
           params.msg.chat.id,
           "Command not found.",
-          (await resolveTelegramPluginThreadParams(params)) ?? {},
+          (await resolveTelegramNativeCommandThreadContext(params)).threadParams ?? {},
         ),
     });
     return;
@@ -221,6 +194,7 @@ export async function executeTelegramPluginCommand(
       channel: "telegram",
       isAuthorizedSender: dispatch.commandAuthorized,
       senderIsOwner: dispatch.senderIsOwner,
+      assertOwnerCurrent: dispatch.assertOwnerCurrent,
       agentId: dispatch.route.agentId,
       sessionKey: dispatch.targetSessionKey,
       sessionId: transcriptContext.sessionId,
@@ -281,7 +255,7 @@ export async function executeTelegramPluginCommand(
           buttons: telegramResultData?.buttons,
         },
       );
-      recordSentMessage(dispatch.chatId, progressMessageId, dispatch.runtimeCfg, {
+      await recordSentMessage(dispatch.chatId, progressMessageId, dispatch.runtimeCfg, {
         accountId: dispatch.route.accountId,
         agentId: dispatch.opts.ownerAgentId,
       });

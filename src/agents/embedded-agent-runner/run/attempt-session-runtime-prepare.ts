@@ -46,7 +46,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   isRawModelRun: boolean;
   resolveActiveContextEnginePluginId: () => string | undefined;
   setup: EmbeddedAttemptSetup;
-  toolBase: ReturnType<typeof prepareEmbeddedAttemptToolBase>;
+  toolBase: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
   toolCatalog: ReturnType<typeof prepareEmbeddedAttemptToolCatalog>;
   bundleTools: Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
   systemPrompt: Awaited<ReturnType<typeof prepareEmbeddedAttemptSystemPrompt>>;
@@ -107,6 +107,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   });
   const { isOpenAIResponsesApi, preparedUserTurnMessage, sessionManager, transcriptPolicy } =
     preparedSessionManager;
+  resources.getUserTranscriptContexts =
+    preparedSessionManager.userMessageBoundary.getUserTranscriptContexts;
 
   const state: EmbeddedAttemptSessionRuntimeState = {
     currentTurnImageFailureCount: 0,
@@ -150,7 +152,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sessionAgentId,
     transcriptLifecycle: sessionLock.transcriptLifecycle,
     sessionManager,
-    assertInitialUserTurnReplay: preparedSessionManager.assertInitialUserTurnReplay,
+    prepareInitialUserTurnReplay: preparedSessionManager.prepareInitialUserTurnReplay,
   });
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
   const recordCurrentTurnImageFailure = (count: number) => {

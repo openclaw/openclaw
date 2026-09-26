@@ -1,5 +1,6 @@
 // Provider/account summary helpers for `openclaw agents list`.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveChannelAccount } from "../channels/account-resolution.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
 import { isChannelVisibleInConfiguredLists } from "../channels/plugins/exposure.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -16,7 +17,7 @@ import type { AgentBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../plugins/channel-plugin-ids.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../plugins/official-external-plugin-repair-hints.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 type ProviderAccountStatus = {
   provider: ChannelId;
@@ -43,8 +44,20 @@ type ProviderSummaryMetadata = {
   repairHint?: string;
 };
 
+// Concrete account keys normalize aliases; scope keys must keep "*" distinct from "default".
 function providerAccountKey(provider: ChannelId, accountId?: string) {
-  return `${provider}:${accountId ?? DEFAULT_ACCOUNT_ID}`;
+  return `${provider}:${normalizeAccountId(accountId)}`;
+}
+
+function recordProviderAccountStatus(
+  index: Map<string, ProviderAccountStatus>,
+  entry: ProviderAccountStatus,
+) {
+  const key = providerAccountKey(entry.provider, entry.accountId);
+  // Exact canonical spelling wins; otherwise keep the first listed alias.
+  if (!index.has(key) || entry.accountId === normalizeAccountId(entry.accountId)) {
+    index.set(key, entry);
+  }
 }
 
 function resolveProviderChannelId(params: {
@@ -137,7 +150,7 @@ async function resolveReadOnlyAccount(params: {
   if (params.plugin.config.inspectAccount) {
     return await Promise.resolve(params.plugin.config.inspectAccount(params.cfg, params.accountId));
   }
-  return params.plugin.config.resolveAccount(params.cfg, params.accountId);
+  return resolveChannelAccount(params);
 }
 
 /** Inspect configured provider accounts and classify their display state. */
@@ -158,7 +171,7 @@ export async function buildProviderStatusIndex(
         if (!isUnresolvedSecretRefResolutionError(error)) {
           throw error;
         }
-        map.set(providerAccountKey(plugin.id, accountId), {
+        recordProviderAccountStatus(map, {
           provider: plugin.id,
           providerLabel: plugin.meta.label,
           accountId,
@@ -216,7 +229,7 @@ export async function buildProviderStatusIndex(
             fallbackState,
           );
       const name = snapshot?.name ?? (account as { name?: string }).name;
-      map.set(providerAccountKey(plugin.id, accountId), {
+      recordProviderAccountStatus(map, {
         provider: plugin.id,
         providerLabel: plugin.meta.label,
         accountId,
@@ -232,11 +245,9 @@ export async function buildProviderStatusIndex(
   return map;
 }
 
-function resolveDefaultAccountId(
-  provider: ChannelId,
-  metadataByProvider: ReadonlyMap<ChannelId, ProviderSummaryMetadata>,
-): string {
-  return metadataByProvider.get(provider)?.defaultAccountId ?? DEFAULT_ACCOUNT_ID;
+function resolveBindingAccountId(binding: AgentBinding): string {
+  const accountId = binding.match.accountId?.trim();
+  return accountId === "*" ? accountId : normalizeAccountId(accountId);
 }
 
 function shouldShowProviderEntry(params: {
@@ -298,9 +309,8 @@ export function summarizeBindings(
     if (!channel) {
       continue;
     }
-    const accountId =
-      binding.match.accountId ?? resolveDefaultAccountId(channel, metadataByProvider);
-    const key = providerAccountKey(channel, accountId);
+    const accountId = resolveBindingAccountId(binding);
+    const key = `${channel}:${accountId}`;
     if (!seen.has(key)) {
       const label = formatChannelAccountLabel({
         provider: channel,
@@ -321,12 +331,12 @@ export function listProvidersForAgent(params: {
   providerStatus: Map<string, ProviderAccountStatus>;
   providerMetadata?: ReadonlyMap<ChannelId, ProviderSummaryMetadata>;
 }): string[] {
-  const allProviderEntries = [...params.providerStatus.values()];
-  const providerLines: string[] = [];
+  let allProviderEntries: ProviderAccountStatus[] | undefined;
   const metadataByProvider =
     params.providerMetadata ?? buildProviderSummaryMetadataIndex(params.cfg);
   if (params.bindings.length > 0) {
-    const seen = new Set<string>();
+    // Keep first-seen account order; empty wildcard scopes retain the existing diagnostic.
+    const linesByAccount = new Map<string, string>();
     for (const binding of params.bindings) {
       const channel = resolveProviderChannelId({
         rawChannelId: binding.match.channel,
@@ -335,32 +345,33 @@ export function listProvidersForAgent(params: {
       if (!channel) {
         continue;
       }
-      const accountId =
-        binding.match.accountId ?? resolveDefaultAccountId(channel, metadataByProvider);
-      const key = providerAccountKey(channel, accountId);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      const status = params.providerStatus.get(key);
-      if (status) {
-        providerLines.push(formatProviderEntry(status));
-      } else {
-        providerLines.push(
-          formatMissingProviderEntry({
-            provider: channel,
-            accountId,
-            metadata: metadataByProvider.get(channel),
-          }),
+      const accountId = resolveBindingAccountId(binding);
+      const statuses =
+        accountId === "*"
+          ? (allProviderEntries ??= [...params.providerStatus.values()]).filter(
+              (entry) => entry.provider === channel,
+            )
+          : [params.providerStatus.get(providerAccountKey(channel, accountId))];
+      for (const status of statuses.length > 0 ? statuses : [undefined]) {
+        linesByAccount.set(
+          status ? providerAccountKey(channel, status.accountId) : `${channel}:${accountId}`,
+          status
+            ? formatProviderEntry(status)
+            : formatMissingProviderEntry({
+                provider: channel,
+                accountId,
+                metadata: metadataByProvider.get(channel),
+              }),
         );
       }
     }
-    return providerLines;
+    return [...linesByAccount.values()];
   }
 
+  const providerLines: string[] = [];
   if (params.summaryIsDefault) {
     const seenProviders = new Set<ChannelId>();
-    for (const entry of allProviderEntries) {
+    for (const entry of params.providerStatus.values()) {
       if (shouldShowProviderEntry({ entry, cfg: params.cfg, metadataByProvider })) {
         providerLines.push(formatProviderEntry(entry));
         seenProviders.add(entry.provider);

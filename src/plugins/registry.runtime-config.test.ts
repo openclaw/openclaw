@@ -1,39 +1,261 @@
 // Verifies plugin registry behavior with runtime config inputs.
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { resolveUserPath } from "../utils.js";
-import { createLazyPluginRuntime } from "./loader-module-runtime.js";
+import {
+  createLazyPluginRuntime,
+  runPluginRegisterSyncInRegistry,
+} from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
+import { revokePluginRecord } from "./registry-lifecycle.js";
+import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRegistry } from "./registry.js";
-import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { disposePluginRegistryInstances, withPluginRegistrationContext } from "./runtime.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import * as sdkAlias from "./sdk-alias.js";
 
-function createTestRegistry(runtime: PluginRuntime) {
-  return createPluginRegistry({
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
+afterEach(() => vi.restoreAllMocks());
+
+describe("plugin registration runtime admission", () => {
+  function fixture(origin: "config" | "bundled" = "config") {
+    const list = vi.fn(async () => ({ nodes: [] }));
+    const runtime = createPluginRuntime();
+    runtime.nodes.list = list;
+    const builder = createPluginRegistry({
+      runtime,
+      activateGlobalSideEffects: false,
+      logger: { info() {}, warn() {}, error() {} },
+    });
+    const record = createPluginRecord({
+      id: "register-runtime",
+      source: "/plugins/register-runtime/index.js",
+      origin,
+      enabled: true,
+      configSchema: false,
+    });
+    const api = builder.createApi(record, { config: {} });
+    const owner = expectDefined(getPluginInstance(record), "registration instance");
+    return { builder, record, api, owner, list };
+  }
+
+  it("rejects a retained ingress purge after runtime retirement without changing rows", async () => {
+    await withStateDirEnv("plugin-ingress-retirement-", async ({ stateDir }) => {
+      const { builder, record, api, owner } = fixture("bundled");
+      builder.registry.plugins.push(record);
+      const queue = api.runtime.state.openChannelIngressQueue<{ text: string }>({
+        accountId: "default",
+        stateDir,
+      });
+      try {
+        await queue.enqueue("active", { text: "active owner" });
+        expect(await queue.purge?.()).toBe(1);
+        await queue.enqueue("pending", { text: "replacement work" });
+        await queue.enqueue("claimed", { text: "in flight" });
+        await queue.claim("claimed");
+        const pending = await queue.listPending();
+        const claims = await queue.listClaims();
+        const purge = expectDefined(queue.purge?.bind(queue), "core purge");
+
+        revokePluginRecord(builder.registry, record);
+
+        await expect(purge()).rejects.toThrow("runtime is no longer active");
+        expect(await queue.listPending()).toEqual(pending);
+        expect(await queue.listClaims()).toEqual(claims);
+      } finally {
+        await owner.dispose();
+        closeOpenClawStateDatabaseForTest();
+      }
+    });
+  });
+
+  it("retains an inspected harness until terminal CLI cleanup without reopening ordinary calls", async () => {
+    const { builder, record, api, owner } = fixture();
+    const dispose = vi.fn(async () => {});
+    const physicalCleanup = vi.fn();
+    owner.lifecycle.onDispose(physicalCleanup);
+    api.registerAgentHarness({
+      id: "owned",
+      label: "Owned",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+      dispose,
+    });
+    builder.registry.plugins.push(record);
+    const inspection = new PluginRegistryInspectionResources(async () => {
+      await owner.dispose();
+    });
+    inspection.attach(builder.registry);
+    await withCliProcessScope(() =>
+      withCliCommandCleanup(false, async (cleanup) => {
+        const command = expectDefined(cleanup, "CLI cleanup owner");
+        try {
+          const [registered] = withPluginRuntimeRegistryScope(
+            builder.registry,
+            listRegisteredAgentHarnesses,
+          );
+          await inspection.release();
+          expect(physicalCleanup).not.toHaveBeenCalled();
+          expect(() => registered!.harness.dispose?.()).toThrow(/reloaded|disabled/);
+          for (const finish of command.harnesses.values()) {
+            await finish();
+          }
+          expect(dispose).toHaveBeenCalledOnce();
+        } finally {
+          await inspection.release();
+          await command.pluginResources?.release();
+        }
+      }),
+    );
+    expect(physicalCleanup).toHaveBeenCalledOnce();
+  });
+
+  it("does not close a shared harness client when an in-process peer retires", async () => {
+    const first = fixture();
+    const second = fixture();
+    let closed = false;
+    const harness = {
+      id: "shared",
+      label: "Shared",
+      supports: () => ({ supported: true as const }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+      loadModelCatalog: async () => {
+        if (closed) {
+          throw new Error("shared client is closed");
+        }
+        return { entries: [] };
+      },
+      dispose: async () => {
+        closed = true;
+      },
+    };
+    first.api.registerAgentHarness(harness);
+    second.api.registerAgentHarness(harness);
+    try {
+      await first.owner.dispose();
+      const peer = expectDefined(second.builder.registry.agentHarnesses[0], "live peer");
+      await expect(
+        peer.harness.loadModelCatalog?.({
+          config: {},
+          agentId: "main",
+          agentDir: "/fixture/agent",
+          workspaceDir: "/fixture/workspace",
+        }),
+      ).resolves.toEqual({ entries: [] });
+      expect(closed).toBe(false);
+    } finally {
+      await second.owner.dispose();
+    }
+  });
+
+  it("allows the canonical synchronous registration call before publication", async () => {
+    const { builder, record, api, owner, list } = fixture();
+    let pending: ReturnType<PluginRuntime["nodes"]["list"]> | undefined;
+    try {
+      runPluginRegisterSyncInRegistry(
+        (registeredApi) => {
+          pending = registeredApi.runtime.nodes.list({ connected: true });
+        },
+        api,
+        builder.registry,
+        record.id,
+      );
+      await expect(pending).resolves.toEqual({ nodes: [] });
+      expect(list).toHaveBeenCalledExactlyOnceWith({ connected: true });
+      expect(builder.registry.plugins).toEqual([]);
+    } finally {
+      await owner.dispose();
+    }
+  });
+
+  it.each([false, true])(
+    "rejects registration metadata without its producer binding (admitted call: %s)",
+    async (admitted) => {
+      const { builder, record, api, owner, list } = fixture();
+      const invoke = () =>
+        withPluginRegistrationContext(builder.registry, record.id, () =>
+          api.runtime.nodes.list({ connected: true }),
+        );
+      try {
+        expect(() => (admitted ? owner.run(invoke) : invoke())).toThrow(
+          "runtime is no longer active",
+        );
+        expect(list).not.toHaveBeenCalled();
+      } finally {
+        await owner.dispose();
+      }
     },
-    runtime,
-    activateGlobalSideEffects: false,
+  );
+
+  it.each(["revoked", "removed"])(
+    "rejects a retained runtime helper when its admitted instance is %s",
+    async (retirement) => {
+      const { builder, record, api, owner, list } = fixture();
+      builder.registry.plugins.push(record);
+      const retained = api.runtime.nodes.list;
+      const resume = createDeferredCore();
+      const pending = owner.run(async () => {
+        await resume.promise;
+        return withPluginRegistrationContext(builder.registry, record.id, () =>
+          retained({ connected: true }),
+        );
+      });
+      const rejected = expect(pending).rejects.toThrow("runtime is no longer active");
+      try {
+        if (retirement === "revoked") {
+          revokePluginRecord(builder.registry, record);
+        } else {
+          builder.rollbackPluginGlobalSideEffects(record.id, record);
+          builder.registry.plugins.splice(0, 1);
+        }
+        resume.resolve();
+        await rejected;
+        expect(list).not.toHaveBeenCalled();
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([pending, owner.dispose()]);
+      }
+    },
+  );
+});
+
+function createRecord(
+  id: string,
+  overrides: Partial<Parameters<typeof createPluginRecord>[0]> = {},
+) {
+  return createPluginRecord({
+    id,
+    source: `/plugins/${id}/index.js`,
+    origin: "global",
+    enabled: true,
+    configSchema: false,
+    ...overrides,
   });
 }
 
 describe("plugin registry runtime config scope", () => {
   it("rejects a plugin harness that claims the built-in runtime id", () => {
-    const pluginRegistry = createTestRegistry(createPluginRuntime());
-    const record = createPluginRecord({
-      id: "untrusted-plugin",
-      source: "/plugins/untrusted-plugin/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
+    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
+    const record = createRecord("untrusted-plugin");
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
     api.registerAgentHarness({
@@ -69,8 +291,8 @@ describe("plugin registry runtime config scope", () => {
       origin: "global",
       packageName: "@openclaw/codex",
     },
-  ] as const)("binds native compaction to the $label Codex harness", (fixture) => {
-    const pluginRegistry = createTestRegistry(createPluginRuntime());
+  ] as const)("binds native compaction to the $label Codex harness", async (fixture) => {
+    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
     const record = createPluginRecord({
       id: "codex",
       source: fixture.source,
@@ -81,6 +303,7 @@ describe("plugin registry runtime config scope", () => {
     });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
     const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
+    const options = { nativeCompaction };
 
     api.registerAgentHarness(
       {
@@ -91,18 +314,34 @@ describe("plugin registry runtime config scope", () => {
           throw new Error("must not run");
         },
       },
-      { nativeCompaction },
+      options,
     );
 
     expect(pluginRegistry.registry.agentHarnesses).toHaveLength(1);
-    expect(pluginRegistry.registry.agentHarnesses[0]?.nativeCompaction).toBe(nativeCompaction);
-    expect(pluginRegistry.registry.agentHarnesses[0]?.harness).not.toHaveProperty("compactNative");
+    const registration = expectDefined(
+      pluginRegistry.registry.agentHarnesses[0],
+      "registered harness",
+    );
+    const compact = expectDefined(registration.nativeCompaction, "native compaction callback");
+    const request = {
+      sessionId: "native-compaction-session",
+      sessionFile: "/tmp/native-compaction/session",
+      workspaceDir: "/tmp/native-compaction",
+      nativeCompactionRequest: "required_preflight",
+    } satisfies Parameters<typeof compact>[0];
+    await expect(compact(request)).resolves.toEqual({ ok: true, compacted: true });
+    expect(nativeCompaction).toHaveBeenCalledWith(request);
+    expect(nativeCompaction.mock.contexts[0]).toBe(options);
+    expect(registration.harness).not.toHaveProperty("compactNative");
+    await expectDefined(getPluginInstance(record), "compaction owner").dispose();
+    expect(() => compact(request)).toThrow(/reloaded|disabled|retiring/);
+    expect(nativeCompaction).toHaveBeenCalledTimes(1);
   });
 
   it.each(["config", "global"] as const)(
     "rejects native compaction from a %s Codex impostor",
     (origin) => {
-      const pluginRegistry = createTestRegistry(createPluginRuntime());
+      const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
       const record = createPluginRecord({
         id: "codex",
         source: "/plugins/impostor/index.js",
@@ -137,14 +376,8 @@ describe("plugin registry runtime config scope", () => {
   );
 
   it("rejects native compaction from a foreign harness owner", () => {
-    const pluginRegistry = createTestRegistry(createPluginRuntime());
-    const record = createPluginRecord({
-      id: "copilot",
-      source: "/plugins/copilot/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
+    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
+    const record = createRecord("copilot");
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
     api.registerAgentHarness(
@@ -172,7 +405,7 @@ describe("plugin registry runtime config scope", () => {
 
   it("resolves plugin API paths against the plugin root", () => {
     const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
-    const pluginRegistry = createTestRegistry(createPluginRuntime());
+    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
     const record = createPluginRecord({
       id: "path-plugin",
       name: "Path Plugin",
@@ -197,15 +430,8 @@ describe("plugin registry runtime config scope", () => {
         throw new Error("Unable to resolve plugin runtime module; loader=/tmp/openclaw-loader.js");
       },
     });
-    const pluginRegistry = createTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "diagnostic-plugin",
-      name: "Diagnostic Plugin",
-      source: "/plugins/diagnostic-plugin/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
+    const record = createRecord("diagnostic-plugin", { name: "Diagnostic Plugin" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
     let thrown: unknown;
@@ -259,15 +485,8 @@ describe("plugin registry runtime config scope", () => {
     } satisfies PluginRuntime["config"];
     const runtime = createPluginRuntime();
     runtime.config = configRuntime;
-    const pluginRegistry = createTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "legacy-plugin",
-      name: "Legacy Plugin",
-      source: "/plugins/legacy-plugin/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
+    const record = createRecord("legacy-plugin", { name: "Legacy Plugin" });
     const api = pluginRegistry.createApi(record, { config });
 
     expect(api.runtime.config.current()).toBe(config);
@@ -301,15 +520,8 @@ describe("plugin registry runtime config scope", () => {
       acquireScope = getPluginRuntimeGatewayRequestScope();
       return undefined;
     });
-    const pluginRegistry = createTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "memory-provider",
-      name: "Memory Provider",
-      source: "/plugins/memory-provider/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
+    const record = createRecord("memory-provider", { name: "Memory Provider", origin: "bundled" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
     await api.runtime.llm.acquireLocalService({
@@ -345,22 +557,17 @@ describe("plugin registry runtime config scope", () => {
           };
         }),
       };
-      const loadPluginModule = vi.fn((_modulePath: string): unknown => {
-        throw new Error("broad runtime should stay lazy during scoped node access");
-      });
+      const resolveRuntimeModule = vi
+        .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
+        .mockImplementation(() => {
+          throw new Error("broad runtime should stay lazy during scoped node access");
+        });
       const runtime =
         mode === "lazy"
-          ? createLazyPluginRuntime({ loadPluginModule, runtimeOptions: { nodes } })
+          ? createLazyPluginRuntime({ runtimeOptions: { nodes } })
           : createPluginRuntime({ nodes });
-      const pluginRegistry = createTestRegistry(runtime);
-      const record = createPluginRecord({
-        id: "google-meet",
-        name: "Google Meet",
-        source: "/plugins/google-meet/index.js",
-        origin: "bundled",
-        enabled: true,
-        configSchema: false,
-      });
+      const pluginRegistry = createRuntimeTestRegistry(runtime);
+      const record = createRecord("google-meet", { name: "Google Meet", origin: "bundled" });
       const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
       await api.runtime.nodes.list({ connected: true });
@@ -384,7 +591,7 @@ describe("plugin registry runtime config scope", () => {
         pluginSource: "/plugins/google-meet/index.js",
       });
       expect(duplexScope?.pluginRegistry).toBe(pluginRegistry.registry);
-      expect(loadPluginModule).not.toHaveBeenCalled();
+      expect(resolveRuntimeModule).not.toHaveBeenCalled();
     },
   );
 
@@ -398,15 +605,8 @@ describe("plugin registry runtime config scope", () => {
         return { ok: true } as T;
       },
     };
-    const pluginRegistry = createTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "google-meet",
-      name: "Google Meet",
-      source: "/plugins/google-meet/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
+    const record = createRecord("google-meet", { name: "Google Meet", origin: "bundled" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
 
     await api.runtime.gateway.request("voicecall.start", { to: "+15550001234" });
@@ -438,21 +638,9 @@ describe("plugin registry runtime config scope", () => {
       },
     );
     runtime.agent.session.createSessionEntry = createSessionEntry;
-    const pluginRegistry = createTestRegistry(runtime);
-    const ownerRecord = createPluginRecord({
-      id: "codex-owner",
-      source: "/plugins/codex-owner/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    const otherRecord = createPluginRecord({
-      id: "other-plugin",
-      source: "/plugins/other-plugin/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
+    const ownerRecord = createRecord("codex-owner", { origin: "bundled" });
+    const otherRecord = createRecord("other-plugin", { origin: "bundled" });
     const ownerApi = pluginRegistry.createApi(ownerRecord, { config: {} as OpenClawConfig });
     const otherApi = pluginRegistry.createApi(otherRecord, { config: {} as OpenClawConfig });
     ownerApi.registerAgentHarness({
@@ -507,14 +695,8 @@ describe("plugin registry runtime config scope", () => {
       entry: { sessionId: "session-1", updatedAt: 1 },
     }));
     runtime.agent.session.createSessionEntry = createSessionEntry;
-    const pluginRegistry = createTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "anthropic",
-      source: "/plugins/anthropic/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
+    const record = createRecord("anthropic", { origin: "bundled" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
     api.registerCliBackend({ id: "claude-cli", config: { command: "claude" } });
     api.registerAgentHarness({
@@ -572,14 +754,8 @@ describe("plugin registry runtime config scope", () => {
       entry: { sessionId: "session-1", updatedAt: 1 },
     }));
     runtime.agent.session.createSessionEntry = createSessionEntry;
-    const pluginRegistry = createTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "opencode",
-      source: "/plugins/opencode/index.js",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
+    const record = createRecord("opencode", { origin: "bundled" });
     const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
     const initialEntry = {
       acpBackendId: "acpx",
@@ -616,4 +792,67 @@ describe("plugin registry runtime config scope", () => {
       }),
     ).rejects.toThrow("requires exactly one runtime owner");
   });
+
+  it.each(["patchSessionEntry", "updateSessionStoreEntry"] as const)(
+    "rejects %s writes resumed after their plugin is replaced",
+    async (method) => {
+      let entry: SessionEntry = { sessionId: "session-1", updatedAt: 1, label: "before" };
+      const commitPatch = (patch: Partial<SessionEntry> | null) => {
+        if (patch) {
+          entry = { ...entry, ...patch };
+        }
+        return entry;
+      };
+      const runtime = createPluginRuntime();
+      runtime.agent.session.getSessionEntry = () => ({ ...entry });
+      runtime.agent.session.patchSessionEntry = async (params) =>
+        commitPatch(await params.update({ ...entry }, { existingEntry: { ...entry } }));
+      runtime.agent.session.updateSessionStoreEntry = async (params) =>
+        commitPatch(await params.update({ ...entry }));
+      const pluginRegistry = createRuntimeTestRegistry(runtime);
+      const recordParams = {
+        id: "session-editor",
+        source: "/plugins/session-editor/index.js",
+        origin: "global" as const,
+        enabled: true,
+        configSchema: false,
+      };
+      const record = createPluginRecord(recordParams);
+      const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+      const entered = createDeferredCore();
+      const resume = createDeferredCore<Partial<SessionEntry>>();
+      const scope = { sessionKey: "agent:main:ordinary", storePath: "/tmp/sessions.json" };
+      try {
+        const pending = api.runtime.agent.session[method]({
+          ...scope,
+          update: () => {
+            entered.resolve();
+            return resume.promise;
+          },
+        });
+        await entered.promise;
+        pluginRegistry.rollbackPluginGlobalSideEffects(record.id, record);
+        pluginRegistry.registry.plugins.splice(0, 1);
+        const replacementApi = pluginRegistry.createApi(createPluginRecord(recordParams), {
+          config: {} as OpenClawConfig,
+        });
+        const rejected = expect(pending).rejects.toThrow("runtime is no longer active");
+        resume.resolve({ label: "stale" });
+        await rejected;
+        expect(entry.label).toBe("before");
+
+        await expect(
+          replacementApi.runtime.agent.session[method]({
+            ...scope,
+            update: () => ({ label: "current" }),
+          }),
+        ).resolves.toMatchObject({ label: "current" });
+        expect(entry.label).toBe("current");
+      } finally {
+        resume.resolve({});
+        await getPluginInstance(record)?.dispose();
+        await disposePluginRegistryInstances(pluginRegistry.registry);
+      }
+    },
+  );
 });

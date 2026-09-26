@@ -1,6 +1,7 @@
 /** Tests ACP runtime handle caching, reuse, re-ensure, and lifecycle cleanup. */
 import { describe, expect, it, vi } from "vitest";
 import {
+  installMutableAcpSessionMetaUpsert,
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
@@ -178,7 +179,7 @@ describe("AcpSessionManager runtime handles", () => {
     expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
   });
 
-  it("re-ensures cached runtime handles when the runtime config changes", async () => {
+  it("keeps handles across policy edits and replaces them when their backend owner changes", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -226,8 +227,25 @@ describe("AcpSessionManager runtime handles", () => {
       requestId: "r2",
     });
 
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.ensureSession).toHaveBeenCalledOnce();
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+    expect(runtimeState.close).not.toHaveBeenCalled();
+
+    const successor = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: successor.runtime,
+    });
+    await manager.runTurn({
+      provenance: "system",
+      cfg: denyCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "third",
+      mode: "prompt",
+      requestId: "r3",
+    });
+    expect(successor.ensureSession).toHaveBeenCalledOnce();
+    expect(successor.runTurn).toHaveBeenCalledOnce();
     expectRecordFields(mockCallArg(runtimeState.close), {
       reason: "runtime-handle-replaced",
     });
@@ -971,15 +989,17 @@ describe("AcpSessionManager runtime handles", () => {
       runtime: runtimeState.runtime,
     });
     const sessionKey = "agent:codex:acp:binding:demo-binding:default:retry-fresh";
-    let currentMeta: SessionAcpMeta = {
-      ...readySessionMeta(),
-      runtimeSessionName: sessionKey,
-      identity: {
-        state: "resolved",
-        source: "status",
-        acpxSessionId: "acpx-sid-stale",
-        agentSessionId: "agent-sid-stale",
-        lastUpdatedAt: Date.now(),
+    const metaState: { currentMeta: SessionAcpMeta } = {
+      currentMeta: {
+        ...readySessionMeta(),
+        runtimeSessionName: sessionKey,
+        identity: {
+          state: "resolved",
+          source: "status",
+          acpxSessionId: "acpx-sid-stale",
+          agentSessionId: "agent-sid-stale",
+          lastUpdatedAt: Date.now(),
+        },
       },
     };
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
@@ -987,26 +1007,10 @@ describe("AcpSessionManager runtime handles", () => {
       return {
         sessionKey: key,
         storeSessionKey: key,
-        acp: currentMeta,
+        acp: metaState.currentMeta,
       };
     });
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta } | undefined,
-        ) => SessionAcpMeta | null | undefined;
-      };
-      const next = params.mutate(currentMeta, { acp: currentMeta });
-      if (next) {
-        currentMeta = next;
-      }
-      return {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        acp: currentMeta,
-      };
-    });
+    installMutableAcpSessionMetaUpsert(metaState);
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
@@ -1031,7 +1035,7 @@ describe("AcpSessionManager runtime handles", () => {
       backendSessionId: "acpx-sid-fresh",
     });
     expect(handle.agentSessionId).toBeUndefined();
-    expect(currentMeta.identity?.acpxSessionId).toBe("acpx-sid-fresh");
-    expect(currentMeta.identity?.agentSessionId).toBeUndefined();
+    expect(metaState.currentMeta.identity?.acpxSessionId).toBe("acpx-sid-fresh");
+    expect(metaState.currentMeta.identity?.agentSessionId).toBeUndefined();
   });
 });

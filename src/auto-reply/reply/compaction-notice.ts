@@ -38,19 +38,25 @@ export function shouldNotifyUserAboutCompaction(cfg?: OpenClawConfig): boolean {
   return cfg?.agents?.defaults?.compaction?.notifyUser === true;
 }
 
-export function createCompactionNoticePayload(params: {
-  phase: CompactionNoticePhase;
-  text?: string;
+type CompactionNoticeOptions = {
   currentMessageId?: string;
   applyReplyToMode?: (payload: ReplyPayload) => ReplyPayload;
-}): ReplyPayload {
+};
+
+function createNoticePayload(text: string, params: CompactionNoticeOptions): ReplyPayload {
   const payload: ReplyPayload = {
-    text: params.text ?? COMPACTION_NOTICE_TEXT[params.phase],
+    text,
     ...(params.currentMessageId ? { replyToId: params.currentMessageId } : {}),
     replyToCurrent: true,
     isCompactionNotice: true,
   };
   return params.applyReplyToMode ? params.applyReplyToMode(payload) : payload;
+}
+
+export function createCompactionNoticePayload(
+  params: CompactionNoticeOptions & { phase: CompactionNoticePhase; text?: string },
+): ReplyPayload {
+  return createNoticePayload(params.text ?? COMPACTION_NOTICE_TEXT[params.phase], params);
 }
 
 export function readCompactionHookMessages(value: unknown): string[] {
@@ -63,19 +69,11 @@ export function readCompactionHookMessages(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-export function createCompactionHookNoticePayload(params: {
-  messages: string[];
-  currentMessageId?: string;
-  applyReplyToMode?: (payload: ReplyPayload) => ReplyPayload;
-}): ReplyPayload | undefined {
+export function createCompactionHookNoticePayload(
+  params: CompactionNoticeOptions & { messages: string[] },
+): ReplyPayload | undefined {
   if (params.messages.length === 0) {
     return undefined;
   }
-  const payload: ReplyPayload = {
-    text: params.messages.join("\n\n"),
-    ...(params.currentMessageId ? { replyToId: params.currentMessageId } : {}),
-    replyToCurrent: true,
-    isCompactionNotice: true,
-  };
-  return params.applyReplyToMode ? params.applyReplyToMode(payload) : payload;
+  return createNoticePayload(params.messages.join("\n\n"), params);
 }

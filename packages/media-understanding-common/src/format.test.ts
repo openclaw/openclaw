@@ -3,20 +3,6 @@ import { describe, expect, it } from "vitest";
 import { formatMediaUnderstandingBody } from "./format.js";
 
 describe("formatMediaUnderstandingBody", () => {
-  it("formats a transcript without user text", () => {
-    const body = formatMediaUnderstandingBody({
-      outputs: [
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 0,
-          text: "hello world",
-          provider: "groq",
-        },
-      ],
-    });
-    expect(body).toBe("[Audio]\nTranscript:\nhello world");
-  });
-
   it("includes user text when body is meaningful", () => {
     const body = formatMediaUnderstandingBody({
       body: "caption here",

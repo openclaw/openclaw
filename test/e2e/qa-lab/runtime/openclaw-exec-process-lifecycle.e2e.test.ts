@@ -55,6 +55,29 @@ function pidExists(pid: number): boolean {
   }
 }
 
+function injectKillPermissionError(child: ChildProcess): void {
+  if (process.versions.bun) {
+    // Bun keeps its native handle private; inject the public, nonterminal error event.
+    expect(
+      child.emit(
+        "error",
+        Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" }),
+      ),
+    ).toBe(true);
+    return;
+  }
+  const handle = (child as ChildProcess & { _handle: { kill: (signal: number) => number } })
+    // oxlint-disable-next-line eslint/no-underscore-dangle -- Native kill errno exercises Node's real error path without ending the child.
+    ._handle;
+  const originalKill = handle.kill;
+  try {
+    handle.kill = () => -constants.errno.EPERM;
+    expect(child.kill("SIGTERM")).toBe(false);
+  } finally {
+    handle.kill = originalKill;
+  }
+}
+
 async function pollTerminal(processTool: ProcessTool, sessionId: string) {
   let terminal: Awaited<ReturnType<ProcessTool["execute"]>> | undefined;
   await expect
@@ -235,33 +258,25 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     if (!child) {
       throw new Error(`missing spawned child ${killedSession.pid}`);
     }
-    const handle = (child as ChildProcess & { _handle: { kill: (signal: number) => number } })
-      // oxlint-disable-next-line eslint/no-underscore-dangle -- Native kill errno exercises Node's real error path without ending the child.
-      ._handle;
-    const originalKill = handle.kill;
+    expect(child.listenerCount("error")).toBeGreaterThan(0);
     const observedErrors: Array<NodeJS.ErrnoException> = [];
     child.on("error", (error) => {
       observedErrors.push(error);
     });
     const errorListenerCount = child.listenerCount("error");
 
-    try {
-      handle.kill = () => -constants.errno.EPERM;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        expect(child.kill("SIGTERM")).toBe(false);
-        expect(child.listenerCount("error")).toBe(errorListenerCount);
-        expect(observedErrors[attempt]).toMatchObject({ code: "EPERM", syscall: "kill" });
-        await Promise.resolve();
-        expect(listRunningSessions()).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ id: killedSession.sessionId, exited: false }),
-          ]),
-        );
-        expect(getActiveBackgroundExecSessionCount()).toBe(1);
-        expect(pidExists(killedSession.pid)).toBe(true);
-      }
-    } finally {
-      handle.kill = originalKill;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      injectKillPermissionError(child);
+      expect(child.listenerCount("error")).toBe(errorListenerCount);
+      expect(observedErrors[attempt]).toMatchObject({ code: "EPERM", syscall: "kill" });
+      await Promise.resolve();
+      expect(listRunningSessions()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: killedSession.sessionId, exited: false }),
+        ]),
+      );
+      expect(getActiveBackgroundExecSessionCount()).toBe(1);
+      expect(pidExists(killedSession.pid)).toBe(true);
     }
 
     const killed = await processTool.execute("kill-session", {
@@ -271,7 +286,7 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     expect(killed.details).toMatchObject({ status: "completed" });
     const killedTerminal = await pollTerminal(processTool, killedSession.sessionId);
     expect(killedTerminal.details).toMatchObject({
-      status: "failed",
+      status: "completed",
       exitReason: "manual-cancel",
     });
     await clearFinished(processTool, killedSession.sessionId);

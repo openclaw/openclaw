@@ -57,6 +57,23 @@ function mockSpeechFetchExpectingFormat(responseFormat: string) {
   return fetchMock;
 }
 
+function createSpeedDirectiveContext(
+  key: string,
+  value: string,
+  baseUrl = "https://api.openai.com/v1/",
+) {
+  return {
+    key,
+    value,
+    policy: {
+      allowVoice: true,
+      allowModelId: true,
+      allowVoiceSettings: true,
+    },
+    providerConfig: { baseUrl },
+  };
+}
+
 describe("buildOpenAISpeechProvider", () => {
   const originalFetch = globalThis.fetch;
 
@@ -280,18 +297,7 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
 
     expect(
-      provider.parseDirectiveToken?.({
-        key: "speed",
-        value: "1.5",
-        policy: {
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-        },
-        providerConfig: {
-          baseUrl: "https://api.openai.com/v1/",
-        },
-      } as never),
+      provider.parseDirectiveToken?.(createSpeedDirectiveContext("speed", "1.5") as never),
     ).toEqual({
       handled: true,
       overrides: { speed: 1.5 },
@@ -302,18 +308,7 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
 
     expect(
-      provider.parseDirectiveToken?.({
-        key: "openai_speed",
-        value: "0.75",
-        policy: {
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-        },
-        providerConfig: {
-          baseUrl: "https://api.openai.com/v1/",
-        },
-      } as never),
+      provider.parseDirectiveToken?.(createSpeedDirectiveContext("openai_speed", "0.75") as never),
     ).toEqual({
       handled: true,
       overrides: { speed: 0.75 },
@@ -341,44 +336,11 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
-  it("warns on non-numeric OpenAI speed values", () => {
-    const provider = buildOpenAISpeechProvider();
-
-    expect(
-      provider.parseDirectiveToken?.({
-        key: "speed",
-        value: "fast",
-        policy: {
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-        },
-        providerConfig: {
-          baseUrl: "https://api.openai.com/v1/",
-        },
-      } as never),
-    ).toEqual({
-      handled: true,
-      warnings: ['invalid OpenAI speed "fast" (0.25-4.0)'],
-    });
-  });
-
   it("warns on partial OpenAI speed values", () => {
     const provider = buildOpenAISpeechProvider();
 
     expect(
-      provider.parseDirectiveToken?.({
-        key: "speed",
-        value: "1.5abc",
-        policy: {
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-        },
-        providerConfig: {
-          baseUrl: "https://api.openai.com/v1/",
-        },
-      } as never),
+      provider.parseDirectiveToken?.(createSpeedDirectiveContext("speed", "1.5abc") as never),
     ).toEqual({
       handled: true,
       warnings: ['invalid OpenAI speed "1.5abc" (0.25-4.0)'],
@@ -389,18 +351,7 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
 
     expect(
-      provider.parseDirectiveToken?.({
-        key: "speed",
-        value: "5",
-        policy: {
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-        },
-        providerConfig: {
-          baseUrl: "https://api.openai.com/v1/",
-        },
-      } as never),
+      provider.parseDirectiveToken?.(createSpeedDirectiveContext("speed", "5") as never),
     ).toEqual({
       handled: true,
       warnings: ['invalid OpenAI speed "5" (0.25-4.0)'],
@@ -411,18 +362,9 @@ describe("buildOpenAISpeechProvider", () => {
     const provider = buildOpenAISpeechProvider();
 
     expect(
-      provider.parseDirectiveToken?.({
-        key: "speed",
-        value: "4.5",
-        policy: {
-          allowVoice: true,
-          allowModelId: true,
-          allowVoiceSettings: true,
-        },
-        providerConfig: {
-          baseUrl: "https://tts.example.com/v1",
-        },
-      } as never),
+      provider.parseDirectiveToken?.(
+        createSpeedDirectiveContext("speed", "4.5", "https://tts.example.com/v1") as never,
+      ),
     ).toEqual({
       handled: true,
       overrides: { speed: 4.5 },

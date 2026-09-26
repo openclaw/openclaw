@@ -48,9 +48,12 @@ function resolvePackageTelegramOutputDir(env: NodeJS.ProcessEnv, repoRoot: strin
 
 const DEFAULT_RTT_CHECK_ID = "channel-canary";
 const EXTENDED_STABLE_2026_6_35 = "2026.6.35";
+const EXTENDED_STABLE_2026_7_33 = "2026.7.33";
+const EXTENDED_STABLE_2026_7_34 = "2026.7.34";
+const EXTENDED_STABLE_2026_7_35 = "2026.7.35";
 const LEGACY_CONFIG_CUTOFF = "2026.7.2-beta.4";
 
-function projectExtendedStable2026_6_35QaConfig(cfg: OpenClawConfig): OpenClawConfig {
+function projectFrozenExtendedStableQaConfig(cfg: OpenClawConfig): OpenClawConfig {
   const { entries, ...agents } = cfg.agents ?? {};
   const { mediaModels, modelPolicy: _modelPolicy, ...defaults } = agents.defaults ?? {};
 
@@ -108,8 +111,13 @@ function projectLegacyPackageQaConfig(cfg: OpenClawConfig): OpenClawConfig {
 
 function resolvePackageConfigMutation(env: NodeJS.ProcessEnv = process.env) {
   const packageVersion = env.OPENCLAW_NPM_TELEGRAM_PACKAGE_VERSION?.trim();
-  if (packageVersion === EXTENDED_STABLE_2026_6_35) {
-    return projectExtendedStable2026_6_35QaConfig;
+  if (
+    packageVersion === EXTENDED_STABLE_2026_6_35 ||
+    packageVersion === EXTENDED_STABLE_2026_7_33 ||
+    packageVersion === EXTENDED_STABLE_2026_7_34 ||
+    packageVersion === EXTENDED_STABLE_2026_7_35
+  ) {
+    return projectFrozenExtendedStableQaConfig;
   }
   const comparison = packageVersion
     ? compareReleaseVersions(packageVersion, LEGACY_CONFIG_CUTOFF)
@@ -142,9 +150,15 @@ function resolvePackageTelegramScenarios(
   resolveScenarioIds: (scenarioIds: readonly string[]) => string[],
 ) {
   const selection = resolvePackageTelegramScenarioSelection(env);
+  const omittedDefaultScenarioIds =
+    selection.scenarioIds.length === 0
+      ? new Set(normalizeCsvOrLooseStringList(env.OPENCLAW_NPM_TELEGRAM_OMIT_DEFAULT_SCENARIOS))
+      : new Set<string>();
   return {
     ...selection,
-    resolvedScenarioIds: resolveScenarioIds(selection.scenarioIds),
+    resolvedScenarioIds: resolveScenarioIds(selection.scenarioIds).filter(
+      (scenarioId) => !omittedDefaultScenarioIds.has(scenarioId),
+    ),
   };
 }
 

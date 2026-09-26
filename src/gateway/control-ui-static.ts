@@ -1,10 +1,16 @@
-// Control UI static-response policy: MIME types, caching, encoding, and pinned-file reads.
-import fs from "node:fs";
+// Control UI static-response policy: MIME types, caching, and encoding.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
+import {
+  resolveHttpContentEncodings,
+  type HttpContentEncoding as ControlUiContentEncoding,
+  type HttpRepresentationEncoding as ControlUiRepresentationEncoding,
+} from "../infra/http-content-encoding.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import type { ControlUiRootAsset } from "./control-ui-file.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { matchesHttpIfModifiedSince } from "./http-conditional.js";
 
@@ -50,106 +56,57 @@ export function isControlUiPrecompressedAssetExtension(extension: string): boole
   return CONTROL_UI_PRECOMPRESSED_ASSET_EXTENSIONS.has(extension);
 }
 
-type ControlUiContentEncoding = "br" | "gzip";
-type ControlUiRepresentationEncoding = ControlUiContentEncoding | "identity";
 type ControlUiEncodingSelection = ControlUiRepresentationEncoding | "not-acceptable";
 
-const CONTROL_UI_QVALUE_PATTERN = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
+const CONTROL_UI_DYNAMIC_ENCODINGS = new Set<ControlUiContentEncoding>(["br", "gzip"]);
 const controlUiHtmlCompressionCache = new Map<string, Promise<Buffer>>();
-
-function normalizedAcceptEncoding(req: IncomingMessage): string {
-  const value = req.headers?.["accept-encoding"];
-  return Array.isArray(value) ? value.join(",") : (value ?? "");
-}
-
-function resolveControlUiContentEncodings(
-  req: IncomingMessage,
-  includeCompressed: boolean,
-): ControlUiRepresentationEncoding[] {
-  const acceptEncoding = normalizedAcceptEncoding(req);
-  if (!acceptEncoding.trim()) {
-    return ["identity"];
-  }
-  const qualities = new Map<string, number>();
-  for (const entry of acceptEncoding.split(",")) {
-    const [rawName, ...rawParams] = entry.split(";");
-    const name = rawName?.trim().toLowerCase();
-    if (!name) {
-      continue;
-    }
-    const qualityParam = rawParams.find((param) => param.trim().toLowerCase().startsWith("q="));
-    const qualityText = qualityParam?.trim().slice(2);
-    const parsedQuality =
-      qualityText === undefined
-        ? 1
-        : CONTROL_UI_QVALUE_PATTERN.test(qualityText)
-          ? Number(qualityText)
-          : Number.NaN;
-    const quality =
-      Number.isFinite(parsedQuality) && parsedQuality >= 0 && parsedQuality <= 1
-        ? parsedQuality
-        : 0;
-    qualities.set(name, Math.max(qualities.get(name) ?? 0, quality));
-  }
-
-  const wildcardQuality = qualities.get("*");
-  // RFC 9110 keeps identity acceptable unless identity or a rejecting wildcard
-  // explicitly disables it. This distinction is required to return 406 rather
-  // than silently violate identity;q=0.
-  const identityQuality = qualities.get("identity") ?? (wildcardQuality === 0 ? 0 : 1);
-  const qualityFor = (name: ControlUiRepresentationEncoding) =>
-    name === "identity" ? identityQuality : (qualities.get(name) ?? wildcardQuality ?? 0);
-  // Stable sorting preserves the server's br/gzip/identity preference for equal quality.
-  const encodings: ControlUiRepresentationEncoding[] = includeCompressed
-    ? ["br", "gzip", "identity"]
-    : ["identity"];
-  return encodings
-    .filter((encoding) => qualityFor(encoding) > 0)
-    .toSorted((left, right) => qualityFor(right) - qualityFor(left));
-}
+const compressBrotli = promisify(brotliCompress);
+const compressGzip = promisify(gzip);
 
 export function resolveControlUiHtmlEncoding(req: IncomingMessage): ControlUiEncodingSelection {
-  return resolveControlUiContentEncodings(req, true)[0] ?? "not-acceptable";
+  return (
+    resolveHttpContentEncodings(
+      req.headers?.["accept-encoding"],
+      CONTROL_UI_DYNAMIC_ENCODINGS,
+    )[0] ?? "not-acceptable"
+  );
 }
 
-type OpenedControlUiRepresentation = {
-  bodyFile: { path: string; fd: number; size: number };
+export function isControlUiCompressibleAsset(filePath: string): boolean {
+  return CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+type ControlUiRepresentation = {
+  file: ControlUiRootAsset["file"];
   encoding?: ControlUiContentEncoding;
 };
 
-export function resolveOpenedControlUiRepresentation(params: {
+export function resolveControlUiRepresentation(params: {
   req: IncomingMessage;
-  sourceFile: { path: string; fd: number; size: number };
+  asset: ControlUiRootAsset;
   contentPath: string;
   precompressed: boolean;
-  openPrecompressedFile: (filePath: string) => { path: string; fd: number; size: number } | null;
-}): OpenedControlUiRepresentation | null {
-  const { req, sourceFile, precompressed, openPrecompressedFile } = params;
-  const extension = path.extname(params.contentPath).toLowerCase();
-  const encodings = resolveControlUiContentEncodings(
-    req,
-    precompressed && CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(extension),
+}): ControlUiRepresentation | null {
+  const { req, asset, precompressed } = params;
+  const encodings = resolveHttpContentEncodings(
+    req.headers?.["accept-encoding"],
+    precompressed && isControlUiCompressibleAsset(params.contentPath)
+      ? CONTROL_UI_DYNAMIC_ENCODINGS
+      : new Set<ControlUiContentEncoding>(),
   );
   // A missing sidecar changes availability, not this request's encoding preferences.
   for (const selected of encodings) {
     if (selected === "identity") {
-      return { bodyFile: sourceFile };
+      return { file: asset.file };
     }
-
-    const suffix = selected === "br" ? ".br" : ".gz";
-    let compressedFile: { path: string; fd: number; size: number } | null;
-    try {
-      compressedFile = openPrecompressedFile(`${sourceFile.path}${suffix}`);
-    } catch (error) {
-      fs.closeSync(sourceFile.fd);
-      throw error;
+    const file = asset[selected];
+    if (file instanceof Error) {
+      throw file;
     }
-    if (compressedFile) {
-      fs.closeSync(sourceFile.fd);
-      return { bodyFile: compressedFile, encoding: selected };
+    if (file) {
+      return { file, encoding: selected };
     }
   }
-  fs.closeSync(sourceFile.fd);
   return null;
 }
 
@@ -236,31 +193,12 @@ export function respondHeadForControlUiFile(
 }
 
 function compressControlUiBody(body: Buffer, encoding: ControlUiContentEncoding): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const callback = (error: Error | null, compressed: Buffer) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(compressed);
-    };
-    if (encoding === "br") {
-      brotliCompress(
-        body,
-        {
-          params: {
-            [zlibConstants.BROTLI_PARAM_QUALITY]: 4,
-          },
-        },
-        callback,
-      );
-      return;
-    }
-    gzip(body, { level: 6 }, callback);
-  });
+  return encoding === "br"
+    ? compressBrotli(body, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 4 } })
+    : compressGzip(body, { level: 6 });
 }
 
-export async function serveControlUiAsset(
+export function serveControlUiAsset(
   res: ServerResponse,
   filePath: string,
   body: Buffer,
@@ -313,42 +251,4 @@ export async function sendControlUiHtmlBody(
   }
   setControlUiEncodingHeaders(res, ".html", encoding);
   res.end(encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding));
-}
-
-// Reuse the stat captured by safe open: another queued fstat adds a full
-// event-loop wait under load. Keep Node readFile's allocation and chunk limits;
-// this read ends at the pinned size, even if the file subsequently grows.
-export async function readAndCloseControlUiFile(file: {
-  fd: number;
-  size: number;
-}): Promise<Buffer> {
-  try {
-    if (file.size > 2 ** 31 - 1) {
-      throw Object.assign(new RangeError("Control UI file exceeds the 2 GiB read limit"), {
-        code: "ERR_FS_FILE_TOO_LARGE",
-      });
-    }
-    const buffer = Buffer.allocUnsafe(file.size);
-    let offset = 0;
-    while (offset < buffer.length) {
-      const length = Math.min(512 * 1024, buffer.length - offset);
-      const bytesRead = await new Promise<number>((resolve, reject) => {
-        fs.read(file.fd, buffer, offset, length, null, (error, count) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve(count);
-          }
-        });
-      });
-      if (bytesRead === 0) {
-        break;
-      }
-      offset += bytesRead;
-    }
-    return buffer.subarray(0, offset);
-  } finally {
-    // Release before compression waits in zlib's worker queue.
-    fs.closeSync(file.fd);
-  }
 }

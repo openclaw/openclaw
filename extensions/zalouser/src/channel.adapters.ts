@@ -1,4 +1,3 @@
-// Zalouser plugin module implements channel.adapters behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
@@ -8,6 +7,7 @@ import type {
 import {
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
+  type ChannelMessageSendTextContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
@@ -19,7 +19,7 @@ import {
   type ChannelOutboundAdapter,
   type OutboundDeliveryResult,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { GroupToolPolicyConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -56,15 +56,7 @@ const loadZalouserChannelRuntime = createLazyRuntimeModule(() => import("./chann
 
 const ZALOUSER_TEXT_CHUNK_LIMIT = 2000;
 
-type ZalouserSendTextContext = {
-  to: string;
-  text: string;
-  accountId?: string | null;
-  cfg: OpenClawConfig;
-  onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;
-};
-
-type ZalouserSendMediaContext = ZalouserSendTextContext & {
+type ZalouserSendMediaContext = ChannelMessageSendTextContext & {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -76,16 +68,6 @@ export function resolveZalouserQrProfile(accountId?: string | null): string {
     return process.env.ZALOUSER_PROFILE?.trim() || process.env.ZCA_PROFILE?.trim() || "default";
   }
   return normalized;
-}
-
-function resolveZalouserOutboundChunkMode(cfg: OpenClawConfig, accountId?: string) {
-  return getZalouserRuntime().channel.text.resolveChunkMode(cfg, "zalouser", accountId);
-}
-
-function resolveZalouserOutboundTextChunkLimit(cfg: OpenClawConfig, accountId?: string) {
-  return getZalouserRuntime().channel.text.resolveTextChunkLimit(cfg, "zalouser", accountId, {
-    fallbackLimit: ZALOUSER_TEXT_CHUNK_LIMIT,
-  });
 }
 
 function toZalouserMessageSendResult(result: ZaloSendResult): ChannelMessageSendResult {
@@ -111,40 +93,7 @@ function resolveZalouserGroupPolicyScope(params: ChannelGroupContext) {
   );
 }
 
-function resolveZalouserGroupToolPolicy(
-  params: ChannelGroupContext,
-): GroupToolPolicyConfig | undefined {
-  return resolveScopeToolsPolicy(resolveZalouserGroupPolicyScope(params));
-}
-
-function resolveZalouserRequireMention(params: ChannelGroupContext): boolean {
-  return resolveScopeRequireMention(resolveZalouserGroupPolicyScope(params));
-}
-
-async function sendZalouserTextFromContext({
-  to,
-  text,
-  accountId,
-  cfg,
-  onDeliveryResult,
-}: ZalouserSendTextContext) {
-  const { sendMessageZalouser } = await loadZalouserChannelRuntime();
-  const account = resolveZalouserAccountSync({ cfg, accountId });
-  const target = parseZalouserOutboundTarget(to);
-  const result = await sendMessageZalouser(target.threadId, text, {
-    profile: account.profile,
-    isGroup: target.isGroup,
-    textMode: "markdown",
-    textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
-    textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
-    onDeliveryResult: async (progress) => {
-      await onDeliveryResult?.(toZalouserMessageSendResult(progress));
-    },
-  });
-  return toZalouserMessageSendResult(result);
-}
-
-async function sendZalouserMediaFromContext({
+async function sendZalouserFromContext({
   to,
   text,
   mediaUrl,
@@ -152,6 +101,9 @@ async function sendZalouserMediaFromContext({
   cfg,
   mediaLocalRoots,
   mediaReadFile,
+  signal,
+  assertDirectAdapterHandoff,
+  onPlatformSendDispatch,
   onDeliveryResult,
 }: ZalouserSendMediaContext) {
   const { sendMessageZalouser } = await loadZalouserChannelRuntime();
@@ -159,14 +111,28 @@ async function sendZalouserMediaFromContext({
   const target = parseZalouserOutboundTarget(to);
   const result = await sendMessageZalouser(target.threadId, text, {
     profile: account.profile,
+    signal,
+    assertDirectAdapterHandoff,
+    onPlatformSendDispatch,
     isGroup: target.isGroup,
     mediaUrl,
     mediaLocalRoots,
     mediaReadFile,
     mediaMaxBytes: account.mediaMaxBytes,
     textMode: "markdown",
-    textChunkMode: resolveZalouserOutboundChunkMode(cfg, account.accountId),
-    textChunkLimit: resolveZalouserOutboundTextChunkLimit(cfg, account.accountId),
+    textChunkMode: getZalouserRuntime().channel.text.resolveChunkMode(
+      cfg,
+      "zalouser",
+      account.accountId,
+    ),
+    textChunkLimit: getZalouserRuntime().channel.text.resolveTextChunkLimit(
+      cfg,
+      "zalouser",
+      account.accountId,
+      {
+        fallbackLimit: ZALOUSER_TEXT_CHUNK_LIMIT,
+      },
+    ),
     onDeliveryResult: async (progress) => {
       await onDeliveryResult?.(toZalouserMessageSendResult(progress));
     },
@@ -196,21 +162,20 @@ function toZalouserOutboundDeliveryResult(
   });
 }
 
-const zalouserRawSendResultAdapter: Pick<ChannelOutboundAdapter, "sendText" | "sendMedia"> = {
-  sendText: async ({ onDeliveryResult, ...ctx }) =>
-    toZalouserOutboundDeliveryResult(
-      await sendZalouserTextFromContext({
-        ...ctx,
-        onDeliveryResult: adaptZalouserOutboundProgress(onDeliveryResult),
-      }),
-    ),
-  sendMedia: async ({ onDeliveryResult, ...ctx }) =>
-    toZalouserOutboundDeliveryResult(
-      await sendZalouserMediaFromContext({
-        ...ctx,
-        onDeliveryResult: adaptZalouserOutboundProgress(onDeliveryResult),
-      }),
-    ),
+const sendZalouserOutbound: NonNullable<ChannelOutboundAdapter["sendMedia"]> = async ({
+  onDeliveryResult,
+  ...ctx
+}) =>
+  toZalouserOutboundDeliveryResult(
+    await sendZalouserFromContext({
+      ...ctx,
+      onDeliveryResult: adaptZalouserOutboundProgress(onDeliveryResult),
+    }),
+  );
+
+const zalouserRawSendResultAdapter = {
+  sendText: sendZalouserOutbound,
+  sendMedia: sendZalouserOutbound,
 };
 
 export const zalouserMessageAdapter = defineChannelMessageAdapter({
@@ -223,8 +188,8 @@ export const zalouserMessageAdapter = defineChannelMessageAdapter({
     },
   },
   send: {
-    text: sendZalouserTextFromContext,
-    media: sendZalouserMediaFromContext,
+    text: sendZalouserFromContext,
+    media: sendZalouserFromContext,
   },
 });
 
@@ -237,8 +202,10 @@ const resolveZalouserDmPolicy = createScopedDmSecurityResolver<ResolvedZalouserA
 });
 
 export const zalouserGroupsAdapter = {
-  resolveRequireMention: resolveZalouserRequireMention,
-  resolveToolPolicy: resolveZalouserGroupToolPolicy,
+  resolveRequireMention: (params: ChannelGroupContext) =>
+    resolveScopeRequireMention(resolveZalouserGroupPolicyScope(params)),
+  resolveToolPolicy: (params: ChannelGroupContext) =>
+    resolveScopeToolsPolicy(resolveZalouserGroupPolicyScope(params)),
 };
 
 export const zalouserMessageActions: ChannelMessageActionAdapter = {
@@ -490,8 +457,8 @@ export const zalouserOutboundAdapter = {
   ) =>
     await sendPayloadWithChunkedTextAndMedia({
       ctx,
-      sendText: (nextCtx) => zalouserRawSendResultAdapter.sendText!(nextCtx),
-      sendMedia: (nextCtx) => zalouserRawSendResultAdapter.sendMedia!(nextCtx),
+      sendText: zalouserRawSendResultAdapter.sendText,
+      sendMedia: zalouserRawSendResultAdapter.sendMedia,
       emptyResult: createEmptyChannelResult("zalouser"),
     }),
   ...zalouserRawSendResultAdapter,
@@ -500,7 +467,7 @@ export const zalouserOutboundAdapter = {
 
 export const zalouserMessagingAdapter = {
   targetPrefixes: ["zalouser", "zlu"],
-  normalizeTarget: (raw: string) => normalizeZalouserTarget(raw),
+  normalizeTarget: normalizeZalouserTarget,
   inferTargetChatType: ({ to }: { to: string }) => {
     try {
       return parseZalouserOutboundTarget(to).isGroup ? ("group" as const) : ("direct" as const);
@@ -508,9 +475,7 @@ export const zalouserMessagingAdapter = {
       return undefined;
     }
   },
-  resolveOutboundSessionRoute: (
-    params: Parameters<typeof resolveZalouserOutboundSessionRoute>[0],
-  ) => resolveZalouserOutboundSessionRoute(params),
+  resolveOutboundSessionRoute: resolveZalouserOutboundSessionRoute,
   targetResolver: {
     looksLikeId: (raw: string) => {
       const normalized = normalizeZalouserTarget(raw);

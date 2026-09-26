@@ -464,6 +464,15 @@ export function createSessionCostSummaryAccumulator(
   return {
     add(source: SessionCostSummary): void {
       addCostUsageTotals(target, source);
+      if (source.computedAt !== undefined) {
+        target.computedAt = Math.min(target.computedAt ?? source.computedAt, source.computedAt);
+      }
+      if (source.staleSince !== undefined) {
+        target.staleSince = Math.min(target.staleSince ?? source.staleSince, source.staleSince);
+      }
+      if (source.refreshing) {
+        target.refreshing = true;
+      }
       target.firstActivity =
         target.firstActivity === undefined
           ? source.firstActivity
@@ -550,7 +559,7 @@ export function buildSessionCostSummaryFromRollup(params: {
   let firstActivity: number | undefined;
   let lastActivity: number | undefined;
 
-  const mergeBucket = (bucket: SessionUsageRollupBucket): void => {
+  for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
     const date = new Date(bucket.timestampMs);
     const dayKey = params.formatDay(date);
     const quarter = getUtcQuarterHourBucketKey(date);
@@ -620,10 +629,6 @@ export function buildSessionCostSummaryFromRollup(params: {
     const dailyLatency = dailyLatencies.get(dayKey) ?? createLatencyAggregate();
     mergeLatencyAggregate(dailyLatency, bucket.latency);
     dailyLatencies.set(dayKey, dailyLatency);
-  };
-
-  for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
-    mergeBucket(bucket);
   }
   if (params.includeUntimestamped) {
     addCostUsageTotals(totals, params.rollup.untimestamped.totals);
@@ -696,48 +701,4 @@ export function addRollupToCostUsageSummary(params: {
     params.daily.set(dayKey, daily);
     addCostUsageTotals(params.totals, bucket.totals);
   }
-}
-
-export function cloneSessionUsageRollupData(
-  rollup: SessionUsageRollupData,
-): SessionUsageRollupData {
-  return {
-    buckets: Object.fromEntries(
-      Object.entries(rollup.buckets).map(([bucketId, bucket]) => [
-        bucketId,
-        {
-          ...bucket,
-          totals: cloneCostUsageTotals(bucket.totals),
-          messageCounts: { ...bucket.messageCounts },
-          tools: bucket.tools.map((tool) => ({ ...tool })),
-          models: bucket.models.map((model) => ({
-            ...model,
-            totals: cloneCostUsageTotals(model.totals),
-          })),
-          latency: {
-            count: bucket.latency.count,
-            max: bucket.latency.max,
-            sum: bucket.latency.sum,
-            ...(bucket.latency.min !== undefined ? { min: bucket.latency.min } : {}),
-            centroids: bucket.latency.centroids.map((centroid) => ({
-              count: centroid.count,
-              value: centroid.value,
-            })),
-          },
-        },
-      ]),
-    ),
-    ...(rollup.lastUserTimestamp !== undefined
-      ? { lastUserTimestamp: rollup.lastUserTimestamp }
-      : {}),
-    untimestamped: {
-      totals: cloneCostUsageTotals(rollup.untimestamped.totals),
-      messageCounts: { ...rollup.untimestamped.messageCounts },
-      tools: rollup.untimestamped.tools.map((tool) => ({ ...tool })),
-      models: rollup.untimestamped.models.map((model) => ({
-        ...model,
-        totals: cloneCostUsageTotals(model.totals),
-      })),
-    },
-  };
 }

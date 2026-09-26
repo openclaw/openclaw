@@ -49,6 +49,7 @@ type CoreToolDefinition = {
   description: string;
   sectionId: string;
   profiles: ToolProfileId[];
+  includeInSectionGroup?: boolean;
   includeInOpenClawGroup?: boolean;
 };
 
@@ -67,6 +68,13 @@ const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
 ];
 
 const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
+  {
+    id: "decision_evaluate",
+    description: "Evaluate explicit evidence with the agent's decision model",
+    sectionId: "agents",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
   {
     id: "ls",
     description: "List directory entries",
@@ -156,6 +164,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Read memory files",
     sectionId: "memory",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "personal_instructions",
+    description: "Edit the requesting user’s personal instructions",
+    sectionId: "memory",
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -292,6 +307,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "theme",
+    description: "List, select, and create appearance themes",
+    sectionId: "ui",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "dashboard",
     description: "Read and arrange the session dashboard",
     sectionId: "ui",
@@ -348,7 +370,21 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   },
   {
     id: "gateway",
-    description: "Read Gateway config/schema; owner-only OpenClaw self-update",
+    description: "Update OpenClaw; read Gateway config/schema when permitted",
+    sectionId: "automation",
+    profiles: ["minimal", "coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "plugins",
+    description: "Manage and reload plugins",
+    sectionId: "automation",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "openclaw",
+    description: "Delegate OpenClaw setup and repair",
     sectionId: "automation",
     profiles: [],
     includeInOpenClawGroup: true,
@@ -362,7 +398,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   },
   {
     id: "computer",
-    description: "Control a paired computer node desktop",
+    description: "Control the Gateway desktop or a paired computer",
     sectionId: "nodes",
     profiles: [],
     includeInOpenClawGroup: true,
@@ -452,8 +488,23 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "transcripts",
+    description: "Inspect and manage meeting transcript captures",
+    sectionId: "media",
+    profiles: [],
+    // Catalog visibility must not change existing media group policies.
+    includeInSectionGroup: false,
+  },
+  {
     id: "tts",
     description: "Text-to-speech conversion",
+    sectionId: "media",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "pdf",
+    description: "PDF reading and extraction",
     sectionId: "media",
     profiles: [],
     includeInOpenClawGroup: true,
@@ -495,6 +546,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
 function buildCoreToolGroupMap() {
   const sectionToolMap = new Map<string, string[]>();
   for (const tool of CORE_TOOL_DEFINITIONS) {
+    if (tool.includeInSectionGroup === false) {
+      continue;
+    }
     const groupId = `group:${tool.sectionId}`;
     const list = sectionToolMap.get(groupId) ?? [];
     list.push(tool.id);
@@ -538,10 +592,10 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
   };
 }
 
-/** Lists core tools grouped into UI sections. */
+/** Lists configurable core tools; per-run authorization belongs to runtime assembly. */
 export function listCoreToolSections(params?: {
   swarmEnabled?: boolean;
-  githubPublicationAvailable?: boolean;
+  personalInstructionsEnabled?: boolean;
 }): CoreToolSection[] {
   // Callers resolve the swarm gate and pass the fact in; resolving config here
   // would couple this ui-shared module to the server graph.
@@ -553,9 +607,7 @@ export function listCoreToolSections(params?: {
       .filter(
         (tool) =>
           (tool.id !== "agents_wait" || swarmEnabled) &&
-          (tool.id !== "github_identity_status" ||
-            params?.githubPublicationAvailable !== undefined) &&
-          (tool.id !== "github_publish" || params?.githubPublicationAvailable === true),
+          (tool.id !== "personal_instructions" || params?.personalInstructionsEnabled === true),
       )
       .map((tool) => ({
         id: tool.id,

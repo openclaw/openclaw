@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createWriteTool } from "./sessions/tools/index.js";
@@ -10,18 +12,17 @@ import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js
 
 const RELATIVE_PATH = "memory/2026-08-08.md";
 
-let declaredWriteOutputSchema: Parameters<typeof validateJsonSchemaValue>[0]["schema"];
+let declaredWriteTool: ReturnType<typeof createWriteTool>;
+let declaredWriteOutputSchema: JsonSchemaObject;
 
 function baseWriteTool(): AnyAgentTool {
   return {
-    name: "write",
-    description: "Write a file.",
-    parameters: { type: "object", properties: {} },
+    ...declaredWriteTool,
     outputSchema: declaredWriteOutputSchema,
-    execute: async () => {
+    execute: vi.fn(async () => {
       throw new Error("append-only wrapper should not delegate for append params");
-    },
-  } as unknown as AnyAgentTool;
+    }),
+  };
 }
 
 function validateAgainstDeclaredSchema(value: unknown) {
@@ -41,10 +42,12 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     // Mirror the catalog path: declared schemas are JSON-serialized before the
     // bridge validates results against them. Read the schema from the public
     // tool factory so production internals do not need a test-only export.
-    const writeTool = createWriteTool(root) as unknown as AnyAgentTool;
-    declaredWriteOutputSchema = structuredClone(writeTool.outputSchema) as unknown as Parameters<
-      typeof validateJsonSchemaValue
-    >[0]["schema"];
+    declaredWriteTool = createWriteTool(root);
+    const outputSchema = declaredWriteTool.outputSchema;
+    if (!isRecord(outputSchema)) {
+      throw new Error("The public write tool must declare an object output schema");
+    }
+    declaredWriteOutputSchema = structuredClone(outputSchema);
   });
 
   afterEach(async () => {
@@ -62,7 +65,7 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
       new AbortController().signal,
       undefined,
     );
-    return (result as { details?: unknown }).details;
+    return result.details;
   }
 
   it.each(["revoked", "replaced", "active"] as const)(
@@ -118,15 +121,38 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     expect(validateAgainstDeclaredSchema(details).ok).toBe(true);
   });
 
-  it("returns write-schema-conforming details when appending to an existing file", async () => {
-    const absolute = path.join(root, RELATIVE_PATH);
-    await fs.mkdir(path.dirname(absolute), { recursive: true });
-    await fs.writeFile(absolute, "seed\n", "utf-8");
-    const details = await runAppend();
-    expect(details).toEqual({ changed: true });
-    expect(validateAgainstDeclaredSchema(details).ok).toBe(true);
-    expect(await fs.readFile(absolute, "utf-8")).toBe("seed\nhello");
-  });
+  it.each(["seed", "seed\n"])(
+    "returns write-schema-conforming append results for existing content %j",
+    async (seed) => {
+      const absolute = path.join(root, RELATIVE_PATH);
+      await fs.mkdir(path.dirname(absolute), { recursive: true });
+      await fs.writeFile(absolute, seed, "utf-8");
+      const baseTool = baseWriteTool();
+      const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseTool, {
+        root,
+        relativePath: RELATIVE_PATH,
+      });
+      const result = await wrapped.execute("call-append", {
+        path: RELATIVE_PATH,
+        content: "hello",
+      });
+      expect(result).toEqual({
+        content: [{ type: "text", text: `Appended content to ${RELATIVE_PATH}.` }],
+        details: { changed: true },
+      });
+      expect(validateAgainstDeclaredSchema(result.details).ok).toBe(true);
+      expect(await fs.readFile(absolute, "utf-8")).toBe("seed\nhello");
+      await expect(
+        wrapped.execute("call-sibling", {
+          path: "memory/other-day.md",
+          content: "wrong target",
+        }),
+      ).rejects.toThrow(
+        `Memory flush writes are restricted to ${RELATIVE_PATH}; use that path only.`,
+      );
+      expect(baseTool.execute).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["file", "ancestor", "absent"] as const)(
     "rejects @memory paths instead of appending to their allowed sibling (literal: %s)",

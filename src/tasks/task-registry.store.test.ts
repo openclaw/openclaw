@@ -1,10 +1,11 @@
 // Covers task registry store persistence, in-memory behavior, and observer notifications.
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
+import { bindExecutionOwnerLifecycleMetadata } from "../audit/execution-owner-lifecycle-binding-store.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   executeSqliteQuerySync,
@@ -20,49 +21,52 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import {
-  collectCronHistoryOverflowTaskIds,
-  CRON_HISTORY_KEEP_PER_JOB,
-} from "./cron-history-retention.js";
-import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "./task-flow-registry.js";
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
+  getTaskFlowById,
+} from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
-import { getTaskRegistryMaintenanceSnapshot } from "./task-registry-maintenance-snapshot.js";
+import { applyTaskRegistryMaintenanceRetention } from "./task-registry-maintenance-retention.js";
+import { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
-  deleteTaskRecordById,
+  finalizeTaskRecordByRunId,
   findTaskByRunId,
   getTaskById,
   listFreshTasksForOwnerKey,
   listTaskRecords,
   markTaskTerminalById,
-  reloadTaskRegistryFromStore,
+  publishTaskRecordAfterAtomicStore,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
   getInspectableActiveTaskRestartBlockers,
-  resetTaskRegistryMaintenanceRuntimeForTests,
+  configureTaskRegistryMaintenance,
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
+import { configureTaskRegistryRuntime } from "./task-registry.store.js";
+import { bindTaskRecord, deleteTaskRowsWithDeliveryState } from "./task-registry.store.kernel.js";
 import {
-  configureTaskRegistryRuntime,
-  type TaskRegistryObserverEvent,
-} from "./task-registry.store.js";
-import {
-  bindTaskRecord,
   bindTaskRunExecution,
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryStateFromSqliteReadOnly,
   loadTaskRegistryStateFromSqliteReadOnlyResult,
-  saveTaskRegistryStateToSqlite,
+  upsertTaskWithDeliveryStateToSqlite,
 } from "./task-registry.store.sqlite.js";
+import type { TaskRegistryObserverEvent } from "./task-registry.store.types.js";
+import { createStoredTask } from "./task-registry.test-support.js";
 import type { TaskDeliveryState, TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 import {
   parseOptionalTaskTerminalOutcome,
@@ -77,7 +81,7 @@ import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
-import { listTasksForOwnerOrRequesterSessionKeyForStatus } from "./task-status-access.js";
+import { getGeneratedMediaTaskIdsForSessionKey } from "./task-status-access.js";
 
 function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
   const task = createTaskRecordOrNull(params);
@@ -132,25 +136,6 @@ function requireFirstUpsertParams(upsertTaskWithDeliveryState: ReturnType<typeof
     throw new Error("expected task upsert params to be an object");
   }
   return params;
-}
-
-function createStoredTask(): TaskRecord {
-  return {
-    taskId: "task-restored",
-    runtime: "acp",
-    sourceId: "run-restored",
-    requesterSessionKey: "agent:main:main",
-    ownerKey: "agent:main:main",
-    scopeKind: "session",
-    childSessionKey: "agent:codex:acp:restored",
-    runId: "run-restored",
-    task: "Restored task",
-    status: "running",
-    deliveryStatus: "pending",
-    notifyPolicy: "done_only",
-    createdAt: 100,
-    lastEventAt: 100,
-  };
 }
 
 function createUnsafeTaskOwnerIndex(database: DatabaseSync): void {
@@ -220,49 +205,10 @@ describe("task-registry store runtime", () => {
     testState.applyEnv();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
-    resetTaskRegistryMaintenanceRuntimeForTests();
+    configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     loggingState.rawConsole = null;
     setLoggerOverride(null);
     resetLogger();
-  });
-
-  it("uses the configured task store for restore and save", () => {
-    const storedTask = createStoredTask();
-    const loadSnapshot = vi.fn(() => ({
-      tasks: new Map([[storedTask.taskId, storedTask]]),
-      deliveryStates: new Map(),
-    }));
-    const saveSnapshot = vi.fn();
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot,
-        saveSnapshot,
-      },
-    });
-
-    expect(findTaskByRunId("run-restored")).toMatchObject({
-      taskId: "task-restored",
-      task: "Restored task",
-    });
-    expect(loadSnapshot).toHaveBeenCalledTimes(1);
-
-    createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:codex:acp:new",
-      runId: "run-new",
-      task: "New task",
-      status: "running",
-      deliveryStatus: "pending",
-    });
-
-    expect(saveSnapshot).toHaveBeenCalled();
-    const latestSnapshot = saveSnapshot.mock.calls[saveSnapshot.mock.calls.length - 1]?.[0] as {
-      tasks: ReadonlyMap<string, TaskRecord>;
-    };
-    expect(latestSnapshot.tasks.size).toBe(2);
-    expect(latestSnapshot.tasks.get("task-restored")?.task).toBe("Restored task");
   });
 
   it("logs restore parser failures and keeps the failure sticky", async () => {
@@ -274,8 +220,8 @@ describe("task-registry store runtime", () => {
     try {
       configureTaskRegistryRuntime({
         store: {
+          ...createInMemoryTaskRegistryStore(),
           loadSnapshot,
-          saveSnapshot: () => {},
         },
       });
 
@@ -304,12 +250,12 @@ describe("task-registry store runtime", () => {
     };
     configureTaskRegistryRuntime({
       store: {
+        ...createInMemoryTaskRegistryStore(),
         loadSnapshot: () => {
           throw new Error(
             `Invalid persisted task delivery status: ${JSON.stringify(invalidValue)}`,
           );
         },
-        saveSnapshot: () => {},
       },
     });
 
@@ -322,7 +268,7 @@ describe("task-registry store runtime", () => {
     );
   });
 
-  it("blocks writes until an explicit reload recovers the registry", () => {
+  it("blocks writes until an explicit reload recovers the registry", async () => {
     const storedTask = createStoredTask();
     let restoreShouldFail = true;
     const loadSnapshot = vi.fn(() => {
@@ -337,8 +283,8 @@ describe("task-registry store runtime", () => {
     const upsertTaskWithDeliveryState = vi.fn();
     configureTaskRegistryRuntime({
       store: {
+        ...createInMemoryTaskRegistryStore(),
         loadSnapshot,
-        saveSnapshot: () => {},
         upsertTaskWithDeliveryState,
       },
     });
@@ -361,64 +307,10 @@ describe("task-registry store runtime", () => {
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
 
     restoreShouldFail = false;
-    reloadTaskRegistryFromStore();
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
     expect(getTaskById(storedTask.taskId)).toMatchObject({ taskId: storedTask.taskId });
     expect(loadSnapshot).toHaveBeenCalledTimes(2);
-  });
-
-  it("clears a sticky restore failure during the test reset boundary", () => {
-    const failedLoad = vi.fn(() => {
-      throw new Error("SQLITE_IOERR: failed to read task registry");
-    });
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: failedLoad,
-        saveSnapshot: () => {},
-      },
-    });
-
-    expect(() => getTaskById("task-restored")).toThrow(
-      "Task registry restore failed: SQLITE_IOERR: failed to read task registry",
-    );
-    resetTaskRegistryForTests({ persist: false });
-
-    const cleanLoad = vi.fn(() => ({
-      tasks: new Map<string, TaskRecord>(),
-      deliveryStates: new Map<string, TaskDeliveryState>(),
-    }));
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: cleanLoad,
-        saveSnapshot: () => {},
-      },
-    });
-
-    expect(getTaskById("task-restored")).toBeUndefined();
-    expect(failedLoad).toHaveBeenCalledTimes(1);
-    expect(cleanLoad).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses scoped owner lookups for fresh owner task reads", () => {
-    const storedTask = createStoredTask();
-    const loadSnapshot = vi.fn(() => ({
-      tasks: new Map(),
-      deliveryStates: new Map(),
-    }));
-    const listTasksForOwnerKey = vi.fn(() => [storedTask]);
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot,
-        saveSnapshot: () => {},
-        listTasksForOwnerKey,
-      },
-    });
-
-    const tasks = listFreshTasksForOwnerKey("agent:main:main");
-
-    expect(tasks.map((task) => task.taskId)).toEqual(["task-restored"]);
-    expect(listTasksForOwnerKey).toHaveBeenCalledWith("agent:main:main");
-    expect(loadSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("does not clone non-blocker details when inspecting restart blockers", () => {
@@ -440,14 +332,16 @@ describe("task-registry store runtime", () => {
       { ...active, taskId: "running-ended", endedAt: now, detail: nonBlockerDetail },
       { ...active, taskId: "tie-last" },
     ];
-    const saveSnapshot = vi.fn();
+    const writeStore = vi.fn();
     configureTaskRegistryRuntime({
       store: {
+        ...createInMemoryTaskRegistryStore(),
         loadSnapshot: () => ({
           tasks: new Map(storedTasks.map((task) => [task.taskId, task])),
           deliveryStates: new Map(),
         }),
-        saveSnapshot,
+        upsertTaskWithDeliveryState: writeStore,
+        upsertDeliveryState: writeStore,
       },
     });
     // Restore before measuring: the hot query, not startup hydration, owns this assertion.
@@ -459,7 +353,7 @@ describe("task-registry store runtime", () => {
       expect(clone).not.toHaveBeenCalledWith(nonBlockerDetail);
       blockers[0]!.title = "caller mutation";
       expect(getInspectableActiveTaskRestartBlockers()[0]?.title).toBe(active.task);
-      expect(saveSnapshot).not.toHaveBeenCalled();
+      expect(writeStore).not.toHaveBeenCalled();
     } finally {
       clone.mockRestore();
     }
@@ -476,11 +370,12 @@ describe("task-registry store runtime", () => {
     expect(listTaskRecords()[0]?.detail).toEqual(["active detail"]);
   });
 
-  it("selects session status tasks before cloning unrelated details", () => {
+  it("snapshots generated-media tasks for exact owners and requesters without cloning unrelated details", () => {
     const sessionKey = "agent:main:cron:job:run:run-id";
     const unrelatedDetail = { history: "unrelated task output" };
     const base: TaskRecord = {
       ...createStoredTask(),
+      taskKind: "image_generation",
       requesterSessionKey: "other-requester",
       ownerKey: "other-owner",
       detail: [["selected detail"]],
@@ -493,33 +388,31 @@ describe("task-registry store runtime", () => {
       { ...base, taskId: "child-only", childSessionKey: sessionKey, detail: unrelatedDetail },
       { ...base, taskId: "padded-owner", ownerKey: ` ${sessionKey} `, detail: unrelatedDetail },
     ];
-    const saveSnapshot = vi.fn();
+    const writeStore = vi.fn();
     configureTaskRegistryRuntime({
       store: {
+        ...createInMemoryTaskRegistryStore(),
         loadSnapshot: () => ({
           tasks: new Map(storedTasks.map((task) => [task.taskId, task])),
           deliveryStates: new Map(),
         }),
-        saveSnapshot,
+        upsertTaskWithDeliveryState: writeStore,
+        upsertDeliveryState: writeStore,
       },
     });
     expect(getTaskById("owner-only")?.taskId).toBe("owner-only");
     const clone = vi.spyOn(globalThis, "structuredClone");
     try {
-      const selected = listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey);
-      expect(selected.map((task) => task.taskId)).toEqual([
-        "requester-only",
-        "owner-only",
-        "older",
-      ]);
+      const selected = getGeneratedMediaTaskIdsForSessionKey(sessionKey);
+      expect([...selected]).toEqual(["requester-only", "owner-only", "older"]);
       expect(clone).not.toHaveBeenCalledWith(unrelatedDetail);
-      const detail = selected[0]?.detail;
+      const detail = listTaskRecords((task) => selected.has(task.taskId))[0]?.detail;
       if (!Array.isArray(detail) || !Array.isArray(detail[0])) {
         throw new Error("expected nested task detail");
       }
       detail[0].push("caller mutation");
       expect(getTaskById("requester-only")?.detail).toEqual([["selected detail"]]);
-      expect(saveSnapshot).not.toHaveBeenCalled();
+      expect(writeStore).not.toHaveBeenCalled();
     } finally {
       clone.mockRestore();
     }
@@ -539,14 +432,16 @@ describe("task-registry store runtime", () => {
       cleanupAfter: now + 24 * 60 * 60_000,
       detail,
     }));
-    const saveSnapshot = vi.fn();
+    const writeStore = vi.fn();
     configureTaskRegistryRuntime({
       store: {
+        ...createInMemoryTaskRegistryStore(),
         loadSnapshot: () => ({
           tasks: new Map(storedTasks.map((task) => [task.taskId, task])),
           deliveryStates: new Map(),
         }),
-        saveSnapshot,
+        upsertTaskWithDeliveryState: writeStore,
+        upsertDeliveryState: writeStore,
       },
       observers: null,
     });
@@ -562,85 +457,10 @@ describe("task-registry store runtime", () => {
       expect(clone.mock.calls.filter(([value]) => value === detail).length).toBeLessThanOrEqual(
         storedTasks.length,
       );
-      expect(saveSnapshot).not.toHaveBeenCalled();
+      expect(writeStore).not.toHaveBeenCalled();
     } finally {
       clone.mockRestore();
     }
-  });
-
-  it("preserves task order and raw cron partitions in maintenance snapshots", () => {
-    const base: TaskRecord = {
-      ...createStoredTask(),
-      runtime: "cron",
-      status: "succeeded",
-      endedAt: 100,
-    };
-    const partitions: { prefix: string; sourceId: string; detail: TaskRecord["detail"] }[] = [
-      { prefix: "empty-history", sourceId: "job", detail: { kind: "cron-run", storeKey: "" } },
-      { prefix: "empty-quiet", sourceId: "job", detail: { storeKey: "" } },
-      { prefix: "space-store", sourceId: "job", detail: { kind: "cron-run", storeKey: " " } },
-      { prefix: "missing-store", sourceId: "job", detail: { kind: "cron-run" } },
-      { prefix: "padded-job", sourceId: " job ", detail: { kind: "cron-run", storeKey: "" } },
-      { prefix: "space-job", sourceId: " ", detail: { kind: "cron-run", storeKey: "" } },
-    ];
-    const storedTasks: TaskRecord[] = [
-      ...partitions.flatMap(({ prefix, sourceId, detail }) =>
-        Array.from({ length: CRON_HISTORY_KEEP_PER_JOB + 1 }, (_, index) => ({
-          ...base,
-          taskId: `${prefix}-${String(index).padStart(4, "0")}`,
-          sourceId,
-          detail,
-        })),
-      ),
-      ...Array.from(["newer-first", "newer-last"], (taskId) => ({
-        ...base,
-        taskId,
-        runtime: "cli" as const,
-        createdAt: 200,
-        lastEventAt: 200,
-        endedAt: 200,
-      })),
-      { ...base, taskId: "older", createdAt: 50, lastEventAt: 50, endedAt: 50 },
-      { ...base, taskId: "missing-source", sourceId: undefined },
-      { ...base, taskId: "empty-source", sourceId: "" },
-      ...Array.from(["queued", "running", "lost"] as const, (status) => ({
-        ...base,
-        taskId: `excluded-${status}`,
-        sourceId: "job",
-        status,
-        createdAt: 300,
-        lastEventAt: 300,
-        endedAt: status === "lost" ? 300 : undefined,
-        detail: { kind: "cron-run", storeKey: "" },
-      })),
-    ];
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          tasks: new Map(storedTasks.map((task) => [task.taskId, task])),
-          deliveryStates: new Map(),
-        }),
-        saveSnapshot: vi.fn(),
-      },
-      observers: null,
-    });
-    const listed = listTaskRecords();
-    const snapshot = getTaskRegistryMaintenanceSnapshot();
-    expect(snapshot.taskIds).toEqual(listed.map((task) => task.taskId));
-    expect(snapshot.taskIds.slice(0, 5)).toEqual([
-      "excluded-lost",
-      "excluded-running",
-      "excluded-queued",
-      "newer-last",
-      "newer-first",
-    ]);
-    expect(snapshot.taskIds.at(-1)).toBe("older");
-    expect([...snapshot.cronHistoryOverflowTaskIds]).toEqual([
-      ...collectCronHistoryOverflowTaskIds(listed),
-    ]);
-    expect(snapshot.cronHistoryOverflowTaskIds).toEqual(
-      new Set(partitions.map(({ prefix }) => `${prefix}-0000`)),
-    );
   });
 
   it("rejects invalid persisted task enum values", () => {
@@ -705,7 +525,7 @@ describe("task-registry store runtime", () => {
           let restoredPolicy: TaskNotifyPolicy | null = null;
           let restoreError: string | null = null;
           try {
-            reloadTaskRegistryFromStore();
+            await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
             restoredPolicy = getTaskById(created.taskId)?.notifyPolicy ?? null;
           } catch (error) {
             restoreError = error instanceof Error ? error.message : String(error);
@@ -762,7 +582,7 @@ describe("task-registry store runtime", () => {
           expect(
             updateTaskNotifyPolicyById({ taskId: created.taskId, notifyPolicy })?.notifyPolicy,
           ).toBe(notifyPolicy);
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           expect(getTaskById(created.taskId)?.notifyPolicy).toBe(notifyPolicy);
         },
       );
@@ -848,10 +668,7 @@ describe("task-registry store runtime", () => {
             usage: { input_tokens: 3, cached: false },
           },
         };
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([[task.taskId, task]]),
-          deliveryStates: new Map(),
-        });
+        upsertTaskWithDeliveryStateToSqlite({ task });
 
         expect(loadTaskRegistryStateFromSqlite().tasks.get(task.taskId)?.detail).toEqual(
           task.detail,
@@ -868,10 +685,7 @@ describe("task-registry store runtime", () => {
           ...createStoredTask(),
           detail: null,
         };
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([[task.taskId, task]]),
-          deliveryStates: new Map(),
-        });
+        upsertTaskWithDeliveryStateToSqlite({ task });
 
         const restored = loadTaskRegistryStateFromSqlite().tasks.get(task.taskId);
         expect(restored).toHaveProperty("detail", null);
@@ -963,7 +777,7 @@ describe("task-registry store runtime", () => {
           deliveryStatus: "not_applicable",
           notifyPolicy: "silent",
         });
-        expect(listFreshTasksForOwnerKey(ownerKey).map((task) => task.taskId)).toContain(
+        expect((await listFreshTasksForOwnerKey(ownerKey)).map((task) => task.taskId)).toContain(
           target.taskId,
         );
 
@@ -987,7 +801,7 @@ describe("task-registry store runtime", () => {
         expect(() => loadTaskRegistryStateFromSqlite()).toThrow(
           /integrity_check failed.*idx_task_runs_owner_key/iu,
         );
-        expect(listFreshTasksForOwnerKey(ownerKey).map((task) => task.taskId)).toContain(
+        expect((await listFreshTasksForOwnerKey(ownerKey)).map((task) => task.taskId)).toContain(
           target.taskId,
         );
 
@@ -996,28 +810,32 @@ describe("task-registry store runtime", () => {
     );
   });
 
-  it("emits incremental observer events for restore, mutation, and delete", () => {
+  it("emits detached observer metadata while retaining full task records", async () => {
     const events: TaskRegistryObserverEvent[] = [];
+    const detail = { notes: [["retained task detail"]] };
+    const restored = { ...createStoredTask(), detail };
+    const store = createInMemoryTaskRegistryStore({
+      tasks: new Map([[restored.taskId, restored]]),
+      deliveryStates: new Map(),
+    });
     configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          tasks: new Map([[createStoredTask().taskId, createStoredTask()]]),
-          deliveryStates: new Map(),
-        }),
-        saveSnapshot: () => {},
-      },
+      store,
       observers: {
         onEvent: (event) => {
           events.push(event);
+          if (event.kind === "upserted") {
+            event.task.label = "observer mutation";
+            if (event.previous) {
+              event.previous.label = "previous observer mutation";
+            }
+          } else if (event.kind === "deleted") {
+            event.previous.label = "deleted observer mutation";
+          }
         },
       },
     });
 
-    expect(findTaskByRunId("run-restored")).toMatchObject({
-      runId: "run-restored",
-      taskId: "task-restored",
-      task: "Restored task",
-    });
+    expect(findTaskByRunId("run-restored")?.detail).toEqual(detail);
     const created = createTaskRecord({
       runtime: "acp",
       ownerKey: "agent:main:main",
@@ -1025,40 +843,75 @@ describe("task-registry store runtime", () => {
       childSessionKey: "agent:codex:acp:new",
       runId: "run-new",
       task: "New task",
+      label: "Original label",
       status: "running",
       deliveryStatus: "pending",
+      detail,
     });
-    expect(deleteTaskRecordById(created.taskId)).toBe(true);
+    expect(created.label).toBe("Original label");
+    expect(created.detail).toEqual(detail);
+    expect(created.detail).not.toBe(detail);
+    expect(getTaskById(created.taskId)?.label).toBe("Original label");
 
-    expect(events.map((event) => event.kind)).toEqual(["restored", "upserted", "deleted"]);
-    expect(events[0]).toMatchObject({
-      kind: "restored",
-      tasks: [expect.objectContaining({ taskId: "task-restored" })],
+    const updated = updateTaskNotifyPolicyById({ taskId: created.taskId, notifyPolicy: "silent" });
+    expect(updated).toMatchObject({ label: "Original label", notifyPolicy: "silent", detail });
+    const completed: TaskRecord = {
+      ...created,
+      notifyPolicy: "silent",
+      status: "succeeded",
+      endedAt: Date.now(),
+      cleanupAfter: 0,
+    };
+    store.upsertTaskWithDeliveryState({ task: completed });
+    const deferredObserverEvents: Array<() => void> = [];
+    const published = publishTaskRecordAfterAtomicStore(completed, { deferredObserverEvents });
+    expect(published).toMatchObject({ status: "succeeded", label: "Original label", detail });
+    expect(events.map((event) => event.kind)).toEqual(["restored", "upserted", "upserted"]);
+    expect(deferredObserverEvents).toHaveLength(1);
+    deferredObserverEvents[0]!();
+    expect(getTaskById(created.taskId)).toMatchObject({
+      status: "succeeded",
+      label: "Original label",
+      detail,
     });
-    expect(events[1]).toMatchObject({
+    expect(store.loadSnapshot().tasks.get(created.taskId)?.detail).toEqual(detail);
+    expect(
+      await applyTaskRegistryMaintenanceRetention(completed, Date.now(), new Set(), () => {}),
+    ).toBe("pruned");
+    expect(getTaskById(created.taskId)).toBeUndefined();
+    expect(store.loadSnapshot().tasks.has(created.taskId)).toBe(false);
+
+    expect(events.map((event) => event.kind)).toEqual([
+      "restored",
+      "upserted",
+      "upserted",
+      "upserted",
+      "deleted",
+    ]);
+    for (const event of events) {
+      if (event.kind === "upserted") {
+        expect(event.task).not.toHaveProperty("detail");
+        if (event.previous) {
+          expect(event.previous).not.toHaveProperty("detail");
+        }
+      } else if (event.kind === "deleted") {
+        expect(event.previous).not.toHaveProperty("detail");
+      }
+    }
+    expect(events[0]).toEqual({ kind: "restored" });
+    expect(events[3]).toMatchObject({
       kind: "upserted",
-      task: expect.objectContaining({ taskId: created.taskId }),
+      task: { taskId: created.taskId, status: "succeeded" },
+      previous: { taskId: created.taskId, status: "running" },
     });
-    expect(events[2]).toMatchObject({
-      kind: "deleted",
-      taskId: created.taskId,
-    });
+    expect(events[4]).toMatchObject({ kind: "deleted", taskId: created.taskId });
+    expect(getTaskById(restored.taskId)?.detail).toEqual(detail);
   });
 
-  it("uses atomic task-plus-delivery store methods when available", async () => {
-    const upsertTaskWithDeliveryState = vi.fn();
-    const deleteTaskWithDeliveryState = vi.fn();
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          tasks: new Map(),
-          deliveryStates: new Map(),
-        }),
-        saveSnapshot: vi.fn(),
-        upsertTaskWithDeliveryState,
-        deleteTaskWithDeliveryState,
-      },
-    });
+  it("persists task and delivery state together during notification", async () => {
+    const store = createInMemoryTaskRegistryStore();
+    const upsertTaskWithDeliveryState = vi.spyOn(store, "upsertTaskWithDeliveryState");
+    configureTaskRegistryRuntime({ store });
 
     const created = createTaskRecord({
       runtime: "acp",
@@ -1072,12 +925,11 @@ describe("task-registry store runtime", () => {
       deliveryStatus: "pending",
     });
 
-    await maybeDeliverTaskStateChangeUpdate(created.taskId, {
+    await maybeDeliverTaskStateChangeUpdate(created, {
       at: 200,
       kind: "progress",
       summary: "working",
     });
-    expect(deleteTaskRecordById(created.taskId)).toBe(true);
 
     expect(upsertTaskWithDeliveryState).toHaveBeenCalled();
     expect(requireFirstUpsertParams(upsertTaskWithDeliveryState)).toMatchObject({
@@ -1091,171 +943,6 @@ describe("task-registry store runtime", () => {
         return params.deliveryState?.lastNotifiedEventAt === 200;
       }),
     ).toBe(true);
-    expect(deleteTaskWithDeliveryState).toHaveBeenCalledWith(created.taskId);
-  });
-
-  it("persists create requester origin with one projected snapshot when only separate upserts exist", () => {
-    const upsertTask = vi.fn();
-    const upsertDeliveryState = vi.fn();
-    const saveSnapshot = vi.fn();
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          tasks: new Map(),
-          deliveryStates: new Map(),
-        }),
-        saveSnapshot,
-        upsertTask,
-        upsertDeliveryState,
-      },
-    });
-
-    const created = createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:codex:acp:new",
-      runId: "run-separate-store-origin",
-      task: "Separate store task",
-      status: "running",
-      deliveryStatus: "pending",
-      requesterOrigin: {
-        channel: "test-channel",
-        to: "C1234567890",
-      },
-    });
-
-    expect(upsertTask).not.toHaveBeenCalled();
-    expect(upsertDeliveryState).not.toHaveBeenCalled();
-    expect(saveSnapshot).toHaveBeenCalledOnce();
-    const snapshot = saveSnapshot.mock.calls[0]?.[0] as {
-      tasks: ReadonlyMap<string, TaskRecord>;
-      deliveryStates: ReadonlyMap<string, TaskDeliveryState>;
-    };
-    expect(snapshot.tasks.get(created.taskId)?.task).toBe("Separate store task");
-    expect(snapshot.deliveryStates.get(created.taskId)?.requesterOrigin).toEqual({
-      channel: "test-channel",
-      to: "C1234567890",
-    });
-  });
-
-  it("falls back to full snapshots when custom stores cannot upsert delivery state", () => {
-    const saveSnapshot = vi.fn();
-    const upsertTask = vi.fn();
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          tasks: new Map(),
-          deliveryStates: new Map(),
-        }),
-        saveSnapshot,
-        upsertTask,
-      },
-    });
-
-    const created = createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:codex:acp:snapshot-fallback",
-      runId: "run-snapshot-fallback-origin",
-      task: "Snapshot fallback task",
-      status: "running",
-      deliveryStatus: "pending",
-      requesterOrigin: {
-        channel: "test-channel",
-        to: "C1234567890",
-      },
-    });
-
-    expect(upsertTask).not.toHaveBeenCalled();
-    expect(saveSnapshot).toHaveBeenCalledOnce();
-    const snapshot = saveSnapshot.mock.calls[0]?.[0] as {
-      deliveryStates: ReadonlyMap<string, TaskDeliveryState>;
-    };
-    expect(snapshot.deliveryStates.get(created.taskId)?.requesterOrigin).toEqual({
-      channel: "test-channel",
-      to: "C1234567890",
-    });
-  });
-
-  it("projects updated tasks into snapshots when custom stores cannot upsert delivery state", () => {
-    const storedTask = createStoredTask();
-    const requesterOrigin = {
-      channel: "test-channel",
-      to: "C1234567890",
-    };
-    const snapshots: Array<{
-      tasks: ReadonlyMap<string, TaskRecord>;
-      deliveryStates: ReadonlyMap<string, TaskDeliveryState>;
-    }> = [];
-    const saveSnapshot = vi.fn(
-      (snapshot: {
-        tasks: ReadonlyMap<string, TaskRecord>;
-        deliveryStates: ReadonlyMap<string, TaskDeliveryState>;
-      }) => {
-        snapshots.push({
-          tasks: new Map(snapshot.tasks),
-          deliveryStates: new Map(snapshot.deliveryStates),
-        });
-      },
-    );
-    const upsertTask = vi.fn();
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          tasks: new Map([[storedTask.taskId, storedTask]]),
-          deliveryStates: new Map([
-            [
-              storedTask.taskId,
-              {
-                taskId: storedTask.taskId,
-                requesterOrigin,
-              },
-            ],
-          ]),
-        }),
-        saveSnapshot,
-        upsertTask,
-      },
-    });
-
-    expect(findTaskByRunId("run-restored")?.taskId).toBe(storedTask.taskId);
-    expect(
-      updateTaskNotifyPolicyById({
-        taskId: storedTask.taskId,
-        notifyPolicy: "state_changes",
-      })?.notifyPolicy,
-    ).toBe("state_changes");
-
-    expect(upsertTask).not.toHaveBeenCalled();
-    const latestSnapshot = snapshots.at(-1);
-    expect(latestSnapshot?.tasks.get(storedTask.taskId)?.notifyPolicy).toBe("state_changes");
-    expect(latestSnapshot?.deliveryStates.get(storedTask.taskId)?.requesterOrigin).toEqual(
-      requesterOrigin,
-    );
-  });
-
-  it("restores persisted tasks from the default sqlite store", () => {
-    const created = createTaskRecord({
-      runtime: "cron",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      sourceId: "job-123",
-      runId: "run-sqlite",
-      task: "Run nightly cron",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-
-    resetTaskRegistryForTests({ persist: false });
-
-    expect(findTaskByRunId("run-sqlite")).toMatchObject({
-      taskId: created.taskId,
-      sourceId: "job-123",
-      task: "Run nightly cron",
-    });
   });
 
   it("persists executor and requester agent ids in sqlite task rows", async () => {
@@ -1322,6 +1009,8 @@ describe("task-registry store runtime", () => {
           data: { phase: "start", name: "read", toolCallId: "call-1" },
         });
 
+        await listFreshTasksForOwnerKey(created.ownerKey);
+        await closeOpenClawStateDatabaseAsync();
         resetTaskRegistryForTests({ persist: false });
         expect(findTaskByRunId("run-tool-activity-sqlite")).toMatchObject({
           taskId: created.taskId,
@@ -1362,41 +1051,6 @@ describe("task-registry store runtime", () => {
         expect(loadTaskRegistryStateFromSqliteReadOnly().tasks.get(created.taskId)?.endedAt).toBe(
           terminalAt,
         );
-      },
-    );
-  });
-
-  it("persists requester origin atomically when creating sqlite tasks", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-task-create-origin-" },
-      async () => {
-        const created = createTaskRecord({
-          runtime: "acp",
-          requesterSessionKey: "agent:main:workspace:channel:C1234567890",
-          ownerKey: "agent:main:main",
-          scopeKind: "session",
-          childSessionKey: "agent:main:workspace:channel:C1234567890",
-          runId: "run-create-origin",
-          task: "Reply to channel task",
-          status: "running",
-          deliveryStatus: "pending",
-          notifyPolicy: "done_only",
-          requesterOrigin: {
-            channel: "test-channel",
-            to: "C1234567890",
-          },
-        });
-
-        resetTaskRegistryForTests({ persist: false });
-
-        expect(findTaskByRunId("run-create-origin")).toMatchObject({
-          taskId: created.taskId,
-        });
-        const deliveryState = loadTaskRegistryStateFromSqlite().deliveryStates.get(created.taskId);
-        expect(deliveryState?.requesterOrigin).toEqual({
-          channel: "test-channel",
-          to: "C1234567890",
-        });
       },
     );
   });
@@ -1474,7 +1128,95 @@ describe("task-registry store runtime", () => {
     });
   });
 
-  it("prunes stale sqlite delivery state while retaining current rows", async () => {
+  it("keeps nonpersistent resets storage-free and normal resets metadata-free", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const databasePath = resolveOpenClawStateSqlitePath(process.env);
+      expect(existsSync(databasePath)).toBe(false);
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      expect(existsSync(databasePath)).toBe(false);
+
+      resetTaskRegistryForTests();
+      resetTaskFlowRegistryForTests();
+      expect(
+        tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
+      ).toBe(false);
+    });
+  });
+
+  it("clears only the reset family's rows and orphan bindings", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      const task = createStoredTask();
+      upsertTaskWithDeliveryStateToSqlite({ task, deliveryState: { taskId: task.taskId } });
+      const flow = createManagedTaskFlow({
+        ownerKey: task.ownerKey,
+        controllerId: "tests/reset-flow",
+        goal: "Retained flow",
+      });
+      const { db } = openOpenClawStateDatabase();
+      for (const [ownerKind, ownerId] of [
+        ["task", task.taskId],
+        ["task", "orphan-task"],
+        ["flow", flow.flowId],
+        ["flow", "orphan-flow"],
+        ["cron", "retained-cron"],
+      ] as const) {
+        bindExecutionOwnerLifecycleMetadata({
+          db,
+          ownerKind,
+          ownerId,
+          binding: { contextId: "reset-context", executionId: "reset-execution" },
+        });
+      }
+      // Reset must not parse malformed fixture payloads before deleting them.
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<TaskRegistryTestDatabase>(db)
+          .updateTable("task_runs")
+          .set({ detail_json: "{" }),
+      );
+      const readBindings = () =>
+        openOpenClawStateDatabase()
+          .db.prepare(
+            "SELECT owner_kind, owner_id FROM execution_owner_lifecycle_bindings ORDER BY owner_kind, owner_id",
+          )
+          .all();
+
+      resetTaskRegistryForTests();
+      expect(db.isOpen).toBe(false);
+      expect(loadTaskRegistryStateFromSqlite()).toEqual({
+        tasks: new Map(),
+        deliveryStates: new Map(),
+      });
+      expect(readBindings()).toEqual([
+        { owner_kind: "cron", owner_id: "retained-cron" },
+        ...[flow.flowId, "orphan-flow"]
+          .toSorted()
+          .map((owner_id) => ({ owner_kind: "flow", owner_id })),
+      ]);
+      upsertTaskWithDeliveryStateToSqlite({ task });
+      bindExecutionOwnerLifecycleMetadata({
+        db: openOpenClawStateDatabase().db,
+        ownerKind: "task",
+        ownerId: task.taskId,
+        binding: { contextId: "reset-context", executionId: "reset-execution" },
+      });
+      resetTaskFlowRegistryForTests({ persist: false });
+      expect(getTaskFlowById(flow.flowId)).toEqual(flow);
+
+      resetTaskFlowRegistryForTests();
+      expect(getTaskFlowById(flow.flowId)).toBeUndefined();
+      expect(loadTaskRegistryStateFromSqlite().tasks.get(task.taskId)).toEqual(task);
+      expect(readBindings()).toEqual([
+        { owner_kind: "cron", owner_id: "retained-cron" },
+        { owner_kind: "task", owner_id: task.taskId },
+      ]);
+    });
+  });
+
+  it("removes omitted delivery state without changing other task rows", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-delivery-prune-" },
       async () => {
@@ -1493,85 +1235,19 @@ describe("task-registry store runtime", () => {
           lastNotifiedEventAt: 200,
         };
 
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([
-            [taskA.taskId, taskA],
-            [taskB.taskId, taskB],
-          ]),
-          deliveryStates: new Map([
-            [deliveryA.taskId, deliveryA],
-            [deliveryB.taskId, deliveryB],
-          ]),
-        });
-
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([
-            [taskA.taskId, taskA],
-            [taskB.taskId, taskB],
-          ]),
-          deliveryStates: new Map([[deliveryB.taskId, deliveryB]]),
-        });
+        upsertTaskWithDeliveryStateToSqlite({ task: taskA, deliveryState: deliveryA });
+        upsertTaskWithDeliveryStateToSqlite({ task: taskB, deliveryState: deliveryB });
+        upsertTaskWithDeliveryStateToSqlite({ task: taskA });
 
         const restored = loadTaskRegistryStateFromSqlite();
+        expect(restored.tasks).toEqual(
+          new Map([
+            [taskA.taskId, taskA],
+            [taskB.taskId, taskB],
+          ]),
+        );
         expect(restored.deliveryStates.has(taskA.taskId)).toBe(false);
         expect(restored.deliveryStates.get(taskB.taskId)).toEqual(deliveryB);
-      },
-    );
-  });
-
-  it("prunes large sqlite snapshots without binding every task id at once", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-task-large-prune-" },
-      async () => {
-        const tasks = new Map<string, TaskRecord>();
-        const deliveryStates = new Map<string, TaskDeliveryState>();
-        for (let index = 0; index < 1_200; index++) {
-          const task: TaskRecord = {
-            ...createStoredTask(),
-            taskId: `task-large-${index}`,
-            runId: `run-large-${index}`,
-            createdAt: index,
-            lastEventAt: index,
-          };
-          tasks.set(task.taskId, task);
-          deliveryStates.set(task.taskId, {
-            taskId: task.taskId,
-            lastNotifiedEventAt: index,
-          });
-        }
-
-        saveTaskRegistryStateToSqlite({ tasks, deliveryStates });
-        const admitted: AdmittedRunContext = {
-          operationalRunInstance: { instanceId: "instance-task-prune", runId: "run-task-prune" },
-          executionIdentityToken: createExecutionIdentityAdmissionToken("run-task-prune", {
-            contextId: "context-task-prune",
-            executionId: "execution-task-prune",
-          }),
-        };
-        expect(bindTaskRunExecution({ admitted, taskId: "task-large-0" })).toBe("bound");
-        expect(bindTaskRunExecution({ admitted, taskId: "task-large-1199" })).toBe("bound");
-        const retainedTasks = new Map([...tasks].slice(100));
-        const retainedDeliveryStates = new Map([...deliveryStates].slice(100));
-        saveTaskRegistryStateToSqlite({
-          tasks: retainedTasks,
-          deliveryStates: retainedDeliveryStates,
-        });
-
-        const restored = loadTaskRegistryStateFromSqlite();
-        expect(restored.tasks.size).toBe(1_100);
-        expect(restored.deliveryStates.size).toBe(1_100);
-        expect(restored.tasks.has("task-large-0")).toBe(false);
-        expect(restored.tasks.has("task-large-1199")).toBe(true);
-        expect(
-          openOpenClawStateDatabase()
-            .db.prepare(
-              `SELECT owner_id
-               FROM execution_owner_lifecycle_bindings
-               WHERE owner_kind = 'task'
-               ORDER BY owner_id`,
-            )
-            .all(),
-        ).toEqual([{ owner_id: "task-large-1199" }]);
       },
     );
   });
@@ -1581,6 +1257,7 @@ describe("task-registry store runtime", () => {
       { layout: "state-only", prefix: "openclaw-task-binding-owner-" },
       async () => {
         const active = { ...createStoredTask(), taskId: "task-binding-active" };
+        const retained = { ...createStoredTask(), taskId: "task-binding-retained" };
         const terminal: TaskRecord = {
           ...createStoredTask(),
           taskId: "task-binding-terminal",
@@ -1592,14 +1269,9 @@ describe("task-registry store runtime", () => {
           taskId: "task-binding-stale",
           endedAt: 199,
         };
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([
-            [active.taskId, active],
-            [terminal.taskId, terminal],
-            [stale.taskId, stale],
-          ]),
-          deliveryStates: new Map(),
-        });
+        for (const task of [active, retained, terminal, stale]) {
+          upsertTaskWithDeliveryStateToSqlite({ task });
+        }
         const admitted: AdmittedRunContext = {
           operationalRunInstance: { instanceId: "instance-task-owner", runId: "run-task-owner" },
           executionIdentityToken: createExecutionIdentityAdmissionToken("run-task-owner", {
@@ -1611,32 +1283,41 @@ describe("task-registry store runtime", () => {
         expect(
           tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
         ).toBe(false);
-        expect(bindTaskRunExecution({ admitted, taskId: terminal.taskId })).toBe("missing");
-        expect(bindTaskRunExecution({ admitted, taskId: stale.taskId })).toBe("missing");
+        expect(await bindTaskRunExecution({ admitted, taskId: terminal.taskId })).toBe("missing");
+        expect(await bindTaskRunExecution({ admitted, taskId: stale.taskId })).toBe("missing");
         expect(
           tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
         ).toBe(false);
-        expect(bindTaskRunExecution({ admitted, taskId: active.taskId })).toBe("bound");
+        expect(await bindTaskRunExecution({ admitted, taskId: active.taskId })).toBe("bound");
+        expect(await bindTaskRunExecution({ admitted, taskId: retained.taskId })).toBe("bound");
 
         const finished = { ...active, status: "succeeded" as const, endedAt: 210 };
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([
-            [finished.taskId, finished],
-            [terminal.taskId, terminal],
-            [stale.taskId, stale],
-          ]),
-          deliveryStates: new Map(),
-        });
-        expect(bindTaskRunExecution({ admitted, taskId: finished.taskId })).toBe("missing");
+        upsertTaskWithDeliveryStateToSqlite({ task: finished });
+        expect(await bindTaskRunExecution({ admitted, taskId: finished.taskId })).toBe("missing");
         expect(
           openOpenClawStateDatabase()
             .db.prepare(
               `SELECT owner_id
                FROM execution_owner_lifecycle_bindings
-               WHERE owner_kind = 'task'`,
+               WHERE owner_kind = 'task' ORDER BY owner_id`,
             )
             .all(),
-        ).toEqual([{ owner_id: active.taskId }]);
+        ).toEqual([{ owner_id: active.taskId }, { owner_id: retained.taskId }]);
+
+        runOpenClawStateWriteTransaction(() =>
+          deleteTaskRowsWithDeliveryState(openOpenClawStateDatabase().db, active.taskId),
+        );
+        const restored = loadTaskRegistryStateFromSqlite();
+        expect([...restored.tasks.keys()].toSorted()).toEqual(
+          [retained.taskId, terminal.taskId, stale.taskId].toSorted(),
+        );
+        expect(
+          openOpenClawStateDatabase()
+            .db.prepare(
+              "SELECT owner_id FROM execution_owner_lifecycle_bindings WHERE owner_kind = 'task'",
+            )
+            .all(),
+        ).toEqual([{ owner_id: retained.taskId }]);
       },
     );
   });
@@ -1646,10 +1327,7 @@ describe("task-registry store runtime", () => {
       { layout: "state-only", prefix: "openclaw-task-store-" },
       async () => {
         const task = createStoredTask();
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([[task.taskId, task]]),
-          deliveryStates: new Map(),
-        });
+        upsertTaskWithDeliveryStateToSqlite({ task });
 
         closeOpenClawStateDatabase();
 
@@ -1687,115 +1365,116 @@ describe("task-registry store runtime", () => {
     );
   });
 
-  it("does not throw or diverge sqlite-direct reads when an upsert persist fails", () => {
-    const ownerKey = "agent:main:main";
-    // sqlite holds the source-of-truth row. status=running (current). When the
-    // upsert throws, sqlite keeps this value (withWriteTransaction ROLLBACK +
-    // re-throw).
-    const sqliteRow: TaskRecord = {
-      ...createStoredTask(),
-      taskId: "task-diverge",
-      runId: "run-diverge",
-      ownerKey,
-      status: "running",
-    };
-    const sqliteState = new Map<string, TaskRecord>([[sqliteRow.taskId, sqliteRow]]);
-
-    let failUpsert = false;
-    const upsertTaskWithDeliveryState = vi.fn((params: { task: TaskRecord }) => {
-      if (failUpsert) {
-        // Same failure mode as production SQLITE_BUSY/FULL/IOERR ->
-        // withWriteTransaction ROLLBACK + re-throw. The sqlite row is untouched.
-        throw new Error("SQLITE_FULL: database or disk is full");
-      }
-      sqliteState.set(params.task.taskId, params.task);
-    });
-    const deleteTaskWithDeliveryState = vi.fn((taskId: string) => {
-      sqliteState.delete(taskId);
-    });
-    // sqlite-direct reader (listFreshTasksForOwnerKey -> store.listTasksForOwnerKey).
-    // Always returns the sqlite source of truth.
-    const listTasksForOwnerKey = vi.fn((key: string) =>
-      [...sqliteState.values()].filter((task) => task.ownerKey === key),
-    );
-
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          tasks: new Map(sqliteState),
-          deliveryStates: new Map(),
-        }),
-        saveSnapshot: () => {},
-        upsertTaskWithDeliveryState,
-        deleteTaskWithDeliveryState,
-        listTasksForOwnerKey,
-      },
-    });
-
-    // in-memory loads the same row via loadSnapshot. Start state: both running.
-    const initial = listFreshTasksForOwnerKey(ownerKey);
-    expect(initial.find((task) => task.taskId === "task-diverge")?.status).toBe("running");
-
-    // Attempt a transition running -> succeeded. updateTask must persist before
-    // committing the in-memory map, so when persist fails the in-memory state is
-    // left untouched and the failure does not escape the task-registry API.
-    failUpsert = true;
-    expect(
-      markTaskTerminalById({
+  it.each(["write", "admission"] as const)(
+    "keeps published and stored tasks unchanged when %s fails before persistence",
+    async (failureStage) => {
+      const ownerKey = "agent:main:main";
+      const sqliteRow: TaskRecord = {
+        ...createStoredTask(),
         taskId: "task-diverge",
-        status: "succeeded",
-        endedAt: 200,
-      }),
-    ).toBeNull();
+        runId: "run-diverge",
+        ownerKey,
+        status: "running",
+      };
+      const sqliteState = new Map<string, TaskRecord>([[sqliteRow.taskId, sqliteRow]]);
 
-    // Divergence check: persist failed, so the in-memory mutation must not be
-    // committed. The discriminating read is the in-memory path (getTaskById):
-    // in the buggy ordering the in-memory record is left at "succeeded" while
-    // sqlite still holds "running", so the two stores diverge. With
-    // persist-before-in-memory the in-memory record stays "running".
-    failUpsert = false;
-    expect(getTaskById("task-diverge")?.status).toBe("running");
+      let failUpsert = false;
+      const upsertTaskWithDeliveryState = vi.fn((params: { task: TaskRecord }) => {
+        if (failUpsert && failureStage === "write") {
+          throw new Error("SQLITE_FULL: database or disk is full");
+        }
+        sqliteState.set(params.task.taskId, params.task);
+      });
+      configureTaskRegistryRuntime({
+        store: {
+          ...createInMemoryTaskRegistryStore(),
+          loadSnapshot: () => ({
+            tasks: new Map(sqliteState),
+            deliveryStates: new Map(),
+          }),
+          withMutation: <T>(operation: () => T): T => {
+            if (failUpsert && failureStage === "admission") {
+              throw new Error("Synthetic coordinator admission failure");
+            }
+            return operation();
+          },
+          upsertTaskWithDeliveryState,
+          listTasksForOwnerKey: async (_context, key) =>
+            [...sqliteState.values()].filter((task) => task.ownerKey === key),
+        },
+      });
 
-    // The sqlite-direct reader (used by media-generation-task-status-shared)
-    // also keeps "running", so both read paths agree.
-    const after = listFreshTasksForOwnerKey(ownerKey);
-    const seen = after.find((task) => task.taskId === "task-diverge");
-    expect(seen?.status).toBe("running");
-  });
+      const initial = await listFreshTasksForOwnerKey(ownerKey);
+      expect(initial.find((task) => task.taskId === "task-diverge")?.status).toBe("running");
 
-  it("does not throw or mutate memory when create persistence fails", () => {
-    const upsertTaskWithDeliveryState = vi.fn(
-      (_params: { task: TaskRecord; deliveryState?: TaskDeliveryState }) => {
-        throw new Error("SQLITE_FULL: database or disk is full");
-      },
-    );
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          tasks: new Map(),
-          deliveryStates: new Map(),
+      failUpsert = true;
+      expect(
+        markTaskTerminalById({
+          taskId: "task-diverge",
+          status: "succeeded",
+          endedAt: 200,
         }),
-        saveSnapshot: () => {},
-        upsertTaskWithDeliveryState,
-      },
-    });
+      ).toBeNull();
+      expect(
+        finalizeTaskRecordByRunId({
+          runId: "run-diverge",
+          status: "succeeded",
+          endedAt: 200,
+          suppressDelivery: true,
+        }),
+      ).toEqual([]);
 
-    const created = createTaskRecordOrNull({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:codex:acp:create-fail",
-      runId: "run-create-fail",
-      task: "Create while persistence fails",
-      status: "running",
-      deliveryStatus: "pending",
-    });
+      failUpsert = false;
+      expect(getTaskById("task-diverge")?.status).toBe("running");
 
-    expect(created).toBeNull();
-    const attempted = upsertTaskWithDeliveryState.mock.calls[0]?.[0]?.task;
-    expect(attempted?.taskId).toEqual(expect.any(String));
-    expect(getTaskById(attempted?.taskId ?? "")).toBeUndefined();
-  });
+      const after = await listFreshTasksForOwnerKey(ownerKey);
+      const seen = after.find((task) => task.taskId === "task-diverge");
+      expect(seen?.status).toBe("running");
+    },
+  );
+
+  it.each(["write", "admission"] as const)(
+    "keeps failed creation unpublished when %s fails",
+    (failureStage) => {
+      const upsertTaskWithDeliveryState = vi.fn(
+        (_params: { task: TaskRecord; deliveryState?: TaskDeliveryState }) => {
+          throw new Error("SQLITE_FULL: database or disk is full");
+        },
+      );
+      configureTaskRegistryRuntime({
+        store: {
+          ...createInMemoryTaskRegistryStore(),
+          withMutation: <T>(operation: () => T): T => {
+            if (failureStage === "admission") {
+              throw new Error("Synthetic coordinator admission failure");
+            }
+            return operation();
+          },
+          upsertTaskWithDeliveryState,
+        },
+      });
+
+      const created = createTaskRecordOrNull({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:create-fail",
+        runId: "run-create-fail",
+        task: "Create while persistence fails",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      expect(created).toBeNull();
+      const attempted = upsertTaskWithDeliveryState.mock.calls[0]?.[0]?.task;
+      if (failureStage === "write") {
+        expect(attempted?.taskId).toEqual(expect.any(String));
+      } else {
+        expect(upsertTaskWithDeliveryState).not.toHaveBeenCalled();
+      }
+      expect(getTaskById(attempted?.taskId ?? "")).toBeUndefined();
+    },
+  );
 
   it("does not report duplicate create metadata updates as applied when persistence fails", () => {
     const first = createTaskRecord({
@@ -1815,11 +1494,11 @@ describe("task-registry store runtime", () => {
     );
     configureTaskRegistryRuntime({
       store: {
+        ...createInMemoryTaskRegistryStore(),
         loadSnapshot: () => ({
           tasks: new Map([[first.taskId, first]]),
           deliveryStates: new Map(),
         }),
-        saveSnapshot: () => {},
         upsertTaskWithDeliveryState,
       },
     });
@@ -1840,163 +1519,106 @@ describe("task-registry store runtime", () => {
     expect(getTaskById(first.taskId)?.task).toBe("Original task");
   });
 
-  it("does not throw or delete memory when delete persistence fails", () => {
-    const sqliteRow = {
-      ...createStoredTask(),
-      taskId: "task-delete-persist-fail",
-      runId: "run-delete-persist-fail",
-    };
-    const sqliteState = new Map<string, TaskRecord>([[sqliteRow.taskId, sqliteRow]]);
-    const deleteTaskWithDeliveryState = vi.fn(() => {
-      throw new Error("SQLITE_IOERR: disk I/O error");
-    });
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          tasks: new Map(sqliteState),
-          deliveryStates: new Map(),
-        }),
-        saveSnapshot: () => {},
-        upsertTaskWithDeliveryState: vi.fn(),
-        deleteTaskWithDeliveryState,
-      },
-    });
+  it.each(["create", "update", "delete"] as const)(
+    "keeps SQLite and published task state atomic when %s persistence fails",
+    async (operation) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: `openclaw-task-atomic-${operation}-` },
+        async () => {
+          resetTaskRegistryForTests({ persist: false });
+          const params = {
+            runtime: "cli" as const,
+            ownerKey: "agent:main:main",
+            scopeKind: "session" as const,
+            runId: `atomic-${operation}`,
+            task: "Preserve task and delivery state together",
+            status: operation === "delete" ? ("succeeded" as const) : ("running" as const),
+            ...(operation === "delete" ? { cleanupAfter: 0 } : {}),
+            deliveryStatus: "pending" as const,
+            notifyPolicy: "silent" as const,
+            requesterOrigin: { channel: "test-channel", to: "C1234567890" },
+          };
+          const existing = operation === "create" ? undefined : createTaskRecord(params);
+          const visibleBefore = listTaskRecords();
+          const storedBefore = loadTaskRegistryStateFromSqlite();
+          const observed: Array<{
+            kind: TaskRegistryObserverEvent["kind"];
+            stored: ReturnType<typeof loadTaskRegistryStateFromSqlite>;
+            visible: TaskRecord[];
+          }> = [];
+          configureTaskRegistryRuntime({
+            observers: {
+              onEvent: (event) => {
+                observed.push({
+                  kind: event.kind,
+                  stored: loadTaskRegistryStateFromSqliteReadOnly(),
+                  visible: listTaskRecords(),
+                });
+              },
+            },
+          });
+          const mutate = async () => {
+            if (operation === "create") {
+              return createTaskRecordOrNull(params);
+            }
+            if (!existing) {
+              throw new Error("expected the existing task fixture");
+            }
+            return operation === "update"
+              ? updateTaskNotifyPolicyById({
+                  taskId: existing.taskId,
+                  notifyPolicy: "state_changes",
+                })
+              : applyTaskRegistryMaintenanceRetention(existing, Date.now(), new Set(), () => {});
+          };
+          const { db } = openOpenClawStateDatabase();
+          const failingStatement =
+            operation === "delete" ? "DELETE ON task_runs" : "INSERT ON task_delivery_state";
+          // Fail the second statement: a missing transaction would leave the first row change behind.
+          db.exec(`
+            CREATE ${operation === "delete" ? "" : "TEMP "}TRIGGER reject_task_write BEFORE ${failingStatement}
+            BEGIN SELECT RAISE(ABORT, 'synthetic task write failure'); END;
+          `);
+          try {
+            expect(await mutate()).toBe(operation === "delete" ? undefined : null);
+            expect(loadTaskRegistryStateFromSqlite()).toEqual(storedBefore);
+            expect(listTaskRecords()).toEqual(visibleBefore);
+            expect(findTaskByRunId(params.runId)).toEqual(existing);
+            expect(observed).toEqual([]);
+          } finally {
+            db.exec("DROP TRIGGER reject_task_write");
+          }
 
-    expect(findTaskByRunId(sqliteRow.runId)?.taskId).toBe(sqliteRow.taskId);
-    expect(deleteTaskRecordById(sqliteRow.taskId)).toBe(false);
-
-    expect(deleteTaskWithDeliveryState).toHaveBeenCalledWith(sqliteRow.taskId);
-    expect(getTaskById(sqliteRow.taskId)?.status).toBe("running");
-  });
-
-  it("deletes through a single atomic store call without a redundant delivery-state delete", () => {
-    const deleteTaskWithDeliveryState = vi.fn();
-    const deleteDeliveryState = vi.fn();
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          tasks: new Map(),
-          deliveryStates: new Map(),
-        }),
-        saveSnapshot: () => {},
-        upsertTaskWithDeliveryState: vi.fn(),
-        deleteTaskWithDeliveryState,
-        deleteDeliveryState,
-      },
-    });
-
-    const created = createTaskRecord({
-      runtime: "acp",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:codex:acp:new",
-      runId: "run-atomic-delete",
-      task: "Atomic delete task",
-      status: "running",
-      deliveryStatus: "pending",
-    });
-
-    expect(deleteTaskRecordById(created.taskId)).toBe(true);
-
-    // The composite delete already removes the task and its delivery state in a
-    // single transaction. A second, non-transactional delivery-state delete
-    // before the in-memory mutation would re-open the divergence window (sqlite
-    // deleted / memory retained) if it threw, so it must not be issued.
-    expect(deleteTaskWithDeliveryState).toHaveBeenCalledTimes(1);
-    expect(deleteTaskWithDeliveryState).toHaveBeenCalledWith(created.taskId);
-    expect(deleteDeliveryState).not.toHaveBeenCalled();
-  });
-
-  it("persists snapshot-only deletes without resurrecting the task", () => {
-    const persistedTaskIds: string[][] = [];
-    const persistedDeliveryIds: string[][] = [];
-    const saveSnapshot = vi.fn(
-      (snapshot: {
-        tasks: ReadonlyMap<string, TaskRecord>;
-        deliveryStates: ReadonlyMap<string, TaskDeliveryState>;
-      }) => {
-        // Capture the keys at call time. A real store serializes the snapshot
-        // immediately; holding the live map reference would let the in-memory
-        // delete (which runs after persistence) mask a resurrected row.
-        persistedTaskIds.push([...snapshot.tasks.keys()]);
-        persistedDeliveryIds.push([...snapshot.deliveryStates.keys()]);
-      },
-    );
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          tasks: new Map([[createStoredTask().taskId, createStoredTask()]]),
-          deliveryStates: new Map<string, TaskDeliveryState>([
-            ["task-restored", { taskId: "task-restored", lastNotifiedEventAt: 100 }],
-          ]),
-        }),
-        saveSnapshot,
-      },
-    });
-
-    // Trigger restore so the task and its delivery state are loaded into memory.
-    expect(findTaskByRunId("run-restored")?.taskId).toBe("task-restored");
-
-    expect(deleteTaskRecordById("task-restored")).toBe(true);
-
-    // A snapshot-only store persists the delete by saving a projected snapshot.
-    // The final persisted snapshot must exclude both the task and its delivery
-    // state; saving the task and delivery deletions as two separate snapshots
-    // would let the second save (built from the un-projected in-memory maps)
-    // resurrect the row the first save removed.
-    expect(saveSnapshot).toHaveBeenCalled();
-    expect(persistedTaskIds.at(-1)).not.toContain("task-restored");
-    expect(persistedDeliveryIds.at(-1)).not.toContain("task-restored");
-  });
-
-  it("persists deletes atomically for non-composite stores with separate delete methods", () => {
-    const backing = {
-      tasks: new Map<string, TaskRecord>(),
-      deliveryStates: new Map<string, TaskDeliveryState>(),
-    };
-    const deleteTask = vi.fn((taskId: string) => {
-      backing.tasks.delete(taskId);
-    });
-    const deleteDeliveryState = vi.fn((taskId: string) => {
-      backing.deliveryStates.delete(taskId);
-    });
-    const saveSnapshot = vi.fn(
-      (snapshot: {
-        tasks: ReadonlyMap<string, TaskRecord>;
-        deliveryStates: ReadonlyMap<string, TaskDeliveryState>;
-      }) => {
-        backing.tasks = new Map(snapshot.tasks);
-        backing.deliveryStates = new Map(snapshot.deliveryStates);
-      },
-    );
-    configureTaskRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          tasks: new Map([[createStoredTask().taskId, createStoredTask()]]),
-          deliveryStates: new Map<string, TaskDeliveryState>([
-            ["task-restored", { taskId: "task-restored", lastNotifiedEventAt: 100 }],
-          ]),
-        }),
-        saveSnapshot,
-        // Non-composite store: separate task / delivery-state deletes, no
-        // deleteTaskWithDeliveryState.
-        deleteTask,
-        deleteDeliveryState,
-      },
-    });
-
-    // Trigger restore so the task and its delivery state are loaded into memory.
-    expect(findTaskByRunId("run-restored")?.taskId).toBe("task-restored");
-
-    expect(deleteTaskRecordById("task-restored")).toBe(true);
-
-    // Without a composite delete, the removal of both the task and its delivery
-    // state is persisted atomically through one projected snapshot, so neither a
-    // leftover delivery-state row nor a two-write divergence window remains.
-    expect(backing.tasks.has("task-restored")).toBe(false);
-    expect(backing.deliveryStates.has("task-restored")).toBe(false);
-    expect(deleteTask).not.toHaveBeenCalled();
-    expect(deleteDeliveryState).not.toHaveBeenCalled();
-  });
+          const result = await mutate();
+          expect(result).not.toBeNull();
+          expect(result).not.toBe(false);
+          const storedAfter = loadTaskRegistryStateFromSqlite();
+          if (operation === "delete") {
+            expect(result).toBe("pruned");
+            expect(storedAfter.tasks.size).toBe(0);
+            expect(storedAfter.deliveryStates.size).toBe(0);
+            expect(findTaskByRunId(params.runId)).toBeUndefined();
+          } else {
+            const current = findTaskByRunId(params.runId);
+            expect(current).toMatchObject({
+              notifyPolicy: operation === "update" ? "state_changes" : "silent",
+            });
+            expect(storedAfter.tasks.get(current?.taskId ?? "")).toMatchObject({
+              task: params.task,
+              notifyPolicy: operation === "update" ? "state_changes" : "silent",
+            });
+            expect(storedAfter.deliveryStates.get(current?.taskId ?? "")?.requesterOrigin).toEqual(
+              params.requesterOrigin,
+            );
+          }
+          expect(observed.map((event) => event.kind)).toEqual([
+            operation === "delete" ? "deleted" : "upserted",
+          ]);
+          expect(observed[0]?.stored).toEqual(storedAfter);
+          expect(observed[0]?.visible).toEqual(listTaskRecords());
+        },
+      );
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

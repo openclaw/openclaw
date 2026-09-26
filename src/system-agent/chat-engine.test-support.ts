@@ -8,6 +8,7 @@ import {
   fingerprintOpaqueRuntimeOwner,
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
+import { committedConfigFiles as hostedConfigFiles } from "../commands/committed-config.test-support.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { runSetupMemoryImportStep } from "../wizard/setup.memory-import.js";
 import { runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl } from "./agent-turn.test-support.js";
@@ -20,6 +21,7 @@ import {
   resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
+import type { SystemAgentOverview } from "./overview.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture as createSystemAgentVerifiedInferenceTestFixtureImpl,
   createSystemAgentPluginMetadataTestSnapshot,
@@ -47,7 +49,6 @@ const mocks = vi.hoisted(() => ({
   runSearchSetupFlow: vi.fn(),
   runSetupMemoryImportStep: vi.fn(),
   writeWizardConfigFile: vi.fn(),
-  runCollectedChannelOnboardingPostWriteHooks: vi.fn(async () => {}),
   sharedVerifiedInference: undefined as SystemAgentVerifiedInferenceBinding | undefined,
 }));
 
@@ -67,7 +68,6 @@ vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
 vi.mock("../commands/onboard-channels.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/onboard-channels.js")>()),
   setupChannels: mocks.setupChannels,
-  runCollectedChannelOnboardingPostWriteHooks: mocks.runCollectedChannelOnboardingPostWriteHooks,
 }));
 
 vi.mock("../commands/onboard-skills.js", async (importOriginal) => ({
@@ -250,7 +250,7 @@ export async function createOAuthVerifiedBinding(
     auth: { authProfileId: profileId, authFingerprint, ...harnessBinding.auth },
     deps: {
       ...harnessBinding.deps,
-      ensureAuthProfileStore: vi.fn(() => ({
+      loadAuthProfileStoreForRuntime: vi.fn(() => ({
         version: 1,
         profiles: { [profileId]: credential },
       })) as never,
@@ -410,6 +410,7 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  hostedConfigFiles.clear();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   mocks.readConfigFileSnapshot.mockResolvedValue(
@@ -421,7 +422,6 @@ afterEach(() => {
   mocks.runSearchSetupFlow.mockReset();
   mocks.runSetupMemoryImportStep.mockReset();
   mocks.writeWizardConfigFile.mockReset();
-  mocks.runCollectedChannelOnboardingPostWriteHooks.mockReset();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -431,26 +431,31 @@ export const CANCEL_HINT = "Say `cancel` to stop this setup.";
 export const countCancelHints = (text: string) => text.split(CANCEL_HINT).length - 1;
 
 export function fakeOverviewLoader(
-  overrides: { defaultModel?: string; claudeFound?: boolean; codexFound?: boolean } = {},
+  overrides: {
+    defaultModel?: string;
+    setupModel?: string;
+    claudeFound?: boolean;
+    codexFound?: boolean;
+  } = {},
 ) {
-  return async () =>
-    ({
-      config: { path: "/tmp/openclaw.json", exists: false, valid: true, issues: [], hash: null },
-      agents: [],
-      defaultAgentId: "main",
-      defaultModel: overrides.defaultModel,
-      tools: {
-        codex: { command: "codex", found: overrides.codexFound ?? false },
-        claude: { command: "claude", found: overrides.claudeFound ?? false },
-        gemini: { command: "gemini", found: false },
-        apiKeys: { openai: false, anthropic: false },
-      },
-      gateway: { url: "ws://127.0.0.1:18789", source: "local", reachable: false },
-      references: {
-        docsUrl: "https://docs.openclaw.ai",
-        sourceUrl: "https://github.com/openclaw/openclaw",
-      },
-    }) as never;
+  return async (): Promise<SystemAgentOverview> => ({
+    config: { path: "/tmp/openclaw.json", exists: false, valid: true, issues: [], hash: null },
+    agents: [],
+    defaultAgentId: "main",
+    defaultModel: overrides.defaultModel,
+    ...(overrides.setupModel ? { setupModel: overrides.setupModel } : {}),
+    tools: {
+      codex: { command: "codex", found: overrides.codexFound ?? false },
+      claude: { command: "claude", found: overrides.claudeFound ?? false },
+      gemini: { command: "gemini", found: false },
+      apiKeys: { openai: false, anthropic: false },
+    },
+    gateway: { url: "ws://127.0.0.1:18789", source: "local", reachable: false },
+    references: {
+      docsUrl: "https://docs.openclaw.ai",
+      sourceUrl: "https://github.com/openclaw/openclaw",
+    },
+  });
 }
 
 export { expectDefined } from "@openclaw/normalization-core";

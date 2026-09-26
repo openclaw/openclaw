@@ -9,6 +9,14 @@ scenario:
     secondary:
       - channels.qa-channel-outbound
   objective: Verify a channel-scoped agent can complete first-use system-agent delegation while an admitted plugin generation is active.
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom: [qa-channel:alice]
+    agents:
+      entries:
+        qa:
+          tools:
+            alsoAllow: [openclaw]
   successCriteria:
     - A synthetic channel turn exposes and calls the real openclaw delegate tool once.
     - First-use inference verification completes through its isolated read-only runtime.
@@ -50,21 +58,24 @@ flow:
             - ref: env
             - 60000
         - call: reset
+        - set: conversation
+          value:
+            id:
+              expr: config.conversationId
+            kind: channel
+            title: QA System Agent Delegation
         - set: delivery
           value:
-            expr: "transport.buildAgentDelivery({ target: `channel:${config.conversationId}` })"
+            expr: "transport.buildAgentDelivery({ target: `${conversation.kind}:${conversation.id}` })"
         - set: sessionKey
           value:
-            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: conversation.kind, id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
         - set: requestCursorBefore
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
         - sendInbound:
             conversation:
-              id:
-                expr: config.conversationId
-              kind: channel
-              title: QA System Agent Delegation
+              ref: conversation
             senderId: alice
             senderName: Alice
             text:
@@ -75,7 +86,7 @@ flow:
             - ref: state
             - lambda:
                 params: [candidate]
-                expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'channel' && !candidate.threadId && String(candidate.text ?? '').includes(config.expectedMarker)"
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === conversation.id && candidate.conversation.kind === conversation.kind && !candidate.threadId && String(candidate.text ?? '').includes(config.expectedMarker)"
             - expr: liveTurnTimeoutMs(env, 180000)
         - call: waitForCondition
           args:
@@ -112,7 +123,7 @@ flow:
               expr: "`channel transcript lost the successful delegate result or final reply: ${JSON.stringify(transcript)}`"
         - set: matchingOutbound
           value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'channel' && String(message.text ?? '').includes(config.expectedMarker))"
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === conversation.id && message.conversation.kind === conversation.kind && String(message.text ?? '').includes(config.expectedMarker))"
         - assert:
             expr: matchingOutbound.length === 1
             message:

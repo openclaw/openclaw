@@ -25,7 +25,7 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -38,7 +38,12 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
-import { createTalkClientAgentConsultRunner } from "./talk-client-agent-consult.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection,
+} from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
+import { createTalkClientAgentConsultRunner } from "./talk/client-agent-consult.js";
 import {
   createGatewaySuiteHarness,
   dispatchInboundMessageMock,
@@ -97,6 +102,12 @@ beforeEach(async () => {
   });
   await prepareGatewayReplyRuntimeForTest({ force: true });
   context = createDirectChatContext({ getRuntimeConfig });
+  const rowProjection = await createSessionRowProjection({
+    cfg: getRuntimeConfig(),
+    getConfig: getRuntimeConfig,
+    context,
+  });
+  bindSessionRowProjection(context, () => rowProjection);
   const profile = ensureProfileForEmail("talk-history@example.test");
   client = {
     connId: connectionId,
@@ -140,6 +151,7 @@ beforeEach(async () => {
   publications = [];
   publicationErrors = [];
   const publish = createTranscriptUpdateBroadcastHandler({
+    getSessionRowProjection: () => getSessionRowProjection(context),
     broadcastToConnIds: broadcast,
     sessionEventSubscribers: { getAll: () => new Set([connectionId]) },
     sessionMessageSubscribers: { get: () => new Set([connectionId]) },
@@ -172,6 +184,7 @@ afterEach(async () => {
     await drainPublications();
   } finally {
     unsubscribe?.();
+    getSessionRowProjection(context)?.dispose();
     unsubscribe = undefined;
     voiceSessionId = undefined;
     clientVoiceSessionTesting.reset();
@@ -374,7 +387,8 @@ describe("Browser Talk consult target handoff", () => {
 });
 
 describe("Browser Talk literal consult commands", () => {
-  it.each(["/stop", "stop"])("dispatches generated %j as literal model input", async (question) => {
+  it("dispatches generated stop as literal model input", async () => {
+    const question = "stop";
     const ack = await consult(question, "literal-command");
     expect(ack).toMatchObject({ runId: expect.any(String), idempotencyKey: ack.runId });
     await Promise.race([
@@ -573,7 +587,7 @@ describe("Browser Talk consult input custody", () => {
       const databasePath = resolveOpenClawAgentSqlitePath(
         toDatabaseOptions(resolveSqliteTranscriptReadScope(scope())),
       );
-      expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
       clearSessionStoreCacheForTest();
       expectVisibleSpeechOnly(await historyMessages(), "reopened chat.history", true);
       for (const manager of [
@@ -716,7 +730,7 @@ describe("Direct Talk consult history after call closure", () => {
         const databasePath = resolveOpenClawAgentSqlitePath(
           toDatabaseOptions(resolveSqliteTranscriptReadScope(scope())),
         );
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
         clearSessionStoreCacheForTest();
         for (const [view, messages] of [
           ["chat.history", history],

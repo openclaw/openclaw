@@ -10,9 +10,58 @@ import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-action
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import {
+  parseRemoteWorkspaceManifestEnvelope,
+  type RemoteWorkspaceManifestEnvelope,
+} from "./workspace-hash-memo.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each([
+  { operation: "clone", reason: "clone-failed", stage: "git clone" },
+  { operation: "checkout", reason: "checkout-failed", stage: "git checkout --detach" },
+])("surfaces $reason diagnostics to cloud placement", async ({ operation, reason, stage }) => {
+  const service = createNodeWorkspaceTransferService({
+    temporaryRoot: tempDirs.make("node-repository-failure-"),
+    getOwner: () => undefined,
+  });
+  const actions = createNodeWorkerWorkspaceActions({
+    environmentId: "environment-1",
+    ownerEpoch: 1,
+    sessionId: "session-1",
+    ownerSignal: new AbortController().signal,
+    isOwnerCurrent: () => true,
+    workspaceTransfer: service,
+    runWorkspaceCommand: async ({ argv }) => ({
+      stdout: argv.includes("rev-parse") ? "a".repeat(40) : "",
+      stderr: argv.includes(operation) ? "fatal: Permission denied\n" : "",
+      code: argv.includes(operation) ? 128 : 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+      workspaceDir: "/node/workspace",
+    }),
+  });
+  try {
+    await expect(
+      actions.syncWorkspace({
+        sessionId: "session-1",
+        generation: 1,
+        source: {
+          kind: "repository",
+          url: "https://example.invalid/repository.git",
+          branch: "openclaw/session",
+        },
+      }),
+    ).rejects.toThrow(
+      `Cloud repository preparation failed: ${reason}: ${stage}: exit (exit code 128, signal null): fatal: Permission denied`,
+    );
+  } finally {
+    await service.closeAll();
+  }
+});
 
 it("rejects repository sources on SSH before invoking any remote command", async () => {
   const run = vi.fn();
@@ -121,6 +170,7 @@ it.each([
       root: path.join(home, "node-host"),
       env: { PATH: process.env.PATH, HOME: home },
     });
+    const manifestCaptures: RemoteWorkspaceManifestEnvelope[] = [];
     const createActions = () => {
       const ownerEpoch = epoch;
       const ownerSignal = new AbortController().signal;
@@ -136,7 +186,7 @@ it.each([
             throw new Error("node workspace authority closed");
           }
           try {
-            return await runtime.exec(
+            const result = await runtime.exec(
               {
                 gatewayNamespace: "gateway-1",
                 environmentId: "environment-1",
@@ -148,6 +198,10 @@ it.each([
               ownerSignal,
               { url: server.gatewayUrl },
             );
+            if (command.argv.at(-1) === "memo-v1") {
+              manifestCaptures.push(parseRemoteWorkspaceManifestEnvelope(result.stdout));
+            }
+            return result;
           } catch (error) {
             if (
               closeOwner &&
@@ -195,6 +249,7 @@ it.each([
         | undefined;
       let revision = 0;
       const capture = async (active = actions, directory = first.remoteWorkspaceDir) => {
+        const firstCapture = manifestCaptures.length;
         const result = await active.reconcileWorkspace({
           remoteWorkspaceDir: directory,
           baseManifestRef: first.baseManifestRef,
@@ -241,9 +296,15 @@ it.each([
             },
           },
         });
-        await result.verifyStable();
-        await result.verifyLocalStable();
-        await result.publishStagedResult?.();
+        await verifyReconciledWorkspaceFinal(result, {
+          assertActive: async () => {},
+          resume: async () => {},
+        });
+        const captures = manifestCaptures.slice(firstCapture);
+        expect(captures).toHaveLength(5);
+        expect(captures.slice(1).every(({ metrics }) => metrics.contentHashCount === 0)).toBe(true);
+        expect(captures.slice(1).every(({ metrics }) => metrics.memoHitCount > 0)).toBe(true);
+        return captures;
       };
       if (closeOwner) {
         await expect(capture()).rejects.toThrow();
@@ -252,7 +313,8 @@ it.each([
         return;
       }
       // Startup must accept setup output even when GitHub normalization is unavailable.
-      await capture();
+      const initialCaptures = await capture();
+      expect(initialCaptures[0]!.metrics.contentHashCount).toBeGreaterThan(0);
       expect(revision).toBe(1);
       expect(checkpoint).toBeDefined();
       await gitAt(first.remoteWorkspaceDir, "rm", "--cached", "retained-removal.ignored");
@@ -273,7 +335,9 @@ it.each([
         "published[1].ignored",
       );
       await fs.writeFile(path.join(first.remoteWorkspaceDir, "first.txt"), "turn one\n");
-      await capture();
+      const changedCaptures = await capture();
+      expect(changedCaptures[0]!.metrics.contentHashCount).toBeGreaterThan(0);
+      expect(changedCaptures[0]!.metrics.memoHitCount).toBeGreaterThan(0);
       await fs.writeFile(path.join(first.remoteWorkspaceDir, "second.txt"), "turn two\n");
       await fs.rm(path.join(first.remoteWorkspaceDir, "tracked.txt"));
       await capture();

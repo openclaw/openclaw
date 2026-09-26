@@ -8,6 +8,7 @@ import {
 } from "../lib/sessions/session-placement-recovery.ts";
 import createRuntime from "./session-placement-startup.runtime.ts";
 import {
+  blockStorageWrites,
   createPlacementStartupHarness,
   createStartupPlacement,
   flushStartupMicrotasks,
@@ -28,6 +29,11 @@ function createStopHarness(phase: string) {
   const reclaim = createDeferred<{ ok: true }>();
   let nextDispatch = 0;
   const request = vi.fn((method: string, params: { idempotencyKey?: string }) => {
+    if (method === "sessions.describe") {
+      return Promise.resolve({
+        session: { placement: createStartupPlacement("reclaimed", 2) },
+      });
+    }
     if (method === "sessions.dispatch") {
       return nextDispatch++ === 0
         ? dispatch.promise
@@ -62,21 +68,6 @@ function createStopHarness(phase: string) {
     dispatch,
     reclaim,
   };
-}
-
-function blockStorageWrites() {
-  const storage = sessionStorage;
-  vi.stubGlobal("sessionStorage", {
-    get length() {
-      return storage.length;
-    },
-    key: storage.key.bind(storage),
-    getItem: storage.getItem.bind(storage),
-    removeItem: storage.removeItem.bind(storage),
-    setItem: () => {
-      throw new Error("quota");
-    },
-  });
 }
 
 function reconnectGateway(

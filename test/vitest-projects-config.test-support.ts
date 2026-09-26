@@ -8,6 +8,7 @@ type VitestTestConfig = {
   dir?: string;
   exclude?: string[];
   include?: string[];
+  projects?: Array<string | VitestConfig>;
 };
 
 type VitestConfig = {
@@ -16,6 +17,8 @@ type VitestConfig = {
 };
 
 type VitestConfigFactory = (env?: Record<string, string | undefined>) => VitestConfig;
+
+let configImportId = 0;
 
 function toRepoPath(filePath: string): string {
   return filePath.replaceAll("\\", "/");
@@ -30,17 +33,27 @@ function findVitestConfigFactory(mod: Record<string, unknown>): VitestConfigFact
   return null;
 }
 
-async function loadRawVitestConfig(configPath: string): Promise<VitestConfig> {
+async function loadRawVitestConfig(
+  configPath: string,
+  includeFile?: string,
+): Promise<VitestConfig> {
   const previousArgv = process.argv;
   const previousIncludeFile = process.env.OPENCLAW_VITEST_INCLUDE_FILE;
   process.argv = [previousArgv[0] ?? "node", previousArgv[1] ?? "vitest"];
-  delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+  if (includeFile === undefined) {
+    delete process.env.OPENCLAW_VITEST_INCLUDE_FILE;
+  } else {
+    process.env.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+  }
   try {
     const configUrl = pathToFileURL(path.resolve(process.cwd(), configPath));
     // Focused runs may have cached a CLI-narrowed default config before the audit clears argv.
-    configUrl.searchParams.set("openclaw-vitest-ownership-audit", "1");
+    configUrl.searchParams.set("openclaw-vitest-ownership-audit", String(configImportId++));
     const mod = (await import(configUrl.href)) as Record<string, unknown>;
-    return findVitestConfigFactory(mod)?.(process.env) ?? ((mod.default ?? {}) as VitestConfig);
+    const defaultConfig = (mod.default ?? {}) as VitestConfig;
+    return defaultConfig.test?.projects
+      ? defaultConfig
+      : (findVitestConfigFactory(mod)?.(process.env) ?? defaultConfig);
   } finally {
     process.argv = previousArgv;
     if (previousIncludeFile === undefined) {
@@ -51,18 +64,40 @@ async function loadRawVitestConfig(configPath: string): Promise<VitestConfig> {
   }
 }
 
+async function listConfigTestFiles(config: VitestConfig, includeFile?: string): Promise<string[]> {
+  const testConfig = config.test ?? {};
+  if (testConfig.projects) {
+    const projects = [];
+    for (const project of testConfig.projects) {
+      projects.push(
+        ...(typeof project === "string"
+          ? await listVitestConfigTestFiles(project, includeFile)
+          : await listConfigTestFiles(project, includeFile)),
+      );
+    }
+    return projects;
+  }
+  const dir = path.resolve(config.root ?? process.cwd(), testConfig.dir ?? ".");
+  const exclude = (testConfig.exclude ?? []).map((pattern) =>
+    path.isAbsolute(pattern) ? toRepoPath(path.relative(dir, pattern)) : toRepoPath(pattern),
+  );
+  return globSync(testConfig.include ?? [], { cwd: dir, exclude }).map((file) =>
+    toRepoPath(path.relative(process.cwd(), path.resolve(dir, file))),
+  );
+}
+
+export async function listVitestConfigTestFiles(
+  configPath: string,
+  includeFile?: string,
+): Promise<string[]> {
+  return listConfigTestFiles(await loadRawVitestConfig(configPath, includeFile), includeFile);
+}
+
 async function listFullSuiteTestFileMatches(): Promise<Map<string, string[]>> {
   const matches = new Map<string, string[]>();
   const configPaths = [...new Set(fullSuiteVitestShards.flatMap((shard) => shard.projects))];
   for (const configPath of configPaths) {
-    const config = await loadRawVitestConfig(configPath);
-    const testConfig = config.test ?? {};
-    const dir = path.resolve(config.root ?? process.cwd(), testConfig.dir ?? ".");
-    const exclude = (testConfig.exclude ?? []).map((pattern) =>
-      path.isAbsolute(pattern) ? toRepoPath(path.relative(dir, pattern)) : toRepoPath(pattern),
-    );
-    for (const file of globSync(testConfig.include ?? [], { cwd: dir, exclude })) {
-      const repoPath = toRepoPath(path.relative(process.cwd(), path.resolve(dir, file)));
+    for (const repoPath of await listVitestConfigTestFiles(configPath)) {
       matches.set(repoPath, [...(matches.get(repoPath) ?? []), configPath]);
     }
   }
@@ -73,7 +108,6 @@ function listNormalFullSuiteTestFiles(): string[] {
   const e2eNamedIntegrationTests = new Set([
     "src/gateway/gateway.test.ts",
     "src/gateway/server.startup-matrix-migration.integration.test.ts",
-    "src/gateway/sessions-history-http.test.ts",
   ]);
   return globSync(["**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"], {
     cwd: process.cwd(),

@@ -1,21 +1,9 @@
-// Feishu plugin module implements app registration behavior.
+import { renderQrTerminal } from "openclaw/plugin-sdk/media-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-/**
- * Feishu app registration via OAuth device-code flow.
- *
- * Migrated from feishu-plugin-cli's `feishu-auth.ts` and `install-prompts.ts`.
- * Replaces axios with native fetch, removes inquirer/ora/chalk in favor of
- * the openclaw WizardPrompter surface.
- */
 import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readFeishuJsonResponse } from "./json-response.js";
-import { renderQrTerminal } from "./qr-terminal.js";
 import type { FeishuDomain } from "./types.js";
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
 const FEISHU_ACCOUNTS_URL = "https://accounts.feishu.cn";
 const LARK_ACCOUNTS_URL = "https://accounts.larksuite.com";
@@ -27,10 +15,6 @@ const REGISTRATION_PATH = "/oauth/v1/app/registration";
 const APP_REGISTRATION_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS = 5;
 const DEFAULT_REGISTRATION_EXPIRE_SECONDS = 600;
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface AppRegistrationResult {
   appId: string;
@@ -90,10 +74,6 @@ type PollOutcome =
   | { status: "timeout" }
   | { status: "error"; message: string };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function accountsBaseUrl(domain: FeishuDomain): string {
   return domain === "lark" ? LARK_ACCOUNTS_URL : FEISHU_ACCOUNTS_URL;
 }
@@ -142,10 +122,6 @@ async function fetchFeishuJson<T>(params: {
     await release();
   }
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 /**
  * Step 1: Initialize registration and verify the environment supports
@@ -261,18 +237,13 @@ export async function pollAppRegistration(params: {
       continue;
     }
 
-    // Domain auto-detection: switch to lark if tenant_brand says so.
-    if (pollRes.user_info?.tenant_brand) {
-      const isLark = pollRes.user_info.tenant_brand === "lark";
-      if (!domainSwitched && isLark) {
-        domain = "lark";
-        domainSwitched = true;
-        // Retry poll immediately with the correct domain.
-        continue;
-      }
+    if (!domainSwitched && pollRes.user_info?.tenant_brand === "lark") {
+      domain = "lark";
+      domainSwitched = true;
+      // Retry poll immediately with the correct domain.
+      continue;
     }
 
-    // Success.
     if (pollRes.client_id && pollRes.client_secret) {
       return {
         status: "success",
@@ -285,7 +256,6 @@ export async function pollAppRegistration(params: {
       };
     }
 
-    // Error handling.
     if (pollRes.error) {
       if (pollRes.error === "authorization_pending") {
         // Continue waiting.
@@ -337,7 +307,6 @@ export async function getAppOwnerOpenId(params: {
     params.domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
 
   try {
-    // First, get a tenant_access_token.
     const tokenData = await fetchFeishuJson<{
       code?: number;
       tenant_access_token?: string;
@@ -356,7 +325,6 @@ export async function getAppOwnerOpenId(params: {
       return undefined;
     }
 
-    // Query app info for the owner's open_id.
     const appData = await fetchFeishuJson<{
       code?: number;
       data?: {

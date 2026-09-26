@@ -1,8 +1,9 @@
+import { MEMORY_SEARCH_DEADLINE_CONTROL } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
 } from "openclaw/plugin-sdk/memory-host-core";
-import { beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resetMemoryToolMockState, setMemorySearchImpl } from "./memory-tool-manager.test-mocks.js";
 import { testing } from "./tools.js";
 import { createMemorySearchToolOrThrow } from "./tools.test-helpers.js";
@@ -18,14 +19,6 @@ type Scenario = {
 
 const scenarios: Scenario[] = [
   { name: "configured primary limit", configured: 12, memoryCount: 12, wikiCount: 0 },
-  {
-    name: "explicit memory corpus",
-    configured: 12,
-    corpus: "memory",
-    memoryCount: 12,
-    wikiCount: 0,
-  },
-  { name: "default primary limit", configured: 6, memoryCount: 6, wikiCount: 0 },
   { name: "smaller tool override", configured: 12, maxResults: 4, memoryCount: 4, wikiCount: 0 },
   { name: "larger tool override", configured: 6, maxResults: 12, memoryCount: 12, wikiCount: 0 },
   { name: "wiki default", configured: 12, corpus: "wiki", memoryCount: 0, wikiCount: 10 },
@@ -45,13 +38,6 @@ const scenarios: Scenario[] = [
     wikiCount: 5,
   },
   {
-    name: "aggregate backfills spare memory slots",
-    configured: 3,
-    corpus: "all",
-    memoryCount: 3,
-    wikiCount: 7,
-  },
-  {
     name: "aggregate tool override",
     configured: 6,
     corpus: "all",
@@ -66,6 +52,76 @@ beforeEach(() => {
   testing.resetMemorySearchToolCooldowns();
   resetMemoryToolMockState();
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+it.each([20_000, 40_000])(
+  "keeps the wiki deadline independent of managed memory readiness (wiki=%i ms)",
+  async (wikiDelayMs) => {
+    vi.useFakeTimers();
+    const memoryHit = {
+      path: "memory/observatory.md",
+      startLine: 1,
+      endLine: 1,
+      score: 1,
+      snippet: "The observatory access phrase is copper heron.",
+      source: "memory" as const,
+    };
+    const wikiHit = {
+      corpus: "wiki",
+      path: "entities/greenhouse.md",
+      score: 0.5,
+      snippet: "Water the greenhouse plants on Tuesdays.",
+    };
+    setMemorySearchImpl(async (options) => {
+      const control = options?.[MEMORY_SEARCH_DEADLINE_CONTROL];
+      control?.report("pause");
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 70_000);
+      });
+      control?.report("resume");
+      return [memoryHit];
+    });
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, wikiDelayMs);
+        });
+        return [wikiHit];
+      },
+      get: async () => null,
+    });
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        memory: { citations: "off" },
+        plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
+      },
+    });
+    const pending = tool.execute("independent-deadlines", { query: "credentials", corpus: "all" });
+    await vi.advanceTimersByTimeAsync(70_000);
+    const result = await pending;
+    expect(result.details).toMatchObject({
+      results: expect.arrayContaining(
+        (wikiDelayMs < 30_000 ? [wikiHit, memoryHit] : [memoryHit]).map((hit) =>
+          expect.objectContaining({ path: hit.path, snippet: hit.snippet }),
+        ),
+      ),
+      corpora: [
+        { corpus: "memory", outcome: "ok" },
+        wikiDelayMs < 30_000
+          ? { corpus: "wiki", outcome: "ok" }
+          : {
+              corpus: "wiki",
+              outcome: "unavailable",
+              error: "memory_search timed out after 30s",
+            },
+      ],
+    });
+    expect(result.details).toHaveProperty("results.length", wikiDelayMs < 30_000 ? 2 : 1);
+  },
+);
 
 it.each(scenarios)("preserves the model-visible $name", async (scenario) => {
   const memory = Array.from({ length: 20 }, (_, index) => ({

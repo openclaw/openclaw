@@ -23,7 +23,7 @@ describe("buildEmbeddedRunPayloads process-error warnings", () => {
     expect(payloads[0]?.text).not.toContain("wild-lagoon");
     expect(payloads[0]?.text).not.toContain(dummyTelegramToken);
     expect(payloads[0]?.text).toContain("exit 7");
-    expect(payloads[0]?.text).toContain("/verbose full");
+    expect(payloads[0]?.text).not.toContain("/verbose");
   });
 
   it("shows a sanitized bounded error only at full verbosity", () => {

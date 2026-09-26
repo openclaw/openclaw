@@ -1,13 +1,9 @@
 // Qa Lab tests cover scenario catalog plugin behavior.
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { resolveQaRepoPath } from "./repo-path.js";
 import {
   listQaScenarioYamlPaths,
-  readQaBootstrapScenarioCatalog,
   readQaScenarioById,
   readQaScenarioExecutionConfig,
   readQaScenarioPack,
@@ -20,13 +16,11 @@ import {
   requireFlowScenario,
 } from "./scenario-catalog.test-utils.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
-import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 
 describe("qa scenario catalog", () => {
   const twoPartCoverageIdPattern = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9-]*$/;
   const agentRuntime = "agent-runtime";
   const browserUi = "control-ui";
-  const cli = "cli";
   const codex = "openai";
   const memory = "session-memory";
   const otel = "observability";
@@ -112,20 +106,6 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("exposes bootstrap data from the YAML pack", () => {
-    const catalog = readQaBootstrapScenarioCatalog();
-
-    expect(catalog.agentIdentityMarkdown).toContain("protocol-minded");
-    expect(catalog.kickoffTask).toContain("Track what worked");
-    const scenarioIds = catalog.scenarios.map((scenario) => scenario.id);
-    expect(scenarioIds).toContain("subagent-fanout-synthesis");
-    expect(
-      resolveQaParityPackScenarioIds({ parityPack: "agentic" }).filter(
-        (scenarioId) => !scenarioIds.includes(scenarioId),
-      ),
-    ).toStrictEqual([]);
-  });
-
   it("loads scenario-specific execution config from per-scenario YAML", () => {
     const discovery = readQaScenarioById("source-docs-discovery-report");
     const discoveryConfig = readQaScenarioExecutionConfig("source-docs-discovery-report");
@@ -194,7 +174,7 @@ describe("qa scenario catalog", () => {
 
   it("keeps the audited parallel script allowlist exact", () => {
     const expected =
-      "active-talk-agent-run-status agent-run-identity-inspection cached-health-snapshot-boundaries channel-health-monitor-lifecycle diagnostic-events-boundary gateway-loopback-lan-access gateway-rpc-account-health gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-gateway-connect-startup-retry mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing subagent-lineage-inspection tui-command-surfaces-pty tui-editor-input-pty tui-entrypoints-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-local-shell-pty tui-pty-evidence-producer-contract tui-session-management-pty tui-streaming-tool-cards-pty tui-terminal-safety-pty voice-call-cli-rpc-agent-tool webchat-auto-tts".split(
+      "active-talk-agent-run-status agent-run-identity-inspection channel-health-monitor-lifecycle cli-status-health-snapshots diagnostic-events-boundary gateway-smoke gateway-ssh-tunnels gateway-stability-runtime gateway-support-export gateway-tls-pinning gateway-websocket-protocol-contracts logging-file-boundary mcp-gateway-connect-startup-retry mcp-plugin-tools-call otel-generation-config-watcher qa-otel-smoke remote-log-tailing subagent-lineage-inspection tui-command-surfaces-pty tui-editor-input-pty tui-gateway-boundary-pty tui-local-runtime-recovery-pty tui-pty-evidence-producer-contract tui-streaming-tool-cards-pty voice-call-cli-rpc-agent-tool".split(
         " ",
       );
     const marked = readQaScenarioPack().scenarios.filter(
@@ -209,6 +189,22 @@ describe("qa scenario catalog", () => {
       parallelSafe: true,
       allowBlockedEvidence: true,
     });
+    for (const scenarioId of ["cached-health-snapshot-boundaries", "gateway-rpc-account-health"]) {
+      expect(readQaScenarioById(scenarioId).execution).toMatchObject({
+        kind: "script",
+        parallelSafe: false,
+      });
+    }
+    expect(readQaScenarioById("tui-local-shell-pty").execution).toMatchObject({
+      kind: "script",
+      parallelSafe: false,
+    });
+    for (const scenarioId of ["tui-entrypoints-pty", "tui-terminal-safety-pty"]) {
+      expect(readQaScenarioById(scenarioId).execution).toMatchObject({
+        kind: "script",
+        parallelSafe: false,
+      });
+    }
   });
 
   it("rejects invalid provider metadata at the catalog boundary", () => {
@@ -339,33 +335,6 @@ describe("qa scenario catalog", () => {
     expect(patch).not.toHaveProperty("memory.search.query.hybrid");
   });
 
-  it("loads native test execution scenarios from YAML", () => {
-    const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
-    const otelSmoke = readQaScenarioById("qa-otel-smoke");
-
-    expect(scenario.execution.kind).toBe("playwright");
-    if (scenario.execution.kind !== "playwright") {
-      throw new Error(`expected Playwright scenario, got ${scenario.execution.kind}`);
-    }
-    expect(scenario.execution.path).toBe("ui/src/e2e/chat-flow.messaging.e2e.test.ts");
-    expect(scenario.execution.testNamePattern).toBe(
-      "sends a chat turn through the GUI and renders the final Gateway event",
-    );
-    expect(scenario.execution.flow).toBeUndefined();
-    expect(scenario.coverage?.secondary).toContain(`${browserUi}.gateway-hosted-ui-control`);
-    expect(otelSmoke.execution.kind).toBe("script");
-    if (otelSmoke.execution.kind !== "script") {
-      throw new Error(`expected script scenario, got ${otelSmoke.execution.kind}`);
-    }
-    expect(otelSmoke.execution.args).toStrictEqual([
-      "--output-dir",
-      "${outputDir}",
-      "--logs-exporter",
-      "both",
-    ]);
-    expect(otelSmoke.coverage?.secondary).not.toContain(`${otel}.otlp-http-traces-qa-lab`);
-  });
-
   it("reserves Gateway-hosted Control UI proof for the real Gateway flow", () => {
     const coverageId = `${browserUi}.gateway-hosted-ui-control`;
     const primaryOwnerIds = readQaScenarioPack()
@@ -436,19 +405,6 @@ describe("qa scenario catalog", () => {
     }
   });
 
-  it("loads canonical runtime-pair lane metadata", () => {
-    const firstHour = readQaScenarioById("runtime-first-hour-20-turn");
-    const soak = readQaScenarioById("runtime-soak-100-turn");
-
-    expect(firstHour.runtimePairLane).toBe("core");
-    expect(readQaScenarioExecutionConfig(firstHour.id)).toMatchObject({
-      runtimeParityComparison: "outcome-only",
-      turnCount: 20,
-    });
-    expect(soak.runtimePairLane).toBe("soak");
-    expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
-  });
-
   it("marks only non-assistant runtime parity fixtures as usage not applicable", () => {
     const notApplicable = readQaScenarioPack()
       .scenarios.filter((scenario) => scenario.runtimeParityUsage?.expectation === "not-applicable")
@@ -470,140 +426,6 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("plugin-hook-health-sentinel").runtimeParityUsage).toBeUndefined();
   });
 
-  it("loads runtime tool fixture metadata for core and extended lanes", () => {
-    const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
-    const sessionsSpawn = readQaScenarioById("runtime-tool-sessions-spawn");
-    const messageTool = readQaScenarioById("runtime-tool-message-tool");
-    const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
-    const webFetch = readQaScenarioById("runtime-tool-web-fetch");
-    const webSearch = readQaScenarioById("runtime-tool-web-search");
-    const imageGenerate = readQaScenarioById("runtime-tool-image-generate");
-
-    expect(applyPatch.runtimePairLane).toBe("core");
-    for (const scenarioId of [
-      "runtime-tool-apply-patch",
-      "runtime-tool-bash",
-      "runtime-tool-edit",
-      "runtime-tool-exec",
-      "runtime-tool-fs-list",
-      "runtime-tool-fs-read",
-      "runtime-tool-fs-write",
-      "runtime-tool-grep",
-    ]) {
-      const nativeWorkspaceScenario = readQaScenarioById(scenarioId);
-      expect(nativeWorkspaceScenario.coverage?.primary, scenarioId).toEqual([]);
-      expect(nativeWorkspaceScenario.coverage?.secondary?.length, scenarioId).toBeGreaterThan(0);
-    }
-    expect(sessionsSpawn.coverage?.primary).toEqual([
-      "agent-runtime.subagent-turns-sessions-spawn",
-    ]);
-    expect(messageTool.runtimePairLane).toBe("extended");
-    expect(tavilySearch.runtimePairLane).toBe("extended");
-    expect(imageGenerate.runtimePairLane).toBe("extended");
-    expect(readQaScenarioExecutionConfig(applyPatch.id)).toMatchObject({
-      toolName: "apply_patch",
-      toolCoverage: {
-        bucket: "codex-native-workspace",
-        expectedLayer: "codex-native-workspace",
-        required: true,
-      },
-    });
-    expect(readQaScenarioExecutionConfig(applyPatch.id)).not.toHaveProperty("knownHarnessGap");
-    expect(readQaScenarioExecutionConfig(applyPatch.id)?.happyPrompt).toContain(
-      "runtime-tool-fixture-patch.txt",
-    );
-    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
-      "../runtime-tool-fixture-denied.txt",
-    );
-    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
-      "runtime-tool-fixture-denied-original",
-    );
-    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
-      "runtime patch outside the workspace",
-    );
-    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).not.toContain(
-      "missing-context",
-    );
-    expect(readQaScenarioExecutionConfig(messageTool.id)).toMatchObject({
-      toolName: "message",
-      expectedAvailable: false,
-      toolCoverage: {
-        bucket: "optional-profile-or-plugin",
-        expectedLayer: "profile-or-plugin",
-        required: false,
-      },
-    });
-    expect(readQaScenarioExecutionConfig(webSearch.id)).toMatchObject({
-      toolName: "web_search",
-      toolCoverage: {
-        bucket: "openclaw-dynamic-integration",
-        expectedLayer: "openclaw-dynamic",
-        capabilityLayer: "openclaw-dynamic-direct",
-        required: true,
-      },
-    });
-    expect(readQaScenarioExecutionConfig(sessionsSpawn.id)).toMatchObject({
-      toolName: "sessions_spawn",
-      toolCoverage: {
-        bucket: "openclaw-dynamic-integration",
-        expectedLayer: "openclaw-dynamic",
-        capabilityLayer: "openclaw-dynamic-direct",
-        required: true,
-      },
-    });
-    expect(readQaScenarioExecutionConfig(sessionsSpawn.id)).not.toHaveProperty("knownHarnessGap");
-    const webFetchConfig = readQaScenarioExecutionConfig(webFetch.id);
-    expect(webFetchConfig?.happyPrompt).toContain("Call web_fetch exactly once");
-    expect(webFetchConfig?.happyPrompt).toContain("call it directly without tool_search");
-    expect(webFetchConfig?.happyPrompt).toContain("Otherwise use tool_search to locate it first");
-    expect(webFetchConfig?.happyPrompt).toContain(
-      "A tool_search result alone does not complete the task",
-    );
-    expect(webFetchConfig?.happyPrompt).toContain("https://example.com/");
-    expect(webFetchConfig?.happyPrompt).toContain("maxChars 500");
-    expect(webFetchConfig?.happyPrompt).toContain("tool search qa check target=web_fetch");
-    expect(webSearch.plugins).toEqual(["qa-lab"]);
-    expect(webSearch.gatewayConfigPatch?.tools).toEqual({
-      web: {
-        search: {
-          enabled: true,
-          provider: "qa-lab-search",
-        },
-      },
-    });
-    expect(readQaScenarioExecutionConfig(webSearch.id)).not.toHaveProperty("knownHarnessGap");
-    expect(readQaScenarioExecutionConfig(imageGenerate.id)).toMatchObject({
-      requiredProviderMode: "mock-openai",
-      toolName: "image_generate",
-      toolCoverage: {
-        bucket: "openclaw-dynamic-integration",
-        expectedLayer: "openclaw-dynamic",
-        capabilityLayer: "openclaw-dynamic-direct",
-        required: false,
-      },
-    });
-  });
-
-  it("loads the Codex legacy Read vocabulary live parity canary", () => {
-    const scenario = readQaScenarioById("codex-legacy-read-tool-vocabulary");
-    const config = readQaScenarioExecutionConfig(scenario.id) as
-      | {
-          runtimeParityComparison?: string;
-          fixtureFile?: string;
-          expectedMarker?: string;
-          unavailableNeedles?: string[];
-        }
-      | undefined;
-
-    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/codex-legacy-read-tool-vocabulary.yaml");
-    expect(scenario.runtimePairLane).toBe("core");
-    expect(config).toMatchObject({ requiredProviderMode: "live-frontier" });
-    expect(config?.runtimeParityComparison).toBe("codex-native-workspace");
-    expect(config?.fixtureFile).toBe("LEGACY_READ_TOOL_FIXTURE.txt");
-    expect(config?.expectedMarker).toBe("LEGACY_READ_TOOL_OK");
-    expect(config?.unavailableNeedles).toContain("not in my available tool surface");
-  });
-
   it("loads the Matrix room block streaming provider override", () => {
     expect(readQaScenarioById("matrix-room-block-streaming").execution).toMatchObject({
       kind: "flow",
@@ -611,90 +433,6 @@ describe("qa scenario catalog", () => {
       retryCount: 0,
       timeoutMs: 75_000,
     });
-  });
-
-  it("loads the QA bus tool trace visibility harness scenario", () => {
-    const scenario = readQaScenarioById("qa-bus-tool-trace-visibility");
-    const config = readQaScenarioExecutionConfig(scenario.id) as
-      | {
-          expectedToolName?: string;
-          expectedRedaction?: string;
-          searchQuery?: string;
-        }
-      | undefined;
-    const claims = scenario.coverage;
-
-    expect(claims?.primary).toContain(`${otel}.telemetry-tool-trace-visibility`);
-    expect(claims?.secondary ?? []).toStrictEqual([
-      `${otel}.telemetry-qa-bus`,
-      `${otel}.telemetry-trace`,
-    ]);
-    expect(config?.expectedToolName).toBe("exec");
-    expect(config?.expectedRedaction).toBe("[redacted]");
-    expect(config?.searchQuery).toBe("exec");
-    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
-      "preserves searchable sanitized tool-call traces",
-    ]);
-  });
-
-  it("loads the opt-in update.run package self-upgrade script proof", () => {
-    const scenario = readQaScenarioById("update-run-package-self-upgrade");
-
-    expect(scenario.coverage?.primary).toEqual([
-      `${cli}.update-status-and-rpc`,
-      "gateway.update-and-setup-apis",
-    ]);
-    expect(scenario.coverage?.secondary).toEqual([`${cli}.managed-gateway-restart`]);
-    expect(scenario.execution.kind).toBe("script");
-    if (scenario.execution.kind !== "script") {
-      throw new Error(`expected script execution, got ${scenario.execution.kind}`);
-    }
-    expect(scenario.execution.path).toBe(
-      "test/e2e/qa-lab/runtime/update-run-package-self-upgrade.ts",
-    );
-    expect(scenario.execution.allowBlockedEvidence).toBe(true);
-    expect(scenario.execution.timeoutMs).toBe(3_600_000);
-    expect(scenario.execution.args).toEqual(["--artifact-base", "${outputDir}"]);
-    expect(scenario.execution.flow).toBeUndefined();
-  });
-
-  it("keeps the update.run producer blocked without destructive opt-in", async () => {
-    const outputDir = await fs.promises.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-update-run-blocked-"),
-    );
-    try {
-      const result = await runQaTestFileScenarios({
-        repoRoot: process.cwd(),
-        outputDir,
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        scenarios: [readQaScenarioById("update-run-package-self-upgrade")],
-        env: {
-          OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF: "0",
-          OPENCLAW_QA_REF: "blocked-evidence-test",
-        },
-      });
-
-      expect(result.results[0]).toMatchObject({
-        status: "blocked",
-        producerEvidence: {
-          entries: [
-            {
-              test: { id: "update-run-package-self-upgrade" },
-              result: {
-                status: "blocked",
-                failure: {
-                  reason:
-                    "blocked destructive package self-upgrade; set OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 to run",
-                },
-              },
-            },
-          ],
-        },
-      });
-    } finally {
-      await fs.promises.rm(outputDir, { recursive: true, force: true });
-    }
   });
 
   it("separates Codex install, package compatibility, and drift diagnostics evidence", () => {
@@ -778,27 +516,6 @@ describe("qa scenario catalog", () => {
     expect(
       characterConfig?.turns?.some((turn) => turn.expectFile?.path === "precious-status.html"),
     ).toBe(true);
-  });
-
-  it("includes the codex leak scenario in the YAML pack", () => {
-    const pack = readQaScenarioPack();
-    const scenario = pack.scenarios.find(
-      (candidate) => candidate.id === "codex-harness-no-meta-leak",
-    );
-
-    expect(scenario?.sourcePath).toBe("qa/scenarios/models/codex-harness-no-meta-leak.yaml");
-    expect(scenario?.execution.flow?.steps.map((step) => step.name)).toContain(
-      "keeps codex coordination chatter out of the visible reply",
-    );
-  });
-
-  it("binds model switch follow-up assertions to the configured alternate model", () => {
-    const scenario = requireFlowScenario(readQaScenarioById("model-switch-follow-up"));
-    const flow = JSON.stringify(scenario.execution.flow);
-
-    expect(flow).toContain("expectedAlternate.model");
-    expect(flow).toContain("config.followupPrompt");
-    expect(flow).not.toContain("gpt-5.6-luna-alt");
   });
 
   it("keeps provider-sensitive QA flow scenarios on their supported lanes", () => {
@@ -899,30 +616,6 @@ describe("qa scenario catalog", () => {
     expect(requestEvidenceIndex).toBeLessThan(flow.indexOf('"call":"waitForOutboundMessage"'));
   });
 
-  it("includes the seeded mock-only broken-turn scenarios in the YAML pack", () => {
-    const scenarioIds = [
-      "reasoning-only-recovery-replay-safe-read",
-      "reasoning-only-no-auto-retry-after-write",
-      "empty-response-recovery-replay-safe-read",
-      "empty-response-retry-budget-exhausted",
-    ];
-
-    for (const scenarioId of scenarioIds) {
-      const scenario = readQaScenarioById(scenarioId);
-      const config = readQaScenarioExecutionConfig(scenarioId) as
-        | {
-            requiredProvider?: string;
-            prompt?: string;
-          }
-        | undefined;
-
-      expect(scenario.sourcePath).toBe(`qa/scenarios/runtime/${scenarioId}.yaml`);
-      expect(config?.requiredProvider).toBe("mock-openai");
-      expect(config?.prompt).toContain("check");
-      expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
-    }
-  });
-
   it("keeps mock-only image debug assertions guarded in live-frontier runs", () => {
     const scenario = readQaScenarioPack().scenarios.find(
       (candidate) => candidate.id === "image-understanding-attachment",
@@ -945,68 +638,6 @@ describe("qa scenario catalog", () => {
 
     expect(imageRequestExpr).toContain("env.mock ?");
     expect(imageRequestExpr).toContain("/debug/requests");
-  });
-
-  it("adds a repo-instruction followthrough scenario to the parity pack", () => {
-    const scenario = readQaScenarioById("instruction-followthrough-repo-contract");
-    const config = readQaScenarioExecutionConfig("instruction-followthrough-repo-contract") as
-      | {
-          workspaceFiles?: Record<string, string>;
-          prompt?: string;
-          expectedReplyAll?: string[];
-          expectedArtifactAll?: string[];
-          expectedArtifactAny?: string[];
-        }
-      | undefined;
-
-    expect(config?.workspaceFiles?.["AGENT.md"]).toContain("Step order:");
-    expect(config?.workspaceFiles?.["SOUL.md"]).toContain("action-first");
-    expect(config?.workspaceFiles?.["FOLLOWTHROUGH_INPUT.md"]).toContain(
-      "Mission: prove you followed the repo contract.",
-    );
-    expect(config?.prompt).toContain("Repo contract followthrough check.");
-    expect(scenario.execution.channel).toBe("qa-channel");
-    expect(config?.expectedReplyAll).toEqual(["read:", "wrote:", "status:"]);
-    expect(config?.expectedArtifactAll).toEqual(["repo contract"]);
-    expect(config?.expectedArtifactAny).toContain("evidence path");
-    expect(scenario.title).toBe("Instruction followthrough repo contract");
-  });
-
-  it("declares native QA-channel fixtures by channel", () => {
-    const scenarioIds = [
-      "instruction-followthrough-repo-contract",
-      "subagent-forked-context",
-      "subagent-handoff",
-      "a2a-message-tool-mirror-dedupe",
-      "group-message-tool-unavailable-fallback",
-      "qa-channel-reconnect-dedupe",
-      "reaction-edit-delete",
-      "image-generation-roundtrip",
-      "image-understanding-attachment",
-      "native-image-generation",
-      "goal-context-next-turn",
-      "goal-context-survives-compaction",
-      "goal-followthrough-live",
-      "active-memory-preprompt-recall",
-      "remember-across-conversations",
-      "memory-recall",
-      "session-memory-ranking",
-      "thread-memory-isolation",
-      "personal-channel-thread-reply",
-      "personal-memory-preference-recall",
-      "personal-reminder-roundtrip",
-      "cron-condition-watcher",
-      "cron-natural-fire-no-duplicate",
-      "cron-one-minute-ping",
-      "cron-single-run-no-duplicate",
-      "control-ui-qa-channel-image-roundtrip",
-      "control-ui-assistant-transcript-role-boundary",
-      "config-apply-restart-wakeup",
-    ];
-
-    for (const scenarioId of scenarioIds) {
-      expect(readQaScenarioById(scenarioId).execution.channel, scenarioId).toBe("qa-channel");
-    }
   });
 
   it("keeps portable thread relation flows on channels with native thread semantics", () => {

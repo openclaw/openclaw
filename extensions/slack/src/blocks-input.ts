@@ -1,4 +1,3 @@
-// Slack plugin module implements blocks input behavior.
 import type { Block, KnownBlock } from "@slack/web-api";
 
 export const SLACK_MAX_BLOCKS = 50;
@@ -11,7 +10,7 @@ function parseBlocksJson(raw: string) {
   }
 }
 
-function assertBlocksArray(raw: unknown) {
+export function validateSlackBlocksArray(raw: unknown): (Block | KnownBlock)[] {
   if (!Array.isArray(raw)) {
     throw new Error("blocks must be an array");
   }
@@ -30,10 +29,6 @@ function assertBlocksArray(raw: unknown) {
       throw new Error("each block must include a non-empty string type");
     }
   }
-}
-
-export function validateSlackBlocksArray(raw: unknown): (Block | KnownBlock)[] {
-  assertBlocksArray(raw);
   return raw as (Block | KnownBlock)[];
 }
 

@@ -17,6 +17,7 @@ import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -59,8 +60,8 @@ function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
     if (!stat.isDirectory()) {
       return "not_directory";
     }
-  } catch {
-    return "missing";
+  } catch (error) {
+    return hasErrnoCode(error, "ENOENT") ? "missing" : "unreadable";
   }
   try {
     fs.accessSync(dirPath, fs.constants.R_OK);
@@ -124,32 +125,23 @@ function resolveClaudeCliWorkspaceTargets(params: {
 }): ClaudeCliWorkspaceTarget[] {
   const agentIds = resolveClaudeCliAgentIds(params.cfg);
   const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
-  const seen = new Set<string>();
-  return agentIds
-    .filter((agentId) => {
-      if (seen.has(agentId)) {
-        return false;
-      }
-      seen.add(agentId);
-      return true;
-    })
-    .map((agentId) => {
-      const workspaceDir =
-        params.workspaceDir && agentIds.length === 1 && agentId === defaultAgentId
-          ? params.workspaceDir
-          : resolveAgentWorkspaceDir(params.cfg, agentId, params.env);
-      const projectDir = resolveClaudeCliProjectDirForWorkspace({
-        workspaceDir,
-        homeDir: params.homeDir,
-      });
-      return {
-        agentId,
-        workspaceDir,
-        projectDir,
-        workspaceHealth: probeDirectoryHealth(workspaceDir),
-        projectDirHealth: probeDirectoryHealth(projectDir),
-      };
+  return agentIds.map((agentId) => {
+    const workspaceDir =
+      params.workspaceDir && agentIds.length === 1 && agentId === defaultAgentId
+        ? params.workspaceDir
+        : resolveAgentWorkspaceDir(params.cfg, agentId, params.env);
+    const projectDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir,
+      homeDir: params.homeDir,
     });
+    return {
+      agentId,
+      workspaceDir,
+      projectDir,
+      workspaceHealth: probeDirectoryHealth(workspaceDir),
+      projectDirHealth: probeDirectoryHealth(projectDir),
+    };
+  });
 }
 
 /**

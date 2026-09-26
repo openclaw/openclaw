@@ -1,3 +1,4 @@
+import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { ensureRecord, getRecord, type LegacyConfigRule } from "../../../config/legacy.shared.js";
@@ -89,8 +90,7 @@ function hasLegacyVllmQwenThinkingFormat(defaultModels: unknown): boolean {
 }
 
 function hasLegacyVllmQwenThinkingProviderParams(provider: unknown): boolean {
-  const params = getRecord(getRecord(provider)?.params);
-  return Boolean(params && getLegacyVllmQwenThinkingFormat(params));
+  return hasLegacyVllmQwenThinkingParams(getRecord(provider)?.params);
 }
 
 function hasLegacyVllmQwenThinkingModelParams(provider: unknown): boolean {
@@ -98,10 +98,7 @@ function hasLegacyVllmQwenThinkingModelParams(provider: unknown): boolean {
   if (!Array.isArray(models)) {
     return false;
   }
-  return models.some((model) => {
-    const params = getRecord(getRecord(model)?.params);
-    return Boolean(params && getLegacyVllmQwenThinkingFormat(params));
-  });
+  return models.some((model) => hasLegacyVllmQwenThinkingParams(getRecord(model)?.params));
 }
 
 function hasLegacyVllmQwenThinkingParams(params: unknown): boolean {
@@ -158,33 +155,10 @@ export function listExistingVllmModelTargets(
 }
 
 export function collectVllmModelIdsFromSelection(value: unknown): string[] {
-  if (typeof value === "string") {
-    const modelId = parseVllmAgentModelKey(value);
+  return listModelRefsFromConfigValue(value).flatMap((ref) => {
+    const modelId = parseVllmAgentModelKey(ref);
     return modelId ? [modelId] : [];
-  }
-  const record = getRecord(value);
-  if (!record) {
-    return [];
-  }
-  const ids: string[] = [];
-  if (typeof record.primary === "string") {
-    const primary = parseVllmAgentModelKey(record.primary);
-    if (primary) {
-      ids.push(primary);
-    }
-  }
-  if (Array.isArray(record.fallbacks)) {
-    for (const fallback of record.fallbacks) {
-      if (typeof fallback !== "string") {
-        continue;
-      }
-      const modelId = parseVllmAgentModelKey(fallback);
-      if (modelId) {
-        ids.push(modelId);
-      }
-    }
-  }
-  return ids;
+  });
 }
 
 export function collectVllmModelIdsFromAgentModelMap(value: unknown): string[] {
@@ -331,12 +305,20 @@ export function applyLegacyVllmQwenThinkingFormat(params: {
   return true;
 }
 
-export function removeUntargetedLegacyVllmQwenThinkingFormat(params: {
+export function applyLegacyVllmQwenThinkingFormatToTargets(params: {
   sourcePath: string;
   legacyParams: Record<string, unknown>;
+  targets: Array<{ model: Record<string, unknown>; index: number }>;
   legacyFormat: NonNullable<ReturnType<typeof getLegacyVllmQwenThinkingFormat>>;
   changes: string[];
 }): void {
+  if (params.targets.length > 0) {
+    // Reuse the captured format after the first target removes the legacy keys.
+    for (const target of params.targets) {
+      applyLegacyVllmQwenThinkingFormat({ ...params, target });
+    }
+    return;
+  }
   removeLegacyVllmQwenThinkingParams(params.legacyParams);
   params.changes.push(
     `Removed ${params.sourcePath}.${params.legacyFormat.key}; no concrete vLLM model row or agent model ref exists, so configure models.providers.vllm.models[].compat.thinkingFormat on each Qwen model that needs it.`,

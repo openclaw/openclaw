@@ -3,22 +3,24 @@
  * A cap captured from a host-pinned creator surface must rebuild exec pinned to
  * that target; absence of the pin keeps baseline exec behavior.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const shellSpies = vi.hoisted(() => ({
-  defaults: vi.fn(),
+  defaults: vi.fn<(defaults?: ExecToolDefaults) => void>(),
   exec: vi.fn(async () => ({ content: [], details: {} })),
   process: vi.fn(async () => ({ content: [], details: {} })),
 }));
 
 vi.mock("./bash-tools.js", () => ({
-  createExecTool: (defaults: unknown) => {
+  createExecTool: (defaults?: ExecToolDefaults) => {
     shellSpies.defaults(defaults);
     return {
       name: "exec",
@@ -170,4 +172,41 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
       undefined,
     );
   });
+
+  it.each(
+    (["sandbox", "node"] as const).flatMap((host) =>
+      (["global", "agent", "run"] as const).map((source) => ({ host, source })),
+    ),
+  )(
+    "preserves the current $source host=$host restriction beside a saved pin",
+    async ({ host, source }) => {
+      const tools = createOpenClawCodingTools({
+        ...(source === "run"
+          ? { exec: { host } }
+          : source === "agent"
+            ? {
+                agentId: "main",
+                config: { agents: { entries: { main: { tools: { exec: { host } } } } } },
+              }
+            : { config: { tools: { exec: { host } } } }),
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "trusted",
+          execTarget: { host: "gateway" },
+        },
+      });
+      const exec = expectDefined(
+        tools.find((tool) => tool.name === "exec"),
+        "scheduled exec tool",
+      );
+      await exec.execute("call-restricted-host", { command: "echo hi" });
+      expect(shellSpies.defaults.mock.lastCall?.[0]?.host).toBe(host);
+      expect(shellSpies.exec).toHaveBeenCalledWith(
+        "call-restricted-host",
+        { command: "echo hi", host: "gateway" },
+        undefined,
+        undefined,
+      );
+    },
+  );
 });

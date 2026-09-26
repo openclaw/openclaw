@@ -10,46 +10,36 @@ import type {
   WorkerSessionPlacements,
 } from "../../state/openclaw-state-db.generated.js";
 import {
-  activeTurnClaimForState,
   assertRecordShape,
-  localTurnClaimForState,
   nextGeneration,
-  normalizeCursor,
   normalizeEpoch,
+  normalizeNonNegativeInteger,
   normalizeWorkerPlacementExecutionMode,
-  normalizeTimestamp,
   nullableRequired,
   required,
-  unclaimedTurnForState,
-  type EmptyWorkerPlacementMetadata,
-  type OwnedWorkerPlacementMetadata,
   type PersistedTurnClaim,
+  type WorkerSessionPlacementChangeSnapshot,
   type WorkerSessionPlacementIdentity,
   type WorkerSessionPlacementRecord,
   type WorkerSessionPlacementTransitionPatch,
 } from "./placement-record.js";
-import { parseWorkerSessionPlacementState } from "./placement-state.js";
+import {
+  parseWorkerSessionPlacementState,
+  type WorkerSessionPlacementState,
+} from "./placement-state.js";
+import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
+import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 
 type PlacementRow = Selectable<WorkerSessionPlacements>;
 type PlacementDatabase = Pick<
   StateDatabase,
-  "worker_session_placements" | "worker_session_tool_operations" | "worker_turn_tool_authorities"
+  | "worker_environments"
+  | "worker_session_placements"
+  | "worker_session_tool_operations"
+  | "worker_turn_tool_authorities"
 >;
 
 export const query = (db: DatabaseSync) => getNodeSqliteKysely<PlacementDatabase>(db);
-
-const EMPTY_WORKER_METADATA: EmptyWorkerPlacementMetadata = {
-  environmentId: null,
-  activeOwnerEpoch: null,
-  workspaceBaseManifestRef: null,
-  remoteWorkspaceDir: null,
-  workerBundleHash: null,
-  lastTranscriptAckCursor: null,
-  lastLiveEventAckCursor: null,
-  recoveryError: null,
-  terminalReason: null,
-  terminalAtMs: null,
-};
 
 function parseTurnClaim(row: PlacementRow): PersistedTurnClaim | null {
   if (row.turn_claim_owner === null) {
@@ -79,49 +69,10 @@ function parseTurnClaim(row: PlacementRow): PersistedTurnClaim | null {
   throw new Error(`Invalid worker session turn claim owner: ${row.turn_claim_owner}`);
 }
 
-type ParsedWorkerMetadata = {
-  environmentId: string | null;
-  activeOwnerEpoch: number | null;
-  workspaceBaseManifestRef: string | null;
-  remoteWorkspaceDir: string | null;
-  workerBundleHash: string | null;
-  lastTranscriptAckCursor: number | null;
-  lastLiveEventAckCursor: number | null;
-  terminalReason: string | null;
-  terminalAtMs: number | null;
-};
-
-function ownedWorkerMetadata(
-  parsed: ParsedWorkerMetadata,
-  state: "active" | "draining" | "reconciling" | "reclaimed",
-): OwnedWorkerPlacementMetadata {
-  if (
-    parsed.environmentId === null ||
-    parsed.activeOwnerEpoch === null ||
-    parsed.workspaceBaseManifestRef === null ||
-    parsed.remoteWorkspaceDir === null ||
-    parsed.workerBundleHash === null
-  ) {
-    throw new Error(`Worker session placement ${state} requires complete worker ownership`);
-  }
-  return {
-    environmentId: parsed.environmentId,
-    activeOwnerEpoch: parsed.activeOwnerEpoch,
-    workspaceBaseManifestRef: parsed.workspaceBaseManifestRef,
-    remoteWorkspaceDir: parsed.remoteWorkspaceDir,
-    workerBundleHash: parsed.workerBundleHash,
-    lastTranscriptAckCursor: parsed.lastTranscriptAckCursor,
-    lastLiveEventAckCursor: parsed.lastLiveEventAckCursor,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
-  };
-}
-
 export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
   const state = parseWorkerSessionPlacementState(row.state);
   const executionMode = normalizeWorkerPlacementExecutionMode(row.execution_mode);
-  const parsed: ParsedWorkerMetadata = {
+  const parsed = {
     environmentId:
       row.environment_id === null ? null : required(row.environment_id, "environment id"),
     activeOwnerEpoch:
@@ -134,17 +85,20 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
     ),
     remoteWorkspaceDir: nullableRequired(row.remote_workspace_dir, "remote workspace directory"),
     workerBundleHash: nullableRequired(row.worker_bundle_hash, "worker bundle hash"),
-    lastTranscriptAckCursor: normalizeCursor(
+    lastTranscriptAckCursor: normalizeNonNegativeInteger(
       row.last_transcript_ack_cursor,
       "transcript ACK cursor",
     ),
-    lastLiveEventAckCursor: normalizeCursor(row.last_live_event_ack_cursor, "live ACK cursor"),
+    lastLiveEventAckCursor: normalizeNonNegativeInteger(
+      row.last_live_event_ack_cursor,
+      "live ACK cursor",
+    ),
     terminalReason: nullableRequired(row.terminal_reason, "terminal reason"),
-    terminalAtMs: normalizeTimestamp(row.terminal_at_ms, "terminal timestamp"),
+    terminalAtMs: normalizeNonNegativeInteger(row.terminal_at_ms, "terminal timestamp"),
   };
   const recoveryError = nullableRequired(row.recovery_error, "recovery error");
   const turnClaim = parseTurnClaim(row);
-  const base = {
+  const record = {
     sessionId: row.session_id,
     agentId: row.agent_id,
     sessionKey: row.session_key,
@@ -153,124 +107,13 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
     createdAtMs: row.created_at_ms,
     updatedAtMs: row.updated_at_ms,
     stateChangedAtMs: row.state_changed_at_ms,
+    state,
+    turnClaim,
+    ...parsed,
+    recoveryError,
   };
-  assertRecordShape({ state, executionMode, ...parsed, recoveryError, turnClaim });
-  switch (state) {
-    case "local": {
-      return {
-        ...base,
-        state,
-        turnClaim: localTurnClaimForState(turnClaim, state),
-        ...EMPTY_WORKER_METADATA,
-      };
-    }
-    case "requested": {
-      return {
-        ...base,
-        state,
-        turnClaim: localTurnClaimForState(turnClaim, state),
-        ...EMPTY_WORKER_METADATA,
-      };
-    }
-    case "provisioning": {
-      return {
-        ...base,
-        state,
-        turnClaim: unclaimedTurnForState(turnClaim, state),
-        ...EMPTY_WORKER_METADATA,
-        environmentId: parsed.environmentId,
-      };
-    }
-    case "syncing": {
-      if (parsed.environmentId === null || parsed.workerBundleHash === null) {
-        throw new Error("Syncing worker session placement requires an environment and bundle");
-      }
-      return {
-        ...base,
-        state,
-        turnClaim: unclaimedTurnForState(turnClaim, state),
-        ...EMPTY_WORKER_METADATA,
-        environmentId: parsed.environmentId,
-        workerBundleHash: parsed.workerBundleHash,
-      };
-    }
-    case "starting": {
-      if (
-        parsed.environmentId === null ||
-        parsed.workspaceBaseManifestRef === null ||
-        parsed.remoteWorkspaceDir === null ||
-        parsed.workerBundleHash === null
-      ) {
-        throw new Error("Starting worker session placement requires complete workspace metadata");
-      }
-      return {
-        ...base,
-        state,
-        turnClaim: unclaimedTurnForState(turnClaim, state),
-        ...EMPTY_WORKER_METADATA,
-        environmentId: parsed.environmentId,
-        workspaceBaseManifestRef: parsed.workspaceBaseManifestRef,
-        remoteWorkspaceDir: parsed.remoteWorkspaceDir,
-        workerBundleHash: parsed.workerBundleHash,
-      };
-    }
-    case "active": {
-      return {
-        ...base,
-        state,
-        turnClaim: activeTurnClaimForState(turnClaim, state, executionMode),
-        ...ownedWorkerMetadata(parsed, state),
-      };
-    }
-    case "draining": {
-      return {
-        ...base,
-        state,
-        turnClaim: activeTurnClaimForState(turnClaim, state, executionMode),
-        ...ownedWorkerMetadata(parsed, state),
-      };
-    }
-    case "reconciling": {
-      return {
-        ...base,
-        state,
-        turnClaim: unclaimedTurnForState(turnClaim, state),
-        ...ownedWorkerMetadata(parsed, state),
-      };
-    }
-    case "reclaimed": {
-      return {
-        ...base,
-        state,
-        turnClaim: unclaimedTurnForState(turnClaim, state),
-        ...ownedWorkerMetadata(parsed, state),
-        terminalReason: parsed.terminalReason,
-        terminalAtMs: parsed.terminalAtMs,
-      };
-    }
-    case "failed": {
-      if (recoveryError === null) {
-        throw new Error("Failed worker session placement requires a recovery error");
-      }
-      return {
-        ...base,
-        state,
-        turnClaim: localTurnClaimForState(turnClaim, state),
-        environmentId: parsed.environmentId,
-        activeOwnerEpoch: parsed.activeOwnerEpoch,
-        workspaceBaseManifestRef: parsed.workspaceBaseManifestRef,
-        remoteWorkspaceDir: parsed.remoteWorkspaceDir,
-        workerBundleHash: parsed.workerBundleHash,
-        lastTranscriptAckCursor: parsed.lastTranscriptAckCursor,
-        lastLiveEventAckCursor: parsed.lastLiveEventAckCursor,
-        recoveryError,
-        terminalReason: parsed.terminalReason,
-        terminalAtMs: parsed.terminalAtMs,
-      };
-    }
-  }
-  // Exhaustive over placement states; the return satisfies consistent-return.
-  return state satisfies never;
+  assertRecordShape(record);
+  return record;
 }
 
 export function find(
@@ -285,6 +128,63 @@ export function find(
       .where("session_id", "=", sessionId),
   );
   return row ? fromRow(row) : undefined;
+}
+
+export function readWorkerPlacementChangeSnapshotInDatabase(
+  db: DatabaseSync,
+  profileIds?: readonly string[],
+): WorkerSessionPlacementChangeSnapshot[] {
+  if (profileIds?.length === 0) {
+    return [];
+  }
+  let select = query(db)
+    .selectFrom("worker_session_placements")
+    .selectAll("worker_session_placements");
+  if (profileIds) {
+    select = select
+      .innerJoin(
+        "worker_environments",
+        "worker_environments.environment_id",
+        "worker_session_placements.environment_id",
+      )
+      .where(
+        "worker_session_placements.environment_id",
+        "in",
+        query(db)
+          .selectFrom("worker_environments")
+          .select("environment_id")
+          .where("profile_id", "in", profileIds),
+      )
+      // Match the instance correlation used by readWorkerPlacementIdentity, including
+      // terminal provenance and pre-epoch dispatch states.
+      .where((eb) =>
+        eb.or([
+          eb(
+            "worker_session_placements.active_owner_epoch",
+            "=",
+            eb.ref("worker_environments.owner_epoch"),
+          ),
+          eb.and([
+            eb("worker_session_placements.active_owner_epoch", "is", null),
+            eb("worker_session_placements.state", "in", ["provisioning", "syncing", "starting"]),
+          ]),
+        ]),
+      );
+  }
+  return executeSqliteQuerySync(
+    db,
+    select.orderBy("worker_session_placements.session_id"),
+  ).rows.map((row) => {
+    const { sessionId, state, generation, updatedAtMs, sessionKey, agentId } = fromRow(row);
+    return {
+      sessionId,
+      state,
+      generation,
+      updatedAtMs,
+      sessionKey,
+      agentId,
+    };
+  });
 }
 
 export function getRequired(db: DatabaseSync, sessionId: string): WorkerSessionPlacementRecord {
@@ -338,7 +238,9 @@ function insertLocal(
       state_changed_at_ms: nowMs,
     }),
   );
-  return getRequired(db, identity.sessionId);
+  const record = getRequired(db, identity.sessionId);
+  publishPlacementTurnClaimState(db, record);
+  return record;
 }
 
 export function ensureLocal(
@@ -395,47 +297,37 @@ export function transitionValues(
       ? null
       : patch.workspaceBaseManifestRef === undefined
         ? current.workspaceBaseManifestRef
-        : patch.workspaceBaseManifestRef === null
-          ? null
-          : required(patch.workspaceBaseManifestRef, "workspace base manifest ref"),
+        : nullableRequired(patch.workspaceBaseManifestRef, "workspace base manifest ref"),
     remote_workspace_dir: clearsWorkerMetadata
       ? null
       : patch.remoteWorkspaceDir === undefined
         ? current.remoteWorkspaceDir
-        : patch.remoteWorkspaceDir === null
-          ? null
-          : required(patch.remoteWorkspaceDir, "remote workspace directory"),
+        : nullableRequired(patch.remoteWorkspaceDir, "remote workspace directory"),
     worker_bundle_hash: clearsWorkerMetadata
       ? null
       : patch.workerBundleHash === undefined
         ? current.workerBundleHash
-        : patch.workerBundleHash === null
-          ? null
-          : required(patch.workerBundleHash, "worker bundle hash"),
+        : nullableRequired(patch.workerBundleHash, "worker bundle hash"),
     last_transcript_ack_cursor: clearsWorkerMetadata
       ? null
       : patch.lastTranscriptAckCursor === undefined
         ? current.lastTranscriptAckCursor
-        : normalizeCursor(patch.lastTranscriptAckCursor, "transcript ACK cursor"),
+        : normalizeNonNegativeInteger(patch.lastTranscriptAckCursor, "transcript ACK cursor"),
     last_live_event_ack_cursor: clearsWorkerMetadata
       ? null
       : patch.lastLiveEventAckCursor === undefined
         ? current.lastLiveEventAckCursor
-        : normalizeCursor(patch.lastLiveEventAckCursor, "live ACK cursor"),
+        : normalizeNonNegativeInteger(patch.lastLiveEventAckCursor, "live ACK cursor"),
     recovery_error: clearsWorkerMetadata
       ? null
       : patch.recoveryError === undefined
         ? current.recoveryError
-        : patch.recoveryError === null
-          ? null
-          : required(patch.recoveryError, "recovery error"),
+        : nullableRequired(patch.recoveryError, "recovery error"),
     terminal_reason:
       to === "failed"
         ? patch.terminalReason === undefined
           ? current.terminalReason
-          : patch.terminalReason === null
-            ? null
-            : required(patch.terminalReason, "terminal reason")
+          : nullableRequired(patch.terminalReason, "terminal reason")
         : null,
     terminal_at_ms: to === "reclaimed" || to === "failed" ? (current.terminalAtMs ?? nowMs) : null,
     turn_claim_owner: null,
@@ -463,4 +355,61 @@ export function transitionValues(
     turnClaim: null,
   });
   return values;
+}
+
+export function updateTransition(
+  db: DatabaseSync,
+  current: WorkerSessionPlacementRecord,
+  to: WorkerSessionPlacementState,
+  patch: WorkerSessionPlacementTransitionPatch,
+  nowMs: number,
+): WorkerSessionPlacementRecord {
+  const values = transitionValues(current, to, patch, nowMs);
+  const result = executeSqliteQuerySync(
+    db,
+    query(db)
+      .updateTable("worker_session_placements")
+      .set(values)
+      .where("session_id", "=", current.sessionId)
+      .where("state", "=", current.state)
+      .where("transition_generation", "=", current.generation)
+      .where("turn_claim_owner", "is", null),
+  );
+  if (result.numAffectedRows !== 1n) {
+    throw new Error(`Worker session placement ${current.sessionId} changed during transition`);
+  }
+  const updated = getRequired(db, current.sessionId);
+  if (updated.state === "active") {
+    // Activation and demand are one commit. Teardown may run before refill observes
+    // the placement, so cleanup timestamps cannot stand in for successful demand.
+    const activated = executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<Pick<StateDatabase, "worker_environments">>(db)
+        .updateTable("worker_environments")
+        .set((eb) => ({
+          last_activated_at_ms: eb
+            .case()
+            .when("last_activated_at_ms", ">", nowMs)
+            .then(eb.ref("last_activated_at_ms"))
+            .else(nowMs)
+            .end(),
+        }))
+        .where("environment_id", "=", updated.environmentId)
+        .where("state", "=", "attached")
+        .where("destroy_requested_at_ms", "is", null)
+        .where("owner_epoch", "=", updated.activeOwnerEpoch)
+        .where("attached_session_ids_json", "=", JSON.stringify([updated.sessionId]))
+        .returning("last_activated_at_ms"),
+    );
+    if (activated.rows.length !== 1) {
+      throw new Error(
+        `Worker session placement ${current.sessionId} lost its attached environment`,
+      );
+    }
+    publishWorkerEnvironmentNativeMutation(db, updated.environmentId!, {
+      lastActivatedAtMs: activated.rows[0]!.last_activated_at_ms,
+    });
+  }
+  publishPlacementTurnClaimState(db, updated);
+  return updated;
 }

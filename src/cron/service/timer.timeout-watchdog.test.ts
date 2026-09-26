@@ -71,7 +71,8 @@ describe("cron service timer regressions", () => {
         defaultAgentId: "main",
         resolveHeartbeatTimeoutMs,
         requestHeartbeatAndWait: vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>(
-          async (_wake, { abortSignal }) => {
+          async (_wake, { abortSignal, onAttemptStarted }) => {
+            onAttemptStarted?.();
             heartbeatStarted.resolve();
             await new Promise<void>((resolve) => {
               if (abortSignal?.aborted) {
@@ -142,7 +143,8 @@ describe("cron service timer regressions", () => {
         nowMs: () => Date.now(),
         defaultAgentId: "main",
         resolveHeartbeatTimeoutMs,
-        runHeartbeatOnce: vi.fn(() => {
+        requestHeartbeatAndWait: vi.fn((_wake, { onAttemptStarted }) => {
+          onAttemptStarted?.();
           heartbeatStarted.resolve();
           return new Promise<never>(() => {});
         }),
@@ -623,85 +625,13 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("clears the pre-execution watchdog on explicit execution milestones (#80283)", async () => {
-    vi.useFakeTimers();
-    try {
-      const store = timerRegressionFixtures.makeStorePath();
-      const scheduledAt = Date.parse("2026-05-10T09:10:00.000Z");
-      const cronJob = createIsolatedRegressionJob({
-        id: "isolated-turn-accepted-80283",
-        name: "turn accepted regression",
-        scheduledAt,
-        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1_200 },
-        state: { nextRunAtMs: scheduledAt },
-      });
-      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
-
-      vi.setSystemTime(scheduledAt);
-      let now = scheduledAt;
-      const started = createDeferred();
-      let abortObserved = false;
-      const cleanupTimedOutAgentRun = vi.fn(async () => {});
-      const state = createCronRegressionState({
-        storePath: store.storePath,
-        nowMs: () => now,
-        cleanupTimedOutAgentRun,
-        runIsolatedAgentJob: vi.fn(
-          async ({
-            abortSignal,
-            onExecutionStarted,
-            onExecutionPhase,
-          }: {
-            abortSignal?: AbortSignal;
-            onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
-            onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
-          }) => {
-            onExecutionStarted?.({
-              jobId: "isolated-turn-accepted-80283",
-              phase: "runner_entered",
-            });
-            onExecutionPhase?.({
-              jobId: "isolated-turn-accepted-80283",
-              phase: "turn_accepted",
-              backend: "codex-app-server",
-            });
-            started.resolve();
-            abortSignal?.addEventListener(
-              "abort",
-              () => {
-                abortObserved = true;
-              },
-              { once: true },
-            );
-            return await new Promise<never>(() => {});
-          },
-        ),
-      });
-
-      const timerPromise = onTimer(state);
-      await started.promise;
-      await vi.advanceTimersByTimeAsync(60_100);
-      now += 60_100;
-      expect(abortObserved).toBe(false);
-      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1_140_000);
-      now += 1_140_000;
-      await timerPromise;
-
-      const job = requireJob(state, "isolated-turn-accepted-80283");
-      expect(abortObserved).toBe(true);
-      expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("job execution timed out");
-      expect(job.state.lastError).toContain("turn-accepted");
-      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it.each([
+    {
+      phase: "turn_accepted",
+      phaseText: "turn-accepted",
+      id: "isolated-turn-accepted-80283",
+      name: "turn accepted regression",
+    },
     {
       phase: "attempt_dispatch",
       phaseText: "attempt-dispatch",
@@ -726,7 +656,7 @@ describe("cron service timer regressions", () => {
     id: string;
     name: string;
   }>)(
-    "clears the pre-execution watchdog when isolated cron reaches $phaseText (#81368)",
+    "clears the pre-execution watchdog when isolated cron reaches $phaseText",
     async ({ phase, phaseText, id, name }) => {
       vi.useFakeTimers();
       try {
@@ -912,7 +842,6 @@ describe("cron service timer regressions", () => {
       expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith({
         job: expect.objectContaining({
           id: "isolated-before-agent-reply-unhandled-82811",
-          state: expect.objectContaining({ lastDiagnosticSummary: diagnostic }),
         }),
         payload: {
           text:

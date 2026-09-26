@@ -9,6 +9,8 @@ import {
   SessionParticipantSchema,
   SessionParticipantIdentitySchema,
 } from "./session-participant.js";
+import { SessionActivitySummarySchema } from "./sessions-activity-summary.js";
+import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
 export const SessionPermissionModeSchema = Type.Union([
@@ -109,11 +111,14 @@ export const SessionRowSchema = Type.Object(
       Type.Literal("unknown"),
     ]),
     label: Type.Optional(Type.String()),
+    autoLabel: Type.Optional(Type.String()),
     icon: Type.Optional(Type.String()),
     /** Named sidebar tint from SESSION_COLOR_IDS; clients map names to theme hues. */
     color: Type.Optional(Type.String()),
     channelAvatarUrl: Type.Optional(NonEmptyString),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+    /** Shared dashboard default; absent means split. */
+    boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
     displayName: Type.Optional(Type.String()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
@@ -128,7 +133,12 @@ export const SessionRowSchema = Type.Object(
     chatType: Type.Optional(
       Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
     ),
+    activitySummary: Type.Optional(SessionActivitySummarySchema),
     updatedAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+    /** Gateway sampling time, retained when a read reuses a cached projection. */
+    snapshotAt: Type.Optional(Type.Number()),
+    /** Personal list preference for the authenticated viewer; not session visibility. */
+    hiddenFromInvolvingMe: Type.Optional(Type.Boolean()),
     archived: Type.Optional(Type.Boolean()),
     archivedAt: Type.Optional(Type.Number()),
     archivedBy: Type.Optional(SessionCreatedActorSchema),
@@ -142,12 +152,14 @@ export const SessionRowSchema = Type.Object(
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(SessionRunStatusSchema),
     lastRunError: Type.Optional(Type.String()),
+    providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),
     restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),
+    parentSessionId: Type.Optional(Type.String()),
     controlOwnerSessionKey: Type.Optional(Type.String()),
     childSessions: Type.Optional(Type.Array(Type.String())),
     forkedFromParent: Type.Optional(Type.Boolean()),
@@ -177,7 +189,15 @@ export const SessionRowSchema = Type.Object(
     execCwd: Type.Optional(Type.String()),
     spawnedWorkspaceDir: Type.Optional(Type.String()),
     spawnedCwd: Type.Optional(Type.String()),
+    /** Persisted project registry association, distinct from a cloud repository workspace. */
+    projectId: Type.Optional(Type.String()),
+    /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
+    workspaceDir: Type.Optional(Type.String()),
     permissionMode: Type.Optional(SessionPermissionModeSchema),
+    /** Authorized per-chat containment opt-out; omission follows configured sandbox policy. */
+    sandboxMode: Type.Optional(Type.Literal("off")),
+    /** Administrator consent to the exact external runtime's own permissions for this incarnation. */
+    nativeRuntimeConsent: Type.Optional(NonEmptyString),
     permissionModePending: Type.Optional(Type.Boolean()),
     sessionRoot: Type.Optional(Type.String()),
     createdVia: Type.Optional(
@@ -223,9 +243,14 @@ export const SessionRowSchema = Type.Object(
     /** Runtime model serving this session while it differs from the selected model. */
     activeModel: Type.Optional(Type.String()),
     activeModelProvider: Type.Optional(Type.String()),
-    /** Persisted override provenance; null means inherited, omission means not projected. */
+    /** Effective override provenance; null means configured default, omission means not projected. */
     modelOverrideSource: Type.Optional(
-      Type.Union([Type.Literal("user"), Type.Literal("auto"), Type.Null()]),
+      Type.Union([
+        Type.Literal("user"),
+        Type.Literal("auto"),
+        Type.Literal("inherited"),
+        Type.Null(),
+      ]),
     ),
     toolOverrides: Type.Optional(SessionToolOverridesSchema),
   },

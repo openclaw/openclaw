@@ -9,9 +9,50 @@ import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
 
-// Shared path boundary helpers for workspace and sandbox-facing agent inputs.
-// Callers get normalized relative paths only after the candidate proves it stays
-// within the named root.
+/** Compare resolved runtime paths using the declared root's syntax, never the host OS. */
+export function relativePathInsideSandboxRoot(root: string, target: string): string | null {
+  const windows = !root.startsWith("/") && path.win32.isAbsolute(root);
+  const syntax = windows ? path.win32 : path.posix;
+  const normalize = windows ? normalizeWindowsPathPreservingCase : path.posix.normalize;
+  const normalizedRoot = normalize(root);
+  const normalizedTarget = normalize(target);
+  if (
+    !syntax.isAbsolute(normalizedRoot) ||
+    !syntax.isAbsolute(normalizedTarget) ||
+    (windows &&
+      (path.win32.parse(normalizedRoot).root === "\\" ||
+        path.win32.parse(normalizedTarget).root === "\\"))
+  ) {
+    return null;
+  }
+  const relative = syntax.relative(normalizedRoot, normalizedTarget);
+  return relative === ".." || relative.startsWith(`..${syntax.sep}`) || syntax.isAbsolute(relative)
+    ? null
+    : relative;
+}
+
+/** Select the deepest admitted mapping without replacing a supplied miss with a host fallback. */
+export function resolveSandboxPathMapping<
+  T extends { readonly hostRoot: string; readonly containerRoot: string },
+>(mappings: readonly T[], target: string): { mapping: T; hostPath: string } | null {
+  let selected: { mapping: T; hostPath: string; relative: string } | undefined;
+  for (const mapping of mappings) {
+    const relative = relativePathInsideSandboxRoot(mapping.containerRoot, target);
+    // A shorter relative suffix means a deeper root after normalization. Equal
+    // roots retain the backend's ordering, including protected mount precedence.
+    if (relative === null || (selected && relative.length >= selected.relative.length)) {
+      continue;
+    }
+    const separator = mapping.containerRoot.startsWith("/") ? "/" : "\\";
+    selected = {
+      mapping,
+      relative,
+      hostPath: path.resolve(mapping.hostRoot, ...relative.split(separator)),
+    };
+  }
+  return selected ? { mapping: selected.mapping, hostPath: selected.hostPath } : null;
+}
+
 type RelativePathOptions = {
   allowRoot?: boolean;
   cwd?: string;
@@ -75,53 +116,22 @@ function toRelativePathUnderRoot(params: {
     params.options?.cwd ?? params.root,
   );
 
-  if (process.platform === "win32") {
-    // path.win32.relative already matches the root case-insensitively, so normalization
-    // here only strips extended-length prefixes that would otherwise read as an escape.
-    // It must not lowercase: this relative path is what callers create files from, and
-    // Windows is case-insensitive but case-preserving.
-    const rootResolved = path.win32.resolve(params.root);
-    const resolvedCandidate = path.win32.resolve(resolvedInput);
-    const rootForCompare = normalizeWindowsPathPreservingCase(rootResolved);
-    const targetForCompare = normalizeWindowsPathPreservingCase(resolvedCandidate);
-    const relative = path.win32.relative(rootForCompare, targetForCompare);
-    return validateRelativePathWithinBoundary({
-      relativePath: relative,
-      isAbsolutePath: path.win32.isAbsolute,
-      options: params.options,
-      rootResolved,
-      candidate: params.candidate,
-    });
-  }
-
-  const rootResolved = path.resolve(params.root);
-  const resolvedCandidate = path.resolve(resolvedInput);
-  const relative = path.relative(rootResolved, resolvedCandidate);
+  const windows = process.platform === "win32";
+  const syntax = windows ? path.win32 : path;
+  const rootResolved = syntax.resolve(params.root);
+  const resolvedCandidate = syntax.resolve(resolvedInput);
+  // Strip extended-length Windows prefixes without lowercasing the relative
+  // path that callers use to create files. win32.relative already ignores case.
+  const relative = syntax.relative(
+    windows ? normalizeWindowsPathPreservingCase(rootResolved) : rootResolved,
+    windows ? normalizeWindowsPathPreservingCase(resolvedCandidate) : resolvedCandidate,
+  );
   return validateRelativePathWithinBoundary({
     relativePath: relative,
-    isAbsolutePath: path.isAbsolute,
+    isAbsolutePath: syntax.isAbsolute,
     options: params.options,
     rootResolved,
     candidate: params.candidate,
-  });
-}
-
-function toRelativeBoundaryPath(params: {
-  root: string;
-  candidate: string;
-  options?: Pick<RelativePathOptions, "allowRoot" | "cwd">;
-  boundaryLabel: string;
-  includeRootInError?: boolean;
-}): string {
-  return toRelativePathUnderRoot({
-    root: params.root,
-    candidate: params.candidate,
-    options: {
-      allowRoot: params.options?.allowRoot,
-      cwd: params.options?.cwd,
-      boundaryLabel: params.boundaryLabel,
-      includeRootInError: params.includeRootInError,
-    },
   });
 }
 
@@ -134,11 +144,14 @@ export function toRelativeWorkspacePath(
   candidate: string,
   options?: Pick<RelativePathOptions, "allowRoot" | "cwd">,
 ): string {
-  return toRelativeBoundaryPath({
+  return toRelativePathUnderRoot({
     root,
     candidate,
-    options,
-    boundaryLabel: "workspace root",
+    options: {
+      allowRoot: options?.allowRoot,
+      cwd: options?.cwd,
+      boundaryLabel: "workspace root",
+    },
   });
 }
 
@@ -151,12 +164,15 @@ export function toRelativeSandboxPath(
   candidate: string,
   options?: Pick<RelativePathOptions, "allowRoot" | "cwd">,
 ): string {
-  return toRelativeBoundaryPath({
+  return toRelativePathUnderRoot({
     root,
     candidate,
-    options,
-    boundaryLabel: "sandbox root",
-    includeRootInError: true,
+    options: {
+      allowRoot: options?.allowRoot,
+      cwd: options?.cwd,
+      boundaryLabel: "sandbox root",
+      includeRootInError: true,
+    },
   });
 }
 

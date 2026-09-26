@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
 import type { Page } from "playwright-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
-import { getImageMetadata } from "../media/media-services.js";
 import { captureScreenshot } from "./cdp.js";
 import { resolveBrowserConfig } from "./config.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
+import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
+import { clickViaPlaywright } from "./pw-tools-core.interactions.actions.js";
 import {
   screenshotWithLabelsViaPlaywright,
   takeScreenshotViaPlaywright,
@@ -151,6 +153,273 @@ async function readLabelBox(page: Page, buffer: Buffer) {
 describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
   "Chromium screenshot ownership",
   () => {
+    it.each(["response", "markers", "sibling"])(
+      "preserves captured-frame authority during %s navigation",
+      async (stage) => {
+        await withBrowser(async (target, page) => {
+          await page.setContent(
+            `<iframe id="selected" srcdoc="<button onclick=&quot;this.textContent='Selected clicked'&quot;>Original child</button>"></iframe><iframe id="sibling" srcdoc="<button>Sibling child</button>"></iframe>`,
+          );
+          await page.frameLocator("#selected").getByRole("button").waitFor();
+          await page.frameLocator("#sibling").getByRole("button").waitFor();
+          const capturedPage = await getPageForTargetId(target);
+          const capture = capturedPage.ariaSnapshot.bind(capturedPage);
+          let captured = false;
+          const captureSpy = vi
+            .spyOn(capturedPage, "ariaSnapshot")
+            .mockImplementation(async (options) => {
+              const snapshot = await capture(options);
+              captured = true;
+              return snapshot;
+            });
+          const context = capturedPage.context();
+          const newSession = context.newCDPSession.bind(context);
+          let navigated = false;
+          const navigatedSelector = stage === "sibling" ? "#sibling" : "#selected";
+          const navigateChild = async () => {
+            navigated = true;
+            await page.locator(navigatedSelector).evaluate((frame) => {
+              (frame as HTMLIFrameElement).srcdoc = "<button>Replacement child</button>";
+            });
+            await capturedPage
+              .frameLocator(navigatedSelector)
+              .getByRole("button", { name: "Replacement child" })
+              .waitFor();
+          };
+          const sessionSpy = vi
+            .spyOn(context, "newCDPSession")
+            .mockImplementation(async (pageOrFrame) => {
+              const cdp = await newSession(pageOrFrame);
+              const send = cdp.send.bind(cdp);
+              vi.spyOn(cdp, "send").mockImplementation((async (
+                method: string,
+                params?: Record<string, unknown>,
+              ) => {
+                if (
+                  stage !== "markers" &&
+                  captured &&
+                  !navigated &&
+                  method === "Page.getFrameTree"
+                ) {
+                  await navigateChild();
+                }
+                const result = await (
+                  send as (method: string, params?: Record<string, unknown>) => Promise<unknown>
+                )(method, params);
+                if (
+                  method === "DOM.setAttributeValue" &&
+                  params?.name === BROWSER_REF_MARKER_ATTRIBUTE
+                ) {
+                  captured = true;
+                  if (stage === "markers" && !navigated) {
+                    await navigateChild();
+                  }
+                }
+                return result;
+              }) as typeof cdp.send);
+              return cdp;
+            });
+          try {
+            const state: BrowserServerState = {
+              port: 0,
+              resolved: resolveBrowserConfig({
+                defaultProfile: "capture",
+                profiles: {
+                  capture: { cdpUrl: target.cdpUrl, color: "#123456", attachOnly: true },
+                },
+              }),
+              profiles: new Map(),
+            };
+            const routes = createBrowserRouteApp();
+            registerBrowserAgentSnapshotRoutes(
+              routes.app,
+              createBrowserRouteContext({ getState: () => state }),
+            );
+            const response = createBrowserRouteResponse();
+            await routes.getHandlers.get("/snapshot")!(
+              {
+                params: {},
+                query: {
+                  targetId: target.targetId,
+                  format: "ai",
+                  ...(stage !== "response" ? { frame: "#selected" } : {}),
+                },
+              },
+              response.res,
+            );
+            expect(navigated).toBe(true);
+            if (stage === "sibling") {
+              expect(response.statusCode, JSON.stringify(response.body)).toBe(200);
+              const snapshot = response.body as { refs: Record<string, { name?: string }> };
+              const ref = Object.entries(snapshot.refs).find(
+                ([, info]) => info.name === "Original child",
+              )![0];
+              await clickViaPlaywright({ ...target, ref, timeoutMs: 1_000 });
+              expect(await page.frameLocator("#selected").getByRole("button").textContent()).toBe(
+                "Selected clicked",
+              );
+              return;
+            }
+            expect(response.statusCode).toBe(500);
+            expect(response.body).toEqual({
+              error: "Error: Frame changed while its browser snapshot was being captured; retry.",
+            });
+          } finally {
+            captureSpy.mockRestore();
+            sessionSpy.mockRestore();
+          }
+        });
+      },
+      30_000,
+    );
+
+    it.each(["frame", "ai"])(
+      "resets %s snapshot deltas after same-URL iframe navigation",
+      async (scope) => {
+        await withBrowser(async (target, page) => {
+          await page.setContent('<iframe srcdoc="<button>Original document</button>"></iframe>');
+          await page
+            .frameLocator("iframe")
+            .getByRole("button", { name: "Original document" })
+            .waitFor();
+          const state: BrowserServerState = {
+            port: 0,
+            resolved: resolveBrowserConfig({
+              defaultProfile: "delta",
+              profiles: {
+                delta: { cdpUrl: target.cdpUrl, color: "#123456", attachOnly: true },
+              },
+            }),
+            profiles: new Map(),
+          };
+          const routes = createBrowserRouteApp();
+          registerBrowserAgentSnapshotRoutes(
+            routes.app,
+            createBrowserRouteContext({ getState: () => state }),
+          );
+          const capture = async () => {
+            const result = createBrowserRouteResponse();
+            await routes.getHandlers.get("/snapshot")!(
+              {
+                params: {},
+                query: {
+                  targetId: target.targetId,
+                  format: "ai",
+                  ...(scope === "frame" ? { frame: "iframe" } : {}),
+                },
+              },
+              result.res,
+            );
+            expect(result.statusCode, JSON.stringify(result.body)).toBe(200);
+            return result.body;
+          };
+          const original = await capture();
+          expect(original).not.toHaveProperty("newElements");
+          await page
+            .frameLocator("iframe")
+            .getByRole("button")
+            .evaluate((button) => {
+              button.insertAdjacentHTML("afterend", "<button>Same-document addition</button>");
+            });
+          const mutated = await capture();
+          expect(mutated).toHaveProperty("newElements");
+          expect(mutated).toHaveProperty(
+            "snapshot",
+            expect.stringMatching(/button "Same-document addition".*\[new\]/),
+          );
+          await page.locator("iframe").evaluate((frame) => {
+            (frame as HTMLIFrameElement).srcdoc = "<button>Replacement document</button>";
+          });
+          await page
+            .frameLocator("iframe")
+            .getByRole("button", { name: "Replacement document" })
+            .waitFor();
+          const replacement = await capture();
+          expect(replacement).not.toHaveProperty("newElements");
+        });
+      },
+      30_000,
+    );
+
+    it.for(["ai", "frame"] as const)(
+      "preserves the requested %s snapshot ref through a labeled screenshot",
+      { timeout: 30_000 },
+      async (mode) => {
+        await withBrowser(async (target, page) => {
+          await page.setContent(`<style>html,body{margin:0}h1{margin:0;line-height:40px}button{display:block;width:120px;height:60px;background:rgb(224,79,95);border:0}iframe{display:block}</style>
+            <h1>Page heading</h1><button onclick="document.querySelector('output').textContent='clicked'">Target</button><output></output>
+            <a href="https://parent.test/docs">Parent docs</a>
+            <iframe srcdoc="<style>html,body{margin:0}button{display:block;width:180px;height:80px;background:rgb(224,79,95);border:0}</style><button onclick=&quot;document.querySelector('output').textContent='clicked'&quot;>Frame target</button><output></output><a href='https://frame.test/docs'>Frame docs</a>"></iframe>`);
+          await page.frameLocator("iframe").getByRole("button").waitFor();
+          const state: BrowserServerState = {
+            port: 0,
+            resolved: resolveBrowserConfig({
+              defaultProfile: "refs",
+              profiles: {
+                refs: { cdpUrl: target.cdpUrl, color: "#123456", attachOnly: true },
+              },
+            }),
+            profiles: new Map(),
+          };
+          const routes = createBrowserRouteApp();
+          registerBrowserAgentSnapshotRoutes(
+            routes.app,
+            createBrowserRouteContext({ getState: () => state }),
+          );
+          const snapshot = createBrowserRouteResponse();
+          await routes.getHandlers.get("/snapshot")!(
+            {
+              params: {},
+              query: {
+                targetId: target.targetId,
+                format: "ai",
+                ...(mode === "frame" ? { frame: "iframe", urls: true } : {}),
+              },
+            },
+            snapshot.res,
+          );
+          expect(snapshot.statusCode, JSON.stringify(snapshot.body)).toBe(200);
+          const result = snapshot.body as {
+            snapshot: string;
+            refs: Record<string, { name?: string }>;
+          };
+          const name = mode === "frame" ? "Frame target" : "Target";
+          const ref = Object.entries(result.refs).find(([, info]) => info.name === name)![0];
+          if (mode === "frame") {
+            expect.soft(result.snapshot).toContain("Frame docs -> https://frame.test/docs");
+            expect.soft(result.snapshot).not.toContain("Parent docs -> https://parent.test/docs");
+          }
+          const capture = createBrowserRouteResponse();
+          await routes.postHandlers.get("/screenshot")!(
+            {
+              params: {},
+              query: {},
+              body: {
+                targetId: target.targetId,
+                ref,
+                labels: true,
+              },
+            },
+            capture.res,
+          );
+          expect(capture.statusCode, JSON.stringify(capture.body)).toBe(200);
+          const screenshot = capture.body as { path: string; annotations: AnnotationItem[] };
+          try {
+            const buffer = await fs.readFile(screenshot.path);
+            await expectImage(page, buffer, mode === "frame" ? [180, 80] : [120, 60], [
+              { x: 10, y: 40, rgb: [224, 79, 95] },
+            ]);
+            expect(screenshot.annotations).toContainEqual(expect.objectContaining({ ref, name }));
+            await clickViaPlaywright({ ...target, ref, timeoutMs: 1_000 });
+            const scope = mode === "frame" ? page.frameLocator("iframe") : page;
+            expect(await scope.locator("output").textContent()).toBe("clicked");
+          } finally {
+            await fs.rm(screenshot.path);
+          }
+        });
+      },
+    );
+
     it("captures a native full page without changing the page geometry", async () => {
       await withBrowser(async (_target, page, wsUrl) => {
         await page.evaluate(() => scrollTo(0, 420));

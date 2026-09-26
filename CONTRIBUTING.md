@@ -52,6 +52,18 @@ pnpm's isolated linker, which keeps dependencies in `node_modules/.pnpm` and lin
 them into each workspace package. On supported macOS volumes, this also lets pnpm
 reuse whole-package APFS clones instead of importing every file separately.
 
+Give each source checkout its own physical dependency installation. Tooling does
+not automatically link a missing `node_modules` to another checkout. Existing
+borrowed installs can still serve direct Node tooling. Normal pnpm install checks
+the checkout-root `node_modules`, the explicitly configured root module directory,
+and their `.pnpm` directories before reconciliation, refusing borrowed links there.
+Preserve that donor and create an independently owned install instead of removing
+or reinstalling through its link. Explicit hydrated module directories remain
+supported when the workspace link points to the configured physical directory.
+This admission check runs through `pnpm:devPreinstall`; `--ignore-scripts` skips
+it. The check does not lock paths against concurrent replacement, inspect every
+workspace package's dependencies, or validate every alternate pnpm directory setting.
+
 When updating a checkout that used the hoisted layout, stop builds, tests, and
 watchers using that checkout's dependencies before running the install command.
 Do not change the linker while other jobs are using the same `node_modules`.
@@ -63,11 +75,12 @@ must declare their own development dependencies rather than rely on hoisting.
 - Use **Node 24.16+ LTS** or **Node 26.1+** for source checkouts. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md) if your local version is too old.
 - Run the Vitest 5 suite on Node 24.16+ or Node 26.1+, matching the packaged runtime floor.
 - Test locally with your OpenClaw instance
-- Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and get the design accepted. See the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
+- An explicit maintainer repair-and-land request covers internal database scheduling, admission, and lifecycle decisions. The implementer owns the design and its verification. Get separate design acceptance when changing public contracts, schemas, durability, retention, or permissions; see the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
-- When ClawSweeper, Barnacle, or a maintainer asks for more context or evidence, edit the PR description instead of only replying in a new comment. Keep **What Problem This Solves**, **Why This Change Was Made**, **User Impact**, and **Evidence** current; a short comment can point reviewers to the update, but the PR body should remain the durable explanation for maintainers and bots.
+- Follow the [PR template](.github/pull_request_template.md): lead with the plain-language problem and concrete user impact, then a brief explanation and useful evidence. Keep technical inventories in the diff or optional details, not the opening summary. Keep important risks, migrations, required actions, and evidence gaps visible; do not invent a user benefit for internal-only work.
+- When ClawSweeper, Barnacle, or a maintainer asks for more context or evidence, edit the PR description instead of only replying in a new comment. Keep **What Problem This Solves**, **User Impact**, **Why This Change Was Made**, and **Evidence** current; a short comment can point reviewers to the update, but the PR body should remain the durable explanation for maintainers and bots.
 - Keep PRs takeover-ready: open them from a branch maintainers can push to. For fork PRs, leave GitHub's **Allow edits by maintainers** option enabled so maintainers can finish urgent fixes or merge prep when needed. If GitHub shows **Allow edits and access to secrets by maintainers**, enable it only when that workflow/secrets access is acceptable and say so in the PR.
-- Do not edit `CHANGELOG.md` in normal PRs or at merge. Changelogs are generated at release time from merged PRs and commits; keep release-note context in PR bodies or commit messages until then.
+- Do not edit the generated `CHANGELOG.md` index or release-owned `CHANGELOG/**` entries and contribution records in normal PRs or at merge. Initial changelogs are generated at release time from merged PRs and commits; keep release-note context in PR bodies or commit messages until then. Explicit release-docs publication changes follow the [release artifact procedure](.agents/skills/openclaw-changelog-update/SKILL.md#post-release-docs-mirrors).
 - Run tests: `pnpm build && pnpm check && pnpm test`
 - For iterative local commits after running equivalent targeted validation for the touched surface, `git commit --no-verify` skips commit hooks.
 - For extension/plugin changes, run the fast local lane first:
@@ -91,7 +104,49 @@ must declare their own development dependencies rather than rely on hoisting.
 - Describe what & why
 - **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
 - Use American English spelling and grammar in code, comments, docs, and UI strings
-- Do not edit files covered by `CODEOWNERS` security ownership unless a listed owner authored or explicitly requested the change, or is already reviewing it with you. For governance changes to ownership/review policy itself, explicit direction from an organization owner is also sufficient only when live GitHub organization membership shows `state: active` and `role: admin`; repository `ADMIN`, `viewerCanAdminister`, or bypass permission alone never qualifies. Neither route waives a GitHub-enforced approval rule. Treat those paths as restricted review surfaces, not opportunistic cleanup targets.
+
+## Security-sensitive changes
+
+Changes to authentication, credentials, secret handling, sandboxing, or execution
+permissions receive a security-review notice with the affected files and review
+guidance. A PR author with a GitHub user account and repository `maintain` or
+`admin` access needs no additional security approval. Other authors need a
+command comment from a user with either role:
+
+- `/allow-security-sensitive-change` for sensitive product changes.
+- `/allow-dependencies-change` for dependency changes that require approval.
+
+Wait for the guard notice to show the current PR commit, then post the applicable
+command on its own line in a new PR comment. Use only command lines in that
+comment. If both guards require approval, post both commands; they can be on
+separate lines in one comment. A later push requires a new comment after the
+notices update. Editing an older comment does
+not grant fresh approval. Deleting the comment or removing a command revokes that
+command's approval. Normal GitHub **Approve** reviews and labels do not satisfy
+these command requirements.
+
+PR updates, approval comment events, and CI completion run security review
+automatically. Approval comments update the review result without rerunning the
+test suite. Missing approval fails the check. Automation using a GitHub user
+account follows the same role checks; GitHub App bot identities do not qualify.
+Open PRs targeting the same branch must have distinct head commits. GitHub shares
+commit statuses across PRs, so duplicate heads block security approval. Close the
+duplicate PR or push a distinct commit; security review evaluates automatically.
+
+The human-readable [security review policy](.github/security-review-policy.yml)
+lists sensitive product categories, review guidance, exclusions, and dependency
+paths. Changes to that inventory require SecOps approval.
+
+Security policy, CodeQL, and the security-review enforcement files listed in
+[CODEOWNERS](.github/CODEOWNERS) require an independent
+`@openclaw/openclaw-secops` approval, including on maintainer-authored PRs. A
+maintainer approval of product code does not replace that code-owner requirement.
+Normal project review and release-owner requirements still apply.
+The existing maintainer CI bypass can override a missing command approval, but
+does not bypass the separate code-owner review requirement.
+
+See [security review checks](https://docs.openclaw.ai/ci/pipeline#security-review-checks)
+for check behavior and enforcement setup.
 
 ## Local commit hook
 

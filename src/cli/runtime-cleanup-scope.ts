@@ -1,11 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import "../plugins/plugin-source-capture-context.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
+import { installCliSignalExitHandlers } from "./signal-exit-barrier.js";
 
 export type CliHarnessCleanup = {
   harnesses: Map<AgentHarness, () => Promise<void>>;
   registries: Set<PluginRegistry>;
+  pluginResources?: CliPluginInvocationResources;
 };
 
 // Entry modules must stay runtime-free. Only executable bootstraps grant this scope;
@@ -21,6 +26,12 @@ export function withCliProcessScope<T>(run: () => T): T {
 
 export function hasCliProcessScope(): boolean {
   return scope.getStore() !== undefined;
+}
+
+/** Caller-owned programs and Gateway boot have no executable resource owner. */
+export function getCliPluginInvocationResources(): CliPluginInvocationResources | undefined {
+  const current = scope.getStore();
+  return current && current !== "process" ? current.pluginResources : undefined;
 }
 
 /** Finalizers own their Windows descendants until executable process exit. */
@@ -46,25 +57,50 @@ export function withCliCommandCleanup<T>(
   if (scope.getStore() !== "process") {
     return run();
   }
-  const cleanup: CliHarnessCleanup = { harnesses: new Map(), registries: new Set() };
-  return scope.run(cleanup, () => run(cleanup));
+  const pluginResources = new CliPluginInvocationResources();
+  const releaseSignals = installCliSignalExitHandlers();
+  pluginResources.adopt({ release: async () => releaseSignals() });
+  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  pluginResources.adopt({ release: () => sdkResourceHost.close() });
+  const cleanup: CliHarnessCleanup = {
+    harnesses: new Map(),
+    registries: new Set(),
+    pluginResources,
+  };
+  return sdkResourceHost.run(() => scope.run(cleanup, () => run(cleanup)));
 }
 
 export function retainCliRegistryHarnesses(
   registry: PluginRegistry,
   dispose: (harness: AgentHarness) => Promise<void>,
+  retain: () => (() => void | Promise<void>) | undefined,
 ): void {
   const current = scope.getStore();
   if (!current || current === "process") {
     return;
   }
   for (const { harness } of registry.agentHarnesses) {
+    if (!current.registries.has(registry)) {
+      // Retain physical custody for terminal teardown, not ordinary invocation authority.
+      const release = retain();
+      if (release) {
+        current.pluginResources?.adopt({
+          release: async () => {
+            await release();
+          },
+        });
+      }
+    }
     current.registries.add(registry);
     if (!current.harnesses.has(harness)) {
       // Preserve request facts as well as the exact registry binding after helpers unwind.
       current.harnesses.set(
         harness,
-        AsyncLocalStorage.bind(() => dispose(harness)),
+        AsyncLocalStorage.bind(() =>
+          current.pluginResources
+            ? current.pluginResources.runCleanup(() => dispose(harness))
+            : dispose(harness),
+        ),
       );
     }
   }

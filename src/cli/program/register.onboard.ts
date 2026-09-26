@@ -1,8 +1,6 @@
 // Commander registration for onboard setup flags and lazy onboard runtime execution.
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Option, type Command } from "commander";
-import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
-import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import type {
@@ -19,12 +17,12 @@ import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-cho
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
-import { listExplicitOptionFlagsExcept } from "../command-options.js";
+import { inheritOptionFromParent, listExplicitOptionFlagsExcept } from "../command-options.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
+import { formatDocsHelp } from "../help-format.js";
 
 function resolveInstallDaemonFlag(command: Command): boolean | undefined {
-  // Commander doesn't support option conflicts natively; keep original behavior.
-  // If --skip-daemon is explicitly passed, it wins.
+  // Explicit --skip-daemon wins over either install-daemon flag.
   if (command.getOptionValueSource("skipDaemon") === "cli") {
     return false;
   }
@@ -50,7 +48,7 @@ async function validateRecommendationParentOptions(
 ): Promise<boolean> {
   const unsupported = listExplicitOptionFlagsExcept(
     command,
-    json ? RECOMMENDATION_READ_PARENT_OPTIONS : NO_RECOMMENDATION_PARENT_OPTIONS,
+    json ? RECOMMENDATION_READ_PARENT_OPTIONS : RECOMMENDATION_MUTATION_PARENT_OPTIONS,
   );
   if (unsupported.length === 0) {
     return true;
@@ -65,13 +63,16 @@ async function validateRecommendationParentOptions(
 
 const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
 const RECOMMENDATION_READ_PARENT_OPTIONS = new Set(["json"]);
-const NO_RECOMMENDATION_PARENT_OPTIONS = new Set<string>();
+const RECOMMENDATION_MUTATION_PARENT_OPTIONS = new Set(["agent"]);
 
-type OnboardAuthFlag = {
-  readonly cliOption: string;
-  readonly description: string;
-  readonly optionKey: string;
-};
+function resolveRecommendationAgentOption(command: Command): string | undefined {
+  const source = command.getOptionValueSource("agent");
+  return readStringValue(
+    source && source !== "default"
+      ? command.getOptionValue("agent")
+      : inheritOptionFromParent(command, "agent"),
+  );
+}
 
 function extractCliFlags(cliOption: string): string[] {
   return cliOption
@@ -83,10 +84,10 @@ function extractCliFlags(cliOption: string): string[] {
     });
 }
 
-function resolveOnboardAuthFlags(): OnboardAuthFlag[] {
+function resolveOnboardAuthFlags() {
   // Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
   const seenCliFlags = new Set<string>();
-  const flags: OnboardAuthFlag[] = [];
+  const flags: ReturnType<typeof resolveProviderOnboardAuthFlags> = [];
   for (const flag of resolveProviderOnboardAuthFlags()) {
     const cliFlags = extractCliFlags(flag.cliOption);
     if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
@@ -239,6 +240,7 @@ export async function resolveOnboardCommandOptions(
   return {
     workspace: readStringValue(opts.workspace),
     agentName: readStringValue(opts.agentName),
+    team: opts.team === true ? true : undefined,
     nonInteractive: Boolean(opts.nonInteractive),
     acceptRisk: Boolean(opts.acceptRisk),
     classic: Boolean(opts.classic),
@@ -280,16 +282,13 @@ export function registerOnboardCommand(program: Command): void {
   const command = program
     .command("onboard")
     .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/onboard"))
     .option(
       "--workspace <dir>",
       "Workspace proposal for guided setup; persisted by classic/non-interactive setup",
     )
-    .option("--agent-name <name>", "Name for the first agent (default: main)")
+    .option("--agent-name <name>", "Name for the first agent (or team coordinator)")
+    .option("--team", "Create a coordinator with researcher, writer, and reviewer specialists")
     .option(
       "--reset",
       "Reset config + credentials + sessions before running onboard (workspace only with --reset-scope full)",
@@ -316,6 +315,7 @@ export function registerOnboardCommand(program: Command): void {
   const recommendations = command
     .command("recommendations")
     .description("Read the app recommendations stored during onboarding")
+    .option("--agent <id>", "Agent whose onboarding recommendations should be used")
     .option("--json", "Output stored recommendation matches as JSON", false)
     .action(async (opts, recommendationsCommand: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
@@ -326,15 +326,20 @@ export function registerOnboardCommand(program: Command): void {
         }
         const { onboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        onboardRecommendationsCommand({ json }, defaultRuntime);
+        const agent = resolveRecommendationAgentOption(recommendationsCommand);
+        await onboardRecommendationsCommand(
+          { json, ...(agent !== undefined ? { agent } : {}) },
+          defaultRuntime,
+        );
       });
     });
 
   recommendations
     .command("acknowledge")
     .description("Mark the stored onboarding recommendation offer as answered")
+    .option("--agent <id>", "Agent whose onboarding recommendations should be used")
     .option("--retry <id...>", "Leave failed recommendation IDs pending for a later run")
-    .action(async (opts: { retry?: string[] }) => {
+    .action(async (opts: { retry?: string[] }, acknowledgeCommand: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         if (
@@ -345,14 +350,19 @@ export function registerOnboardCommand(program: Command): void {
         }
         const { acknowledgeOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        acknowledgeOnboardRecommendationsCommand({ retry: opts.retry }, defaultRuntime);
+        const agent = resolveRecommendationAgentOption(acknowledgeCommand);
+        await acknowledgeOnboardRecommendationsCommand(
+          { retry: opts.retry, ...(agent !== undefined ? { agent } : {}) },
+          defaultRuntime,
+        );
       });
     });
 
   recommendations
     .command("refresh")
     .description("Clear stored app recommendations so the next onboarding run rescans")
-    .action(async () => {
+    .option("--agent <id>", "Agent whose onboarding recommendations should be used")
+    .action(async (_opts, refreshCommand: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
         if (
@@ -363,7 +373,11 @@ export function registerOnboardCommand(program: Command): void {
         }
         const { refreshOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        refreshOnboardRecommendationsCommand(defaultRuntime);
+        const agent = resolveRecommendationAgentOption(refreshCommand);
+        await refreshOnboardRecommendationsCommand(
+          agent !== undefined ? { agent } : {},
+          defaultRuntime,
+        );
       });
     });
 

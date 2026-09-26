@@ -1,20 +1,25 @@
 // Config snapshots and pre/post-update config restoration.
 import fs from "node:fs/promises";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isDeepStrictEqual } from "node:util";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import {
+  createConfigIO,
   mutateConfigFileWithRetry,
   parseConfigJson5,
   readConfigFileSnapshot,
 } from "../../config/config.js";
 import { resolveConfigEnvVars } from "../../config/env-substitution.js";
 import { resolveConfigIncludes } from "../../config/includes.js";
+import { createConfigFileSnapshot } from "../../config/io.snapshot-shared.js";
+import type { ConfigWriteOptions } from "../../config/io.types.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
-import { resolveIncludeRoots } from "../../config/paths.js";
-import { parsePluginInstallRecordMap } from "../../config/plugin-install-record-map.js";
+import { resolveConfigPath, resolveIncludeRoots } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { shouldWarnOnTouchedVersion } from "../../config/version.js";
+import { composeConfigWriteAssertions } from "../../config/write-authority.js";
 import { normalizeUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -23,29 +28,55 @@ import { VERSION } from "../../version.js";
 
 const PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
-export function normalizePluginInstallRecordMap(
-  value: unknown,
-): Record<string, PluginInstallRecord> {
-  const records = parsePluginInstallRecordMap(value);
-  if (!records) {
-    throw new Error("Invalid plugin install record map");
-  }
-  return records;
+export function capturePreUpdateSourceConfig(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+): PreUpdateConfigRestoreInput | undefined {
+  return snapshot.valid
+    ? {
+        sourceConfig: snapshot.sourceConfig,
+        authoredConfig: isRecord(snapshot.parsed)
+          ? (snapshot.parsed as OpenClawConfig) // SAFETY: the valid snapshot has validated this authored record.
+          : snapshot.sourceConfig,
+      }
+    : undefined;
 }
 
-function normalizeChannelConfigMap(value: unknown): Record<string, unknown> | null {
-  if (!isRecord(value)) {
-    return null;
+/** Preserve captured path ownership while adding the update's original executor. */
+export function withUpdateConfigWriteAuthority(
+  writeOptions: ConfigWriteOptions,
+  assertCurrent?: () => void,
+): ConfigWriteOptions {
+  if (!assertCurrent) {
+    return writeOptions;
   }
-  return value;
+  const assertOwner = writeOptions.assertCurrent;
+  return {
+    ...writeOptions,
+    observe: false,
+    assertCurrent: composeConfigWriteAssertions(assertOwner, assertCurrent),
+  };
 }
 
 function normalizeDirectAuthoredChannelConfigMap(value: unknown): Record<string, unknown> | null {
-  const channels = normalizeChannelConfigMap(value);
+  const channels = asNullableRecord(value);
   if (!channels || Object.hasOwn(channels, "$include")) {
     return null;
   }
   return channels;
+}
+
+function restoreMissingChannelConfigKeys(
+  current: Record<string, unknown>,
+  previous: Record<string, unknown>,
+): string[] {
+  const restored: string[] = [];
+  for (const [key, value] of Object.entries(previous)) {
+    if (current[key] === undefined) {
+      current[key] = structuredClone(value);
+      restored.push(key);
+    }
+  }
+  return restored;
 }
 
 function restorePreUpdateChannelModelOverrides(params: {
@@ -56,34 +87,25 @@ function restorePreUpdateChannelModelOverrides(params: {
   if (params.restoredChannelIds.length === 0) {
     return { channels: params.channels, changed: false };
   }
-  const preUpdateModelByChannel = normalizeChannelConfigMap(
-    params.preUpdateChannels.modelByChannel,
-  );
+  const preUpdateModelByChannel = asNullableRecord(params.preUpdateChannels.modelByChannel);
   if (!preUpdateModelByChannel) {
     return { channels: params.channels, changed: false };
   }
-  const currentModelByChannel = normalizeChannelConfigMap(params.channels.modelByChannel) ?? {};
+  const currentModelByChannel = asNullableRecord(params.channels.modelByChannel) ?? {};
   const restoredModelByChannel = structuredClone(currentModelByChannel);
   let changed = false;
   for (const [providerId, providerOverrides] of Object.entries(preUpdateModelByChannel)) {
-    const preUpdateProviderOverrides = normalizeChannelConfigMap(providerOverrides);
+    const preUpdateProviderOverrides = asNullableRecord(providerOverrides);
     if (!preUpdateProviderOverrides) {
       continue;
     }
-    const currentProviderOverrides =
-      normalizeChannelConfigMap(restoredModelByChannel[providerId]) ?? {};
-    let providerChanged = false;
-    for (const channelId of params.restoredChannelIds) {
-      if (
-        currentProviderOverrides[channelId] !== undefined ||
-        preUpdateProviderOverrides[channelId] === undefined
-      ) {
-        continue;
-      }
-      currentProviderOverrides[channelId] = structuredClone(preUpdateProviderOverrides[channelId]);
-      providerChanged = true;
-    }
-    if (providerChanged) {
+    const currentProviderOverrides = asNullableRecord(restoredModelByChannel[providerId]) ?? {};
+    const missingOverrides = Object.fromEntries(
+      params.restoredChannelIds
+        .filter((channelId) => preUpdateProviderOverrides[channelId] !== undefined)
+        .map((channelId) => [channelId, preUpdateProviderOverrides[channelId]]),
+    );
+    if (restoreMissingChannelConfigKeys(currentProviderOverrides, missingOverrides).length > 0) {
       restoredModelByChannel[providerId] = currentProviderOverrides;
       changed = true;
     }
@@ -93,7 +115,7 @@ function restorePreUpdateChannelModelOverrides(params: {
     : { channels: params.channels, changed: false };
 }
 
-export function restoreDroppedPreUpdateChannels(
+function restoreDroppedPreUpdateChannels(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   preUpdateConfig: PreUpdateConfigRestoreInput | undefined,
 ): {
@@ -104,28 +126,18 @@ export function restoreDroppedPreUpdateChannels(
   if (!snapshot.valid || !preUpdateConfig) {
     return { snapshot, changed: false };
   }
-  const preUpdateChannels = normalizeChannelConfigMap(preUpdateConfig.sourceConfig.channels);
+  const preUpdateChannels = asNullableRecord(preUpdateConfig.sourceConfig.channels);
   if (!preUpdateChannels) {
     return { snapshot, changed: false };
   }
 
-  const postUpdateChannels = normalizeChannelConfigMap(snapshot.sourceConfig.channels) ?? {};
+  const postUpdateChannels = asNullableRecord(snapshot.sourceConfig.channels) ?? {};
   let restoredChannels = { ...postUpdateChannels };
-  const restoredChannelIds: string[] = [];
-  let restored = false;
-  for (const [channelId, channelConfig] of Object.entries(preUpdateChannels)) {
-    if (restoredChannels[channelId] !== undefined) {
-      continue;
-    }
-    restoredChannels[channelId] = structuredClone(channelConfig);
-    if (channelId !== "modelByChannel") {
-      restoredChannelIds.push(channelId);
-    }
-    restored = true;
-  }
-  if (!restored) {
+  const restoredKeys = restoreMissingChannelConfigKeys(restoredChannels, preUpdateChannels);
+  if (restoredKeys.length === 0) {
     return { snapshot, changed: false };
   }
+  const restoredChannelIds = restoredKeys.filter((channelId) => channelId !== "modelByChannel");
   const restoredModelOverrides = restorePreUpdateChannelModelOverrides({
     channels: restoredChannels,
     preUpdateChannels,
@@ -135,9 +147,7 @@ export function restoreDroppedPreUpdateChannels(
 
   const authoredChannels = resolveRestoredAuthoredChannels({
     currentChannels: snapshot.sourceConfig.channels,
-    currentAuthoredChannels: isRecord(snapshot.parsed)
-      ? (snapshot.parsed as OpenClawConfig).channels
-      : snapshot.sourceConfig.channels,
+    currentAuthoredChannels: capturePreUpdateSourceConfig(snapshot)?.authoredConfig.channels,
     preUpdateAuthoredChannels: preUpdateConfig.authoredConfig.channels,
     restoredChannelIds,
   });
@@ -162,11 +172,11 @@ function hasRestorablePreUpdateChannels(
   if (!snapshot.valid) {
     return false;
   }
-  const preUpdateChannels = normalizeChannelConfigMap(preUpdateConfig.sourceConfig.channels);
+  const preUpdateChannels = asNullableRecord(preUpdateConfig.sourceConfig.channels);
   if (!preUpdateChannels) {
     return false;
   }
-  const postUpdateChannels = normalizeChannelConfigMap(snapshot.sourceConfig.channels) ?? {};
+  const postUpdateChannels = asNullableRecord(snapshot.sourceConfig.channels) ?? {};
   return Object.keys(preUpdateChannels).some(
     (channelId) => postUpdateChannels[channelId] === undefined,
   );
@@ -185,7 +195,7 @@ function resolveRestoredAuthoredChannels(params: {
     params.preUpdateAuthoredChannels,
   );
   if (!directAuthoredChannels) {
-    const preUpdateAuthoredChannels = normalizeChannelConfigMap(params.preUpdateAuthoredChannels);
+    const preUpdateAuthoredChannels = asNullableRecord(params.preUpdateAuthoredChannels);
     if (!preUpdateAuthoredChannels) {
       return undefined;
     }
@@ -198,7 +208,7 @@ function resolveRestoredAuthoredChannels(params: {
         ...structuredClone(currentDirectAuthoredChannels),
       };
     }
-    const currentAuthoredChannels = normalizeChannelConfigMap(params.currentAuthoredChannels);
+    const currentAuthoredChannels = asNullableRecord(params.currentAuthoredChannels);
     return !currentAuthoredChannels || Object.keys(currentAuthoredChannels).length === 0
       ? structuredClone(preUpdateAuthoredChannels)
       : undefined;
@@ -209,17 +219,12 @@ function resolveRestoredAuthoredChannels(params: {
     normalizeDirectAuthoredChannelConfigMap(params.currentChannels) ??
     {};
   const restoredChannels = { ...currentChannels };
-  let changed = false;
-  for (const channelId of params.restoredChannelIds) {
-    if (
-      restoredChannels[channelId] !== undefined ||
-      directAuthoredChannels[channelId] === undefined
-    ) {
-      continue;
-    }
-    restoredChannels[channelId] = structuredClone(directAuthoredChannels[channelId]);
-    changed = true;
-  }
+  const missingChannels = Object.fromEntries(
+    params.restoredChannelIds
+      .filter((channelId) => directAuthoredChannels[channelId] !== undefined)
+      .map((channelId) => [channelId, directAuthoredChannels[channelId]]),
+  );
+  const changed = restoreMissingChannelConfigKeys(restoredChannels, missingChannels).length > 0;
   const restoredModelOverrides = restorePreUpdateChannelModelOverrides({
     channels: restoredChannels,
     preUpdateChannels: directAuthoredChannels,
@@ -233,6 +238,7 @@ function resolveRestoredAuthoredChannels(params: {
 
 export async function persistValidatedDowngradeConfig(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+  assertCurrent?: () => void,
 ): Promise<void> {
   if (
     snapshot.valid &&
@@ -241,8 +247,19 @@ export async function persistValidatedDowngradeConfig(
     // Strict target validation permits this write even when Doctor execution failed.
     // Committing unchanged config through its normal writer stamps the target version,
     // so same-channel downgrades retain ordinary restart eligibility.
-    await withPluginLifecycleLease({}, async () => {
-      await mutateConfigFileWithRetry({ mutate: () => undefined });
+    await withPluginLifecycleLease({ assertCurrent }, async () => {
+      assertCurrent?.();
+      await mutateConfigFileWithRetry({
+        mutate: () => undefined,
+        ...(assertCurrent
+          ? {
+              writeOptions: withUpdateConfigWriteAuthority(
+                { beforeCommit: assertCurrent },
+                assertCurrent,
+              ),
+            }
+          : {}),
+      });
     });
   }
 }
@@ -250,6 +267,7 @@ export async function persistValidatedDowngradeConfig(
 export async function persistRequestedUpdateChannel(params: {
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   requestedChannel: UpdateChannel | null;
+  assertCurrent?: () => void;
 }): Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> {
   if (!params.requestedChannel || !params.configSnapshot.valid) {
     return params.configSnapshot;
@@ -261,7 +279,13 @@ export async function persistRequestedUpdateChannel(params: {
   const requestedChannel = params.requestedChannel;
 
   const mutation = await mutateConfigFileWithRetry({
-    writeOptions: { skipPluginValidation: true },
+    writeOptions: withUpdateConfigWriteAuthority(
+      {
+        skipPluginValidation: true,
+        ...(params.assertCurrent ? { beforeCommit: params.assertCurrent } : {}),
+      },
+      params.assertCurrent,
+    ),
     mutate: (draft) => {
       draft.update = {
         ...draft.update,
@@ -270,6 +294,45 @@ export async function persistRequestedUpdateChannel(params: {
     },
   });
   return createUpdatedConfigSnapshot(mutation.snapshot, mutation.nextConfig);
+}
+
+/** Capture write provenance in the process that will converge plugins, after any channel write. */
+export async function preparePostCorePluginConfig(params: {
+  requestedChannel: UpdateChannel | null;
+  preUpdateConfig?: PreUpdateConfigRestoreInput;
+  suppressFutureVersionWarning?: boolean;
+  observe?: boolean;
+  assertCurrent?: () => void;
+}) {
+  const io = createConfigIO({
+    pluginValidation: "skip",
+    suppressFutureVersionWarning: params.suppressFutureVersionWarning,
+    observe: params.observe,
+  });
+  let prepared = await io.readConfigFileSnapshotForWrite();
+  params.assertCurrent?.();
+  const channelSnapshot = await persistRequestedUpdateChannel({
+    configSnapshot: prepared.snapshot,
+    requestedChannel: params.requestedChannel,
+    assertCurrent: params.assertCurrent,
+  });
+  if (channelSnapshot !== prepared.snapshot) {
+    prepared = await io.readConfigFileSnapshotForWrite();
+  }
+  params.assertCurrent?.();
+  const restored = restoreDroppedPreUpdateChannels(prepared.snapshot, params.preUpdateConfig);
+  return {
+    configSnapshot: restored.snapshot,
+    configWriteOptions: withUpdateConfigWriteAuthority(
+      {
+        ...prepared.writeOptions,
+        ...(params.assertCurrent ? { beforeCommit: params.assertCurrent } : {}),
+      },
+      params.assertCurrent,
+    ),
+    configChanged: restored.changed,
+    restoredAuthoredChannels: restored.authoredChannels,
+  };
 }
 
 function createUpdatedConfigSnapshot(
@@ -290,17 +353,108 @@ function createUpdatedConfigSnapshot(
   };
 }
 
+/** Read-only startup configuration, retaining the authored snapshot alongside any projection. */
+export async function readUpdateChannelConfig(
+  channelRequested: boolean,
+  options?: { tolerateReadFailure?: boolean },
+) {
+  let configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  let configReadFailure: Error | undefined;
+  try {
+    configSnapshot = await readConfigFileSnapshot({
+      skipPluginValidation: true,
+      observe: false,
+    });
+  } catch (error) {
+    if (!options?.tolerateReadFailure) {
+      throw error;
+    }
+    configReadFailure = toErrorObject(error, "Configuration could not be read.");
+    configSnapshot = createConfigFileSnapshot({
+      path: resolveConfigPath(),
+      exists: true,
+      raw: null,
+      parsed: null,
+      sourceConfig: {},
+      runtimeConfig: {},
+      valid: false,
+      issues: [{ path: "", message: "Configuration could not be read." }],
+      warnings: [],
+      legacyIssues: [],
+      readError: { code: null },
+    });
+  }
+  const legacyConfigPlan = channelRequested
+    ? await planUpdateChannelLegacyConfig(configSnapshot)
+    : undefined;
+  const plannedConfig =
+    legacyConfigPlan?.config ??
+    (configSnapshot.valid
+      ? configSnapshot.config
+      : options?.tolerateReadFailure
+        ? configSnapshot.sourceConfig
+        : undefined);
+  return {
+    configSnapshot,
+    configReadFailure,
+    legacyConfigPlan,
+    storedChannel: normalizeUpdateChannel(plannedConfig?.update?.channel),
+  };
+}
+
+/** Preserve authored bytes during target admission; the projection grants no write authority. */
+async function planUpdateChannelLegacyConfig(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+): Promise<LegacyConfigUpdatePlan | undefined> {
+  if (snapshot.valid || snapshot.legacyIssues.length === 0) {
+    return undefined;
+  }
+  const { planLegacyConfigForUpdateChannel } =
+    await import("../../commands/doctor/legacy-config-repair.js");
+  const plan = planLegacyConfigForUpdateChannel(snapshot);
+  if (!plan || !snapshot.includedPaths?.length) {
+    return plan;
+  }
+  const current = await createConfigIO({
+    observe: false,
+    pluginValidation: "skip",
+  }).readConfigFileSnapshotForWrite();
+  const keys = [
+    "path",
+    "exists",
+    "raw",
+    "hash",
+    "includedPaths",
+    "includeProvenance",
+    "sourceConfig",
+  ] as const;
+  if (keys.some((key) => !isDeepStrictEqual(snapshot[key], current.snapshot[key]))) {
+    throw new Error(
+      "Legacy configuration changed during update planning; retry against the current source.",
+    );
+  }
+  return planLegacyConfigForUpdateChannel(snapshot, current.writeOptions);
+}
+
 export async function maybeRepairLegacyConfigForUpdateChannel(params: {
+  plan?: LegacyConfigUpdatePlan;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  configWriteOptions?: ConfigWriteOptions;
   jsonMode: boolean;
 }): Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> {
-  if (params.configSnapshot.valid || params.configSnapshot.legacyIssues.length === 0) {
+  if (
+    !params.plan &&
+    (params.configSnapshot.valid || params.configSnapshot.legacyIssues.length === 0)
+  ) {
     return params.configSnapshot;
   }
 
   const { repairLegacyConfigForUpdateChannel } =
     await import("../../commands/doctor/legacy-config-repair.js");
-  const { snapshot, repaired } = await repairLegacyConfigForUpdateChannel(params);
+  const { snapshot, repaired, warnings } = await repairLegacyConfigForUpdateChannel(params);
+  for (const warning of warnings ?? []) {
+    defaultRuntime.error(`Warning: ${warning}`);
+  }
   if (!params.jsonMode && repaired) {
     defaultRuntime.log(theme.muted("Migrated legacy config before changing update channel."));
   }
@@ -407,43 +561,25 @@ export async function readPostCorePreUpdateSourceConfig(params: {
   if (params.updateStartedAtMs === undefined) {
     return undefined;
   }
-  const explicitPreUpdatePath = `${params.currentSnapshot.path}.pre-update`;
-  if (
-    await isFreshPreUpdateConfigSnapshot({
-      currentConfigPath: params.currentSnapshot.path,
-      snapshotPath: explicitPreUpdatePath,
-      updateStartedAtMs: params.updateStartedAtMs,
-    })
-  ) {
-    const preUpdateConfig = await readPostCoreSourceConfigFile(explicitPreUpdatePath, {
+  for (const suffix of [".pre-update", ".bak"]) {
+    const snapshotPath = `${params.currentSnapshot.path}${suffix}`;
+    if (
+      !(await isFreshPreUpdateConfigSnapshot({
+        currentConfigPath: params.currentSnapshot.path,
+        snapshotPath,
+        updateStartedAtMs: params.updateStartedAtMs,
+      }))
+    ) {
+      continue;
+    }
+    const preUpdateConfig = await readPostCoreSourceConfigFile(snapshotPath, {
       configPath: params.currentSnapshot.path,
     });
-    if (
-      preUpdateConfig &&
+    // A fresh explicit snapshot is authoritative, even if it cannot restore channels.
+    return preUpdateConfig &&
       hasRestorablePreUpdateChannels(params.currentSnapshot, preUpdateConfig)
-    ) {
-      return preUpdateConfig;
-    }
-    return undefined;
-  }
-
-  const backupPath = `${params.currentSnapshot.path}.bak`;
-  if (
-    await isFreshPreUpdateConfigSnapshot({
-      currentConfigPath: params.currentSnapshot.path,
-      snapshotPath: backupPath,
-      updateStartedAtMs: params.updateStartedAtMs,
-    })
-  ) {
-    const preUpdateConfig = await readPostCoreSourceConfigFile(backupPath, {
-      configPath: params.currentSnapshot.path,
-    });
-    if (
-      preUpdateConfig &&
-      hasRestorablePreUpdateChannels(params.currentSnapshot, preUpdateConfig)
-    ) {
-      return preUpdateConfig;
-    }
+      ? preUpdateConfig
+      : undefined;
   }
   return undefined;
 }

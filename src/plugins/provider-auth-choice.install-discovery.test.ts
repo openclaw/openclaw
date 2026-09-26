@@ -1,17 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { computeDeclaredSurfaceHash } from "./capability-summary.js";
+import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
+import { computeDeclaredSurfaceHash, resolveAcceptedSurfaceCurrent } from "./capability-summary.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-reader.js";
 import { recordPluginInstall } from "./installs.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
+import { getScopedPluginCache } from "./plugin-cache.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { prepareAuthChoiceLoadedPluginProvider } from "./provider-auth-choice.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -64,6 +68,9 @@ it.each([false, true])(
     const projectRoot = path.join(stateDir, "npm", "projects", "installed-provider");
     const pluginRoot = path.join(projectRoot, "node_modules", "@fixture", "installed-provider");
     const config: OpenClawConfig = { gateway: { mode: "local" } };
+    const event = `installed-provider-owner-${setDefaultModel}`;
+    const before = process.listenerCount(event);
+    const cleanupPath = path.join(root, "provider-cleaned");
     const acceptedSurface = {
       channels: [],
       providers: ["installed-provider"],
@@ -138,9 +145,14 @@ it.each([false, true])(
           );
           fs.writeFileSync(
             path.join(pluginRoot, "index.cjs"),
-            `module.exports = {
+            `const listener = () => {}; process.on(${JSON.stringify(event)}, listener);
+            module.exports = {
         id: "installed-provider",
         register(api) {
+          api.lifecycle.onDispose(() => {
+            process.off(${JSON.stringify(event)}, listener);
+            require("node:fs").writeFileSync(${JSON.stringify(cleanupPath)}, "closed");
+          });
           api.registerProvider({ id: "installed-provider", label: "Installed provider", auth: [
             { id: "unselected", label: "Other method", kind: "api_key",
               async run() { throw new Error("Unselected auth method ran"); } },
@@ -152,7 +164,7 @@ it.each([false, true])(
                   "installed-provider": { source: "path", installPath: "/untrusted/provider-patch" }
                 } } } };
               } }
-          ], onModelSelected: async ({ model, prompter }) => {
+          ], normalizeModelId: () => "canonical-model", onModelSelected: async ({ model, prompter }) => {
             await prompter.note(model, "Installed provider model hook");
           } });
         }
@@ -174,20 +186,41 @@ it.each([false, true])(
         await withPluginRuntimeGenerationScope(
           { metadataSnapshot: runningMetadata, pluginRegistry: runningRegistry },
           async () => {
-            const prepared = await prepareAuthChoiceLoadedPluginProvider({
-              authChoice: "installed-provider-key",
-              config,
-              env,
-              workspaceDir,
-              agentDir: path.join(stateDir, "agents", "main", "agent"),
-              agentId: "main",
-              prompter,
-              runtime: createNonExitingRuntime(),
-              setDefaultModel,
-            });
+            const prepared = await prepareAuthChoiceLoadedPluginProvider(
+              {
+                authChoice: "installed-provider-key",
+                config,
+                env,
+                workspaceDir,
+                agentDir: path.join(stateDir, "agents", "main", "agent"),
+                agentId: "main",
+                prompter,
+                runtime: createNonExitingRuntime(),
+                setDefaultModel,
+              },
+              async (result, provider) => {
+                const cache = getScopedPluginCache();
+                expect(cache).toBeDefined();
+                expect(cache?.retirement).toBeUndefined();
+                expect(process.listenerCount(event)).toBe(before + 1);
+                await withPluginLifecycleLease({ env, waitMs: 0 }, async (lease) =>
+                  lease.assertOwned(),
+                );
+                await nextTurn();
+                expect(
+                  provider?.normalizeModelId?.({
+                    provider: "installed-provider",
+                    modelId: "fixture-model",
+                  }),
+                ).toBe("canonical-model");
+                return result;
+              },
+            );
             expect(install).toHaveBeenCalledOnce();
             expect(prepared?.retrySelection).not.toBe(true);
-            expect(prepared?.provider?.id).toBe("installed-provider");
+            expect(prepared).not.toHaveProperty("provider");
+            expect(process.listenerCount(event)).toBe(before);
+            expect(fs.readFileSync(cleanupPath, "utf8")).toBe("closed");
             expect(prompter.text).toHaveBeenCalledWith({ message: "Selected provider credential" });
             if (setDefaultModel) {
               expect(prompter.note).toHaveBeenCalledWith(
@@ -206,6 +239,21 @@ it.each([false, true])(
             }
             const trusted = prepared?.pendingPluginInstalls?.["installed-provider"];
             expect(trusted).toMatchObject(trustedRecord);
+            const providerAuthored = prepared?.config.plugins?.installs?.["installed-provider"];
+            if (!trusted || !providerAuthored || !prepared) {
+              throw new Error(
+                "Provider preparation lost the installer or provider-authored record",
+              );
+            }
+            const declared = resolvePluginArtifactDeclaredSurface(pluginRoot, env, {
+              config: prepared.config,
+            });
+            expect(resolveAcceptedSurfaceCurrent(trusted, declared)).toBe(true);
+            expect(providerAuthored).toMatchObject({
+              source: "path",
+              installPath: "/untrusted/provider-patch",
+            });
+            expect(trusted.installPath).toBe(pluginRoot);
             expect(getActivePluginRegistry()).toBe(runningRegistry);
             expect(getCurrentPluginMetadataSnapshot({ config, env, workspaceDir })).toBe(
               runningMetadata,

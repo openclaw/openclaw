@@ -1,4 +1,3 @@
-import AudioToolbox
 import AVFoundation
 import Foundation
 import OpenClawChatUI
@@ -60,7 +59,6 @@ actor TalkModeRuntime {
     private var rmsTask: Task<Void, Never>?
     private let rmsMeter = RMSMeter()
 
-    private var captureTask: Task<Void, Never>?
     private var silenceTask: Task<Void, Never>?
     var phase: TalkModePhase = .idle
     var isEnabled = false
@@ -256,8 +254,6 @@ actor TalkModeRuntime {
         self.realtimeSession = nil
         self.audioInputObserver?.stop()
         self.audioInputObserver = nil
-        self.captureTask?.cancel()
-        self.captureTask = nil
         self.silenceTask?.cancel()
         self.silenceTask = nil
         self.lastTranscript = ""
@@ -519,36 +515,6 @@ actor TalkModeRuntime {
         await sendAndSpeak(text)
     }
 
-    private func bindSelectedInputIfNeeded(
-        _ selection: AudioInputDeviceResolution,
-        to input: AVAudioInputNode) -> AudioInputDeviceResolution
-    {
-        guard selection.shouldBindSelectedDevice, let selectedUID = selection.resolvedUID else {
-            return selection
-        }
-        guard let audioUnit = input.audioUnit,
-              var deviceID = AudioInputDeviceObserver.inputDeviceID(forUID: selectedUID)
-        else {
-            self.logger.warning("talk selected input could not be resolved; using system default")
-            return self.defaultFallback(for: selection)
-        }
-
-        let status = AudioUnitSetProperty(
-            audioUnit,
-            kAudioOutputUnitProperty_CurrentDevice,
-            kAudioUnitScope_Global,
-            0,
-            &deviceID,
-            UInt32(MemoryLayout<AudioObjectID>.size))
-        guard status == noErr else {
-            self.logger.warning(
-                "talk selected input binding failed status=\(status); using system default")
-            return self.defaultFallback(for: selection)
-        }
-        self.logger.info("talk selected input bound uid=\(selectedUID, privacy: .private(mask: .hash))")
-        return selection
-    }
-
     private func prepareStartedRecognitionCapture(
         selection: AudioInputDeviceResolution,
         enableVoiceProcessing: Bool)
@@ -564,7 +530,8 @@ actor TalkModeRuntime {
                 try input.setVoiceProcessingEnabled(true)
             }
 
-            let activeResolution = self.bindSelectedInputIfNeeded(selection, to: input)
+            let activeResolution = AudioInputDeviceObserver.bindSelectedInputIfNeeded(
+                selection, to: input, logger: self.logger, context: "talk")
             guard activeResolution.resolvedUID != nil else {
                 throw TalkAudioInputError.unavailable
             }
@@ -598,13 +565,6 @@ actor TalkModeRuntime {
             audioEngine.stop()
             throw error
         }
-    }
-
-    private func defaultFallback(for selection: AudioInputDeviceResolution) -> AudioInputDeviceResolution {
-        AudioInputDeviceResolution(
-            selectedUID: selection.selectedUID,
-            resolvedUID: AudioInputDeviceObserver.resolveSelection(nil).resolvedUID,
-            fellBackToSystemDefault: selection.selectedUID != nil)
     }
 }
 
@@ -1096,10 +1056,10 @@ extension TalkModeRuntime {
             let mp3Stream = client.streamSynthesize(
                 voiceId: voiceId,
                 request: makeRequest(mp3Format))
-            return await playMP3(stream: mp3Stream)
+            return await StreamingAudioPlayer.shared.play(stream: mp3Stream)
         }
         self.lastPlaybackWasPCM = false
-        return await playMP3(stream: stream)
+        return await StreamingAudioPlayer.shared.play(stream: stream)
     }
 
     private func playGatewayTalkSpeak(input: TalkPlaybackInput) async throws {
@@ -1118,8 +1078,8 @@ extension TalkModeRuntime {
                 NSLocalizedDescriptionKey: "gateway talk.speak returned empty audio",
             ])
         }
-        _ = await stopPCM()
-        _ = await stopMP3()
+        _ = await PCMStreamingAudioPlayer.shared.stop()
+        _ = await StreamingAudioPlayer.shared.stop()
         if self.interruptOnSpeech {
             guard await self.prepareForPlayback(generation: input.generation) else { return }
         }
@@ -1171,8 +1131,8 @@ extension TalkModeRuntime {
                 onTimeout: {
                     TalkMLXSpeechSynthesizer.SynthesizeError.timedOut
                 },
-                operation: { [self] in
-                    try await self.streamMLXVoice(
+                operation: {
+                    try await TalkMLXSpeechSynthesizer.shared.synthesizeStream(
                         text: input.cleanedText,
                         modelRepo: modelRepo,
                         language: input.language,
@@ -1182,15 +1142,15 @@ extension TalkModeRuntime {
                         stallTimeoutSeconds: input.synthTimeoutSeconds)
                 })
         } catch TalkMLXSpeechSynthesizer.SynthesizeError.timedOut {
-            _ = await stopPCM()
-            await stopMLXVoice()
+            _ = await PCMStreamingAudioPlayer.shared.stop()
+            await TalkMLXSpeechSynthesizer.shared.cancelCurrent()
             throw TalkMLXSpeechSynthesizer.SynthesizeError.timedOut
         }
         let result = await playPCM(
             stream: playbackStream.chunks,
             sampleRate: playbackStream.sampleRate)
         if !result.finished, result.interruptedAt == nil {
-            await stopMLXVoice()
+            await TalkMLXSpeechSynthesizer.shared.cancelCurrent()
             throw TalkMLXSpeechSynthesizer.SynthesizeError.audioPlaybackFailed
         }
         self.ttsLogger.info("talk mlx done")
@@ -1265,17 +1225,18 @@ extension TalkModeRuntime {
             return
         }
         let usePCM = self.lastPlaybackWasPCM
-        let remoteInterruptedAt = usePCM ? await stopPCM() : await stopMP3()
+        let remoteInterruptedAt = usePCM ? await PCMStreamingAudioPlayer.shared.stop() : await StreamingAudioPlayer
+            .shared.stop()
         guard self.ownsReconfiguration(
             expectedReconfigurationGeneration,
             lifecycleGeneration: expectedLifecycleGeneration)
         else { return }
-        _ = usePCM ? await stopMP3() : await stopPCM()
+        _ = usePCM ? await StreamingAudioPlayer.shared.stop() : await PCMStreamingAudioPlayer.shared.stop()
         guard self.ownsReconfiguration(
             expectedReconfigurationGeneration,
             lifecycleGeneration: expectedLifecycleGeneration)
         else { return }
-        let localInterruptedAt = await stopTalkAudio()
+        let localInterruptedAt = await TalkBufferedAudioPlayer.shared.stop()
         guard self.ownsReconfiguration(
             expectedReconfigurationGeneration,
             lifecycleGeneration: expectedLifecycleGeneration)
@@ -1285,7 +1246,7 @@ extension TalkModeRuntime {
             expectedReconfigurationGeneration,
             lifecycleGeneration: expectedLifecycleGeneration)
         else { return }
-        await stopMLXVoice()
+        await TalkMLXSpeechSynthesizer.shared.cancelCurrent()
         guard self.ownsReconfiguration(
             expectedReconfigurationGeneration,
             lifecycleGeneration: expectedLifecycleGeneration)
@@ -1298,12 +1259,7 @@ extension TalkModeRuntime {
         if reason == .manual {
             return
         }
-        if reason == .speech || reason == .userTap {
-            await self.startListening()
-            return
-        }
-        self.phase = .thinking
-        await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
+        await self.startListening()
     }
 }
 
@@ -1369,56 +1325,12 @@ extension TalkModeRuntime {
         return result
     }
 
-    /// MP3 streaming has no metering hook; the wave falls back to its floor.
-    @MainActor
-    private func playMP3(stream: AsyncThrowingStream<Data, Error>) async -> StreamingPlaybackResult {
-        await StreamingAudioPlayer.shared.play(stream: stream)
-    }
-
-    @MainActor
-    private func stopPCM() -> Double? {
-        PCMStreamingAudioPlayer.shared.stop()
-    }
-
-    @MainActor
-    private func stopMP3() -> Double? {
-        StreamingAudioPlayer.shared.stop()
-    }
-
     @MainActor
     private func playTalkAudio(data: Data) async -> StreamingPlaybackResult {
         TalkBufferedAudioPlayer.shared.setLevelHandler { level in
             TalkModeController.shared.updateSpeakingLevel(level)
         }
         return await TalkBufferedAudioPlayer.shared.play(data: data)
-    }
-
-    @MainActor
-    private func stopTalkAudio() -> Double? {
-        TalkBufferedAudioPlayer.shared.stop()
-    }
-
-    private func streamMLXVoice(
-        text: String,
-        modelRepo: String?,
-        language: String?,
-        voicePreset: String?,
-        referenceAudioPath: String?,
-        referenceText: String?,
-        stallTimeoutSeconds: Double) async throws -> MLXTTSPlaybackStream
-    {
-        try await TalkMLXSpeechSynthesizer.shared.synthesizeStream(
-            text: text,
-            modelRepo: modelRepo,
-            language: language,
-            voicePreset: voicePreset,
-            referenceAudioPath: referenceAudioPath,
-            referenceText: referenceText,
-            stallTimeoutSeconds: stallTimeoutSeconds)
-    }
-
-    private func stopMLXVoice() async {
-        await TalkMLXSpeechSynthesizer.shared.cancelCurrent()
     }
 
     func parseTalkConfig(_ snap: ConfigSnapshot) -> TalkModeGatewayConfigState {
@@ -1587,9 +1499,6 @@ extension TalkModeRuntime {
     private func isLikelyEcho(of transcript: String) -> Bool {
         guard let spoken = lastSpokenText?.lowercased(), !spoken.isEmpty else { return false }
         let probe = transcript.lowercased()
-        if probe.count < 6 {
-            return spoken.contains(probe)
-        }
         return spoken.contains(probe)
     }
 }

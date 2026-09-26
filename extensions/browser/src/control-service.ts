@@ -1,6 +1,5 @@
-/**
- * Browser control service lifecycle for plugin-managed, in-process operation.
- */
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createBrowserControlContext,
   ensureBrowserControlRuntime,
@@ -13,9 +12,7 @@ import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { ensureBrowserControlAuth } from "./browser/control-auth.js";
 import { getExtensionRelayModule } from "./browser/extension-relay.runtime.js";
 import type { BrowserServerState } from "./browser/server-context.js";
-import { getRuntimeConfig } from "./config/config.js";
-import { createSubsystemLogger } from "./logging/subsystem.js";
-import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
+import { resolveBrowserPluginEnableState } from "./plugin-enabled.js";
 
 const log = createSubsystemLogger("browser");
 const logService = log.child("service");
@@ -28,7 +25,7 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
 
   const cfg = getRuntimeConfig();
   const browserCfg = loadBrowserConfigForRuntimeRefresh();
-  if (!isDefaultBrowserPluginEnabled(browserCfg)) {
+  if (!resolveBrowserPluginEnableState(cfg).enabled) {
     return null;
   }
   const resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);
@@ -79,7 +76,6 @@ async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState 
   return state;
 }
 
-/** Starts Browser control without binding the HTTP server when config enables it. */
 export async function startBrowserControlServiceFromConfig(): Promise<BrowserServerState | null> {
   return await withBrowserControlStart(startBrowserControlServiceUnlocked);
 }
@@ -102,5 +98,4 @@ export async function stopBrowserControlService(): Promise<void> {
   }
 }
 
-/** Re-export Browser control context accessors for gateway-local dispatch. */
 export { createBrowserControlContext, getBrowserControlState };

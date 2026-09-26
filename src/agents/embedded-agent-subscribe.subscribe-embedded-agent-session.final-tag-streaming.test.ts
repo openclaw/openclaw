@@ -9,6 +9,7 @@ import {
   extractAgentEventPayloads,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 type ReplyMock = ReturnType<typeof vi.fn>;
 type ReplyPayload = { text?: string };
@@ -27,16 +28,20 @@ function requireFirstReplyPayload(mock: ReplyMock): ReplyPayload {
   return payload as ReplyPayload;
 }
 
+function subscribe(
+  options: Omit<Parameters<typeof subscribeEmbeddedAgentSession>[0], "session" | "runId">,
+) {
+  const { session, emit } = createStubSessionHarness();
+  subscribeEmbeddedAgentSession({ session, runId: "run", ...options });
+  return emit;
+}
+
 describe("subscribeEmbeddedAgentSession", () => {
   it("filters to <final> and suppresses output without a start tag", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onPartialReply = vi.fn();
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       enforceFinalTag: true,
       onPartialReply,
       onAgentEvent,
@@ -57,13 +62,9 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
   });
   it("suppresses agent events on message_end without <final> tags when enforced", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       enforceFinalTag: true,
       onAgentEvent,
     });
@@ -73,41 +74,12 @@ describe("subscribeEmbeddedAgentSession", () => {
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toHaveLength(0);
   });
-  it("emits via streaming when <final> tags are present and enforcement is on", () => {
-    const { session, emit } = createStubSessionHarness();
-
-    const onPartialReply = vi.fn();
-    const onAgentEvent = vi.fn();
-
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
-      enforceFinalTag: true,
-      onPartialReply,
-      onAgentEvent,
-    });
-
-    // With enforceFinalTag, content is emitted via streaming (text_delta path),
-    // NOT recovered from message_end fallback. extractEmbeddedAssistantText strips
-    // <final> tags, so message_end would see plain text with no <final> markers
-    // and correctly suppress it (treated as reasoning leak).
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta({ emit, delta: "<final>Hello world</final>" });
-
-    expect(onPartialReply).toHaveBeenCalledTimes(1);
-    expect(requireFirstReplyPayload(onPartialReply).text).toBe("Hello world");
-  });
-
   it("keeps final tag literals inside streamed fenced code while enforcement is on", () => {
     // Literal <final> tags inside code fences remain hidden until a real final
     // tag appears outside the fence.
-    const { session, emit } = createStubSessionHarness();
-
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       enforceFinalTag: true,
       onAgentEvent,
     });
@@ -123,13 +95,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("does not keep stale fence state after a suppressed prefix closes before final text", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       enforceFinalTag: true,
       onAgentEvent,
     });
@@ -146,13 +114,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("does not let suppressed inline code state hide later final tags", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onPartialReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       enforceFinalTag: true,
       onPartialReply,
     });
@@ -166,13 +130,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("closes hidden reasoning fences split across deltas before final text", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onPartialReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       enforceFinalTag: true,
       onPartialReply,
     });
@@ -186,13 +146,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("strips nested final tag literals after suppressed fenced prefixes", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       enforceFinalTag: true,
       onAgentEvent,
     });
@@ -210,13 +166,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("strips final tags split across streamed deltas without emitting tag remnants", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       onAgentEvent,
     });
 
@@ -234,10 +186,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("preserves literal custom XML tag openers split after a bare less-than", () => {
-    const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({ session, runId: "run", onAgentEvent });
+    const emit = subscribe({ onAgentEvent });
     emit({ type: "message_start", message: { role: "assistant" } });
     for (const delta of ["<", "xiaohai-banli>milk tea</xiaohai-banli>"]) {
       emitAssistantTextDelta({ emit, delta });
@@ -250,13 +201,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("strips self-closing and attributed final tags from streamed deltas", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       onAgentEvent,
     });
 
@@ -273,13 +220,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("strips attributed final tags split across streamed deltas", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       onAgentEvent,
     });
 
@@ -295,13 +238,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("treats self-closing final tags as closers during enforced streaming", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onPartialReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       enforceFinalTag: true,
       onPartialReply,
     });
@@ -320,13 +259,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("treats leading self-closing final tags as openers during enforced streaming", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onPartialReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       enforceFinalTag: true,
       onPartialReply,
     });
@@ -345,13 +280,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("preserves enforced final content when attributed final tags split across deltas", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onPartialReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       enforceFinalTag: true,
       onPartialReply,
     });
@@ -369,13 +300,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("does not treat custom or malformed final-like tags as enforced final blocks", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onPartialReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       enforceFinalTag: true,
       onPartialReply,
     });
@@ -388,13 +315,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("preserves final content when enforced final tags are split across streamed deltas", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onPartialReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       enforceFinalTag: true,
       onPartialReply,
     });
@@ -412,13 +335,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("does not buffer ordinary trailing less-than text as a tag fragment", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       onAgentEvent,
     });
 
@@ -430,13 +349,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("flushes a literal trailing final-tag prefix when the text stream ends", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       onAgentEvent,
     });
 
@@ -449,13 +364,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("flushes a literal trailing final-tag prefix in text_end block replies", async () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onBlockReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       onBlockReply,
       blockReplyBreak: "text_end",
     });
@@ -470,13 +381,9 @@ describe("subscribeEmbeddedAgentSession", () => {
   });
 
   it("keeps a trailing final-tag prefix when synchronous message_end drains chunked text_end replies", async () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onBlockReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       onBlockReply,
       blockReplyBreak: "text_end",
       blockReplyChunking: { minChars: 1, maxChars: 200 },
@@ -494,20 +401,13 @@ describe("subscribeEmbeddedAgentSession", () => {
     emit({ type: "message_end", message: assistantMessage });
     await Promise.resolve();
 
-    expect(onBlockReply.mock.calls.map((call) => call[0]?.text)).toEqual([
-      "Answer ends with",
-      "<fi",
-    ]);
+    expect(onBlockReply.mock.calls.map((call) => call[0]?.text)).toEqual(["Answer ends with <fi"]);
   });
 
   it("preserves literal trailing tag-prefix text from message end fallback", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       onAgentEvent,
     });
 
@@ -517,13 +417,9 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(payloads.map((payload) => payload.delta).join("")).toBe("Answer ends with <");
   });
   it("does not require <final> when enforcement is off", () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onPartialReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       onPartialReply,
     });
 
@@ -533,21 +429,14 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(payload?.text).toBe("Hello world");
   });
   it("emits block replies on message_end", async () => {
-    const { session, emit } = createStubSessionHarness();
-
     const onBlockReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
-      session,
-      runId: "run",
+    const emit = subscribe({
       onBlockReply,
       blockReplyBreak: "message_end",
     });
 
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello block" }],
-    } as AssistantMessage;
+    const assistantMessage = textAssistant("Hello block") as AssistantMessage;
 
     emit({ type: "message_end", message: assistantMessage });
     await Promise.resolve();

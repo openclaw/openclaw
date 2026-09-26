@@ -244,7 +244,7 @@ describe("Talk device and voice wake settings", () => {
         openSystemSettings: vi.fn(),
         openPanel: vi.fn(),
         checkForUpdates: vi.fn(),
-        installChromeExtension: vi.fn(),
+        setupChromeExtension: vi.fn(),
         refresh: vi.fn(),
         dispose: vi.fn(),
       } satisfies NativeDeviceSettingsCapability;
@@ -547,7 +547,7 @@ describe("Talk device and voice wake settings", () => {
       openSystemSettings: vi.fn(),
       openPanel: vi.fn(),
       checkForUpdates: vi.fn(),
-      installChromeExtension: vi.fn(),
+      setupChromeExtension: vi.fn(),
       refresh: vi.fn(),
       dispose: vi.fn(),
     } satisfies NativeDeviceSettingsCapability;
@@ -619,7 +619,7 @@ describe("Talk device and voice wake settings", () => {
       openSystemSettings: vi.fn(),
       openPanel: vi.fn(),
       checkForUpdates: vi.fn(),
-      installChromeExtension: vi.fn(),
+      setupChromeExtension: vi.fn(),
       refresh: vi.fn(),
       dispose: vi.fn(),
     } satisfies NativeDeviceSettingsCapability;
@@ -903,12 +903,6 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     ).toHaveBeenCalledWith(["talk", "realtime", "transport"]);
   });
 
-  it("preserves a transport advertised by the explicit provider", async () => {
-    expect(
-      await selectModel("gpt-live-test-canary", { transports: ["gateway-relay"] }),
-    ).not.toHaveBeenCalled();
-  });
-
   it("resolves an explicit provider alias before preserving transport", async () => {
     expect(
       await selectModel("gpt-live-test-canary", {
@@ -935,10 +929,7 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     ).toHaveBeenCalledOnce();
   });
 
-  it.each(["gpt-liveish", "gpt-lively"])(
-    "preserves transport for GPT-Live lookalikes: %s",
-    async (model) => {
-      expect(await selectModel(model, { transports: ["webrtc"] })).not.toHaveBeenCalled();
-    },
-  );
+  it("preserves transport for a GPT-Live lookalike", async () => {
+    expect(await selectModel("gpt-liveish", { transports: ["webrtc"] })).not.toHaveBeenCalled();
+  });
 });

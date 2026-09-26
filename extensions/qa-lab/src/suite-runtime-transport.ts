@@ -1,7 +1,6 @@
-// Qa Lab plugin module implements suite runtime transport behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import {
-  findFailureOutboundMessage as findTransportFailureOutboundMessage,
+  findFailureOutboundMessage,
   waitForQaTransportCondition,
   type QaTransportState,
 } from "./qa-transport.js";
@@ -11,13 +10,6 @@ import type { QaBusMessage } from "./runtime-api.js";
 type WaitForNoOutboundOptions = {
   sinceIndex?: number;
 };
-
-function findFailureOutboundMessage(
-  state: QaTransportState,
-  options?: { accountId?: string; sinceIndex?: number; cursorSpace?: "all" | "outbound" },
-) {
-  return findTransportFailureOutboundMessage(state, options);
-}
 
 async function waitForOutboundMessage(
   state: QaTransportState,
@@ -104,12 +96,7 @@ function readTransportTranscript(
 
 function formatTransportTranscript(
   state: QaTransportState,
-  params: {
-    conversationId: string;
-    threadId?: string;
-    direction?: "inbound" | "outbound";
-    limit?: number;
-  },
+  params: Parameters<typeof readTransportTranscript>[1],
 ) {
   const messages = readTransportTranscript(state, params);
   return messages
@@ -130,24 +117,10 @@ function formatTransportTranscript(
     .join("\n\n");
 }
 
-function formatConversationTranscript(
+const formatConversationTranscript: (
   state: QaTransportState,
-  params: {
-    conversationId: string;
-    threadId?: string;
-    limit?: number;
-  },
-) {
-  return formatTransportTranscript(state, params);
-}
-
-async function waitForNoTransportOutbound(
-  state: QaTransportState,
-  timeoutMs = 1_200,
-  options?: WaitForNoOutboundOptions,
-) {
-  await waitForNoOutbound(state, timeoutMs, options);
-}
+  params: Omit<Parameters<typeof readTransportTranscript>[1], "direction">,
+) => string = formatTransportTranscript;
 
 export {
   formatConversationTranscript,
@@ -155,6 +128,6 @@ export {
   readTransportTranscript,
   recentOutboundSummary,
   waitForNoOutbound,
-  waitForNoTransportOutbound,
+  waitForNoOutbound as waitForNoTransportOutbound,
   waitForOutboundMessage,
 };

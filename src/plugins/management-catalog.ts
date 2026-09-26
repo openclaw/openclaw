@@ -9,9 +9,11 @@ import type {
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
@@ -26,9 +28,9 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginInstallSources,
-  type HostedOfficialExternalPluginCatalogLoadResult,
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
+import type { OfficialCatalogResult } from "./official-external-plugin-catalog.types.js";
 import {
   getPluginCache,
   getPluginMetadataSnapshotCache,
@@ -41,14 +43,101 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 export type ManagedPluginCatalogEntry = PluginCatalogEntry;
 export type ManagedPluginCatalog = PluginsListResult;
 
-export type OfficialCatalogResult = Pick<
-  HostedOfficialExternalPluginCatalogLoadResult,
-  "entries"
-> & {
-  error?: string;
-  hostedFeaturedAuthoritative?: boolean;
+export type ManagedPluginIconSource = { kind: "file"; path: string; rootPath: string };
+export type ManagedPluginClawHubIconSource = {
+  kind: "clawhub";
+  baseUrl: string;
+  packageName: string;
 };
 
+export function resolveInstalledPluginClawHubIconSource(params: {
+  installRecord?: PluginInstallRecord;
+  clawhubPackage?: string;
+}): ManagedPluginClawHubIconSource | undefined {
+  const record = params.installRecord;
+  const recordedPackage =
+    record?.source === "clawhub" && normalizeOptionalString(record.clawhubPackage);
+  const recordedUrl = record?.source === "clawhub" && normalizeOptionalString(record.clawhubUrl);
+  if (recordedPackage && recordedUrl) {
+    return {
+      kind: "clawhub",
+      baseUrl: resolveClawHubBaseUrl(recordedUrl),
+      packageName: recordedPackage,
+    };
+  }
+  return params.clawhubPackage
+    ? { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: params.clawhubPackage }
+    : undefined;
+}
+
+export function resolvePluginIconSource(params: {
+  metadata: PluginMetadataSnapshot;
+  pluginId: string;
+}): ManagedPluginIconSource | undefined {
+  const normalizedPluginId = params.metadata.normalizePluginId(params.pluginId);
+  const manifest = params.metadata.byPluginId.get(normalizedPluginId);
+  const localIconPath = normalizeOptionalString(manifest?.iconPath);
+  if (localIconPath && manifest) {
+    return { kind: "file", path: localIconPath, rootPath: manifest.rootDir };
+  }
+  return undefined;
+}
+
+export async function resolvePluginIconSources(params: {
+  metadata: PluginMetadataSnapshot;
+  pluginId: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<Array<ManagedPluginIconSource | ManagedPluginClawHubIconSource>> {
+  const { metadata, env } = params;
+  const pluginId = metadata.normalizePluginId(params.pluginId);
+  const file = resolvePluginIconSource({ metadata, pluginId });
+  const sources: Array<ManagedPluginIconSource | ManagedPluginClawHubIconSource> = file
+    ? [file]
+    : [];
+  const record = metadata.index.plugins.find(
+    (candidate) => metadata.normalizePluginId(candidate.pluginId) === pluginId,
+  );
+  if (!record) {
+    return sources;
+  }
+  const ownership = createInstalledPluginOwnershipResolver(metadata.index, env).resolvePackage(
+    record.pluginId,
+  );
+  const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
+  const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
+  const officialCatalog = await loadOfficialCatalog();
+  const { clawhubPackage } = resolveInstalledHostedOfficialEntry({
+    record,
+    installOwner,
+    installRecord,
+    officialEntries: prepareCatalogEntries(officialCatalog.entries),
+    bundledOfficialEntries: prepareCatalogEntries(listOfficialExternalPluginCatalogEntries()),
+  });
+  const remote = resolveInstalledPluginClawHubIconSource({ installRecord, clawhubPackage });
+  if (remote) {
+    sources.push(remote);
+  }
+  return sources;
+}
+
+export function resolvePluginActivityIconSource(params: {
+  metadata: PluginMetadataSnapshot;
+  pluginId: string;
+  toolName?: string;
+}): ManagedPluginIconSource | undefined {
+  const pluginId = params.metadata.normalizePluginId(params.pluginId);
+  const manifest = params.metadata.byPluginId.get(pluginId);
+  if (!manifest) {
+    return undefined;
+  }
+  const overrides = manifest.toolActivityIconPaths;
+  const override =
+    params.toolName && overrides && Object.hasOwn(overrides, params.toolName)
+      ? overrides[params.toolName]
+      : undefined;
+  const iconPath = override ?? manifest.activityIconPath;
+  return iconPath ? { kind: "file", path: iconPath, rootPath: manifest.rootDir } : undefined;
+}
 export function getManagedPluginCache(metadata?: PluginMetadataSnapshot) {
   if (metadata) {
     return getPluginMetadataSnapshotCache(metadata);
@@ -71,9 +160,11 @@ export function withManagedPluginCache<
   return (params) => withPluginCache(getManagedPluginCache(params.metadata), () => run(params));
 }
 
-/** Clear the process-stable hosted catalog snapshot after an explicit owner reload. */
-export function clearManagedPluginOfficialCatalogCache(): void {
-  getManagedPluginCache().officialCatalog = undefined;
+/** Clear process-stable catalog snapshots after an explicit owner reload. */
+export function clearManagedPluginCatalogCache(): void {
+  const cache = getManagedPluginCache();
+  cache.officialCatalog = undefined;
+  cache.pluginVersionCategories = undefined;
 }
 
 function mergeCatalogMetadata(
@@ -148,12 +239,10 @@ export function prepareCatalogEntries(entries: readonly OfficialExternalPluginCa
  */
 function overlayBundledOfficialPluginCatalogMetadata(
   entries: readonly OfficialExternalPluginCatalogEntry[],
-  bundledEntries: readonly OfficialExternalPluginCatalogEntry[] = listOfficialExternalPluginCatalogEntries(),
-  options: { hostedFeaturedAuthoritative: boolean } = {
-    hostedFeaturedAuthoritative: false,
-  },
+  options: { hostedFeaturedAuthoritative: boolean },
 ): OfficialExternalPluginCatalogEntry[] {
-  const bundledFacts = entries.length > 0 ? bundledEntries.map(prepareCatalogEntry) : [];
+  const bundledFacts =
+    entries.length > 0 ? listOfficialExternalPluginCatalogEntries().map(prepareCatalogEntry) : [];
   return entries.map((entry) => {
     const { clawhub, npmPackage } = prepareCatalogEntry(entry);
     const matches = bundledFacts.filter(
@@ -188,9 +277,17 @@ function overlayBundledOfficialPluginCatalogMetadata(
 export async function loadOfficialCatalog(): Promise<OfficialCatalogResult> {
   const cache = getManagedPluginCache();
   if (!cache.officialCatalog) {
-    const promise = Promise.resolve().then(() =>
-      loadConfiguredHostedOfficialExternalPluginCatalogEntries(),
-    );
+    const promise = loadConfiguredHostedOfficialExternalPluginCatalogEntries().then((result) => {
+      const hostedFeaturedAuthoritative =
+        result.source === "hosted" || result.source === "hosted-snapshot";
+      return {
+        entries: overlayBundledOfficialPluginCatalogMetadata(result.entries, {
+          hostedFeaturedAuthoritative,
+        }),
+        hostedFeaturedAuthoritative,
+        ...("error" in result ? { error: result.error } : {}),
+      };
+    });
     cache.officialCatalog = promise;
     void promise.catch(() => {
       if (cache.officialCatalog === promise) {
@@ -198,16 +295,7 @@ export async function loadOfficialCatalog(): Promise<OfficialCatalogResult> {
       }
     });
   }
-  const result = await cache.officialCatalog;
-  const hostedFeaturedAuthoritative =
-    result.source === "hosted" || result.source === "hosted-snapshot";
-  return {
-    entries: overlayBundledOfficialPluginCatalogMetadata(result.entries, undefined, {
-      hostedFeaturedAuthoritative,
-    }),
-    hostedFeaturedAuthoritative,
-    ...("error" in result ? { error: result.error } : {}),
-  };
+  return cache.officialCatalog;
 }
 
 export function normalizeKinds(kind: string | readonly string[] | undefined): string[] | undefined {
@@ -238,8 +326,8 @@ export function normalizeFeaturedAt(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0 });
 }
 
-/** Coarse manifest-derived grouping so catalog UIs can shelve a large inventory. */
-export function derivePluginCategory(
+/** Preserve the shipped coarse category projection for older catalog clients. */
+export function deriveLegacyPluginCategory(
   manifest: PluginManifestRecord | undefined,
 ): string | undefined {
   if (!manifest) {

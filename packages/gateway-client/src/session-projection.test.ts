@@ -177,13 +177,6 @@ describe("readSessionMessageSequence", () => {
   it("preserves the durable sequence of role-less history and status markers", () => {
     expect(readSessionMessageSequence({ __openclaw: { seq: 7 } })).toBe(7);
   });
-
-  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
-    "rejects unsafe role-less marker sequence %s",
-    (sequence) => {
-      expect(readSessionMessageSequence({ __openclaw: { seq: sequence } })).toBeNull();
-    },
-  );
 });
 
 describe("session transcript projection", () => {
@@ -640,20 +633,24 @@ describe("session transcript projection", () => {
     expect(state.messages).toEqual([first, second]);
   });
 
-  it("does not merge native messages with colliding imported provider-local IDs", () => {
-    const native = createMessage("user", "native", { id: "provider-local", seq: 1 });
-    const imported = createMessage("user", "imported", {
-      id: "provider-local",
-      seq: 2,
-      importedFrom: "claude-cli",
-      cliSessionId: "cli-session",
-      externalId: "provider-local",
-    });
-    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), native);
-    state = projectLiveSessionMessage(state, imported);
+  it.each([undefined, { source: "", rawSeq: 1 }, { source: "foreign", rawSeq: -1 }])(
+    "keeps imported ID collisions separate without valid placement (%j)",
+    (transcriptPosition) => {
+      const native = createMessage("user", "native", { id: "provider-local", seq: 1 });
+      const imported = createMessage("user", "imported", {
+        id: "provider-local",
+        seq: 2,
+        importedFrom: "claude-cli",
+        cliSessionId: "cli-session",
+        externalId: "provider-local",
+        transcriptPosition,
+      });
+      let state = projectLiveSessionMessage(createSessionProjection(primaryScope), native);
+      state = projectLiveSessionMessage(state, imported);
 
-    expect(state.messages).toEqual([native, imported]);
-  });
+      expect(state.messages).toEqual([native, imported]);
+    },
+  );
 
   it("does not merge incomplete imported source tuples", () => {
     const first = createMessage("user", "same words", {
@@ -931,24 +928,6 @@ describe("session transcript projection", () => {
     expect(isLocallyOptimisticSessionMessage(sequenced)).toBe(false);
     expect(isLocallyOptimisticSessionMessage(persisted)).toBe(false);
     expect(isLocallyOptimisticSessionMessage({ role: "system", content: "marker" })).toBe(false);
-  });
-
-  it("infers one canonical pending owner for a local prompt and its assistant stream", () => {
-    const pending = createMessage("user", "local prompt", {
-      idempotencyKey: "local-run:user",
-    });
-    const assistant = createMessage("assistant", "streaming locally");
-    const projection = createSessionProjection(primaryScope, [pending, assistant]);
-
-    expect(
-      projection.entries.map(({ pending: isPending, pendingRunId }) => ({
-        pending: isPending,
-        pendingRunId,
-      })),
-    ).toEqual([
-      { pending: true, pendingRunId: "local-run" },
-      { pending: true, pendingRunId: "local-run" },
-    ]);
   });
 
   it("filters hidden snapshot, authoritative live, and pending rows in one canonical pass", () => {

@@ -222,6 +222,7 @@ openclaw_e2e_print_log() {
   max_lines="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_LINES 120)" || return $?
   [ -f "$path" ] || return 0
   echo "--- $path ---"
+  [ -s "$path" ] || return 0
   redactor_module="${OPENCLAW_E2E_REDACTOR_MODULE:-$(openclaw_e2e_package_root)/dist/plugin-sdk/logging-core.js}"
   [ -f "$redactor_module" ] || redactor_module="$PWD/dist/plugin-sdk/logging-core.js"
   if [ ! -f "$redactor_module" ]; then
@@ -257,6 +258,7 @@ openclaw_e2e_install_package() {
   fi
   echo "Installing $label..."
   if openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
+    echo "Installed $label."
     return 0
   else
     local install_status=$?
@@ -267,7 +269,7 @@ openclaw_e2e_install_package() {
     if [ -f "$log_file" ]; then
       openclaw_e2e_print_log "$log_file" >&2
     fi
-    exit 1
+    return "$install_status"
   fi
 }
 openclaw_e2e_find_dep_package() {
@@ -405,13 +407,41 @@ openclaw_e2e_terminate_gateways() {
 }
 openclaw_e2e_start_mock_openai() { openclaw_e2e_start_tracked_process "$2" env "MOCK_PORT=$1" node scripts/e2e/mock-openai-server.mjs; }
 openclaw_e2e_wait_mock_openai() {
+  # Port 0 uses the supplied process/log receipt and prints its allocated port.
   local port="$1" attempts="${2:-80}" timeout_ms="${3:-400}" _
-  local base_url="${4:-http://127.0.0.1:${port}}"
+  local base_url="${4:-}" pid="${5:-}" log="${6:-}" ready_port="$port" line
+  if [ "$port" = "0" ] && { [ -z "$pid" ] || [ -z "$log" ] || [ -n "$base_url" ]; }; then
+    echo "Allocated mock OpenAI readiness requires its process and log, without a base URL override." >&2
+    return 2
+  fi
   for _ in $(seq 1 "$attempts"); do
-    openclaw_e2e_probe_http "${base_url}/health" ok "$timeout_ms" && return 0
+    if [ "$port" = "0" ]; then
+      # Only the actual listener publishes this complete line. An unrelated
+      # server's /health response cannot attest to ownership of the mock port.
+      openclaw_e2e_process_alive "$pid" || break
+      ready_port=""
+      while IFS= read -r line; do
+        if [[ "$line" =~ ^mock-openai\ listening\ on\ ([1-9][0-9]{0,4})$ ]] && [ "${BASH_REMATCH[1]}" -le 65535 ]; then
+          ready_port="${BASH_REMATCH[1]}"
+          break
+        fi
+      done < <(head -c 65536 "$log" 2>/dev/null)
+    fi
+    if [ -n "$ready_port" ] && openclaw_e2e_probe_http "${base_url:-http://127.0.0.1:${ready_port}}/health" ok "$timeout_ms"; then
+      if [ "$port" = "0" ]; then
+        openclaw_e2e_process_alive "$pid" || break
+        printf '%s\n' "$ready_port"
+      fi
+      return 0
+    fi
     sleep 0.1
   done
-  openclaw_e2e_probe_http "${base_url}/health" ok "$timeout_ms"
+  if [ "$port" = "0" ]; then
+    openclaw_e2e_print_log "$log" >&2
+    echo "Mock OpenAI did not publish a live listener." >&2
+    return 1
+  fi
+  openclaw_e2e_probe_http "${base_url:-http://127.0.0.1:${port}}/health" ok "$timeout_ms"
 }
 openclaw_e2e_start_gateway() { openclaw_e2e_start_tracked_process "$3" node "$1" gateway --port "$2" --bind loopback --allow-unconfigured; }
 openclaw_e2e_exec_gateway() { exec node "$1" gateway --port "$2" --bind "${3:-loopback}" --allow-unconfigured >"$4" 2>&1; }

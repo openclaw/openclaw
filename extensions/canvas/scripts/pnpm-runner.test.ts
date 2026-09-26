@@ -1,6 +1,7 @@
 // Canvas tests cover pnpm runner plugin behavior.
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -148,7 +149,7 @@ describe("canvas pnpm runner", () => {
 
   it.runIf(process.platform === "win32")(
     "launches native PATH entries and spaced cmd wrappers",
-    () => {
+    async () => {
       const tempDir = mkdtempSync(path.join(os.tmpdir(), "canvas pnpm windows "));
       try {
         const nativePath = path.join(tempDir, "pnpm.exe");
@@ -184,14 +185,19 @@ describe("canvas pnpm runner", () => {
           resolvePnpmRunner({ npmExecPath: cmdPath, pnpmArgs: ["unsafe&argument"] }),
         ).toThrow(/unsafe/);
       } finally {
-        rmSync(tempDir, { recursive: true, force: true });
+        await rm(tempDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 20,
+        });
       }
     },
   );
 
   it.runIf(process.platform === "win32")(
     "preserves literal arguments through spaced cmd wrappers",
-    () => {
+    async () => {
       const tempDir = mkdtempSync(path.join(os.tmpdir(), "canvas pnpm argv "));
       try {
         const capturePath = path.join(tempDir, "capture.cjs");
@@ -213,7 +219,12 @@ describe("canvas pnpm runner", () => {
         expect(result.status, result.stderr).toBe(0);
         expect(JSON.parse(result.stdout)).toEqual(expected);
       } finally {
-        rmSync(tempDir, { recursive: true, force: true });
+        await rm(tempDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 20,
+        });
       }
     },
   );

@@ -1,5 +1,5 @@
 ---
-summary: "Reference for every Gateway rate limit: pre-auth lockouts, browser and webhook throttles, the control-plane write backstop, ACP session caps, and restart cooldown"
+summary: "Reference for every Gateway rate limit: pre-auth socket budgets and lockouts, browser and webhook throttles, the control-plane write backstop, ACP session caps, and restart cooldown"
 read_when:
   - A client sees `rate limit exceeded for <method>`, `AUTH_RATE_LIMITED`, or lockout errors
   - You want to tune `gateway.auth.rateLimit`
@@ -14,14 +14,58 @@ This page is the reference for all of them.
 
 At a glance:
 
-| Surface                             | Limit (default)                  | Keyed by                         | Configurable             |
-| ----------------------------------- | -------------------------------- | -------------------------------- | ------------------------ |
-| Failed auth (token/password/device) | 10 failures / 60s, 5 min lockout | IP + credential scope            | `gateway.auth.rateLimit` |
-| Browser-origin WS auth failures     | same, loopback **not** exempt    | IP, or page origin from loopback | `gateway.auth.rateLimit` |
-| Webhook (`/hooks`) auth failures    | 20 failures / 60s, 60s lockout   | IP                               | no                       |
-| Control-plane write RPCs            | 30 requests / 60s per method     | method + device + IP             | no                       |
-| ACP session creation                | 120 sessions / 10s               | translator instance              | internal                 |
-| Gateway restart cycles              | 30s cooldown between restarts    | process                          | no                       |
+| Surface                              | Limit (default)                  | Keyed by                         | Configurable                              |
+| ------------------------------------ | -------------------------------- | -------------------------------- | ----------------------------------------- |
+| Unauthenticated WebSocket handshakes | 32 outstanding sockets           | Resolved client IP               | `OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP` |
+| Failed auth (token/password/device)  | 10 failures / 60s, 5 min lockout | IP + credential scope            | `gateway.auth.rateLimit`                  |
+| Browser-origin WS auth failures      | same, loopback **not** exempt    | IP, or page origin from loopback | `gateway.auth.rateLimit`                  |
+| Webhook (`/hooks`) auth failures     | 20 failures / 60s, 60s lockout   | IP                               | no                                        |
+| Control-plane write RPCs             | 30 requests / 60s per method     | method + device + IP (see below) | no                                        |
+| ACP session creation                 | 120 sessions / 10s               | translator instance              | internal                                  |
+| Gateway restart cycles               | 30s cooldown between restarts    | process                          | no                                        |
+
+## Unauthenticated WebSocket connections
+
+The Gateway allows **32 outstanding unauthenticated WebSocket connections per
+client IP**. This is a concurrent handshake budget, not a requests-per-minute
+limit or a cap on authenticated clients. A slot is released when authentication
+succeeds or the connection closes; failed upgrades also release their slots.
+Loopback connections are not exempt.
+
+An upgrade over budget receives HTTP `503 Service Unavailable` with the body
+`Too many unauthenticated sockets`, without a `Retry-After` header. Stagger
+connection or reconnect bursts so existing handshakes can finish.
+
+The budget uses the client IP resolved before the upgrade:
+
+- **Direct connections:** the normalized socket peer IP. Clients behind the same
+  NAT share the public source IP and therefore the same budget.
+- **Trusted reverse proxies:** when the socket peer matches
+  `gateway.trustedProxies`, OpenClaw walks `X-Forwarded-For` right to left,
+  skipping loopback and trusted proxy hops, and uses the first remaining IP.
+  `X-Real-IP` is a fallback only when `gateway.allowRealIpFallback: true` and
+  that walk finds no client IP. The proxy must overwrite or safely rebuild
+  these headers. Proxy-shaped requests without valid attribution are rejected
+  before acquiring a slot; they do not fall back to a shared proxy-IP budget.
+- **Cloudflare Tunnel:** the same trusted-proxy rules apply. Trust the immediate
+  `cloudflared` socket source narrowly and ensure a safe `X-Forwarded-For`
+  chain reaches the Gateway. `CF-Connecting-IP` is not used to select this
+  budget. See [Cloudflare Tunnel and Access](/gateway/cloudflare-access).
+- **OpenClaw-managed Tailscale Serve:** the dedicated private listener uses the
+  client IP from Tailscale's rewritten `X-Forwarded-For`, not the loopback
+  socket address or the Tailscale user login. Externally managed Serve targeting
+  the ordinary listener follows the trusted-proxy rules above.
+
+For a known shared-IP burst, set the existing environment override on the
+Gateway process and restart it. For example, to allow 128 overlapping handshakes:
+
+```bash
+OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP=128 openclaw gateway run
+```
+
+Use a positive integer; invalid values fall back to 32. A higher budget permits
+more unauthenticated sockets to remain open at once. It does not change the
+failed-authentication limits below.
 
 ## Authentication attempts (pre-auth)
 
@@ -107,7 +151,7 @@ Configure the proxy address narrowly in `gateway.trustedProxies` and have the
 proxy overwrite or safely rebuild forwarding headers. OpenClaw then restores
 validated per-client attribution and rate-limit buckets. See [Trusted Proxy
 Auth](/gateway/trusted-proxy-auth) and the [Gateway security
-guide](/gateway/security#reverse-proxy-configuration).
+guide](/gateway/security/network-exposure#reverse-proxy-configuration).
 
 A headerless TCP forwarder provides no request-level provenance and is
 indistinguishable from a process connecting directly over loopback. This
@@ -147,6 +191,11 @@ Write-side admin RPCs (`config.apply`, `config.patch`, `plugins.install`,
 `gateway.restart.request`, ...) are additionally rate-limited **after**
 authorization: 30 requests per 60 seconds, per method, per
 `deviceId+clientIp`.
+
+WebSocket clients supply both parts of that key. Admin HTTP controllers carry no
+device id, so their bucket is the resolved client IP alone, and controllers
+behind one proxy share a budget. See [External apps](/gateway/external-apps) for
+the controller-side view.
 
 This is not a security boundary — callers already hold `operator.admin` — it
 is a backstop that bounds runaway client or agent loops hammering expensive

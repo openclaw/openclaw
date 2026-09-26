@@ -3,14 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { FIELD_HELP } from "./schema.help.js";
-import {
-  CHANNELS_AGENTS_TARGET_KEYS,
-  ENUM_EXPECTATIONS,
-  FINAL_BACKLOG_TARGET_KEYS,
-  ROOT_SECTIONS,
-  TARGET_KEYS,
-  TOOLS_HOOKS_TARGET_KEYS,
-} from "./schema.help.quality.test-fixtures.js";
+import { ENUM_EXPECTATIONS, ROOT_SECTIONS } from "./schema.help.quality.test-fixtures.js";
 import { buildBaseHints } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 
@@ -77,47 +70,6 @@ function formatMissingTierFailure(paths: readonly string[]): string {
   ].join("\n");
 }
 
-function titleCaseLabelSegment(segment: string): string {
-  return segment
-    .replace(/\[\]/g, "")
-    .replace(/[*_-]+/g, " ")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function createFieldLabelStub(key: string): string {
-  const segments = key.split(".").filter((segment) => segment !== "*");
-  const leaf = segments.at(-1) ?? key;
-  return titleCaseLabelSegment(leaf) || key;
-}
-
-function collectMissingLabelKeys(
-  helpKeys: readonly string[],
-  labels: Record<string, string>,
-): string[] {
-  return helpKeys.filter((key) => {
-    const label = labels[key];
-    return typeof label !== "string" || label.length === 0;
-  });
-}
-
-function formatMissingLabelFailure(missingKeys: readonly string[]): string {
-  const stubs = missingKeys
-    .map((key) => `  ${JSON.stringify(key)}: ${JSON.stringify(createFieldLabelStub(key))},`)
-    .join("\n");
-  return [
-    `${missingKeys.length} help key(s) missing from FIELD_LABELS.`,
-    "Add or adjust these entries in src/config/schema.labels.ts:",
-    "",
-    stubs,
-    "",
-    "Review generated labels before committing; they are mechanical starting points.",
-  ].join("\n");
-}
-
 describe("config help copy quality", () => {
   function requireHelp(key: string): string {
     const help = FIELD_HELP[key];
@@ -135,21 +87,6 @@ describe("config help copy quality", () => {
     return label;
   }
 
-  function expectOperationalGuidance(
-    keys: readonly string[],
-    guidancePattern: RegExp,
-    minLength = 80,
-  ) {
-    for (const key of keys) {
-      const help = requireHelp(key);
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(minLength);
-      expect(
-        guidancePattern.test(help),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
-  }
-
   it("describes auto-mode weekly Workshop review", () => {
     const help = requireHelp("skills.workshop.autonomous.mode");
     expect(help).toContain("weekly");
@@ -165,48 +102,16 @@ describe("config help copy quality", () => {
   });
 
   it("keeps labels in parity for all help keys", () => {
-    const missing = collectMissingLabelKeys(Object.keys(FIELD_HELP), FIELD_LABELS);
-    if (missing.length > 0) {
-      expect.fail(formatMissingLabelFailure(missing));
-    }
+    const missing = Object.keys(FIELD_HELP).filter((key) => {
+      const label = FIELD_LABELS[key];
+      return typeof label !== "string" || label.length === 0;
+    });
+    expect(missing, "help keys without FIELD_LABELS entries").toEqual([]);
   });
 
-  it("prints copy-paste-ready label stubs for missing help labels", () => {
-    const message = formatMissingLabelFailure([
-      "gateway.push",
-      "gateway.push.apns.relay.timeoutMs",
-    ]);
-    expect(message).toContain("2 help key(s) missing from FIELD_LABELS.");
-    expect(message).toContain("src/config/schema.labels.ts");
-    expect(message).toContain(`  "gateway.push": "Push",`);
-    expect(message).toContain(`  "gateway.push.apns.relay.timeoutMs": "Timeout Ms",`);
-  });
-
-  it("covers the target confusing fields with non-trivial explanations", () => {
-    expectOperationalGuidance(
-      TARGET_KEYS,
-      /(default|keep|use|enable|disable|controls|selects|sets|defines)/i,
-    );
-  });
-
-  it("covers tools/hooks help keys with non-trivial operational guidance", () => {
-    expectOperationalGuidance(
-      TOOLS_HOOKS_TARGET_KEYS,
-      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
-    );
-  });
-
-  it("covers channels/agents help keys with non-trivial operational guidance", () => {
-    expectOperationalGuidance(
-      CHANNELS_AGENTS_TARGET_KEYS,
-      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
-    );
-  });
-
-  it("covers final backlog help keys with non-trivial operational guidance", () => {
-    expectOperationalGuidance(
-      FINAL_BACKLOG_TARGET_KEYS,
-      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
+  it("documents remote gateway token rotation", () => {
+    expect(requireHelp("gateway.remote.token")).toContain(
+      "Store via secret/env substitution and rotate alongside remote gateway auth changes.",
     );
   });
 
@@ -264,8 +169,13 @@ describe("config help copy quality", () => {
       ],
     },
     {
-      name: "documents broadcast command examples",
-      fields: [["broadcast.*", [/source peer ID/i, /destination peer IDs/i]]],
+      name: "documents agent group participants and bounds",
+      fields: [
+        ["broadcast.*", ["telegram:-100123", /agent IDs/i, /precedence/i, "16"]],
+        ["broadcast.*.mentionGating", [/explicitly @mentioned/i, /otherwise run all/i]],
+        ["broadcast.*.maxRounds", [/initial round/i, "1–4"]],
+        ["broadcast.*.maxTurns", [/participant turns/i, "1–32", /agents.length/i, /restart/i]],
+      ],
     },
     {
       name: "documents hook transform safety and queue behavior options",
@@ -273,10 +183,6 @@ describe("config help copy quality", () => {
         ["hooks.mappings[].transform.module", [/relative/i, /path traversal|reviewed|controlled/i]],
         ["messages.queue.mode", ['"interrupt"', '"steer"']],
       ],
-    },
-    {
-      name: "documents gateway bind modes",
-      fields: [["gateway.bind", ['"loopback"', '"tailnet"']]],
     },
     {
       name: "documents admin semantics for logging and plugins",

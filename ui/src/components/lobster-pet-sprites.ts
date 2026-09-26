@@ -4,7 +4,6 @@
 // selection logic stays in lobster-pet-look.ts.
 import { svg, type TemplateResult } from "lit";
 import type {
-  LobsterPasserKind,
   LobsterPetAccessory,
   LobsterPetAntennae,
   LobsterPetPaletteId,
@@ -490,134 +489,123 @@ export const ANTENNAE_SPRITES: Record<LobsterPetAntennae, TemplateResult> = {
 
 // Not a lobster. Wide shell, eye stalks, walks sideways across the ledge,
 // and the Lobsterdex refuses to acknowledge it.
-function renderCrabSvg() {
-  return svg`
-    <svg
-      class="lobster-pet__svg"
-      viewBox="0 0 120 105"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      <g stroke="#a63a2e" stroke-width="4" stroke-linecap="round" fill="none">
-        <path d="M22 78 L8 88" />
-        <path d="M28 88 L16 99" />
-        <path d="M98 78 L112 88" />
-        <path d="M92 88 L104 99" />
-      </g>
-      <g stroke="#c44536" stroke-width="3.5" stroke-linecap="round" fill="none">
-        <path d="M44 38 L40 24" />
-        <path d="M76 38 L80 24" />
-      </g>
-      <circle cx="40" cy="22" r="4.5" fill="#0a1014" />
-      <circle cx="80" cy="22" r="4.5" fill="#0a1014" />
-      <circle cx="41.5" cy="20.5" r="1.8" fill="#ffd166" />
-      <circle cx="81.5" cy="20.5" r="1.8" fill="#ffd166" />
-      <ellipse cx="60" cy="70" rx="46" ry="30" fill="#c44536" />
-      <ellipse cx="48" cy="60" rx="16" ry="9" fill="#ffffff" opacity="0.1" />
-      <path
-        d="M16 58 C2 52 -2 62 4 72 C10 82 20 76 24 66 C26 60 22 58 16 58 Z"
-        fill="#d95f4b"
-      />
-      <path
-        d="M104 58 C118 52 122 62 116 72 C110 82 100 76 96 66 C94 60 98 58 104 58 Z"
-        fill="#d95f4b"
-      />
-      <path d="M48 82 Q60 90 72 82" stroke="#7e2a20" stroke-width="3" stroke-linecap="round" fill="none" />
-    </svg>
-  `;
-}
+const CRAB_SPRITE = svg`
+  <svg
+    class="lobster-pet__svg"
+    viewBox="0 0 120 105"
+    preserveAspectRatio="none"
+    aria-hidden="true"
+  >
+    <g stroke="#a63a2e" stroke-width="4" stroke-linecap="round" fill="none">
+      <path d="M22 78 L8 88" />
+      <path d="M28 88 L16 99" />
+      <path d="M98 78 L112 88" />
+      <path d="M92 88 L104 99" />
+    </g>
+    <g stroke="#c44536" stroke-width="3.5" stroke-linecap="round" fill="none">
+      <path d="M44 38 L40 24" />
+      <path d="M76 38 L80 24" />
+    </g>
+    <circle cx="40" cy="22" r="4.5" fill="#0a1014" />
+    <circle cx="80" cy="22" r="4.5" fill="#0a1014" />
+    <circle cx="41.5" cy="20.5" r="1.8" fill="#ffd166" />
+    <circle cx="81.5" cy="20.5" r="1.8" fill="#ffd166" />
+    <ellipse cx="60" cy="70" rx="46" ry="30" fill="#c44536" />
+    <ellipse cx="48" cy="60" rx="16" ry="9" fill="#ffffff" opacity="0.1" />
+    <path
+      d="M16 58 C2 52 -2 62 4 72 C10 82 20 76 24 66 C26 60 22 58 16 58 Z"
+      fill="#d95f4b"
+    />
+    <path
+      d="M104 58 C118 52 122 62 116 72 C110 82 100 76 96 66 C94 60 98 58 104 58 Z"
+      fill="#d95f4b"
+    />
+    <path d="M48 82 Q60 90 72 82" stroke="#7e2a20" stroke-width="3" stroke-linecap="round" fill="none" />
+  </svg>
+`;
 
 // Also not a lobster. Crosses the ledge on its own schedule, which is to
 // say: eventually.
-function renderSnailSvg() {
-  return svg`
-    <svg
-      class="lobster-pet__svg"
-      viewBox="0 0 120 105"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      <path
-        d="M14 96 Q32 84 58 88 L96 88 Q110 90 112 97 Q112 103 102 103 L24 103 Q14 103 14 96 Z"
-        fill="#c9a06a"
-      />
-      <g stroke="#c9a06a" stroke-width="3.5" stroke-linecap="round" fill="none">
-        <path d="M94 88 Q96 76 91 68" />
-        <path d="M103 88 Q107 76 103 66" />
-      </g>
-      <circle cx="90" cy="65" r="3.6" fill="#0a1014" />
-      <circle cx="103" cy="63" r="3.6" fill="#0a1014" />
-      <circle cx="91" cy="64" r="1.3" fill="#ffd166" />
-      <circle cx="104" cy="62" r="1.3" fill="#ffd166" />
-      <circle cx="50" cy="62" r="27" fill="#8a5a2b" />
-      <path
-        d="M50 41 a21 21 0 1 1 -15 36 a14 14 0 1 0 11 -25 a8 8 0 1 0 4 14"
-        stroke="#5f3d1c"
-        stroke-width="4"
-        stroke-linecap="round"
-        fill="none"
-      />
-    </svg>
-  `;
-}
+const SNAIL_SPRITE = svg`
+  <svg
+    class="lobster-pet__svg"
+    viewBox="0 0 120 105"
+    preserveAspectRatio="none"
+    aria-hidden="true"
+  >
+    <path
+      d="M14 96 Q32 84 58 88 L96 88 Q110 90 112 97 Q112 103 102 103 L24 103 Q14 103 14 96 Z"
+      fill="#c9a06a"
+    />
+    <g stroke="#c9a06a" stroke-width="3.5" stroke-linecap="round" fill="none">
+      <path d="M94 88 Q96 76 91 68" />
+      <path d="M103 88 Q107 76 103 66" />
+    </g>
+    <circle cx="90" cy="65" r="3.6" fill="#0a1014" />
+    <circle cx="103" cy="63" r="3.6" fill="#0a1014" />
+    <circle cx="91" cy="64" r="1.3" fill="#ffd166" />
+    <circle cx="104" cy="62" r="1.3" fill="#ffd166" />
+    <circle cx="50" cy="62" r="27" fill="#8a5a2b" />
+    <path
+      d="M50 41 a21 21 0 1 1 -15 36 a14 14 0 1 0 11 -25 a8 8 0 1 0 4 14"
+      stroke="#5f3d1c"
+      stroke-width="4"
+      stroke-linecap="round"
+      fill="none"
+    />
+  </svg>
+`;
 
 // The rubber duck: patron saint of debugging. It floats through, listens,
 // and leaves without judging anyone's architecture.
-function renderDuckSvg() {
-  return svg`
-    <svg
-      class="lobster-pet__svg"
-      viewBox="0 0 120 105"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      <path d="M30 82 Q20 74 27 65 Q30 76 40 79 Z" fill="#f0b52e" />
-      <ellipse cx="58" cy="85" rx="34" ry="17" fill="#ffd23e" />
-      <circle cx="82" cy="50" r="18" fill="#ffd23e" />
-      <path d="M98 49 Q112 52 99 59 Q95 56 95 51 Z" fill="#ff8c2e" />
-      <circle cx="86" cy="44" r="3.6" fill="#0a1014" />
-      <circle cx="87" cy="43" r="1.3" fill="#ffffff" />
-      <path d="M44 82 Q58 72 72 82 Q58 93 44 82 Z" fill="#f0b52e" opacity="0.75" />
-    </svg>
-  `;
-}
+const DUCK_SPRITE = svg`
+  <svg
+    class="lobster-pet__svg"
+    viewBox="0 0 120 105"
+    preserveAspectRatio="none"
+    aria-hidden="true"
+  >
+    <path d="M30 82 Q20 74 27 65 Q30 76 40 79 Z" fill="#f0b52e" />
+    <ellipse cx="58" cy="85" rx="34" ry="17" fill="#ffd23e" />
+    <circle cx="82" cy="50" r="18" fill="#ffd23e" />
+    <path d="M98 49 Q112 52 99 59 Q95 56 95 51 Z" fill="#ff8c2e" />
+    <circle cx="86" cy="44" r="3.6" fill="#0a1014" />
+    <circle cx="87" cy="43" r="1.3" fill="#ffffff" />
+    <path d="M44 82 Q58 72 72 82 Q58 93 44 82 Z" fill="#f0b52e" opacity="0.75" />
+  </svg>
+`;
 
 // A jellyfish drifting past above the ledge, pulsing gently, thinking about
 // nothing at all.
-function renderJellyfishSvg() {
-  return svg`
-    <svg
-      class="lobster-pet__svg"
-      viewBox="0 0 120 105"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-    >
-      <g class="lob-jelly-tentacles" stroke="#9f7dfa" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.8">
-        <path d="M40 58 Q35 74 42 90" />
-        <path d="M54 61 Q52 78 57 96" />
-        <path d="M68 61 Q71 78 64 94" />
-        <path d="M80 58 Q85 72 78 88" />
-      </g>
-      <path
-        d="M30 52 C30 22 90 22 90 52 L90 58 Q82 52 75 58 Q67 52 60 58 Q52 52 45 58 Q38 52 30 58 Z"
-        fill="#b79bff"
-        opacity="0.78"
-      />
-      <ellipse cx="47" cy="37" rx="12" ry="6" fill="#ffffff" opacity="0.25" />
-      <circle cx="52" cy="45" r="2.6" fill="#0a1014" />
-      <circle cx="66" cy="45" r="2.6" fill="#0a1014" />
-    </svg>
-  `;
-}
+const JELLYFISH_SPRITE = svg`
+  <svg
+    class="lobster-pet__svg"
+    viewBox="0 0 120 105"
+    preserveAspectRatio="none"
+    aria-hidden="true"
+  >
+    <g class="lob-jelly-tentacles" stroke="#9f7dfa" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.8">
+      <path d="M40 58 Q35 74 42 90" />
+      <path d="M54 61 Q52 78 57 96" />
+      <path d="M68 61 Q71 78 64 94" />
+      <path d="M80 58 Q85 72 78 88" />
+    </g>
+    <path
+      d="M30 52 C30 22 90 22 90 52 L90 58 Q82 52 75 58 Q67 52 60 58 Q52 52 45 58 Q38 52 30 58 Z"
+      fill="#b79bff"
+      opacity="0.78"
+    />
+    <ellipse cx="47" cy="37" rx="12" ry="6" fill="#ffffff" opacity="0.25" />
+    <circle cx="52" cy="45" r="2.6" fill="#0a1014" />
+    <circle cx="66" cy="45" r="2.6" fill="#0a1014" />
+  </svg>
+`;
 
-export const PASSER_SPRITES: Record<
-  Exclude<LobsterPasserKind, "stranger">,
-  () => TemplateResult
-> = {
-  crab: renderCrabSvg,
-  snail: renderSnailSvg,
-  duck: renderDuckSvg,
-  jellyfish: renderJellyfishSvg,
+export const PASSER_SPRITES: Record<"crab" | "snail" | "duck" | "jellyfish", TemplateResult> = {
+  crab: CRAB_SPRITE,
+  snail: SNAIL_SPRITE,
+  duck: DUCK_SPRITE,
+  jellyfish: JELLYFISH_SPRITE,
 };
 
 // While hovering, a closed bottle keeps its secret; opening swaps the title
@@ -655,7 +643,7 @@ export const BALLOON = svg`
   </svg>
 `;
 
-export const PASSER_TITLES: Record<LobsterPasserKind, string> = {
+export const PASSER_TITLES: Record<"stranger" | keyof typeof PASSER_SPRITES, string> = {
   stranger: "a stranger",
   crab: "definitely a lobster",
   snail: "in no particular hurry",

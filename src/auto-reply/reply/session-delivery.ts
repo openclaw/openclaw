@@ -7,8 +7,8 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
-  deliveryContextFromSession,
   deliveryContextKey,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";

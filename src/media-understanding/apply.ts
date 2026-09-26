@@ -37,13 +37,7 @@ import type {
 } from "./types.js";
 
 export type ApplyMediaUnderstandingResult = {
-  outputs: MediaUnderstandingOutput[];
-  decisions: MediaUnderstandingDecision[];
   extractedFileImages: ExtractedFileImage[];
-  appliedImage: boolean;
-  appliedAudio: boolean;
-  appliedVideo: boolean;
-  appliedFile: boolean;
   enableLocalPathSelfServe?: (
     contexts: MsgContext[],
     stagedPaths?: ReadonlyMap<number, string>,
@@ -55,12 +49,11 @@ const AUDIO_ONLY_CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["audio"];
 const EMPTY_VOICE_NOTE_PLACEHOLDER =
   "[Voice note could not be transcribed because the audio attachment was too small]";
 
-function appendFileBlocks(body: string | undefined, blocks: string[]): string {
-  if (!blocks || blocks.length === 0) {
+function appendFileBlocks(body: string | undefined, suffix: string | undefined): string {
+  if (suffix === undefined) {
     return body ?? "";
   }
   const base = typeof body === "string" ? body.trim() : "";
-  const suffix = blocks.join("\n\n").trim();
   if (!base) {
     return suffix;
   }
@@ -142,8 +135,8 @@ export async function applyMediaUnderstanding(params: {
   workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
-  /** Preserve native-harness ownership of image, video, and file inputs while applying STT. */
-  processingMode?: "audio-only";
+  /** Limit utility processing while preserving native image and video inputs. */
+  processingMode?: "audio-only" | "files-only" | "audio-and-files";
   /** Render local paths immediately only when the caller owns the final tool surface. */
   selfServeLocalPaths?: boolean;
   /** Attachment indexes the caller (ACP) has already resolved into native turn attachments. */
@@ -151,10 +144,9 @@ export async function applyMediaUnderstanding(params: {
 }): Promise<ApplyMediaUnderstandingResult> {
   const { ctx, cfg } = params;
   const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
-  const originalUserText =
-    commandCandidates
-      .map((value) => normalizeOptionalString(value))
-      .find((value) => value && value.trim()) ?? undefined;
+  const originalUserText = commandCandidates
+    .map((value) => normalizeOptionalString(value))
+    .find(Boolean);
 
   const attachments = normalizeMediaAttachments(ctx);
   const providerRegistry = buildProviderRegistry(params.providers, cfg);
@@ -164,13 +156,20 @@ export async function applyMediaUnderstanding(params: {
       ctx,
       workspaceDir: params.workspaceDir,
     }),
+    // The scoped root set is authoritative: merging sessionless defaults back in would restore
+    // the shared workspace/sandbox parents for sandboxed sessions.
+    includeDefaultLocalPathRoots: false,
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
     workspaceDir: params.workspaceDir,
   });
 
   try {
     const results = await pMap(
-      params.processingMode === "audio-only" ? AUDIO_ONLY_CAPABILITY_ORDER : CAPABILITY_ORDER,
+      params.processingMode === "files-only"
+        ? []
+        : params.processingMode === "audio-only" || params.processingMode === "audio-and-files"
+          ? AUDIO_ONLY_CAPABILITY_ORDER
+          : CAPABILITY_ORDER,
       async (capability) =>
         await runMediaCapability({
           capability,
@@ -283,8 +282,9 @@ export async function applyMediaUnderstanding(params: {
     });
     const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
     if (outputs.length > 0 || contextBlocks.length > 0) {
+      const fileSuffix = contextBlocks.length > 0 ? contextBlocks.join("\n\n").trim() : undefined;
       const enrich = (body?: string) =>
-        appendFileBlocks(formatMediaUnderstandingBody({ body, outputs }), contextBlocks);
+        appendFileBlocks(formatMediaUnderstandingBody({ body, outputs }), fileSuffix);
       // Channels may carry preflight transcripts only in prepared agent text.
       // Enrich that base before changing the separate transport envelope.
       ctx.agentText = enrich(ctx.agentText ?? ctx.BodyForAgent ?? ctx.Body);
@@ -293,13 +293,7 @@ export async function applyMediaUnderstanding(params: {
     }
 
     return {
-      outputs,
-      decisions,
       extractedFileImages: fileContext.images,
-      appliedImage: outputs.some((output) => output.kind === "image.description"),
-      appliedAudio: outputs.some((output) => output.kind === "audio.transcription"),
-      appliedVideo: outputs.some((output) => output.kind === "video.description"),
-      appliedFile: fileContext.blocks.length > 0,
       ...(fileContext.localPathSelfServeUpgrades.length > 0
         ? {
             enableLocalPathSelfServe: (

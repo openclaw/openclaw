@@ -1,13 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { ScopeUpgradeController } from "../app/device-scope-upgrade-controller.runtime.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
 import type { MentionsCapability } from "../app/mentions.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
+import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "../styles/sidebar-issues.css";
 import { renderHubTabs } from "./hub-tabs.ts";
@@ -27,11 +26,14 @@ import {
   renderSidebarUpdateSurface,
 } from "./sidebar-issue-item.ts";
 import { ISSUE_TABS, issueTabLabel, type IssueTab } from "./sidebar-issues-tabs.ts";
+import { renderSidebarOutboxItem } from "./sidebar-outbox-item.ts";
 import "./menu-surface.ts";
+
+registerSidebarAttentionEnglish();
 
 // Keep request orchestration behind the same lazy boundary as its Inbox UI;
 // ApplicationContext retains the activated controller across presenters.
-export { ScopeUpgradeController };
+export { ScopeUpgradeController } from "../app/device-scope-upgrade-controller.runtime.ts";
 
 export type SidebarAttentionPanelPosition = { left: number } & (
   | { anchor: "top"; top: number }
@@ -46,7 +48,7 @@ type SidebarAttentionPanelParams = {
   onClose: (restoreFocus: boolean) => void;
   onDismiss: (dismissal: SidebarAttentionDismissal) => void;
   onKeydown: (event: KeyboardEvent) => void;
-  onNavigate: (routeId: NavigationRouteId) => void;
+  onNavigate: ApplicationContext["navigate"];
   onOpen: (item: SidebarAttentionItem) => void;
   onScroll: () => void;
   onSelectTab: (tab: IssueTab) => void;
@@ -79,6 +81,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
   const canDismissShown = visibleDismissals.length > 0 || mentionDismissals.length > 0;
   const mentionsTab = params.selectedTab === "mentions";
   const showMentionStatus =
+    params.context.gateway.snapshot.phase === "connected" &&
     (mentionsTab || params.selectedTab === "all") &&
     (mentions.error !== null ||
       mentions.phase === "loading" ||
@@ -88,11 +91,17 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
     const dismissal = entry.dismissal;
     const onDismiss = dismissal ? () => params.onDismiss(dismissal) : undefined;
     switch (entry.type) {
+      case "outbox":
+        return renderSidebarOutboxItem({
+          entry,
+          context: params.context,
+          onNavigate: params.onNavigate,
+        });
       case "approval":
         return renderSidebarApprovalItem({
           approval: entry.approval,
           context: params.context,
-          onClosePanel: () => params.onClose(false),
+          onNavigate: params.onNavigate,
           onDecision: params.onApprovalDecision,
         });
       case "attention":
@@ -108,7 +117,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           context: params.context,
           dismissing: mentions.dismissing.includes(entry.mention.id),
           onDismiss: () => void params.mentions.dismiss([entry.mention.id]),
-          onClosePanel: () => params.onClose(false),
+          onNavigate: params.onNavigate,
         });
       case "scopeUpgrade":
         return renderSidebarScopeUpgradeItem({
@@ -123,7 +132,6 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           context: params.context,
           onDismiss,
           onNavigate: () => params.onNavigate("updates"),
-          visible: true,
           watchUpdateProgress: params.watchUpdateProgress,
         });
     }
@@ -172,6 +180,21 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
             >
               ${t("attention.dismissShown")}
             </button>
+            <openclaw-tooltip .content=${t("attention.mentions.notifications")}>
+              <a
+                class="sidebar-brand__icon"
+                aria-label=${t("attention.mentions.notifications")}
+                href=${pathForRoute("notifications", params.context.basePath)}
+                @click=${(event: MouseEvent) => {
+                  if (!shouldHandleNavigationClick(event)) {
+                    return;
+                  }
+                  event.preventDefault();
+                  params.onNavigate("notifications");
+                }}
+                >${icons.settings}</a
+              >
+            </openclaw-tooltip>
             <button
               type="button"
               class="sidebar-brand__icon sidebar-issues-panel__mobile-close"
@@ -271,17 +294,6 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           mentionsTab
             ? html`<footer class="sidebar-issues-panel__mentions-note">
                 <span>${t("attention.mentions.retention")}</span>
-                <a
-                  href=${pathForRoute("notifications", params.context.basePath)}
-                  @click=${(event: MouseEvent) => {
-                    if (!shouldHandleNavigationClick(event)) {
-                      return;
-                    }
-                    event.preventDefault();
-                    params.onNavigate("notifications");
-                  }}
-                  >${t("attention.mentions.notifications")}</a
-                >
               </footer>`
             : nothing
         }

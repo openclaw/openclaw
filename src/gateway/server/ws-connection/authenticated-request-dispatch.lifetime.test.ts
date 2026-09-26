@@ -10,10 +10,63 @@ import type { GatewayRequestOptions } from "../../server-methods/types.js";
 afterEach(() => {
   vi.doUnmock("./authenticated-request-dispatch.server-methods.runtime.js");
   vi.doUnmock("./request-start.js");
+  vi.doUnmock("../../session-sharing.js");
+  vi.doUnmock("../../session-sharing-target-input.js");
+  vi.doUnmock("../../server-methods/gateway-personal-caller.js");
   vi.resetModules();
 });
 
 describe("authenticated request completion", { concurrent: false }, () => {
+  it.for(["lazy import", "start scheduler"] as const)(
+    "rejects access revoked during %s before entering the handler",
+    async (stage, { signal }) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const grant = new AbortController();
+      const handleGatewayRequest = vi.fn(async () => {});
+      const unblock = () => release.resolve();
+      signal.addEventListener("abort", unblock, { once: true });
+      const hold = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      vi.resetModules();
+      vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
+        if (stage === "lazy import") {
+          await hold();
+        }
+        return { handleGatewayRequest };
+      });
+      if (stage === "start scheduler") {
+        vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
+      }
+      const { createDispatchTestHarness, createOperatorWsClient } =
+        await import("./authenticated-request-dispatch.test-support.js");
+      const harness = createDispatchTestHarness();
+      const client = createOperatorWsClient({ socket: new EventEmitter() });
+      client.internal = {
+        operatorAccessAuthority: {
+          signal: grant.signal,
+          assertCurrent: () => grant.signal.throwIfAborted(),
+        },
+      };
+      const dispatch = harness.dispatcher.dispatch(
+        { type: "req", id: "revoked", method: "test.lifetime", params: {} },
+        client,
+      );
+      try {
+        await entered.promise;
+        grant.abort(new Error("Access ended"));
+      } finally {
+        unblock();
+        await dispatch;
+        signal.removeEventListener("abort", unblock);
+      }
+      expect(handleGatewayRequest).not.toHaveBeenCalled();
+      expect([...harness.clients.authorityClients]).toEqual([]);
+    },
+  );
+
   it.for([
     "lazy import",
     "start scheduler",
@@ -49,13 +102,40 @@ describe("authenticated request completion", { concurrent: false }, () => {
         }
       };
       vi.resetModules();
-      if (stage !== "profile authorization") {
-        vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
-          if (stage === "lazy import") {
-            await hold();
-          }
-          return { handleGatewayRequest };
+      // A fresh factory prevents shared workers from reusing the prior case's handler.
+      vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
+        if (stage === "lazy import") {
+          await hold();
+        }
+        return {
+          handleGatewayRequest:
+            stage === "profile authorization"
+              ? (
+                  await vi.importActual<typeof import("../../server-methods.js")>(
+                    "../../server-methods.js",
+                  )
+                ).handleGatewayRequest
+              : handleGatewayRequest,
+        };
+      });
+      if (stage === "profile authorization") {
+        // This admin auxiliary request has no session target or personal-caller policy.
+        // Keep the real router/profile fence without loading those unrelated runtimes.
+        vi.doMock("../../session-sharing.js", async () => {
+          const { SessionMutationAuthorizationChangedError } =
+            await import("../../session-mutation-authorization-error.js");
+          return {
+            SessionMutationAuthorizationChangedError,
+            resolveSessionMutationAuthorization: () => ({ error: null }),
+          };
         });
+        vi.doMock("../../session-sharing-target-input.js", () => ({
+          resolveDirectIncognitoTargets: () => [],
+          resolveDirectSessionTargets: () => [],
+        }));
+        vi.doMock("../../server-methods/gateway-personal-caller.js", () => ({
+          isSyntheticGatewayCaller: () => false,
+        }));
       }
       if (stage === "start scheduler") {
         vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
@@ -90,6 +170,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
         await entered.promise;
         await nextTurn();
         expect.soft(dispatched, `${stage} is still executing`).toBe(false);
+        expect([...harness.clients.authorityClients]).toEqual([client]);
       } finally {
         // Join the handler independently: the broken dispatcher returns before it finishes.
         unblock();
@@ -99,6 +180,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
       }
       expect(selectedRoot).toBe(initialRoot);
       expect(dispatched).toBe(true);
+      expect([...harness.clients.authorityClients]).toEqual([]);
     },
   );
 });

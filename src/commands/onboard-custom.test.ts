@@ -80,12 +80,14 @@ async function runPromptCustomApi(
   prompter: ReturnType<typeof createTestPrompter>,
   config: object = {},
   target?: Parameters<typeof promptCustomApiConfig>[0]["target"],
+  setup?: Pick<Parameters<typeof promptCustomApiConfig>[0], "verification" | "setAsPrimary">,
 ) {
   return promptCustomApiConfig({
     prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
     runtime: { log: vi.fn() } as unknown as Parameters<typeof promptCustomApiConfig>[0]["runtime"],
     config,
     ...(target ? { target } : {}),
+    ...setup,
   });
 }
 
@@ -124,6 +126,29 @@ describe("promptCustomApiConfig", () => {
     expect(result.config.agents?.defaults?.models?.["custom/llama3"]?.alias).toBe("local");
     expect(result.config.models?.providers?.custom?.models?.[0]?.input).toEqual(["text"]);
     expect(prompter.confirm).not.toHaveBeenCalled();
+  });
+
+  it("prepares deferred setup without a provider request or a selected default", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://provider.example/v1", "fixture-key", "fixture-model", "custom", ""],
+      select: ["plaintext", "openai-responses"],
+    });
+    const fetchMock = stubFetchSequence([]);
+    const config = {};
+
+    const result = await runPromptCustomApi(prompter, config, undefined, {
+      verification: "deferred",
+      setAsPrimary: false,
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.config.models?.providers?.custom).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://provider.example/v1",
+      models: [expect.objectContaining({ id: "fixture-model" })],
+    });
+    expect(result.config.agents?.defaults?.model).toBeUndefined();
+    expect(config).toEqual({});
   });
 
   it("rejects aliases already used only by the selected agent", async () => {

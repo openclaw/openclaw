@@ -16,14 +16,15 @@ search or dynamic-tools surface. Codex-native code mode, tool search, deferred
 dynamic tools, and nested tool calls are stable Codex harness surfaces and do
 not depend on `tools.toolSearch`.
 
-For the generic OpenClaw runtime that exposes a QuickJS-WASI `exec`/`wait`
+For the generic OpenClaw runtime that exposes a JavaScript `exec`/`wait`
 surface instead of Tool Search controls, see [Code Mode](/tools/code-mode).
 
-Local inference routes use structured Tool Search automatically when
+OpenClaw embedded and Copilot runs use structured Tool Search automatically when
 `tools.toolSearch` is unset. This defers tool schemas while keeping the
 policy-approved capabilities available. It does not enable lean mode or remove
-optional tools. The default follows the active model for each run, including
-model switches and fallbacks, without changing another agent's settings.
+optional tools. Set `tools.toolSearch: false` to restore direct schemas. Engaged
+[Code Mode](/tools/code-mode) takes precedence, and Codex keeps its native surface.
+Explicit settings are preserved; no configuration file is rewritten.
 
 When enabled for OpenClaw runs, the model automatically receives a bounded
 directory of the available trusted tool names and descriptions. Explicitly
@@ -91,10 +92,10 @@ normal policy, approval, hook, logging, and result handling still apply.
 
 `tools.toolSearch` has three model-facing modes:
 
-- `code`: exposes `tool_search_code`, the default compact JavaScript bridge,
+- `code`: exposes `tool_search_code`, the explicitly selected JavaScript bridge,
   alongside the capability directory and direct-only tools.
-- `tools`: exposes `tool_search`, `tool_describe`, and `tool_call` as plain
-  structured tools for providers that should not receive code, alongside the
+- `tools`: the default when `tools.toolSearch` is unset. Exposes `tool_search`,
+  `tool_describe`, and `tool_call` as plain structured tools, alongside the
   capability directory and direct-only tools.
 - `directory`: exposes `tool_search`, `tool_describe`, and `tool_call` plus a
   bounded, cache-stable prompt directory. Core coding primitives, direct-only
@@ -104,15 +105,25 @@ normal policy, approval, hook, logging, and result handling still apply.
 All modes use the same policy-filtered catalog and normal OpenClaw execution
 path. Tools marked `catalogMode: "direct-only"` stay outside that catalog and
 remain model-visible. If the current runtime cannot launch the isolated Node code-mode child
-process, the default `code` mode falls back to `tools` before catalog
+process, explicitly selected `code` mode falls back to `tools` before catalog
 compaction. In `directory` mode, client-provided tools stay directly visible
 for the current run while OpenClaw tools, plugin tools, and MCP tools can be
 compacted behind the directory catalog. A direct call to an exact hidden
-directory name is hydrated from that same authorized catalog before execution.
+directory name is hydrated from that same authorized catalog before execution
+in the embedded harness. The [Copilot harness](/plugins/copilot) instead maps
+`directory` to structured `tools` semantics: hidden OpenClaw catalog names must
+be invoked through `tool_call`, because they are not registered SDK handlers.
 
-All modes are experimental. Local inference defaults to structured `tools` mode;
-other routes keep direct tool exposure unless configured otherwise. Codex harness
-runs use their native surfaces.
+The structured `tools` surface is on by default for OpenClaw runs. It does not
+add the Node code bridge's wall-clock deadline to tools that wait for approval or
+take more than a few seconds. Explicit `toolSearch: true` and object settings
+retain their existing semantics: `true` still selects `code`, and an object
+without a mode still uses `code`. See [Runtime boundary](#runtime-boundary).
+Codex harness runs use their native surfaces.
+
+Compaction is not always cheaper: small catalogs can gain schema overhead, and
+additional discovery turns can offset initial payload savings. Set
+`tools.toolSearch: false` when direct schemas suit your workload better.
 
 There is no separate source-selection config. When Tool Search is enabled, the
 catalog includes catalog-eligible OpenClaw, MCP, and client tools after normal
@@ -137,8 +148,8 @@ Tool Search changes the shape:
 - during the turn: the model can load remaining schemas as needed
 
 Tool Search is useful when one run can see many tools, especially from MCP
-servers or client-provided app tools. Local inference uses it by default to
-reduce the prompt that the model must process before responding.
+servers or client-provided app tools. Structured search is the default, but
+actual request size and latency depend on the catalog and the model's calls.
 
 The capability directory is sorted by tool name, limited to 18,000 characters,
 and built from the already policy-filtered catalog. OpenClaw reuses the
@@ -147,7 +158,9 @@ system-prompt cache boundary. User messages, per-turn tool guesses, session
 identifiers, and untrusted MCP or client metadata do not enter the directory.
 This keeps repeated turns eligible for prompt KV-cache reuse. When the
 authorized catalog changes, OpenClaw builds a new directory for the new
-snapshot.
+snapshot. Prompt-hook `toolsAllow` restrictions apply before the final prompt is
+submitted: the embedded and Copilot prompts advertise only the remaining
+catalog, without rerunning the hook or rewriting earlier conversation turns.
 
 ## API
 
@@ -161,10 +174,10 @@ light English stemming so `scheduling` reaches a tool described as `Schedule a
 recurring task`, and a small intent expansion so `look up the price` reaches one
 described as `Search the web`. Tool names and descriptions are written in English,
 so a query in another language will usually match nothing. It is not rejected —
-a catalog may legitimately describe a tool in another script — but it is also no
-longer answered with an arbitrary slice of the catalog presented as if it were
-ranked, which is what the previous scorer did whenever a query produced no
-usable terms. Both `tool_search` and the code-mode bridge state this
+a catalog may legitimately describe a tool in another script — but a query with
+no usable terms returns no ranked results rather than an arbitrary slice of the
+catalog. An exact tool name is still honored even when it tokenizes to nothing.
+Both `tool_search` and the code-mode bridge state this
 requirement in their model-facing descriptions.
 
 Untrusted parameter schemas are never indexed. MCP and client tools are matched
@@ -228,7 +241,7 @@ await openclaw.tools.call(calendarCreate.id, {
 Tool authors declare output contracts on the tool's `outputSchema` property.
 It describes `AgentToolResult.details`, not rendered content blocks. Include
 all non-throwing variants or omit it for unstable results. See
-[Code Mode output contracts](/tools/code-mode#declared-output-contracts) and
+[Code Mode output contracts](/tools/code-mode/output#declared-output-contracts) and
 [Tool plugins](/plugins/tool-plugins#output-contracts).
 
 The structured fallback mode exposes the same operations as tools:
@@ -304,8 +317,9 @@ tool schemas stay deferred rather than changing with each user prompt. MCP tools
 cannot impersonate a directly visible core or policy-required delivery tool. If
 the bounded directory omits entries, use `tool_search` to find them and
 `tool_describe` to retrieve their full schemas. If the model requests an exact
-hidden directory tool name directly, OpenClaw resolves it from the authorized
-catalog before normal execution.
+hidden directory tool name directly, the embedded harness resolves it from the
+authorized catalog before normal execution. Copilot uses `tool_call` instead,
+as described under [Modes](#modes).
 Directory-mode client tool names must not collide with OpenClaw, plugin, or MCP
 tool names because exact deferred dispatch uses those names.
 
@@ -316,6 +330,21 @@ with Node permission mode enabled, an empty environment, no filesystem or
 network grants, and no child-process or worker grants. OpenClaw enforces a
 parent-process wall-clock timeout and kills the subprocess on timeout, including
 after async continuations.
+
+The default `codeTimeoutMs` is 10 seconds for the entire `tool_search_code`
+invocation, including bridged tool execution and approval waits. The deadline
+does not pause while `openclaw.tools.call(...)` waits on the host. This bridge
+does not return a resumable `waiting` result: expiry kills the child and cancels
+outstanding calls. Before retrying a timed-out mutation, inspect its outcome;
+cancellation cannot undo side effects that already occurred.
+
+This is different from the [Code Mode](/tools/code-mode/configuration)
+`exec`/`wait` surface, which pauses its budget for approvals and can checkpoint
+unfinished tool waits for a later `wait`. Use structured `tools` mode when the
+Node bridge deadline is unsuitable; target tools still enforce their own
+timeouts, approvals, and cancellation. The hard deadline also stops runaway
+JavaScript after async continuations, so disabling it around host waits is not
+a safe substitute for resumable execution.
 
 Outstanding bridged tool calls are canceled when the child settles, including
 fatal exits and final results. Failed exits wait for stderr to drain before
@@ -342,19 +371,18 @@ Normal OpenClaw behavior still applies to final calls:
 
 ## Config
 
-With `tools.toolSearch` unset, local Ollama models, LM Studio, and managed local
-services use structured `tools` mode with a default search limit of 5 and a
-maximum of 10. Known hosted Ollama routes (cloud model tags, the cloud provider,
-or the hosted endpoint) are excluded. An untagged alias served by an Ollama
-daemon inherits the daemon's Tool Search default even if that alias forwards to
-a hosted model. Other providers are not classified from model names or a
-loopback URL alone.
+With `tools.toolSearch` unset, OpenClaw runs use structured `tools` mode with
+a default search limit of 8 and a maximum of 20. Local Ollama models, LM Studio,
+and managed local services retain their smaller limits of 5 and 10. Known hosted
+Ollama routes use the general limits. An untagged alias served by an Ollama daemon
+inherits the daemon's limits even if that alias forwards to a hosted model.
+Other providers are not classified as local from model names or a loopback URL alone.
 
 An explicit `tools.toolSearch` value takes precedence, including `false`.
 Setting `agents.defaults.experimental.localModelLean: false` restores optional
 tools but does not turn off automatic Tool Search.
 
-Enable Tool Search explicitly for OpenClaw runs with the default code bridge:
+Opt into the legacy Node code bridge explicitly (not the structured default):
 
 ```bash
 openclaw config set tools.toolSearch true
@@ -370,7 +398,7 @@ Equivalent JSON:
 }
 ```
 
-Use the structured fallback tools instead for OpenClaw runs:
+Pin the structured default explicitly:
 
 ```json5
 {
@@ -473,6 +501,22 @@ The regression proves:
 6. Session logs show the expected tool-call counts and bridged call telemetry.
 7. Structured mode resolves two queries with one `tool_search` call before the
    selected plugin tool runs through `tool_call`.
+
+### Real-model comparison
+
+```bash
+pnpm test:live -- src/agents/tool-search.live.test.ts
+```
+
+This opt-in probe uses configured OpenAI credentials; without them it is skipped.
+It compares direct exposure, the unset default, and all three explicit Tool Search modes with small and large
+synthetic catalogs through the OpenClaw runner. A verification code created inside
+the target tool proves actual execution. The probe checks policy-denied and
+direct-only tools, deferred schemas, and transcript delivery without forcing a
+model tool choice. It reports request bytes, discovery and call counts, schema
+recovery, and elapsed time. Small catalogs are measured rather than assumed to
+benefit from compaction. A successful probe is not a cross-provider reliability
+benchmark.
 
 ## Failure behavior
 

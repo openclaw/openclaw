@@ -130,10 +130,21 @@ describe("terminal file upload", () => {
 
       expect(failure).toBeInstanceOf(Error);
       expect(failure).toMatchObject({
-        message: expect.stringContaining("stop all Gateway and node-host processes"),
+        message: expect.stringContaining("Stop all Gateway and node-host processes"),
       });
       expect(failure).toMatchObject({
-        message: expect.stringContaining(`remove the lock directory ${lockDirectory}`),
+        message: expect.stringContaining(path.relative(root, lockDirectory)),
+      });
+      expect(failure).toMatchObject({ message: expect.not.stringContaining(lockDirectory) });
+      expect(failure).toMatchObject({
+        message: expect.stringContaining("remove only this lock directory"),
+      });
+      expect(failure).toMatchObject({
+        message: expect.stringContaining(
+          process.platform === "win32"
+            ? "home directory of the account running this terminal's Gateway or node host"
+            : "system temporary directory used by this terminal's Gateway or node-host process",
+        ),
       });
       expect(failure).toMatchObject({ message: expect.stringContaining("then restart them") });
       expect(await retainedDirectories(root)).toHaveLength(1);
@@ -155,6 +166,57 @@ describe("terminal file upload", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "retries a finished upload's lock release after directory permissions recover",
+    async () => {
+      const root = tempDirs.make("openclaw-terminal-upload-release-test-");
+      const writeMock = vi.mocked(writeFile);
+      let lockDirectory = "";
+      let writtenPath = "";
+      writeMock.mockImplementation(async (target, data, options) => {
+        await actualFs.writeFile(target, data, options);
+        if (typeof target !== "string" || path.basename(target) !== "first.bin") {
+          return;
+        }
+        writtenPath = target;
+        const entries = await readdir(root, { recursive: true, withFileTypes: true });
+        const lock = entries.find(
+          (entry) => entry.isDirectory() && entry.name === "terminal-upload-lock",
+        );
+        if (!lock) {
+          throw new Error("the upload must hold its staging lock before writing");
+        }
+        lockDirectory = path.join(lock.parentPath, lock.name);
+        await chmod(lockDirectory, 0o500);
+      });
+      try {
+        await expect(
+          stageTerminalUpload({ name: "first.bin", contentBase64: "AA==" }, { tempRoot: root }),
+        ).rejects.toMatchObject({ code: "EACCES" });
+        expect(await readFile(writtenPath)).toEqual(Buffer.from([0]));
+
+        writeMock.mockImplementation(actualFs.writeFile);
+        await chmod(lockDirectory, 0o700);
+        const recovered = await stageTerminalUpload(
+          { name: "second.bin", contentBase64: "AQ==" },
+          { tempRoot: root },
+        );
+
+        expect(await readFile(recovered.path)).toEqual(Buffer.from([1]));
+        expect(await readFile(writtenPath)).toEqual(Buffer.from([0]));
+        expect(await retainedDirectories(root)).toHaveLength(2);
+        await expect(stat(path.join(lockDirectory, "admission.lock"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } finally {
+        writeMock.mockImplementation(actualFs.writeFile);
+        if (lockDirectory) {
+          await chmod(lockDirectory, 0o700);
+        }
+      }
+    },
+  );
+
   it("normalizes hostile and oversized names", async () => {
     const root = tempDirs.make("openclaw-terminal-upload-name-test-");
     const stagedName = async (name: string) =>
@@ -167,12 +229,16 @@ describe("terminal file upload", () => {
         ).path,
       );
 
-    expect(await stagedName("..\\..\\secret\u0000.txt")).toBe("secret_.txt");
-    expect(await stagedName("report:<final>?!-%PATH%.pdf. ")).toBe("report__final___-_PATH_.pdf");
-    expect(await stagedName("CON.txt")).toBe("_CON.txt");
-    expect(await stagedName("COM¹.txt")).toBe("_COM¹.txt");
-    expect(await stagedName("LPT³.log")).toBe("_LPT³.log");
+    expect(await stagedName("..\\..\\secret\u0000.txt")).toBe("secret.txt");
+    expect(await stagedName("report:<final>?!-%PATH%.pdf. ")).toBe("reportfinal_-_PATH_.pdf");
+    expect(await stagedName("CON.txt")).toBe("CON_.txt");
+    expect(await stagedName("COM¹.txt")).toBe("COM¹_.txt");
+    expect(await stagedName("LPT³.log")).toBe("LPT³_.log");
     expect(Buffer.byteLength(await stagedName("🦞".repeat(100)), "utf8")).toBeLessThanOrEqual(180);
+    expect(await stagedName(`${"a".repeat(179)}.b`)).toBe("a".repeat(179));
+    expect(await stagedName(`${"b".repeat(179)} c`)).toBe("b".repeat(179));
+    expect(await stagedName(`${"c".repeat(175)}🦞.d`)).toBe(`${"c".repeat(175)}🦞`);
+    expect(await stagedName(`CON${" ".repeat(177)}x`)).toBe("CON_");
     expect(await stagedName("..")).toBe("upload");
   });
 

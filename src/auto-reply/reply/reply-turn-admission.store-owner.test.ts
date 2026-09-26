@@ -186,7 +186,7 @@ it.each([true, false])(
         if (result.status === "owned") {
           expect(result.operation.sessionId).toBe(successorId);
           expect(result.operation.agentId).toBe("main");
-          expect(result.databaseClaim?.database.db).toBe(databaseClaim.database.db);
+          expect(result.databaseClaim?.incarnation).toBe(databaseClaim.incarnation);
           result.operation.complete();
         }
       } else {
@@ -204,6 +204,52 @@ it.each([true, false])(
     }
   },
 );
+
+it("rejects rotation recorded after the waited owner moves to another physical store", async () => {
+  const ownerStore = path.join(tempDirs.make("reply-wait-owner-"), "sessions.json");
+  const adoptedStore = path.join(tempDirs.make("reply-wait-adopted-"), "sessions.json");
+  seed(ownerStore);
+  seed(adoptedStore);
+  const owner = await admitOwner(ownerStore);
+  const waited = vi.spyOn(registry.replyRunRegistry, "waitForIdle");
+  const pending = admitReplyTurn({
+    sessionKey,
+    sessionId,
+    expectedSessionId: sessionId,
+    storePath: ownerStore,
+    kind: "queued_followup",
+    resetTriggered: false,
+  });
+  try {
+    await vi.waitFor(() => expect(waited).toHaveBeenCalled());
+    const adopted = await admitReplyTurn({
+      sessionKey,
+      sessionId,
+      expectedSessionId: sessionId,
+      storePath: adoptedStore,
+      kind: "visible",
+      resetTriggered: false,
+      adoptOperation: owner,
+    });
+    if (adopted.status !== "owned") {
+      throw new Error("fixture requires physical-store adoption");
+    }
+    seed(ownerStore, successorId);
+    seed(adoptedStore, successorId);
+    owner.updateSessionId(successorId);
+    owner.complete();
+    await expect(pending).resolves.toMatchObject({
+      status: "skipped",
+      reason: "lifecycle-invalidated",
+    });
+  } finally {
+    owner.complete();
+    const result = await pending;
+    if (result.status === "owned") {
+      result.operation.complete();
+    }
+  }
+});
 
 it.each(["before", "after"] as const)(
   "keeps same-store rotation when a foreign barrier is installed %s the rotation",

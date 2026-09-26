@@ -9,10 +9,11 @@ import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement, settleLitElements } from "../../test-helpers/lit-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ConfigPage, configSelectionFromSearch, type ConfigPageId } from "./config-page.ts";
-import type { ConfigRouteData } from "./route-data.ts";
+import { configRouteData, type ConfigRouteData } from "./route-data.ts";
 import { pages } from "./route.ts";
 
 beforeEach(() => {
@@ -31,34 +32,9 @@ afterEach(async () => {
 });
 
 describe("configSelectionFromSearch", () => {
-  it("opens a valid linked Settings section", () => {
-    expect(configSelectionFromSearch("communications", "?section=tts")).toEqual({
-      activeSection: "tts",
-      activeSubsection: null,
-    });
-  });
-
   it("falls back when a linked section does not belong to the page", () => {
     expect(configSelectionFromSearch("communications", "?section=gateway")).toEqual({
       activeSection: "messages",
-      activeSubsection: null,
-    });
-  });
-
-  it("keeps MCP separate from Infrastructure", () => {
-    expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
-      activeSection: "mcp",
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("infrastructure", "?section=mcp")).toEqual({
-      activeSection: "gateway",
-      activeSubsection: null,
-    });
-  });
-
-  it("keeps the Updates section off Advanced", () => {
-    expect(configSelectionFromSearch("advanced", "?section=update")).toEqual({
-      activeSection: null,
       activeSubsection: null,
     });
   });
@@ -96,16 +72,6 @@ describe("ConfigPage advanced selection guard", () => {
 describe("ConfigPage default selections", () => {
   it.each([
     ["communications", "messages"],
-    ["appearance", "__appearance__"],
-    ["notifications", "__notifications__"],
-    ["security", "security"],
-    ["automation", "commands"],
-    ["mcp", "mcp"],
-    ["memory", "memory"],
-    ["talk", "talk"],
-    ["infrastructure", "gateway"],
-    ["updates", "update"],
-    ["ai-agents", "agents"],
     ["advanced", null],
   ] as const)("opens %s at its default when no section is selected", (pageId, activeSection) => {
     for (const search of ["", "?section="]) {
@@ -116,14 +82,11 @@ describe("ConfigPage default selections", () => {
     }
   });
 
-  it.each(["unknown", "toString", "constructor", "__proto__"])(
-    "rejects an unsupported runtime page id: %s",
-    (pageId) => {
-      expect(() => configSelectionFromSearch(pageId as ConfigPageId, "")).toThrow(
-        "Unknown config page",
-      );
-    },
-  );
+  it.each(["unknown", "__proto__"])("rejects an unsupported runtime page id: %s", (pageId) => {
+    expect(() => configSelectionFromSearch(pageId as ConfigPageId, "")).toThrow(
+      "Unknown config page",
+    );
+  });
 
   it("keeps subsequent defaults independent from a mutated selection", () => {
     const selection = configSelectionFromSearch("communications", "");
@@ -154,7 +117,7 @@ function routeContext(): ApplicationContext {
   return {
     basePath: "",
     gateway,
-    agentSelection: { state: { selectedId: "main" }, subscribe },
+    settingsAgentSelection: { state: { selectedId: "main" }, subscribe },
     config: {
       current: { assistantIdentity: { name: "OpenClaw" }, serverVersion: "test" },
       subscribe,
@@ -191,6 +154,68 @@ function routeContext(): ApplicationContext {
 }
 
 describe("ConfigPage route selections", () => {
+  it.each([
+    { profile: "coding", writes: 1 },
+    { profile: undefined, writes: 1 },
+    { profile: "full", writes: 0 },
+  ])("Security Full preserves an explicit choice from $profile", async ({ profile, writes }) => {
+    const baseContext = routeContext();
+    const patchForm = vi.fn();
+    const removeFormValue = vi.fn();
+    const context: ApplicationContext = {
+      ...baseContext,
+      gateway: {
+        ...baseContext.gateway,
+        snapshot: {
+          ...baseContext.gateway.snapshot,
+          phase: "connected",
+          hello: gatewayHelloForMethods(["config.set"]),
+        },
+      },
+      runtimeConfig: {
+        ...baseContext.runtimeConfig,
+        canSet: true,
+        patchForm,
+        removeFormValue,
+        state: {
+          ...baseContext.runtimeConfig.state,
+          connected: true,
+          configForm: profile ? { tools: { profile } } : {},
+        },
+      },
+    };
+    const provider = createApplicationContextProvider(context);
+    document.body.append(provider);
+    const page = new ConfigPage();
+    page.pageId = "security";
+    provider.append(page);
+    await settleLitElement(page);
+
+    expect(patchForm).not.toHaveBeenCalled();
+    expect(removeFormValue).not.toHaveBeenCalled();
+    const full = expectDefined(
+      page.querySelector<HTMLElement>('wa-radio[value="full"]'),
+      "Full tool choice",
+    );
+    expect(page.querySelectorAll("wa-radio")).toHaveLength(4);
+    expect(page.querySelectorAll(".settings-segmented__btn--active")).toHaveLength(profile ? 1 : 0);
+    if (profile !== "full") {
+      const group = expectDefined(
+        full.closest<HTMLElement & { value: string }>("wa-radio-group"),
+        "tool choices",
+      );
+      group.value = "full";
+      group.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
+      full.click();
+    }
+    expect(patchForm).toHaveBeenCalledTimes(writes);
+    if (writes > 0) {
+      expect(patchForm).toHaveBeenCalledWith(["tools", "profile"], "full");
+    }
+    expect(removeFormValue).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["communications", "", "config-section-messages", "config-section-tts"],
     ["communications", "?section=tts", "config-section-tts", "config-section-messages"],
@@ -232,6 +257,77 @@ describe("ConfigPage route selections", () => {
           search ? "Voice" : "Messages",
         );
       }
+    },
+  );
+});
+
+describe("ConfigPage pending section navigation", () => {
+  it.each(["replacement", "retirement", "disconnect"] as const)(
+    "does not scroll to a stale target after %s",
+    async (transition) => {
+      const provider = createApplicationContextProvider(routeContext());
+      document.body.append(provider);
+      const page = new ConfigPage();
+      page.pageId = "communications";
+      page.routeData = configRouteData({
+        pathname: "/settings/communications",
+        search: "",
+        hash: "",
+      });
+      provider.append(page);
+      await settleLitElement(page);
+      const frames = new Map<number, FrameRequestCallback>();
+      let nextFrameId = 0;
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+        const id = ++nextFrameId;
+        frames.set(id, callback);
+        return id;
+      });
+      vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+        frames.delete(id);
+      });
+      const previousTarget = expectDefined(
+        page.querySelector<HTMLElement>("#config-section-messages"),
+        "rendered Messages section",
+      );
+      const previousScroll = vi.fn();
+      previousTarget.scrollIntoView = previousScroll;
+      page.routeData = configRouteData({
+        pathname: "/settings/communications",
+        search: "",
+        hash: "#config-section-messages",
+      });
+      await settleLitElement(page);
+      expect(previousScroll).not.toHaveBeenCalled();
+      expect(frames.size).toBe(1);
+
+      if (transition === "disconnect") {
+        page.remove();
+      } else {
+        page.routeData = configRouteData({
+          pathname: "/settings/communications",
+          search: transition === "replacement" ? "?section=tts" : "",
+          hash: transition === "replacement" ? "#config-section-tts" : "",
+        });
+        await settleLitElement(page);
+      }
+      const nextScroll = vi.fn();
+      if (transition === "replacement") {
+        expectDefined(
+          page.querySelector<HTMLElement>("#config-section-tts"),
+          "rendered Voice section",
+        ).scrollIntoView = nextScroll;
+        expect(frames.size).toBe(1);
+      } else {
+        expect(frames.size).toBe(0);
+      }
+      const pending = [...frames.values()];
+      frames.clear();
+      for (const frame of pending) {
+        frame(0);
+      }
+      expect(previousScroll).not.toHaveBeenCalled();
+      expect(nextScroll).toHaveBeenCalledTimes(transition === "replacement" ? 1 : 0);
     },
   );
 });

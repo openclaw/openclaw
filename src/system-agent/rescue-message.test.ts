@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 // OpenClaw rescue message tests cover generated rescue message content.
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -280,30 +281,35 @@ describe("OpenClaw rescue message", () => {
     );
   });
 
-  it("refuses model provider setup from remote rescue with a local pointer", async () => {
-    const cfg: OpenClawConfig = {};
-    const reply = await runRescue("/openclaw configure model provider", cfg);
-    expect(reply).toContain("cannot host model-provider credential setup");
-    expect(reply).toContain("openclaw onboard");
-  });
-
   it("refuses doctor repairs without creating a pending approval", async () => {
     await withRescueStateDir("doctor-fix-refused-", async () => {
       const cfg: OpenClawConfig = {};
-      const deps = {
-        runDoctor: vi.fn(async () => {
-          throw new Error("remote rescue must not run doctor repair");
-        }),
-      };
 
-      const reply = await runRescue("/openclaw doctor fix", cfg, commandContext(), deps);
+      const reply = await runRescue("/openclaw doctor fix", cfg, commandContext());
       expect(reply).toContain("machine running OpenClaw");
       expect(reply).toContain("with OpenClaw stopped");
       expect(reply).toContain("run `openclaw doctor --fix`");
-      await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toBe(
+      await expect(runRescue("/openclaw yes", cfg, commandContext())).resolves.toBe(
         "No pending OpenClaw rescue change is waiting for approval.",
       );
-      expect(deps.runDoctor).not.toHaveBeenCalled();
+    });
+  });
+
+  it("refuses config deletion without creating a pending approval or writing config", async () => {
+    await withRescueStateDir("config-unset-refused-", async () => {
+      const cfg: OpenClawConfig = {};
+      const before = mockConfig.currentConfig();
+      mockConfig.mutateConfigFile.mockClear();
+
+      await expect(
+        runRescue("/openclaw config unset agents.defaults.fastModeDefault", cfg),
+      ).resolves.toContain("cannot remove configuration settings");
+      await expect(runRescue("/openclaw yes", cfg)).resolves.toBe(
+        "No pending OpenClaw rescue change is waiting for approval.",
+      );
+      expect(mockConfig.mutateConfigFile).not.toHaveBeenCalled();
+      expect(mockConfig.currentConfig()).toEqual(before);
+      expect(listSystemAgentAuditEntriesForTests()).toEqual([]);
     });
   });
 
@@ -638,9 +644,7 @@ describe("OpenClaw rescue message", () => {
       await runRescue("/openclaw restart gateway", cfg, commandContext(), deps);
       const store = openRescuePendingTestStore();
       const [entry] = store.entries();
-      if (!entry) {
-        throw new Error("expected pending rescue row");
-      }
+      assert(entry, "expected pending rescue row");
       store.register(
         entry.key,
         { version: 1, operation: { kind: "gateway-restart", unexpected: true } },
@@ -657,59 +661,71 @@ describe("OpenClaw rescue message", () => {
     });
   });
 
-  it("queues and applies agent creation through conversational approval", async () => {
-    await withRescueStateDir("agent-", async () => {
-      const cfg: OpenClawConfig = {};
-      const deps = {
-        createAgent: vi.fn(async () => ({
-          status: "created" as const,
-          agentId: "work",
-          name: "work",
-          workspace: "/tmp/work",
-          agentDir: "/tmp/agent-work",
-          bootstrapPending: true,
-          config: cfg,
-        })),
-      };
-
-      await expect(
-        runRescue("/openclaw create agent work workspace /tmp/work", cfg, commandContext(), deps),
-      ).resolves.toBe(
-        "Plan: create agent work with workspace /tmp/work. Reply /openclaw yes to apply.",
-      );
-      await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toContain(
-        "[openclaw] done: agents.create",
-      );
-
-      expect(deps.createAgent).toHaveBeenCalledTimes(1);
-      const [agentParams] = requireFirstMockCall(deps.createAgent, "agents add") as unknown as [
-        {
-          name: string;
-          workspace: string;
-          provenance: { createdVia: string; creatorAgentId: string };
-        },
-      ];
-      expect(agentParams).toEqual({
-        name: "work",
-        workspace: "/tmp/work",
-        provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
-      });
-      const audit = readLastAuditEntry() as {
-        operation?: string;
-        details?: {
-          rescue?: boolean;
-          channel?: string;
-          senderId?: string;
-          agentId?: string;
-          workspace?: string;
+  it.each([
+    { role: undefined, name: undefined },
+    { role: "writer", name: undefined },
+    { role: undefined, name: "QA Writer" },
+    { role: "writer", name: "QA Writer" },
+  ])(
+    "queues and applies agent creation with role $role and name $name through conversational approval",
+    async ({ role, name }) => {
+      await withRescueStateDir("agent-", async () => {
+        const cfg: OpenClawConfig = {};
+        const deps = {
+          createAgent: vi.fn(async () => ({
+            status: "created" as const,
+            agentId: "work",
+            name: name ?? "work",
+            workspace: "/tmp/work",
+            agentDir: "/tmp/agent-work",
+            bootstrapPending: true,
+            config: cfg,
+            configPath: "/tmp/openclaw.json",
+          })),
         };
-      };
-      expect(audit.operation).toBe("agents.create");
-      expect(audit.details?.rescue).toBe(true);
-      expect(audit.details?.channel).toBe("whatsapp");
-      expect(audit.details?.senderId).toBe("user:owner");
-      expect(audit.details?.agentId).toBe("work");
-      expect(audit.details?.workspace).toBe("/tmp/work");
-    });
-  });
+
+        await expect(
+          runRescue(
+            `/openclaw create agent work${name ? ` name ${JSON.stringify(name)}` : ""}${role ? ` role ${role}` : ""} workspace /tmp/work`,
+            cfg,
+            commandContext(),
+            deps,
+          ),
+        ).resolves.toBe(
+          `Plan: create agent work with workspace /tmp/work${name ? `, name: ${JSON.stringify(name)}` : ""}${role ? ", role: Writer" : ""}. Reply /openclaw yes to apply.`,
+        );
+        expect(deps.createAgent).not.toHaveBeenCalled();
+        await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toContain(
+          "[openclaw] done: agents.create",
+        );
+
+        expect(deps.createAgent).toHaveBeenCalledTimes(1);
+        expect(deps.createAgent).toHaveBeenCalledWith({
+          entry: {
+            id: "work",
+            ...(name ? { name, identity: { name } } : {}),
+          },
+          ...(role ? { role } : {}),
+          workspace: "/tmp/work",
+          provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
+        });
+        const audit = readLastAuditEntry() as {
+          operation?: string;
+          details?: {
+            rescue?: boolean;
+            channel?: string;
+            senderId?: string;
+            agentId?: string;
+            workspace?: string;
+          };
+        };
+        expect(audit.operation).toBe("agents.create");
+        expect(audit.details?.rescue).toBe(true);
+        expect(audit.details?.channel).toBe("whatsapp");
+        expect(audit.details?.senderId).toBe("user:owner");
+        expect(audit.details?.agentId).toBe("work");
+        expect(audit.details?.workspace).toBe("/tmp/work");
+      });
+    },
+  );
 });

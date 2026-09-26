@@ -1,6 +1,7 @@
 /** Lazy Control UI consent flow for reporting one authoritative failed update. */
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { UpdateReportResult } from "../api/types.ts";
+import { showConfirmDialog } from "../components/confirm-dialog.ts";
 import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 
@@ -25,7 +26,6 @@ export async function reportUpdateFailure(params: {
   if (preview.status !== "ready" || preview.attemptId !== params.attemptId || !params.isCurrent()) {
     return null;
   }
-  const { showConfirmDialog } = await import("../components/confirm-dialog.ts");
   const confirmed = await showConfirmDialog({
     title: t("updates.report.title"),
     message: t("updates.report.message"),

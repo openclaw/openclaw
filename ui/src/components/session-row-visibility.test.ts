@@ -21,7 +21,7 @@ const states = [
   ["stale running status", { status: "running" }, false, false, false],
   ["failed session", { status: "failed" }, false, false, false],
   ["running descendant", { runningChildCount: 1 }, true, false, false],
-  ["attention", { attention: { kind: "question" } }, true, false, true],
+  ["attention", { attention: { kind: "question", requests: [] } }, true, false, true],
 ] as const;
 
 it.each(states)(

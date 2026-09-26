@@ -1,3 +1,6 @@
+# shellcheck source=scripts/pr-lib/github.sh
+source "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/github.sh" || return 1
+
 run_hosted_prepare_gates() {
   local pr="$1"
   local current_head="$2"
@@ -5,7 +8,7 @@ run_hosted_prepare_gates() {
   local recent_sha=""
   local remote_record="${4:-}" remote_head remote_head_ref remote_is_cross_repository
   if [ -z "$remote_record" ]; then
-    remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository") || return 1
+    remote_record=$(read_pr_observation "$pr") || return 1
   fi
   remote_head=$(pr_view_string_field "$remote_record" "headRefOid" "$pr" "Re-run prepare-init.") || return 1
   remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
@@ -19,21 +22,22 @@ run_hosted_prepare_gates() {
   if [ -z "$recent_sha" ]; then
     local parent_sha
     local parent_delta
-    if parent_sha=$(git rev-parse "${current_head}^" 2>/dev/null) &&
-      parent_delta=$(git diff --name-only "$parent_sha" "$current_head" 2>/dev/null) &&
+    if parent_sha=$(pr_git rev-parse "${current_head}^" 2>/dev/null) &&
+      parent_delta=$(pr_git diff --name-only "$parent_sha" "$current_head" 2>/dev/null) &&
       file_list_is_docsish_only "$parent_delta"; then
       recent_sha="$parent_sha"
     fi
   fi
 
   local repo
-  repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+  repo=$(printf '%s\n' "$remote_record" | jq -er '.baseRepository.nameWithOwner | select(type == "string" and length > 0)') || return 1
   local scripts_dir="${script_parent_dir:-}"
   if [ -z "$scripts_dir" ]; then
     scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
   fi
+  # A directory argv[1] keeps the imported module's standalone entrypoint inactive.
   local args=(
-    "$scripts_dir/verify-pr-hosted-gates.mjs"
+    "$scripts_dir"
     --repo "$repo"
     --sha "$current_head"
     --pr "$pr"
@@ -46,7 +50,31 @@ run_hosted_prepare_gates() {
   if [ "$changelog_only" = "true" ]; then
     args+=(--changelog-only)
   fi
-  if run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"; then
+  if printf '%s\n' "$remote_record" | run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" \
+    node --input-type=module -e '
+      import { readFileSync } from "node:fs";
+      import { pathToFileURL } from "node:url";
+      const { main } = await import(pathToFileURL(process.argv[1] + "/verify-pr-hosted-gates.mts").href);
+      main(process.argv.slice(2), JSON.parse(readFileSync(0, "utf8")));
+    ' "${args[@]}"; then
+    local reused_head
+    reused_head=$(jq -er '.reusedFromSha // "" | strings' .local/gates-hosted-checks.json) || return 1
+    if [ -n "$reused_head" ]; then
+      # Compare only main context incorporated into the candidate, not later main drift.
+      local reused_base current_base
+      reused_base=$(pr_git merge-base "$PR_MAIN_SHA" "$reused_head") || return 1
+      current_base=$(pr_git merge-base "$PR_MAIN_SHA" "$current_head") || return 1
+      if mainline_drift_requires_sync "$reused_base" "$reused_head" "$current_base"; then
+        echo "Hosted CI reuse declined: candidate incorporated relevant main changes; require successful CI for $current_head."
+        return 1
+      else
+        local drift_status=$?
+        if [ "$drift_status" -ne 1 ]; then
+          echo "Hosted CI reuse failed: unable to evaluate mainline input changes." >&2
+          return 1
+        fi
+      fi
+    fi
     return 0
   fi
 
@@ -78,7 +106,7 @@ ci_dispatch() {
   local pr="$1"
   shift
   local record base_sha head_ref head_sha is_cross_repository
-  record=$(gh pr view "$pr" --json baseRefOid,headRefName,headRefOid,isCrossRepository)
+  record=$(pr_gh pr view "$pr" --json baseRefOid,headRefName,headRefOid,isCrossRepository) || return 1
   base_sha=$(printf '%s\n' "$record" | jq -r .baseRefOid)
   head_ref=$(printf '%s\n' "$record" | jq -r .headRefName)
   head_sha=$(printf '%s\n' "$record" | jq -r .headRefOid)
@@ -89,6 +117,10 @@ ci_dispatch() {
   fi
   if [ "$is_cross_repository" = "true" ]; then
     echo "PR #$pr comes from a fork; release-gate workflow dispatch requires a base-repository branch at $head_sha." >&2
+    return 1
+  fi
+  if [ "$is_cross_repository" != "false" ]; then
+    echo "PR #$pr is missing repository identity for workflow dispatch." >&2
     return 1
   fi
 
@@ -118,14 +150,16 @@ resolve_pr_gates_remote_mode() {
     "")
       printf 'local\n'
       ;;
-    testbox)
-      printf 'testbox\n'
-      ;;
-    crabbox-aws)
-      printf 'crabbox-aws\n'
+    testbox|crabbox-aws|github)
+      if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+        echo "OPENCLAW_PR_GATES_REMOTE=$OPENCLAW_PR_GATES_REMOTE conflicts with OPENCLAW_TESTBOX=1; select one gate mode." >&2
+        echo "Unset OPENCLAW_TESTBOX to use $OPENCLAW_PR_GATES_REMOTE gates, or unset OPENCLAW_PR_GATES_REMOTE to use completed hosted proof." >&2
+        return 2
+      fi
+      printf '%s\n' "$OPENCLAW_PR_GATES_REMOTE"
       ;;
     *)
-      echo "Unsupported OPENCLAW_PR_GATES_REMOTE=${OPENCLAW_PR_GATES_REMOTE} (supported: testbox, crabbox-aws)." >&2
+      echo "Unsupported OPENCLAW_PR_GATES_REMOTE=${OPENCLAW_PR_GATES_REMOTE} (supported: testbox, crabbox-aws, github)." >&2
       return 1
       ;;
   esac
@@ -140,6 +174,22 @@ run_remote_testbox_full_test_gate() {
   local label="$1"
   local log_file="$2"
   local lease_label="$3"
+  local remote_env=(CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false)
+  local name value
+  # Delegated Testbox commands do not inherit the caller's scheduling controls.
+  for name in OPENCLAW_TEST_PROJECTS_PARALLEL OPENCLAW_VITEST_MAX_WORKERS; do
+    [ -n "${!name:-}" ] || continue
+    value=$(node --input-type=module -e '
+      import { pathToFileURL } from "node:url";
+      const { parsePositiveInt } = await import(pathToFileURL(process.argv[1] + "/lib/numeric-options.mjs").href);
+      const value = process.argv[2].trim();
+      if (value) {
+        try { console.log(parsePositiveInt(value, process.argv[3])); }
+        catch (error) { console.error(error.message); process.exitCode = 2; }
+      }
+    ' "$script_parent_dir" "${!name}" "$name") || return 2
+    [ -z "$value" ] || remote_env+=("$name=$value")
+  done
   # Same Blacksmith Testbox delegation shape check:changed uses; the worktree's
   # own wrapper syncs this prep tree (the canonical copy would sync the primary
   # checkout instead).
@@ -154,7 +204,7 @@ run_remote_testbox_full_test_gate() {
     --ttl 240m \
     --timing-json \
     --label "$lease_label" \
-    -- env CI=1 OPENCLAW_TESTBOX_REMOTE_RUN=1 PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false corepack pnpm test
+    -- env "${remote_env[@]}" corepack pnpm test
 }
 
 read_remote_testbox_gate_stamp() {
@@ -211,8 +261,8 @@ require_remote_testbox_gate_stamp() {
 
 require_active_org_admin_for_crabbox_gate() {
   local actor membership
-  actor=$(gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login) || return
-  membership=$(gh_plain api "orgs/openclaw/memberships/$actor" -H 'Cache-Control: max-age=0') || return
+  actor=$(pr_gh_writer_login) || return
+  membership=$(pr_gh_plain api "orgs/openclaw/memberships/$actor" -H 'Cache-Control: max-age=0') || return
   if [ "$(printf '%s\n' "$membership" | jq -r .state)" != "active" ] ||
     [ "$(printf '%s\n' "$membership" | jq -r .role)" != "admin" ]; then
     echo "OPENCLAW_PR_GATES_REMOTE=crabbox-aws requires an active openclaw organization admin." >&2
@@ -226,7 +276,7 @@ read_crabbox_gate_pr_binding() {
   local expected_head="$2"
   local expected_base="${3:-}"
   local record
-  record=$(gh pr view "$pr" --json baseRefName,baseRefOid,headRefOid,isCrossRepository,state)
+  record=$(pr_gh pr view "$pr" --json baseRefName,baseRefOid,headRefOid,isCrossRepository,state) || return 1
   if [ "$(printf '%s\n' "$record" | jq -r .state)" != "OPEN" ] ||
     [ "$(printf '%s\n' "$record" | jq -r .isCrossRepository)" != "false" ] ||
     [ "$(printf '%s\n' "$record" | jq -r .baseRefName)" != "main" ] ||
@@ -252,7 +302,7 @@ finalize_remote_crabbox_aws_gate() {
   require_active_org_admin_for_crabbox_gate >/dev/null || return 1
   log_file=".local/gates-crabbox-aws.log"
   run_quiet_logged "protected-main Crabbox AWS exact-head gate" "$log_file" \
-    ci_dispatch "$pr" --backend crabbox
+    ci_dispatch "$pr" --backend crabbox || return 1
   stamp=$(jq -c -R \
     --arg baseSha "$base_sha" \
     --arg headSha "$head_sha" '
@@ -304,30 +354,94 @@ write_gates_env_stamp() {
   local remote_run_url="${11}"
 
   # Security: shell-escape values to prevent command injection when sourced.
-  printf '%s=%q\n' \
-    PR_NUMBER "$pr" \
-    DOCS_ONLY "$docs_only" \
-    CHANGELOG_REQUIRED "$changelog_required" \
-    GATES_MODE "$gates_mode" \
-    LAST_VERIFIED_HEAD_SHA "$last_verified_head" \
-    FULL_GATES_HEAD_SHA "$full_gates_head" \
-    HOSTED_GATES_TARGET_HEAD_SHA "$hosted_gates_head" \
-    REMOTE_GATES_PROVIDER "$remote_provider" \
-    REMOTE_GATES_RUN_ID "$remote_run_id" \
-    REMOTE_GATES_LEASE_ID "$remote_lease_id" \
-    REMOTE_GATES_RUN_URL "$remote_run_url" \
-    GATES_PASSED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    > .local/gates.env
+  {
+    printf '%s=%q\n' \
+      PR_NUMBER "$pr" \
+      DOCS_ONLY "$docs_only" \
+      CHANGELOG_REQUIRED "$changelog_required" \
+      GATES_MODE "$gates_mode" \
+      HOSTED_GATES_TARGET_HEAD_SHA "$hosted_gates_head"
+    if [ "$gates_mode" != github_pending ]; then
+      printf '%s=%q\n' \
+        LAST_VERIFIED_HEAD_SHA "$last_verified_head" \
+        FULL_GATES_HEAD_SHA "$full_gates_head" \
+        REMOTE_GATES_PROVIDER "$remote_provider" \
+        REMOTE_GATES_RUN_ID "$remote_run_id" \
+        REMOTE_GATES_LEASE_ID "$remote_lease_id" \
+        REMOTE_GATES_RUN_URL "$remote_run_url" \
+        GATES_PASSED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fi
+  } > .local/gates.env
 }
 
+# Correction publication requires the native gate owner's exact candidate
+# stamp. An explicit pending Crabbox stamp is admission to its protected-main
+# publisher, not proof; retain that separately authorized route.
+require_correction_publication_gates() (
+  local pr="$1" head="$2" allow_pending="${3:-false}"
+  local PR_NUMBER="" LAST_VERIFIED_HEAD_SHA="" FULL_GATES_HEAD_SHA=""
+  local GATES_MODE="" HOSTED_GATES_TARGET_HEAD_SHA="" DOCS_ONLY=""
+  local REMOTE_GATES_PROVIDER="" REMOTE_GATES_RUN_ID="" REMOTE_GATES_LEASE_ID="" REMOTE_GATES_RUN_URL=""
+  require_artifact .local/gates.env || return 1
+  source .local/gates.env || return 1
+  local qualified_head="$LAST_VERIFIED_HEAD_SHA"
+  [ "$PR_NUMBER" = "$pr" ] || return 1
+  if [ "$qualified_head" != "$head" ]; then
+    # GraphQL can assign a hosted OID for the identical reviewed local tree.
+    # The verified publication can precede the completed preparation stamp.
+    local PR_HEAD="" PR_HEAD_SHA_BEFORE=""
+    local PREP_PUBLICATION_LEASE_SHA="" PREP_PUBLICATION_HEAD_SHA=""
+    PR_NUMBER=""
+    require_artifact .local/prep-context.env || return 1
+    source .local/prep-context.env || return 1
+    resolve_prep_publication_target "$pr" "$head" || return 1
+    [ "$PREP_PUBLICATION_HEAD_SHA" = "$qualified_head" ] || {
+      echo "Correction publication requires gates for the exact reviewed candidate." >&2
+      return 1
+    }
+  fi
+  case "$GATES_MODE" in
+    full) [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
+    docs_only|reused_docs_only) [ "$DOCS_ONLY" = true ] || return 1 ;;
+    hosted_exact_or_recent_parent) [ "$HOSTED_GATES_TARGET_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
+    remote_testbox)
+      [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] &&
+        [ "$REMOTE_GATES_PROVIDER" = blacksmith-testbox ] &&
+        [[ "$REMOTE_GATES_LEASE_ID" == tbx_* ]] || return 1
+      ;;
+    remote_crabbox_aws)
+      [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] &&
+        [ "$REMOTE_GATES_PROVIDER" = aws ] &&
+        [[ "$REMOTE_GATES_RUN_ID" == run_* ]] && [[ "$REMOTE_GATES_LEASE_ID" == cbx_* ]] &&
+        [[ "$REMOTE_GATES_RUN_URL" == https://github.com/openclaw/openclaw/actions/runs/* ]] || return 1
+      ;;
+    remote_crabbox_aws_pending)
+      [ "$allow_pending" = true ] && [ "$REMOTE_GATES_PROVIDER" = aws ] || return 1
+      require_active_org_admin_for_crabbox_gate >/dev/null || return 1
+      # The candidate is not hosted yet. Bind eligibility to the publication
+      # lease, then let the existing publisher verify the newly hosted head.
+      [ -n "${PREP_PUBLICATION_LEASE_SHA:-}" ] || return 1
+      read_crabbox_gate_pr_binding "$pr" "$PREP_PUBLICATION_LEASE_SHA" >/dev/null || return 1
+      ;;
+    *) echo "Unrecognized correction gate mode: $GATES_MODE" >&2; return 1 ;;
+  esac
+)
+
 derive_prepare_gate_change_plan() {
-  PREPARE_GATE_CHANGED_FILES=$(git diff --name-only "$PR_MAIN_SHA...${1:-HEAD}") || return 1
+  PREPARE_GATE_BASE_SHA=$(pr_git merge-base "$PR_MAIN_SHA" "${1:-HEAD}") || return 1
+  PREPARE_GATE_CHANGED_FILES=$(pr_git diff --name-only "$PREPARE_GATE_BASE_SHA" "${1:-HEAD}") || return 1
   PREPARE_GATE_DOCS_ONLY=false
   if file_list_is_docsish_only "$PREPARE_GATE_CHANGED_FILES"; then
     PREPARE_GATE_DOCS_ONLY=true
   fi
   PREPARE_GATE_CHANGELOG_ONLY=false
-  if [ "$PREPARE_GATE_CHANGED_FILES" = "CHANGELOG.md" ]; then
+  local changelog_mode
+  changelog_mode=$(release_changelog_file_list_mode "$PREPARE_GATE_CHANGED_FILES") || return 1
+  PREPARE_GATE_CHANGELOG_UPDATE=false
+  if [ "$changelog_mode" != "none" ]; then
+    PREPARE_GATE_CHANGELOG_UPDATE=true
+  fi
+  if [ "$changelog_mode" = "only" ]; then
     PREPARE_GATE_CHANGELOG_ONLY=true
   fi
   PREPARE_GATE_CHANGELOG_REQUIRED=false
@@ -338,12 +452,9 @@ derive_prepare_gate_change_plan() {
 
 prepare_gates() {
   local pr="$1"
+  local remote_record="${2:-}"
   local gates_remote_mode
-  gates_remote_mode=$(resolve_pr_gates_remote_mode)
-  if [ "$gates_remote_mode" != "local" ] && [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-    echo "OPENCLAW_PR_GATES_REMOTE=$gates_remote_mode conflicts with OPENCLAW_TESTBOX=1; hosted PR gates already own remote proof."
-    exit 2
-  fi
+  gates_remote_mode=$(resolve_pr_gates_remote_mode) || return $?
 
   PR_MAIN_SHA=""
   enter_worktree "$pr" false || return 1
@@ -355,13 +466,17 @@ prepare_gates() {
   # shellcheck disable=SC1091
   source .local/pr-meta.env
 
-  derive_prepare_gate_change_plan
+  require_prepared_review "$pr" || return 1
+  local current_head
+  current_head=$(pr_git rev-parse HEAD) || return 1
+  derive_prepare_gate_change_plan "$current_head" || return 1
+  local check_base="$PREPARE_GATE_BASE_SHA"
   local changed_files="$PREPARE_GATE_CHANGED_FILES"
   local docs_only="$PREPARE_GATE_DOCS_ONLY"
   local changelog_only="$PREPARE_GATE_CHANGELOG_ONLY"
   local changelog_required="$PREPARE_GATE_CHANGELOG_REQUIRED"
 
-  local has_changelog_update=false
+  local has_changelog_update="$PREPARE_GATE_CHANGELOG_UPDATE"
   local unsupported_changelog_fragments=""
   local changed_path
   while [ -n "$changed_files" ]; do
@@ -373,9 +488,6 @@ prepare_gates() {
     fi
     [ -n "$changed_path" ] || continue
     case "$changed_path" in
-      CHANGELOG.md)
-        has_changelog_update=true
-        ;;
       changelog/fragments/*)
         unsupported_changelog_fragments="${unsupported_changelog_fragments}${changed_path}"$'\n'
         ;;
@@ -384,21 +496,19 @@ prepare_gates() {
   if [ -n "$unsupported_changelog_fragments" ]; then
     echo "Unsupported changelog fragment files detected:"
     printf '%s\n' "$unsupported_changelog_fragments"
-    echo "Move changelog fragment content into CHANGELOG.md and remove changelog/fragments files."
+    echo "Move release-note context into the PR body or commit message and remove changelog/fragments files."
     exit 1
   fi
 
-  local remote_record="" changelog_mode
+  local changelog_mode
   if [ "$has_changelog_update" = "true" ]; then
-    remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository,title,baseRefName") || return 1
+    [ -n "$remote_record" ] || remote_record=$(read_pr_observation "$pr") || return 1
     if ! changelog_mode=$(root_changelog_update_allowed_for_pr "$remote_record"); then
-      echo "CHANGELOG.md is release-owned; normal PRs should put release-note context in the PR body or commit message."
-      echo "Use release/<version>-main-closeout with the documented title and only that origin-tagged version section, or set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 for explicit release automation."
+      echo "CHANGELOG.md is release-owned, along with CHANGELOG/<version>.md and matching records; normal PRs should put release-note context in the PR body or commit message."
+      echo "Use release/<version>-main-closeout with the documented title and only that origin-tagged release's artifacts and necessary index update, or set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 for explicit release automation."
       exit 1
     fi
-    # Published closeout text is immutable; normalizing PR references can move it
-    # into an Unreleased section and invalidate the tagged release copy.
-    if [ "$changelog_mode" = "override" ]; then normalize_pr_changelog_entries "$pr"; fi
+    # Release artifacts retain their approved text, including historical PR references.
     validate_changelog_attribution_policy
   fi
 
@@ -410,15 +520,13 @@ prepare_gates() {
     echo "Changelog not required for this changed-file set."
   fi
 
-  local current_head
-  current_head=$(git rev-parse HEAD)
   local previous_last_verified_head=""
   local previous_full_gates_head=""
   local remote_gates_provider=""
   local remote_gates_run_id=""
   local remote_gates_lease_id=""
   local remote_gates_run_url=""
-  if [ -s .local/gates.env ]; then
+  if [ "$gates_remote_mode" != github ] && [ -s .local/gates.env ]; then
     # shellcheck disable=SC1091
     source .local/gates.env
     previous_last_verified_head="${LAST_VERIFIED_HEAD_SHA:-}"
@@ -434,24 +542,28 @@ prepare_gates() {
   local gates_mode="full"
   local hosted_gates_head=""
   local reuse_gates=false
-  if [ "${OPENCLAW_TESTBOX:-}" != "1" ] && [ "$docs_only" = "true" ] && [ -n "$previous_last_verified_head" ] && git merge-base --is-ancestor "$previous_last_verified_head" HEAD 2>/dev/null; then
+  if [ "${OPENCLAW_TESTBOX:-}" != "1" ] && [ "$docs_only" = "true" ] && [ -n "$previous_last_verified_head" ] && pr_git merge-base --is-ancestor "$previous_last_verified_head" HEAD 2>/dev/null; then
     local delta_since_verified
-    delta_since_verified=$(git diff --name-only "$previous_last_verified_head"..HEAD)
+    delta_since_verified=$(pr_git diff --name-only "$previous_last_verified_head"..HEAD)
     if [ -z "$delta_since_verified" ] || file_list_is_docsish_only "$delta_since_verified"; then
       reuse_gates=true
     fi
   fi
 
-  if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+  if [ "$gates_remote_mode" = github ]; then
+    gates_mode=github_pending
+    hosted_gates_head="$current_head"
+    echo "Required GitHub gates deferred for $current_head; no successful gate proof recorded."
+  elif [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
     gates_mode="hosted_exact_or_recent_parent"
     remote_gates_provider=""
     remote_gates_run_id=""
     remote_gates_lease_id=""
     remote_gates_run_url=""
     if [ "$changelog_only" = "true" ]; then
-      run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check "$PR_MAIN_SHA...HEAD"
+      run_quiet_logged "git diff --check" ".local/gates-diff-check.log" pr_git diff --check "$PR_MAIN_SHA...HEAD"
     fi
-    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$remote_record"
+    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$remote_record" || return 1
     hosted_gates_head="$current_head"
   elif [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"
@@ -468,7 +580,7 @@ prepare_gates() {
   else
     prepare_local_gate_workspace
     run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
-    run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
+    run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check --base "$check_base"
 
     if [ "$docs_only" = "true" ]; then
       gates_mode="docs_only"
@@ -513,6 +625,11 @@ prepare_gates() {
     fi
   fi
 
+  require_prepared_review "$pr" || return 1
+  [ "$(pr_git rev-parse HEAD)" = "$current_head" ] || {
+    echo "Candidate changed while gates ran; no gate stamp written." >&2
+    return 1
+  }
   write_gates_env_stamp \
     "$pr" \
     "$docs_only" \

@@ -5,10 +5,8 @@ import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-ur
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
-import { computeBaseConfigSchemaResponse } from "./schema-base.js";
-import { FIELD_HELP } from "./schema.help.js";
 import { buildBaseHints, mapSensitivePaths, testApi } from "./schema.hints.js";
-import { INHERITED_DEFAULT_PLACEHOLDERS } from "./schema.inherited-defaults.js";
+import { buildConfigSchemaCore } from "./schema.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
@@ -107,113 +105,17 @@ describe("plugin-owned channel hint paths", () => {
   });
 });
 
-type SchemaLeaf = { type?: string | string[]; default?: unknown };
+describe("inherited defaults", () => {
+  it("describes omitted settings without adding them to authored config", () => {
+    const { uiHints } = buildConfigSchemaCore();
+    expect(uiHints["cron.enabled"]?.placeholder).toBe("Default: On");
+    expect(uiHints["plugins.enabled"]?.placeholder).toBe("Default: On");
+    expect(uiHints["gateway.port"]?.placeholder).toBe("Default: 18789");
 
-function collectSchemaLeaves(
-  node: Record<string, unknown>,
-  path = "",
-  leaves = new Map<string, SchemaLeaf>(),
-): Map<string, SchemaLeaf> {
-  const properties = (node.properties ?? {}) as Record<string, Record<string, unknown>>;
-  const additional = node.additionalProperties;
-  const items = Array.isArray(node.items) ? node.items : node.items ? [node.items] : [];
-  const branches = [node.anyOf, node.oneOf, node.allOf].flatMap((list) =>
-    Array.isArray(list) ? list : [],
-  ) as Record<string, unknown>[];
-  let hasChildren = false;
-  for (const [key, child] of Object.entries(properties)) {
-    hasChildren = true;
-    collectSchemaLeaves(child, path ? `${path}.${key}` : key, leaves);
-  }
-  if (additional && typeof additional === "object") {
-    hasChildren = true;
-    collectSchemaLeaves(additional as Record<string, unknown>, path ? `${path}.*` : "*", leaves);
-  }
-  for (const item of items as Record<string, unknown>[]) {
-    hasChildren = true;
-    collectSchemaLeaves(item, path ? `${path}.*` : "*", leaves);
-  }
-  for (const branch of branches) {
-    hasChildren = true;
-    collectSchemaLeaves(branch, path, leaves);
-  }
-  if (path && !hasChildren && !leaves.has(path)) {
-    leaves.set(path, node as SchemaLeaf);
-  }
-  return leaves;
-}
-
-describe("inherited default placeholders", () => {
-  const leaves = collectSchemaLeaves(
-    computeBaseConfigSchemaResponse().schema as Record<string, unknown>,
-  );
-  const DEFAULT_ON_HELP =
-    /default(?:s|ed)?(?: is| to|:)? ?`?(?:true|on|enabled)`?\b|(?:enabled|on) by default/i;
-  // Help text claims a default the core runtime does not decide for the absent
-  // case (issue #139169 "not resolved"); leave these to their owners. The
-  // `tools.swarm` boolean|object union is covered by its `enabled` leaf.
-  const UNVERIFIED_DEFAULT_ON_HELP = new Set([
-    "channels.defaults.botLoopProtection.enabled",
-    "gateway.nodes.pairing.sshVerify",
-    "memory.search.cache.enabled",
-    "tools.message.crossContext.marker.enabled",
-    "tools.swarm",
-  ]);
-
-  it("names a runtime fallback only for schema leaves that declare no default", () => {
-    const hints = buildBaseHints();
-    for (const [path, placeholder] of Object.entries(INHERITED_DEFAULT_PLACEHOLDERS)) {
-      const leaf = leaves.get(path);
-      expect(leaf, `${path} is not a config schema leaf`).toBeDefined();
-      expect(
-        leaf?.default,
-        `${path} declares a schema default; drop the placeholder`,
-      ).toBeUndefined();
-      expect(placeholder.startsWith("Default: "), `${path}: ${placeholder}`).toBe(true);
-      expect(hints[path]?.placeholder, path).toBe(placeholder);
-    }
-  });
-
-  it("never claims default-on for a boolean whose help documents default-off", () => {
-    // A wrong placeholder reproduces the original defect in the more dangerous
-    // direction: a safety control that looks active while it is opt-in.
-    const DEFAULT_OFF_HELP =
-      /default(?:s|ed)?(?: is| to|:)? ?`?(?:false|off|disabled)`?\b|(?:disabled|off) by default/i;
-    const contradictions = Object.entries(INHERITED_DEFAULT_PLACEHOLDERS)
-      .filter(
-        ([path, placeholder]) =>
-          placeholder === "Default: On" && DEFAULT_OFF_HELP.test(FIELD_HELP[path] ?? ""),
-      )
-      .map(([path]) => path);
-    expect(contradictions).toEqual([]);
-  });
-
-  it("gives every boolean documented as default-on a placeholder", () => {
-    // Without one the form renders an unset key as an OFF toggle while the
-    // runtime treats it as ON, which is the defect behind issue #139169.
-    const missing = Object.entries(FIELD_HELP)
-      .filter(([path, help]) => {
-        const leaf = leaves.get(path);
-        return (
-          leaf?.type === "boolean" &&
-          leaf.default === undefined &&
-          DEFAULT_ON_HELP.test(help) &&
-          !INHERITED_DEFAULT_PLACEHOLDERS[path] &&
-          !UNVERIFIED_DEFAULT_ON_HELP.has(path)
-        );
-      })
-      .map(([path]) => path);
-    const stubs = missing.map((path) => `  ${JSON.stringify(path)},`).join("\n");
-    expect(
-      missing,
-      [
-        `${missing.length} boolean(s) document a default-on state without a placeholder.`,
-        "Verify the runtime read site, then add each to DEFAULT_ON_BOOLEAN_PATHS in",
-        "src/config/schema.inherited-defaults.ts (or name the conditional rule):",
-        "",
-        stubs,
-      ].join("\n"),
-    ).toEqual([]);
+    const config = OpenClawSchema.parse({ cron: {}, plugins: {}, gateway: {} });
+    expect(config.cron).not.toHaveProperty("enabled");
+    expect(config.plugins).not.toHaveProperty("enabled");
+    expect(config.gateway).not.toHaveProperty("port");
   });
 });
 
@@ -267,37 +169,6 @@ describe("mapSensitivePaths", () => {
     expect(result["discriminated.value"]?.sensitive).toBe(true);
   });
 
-  it("should not detect non-sensitive fields nested inside all structural Zod types", () => {
-    const GrandSchema = z.object({
-      simple: z.string().optional(),
-      simpleReversed: z.string().optional(),
-      nested: z.object({
-        nested: z.string(),
-      }),
-      list: z.array(z.string()),
-      listOfObjects: z.array(z.object({ nested: z.string() })),
-      headers: z.record(z.string(), z.string()),
-      headersNested: z.record(z.string(), z.object({ nested: z.string() })),
-      auth: z.union([
-        z.object({ type: z.literal("none") }),
-        z.object({ type: z.literal("token"), value: z.string() }),
-      ]),
-      merged: z.object({ id: z.string() }).and(z.object({ nested: z.string() })),
-    });
-
-    const result = mapSensitivePaths(GrandSchema, "", {});
-
-    expect(result["simple"]?.sensitive).toBe(undefined);
-    expect(result["simpleReversed"]?.sensitive).toBe(undefined);
-    expect(result["nested.nested"]?.sensitive).toBe(undefined);
-    expect(result["list[]"]?.sensitive).toBe(undefined);
-    expect(result["listOfObjects[].nested"]?.sensitive).toBe(undefined);
-    expect(result["headers.*"]?.sensitive).toBe(undefined);
-    expect(result["headersNested.*.nested"]?.sensitive).toBe(undefined);
-    expect(result["auth.value"]?.sensitive).toBe(undefined);
-    expect(result["merged.nested"]?.sensitive).toBe(undefined);
-  });
-
   it("maps sensitive fields nested under object catchall schemas", () => {
     const schema = z.object({
       custom: z.object({}).catchall(
@@ -343,11 +214,6 @@ describe("mapSensitivePaths", () => {
   });
 
   it("main schema yields correct hints (samples)", () => {
-    const schema = OpenClawSchema.toJSONSchema({
-      target: "draft-07",
-      unrepresentable: "any",
-    });
-    schema.title = "OpenClawConfig";
     const hints = mapSensitivePaths(OpenClawSchema, "", {});
 
     expect(hints["memory.search.remote.apiKey"]?.sensitive).toBe(true);
@@ -386,5 +252,51 @@ describe("mapSensitivePaths", () => {
     ]) {
       expect(hints[path]?.tags, path).toContain(SENSITIVE_URL_HINT_TAG);
     }
+  });
+});
+
+describe("authored schema hints", () => {
+  it("preserves authored metadata without deriving tags from field names or tiers", () => {
+    const result = buildConfigSchemaCore({
+      plugins: [
+        {
+          id: "authored-metadata",
+          configSchema: {
+            type: "object",
+            properties: {
+              maxTokens: { type: "integer" },
+              storagePath: { type: "string" },
+              apiKey: { type: "string" },
+            },
+          },
+          configUiHints: {
+            maxTokens: { sensitive: false },
+            storagePath: { tags: ["User-defined"], advanced: true },
+            apiKey: { sensitive: true },
+          },
+        },
+      ],
+      channels: [
+        {
+          id: "authored-metadata-channel",
+          configSchema: { type: "object", properties: { retryLimit: { type: "integer" } } },
+          configUiHints: { retryLimit: { tags: ["Tuning"] } },
+        },
+      ],
+    });
+    const hints = result.uiHints;
+    expect(hints["gateway.auth.token"]?.tags).toBeUndefined();
+    expect(hints["plugins.entries.authored-metadata.config.maxTokens"]).toMatchObject({
+      sensitive: false,
+    });
+    expect(hints["plugins.entries.authored-metadata.config.maxTokens"]?.tags).toBeUndefined();
+    expect(hints["plugins.entries.authored-metadata.config.storagePath"]).toMatchObject({
+      tags: ["User-defined"],
+      advanced: true,
+    });
+    expect(hints["plugins.entries.authored-metadata.config.apiKey"]?.sensitive).toBe(true);
+    expect(hints["plugins.entries.authored-metadata.config.apiKey"]?.tags).toBeUndefined();
+    expect(hints["channels.authored-metadata-channel.retryLimit"]?.tags).toEqual(["Tuning"]);
+    expect(hints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
   });
 });

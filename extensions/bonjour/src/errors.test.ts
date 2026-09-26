@@ -1,4 +1,3 @@
-// Bonjour tests cover errors plugin behavior.
 import { describe, expect, it } from "vitest";
 import { formatBonjourError } from "./errors.js";
 

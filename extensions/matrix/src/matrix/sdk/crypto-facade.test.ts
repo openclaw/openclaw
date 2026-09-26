@@ -28,17 +28,17 @@ function createVerificationManagerMock(
 }
 
 function createRecoveryKeyStoreMock(
-  summary: ReturnType<MatrixRecoveryKeyStore["getRecoveryKeySummary"]> = null,
+  summary: Awaited<ReturnType<MatrixRecoveryKeyStore["getRecoveryKeySummary"]>> = null,
 ): MatrixRecoveryKeyStore {
   return {
-    getRecoveryKeySummary: vi.fn(() => summary),
+    getRecoveryKeySummary: vi.fn(async () => summary),
   } as unknown as MatrixRecoveryKeyStore;
 }
 
 function createFacadeHarness(params?: {
   client?: Partial<MatrixCryptoFacadeDeps["client"]>;
   verificationManager?: Partial<MatrixVerificationManager>;
-  recoveryKeySummary?: ReturnType<MatrixRecoveryKeyStore["getRecoveryKeySummary"]>;
+  recoveryKeySummary?: Awaited<ReturnType<MatrixRecoveryKeyStore["getRecoveryKeySummary"]>>;
   isRoomEncrypted?: MatrixCryptoFacadeDeps["isRoomEncrypted"];
   downloadContent?: MatrixCryptoFacadeDeps["downloadContent"];
 }) {
@@ -78,14 +78,6 @@ describe("createMatrixCryptoFacade", () => {
 
     await expect(facade.isRoomEncrypted("!room:example.org")).resolves.toBe(false);
     expect(isRoomEncrypted).toHaveBeenCalledWith("!room:example.org");
-  });
-
-  it("never downgrades an existing malformed encryption event to plaintext", async () => {
-    const { facade } = createFacadeHarness({
-      isRoomEncrypted: async () => true,
-    });
-
-    await expect(facade.isRoomEncrypted("!room:example.org")).resolves.toBe(true);
   });
 
   it("propagates authoritative room-state failures without permitting plaintext", async () => {

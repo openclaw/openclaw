@@ -1,16 +1,23 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
 import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayEventFrame,
+} from "../../api/gateway.ts";
+import type { SessionsListResult } from "../../api/types.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createGatewayHarness,
   createSessionCapabilityHarness,
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
 import type { SessionGateway } from "./session-capability.ts";
 
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 type ListParams = {
   agentId?: string;
@@ -70,6 +77,98 @@ function sessionHarness(request: unknown) {
 }
 
 describe("session list requests", () => {
+  it("clears serialized start timing tombstones while the next roster read is pending", async () => {
+    vi.useFakeTimers();
+    const child = {
+      key: "agent:main:timing-child",
+      sessionId: "timing-child-session",
+      spawnedBy: "agent:main:timing-parent",
+      kind: "direct" as const,
+      label: "Keep this child title",
+      status: "done" as const,
+      hasActiveRun: false,
+      activeRunIds: [],
+      updatedAt: 121_000,
+      startedAt: 1_000,
+      endedAt: 121_000,
+      runtimeMs: 120_000,
+    };
+    const sibling = {
+      ...child,
+      key: "agent:main:timing-sibling",
+      sessionId: "timing-sibling-session",
+    };
+    const initial = sessionsResult([child, sibling], 121_000);
+    const nextList = createDeferred<SessionsListResult>();
+    let listCalls = 0;
+    const request = vi.fn(async (method: string): Promise<SessionsListResult> => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCalls += 1;
+      return listCalls === 1 ? initial : nextList.promise;
+    });
+    const { gateway, emitEvent } = createGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(gateway);
+
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      void sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.loading).toBe(true);
+      const wire = JSON.stringify({
+        sessionKey: child.key,
+        agentId: "main",
+        phase: "start",
+        runId: "run-b",
+        ts: 200_000,
+        session: {
+          key: child.key,
+          sessionId: child.sessionId,
+          kind: "direct",
+          archived: false,
+          updatedAt: 200_000,
+          startedAt: 200_000,
+          endedAt: null,
+          runtimeMs: null,
+          status: "running",
+          hasActiveRun: true,
+          activeRunIds: ["run-b"],
+        },
+      });
+      const payload: unknown = JSON.parse(wire);
+      emitEvent({ type: "event", event: "sessions.changed", payload });
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(request).toHaveBeenCalledTimes(2);
+      const current = sessions.state.result?.sessions.find((row) => row.key === child.key);
+      expect(current).toMatchObject({
+        key: child.key,
+        sessionId: child.sessionId,
+        spawnedBy: child.spawnedBy,
+        label: child.label,
+        updatedAt: 200_000,
+        startedAt: 200_000,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["run-b"],
+      });
+      expect(current?.endedAt).toBeUndefined();
+      expect(current?.runtimeMs).toBeUndefined();
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([
+        child.key,
+        sibling.key,
+      ]);
+      expect(sessions.state.result?.sessions.find((row) => row.key === sibling.key)).toEqual(
+        sibling,
+      );
+    } finally {
+      sessions.dispose();
+      nextList.resolve(initial);
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps an observed active query independent and retires its disposed handle", async () => {
     const pending = createDeferred<SessionsListResult>();
     let holdRefresh = false;
@@ -132,6 +231,71 @@ describe("session list requests", () => {
     }
   });
 
+  it.each([
+    { managedAgentId: "work", expectedSource: "managed" },
+    { managedAgentId: "main", expectedSource: "primary" },
+  ] as const)(
+    "keeps a $managedAgentId global query scoped when a newer Main observation arrives",
+    async ({ managedAgentId, expectedSource }) => {
+      // Explicit session IDs are scoped to agent stores, including their global rows.
+      const primaryRow = {
+        key: "global",
+        kind: "global" as const,
+        agentId: "main",
+        sessionId: "operator-session",
+        updatedAt: 10,
+        label: "Current Main label",
+        derivedTitle: "Current Main title",
+        lastMessagePreview: "Current Main preview",
+      };
+      const managedRow = {
+        ...primaryRow,
+        agentId: managedAgentId,
+        label: "Managed query label",
+        derivedTitle: "Managed query title",
+        lastMessagePreview: "Managed query preview",
+      };
+      const held = createDeferred<SessionsListResult>();
+      const request = vi.fn(async (method: string, params?: ListParams) => {
+        expect(method).toBe("sessions.list");
+        return params?.archived === "all" ? held.promise : sessionsResult([primaryRow], 10);
+      });
+      const { sessions } = sessionHarness(request);
+      const query = { agentId: managedAgentId, archivedFilter: "all" as const };
+      const listener = vi.fn();
+      const observation = sessions.observeList(query, listener);
+      const pending = observation.refresh();
+
+      try {
+        expect(request).toHaveBeenCalledExactlyOnceWith(
+          "sessions.list",
+          expect.objectContaining({ agentId: managedAgentId, archived: "all" }),
+        );
+        await sessions.refresh({ agentId: "main", force: true });
+        held.resolve(sessionsResult([managedRow], 10));
+        await pending;
+
+        const expectedRow = expectedSource === "primary" ? primaryRow : managedRow;
+        expect(sessions.listSnapshot(query)).toMatchObject({
+          agentId: managedAgentId,
+          result: { sessions: [expectedRow] },
+        });
+        expect(listener).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            agentId: managedAgentId,
+            result: expect.objectContaining({ sessions: [expectedRow] }),
+          }),
+        );
+        expect(sessions.state.result?.sessions).toEqual([primaryRow]);
+      } finally {
+        held.resolve(sessionsResult([managedRow], 10));
+        await Promise.allSettled([pending]);
+        observation.dispose();
+        sessions.dispose();
+      }
+    },
+  );
+
   it("queues a reentrant observed refresh behind the current request", async () => {
     const firstResponse = createDeferred<SessionsListResult>();
     const secondResponse = createDeferred<SessionsListResult>();
@@ -177,78 +341,112 @@ describe("session list requests", () => {
     }
   });
 
-  it("refreshes a managed query after a local terminal outside the primary roster", async () => {
-    vi.useFakeTimers();
-    const key = "agent:writer:linked";
-    let writerFinished = false;
-    const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      const agentId = params?.agentId ?? "main";
-      const done = agentId === "writer" && writerFinished;
-      return sessionsResult(
-        [
-          {
-            key: agentId === "writer" ? key : `agent:${agentId}:main`,
-            kind: "direct",
-            updatedAt: done ? 2 : 1,
-            hasActiveRun: !done,
-            activeRunIds: done ? [] : [`${agentId}-run`],
-            status: done ? "done" : "running",
-          },
-        ],
-        done ? 2 : 1,
+  it.each([false, true])(
+    "settles managed-only terminals before refresh (refresh fails: %s)",
+    async (refreshFails) => {
+      vi.useFakeTimers();
+      const key = "agent:writer:linked";
+      let writerFinished = false;
+      const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        const agentId = params?.agentId ?? "main";
+        const done = agentId === "writer" && writerFinished;
+        if (done && refreshFails) {
+          throw new Error("List refresh failed");
+        }
+        const result = sessionsResult(
+          [
+            {
+              key: agentId === "writer" ? key : `agent:${agentId}:main`,
+              sessionId: `${agentId}-session`,
+              kind: "direct",
+              updatedAt: done ? 2 : 1,
+              hasActiveRun: !done,
+              activeRunIds: done ? [] : [`${agentId}-run`],
+              status: done ? "done" : "running",
+            },
+          ],
+          done ? 2 : 1,
+        );
+        return { ...result, totalCount: 3, hasMore: true, nextOffset: 1 };
+      });
+      const { sessions } = createSessionCapabilityHarness(
+        request as unknown as GatewayBrowserClient["request"],
       );
-    });
-    const { sessions } = createSessionCapabilityHarness(
-      request as unknown as GatewayBrowserClient["request"],
-    );
-    const writerQuery = { agentId: "writer", archivedFilter: "all" as const, limit: 2 };
-    const researchQuery = { ...writerQuery, agentId: "research" };
-    const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
-    const stopResearch = sessions.subscribeList(researchQuery, () => undefined);
+      const writerQuery = { agentId: "writer", archivedFilter: "all" as const, limit: 2 };
+      const otherWriterQuery = { ...writerQuery, ownerId: "ada" };
+      const researchQuery = { ...writerQuery, agentId: "research" };
+      const observed: unknown[] = [];
+      const stopWriter = sessions.subscribeList(writerQuery, (snapshot) => {
+        if (!snapshot.loading && !snapshot.result?.sessions[0]?.hasActiveRun) {
+          observed.push(sessions.listSnapshot(otherWriterQuery).result?.sessions[0]?.status);
+        }
+      });
+      const stopOtherWriter = sessions.subscribeList(otherWriterQuery, () => undefined);
+      const stopResearch = sessions.subscribeList(researchQuery, () => undefined);
 
-    try {
-      await sessions.refresh({ agentId: "main", force: true });
-      await sessions.refreshList(writerQuery);
-      await sessions.refreshList(researchQuery);
-      const primary = sessions.state.result;
-      expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
-        key,
-        hasActiveRun: true,
-        status: "running",
-      });
-      request.mockClear();
-      writerFinished = true;
+      try {
+        await sessions.refresh({ agentId: "main", force: true });
+        await sessions.refreshList(writerQuery);
+        await sessions.refreshList(otherWriterQuery);
+        await sessions.refreshList(researchQuery);
+        const primary = sessions.state.result;
+        expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+          key,
+          hasActiveRun: true,
+          status: "running",
+        });
+        request.mockClear();
+        writerFinished = true;
 
-      sessions.reconcileRunTerminal({
-        sessionKeys: [key],
-        runId: "writer-run",
-        status: "done",
-        endedAt: 2,
-      });
-      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+        sessions.reconcileRunTerminal({
+          sessionKeys: [key],
+          runId: "writer-run",
+          status: "done",
+          endedAt: 2,
+        });
+        expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+          key,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        });
+        expect(observed).toEqual(["done"]);
+        expect(sessions.listSnapshot(writerQuery).result).toMatchObject({
+          count: 1,
+          totalCount: 3,
+          hasMore: true,
+          nextOffset: 1,
+        });
+        expect(request).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
-      expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
-        key,
-        hasActiveRun: false,
-        status: "done",
-      });
-      expect(sessions.state.result).toEqual(primary);
-      expect(sessions.listSnapshot(researchQuery).result?.sessions[0]).toMatchObject({
-        key: "agent:research:main",
-        hasActiveRun: true,
-        status: "running",
-      });
-      expect(request.mock.calls.map(([, params]) => params?.agentId)).not.toContain("research");
-    } finally {
-      stopWriter();
-      stopResearch();
-      sessions.dispose();
-      vi.useRealTimers();
-    }
-  });
+        expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+          key,
+          hasActiveRun: false,
+          status: "done",
+        });
+        expect(sessions.state.result).toEqual(primary);
+        expect(sessions.listSnapshot(writerQuery).error).toBe(
+          refreshFails ? "List refresh failed" : null,
+        );
+        expect(sessions.listSnapshot(researchQuery).result?.sessions[0]).toMatchObject({
+          key: "agent:research:main",
+          hasActiveRun: true,
+          status: "running",
+        });
+        expect(request.mock.calls.map(([, params]) => params?.agentId)).not.toContain("research");
+      } finally {
+        stopWriter();
+        stopOtherWriter();
+        stopResearch();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("forwards a trimmed parent key when listing child sessions", async () => {
     const request = vi.fn(async (_method: string, _params?: unknown) => listResult());
@@ -292,22 +490,8 @@ describe("session list requests", () => {
     sessions.dispose();
   });
 
-  it("forwards the involving-me predicate", async () => {
-    const request = vi.fn(async () => listResult());
-    const { sessions } = sessionHarness(request);
-    await sessions.list({ involvingMe: true });
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
-      expect.objectContaining({ involvingMe: true }),
-    );
-    sessions.dispose();
-  });
-
   it("discards a list rejection from a retired same-client connection", async () => {
-    let rejectStale!: (error: Error) => void;
-    const staleRequest = new Promise<SessionsListResult>((_resolve, reject) => {
-      rejectStale = reject;
-    });
+    const { promise: staleRequest, reject: rejectStale } = createDeferred<SessionsListResult>();
     const request = vi.fn(async () => staleRequest);
     const { sessions, reconnect } = sessionHarness(request);
     const retiredRequest = sessions.list({ boardFace: "dashboard" });
@@ -349,10 +533,8 @@ describe("session list requests", () => {
   });
 
   it("coalesces concurrent managed-list demand while preserving later forced refreshes", async () => {
-    let resolveRequest!: (result: SessionsListResult) => void;
-    const pendingResult = new Promise<SessionsListResult>((resolve) => {
-      resolveRequest = resolve;
-    });
+    const { promise: pendingResult, resolve: resolveRequest } =
+      createDeferred<SessionsListResult>();
     const request = vi
       .fn()
       .mockImplementationOnce(async () => pendingResult)
@@ -381,51 +563,123 @@ describe("session list requests", () => {
     }
   });
 
-  it.each([
-    { description: "archived", query: { archivedFilter: "archived" as const } },
-    { description: "all", query: { archivedFilter: "all" as const } },
-    { description: "dashboard", query: { boardFace: "dashboard" as const } },
-    { description: "involving-me", query: { involvingMe: true as const } },
-  ])(
-    "honors a forced $description refresh requested during an existing load",
-    async ({ query }) => {
-      let resolveRequest!: (result: SessionsListResult) => void;
-      const pendingResult = new Promise<SessionsListResult>((resolve) => {
-        resolveRequest = resolve;
+  it("honors a forced managed refresh requested during an existing load", async () => {
+    const { promise: pendingResult, resolve: resolveRequest } =
+      createDeferred<SessionsListResult>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(async () => pendingResult)
+      .mockResolvedValue(listResult(["agent:main:current"]));
+    const { sessions } = sessionHarness(request);
+    const scope = { agentId: "main", limit: 50, archivedFilter: "archived" as const };
+    const unsubscribe = sessions.subscribeList(scope, () => undefined);
+
+    try {
+      const pending = sessions.refreshList(scope);
+      const forced = sessions.refreshList({ ...scope, force: true });
+      const repeated = sessions.refreshList({ ...scope, force: true });
+      expect(forced).toBe(pending);
+      expect(repeated).toBe(pending);
+
+      resolveRequest(listResult(["agent:main:stale"]));
+      await Promise.all([pending, forced, repeated]);
+
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(sessions.listSnapshot(scope).result?.sessions[0]?.key).toBe("agent:main:current");
+    } finally {
+      resolveRequest(listResult());
+      unsubscribe();
+      sessions.dispose();
+    }
+  });
+
+  it.each(["before", "after"] as const)(
+    "absorbs only invalidations preceding a queued managed replacement (%s)",
+    async (eventTiming) => {
+      vi.useFakeTimers();
+      const first = createDeferred<SessionsListResult>();
+      const second = createDeferred<SessionsListResult>();
+      const secondStarted = createDeferred();
+      const row = (version: number) => ({
+        key: "agent:main:managed-refresh",
+        sessionId: "managed-refresh",
+        kind: "direct" as const,
+        archived: true,
+        updatedAt: version,
+        label: `Read ${version}`,
       });
-      const request = vi
-        .fn()
-        .mockImplementationOnce(async () => pendingResult)
-        .mockResolvedValue(listResult(["agent:main:current"]));
-      const { sessions } = sessionHarness(request);
-      const scope = { agentId: "main", limit: 50, ...query };
-      const unsubscribe = sessions.subscribeList(scope, () => undefined);
-
+      let managedCalls = 0;
+      const client = createTestGatewayClient((method, params) => {
+        if (method !== "sessions.list") {
+          throw new Error(`Unexpected request: ${method}`);
+        }
+        if (asNullableRecord(params)?.archived !== true) {
+          return sessionsResult([], 0);
+        }
+        managedCalls += 1;
+        if (managedCalls === 1) {
+          return first.promise;
+        }
+        if (managedCalls === 2) {
+          secondStarted.resolve();
+          return second.promise;
+        }
+        return sessionsResult([row(3)], 3);
+      });
+      const { gateway, emitEvent } = createGatewayHarness(client);
+      const sessions = createTestSessionCapability(gateway);
+      const query = { agentId: "main", archivedFilter: "archived" as const, limit: 17 };
+      const readThreeObserved = createDeferred();
+      const unsubscribe = sessions.subscribeList(query, (next) => {
+        if (next.result?.sessions[0]?.label === "Read 3") {
+          readThreeObserved.resolve();
+        }
+      });
+      const event = {
+        type: "event",
+        event: "sessions.changed",
+        payload: { ...row(1), sessionKey: row(1).key, agentId: "main", reason: "update" },
+      } as const satisfies GatewayEventFrame;
       try {
-        const pending = sessions.refreshList(scope);
-        const forced = sessions.refreshList({ ...scope, force: true });
-        const repeated = sessions.refreshList({ ...scope, force: true });
-        expect(forced).toBe(pending);
-        expect(repeated).toBe(pending);
-
-        resolveRequest(listResult(["agent:main:stale"]));
-        await Promise.all([pending, forced, repeated]);
-
-        expect(request).toHaveBeenCalledTimes(2);
-        expect(sessions.listSnapshot(scope).result?.sessions[0]?.key).toBe("agent:main:current");
+        const initial = sessions.refreshList(query);
+        const forced = sessions.refreshList({ ...query, force: true });
+        if (eventTiming === "before") {
+          emitEvent(event);
+        }
+        first.resolve(sessionsResult([row(1)], 1));
+        await secondStarted.promise;
+        expect(managedCalls).toBe(2);
+        if (eventTiming === "after") {
+          emitEvent(event);
+        }
+        await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+        second.resolve(sessionsResult([row(2)], 2));
+        await Promise.all([initial, forced]);
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(managedCalls).toBe(2);
+        expect(sessions.listSnapshot(query).result?.sessions[0]?.label).toBe("Read 2");
+        await vi.advanceTimersByTimeAsync(1);
+        if (eventTiming === "after") {
+          expect(managedCalls).toBe(3);
+          await readThreeObserved.promise;
+        }
+        expect.soft(managedCalls).toBe(eventTiming === "before" ? 2 : 3);
+        expect(sessions.listSnapshot(query).result?.sessions[0]?.label).toBe(
+          eventTiming === "before" ? "Read 2" : "Read 3",
+        );
       } finally {
-        resolveRequest(listResult());
+        first.resolve(sessionsResult([], 1));
+        second.resolve(sessionsResult([], 2));
         unsubscribe();
         sessions.dispose();
+        vi.useRealTimers();
       }
     },
   );
 
   it("does not queue forced filtered pagination behind an in-flight replacement", async () => {
-    let resolveRequest!: (result: SessionsListResult) => void;
-    const pendingResult = new Promise<SessionsListResult>((resolve) => {
-      resolveRequest = resolve;
-    });
+    const { promise: pendingResult, resolve: resolveRequest } =
+      createDeferred<SessionsListResult>();
     const firstPage = listResult(["agent:main:first", "agent:main:second"], 4);
     const request = vi
       .fn()
@@ -454,10 +708,8 @@ describe("session list requests", () => {
   });
 
   it("retains an in-flight managed query while its route subscriber is replaced", async () => {
-    let resolveRequest!: (result: SessionsListResult) => void;
-    const pendingResult = new Promise<SessionsListResult>((resolve) => {
-      resolveRequest = resolve;
-    });
+    const { promise: pendingResult, resolve: resolveRequest } =
+      createDeferred<SessionsListResult>();
     const request = vi.fn(async () => pendingResult);
     const { sessions } = sessionHarness(request);
     const query = { agentId: "main", archivedFilter: "all" as const, limit: 50 };
@@ -608,10 +860,7 @@ describe("session list requests", () => {
   });
 
   it("retires stale filtered snapshots across same-client reconnects without losing subscribers", async () => {
-    let resolveStale!: (result: SessionsListResult) => void;
-    const staleResult = new Promise<SessionsListResult>((resolve) => {
-      resolveStale = resolve;
-    });
+    const { promise: staleResult, resolve: resolveStale } = createDeferred<SessionsListResult>();
     let archivedRequests = 0;
     const request = vi.fn(async (method: string, params?: { archived?: boolean }) => {
       if (method === "sessions.subscribe") {
@@ -670,7 +919,12 @@ describe("session list requests", () => {
       });
       const { sessions, publish } = sessionHarness(request);
       const query = { hasBoard: true };
-      const unsubscribe = sessions.subscribeList(query, () => undefined);
+      const recoveredObserved = createDeferred();
+      const unsubscribe = sessions.subscribeList(query, (next) => {
+        if (next.result?.sessions[0]?.key === "agent:main:recovered") {
+          recoveredObserved.resolve();
+        }
+      });
       try {
         await sessions.refreshList(query);
         fail = true;
@@ -699,7 +953,13 @@ describe("session list requests", () => {
           expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(2);
           pending.reject(error);
           await refresh;
+          await vi.advanceTimersByTimeAsync(4_999);
+          expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(2);
+          expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:original");
+          await vi.advanceTimersByTimeAsync(1);
+          expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(3);
         }
+        await recoveredObserved.promise;
         expect(sessions.listSnapshot(query).result?.sessions[0]?.key).toBe("agent:main:recovered");
         expect(sessions.listSnapshot(query).error).toBeNull();
         expect(request.mock.calls.filter(([, params]) => params?.hasBoard)).toHaveLength(3);

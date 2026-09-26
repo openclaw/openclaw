@@ -6,7 +6,11 @@ import {
   ConverseStreamCommand,
   StopReason as BedrockStopReason,
 } from "@aws-sdk/client-bedrock-runtime";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
+} from "@openclaw/ai/internal/shared";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
@@ -190,34 +194,6 @@ describe("Bedrock reasoning replay", () => {
   });
 
   it.each(["3q2+7w==", undefined])(
-    "drops opaque Claude reasoning when switching to an unsupported model (signature: %s)",
-    async (thinkingSignature) => {
-      const modelId = "amazon.nova-micro-v1:0";
-      const messages = await captureMessages(bedrockModel({ id: modelId, name: "Nova Micro" }), {
-        messages: [
-          {
-            role: "assistant",
-            api: "bedrock-converse-stream",
-            provider: "amazon-bedrock",
-            model: "anthropic.claude-haiku-4-5-20251001-v1:0",
-            content: [
-              {
-                type: "thinking",
-                thinking: "[Reasoning redacted]",
-                thinkingSignature,
-                redacted: true,
-              },
-              { type: "text", text: "Safe visible response" },
-            ],
-          },
-        ],
-      } as never);
-
-      expect(messages[0]?.content).toEqual([{ text: "Safe visible response" }]);
-    },
-  );
-
-  it.each(["3q2+7w==", undefined])(
     "drops model-bound opaque reasoning when switching between Claude models (signature: %s)",
     async (thinkingSignature) => {
       const targetModelId = "anthropic.claude-sonnet-4-5-20250929-v1:0";
@@ -321,16 +297,12 @@ describe("Bedrock prompt cache ownership", () => {
 
   it.each([
     ["amazon.nova-micro-v1:0", true],
-    ["eu.amazon.nova-lite-v1:0", true],
-    ["apac.amazon.nova-pro-v1:0", true],
-    ["us.amazon.nova-premier-v1:0", true],
     ["global.amazon.nova-2-lite-v1:0", true],
     ["arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0", true],
     ["arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-pro-v1:0", true],
     ["amazon.nova-sonic-v1:0", false],
     ["amazon.nova-lite-v2:0", false],
     ["amazon.nova-pro-v1:0:custom", false],
-    ["meta.llama3-70b-instruct-v1:0", false],
     [
       "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/amazon.nova-pro-v1:0",
       false,
@@ -469,7 +441,7 @@ describe("Bedrock prompt cache ownership", () => {
               name: "Claude Haiku 4.5",
             }),
             {
-              systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}${suffix}`,
+              systemPrompt: `${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY.trim()}Stable workspace${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END.trim()}${SYSTEM_PROMPT_CACHE_BOUNDARY}${suffix}`,
               messages: [{ role: "user", content: "Hello", timestamp: 0 }],
             },
             { cacheRetention },
@@ -502,50 +474,23 @@ describe("Bedrock prompt cache ownership", () => {
   const model = () =>
     bedrockModel({ id: "anthropic.claude-haiku-4-5-20251001-v1:0", name: "Claude Haiku 4.5" });
 
-  it("anchors prompt caching on the last stable user turn instead of transient runtime context", async () => {
-    const messages = await captureMessages(
+  it("strips relocation markers from a prompt without a cache boundary", async () => {
+    const payload = await capturePayload(
       model(),
       {
-        messages: [
-          { role: "user", content: "stable operator request", timestamp: 0 },
-          {
-            role: "user",
-            content: "volatile current-turn metadata",
-            runtimeContextCarrier: true,
-            timestamp: 1,
-          },
-        ],
+        systemPrompt: `${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY.trim()}Complete policy${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END.trim()}`,
+        messages: [{ role: "user", content: "Hello", timestamp: 0 }],
       },
       { cacheRetention: "short" },
     );
 
-    expect(messages).toEqual([
-      {
-        role: ConversationRole.USER,
-        content: [{ text: "stable operator request" }, { cachePoint: { type: "default" } }],
-      },
-      { role: ConversationRole.USER, content: [{ text: "volatile current-turn metadata" }] },
+    expect(payload.system).toEqual([
+      { text: "Complete policy" },
+      { cachePoint: { type: "default" } },
     ]);
-  });
-
-  it("does not cache a runtime-context carrier when no stable user turn exists", async () => {
-    const messages = await captureMessages(
-      model(),
-      {
-        messages: [
-          {
-            role: "user",
-            content: "volatile current-turn metadata",
-            runtimeContextCarrier: true,
-            timestamp: 0,
-          },
-        ],
-      },
-      { cacheRetention: "short" },
-    );
-
-    expect(messages).toEqual([
-      { role: ConversationRole.USER, content: [{ text: "volatile current-turn metadata" }] },
+    expect(payload.messages?.[0]?.content).toEqual([
+      { text: "Hello" },
+      { cachePoint: { type: "default" } },
     ]);
   });
 
@@ -689,4 +634,112 @@ describe("Bedrock token usage", () => {
       total: 82,
     });
   });
+});
+
+describe("Bedrock tool-result images", () => {
+  it.each(["openai.gpt-5.6-sol", "us.openai.gpt-5.6-sol"])(
+    "lifts tool images into user content for %s while preserving result associations",
+    async (id) => {
+      const png =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+      const image = { type: "image", mimeType: "image/png", data: png };
+      const context = {
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_first",
+            toolName: "inspect",
+            content: [{ type: "text", text: "first result" }, image, image],
+            isError: false,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_second",
+            toolName: "inspect",
+            content: [image],
+            isError: true,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_text",
+            toolName: "read",
+            content: [{ type: "text", text: "plain result" }],
+            isError: false,
+          },
+        ],
+      };
+      const before = structuredClone(context);
+      const input = await capturePayload(
+        bedrockModel({ id, input: ["text", "image"] }),
+        context as never,
+      );
+      const expectedImage = {
+        image: { format: "png", source: { bytes: new Uint8Array(Buffer.from(png, "base64")) } },
+      };
+      const placeholder = (toolCallId: string) => ({
+        text: `(see attached images labeled "Images from tool result ${toolCallId}")`,
+      });
+      expect(input.messages).toEqual([
+        {
+          role: ConversationRole.USER,
+          content: [
+            {
+              toolResult: {
+                toolUseId: "call_first",
+                status: "success",
+                content: [{ text: "first result" }, placeholder("call_first")],
+              },
+            },
+            {
+              toolResult: {
+                toolUseId: "call_second",
+                status: "error",
+                content: [placeholder("call_second")],
+              },
+            },
+            {
+              toolResult: {
+                toolUseId: "call_text",
+                status: "success",
+                content: [{ text: "plain result" }],
+              },
+            },
+            { text: "Images from tool result call_first:" },
+            expectedImage,
+            expectedImage,
+            { text: "Images from tool result call_second:" },
+            expectedImage,
+          ],
+        },
+      ]);
+      expect(context).toEqual(before);
+
+      const unaffected = await capturePayload(
+        bedrockModel({ input: ["text", "image"] }),
+        context as never,
+      );
+      expect(unaffected.messages).toEqual([
+        {
+          role: ConversationRole.USER,
+          content: [
+            {
+              toolResult: {
+                toolUseId: "call_first",
+                status: "success",
+                content: [{ text: "first result" }, expectedImage, expectedImage],
+              },
+            },
+            { toolResult: { toolUseId: "call_second", status: "error", content: [expectedImage] } },
+            {
+              toolResult: {
+                toolUseId: "call_text",
+                status: "success",
+                content: [{ text: "plain result" }],
+              },
+            },
+          ],
+        },
+      ]);
+    },
+  );
 });

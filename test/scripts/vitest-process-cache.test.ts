@@ -4,10 +4,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveNativeFixtureShortPath } from "./native-boundary-fixture.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 const tsxPreload = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
 
 it.each(["hermetic", "live-aware", "tooling"] as const)(
@@ -26,7 +28,7 @@ if (result.error) throw result.error;
 if (result.status !== 0) throw new Error(result.stderr);
 const namespace = os.tmpdir();
 const cache = path.join(namespace, "tsx-" + (process.geteuid?.() ?? os.userInfo().username));
-console.log(JSON.stringify({ namespace, output: result.stdout, cached: fs.existsSync(cache) && fs.readdirSync(cache).length > 0 }));
+console.log(JSON.stringify({ namespace, output: result.stdout, disabled: process.env.TSX_DISABLE_CACHE, cached: fs.existsSync(cache) && fs.readdirSync(cache).length > 0 }));
 `;
     const env = {
       PATH: process.env.PATH,
@@ -40,8 +42,8 @@ console.log(JSON.stringify({ namespace, output: result.stdout, cached: fs.exists
       ESBUILD_WORKER_THREADS: "0",
     };
     const { child, completion } = spawnOwnedVitestProcess({
-      command: process.execPath,
-      args: ["--input-type=module", "-e", script],
+      command: testNodeExecPath,
+      args: ["--import", tsxPreload, "--input-type=module", "-e", script],
       homeMode,
       options: { env, stdio: ["ignore", "pipe", "pipe"] },
     });
@@ -59,7 +61,7 @@ console.log(JSON.stringify({ namespace, output: result.stdout, cached: fs.exists
     });
     const observed = JSON.parse(output);
     expect(observed.output).toBe("42\n");
-    expect(observed.cached).toBe(homeMode !== "tooling");
+    expect(observed.cached, JSON.stringify(observed)).toBe(homeMode !== "tooling");
     expect(path.dirname(observed.namespace)).toBe(root);
     expect(env.TSX_DISABLE_CACHE).toBe("1");
     expect(fs.existsSync(observed.namespace)).toBe(process.platform === "win32");
@@ -76,7 +78,7 @@ it.skipIf(process.platform !== "win32")(
       return;
     }
     const { child, completion } = spawnOwnedVitestProcess({
-      command: process.execPath,
+      command: testNodeExecPath,
       args: [
         "-e",
         "console.log(JSON.stringify([process.env.TMPDIR, process.env.TMP, process.env.TEMP]))",

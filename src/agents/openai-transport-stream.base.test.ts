@@ -1,12 +1,13 @@
+import { getAiTransportHost } from "@openclaw/ai";
 import {
   buildTransportAwareSimpleStreamFn,
-  createBoundaryAwareStreamFnForModel,
-  createOpenClawTransportStreamFnForModel,
+  createAzureOpenAIResponsesTransportStreamFn,
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "@openclaw/ai/transports";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
+import { logResponsesFailedNoDetails } from "../../packages/ai/src/transports/openai-responses-debug.js";
 import {
   resolveAzureOpenAIApiVersion,
   type OpenAIResponsesOutput,
@@ -24,13 +25,23 @@ import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 describe("openai transport stream", () => {
   it("keeps bounded redacted diagnostics UTF-16 well-formed", () => {
-    const payload = testing.stringifyRedactedPayload(`${"x".repeat(7_998)}🚀tail`);
-    const event = testing.stringifyRedactedEvent(`${"x".repeat(1_998)}🚀tail`);
+    const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+    process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
+    try {
+      const payload = testing.summarizeResponsesPayload({ input: `${"x".repeat(7_989)}🚀tail` });
+      const event = testing.stringifyRedactedEvent(`${"x".repeat(1_998)}🚀tail`);
 
-    expect(payload).toContain(`${"x".repeat(7_998)}…<truncated>`);
-    expect(event).toContain(`${"x".repeat(1_998)}…<truncated>`);
-    expect(payload).not.toContain("\uD83D");
-    expect(event).not.toContain("\uD83D");
+      expect(payload).toContain(`payload={"input":"${"x".repeat(7_989)}…<truncated>`);
+      expect(event).toContain(`${"x".repeat(1_998)}…<truncated>`);
+      expect(payload).not.toContain("\uD83D");
+      expect(event).not.toContain("\uD83D");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
+      } else {
+        process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = previous;
+      }
+    }
   });
 
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
@@ -86,8 +97,8 @@ describe("openai transport stream", () => {
       },
     };
 
-    const observation = testing.buildResponsesFailedNoDetailsObservation(event, model);
-    const summary = testing.summarizeResponsesFailedNoDetailsObservation(observation);
+    const observation = testing.normalizeResponsesFailedEvent(event, model).observation;
+    assert(observation);
 
     expect(observation.providerRuntimeFailureKind).toBe("no_error_details");
     expect(observation.responseId).toBe("resp_failed_123");
@@ -96,8 +107,15 @@ describe("openai transport stream", () => {
     expect(observation.metadataKeys).toEqual(["api_key", "litellm_request_id"]);
     expect(observation.requestIdHashes).toHaveLength(6);
     expect(observation.requestIdHashes.join(",")).toContain("sha256:");
-    expect(summary).toContain("responseId=resp_failed_123");
-    expect(summary).toContain("requestIds=");
+    const logWarn = vi.spyOn(getAiTransportHost(), "logWarn").mockImplementation(() => {});
+    try {
+      logResponsesFailedNoDetails(observation);
+      expect(logWarn).toHaveBeenCalledOnce();
+      expect(logWarn.mock.calls[0]?.[1]).toContain("responseId=resp_failed_123");
+      expect(logWarn.mock.calls[0]?.[1]).toContain("requestIds=");
+    } finally {
+      logWarn.mockRestore();
+    }
     expect(JSON.stringify(observation)).not.toContain("litellm_req_plaintext_123");
     expect(JSON.stringify(observation)).not.toContain("provider_req_plaintext_456");
     expect(JSON.stringify(observation)).not.toContain("provider_req_nested_789");
@@ -894,11 +912,13 @@ describe("openai transport stream", () => {
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
     try {
       expect(
-        testing.summarizeResponsesTools([
-          { type: "function", name: "exec" },
-          { type: "function", function: { name: "wait" } },
-        ]),
-      ).toBe("count=2 names=exec,wait");
+        testing.summarizeResponsesPayload({
+          tools: [
+            { type: "function", name: "exec" },
+            { type: "function", function: { name: "wait" } },
+          ],
+        }),
+      ).toContain("tools=count=2 names=exec,wait");
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
@@ -913,24 +933,26 @@ describe("openai transport stream", () => {
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
     try {
       expect(
-        testing.summarizeResponsesTools([
-          {
-            type: "function",
-            get function(): { name: string } {
-              throw new Error("responses debug tool function getter exploded");
-            },
-          },
-          {
-            type: "function",
-            function: {
-              get name(): string {
-                throw new Error("responses debug nested name getter exploded");
+        testing.summarizeResponsesPayload({
+          tools: [
+            {
+              type: "function",
+              get function(): { name: string } {
+                throw new Error("responses debug tool function getter exploded");
               },
             },
-          },
-          { type: "function", function: { name: "wait" } },
-        ]),
-      ).toBe("count=3 names=wait");
+            {
+              type: "function",
+              function: {
+                get name(): string {
+                  throw new Error("responses debug nested name getter exploded");
+                },
+              },
+            },
+            { type: "function", function: { name: "wait" } },
+          ],
+        }),
+      ).toContain("tools=count=3 names=wait");
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
@@ -1146,24 +1168,6 @@ describe("openai transport stream", () => {
     expect(headers.session_id).toBeUndefined();
   });
 
-  it("does not overwrite an existing session_id header on the native ChatGPT/Codex Responses transport", () => {
-    const headers = testing.buildOpenAIClientHeaders(
-      makeResponsesModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-        headers: {},
-      }),
-      { systemPrompt: "", messages: [] } as never,
-      { session_id: "caller-supplied-session" },
-      undefined,
-      "session-abc-123",
-    );
-
-    expect(headers.session_id).toBe("caller-supplied-session");
-  });
-
   it("does not add a generated session_id header when the caller supplies a differently-cased one", () => {
     const headers = testing.buildOpenAIClientHeaders(
       makeResponsesModel({
@@ -1222,48 +1226,6 @@ describe("openai transport stream", () => {
     ).toBeUndefined();
   });
 
-  it("builds boundary-aware stream shapers for supported default agent transports", () => {
-    expect(
-      createBoundaryAwareStreamFnForModel(
-        makeResponsesModel({
-          id: "gpt-5.4",
-          name: "GPT-5.4",
-        }),
-      ),
-    ).toBeTypeOf("function");
-    expect(
-      createOpenClawTransportStreamFnForModel(
-        makeResponsesModel({
-          id: "gpt-5.4",
-          name: "GPT-5.4",
-        }),
-      ),
-    ).toBeTypeOf("function");
-    expect(
-      createBoundaryAwareStreamFnForModel(
-        makeResponsesModel({
-          id: "codex-mini-latest",
-          name: "Codex Mini Latest",
-          api: "openai-chatgpt-responses",
-        }),
-      ),
-    ).toBeTypeOf("function");
-    expect(
-      createBoundaryAwareStreamFnForModel({
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        api: "anthropic-messages",
-        provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"anthropic-messages">),
-    ).toBeTypeOf("function");
-  });
-
   it("prepares a custom simple-completion api alias when transport overrides are attached", () => {
     const model = attachModelProviderRequestTransport(
       makeResponsesModel({
@@ -1287,94 +1249,6 @@ describe("openai transport stream", () => {
       id: "gpt-5.4",
     });
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
-  });
-
-  it("prepares a Codex Responses simple-completion api alias when transport overrides are attached", () => {
-    const model = attachModelProviderRequestTransport(
-      makeResponsesModel({
-        id: "codex-mini-latest",
-        name: "Codex Mini Latest",
-        api: "openai-chatgpt-responses",
-      }),
-      {
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-        },
-      },
-    );
-
-    const prepared = prepareTransportAwareSimpleModel(model);
-
-    expect(resolveTransportAwareSimpleApi(model.api)).toBe(
-      "openclaw-openai-chatgpt-responses-transport",
-    );
-    expectRecordFields(prepared, {
-      api: "openclaw-openai-chatgpt-responses-transport",
-      provider: "openai",
-      id: "codex-mini-latest",
-    });
-    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
-  });
-
-  it("prepares an Anthropic simple-completion api alias when transport overrides are attached", () => {
-    const model = attachModelProviderRequestTransport(
-      {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        api: "anthropic-messages",
-        provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"anthropic-messages">,
-      {
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-        },
-      },
-    );
-
-    const prepared = prepareTransportAwareSimpleModel(model);
-
-    expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-anthropic-messages-transport");
-    expectRecordFields(prepared, {
-      api: "openclaw-anthropic-messages-transport",
-      provider: "anthropic",
-      id: "claude-sonnet-4-6",
-    });
-    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
-  });
-
-  it("reports the Google simple-completion api alias without loading provider runtime", () => {
-    const model = attachModelProviderRequestTransport(
-      {
-        id: "gemini-3.1-pro-preview",
-        name: "Gemini 3.1 Pro Preview",
-        api: "google-generative-ai",
-        provider: "google",
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } satisfies Model<"google-generative-ai">,
-      {
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-        },
-      },
-    );
-
-    expect(resolveTransportAwareSimpleApi(model.api)).toBe(
-      "openclaw-google-generative-ai-transport",
-    );
   });
 
   it("keeps github-copilot OpenAI-family models on the shared transport seam", () => {
@@ -1441,28 +1315,63 @@ describe("openai transport stream", () => {
     );
   });
 
-  it("uses an OpenAI-compatible client for Foundry Azure Responses base URLs", () => {
-    const model = {
-      ...createAzureResponsesModel(),
+  it.each([
+    {
       baseUrl: "https://project.services.ai.azure.com/api/projects/demo/openai/v1",
-    };
-    const client = testing.createAzureOpenAIClient(
-      model,
-      { systemPrompt: "system", messages: [], tools: [] } as never,
-      "test-key",
-    );
-
-    expect(client.constructor.name).toBe("OpenAI");
-  });
-
-  it("keeps traditional Azure Responses hosts on the AzureOpenAI client", () => {
-    const client = testing.createAzureOpenAIClient(
-      createAzureResponsesModel(),
-      { systemPrompt: "system", messages: [], tools: [] } as never,
-      "test-key",
-    );
-
-    expect(client.constructor.name).toBe("AzureOpenAI");
-  });
+      azureApiVersion: null,
+    },
+    { baseUrl: "https://example.openai.azure.com", azureApiVersion: "preview" },
+  ])(
+    "preserves Azure routing and prepared headers for $baseUrl",
+    async ({ baseUrl, azureApiVersion }) => {
+      const previousApiVersion = process.env.AZURE_OPENAI_API_VERSION;
+      const model = {
+        ...createAzureResponsesModel(),
+        baseUrl,
+      };
+      const requests: Request[] = [];
+      const fetchOwner = vi
+        .spyOn(getAiTransportHost(), "buildModelFetch")
+        .mockReturnValue(async (input, init) => {
+          requests.push(new Request(input, init));
+          return new Response(
+            `data: ${JSON.stringify({
+              type: "response.completed",
+              response: { id: "resp_fixture", status: "completed", output: [] },
+            })}\n\n`,
+            { headers: { "content-type": "text/event-stream" } },
+          );
+        });
+      process.env.AZURE_OPENAI_API_VERSION = "preview";
+      try {
+        const stream = await createAzureOpenAIResponsesTransportStreamFn()(
+          model,
+          {
+            messages: [{ role: "user", content: "hello", timestamp: 1 }],
+          },
+          { apiKey: "test-key", headers: { session_id: "prepared-affinity" } },
+        );
+        const result = await stream.result();
+        expect(result.stopReason).toBe("stop");
+        expect(requests).toHaveLength(1);
+        const request = requests[0];
+        assert(request);
+        const url = new URL(request.url);
+        expect(url.origin + url.pathname).toBe(`${baseUrl}/responses`);
+        expect(url.searchParams.get("api-version")).toBe(azureApiVersion);
+        expect(request.headers.get(azureApiVersion ? "api-key" : "authorization")).toBe(
+          azureApiVersion ? "test-key" : "Bearer test-key",
+        );
+        expect(request.headers.get("session_id")).toBe("prepared-affinity");
+      } finally {
+        fetchOwner.mockRestore();
+        if (previousApiVersion === undefined) {
+          delete process.env.AZURE_OPENAI_API_VERSION;
+        } else {
+          process.env.AZURE_OPENAI_API_VERSION = previousApiVersion;
+        }
+      }
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

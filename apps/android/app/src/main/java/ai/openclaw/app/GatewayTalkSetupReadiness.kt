@@ -103,8 +103,8 @@ val GatewayTalkSetupState.requiresSetup: Boolean
 
 internal fun isAndroidRealtimeRelayModelSupported(model: String?): Boolean {
   val normalized = model?.trim()?.lowercase() ?: return true
-  // extensions/openai/realtime-quicksilver.ts makes gpt-live WebRTC-only;
-  // the Gateway relay rejects it instead of providing a usable Android session.
+  // Older Gateways omit relay capability hints. Keep their native fallback;
+  // a positive Gateway hint overrides this legacy model check.
   return normalized != "gpt-live" && !normalized.startsWith("gpt-live-")
 }
 
@@ -198,7 +198,7 @@ private fun parseTalkCatalogGroup(
       ?.mapNotNull(::parseTalkCatalogProvider)
       .orEmpty()
   val ready = (group["ready"] as? JsonPrimitive)?.booleanOrNull
-  val activeProviderId = group["activeProvider"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+  val activeProviderId = group.nonBlankString("activeProvider")
   if (providers.isEmpty()) {
     return when {
       ready == false -> {
@@ -225,8 +225,8 @@ private fun parseTalkCatalogGroup(
   }
   val selected =
     // Match Gateway registry precedence: canonical ids win before alias fallback.
-    providers.firstOrNull { it.matchesId(activeProviderId) }
-      ?: providers.firstOrNull { it.matchesAlias(activeProviderId) }
+    providers.firstOrNull { it.id.equals(activeProviderId, ignoreCase = true) }
+      ?: providers.firstOrNull { provider -> provider.aliases.any { it.equals(activeProviderId, ignoreCase = true) } }
       ?: return if (ready == false) {
         GatewayTalkSetupState.NeedsSetup(GatewayTalkSetupIssue.UnsupportedProvider(target))
       } else {
@@ -254,18 +254,13 @@ private fun parseTalkCatalogGroup(
 private data class TalkCatalogProvider(
   val id: String,
   val label: String,
-  val configured: Boolean,
   val aliases: List<String>,
-) {
-  fun matchesId(candidate: String): Boolean = id.equals(candidate, ignoreCase = true)
-
-  fun matchesAlias(candidate: String): Boolean = aliases.any { it.equals(candidate, ignoreCase = true) }
-}
+)
 
 private fun parseTalkCatalogProvider(item: JsonElement): TalkCatalogProvider? {
   val value = item.asObjectOrNull() ?: return null
-  val id = value["id"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return null
-  val label = value["label"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: id
+  val id = value.nonBlankString("id") ?: return null
+  val label = value.nonBlankString("label") ?: id
   val aliases =
     (value["aliases"] as? JsonArray)
       ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) }
@@ -273,7 +268,6 @@ private fun parseTalkCatalogProvider(item: JsonElement): TalkCatalogProvider? {
   return TalkCatalogProvider(
     id = id,
     label = label,
-    configured = (value["configured"] as? JsonPrimitive)?.booleanOrNull == true,
     aliases = aliases,
   )
 }

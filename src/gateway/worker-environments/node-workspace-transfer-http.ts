@@ -1,26 +1,32 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { constants as zlibConstants, createGzip } from "node:zlib";
+import { resolveHttpContentEncodings } from "../../infra/http-content-encoding.js";
+import { readWorkspaceTransferBody } from "../../worker/node-workspace-transfer-body.js";
 import { NODE_WORKSPACE_TRANSFER_PATH } from "../../worker/node-workspace-transfer-protocol.js";
-import { AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER, type AuthRateLimiter } from "../auth-rate-limit.js";
 import { classifyNodeWorkspaceTransferPath } from "../gateway-http-route-contracts.js";
 import { sendJson, watchClientDisconnect } from "../http-common.js";
-import { withSerializedRateLimitAttempt } from "../rate-limit-attempt-serialization.js";
+import {
+  handleWorkerTransferHttpRequest,
+  type ArtifactTransferHttpRequest,
+} from "./artifact-transfer-http.js";
 import type {
   NodeWorkspaceTransferHttpCallback,
   NodeWorkspaceTransferHttpRoute,
 } from "./node-workspace-transfer-http-contract.js";
+import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import {
-  isNodeWorkspaceTransferLimitError,
+  NodeWorkspaceTransferLimitError,
   nodeWorkspaceTransferInvalidReason,
-  type NodeWorkspaceTransferService,
-} from "./node-workspace-transfer-service.js";
+} from "./node-workspace-upload-reader.js";
+import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
 
 export type { NodeWorkspaceTransferHttpCallback } from "./node-workspace-transfer-http-contract.js";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const MANIFEST_ENCODINGS = new Set<"gzip">(["gzip"]);
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const MAX_ENVIRONMENT_ID_LENGTH = 256;
 const OPAQUE_NOT_FOUND = { error: "not_found" } as const;
@@ -100,38 +106,14 @@ function parseNodeWorkspaceTransferHttpRoute(
   return undefined;
 }
 
-function bearerToken(req: IncomingMessage): string | undefined {
-  const authorization = normalizeOptionalString(req.headers.authorization);
-  if (!authorization?.toLowerCase().startsWith("bearer ")) {
-    return undefined;
-  }
-  return normalizeOptionalString(authorization.slice(7));
-}
-
 function sendOpaqueNotFound(res: ServerResponse): void {
   sendJson(res, 404, OPAQUE_NOT_FOUND);
 }
 
-function sendTransferRateLimited(res: ServerResponse, retryAfterMs: number): void {
-  if (retryAfterMs > 0) {
-    res.setHeader("Retry-After", String(Math.ceil(retryAfterMs / 1000)));
-  }
-  sendJson(res, 429, { error: "rate_limited" });
-}
-
-type TransferAdmission =
-  | { kind: "rate-limited"; retryAfterMs: number }
-  | { kind: "unauthorized" }
-  | Extract<Awaited<ReturnType<NodeWorkspaceTransferHttpCallback>>, { kind: "authorized" }>;
-
 /** Reserve and authenticate the node workspace transfer namespace before normal HTTP routing. */
-export async function handleNodeWorkspaceTransferHttpRequest(params: {
-  req: IncomingMessage;
-  res: ServerResponse;
-  clientIp: string | undefined;
-  rateLimiter?: AuthRateLimiter;
-  callback?: NodeWorkspaceTransferHttpCallback;
-}): Promise<boolean> {
+export async function handleNodeWorkspaceTransferHttpRequest(
+  params: ArtifactTransferHttpRequest & { callback?: NodeWorkspaceTransferHttpCallback },
+): Promise<boolean> {
   const parsed = URL.parse(params.req.url ?? "/", "http://localhost");
   if (!parsed?.pathname || classifyNodeWorkspaceTransferPath(parsed.pathname) === "outside") {
     return false;
@@ -142,40 +124,9 @@ export async function handleNodeWorkspaceTransferHttpRequest(params: {
     sendOpaqueNotFound(params.res);
     return true;
   }
-  const bearer = bearerToken(params.req);
-  const admission = await withSerializedRateLimitAttempt<TransferAdmission>({
-    ip: params.clientIp,
-    scope: AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER,
-    run: async () => {
-      const rateCheck = params.rateLimiter?.check(
-        params.clientIp,
-        AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER,
-      );
-      if (rateCheck && !rateCheck.allowed) {
-        return { kind: "rate-limited", retryAfterMs: rateCheck.retryAfterMs };
-      }
-      const outcome =
-        bearer && params.callback
-          ? await params.callback({ req: params.req, res: params.res, route, bearer })
-          : ({ kind: "unauthorized" } as const);
-      if (outcome.kind === "unauthorized") {
-        params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER);
-        return outcome;
-      }
-      params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER);
-      return outcome;
-    },
-  });
-  if (admission.kind === "rate-limited") {
-    sendTransferRateLimited(params.res, admission.retryAfterMs);
-    return true;
-  }
-  if (admission.kind === "unauthorized") {
-    sendOpaqueNotFound(params.res);
-    return true;
-  }
-  await admission.handle();
-  return true;
+  return handleWorkerTransferHttpRequest(params, (bearer) =>
+    params.callback?.({ req: params.req, res: params.res, route, bearer }),
+  );
 }
 
 export function createNodeWorkspaceTransferHttpCallback(
@@ -196,12 +147,20 @@ export function createNodeWorkspaceTransferHttpCallback(
           clientAbort.signal,
           AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
         ]);
-        const abortRequest = () => {
+        const abortTransfer = () => {
+          // The request can be fully read and destroyed while its uploader still
+          // awaits staging validation on the open response.
+          if (!res.destroyed) {
+            res.destroy(signal.reason instanceof Error ? signal.reason : undefined);
+          }
           if (!req.destroyed) {
             req.destroy(signal.reason instanceof Error ? signal.reason : undefined);
           }
         };
-        signal.addEventListener("abort", abortRequest, { once: true });
+        signal.addEventListener("abort", abortTransfer, { once: true });
+        if (signal.aborted) {
+          abortTransfer();
+        }
         const stillCurrent = () => !signal.aborted && service.isAuthorizationCurrent(authorization);
         try {
           if (route.kind === "manifest" || route.kind === "pack") {
@@ -211,13 +170,37 @@ export function createNodeWorkspaceTransferHttpCallback(
               return;
             }
             if (route.kind === "manifest") {
-              const body = Buffer.from(snapshot.rawManifest);
+              let body: Buffer = Buffer.from(snapshot.rawManifest);
+              const [encoding] = resolveHttpContentEncodings(
+                req.headers["accept-encoding"],
+                MANIFEST_ENCODINGS,
+              );
+              if (encoding === "gzip") {
+                body = await pipeline(
+                  [body],
+                  createGzip({ level: zlibConstants.Z_BEST_SPEED }),
+                  async (source) =>
+                    await readWorkspaceTransferBody(source, MAX_WORKSPACE_MANIFEST_BYTES),
+                  { signal },
+                );
+              }
+              // Token revocation need not abort the context. Revalidate after zlib
+              // completes, then queue the complete response without another await.
               if (!stillCurrent()) {
+                if (!signal.aborted) {
+                  sendOpaqueNotFound(res);
+                }
+                return;
+              }
+              res.setHeader("Vary", "Accept-Encoding");
+              if (encoding === undefined) {
+                res.writeHead(406).end();
                 return;
               }
               res.writeHead(200, {
                 "content-type": "application/json; charset=utf-8",
                 "content-length": String(body.byteLength),
+                ...(encoding === "gzip" ? { "content-encoding": "gzip" } : {}),
               });
               res.end(body);
               return;
@@ -276,7 +259,7 @@ export function createNodeWorkspaceTransferHttpCallback(
             if (signal.aborted || res.destroyed) {
               return;
             }
-            const limit = isNodeWorkspaceTransferLimitError(error);
+            const limit = error instanceof NodeWorkspaceTransferLimitError;
             const reason = nodeWorkspaceTransferInvalidReason(error);
             const body = Buffer.from(
               JSON.stringify({
@@ -295,7 +278,7 @@ export function createNodeWorkspaceTransferHttpCallback(
             throw error;
           }
         } finally {
-          signal.removeEventListener("abort", abortRequest);
+          signal.removeEventListener("abort", abortTransfer);
           stopWatchingDisconnect();
         }
       },

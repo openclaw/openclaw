@@ -1,26 +1,69 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { Type } from "typebox";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runBridgeRequest } from "./code-mode-bridge.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { CodeModeProgramDataInbox } from "./code-mode-program-data.js";
+import { createCodeModeResultsAccess } from "./code-mode-results.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import {
+  addClientToolsToCodeModeCatalog,
   applyCodeModeCatalog,
   createCodeModeTools,
   runCodeModeScriptHeadless,
 } from "./code-mode.js";
 import {
+  createCodeModeHarness,
   pluginTool,
   resetCodeModeTestState,
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
+import type { ToolDefinition } from "./sessions/index.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import { createToolSearchCatalogRef, registerHeadlessToolSearchCatalog } from "./tool-search.js";
+import { jsonResult } from "./tools/common.js";
 
 describe.each(["interactive", "headless"] as const)("Code Mode %s search", (mode) => {
   afterEach(resetCodeModeTestState);
+
+  it("round-trips exact plugin and client callable names that differ only in case", async () => {
+    const { config, catalogRef, ctx, tools } = createCodeModeHarness();
+    const plugin = pluginTool("listURL", "List plugin URLs");
+    const clientExecute = vi.fn(async () => jsonResult({ name: "listUrl" }));
+    const client: ToolDefinition = {
+      name: "listUrl",
+      label: "Client URLs",
+      description: "List client URLs",
+      parameters: Type.Object({}),
+      execute: clientExecute,
+    };
+    applyCodeModeCatalog({ tools: [...tools, plugin], config, catalogRef });
+    addClientToolsToCodeModeCatalog({ tools: [client], config, catalogRef });
+    const code = `
+      const found = [];
+      for (const tool of catalog.all()) {
+        const [exact] = await catalog.search(tool.callableName, { limit: 1 });
+        found.push({ name: tool.toolName, sameHandle: exact === tool, called: await exact() });
+      }
+      return found;
+    `;
+    const result =
+      mode === "headless"
+        ? await runCodeModeScriptHeadless({ ctx, code })
+        : await runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      value: expect.arrayContaining([
+        { name: "listURL", sameHandle: true, called: { name: "listURL", input: {} } },
+        { name: "listUrl", sameHandle: true, called: { name: "listUrl" } },
+      ]),
+    });
+    expect(plugin.execute).toHaveBeenCalledOnce();
+    expect(clientExecute).toHaveBeenCalledOnce();
+  });
 
   function setup(maxOutputBytes = 1_024, maxSearchLimit = 50) {
     const catalogRef = createToolSearchCatalogRef();
@@ -143,6 +186,7 @@ it("refuses oversized discovery as a catchable bridge error and accepts a narrow
       expect(
         await runBridgeRequest({
           runtime,
+          results: createCodeModeResultsAccess(ctx, limits),
           catalogProjection: createCodeModeCatalogProjection(runtime.all({ includeMcp: false })),
           namespaceRuntime: createCodeModeNamespaceRuntime(),
           parentToolCallId: "search-admission",

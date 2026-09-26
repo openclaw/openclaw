@@ -2,8 +2,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import { contractPluginPath, getBundledPluginRoots } from "./test-helpers/bundled-plugin-roots.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -16,7 +17,6 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "a2a",
   "acpx",
   "browser",
-  "buzz",
   "canvas",
   "clickclack",
   "copilot-proxy",
@@ -34,7 +34,6 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "reef",
   "tlon",
   "tokenjuice",
-  "webhooks",
   "workboard",
   "zai",
   "zalo",
@@ -42,6 +41,8 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
 ] as const;
 
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
+  [contractPluginPath({ rootDir: ROOT_DIR, pluginId: "facetime", relativePath: "runtime-api.ts" })]:
+    ['export { createFaceTimeRuntime, type FaceTimeRuntime } from "./src/runtime.js";'],
   [contractPluginPath({
     rootDir: ROOT_DIR,
     pluginId: "diagnostics-otel",
@@ -99,36 +100,13 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { imessageMessageActions } from "./src/actions.js";',
       'export { setIMessageRuntime } from "./src/runtime.js";',
       'export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";',
-      'export type IMessageAccountConfig = Omit< NonNullable<NonNullable<RuntimeApiOpenClawConfig["channels"]>["imessage"]>, "accounts" | "defaultAccount" >;',
+      'export type { IMessageAccountConfig } from "./src/account-types.js";',
     ],
   [contractPluginPath({
     rootDir: ROOT_DIR,
     pluginId: "googlechat",
     relativePath: "runtime-api.ts",
-  })]: [
-    'export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";',
-    'export { createActionGate, jsonResult, readNumberParam, readReactionParams, readStringParam } from "openclaw/plugin-sdk/channel-actions";',
-    'export { buildChannelConfigSchema, GoogleChatConfigSchema } from "./config-api.js";',
-    'export type { ChannelMessageActionAdapter, ChannelMessageActionName, ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";',
-    'export { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";',
-    'export { createAccountStatusSink, runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-outbound";',
-    'export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";',
-    'export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";',
-    'export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";',
-    'export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";',
-    'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
-    'export { GROUP_POLICY_BLOCKED_LABEL, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";',
-    'export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";',
-    'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
-    'export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
-    'export type { GoogleChatAccountConfig, GoogleChatConfig } from "openclaw/plugin-sdk/config-contracts";',
-    'export { extractToolSend } from "openclaw/plugin-sdk/tool-send";',
-    'export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";',
-    'export { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";',
-    'export { registerWebhookTargetWithPluginRoute, resolveWebhookTargetWithAuthOrReject, withResolvedWebhookRequestPipeline } from "openclaw/plugin-sdk/webhook-targets";',
-    'export { createWebhookInFlightLimiter, readJsonWebhookBodyOrReject, type WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";',
-    'export { setGoogleChatRuntime } from "./src/runtime.js";',
-  ],
+  })]: ['export { setGoogleChatRuntime } from "./src/runtime.js";'],
   [contractPluginPath({ rootDir: ROOT_DIR, pluginId: "msteams", relativePath: "runtime-api.ts" })]:
     [
       'export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";',
@@ -209,30 +187,6 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',
   ],
   [contractPluginPath({ rootDir: ROOT_DIR, pluginId: "signal", relativePath: "runtime-api.ts" })]: [
-    'export type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";',
-    'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
-    'export { buildChannelConfigSchema, SignalConfigSchema } from "./config-api.js";',
-    'export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";',
-    'export type { ChannelPlugin, OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";',
-    'export { DEFAULT_ACCOUNT_ID, applyAccountNameToChannelSection, deleteAccountFromConfigSection, emptyPluginConfigSchema, formatPairingApproveHint, getChatChannelMeta, migrateBaseNameToDefaultAccount, normalizeAccountId, setAccountEnabledInConfigSection } from "openclaw/plugin-sdk/core";',
-    'export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";',
-    'export { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";',
-    'export { chunkText } from "openclaw/plugin-sdk/reply-runtime";',
-    'export { detectBinary } from "openclaw/plugin-sdk/setup-tools";',
-    'export { resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";',
-    'export { buildBaseAccountStatusSnapshot, buildBaseChannelStatusSummary, collectStatusIssuesFromLastError, createDefaultChannelRuntimeState } from "openclaw/plugin-sdk/status-helpers";',
-    'export { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";',
-    'export { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./src/normalize.js";',
-    'export { listEnabledSignalAccounts, listSignalAccountIds, resolveDefaultSignalAccountId, resolveSignalAccount } from "./src/accounts.js";',
-    'export { monitorSignalProvider } from "./src/monitor.js";',
-    'export { installSignalCli } from "./src/install-signal-cli.js";',
-    'export { probeSignal } from "./src/probe.js";',
-    'export { resolveSignalReactionLevel } from "./src/reaction-level.js";',
-    'export { removeReactionSignal, sendReactionSignal } from "./src/send-reactions.js";',
-    'export { sendMessageSignal } from "./src/send.js";',
-    'export { signalMessageActions } from "./src/message-actions.js";',
-    'export type { ResolvedSignalAccount } from "./src/accounts.js";',
-    'export type { SignalAccountConfig } from "./src/account-types.js";',
     'export { setSignalRuntime } from "./src/runtime.js";',
   ],
   [contractPluginPath({ rootDir: ROOT_DIR, pluginId: "slack", relativePath: "runtime-api.ts" })]: [
@@ -273,7 +227,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export { monitorTelegramProvider } from "./src/monitor.js";',
       'export { probeTelegram } from "./src/probe.js";',
       'export { resolveTelegramFetch, resolveTelegramTransport, shouldRetryTelegramTransportFallback } from "./src/fetch.js";',
-      'export { makeProxyFetch } from "./src/proxy.js";',
+      'export { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";',
       'export { createForumTopicTelegram, deleteMessageTelegram, editForumTopicTelegram, editMessageReplyMarkupTelegram, editMessageTelegram, pinMessageTelegram, reactMessageTelegram, renameForumTopicTelegram, sendMessageTelegram, sendPollTelegram, sendStickerTelegram, sendTypingTelegram, unpinMessageTelegram } from "./src/send.js";',
       'export { createTelegramThreadBindingManager, getTelegramThreadBindingManager, setTelegramThreadBindingIdleTimeoutBySessionKey, setTelegramThreadBindingMaxAgeBySessionKey } from "./src/thread-bindings.js";',
       'export { resolveTelegramToken } from "./src/token.js";',
@@ -337,14 +291,19 @@ function collectRuntimeApiFiles(): string[] {
     );
 }
 
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+
 function readExportStatements(path: string): string[] {
   const sourceText = readFileSync(resolve(ROOT_DIR, "..", path), "utf8");
-  const sourceFile = ts.createSourceFile(path, sourceText, ts.ScriptTarget.Latest, true);
+  const sourceFile = parser.parseSourceFile(path, sourceText);
 
   return sourceFile.statements.flatMap((statement) => {
     if (!ts.isExportDeclaration(statement)) {
-      const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
-      if (!modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+      const isExported = statement.forEachChild((child) =>
+        child.kind === ts.SyntaxKind.ExportKeyword ? true : undefined,
+      );
+      if (!isExported) {
         return [];
       }
       return [statement.getText(sourceFile).replaceAll(/\s+/g, " ").trim()];
@@ -472,14 +431,14 @@ describe("runtime api guardrails", () => {
     ]);
   });
 
-  it("keeps Matrix's narrow runtime-setter entrypoint pinned to a single export", () => {
+  it("keeps Matrix's runtime-setter entrypoint limited to registration helpers", () => {
     const setterFile = contractPluginPath({
       rootDir: ROOT_DIR,
       pluginId: "matrix",
       relativePath: "runtime-setter-api.ts",
     });
     expect(readExportStatements(setterFile)).toEqual([
-      'export { setMatrixRuntime } from "./src/runtime.js";',
+      'export { setMatrixRuntime, setMatrixRuntimeLifecycle } from "./src/runtime.js";',
     ]);
   });
 

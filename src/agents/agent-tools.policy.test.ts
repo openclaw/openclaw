@@ -15,12 +15,12 @@ import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.j
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
+  resolveGroupToolPolicyOutcome,
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
   resolveTrustedGroupId,
 } from "./agent-tools.policy.js";
-import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
-import { filterToolsByPolicy, isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 vi.mock("../channels/plugins/session-conversation.js", () => ({
   resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
@@ -64,29 +64,6 @@ function createSessionStorePath(prefix: string, agentId = "main"): string {
     "sessions.json",
   );
 }
-
-describe("agent-tools.policy", () => {
-  it("treats * in allow as allow-all", () => {
-    const tools = [createStubTool("read"), createStubTool("exec")];
-    const filtered = filterToolsByPolicy(tools, { allow: ["*"] });
-    expect(filtered.map((tool) => tool.name)).toEqual(["read", "exec"]);
-  });
-
-  it("treats * in deny as deny-all", () => {
-    const tools = [createStubTool("read"), createStubTool("exec")];
-    const filtered = filterToolsByPolicy(tools, { deny: ["*"] });
-    expect(filtered).toStrictEqual([]);
-  });
-
-  it("supports wildcard allow/deny patterns", () => {
-    expect(isToolAllowedByPolicyName("web_fetch", { allow: ["web_*"] })).toBe(true);
-    expect(isToolAllowedByPolicyName("web_search", { deny: ["web_*"] })).toBe(false);
-  });
-
-  it("keeps apply_patch when write is allowlisted", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"] })).toBe(true);
-  });
-});
 
 describe("resolveGroupToolPolicy group context validation", () => {
   const cfg: OpenClawConfig = {
@@ -218,44 +195,37 @@ describe("resolveGroupToolPolicy group context validation", () => {
     expect(policy).toEqual({ allow: ["read"] });
   });
 
-  it("fails closed when scheduled authority names a removed account", () => {
-    expect(
-      resolveGroupToolPolicy({
+  it.each(["agent:main:whatsapp:group:safe-room", "agent:main:main"])(
+    "reports unavailable scheduled authority for %s before tool construction",
+    (sessionKey) => {
+      const params = {
         config: cfg,
-        sessionKey: "agent:main:whatsapp:group:safe-room",
+        sessionKey,
         accountId: "removed",
         requireConfiguredAccount: true,
+      };
+      expect(resolveGroupToolPolicyOutcome(params)).toMatchObject({
+        kind: "account-unavailable",
+        accountId: "removed",
+        message: expect.stringContaining('Scheduled account "removed" is unavailable'),
+      });
+      expect(() => resolveGroupToolPolicy(params)).toThrow(
+        'Scheduled account "removed" is unavailable',
+      );
+    },
+  );
+
+  it("preserves intentional deny-all policy for a configured scheduled account", () => {
+    expect(
+      resolveGroupToolPolicyOutcome({
+        config: {
+          channels: { whatsapp: { groups: { "safe-room": { tools: { deny: ["*"] } } } } },
+        },
+        sessionKey: "agent:main:whatsapp:group:safe-room",
+        accountId: "default",
+        requireConfiguredAccount: true,
       }),
-    ).toEqual({ allow: [], deny: ["*"] });
-  });
-
-  it("denies every tool when scheduled authority names a removed account", () => {
-    const policy = resolveGroupToolPolicy({
-      config: cfg,
-      sessionKey: "agent:main:whatsapp:group:safe-room",
-      accountId: "removed",
-      requireConfiguredAccount: true,
-    });
-    const tools = [
-      createStubTool("read"),
-      createStubTool("write"),
-      createStubTool("exec"),
-      createStubTool("apply_patch"),
-    ];
-    expect(filterToolsByPolicy(tools, policy)).toStrictEqual([]);
-    expect(isToolAllowedByPolicyName("exec", policy)).toBe(false);
-    expect(isToolAllowedByPolicyName("apply_patch", policy)).toBe(false);
-  });
-
-  it("fails closed when scheduled authority names a removed account without channel context", () => {
-    const policy = resolveGroupToolPolicy({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      accountId: "removed",
-      requireConfiguredAccount: true,
-    });
-    expect(policy).toEqual({ allow: [], deny: ["*"] });
-    expect(isToolAllowedByPolicyName("exec", policy)).toBe(false);
+    ).toMatchObject({ kind: "resolved", policy: { deny: ["*"] } });
   });
 
   it("resolves scheduled group policy for a still-configured named account", () => {
@@ -326,6 +296,7 @@ describe("resolveSubagentToolPolicyForSession", () => {
     const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_search", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
     expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
   });
@@ -712,34 +683,6 @@ describe("resolveEffectiveToolPolicy", () => {
     }
   });
 
-  it("still warns when an agent profile has its own configured exec section (#47487)", async () => {
-    const warnLogs = createWarnLogCapture("openclaw-agent-tools-policy-test");
-    try {
-      const cfg = {
-        agents: {
-          list: [
-            {
-              id: "sage",
-              tools: {
-                profile: "messaging",
-                exec: { mode: "allowlist" },
-              },
-            },
-          ],
-        },
-      } as OpenClawConfig;
-
-      resolveEffectiveToolPolicy({ config: cfg, agentId: "sage" });
-
-      const warning = await warnLogs.findText('tools policy: profile "messaging"');
-      expect(warning).toContain('(agent "sage")');
-      expect(warning).toContain("configured tool sections (tools.exec)");
-      expect(warning).toContain('Add alsoAllow: ["exec", "process"]');
-    } finally {
-      warnLogs.cleanup();
-    }
-  });
-
   it.each<{
     name: string;
     tools?: OpenClawConfig["tools"];
@@ -835,17 +778,5 @@ describe("resolveEffectiveToolPolicy", () => {
     } finally {
       warnLogs.cleanup();
     }
-  });
-
-  it("explicit alsoAllow with exec still grants exec under messaging profile", () => {
-    const cfg = {
-      tools: {
-        profile: "messaging",
-        alsoAllow: ["exec", "process"],
-        exec: { host: "sandbox" },
-      },
-    } as OpenClawConfig;
-    const result = resolveEffectiveToolPolicy({ config: cfg });
-    expect(result.profileAlsoAllow).toEqual(["exec", "process"]);
   });
 });

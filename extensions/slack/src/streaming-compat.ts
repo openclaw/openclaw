@@ -1,30 +1,17 @@
-// Slack plugin module implements streaming compat behavior.
 // channel-streaming-config exports the same helpers without channel-outbound's
 // reply-pipeline/channel-registry graph, which doctor enumeration cold-loads.
 import {
   getChannelStreamingConfigObject,
   resolveChannelStreamingNativeTransport,
 } from "openclaw/plugin-sdk/channel-streaming-config";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type StreamingMode = "off" | "partial" | "block" | "progress";
 // Inbound-only: doctor migration still parses these legacy draft-mode values.
 type SlackLegacyDraftStreamMode = "replace" | "status_final" | "append";
 
-function normalizeStreamingMode(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized =
-    normalizeOptionalString(value) == null ? "" : normalizeLowercaseStringOrEmpty(value);
-  return normalized || null;
-}
-
 function parseStreamingMode(value: unknown): StreamingMode | null {
-  const normalized = normalizeStreamingMode(value);
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (
     normalized === "off" ||
     normalized === "partial" ||
@@ -37,7 +24,7 @@ function parseStreamingMode(value: unknown): StreamingMode | null {
 }
 
 function parseSlackLegacyDraftStreamMode(value: unknown): SlackLegacyDraftStreamMode | null {
-  const normalized = normalizeStreamingMode(value);
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (normalized === "replace" || normalized === "status_final" || normalized === "append") {
     return normalized;
   }

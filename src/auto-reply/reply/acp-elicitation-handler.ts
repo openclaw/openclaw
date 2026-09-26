@@ -99,10 +99,7 @@ export function createAcpElicitationHandler(
         ? { action: "accept" }
         : { action: "accept", content: result.content };
     }
-    if (result.status === "declined") {
-      return decline(result.message);
-    }
-    if (result.status === "unsupported") {
+    if (result.status === "declined" || result.status === "unsupported") {
       return decline(result.message);
     }
     return cancellation(result.message ?? "ACP input request was cancelled.");

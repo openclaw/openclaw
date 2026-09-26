@@ -57,6 +57,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const config = options.getConfig();
     const url = await resolvePairingGatewayUrl(config, {
       env: process.env,
+      useLocalGateway: config.gateway?.mode === "remote",
       publicUrl: resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
       networkInterfaces: os.networkInterfaces,
       runCommandWithTimeout: commandRunner,
@@ -175,6 +176,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     bundle: TransferArtifact,
     operationSignal?: AbortSignal,
   ): Promise<WorkerNodeRuntimePreparation> => {
+    await options.store.ready();
     const { binding, enrollmentSignal, current } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
@@ -202,11 +204,13 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     record: WorkerEnvironmentRecord,
     operationSignal?: AbortSignal,
   ): Promise<WorkerNodeEnrollment> => {
+    await options.store.ready();
     const { binding, enrollmentSignal, current: requireCurrent } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
       requireCurrent();
-      let current = options.store.ensureNodeEnrollment(record.environmentId);
+      let current = await options.store.ensureNodeEnrollment(record.environmentId);
+      requireCurrent();
       if (
         current.state !== "provisioning" ||
         current.destroyRequestedAtMs !== null ||
@@ -232,7 +236,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         });
         requireCurrent();
         if (issued.status === "completed") {
-          current = options.store.ensureNodeEnrollment(record.environmentId);
+          current = await options.store.ensureNodeEnrollment(record.environmentId);
+          requireCurrent();
           if (!current.nodeDeviceId || current.nodeDeviceId !== issued.deviceId) {
             throw new Error("Worker node enrollment completion did not bind its environment");
           }
@@ -241,6 +246,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           const config = options.getConfig();
           const resolved = await resolvePairingSetupFromConfig(config, {
             env: process.env,
+            useLocalGateway: config.gateway?.mode === "remote",
             publicUrl:
               resolveConfiguredPairingPublicUrl(config) ?? resolveGatewayPublicOrigin(config),
             bootstrapProfile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -292,8 +298,9 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           const deadline = now() + NODE_ENROLLMENT_TIMEOUT_MS;
           while (now() < deadline) {
             enrollmentSignal.throwIfAborted();
-            const live = options.store.ensureNodeEnrollment(owner.environmentId);
+            const live = options.store.get(owner.environmentId);
             if (
+              !live ||
               live.destroyRequestedAtMs !== null ||
               live.state !== "provisioning" ||
               live.provisionOperationId !== owner.provisionOperationId ||

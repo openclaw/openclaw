@@ -30,14 +30,19 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
-- `tools.effective` (`operator.read`) fetches the runtime-effective tool
-  inventory for a session.
+- `tools.effective` (`operator.read`) fetches a prospective tool preview for a
+  session.
   - `sessionKey` is required.
   - The gateway derives trusted runtime context from the session server-side
     instead of accepting caller-supplied auth or delivery context.
-  - The response is a session-scoped server-derived projection of the active
-    inventory, including core, plugin, channel, and already-discovered MCP
-    server tools.
+  - The response is a session-scoped server-derived projection from saved
+    settings, including core, plugin, channel, and already-discovered MCP
+    server tools. It is not the exact tool inventory of an active run: run
+    authority, credentials, discovery, and final run policy can change which
+    tools are offered. Absence from this preview does not establish that a tool
+    is disabled, and inclusion does not guarantee execution access.
+  - The projection can use cached inventory while refreshing it. Unsaved UI
+    edits are not inputs, and saved or runtime changes may not appear immediately.
   - `tools.effective` is read-only for MCP: it may project a warm session MCP
     catalog through the final tool policy, but does not create MCP runtimes,
     connect transports, or issue `tools/list`. If no matching warm catalog
@@ -111,11 +116,10 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   response is the allowed catalog, including dynamically discovered models
   for `provider/*` entries. Otherwise the response is the full gateway
   catalog.
-- `"configured"`: picker-sized behavior. If `agents.defaults.modelPolicy.allow` is
-  configured, it still wins, including provider-scoped discovery for
-  `provider/*` entries. Without an allowlist, the response uses explicit
-  `models.providers.<provider>.models` entries, falling back to the full
-  catalog only when no configured model rows exist.
+- `"configured"`: a compact catalog that also retains configured defaults and
+  fallbacks for current-model controls. These metadata rows are not necessarily
+  permitted manual choices. Published rows matched by `provider/*` remain
+  included. Without an allowlist, configured and authenticated rows remain visible.
 - `"provider-config"`: source-authored `models.providers.*.models` inventory,
   independent of picker allowlists. Rows include public model capabilities and
   route-aware availability, but omit provider endpoints, auth material, and
@@ -123,17 +127,93 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
 - `"all"`: full gateway catalog, bypassing `agents.defaults.modelPolicy.allow`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 
-Two optional controls separate automatic reads from operator-requested discovery:
+Clients that advertise `model-selection-policy` in connect `caps` receive
+`manualSelectionAllowed` on every `models.list` row. The same fact appears in
+their initial `models.snapshot`. Filter rows with `false` only when deriving
+manual choices; keep the complete catalog for current-model capabilities and
+readiness. Scoped configured reads also retain known metadata for the current
+session model, without changing its selection or granting permission.
 
-- `preparedOnly: true` reuses the current prepared catalog or a completed catalog for that
-  runtime generation without starting provider discovery. Control UI startup and polling use
-  this mode.
-- `refresh: true` replaces a completed full catalog when the selected view requires discovery.
-  Concurrent refreshes share one build; a failed refresh leaves the previous completed catalog
-  available and returns the failure to the caller.
+The fact is independent of `available` and does not authorize a session write.
+The server checks the current policy again when a model is selected. Capless
+connections retain the previous row shape. Generic client libraries do not opt
+in: a proxy forwarding a capable connection must support its negotiated row
+shape, or use a capless context for an older closed-schema consumer.
 
-`preparedOnly: true` and `refresh: true` are mutually exclusive because one forbids discovery
-while the other requests it.
+Ordinary requests read the published catalog without starting provider discovery.
+Views select rows; they do not decide whether discovery runs. If the owner is not
+published yet, the request reports that the model catalog is not ready. A result
+whose owner becomes stale during projection is rejected with `UNAVAILABLE`,
+`retryable: true`, and `retryAfterMs: 0`. The Control UI shares one retry across
+catalog consumers, retaining cancellation and any explicit request deadline.
+
+- `preparedOnly: true` remains supported for automatic clients. Ordinary reads
+  are passive with or without this flag.
+- `refresh: true` requests provider acquisition before reading the new published
+  generation. Concurrent refreshes share the owner build. A failed acquisition
+  retains compatible rows and reports its `providerOutcomes`; successful empty
+  acquisition remains empty.
+- `provider: "<id>"` filters the published result through the captured provider
+  aliases. Unknown provider IDs are rejected.
+- `includeDetails: true` includes available input modalities, effective
+  `contextTokens`, and a `local` endpoint classification. It does not expose
+  endpoint URLs, headers, credentials, costs or runtime request parameters.
+
+For a conversation picker, pass `sessionKey` to read the session's canonical
+agent and saved account selection. A conflicting `agentId` is rejected. The
+viewer's current account default does not replace a saved session's selection.
+For a new draft, `authProfileId` previews a retained account owned by the
+identified caller with `operator.read` access. It does not save an account
+default. `sessionKey` and `authProfileId` are mutually exclusive.
+
+Saved-session metadata and draft previews stay current across unrelated session
+creations and writes. Before publishing, the Gateway rechecks the selected
+session's identity and canonical metadata, runtime configuration, and current
+access authority. Recreating a row with identical session facts does not invalidate
+the read. `chat.metadata` also tolerates title, activity, and ordinary preference
+updates to the selected row when its metadata inputs and access facts remain
+unchanged. Account, model, runtime, lifecycle, and access changes still invalidate
+an in-flight metadata read.
+
+Session and identified-account results include `accountSelection` display facts
+with the models. Collaborators do not receive another person's private account
+locator. The `provider-config` view remains shared authored inventory and omits
+account selection. `refreshFailed: true` reports a failed acquisition while
+compatible rows remain usable; recovery clears it. A successful empty catalog
+remains empty.
+
+The Gateway advertises `session-scoped-model-catalog` for this contract.
+`chat.metadata` remains available to legacy clients; the Control UI reads models
+directly and keeps commands in its metadata cache. Opening a conversation picker
+performs a passive read, without a model-cache timer or implicit provider refresh.
+Metadata refresh publishes model-owner facts without preparing every agent's
+commands and model projections. Requests prepare their agent's metadata on demand;
+a slow agent does not delay other agents. Retained commands and projections are
+bounded and do not retain completed requests' session documents. Account selection
+is projected for the current session even when its model catalog is shared.
+Provider renewal with unchanged inventory and auth metadata preserves cached metadata
+without broadcasting `chat.metadata.changed`. Discovery progress alone does not
+invalidate metadata; catalog changes and `refreshFailed` transitions still do.
+Shared model or account replacement still gates these reads, and history
+uses only already-prepared catalogs without starting or waiting for preparation.
+The Models settings page uses `preparedOnly: true` for its initial load, then
+requests `refresh: true` the first time a primary, utility, or fallback model
+picker opens for the current core-data snapshot. Pending opens share that page's request; completed reopens read the
+current published catalog without acquiring providers again. Explicit **Retry**
+requests a new acquisition. Replacing core settings data, the page, agent, or
+Gateway resets this request state. Core data reloads after configuration changes,
+so the next picker open can discover models from newly configured providers.
+Usable choices remain available when refresh fails.
+This replaces the former five-minute automatic refresh policy; elapsed time alone
+does not make a reopened Settings picker refresh. The Gateway shares concurrent
+provider acquisition.
+
+`preparedOnly: true` and `refresh: true` remain mutually exclusive.
+The Gateway advertises these published-read and details controls as
+`published-model-catalog`. Clients that require this contract must check the
+capability before sending the new fields; an older Gateway requires an update
+or restart, not a silent local fallback. The model CLI uses this contract for
+`models list` and `models list --refresh`.
 
 ## Exec approvals
 

@@ -35,7 +35,6 @@ import {
   snapshotStructuredInput,
 } from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
-import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
@@ -46,12 +45,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
-import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import { truncateUtf16Safe } from "../utils.js";
 
-/** Default truncation limit for user-facing tool progress output. */
-export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+export { projectAgentActivityItem } from "../agents/agent-activity-presentation.js";
+export { projectAgentToolActivity } from "../infra/agent-activity-events.js";
+
+export {
+  formatToolProgressOutput,
+  TOOL_PROGRESS_OUTPUT_MAX_CHARS,
+} from "../agents/harness/projection-tool-output.js";
 
 /** Core exec mode algebra for plugin-owned policy adapters. */
 export const execPolicy = Object.freeze({ resolveExecModePolicy, minSecurity, maxAsk });
@@ -127,18 +129,21 @@ export const agentHarnessAttemptTerminal = {
   setFailure: setAgentRunAttemptTerminalFailure,
 };
 export { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
+export { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 export { restorePreparedUserTurnOperationalMetaForRuntime } from "../sessions/user-turn-transcript.metadata.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
   AgentHarnessUserInputAnswers,
   AgentHarnessUserInputOption,
-  AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
-} from "../agents/harness/user-input-bridge.js";
+} from "../agents/harness/user-input-types.js";
+export type { AgentHarnessUserInputPromptOptions } from "../agents/harness/user-input-bridge.js";
 export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-question-dispatch.js";
 type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
   | "admittedRunContext"
+  | "disableToolSearch"
+  | "sessionReadScopeKey"
   | "authoredContextTokenCap"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
@@ -178,6 +183,13 @@ export type {
 export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+/**
+ * Plugin exec-review contract: low/medium-risk `allow-once` permits one run;
+ * `ask` routes to human approval. Consumers must handle `deny` explicitly:
+ * do not run or escalate, and return the rationale and rejection guidance to the
+ * agent. The configured exec reviewer maps provider failures, timeouts, and
+ * invalid responses to `ask`, and detected reviewer-directed injection to `deny`.
+ */
 export type {
   ExecAutoReviewDecision,
   ExecAutoReviewInput,
@@ -220,7 +232,7 @@ export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 export { classifyEmbeddedAgentRunResultForModelFallback } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { resolveUserPath } from "../utils.js";
-export { callGatewayTool } from "../agents/tools/gateway.js";
+export { callGatewayTool, readGatewayToolOperatorScopes } from "../agents/tools/gateway.js";
 export { hasGatewayToolRoutingContext } from "../agents/tools/in-process-gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
 export {
@@ -235,8 +247,14 @@ export {
 } from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
 export {
+  projectPluginMessageDeliveryFact,
+  readEmbeddedMessageDeliveryFact,
+} from "../agents/embedded-agent-message-delivery.js";
+export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
+  isDeliveredMessagingToolSendToCurrentSource,
 } from "../agents/embedded-agent-messaging-extraction.js";
 export {
   extractToolResultMediaArtifact,
@@ -244,6 +262,7 @@ export {
 } from "../agents/embedded-agent-tool-media.js";
 export {
   extractToolErrorMessage,
+  sanitizeToolArgs,
   sanitizeToolResult,
 } from "../agents/embedded-agent-tool-results.js";
 export {
@@ -253,6 +272,7 @@ export {
   resolveToolResultFailureKind,
   type ToolResultFailureKind,
 } from "../agents/tool-result-error.js";
+export { readToolOperatorHint } from "../agents/tool-operator-hint.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
@@ -290,9 +310,9 @@ export {
   resolveMainSessionDelegationMode,
 } from "../agents/delegation-guidance.js";
 export { buildHarnessVisibleReplyGuidance } from "../auto-reply/source-reply-delivery-mode.js";
+export { buildCredentialSafetyPrompt } from "../agents/credential-safety-prompt.js";
 export { buildUiPresentationPrompt } from "../agents/ui-presentation-prompt.js";
 export { normalizeQuestionTimeoutSeconds } from "../agents/tools/ask-user-tool-normalization.js";
-export { buildCredentialSafetyPrompt } from "../agents/transcript-credential-safety.js";
 export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt-thread-helpers.js";
 export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
@@ -351,6 +371,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   prompt: string;
   userTurnTranscriptRecorder?: EmbeddedAgentQueueMessageOptions["userTurnTranscriptRecorder"];
   workspaceDir: string;
+  agentWorkspaceDir?: string;
   model: { input?: string[] };
   existingImages?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
@@ -361,6 +382,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   sandbox?: { root: string; bridge: SandboxFsBridge };
 }): Promise<{
   images: ImageContent[];
+  imageFactIndexes: Array<number | null>;
   detectedRefs: Array<{ raw: string; resolved: string; type: "path" | "media-uri" }>;
   loadedCount: number;
   skippedCount: number;
@@ -376,6 +398,7 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   return detectAndLoadPromptImages({
     prompt: params.prompt,
     workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
     model: params.model,
     existingImages: params.existingImages,
     imageOrder: params.imageOrder,
@@ -490,6 +513,8 @@ export {
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
 } from "../agents/bootstrap-files.js";
+export { prepareAgentWorkspaceContext } from "../agents/harness/workspace-context.js";
+export { buildAgentWorkspaceInstructionSnapshot } from "../agents/harness/workspace-instructions.js";
 export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/context-file.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export {
@@ -587,32 +612,7 @@ export {
 export type ToolProgressDetailMode = "explain" | "raw";
 
 /** Infer compact display metadata for one tool invocation from its name and arguments. */
-export function inferToolMetaFromArgs(
-  toolName: string,
-  args: unknown,
-  options?: { detailMode?: ToolProgressDetailMode },
-): string | undefined {
-  return inferToolMetaFromArgsCore(toolName, args, options);
-}
-
-/**
- * Prepare verbose tool output for user-facing progress messages.
- */
-export function formatToolProgressOutput(
-  output: string,
-  options?: { maxChars?: number },
-): string | undefined {
-  const trimmed = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const redacted = redactToolDetail(trimmed);
-  const maxChars = options?.maxChars ?? TOOL_PROGRESS_OUTPUT_MAX_CHARS;
-  if (redacted.length <= maxChars) {
-    return redacted;
-  }
-  return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
-}
+export { inferToolMetaFromArgsCore as inferToolMetaFromArgs } from "../agents/tool-display.js";
 
 /** Inputs used to classify a finished harness turn with little or no visible assistant output. */
 export type AgentHarnessTerminalOutcomeInput = {

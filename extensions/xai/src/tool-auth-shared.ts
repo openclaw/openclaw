@@ -1,14 +1,12 @@
 // Xai plugin module implements tool auth shared behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import {
   coerceSecretRef,
-  resolveNonEnvSecretRefApiKeyMarker,
-} from "openclaw/plugin-sdk/provider-auth";
-import {
+  normalizeSecretInputString,
   readProviderEnvValue,
-  resolveProviderWebSearchPluginConfig,
-} from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
+  resolveNonEnvSecretRefApiKeyMarker,
+} from "openclaw/plugin-sdk/secret-input";
 import {
   resolveReadOnlyEnvSecretRef,
   type ReadOnlyEnvSecretRefResolution,

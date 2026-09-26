@@ -180,13 +180,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/command-palette.ts",
-      "text": "esc"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/components/file-preview-modal.ts",
       "text": "esc"
     },
@@ -194,14 +187,14 @@
       "count": 2,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/lobster-pet-look.ts",
+      "path": "ui/src/components/lobster-pet-scene-view.ts",
       "text": "z"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/lobster-pet-look.ts",
+      "path": "ui/src/components/lobster-pet-scene-view.ts",
       "text": "Z"
     },
     {
@@ -234,6 +227,48 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "AWS"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Azure"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Daytona"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Google Cloud"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Hetzner"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Machine0"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/settings-sidebar.ts",
@@ -255,24 +290,24 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "help",
-      "path": "ui/src/lib/chat/commands.ts",
-      "text": "book"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "help",
-      "path": "ui/src/lib/chat/commands.ts",
-      "text": "tools"
-    },
-    {
-      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/about/view.ts",
       "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/activity/session-activity-view.test-harness.ts",
+      "text": "Offline person"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/activity/session-activity-view.test-harness.ts",
+      "text": "Online person"
     },
     {
       "count": 1,
@@ -315,20 +350,6 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "% ctx"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
-      "text": "R"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
-      "text": "W"
     },
     {
       "count": 1,
@@ -429,11 +450,137 @@
       "text": "exec host=gateway/node"
     },
     {
-      "count": 4,
+      "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/plugins/view.ts",
-      "text": "v"
+      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw connect --service --session-host"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw node restart"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw update"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/new-session/where-chip.test-support.ts",
+      "text": "Build runner"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/new-session/where-chip.test-support.ts",
+      "text": "Duplicate runner"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Chat with your agent from Telegram groups and direct messages."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Connect OpenClaw to Matrix rooms and direct messages."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Coordinate work using the included calendar plugin."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Dashboard workboard for agent-owned issues and sessions."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Matrix access token"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Matrix homeserver URL"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Plan and coordinate work from a shared calendar."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Run typed workflows with resumable approvals."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Send and receive Matrix messages."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Web extraction and crawling."
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Access token"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Enabled"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Homeserver"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "title",
+      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
+      "text": "Mode"
     },
     {
       "count": 1,
@@ -441,6 +588,13 @@
       "name": "text",
       "path": "ui/src/pages/profile/profile-hero.ts",
       "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/search/search-results.ts",
+      "text": "snippet"
     },
     {
       "count": 1,

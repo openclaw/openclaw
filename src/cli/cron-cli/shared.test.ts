@@ -2,16 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import type { CronJob } from "../../cron/types.js";
-import { GatewayClientRequestError } from "../../gateway/client.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   getCronChannelOptions,
-  handleCronCliError,
   parseAt,
-  parseCronToolsAllow,
+  parseCronStringList,
   parsePositiveCronDurationMs,
   printCronList,
   printCronShow,
@@ -41,29 +39,6 @@ function expectLogsToInclude(logs: readonly string[], text: string): void {
 
 afterEach(() => {
   vi.useRealTimers();
-});
-
-describe("handleCronCliError", () => {
-  it("renders typed automation lookup misses with the cron list recovery command", () => {
-    const error = new GatewayClientRequestError({
-      code: "INVALID_REQUEST",
-      message: "transport-neutral lookup miss",
-      details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
-    });
-    const errorOutput = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(((code: number) => {
-      throw new Error(`exit ${code}`);
-    }) as never);
-
-    expect(() => handleCronCliError(error)).toThrow("exit 1");
-    expect(errorOutput).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.",
-      ),
-    );
-    errorOutput.mockRestore();
-    exit.mockRestore();
-  });
 });
 
 function createBaseJob(overrides: Partial<CronJob>): CronJob {
@@ -424,7 +399,7 @@ describe("printCronList", () => {
     expectLogsToInclude(show.logs, "schedule: stream node events.mjs+trigger");
   });
 
-  it("shows disabled stream sources and their actionable failure reason", () => {
+  it.each([false, true])("shows disabled stream sources with running=%s", (running) => {
     const job = createBaseJob({
       schedule: { kind: "stream", command: ["node", "events.mjs"] },
       state: {
@@ -433,23 +408,26 @@ describe("printCronList", () => {
         lastRunStatus: "ok",
         lastDeliveryStatus: "not-delivered",
         deliverySuppressionReason: "silent",
+        ...(running ? { runningAtMs: Date.now() } : {}),
       },
     });
 
     const list = createRuntimeLogCapture();
     printCronList([job], list.runtime);
     const row = list.logs.find((line) => line.includes(job.id)) ?? "";
-    expect(row).toContain("disabled");
+    expect(row).toContain(running ? "running" : "disabled");
     expect(row).not.toContain("idle");
     expect(row).not.toContain("ok (suppressed)");
 
     const show = createRuntimeLogCapture();
     printCronShow(job, show.runtime);
+    expect(show.logs).toContain(`status: ${running ? "running" : "disabled"}`);
     expectLogsToInclude(show.logs, "stream status: disabled");
     expectLogsToInclude(
       show.logs,
       "stream error: stream sources require cron.triggers.enabled=true",
     );
+    expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: running ? "running" : "ok" });
   });
 
   it("shows on-exit schedules in list and show output", () => {
@@ -920,19 +898,19 @@ describe("getCronChannelOptions", () => {
   });
 });
 
-describe("parseCronToolsAllow", () => {
+describe("parseCronStringList", () => {
   it.each([
     { input: "exec,read,write", expected: ["exec", "read", "write"] },
     { input: "exec, read, write", expected: ["exec", "read", "write"] },
     { input: "exec read write", expected: ["exec", "read", "write"] },
     { input: " exec  read,write ", expected: ["exec", "read", "write"] },
     { input: ["exec", "read", "write"], expected: ["exec", "read", "write"] },
+    { input: undefined, expected: undefined },
+    { input: "", expected: [] },
+    { input: " ,  ", expected: [] },
+    { input: [], expected: [] },
   ])("parses $input", ({ input, expected }) => {
-    expect(parseCronToolsAllow(input)).toEqual(expected);
-  });
-
-  it("returns undefined for empty input", () => {
-    expect(parseCronToolsAllow(" ,  ")).toBeUndefined();
+    expect(parseCronStringList(input)).toEqual(expected);
   });
 });
 

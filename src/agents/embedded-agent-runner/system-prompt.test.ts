@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 // Embedded system prompt tests cover prompt assembly for provider guidance,
 // delegation mode, workspace-only safety, memory sections, and active processes.
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,25 @@ vi.mock("../../tts/tts-settings.js", () => ({
   resolveModelOverridePolicy: vi.fn(),
   setTtsMachinePrefsPathResolver: vi.fn(),
 }));
+
+function basicPromptInputs(): Parameters<typeof buildEmbeddedSystemPrompt>[0] {
+  return {
+    workspaceDir: "/tmp/openclaw",
+    reasoningTagHint: false,
+    runtimeInfo: {
+      host: "local",
+      os: "darwin",
+      arch: "arm64",
+      node: process.version,
+      model: "gpt-5.4",
+      provider: "openai",
+    },
+    tools: [],
+    modelAliasLines: [],
+    userTimezone: "UTC",
+    userDate: "2026-01-05",
+  };
+}
 
 function fixedEmbeddedPromptInputs(): Parameters<typeof buildEmbeddedSystemPrompt>[0] {
   return {
@@ -66,23 +86,33 @@ describe("buildEmbeddedSystemPrompt", () => {
     clearMemoryPluginState();
   });
 
+  it.each(["available", "source-reply-only", "absent"] as const)(
+    "advertises ClawHub from the actual %s message tool schema",
+    (surface) => {
+      const message = createStubTool("message");
+      message.parameters = Type.Object({
+        message: Type.Optional(Type.String()),
+        ...(surface === "available" ? { clawhub: Type.Object({ query: Type.String() }) } : {}),
+      });
+      const prompt = buildEmbeddedSystemPrompt({
+        ...fixedEmbeddedPromptInputs(),
+        runtimeInfo: { ...fixedEmbeddedPromptInputs().runtimeInfo, channel: "webchat" },
+        tools: surface === "absent" ? [] : [message],
+      });
+
+      expect(
+        prompt.includes("For explicit plugin/skill search/install or missing capability"),
+      ).toBe(surface === "available");
+      expect(prompt.includes('message(action="send", clawhub={query:"capability"})')).toBe(
+        surface === "available",
+      );
+    },
+  );
+
   it("forwards provider prompt contributions into the embedded prompt", () => {
     const prompt = buildEmbeddedSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      ...basicPromptInputs(),
       runtimeCwd: "/tmp/task-repo",
-      reasoningTagHint: false,
-      runtimeInfo: {
-        host: "local",
-        os: "darwin",
-        arch: "arm64",
-        node: process.version,
-        model: "gpt-5.4",
-        provider: "openai",
-      },
-      tools: [],
-      modelAliasLines: [],
-      userTimezone: "UTC",
-      userDate: "2026-01-05",
       promptContribution: {
         stablePrefix: "## Embedded Stable\n\nStable provider guidance.",
       },
@@ -95,20 +125,7 @@ describe("buildEmbeddedSystemPrompt", () => {
 
   it("keeps post-compaction curated context scoped to the prepared project", () => {
     const prompt = buildEmbeddedSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      reasoningTagHint: false,
-      runtimeInfo: {
-        host: "local",
-        os: "darwin",
-        arch: "arm64",
-        node: process.version,
-        model: "gpt-5.4",
-        provider: "openai",
-      },
-      tools: [],
-      modelAliasLines: [],
-      userTimezone: "UTC",
-      userDate: "2026-01-05",
+      ...basicPromptInputs(),
       activeProjectKeys: ["github.com/acme/Alpha"],
       contextFiles: [
         {
@@ -129,6 +146,7 @@ describe("buildEmbeddedSystemPrompt", () => {
 
   it("uses config-backed sub-agent delegation mode", () => {
     const prompt = buildEmbeddedSystemPrompt({
+      ...basicPromptInputs(),
       config: {
         agents: {
           defaults: {
@@ -139,20 +157,8 @@ describe("buildEmbeddedSystemPrompt", () => {
         },
       },
       agentId: "main",
-      workspaceDir: "/tmp/openclaw",
-      reasoningTagHint: false,
-      runtimeInfo: {
-        agentId: "main",
-        host: "local",
-        os: "darwin",
-        arch: "arm64",
-        node: process.version,
-        model: "gpt-5.4",
-        provider: "openai",
-      },
+      runtimeInfo: { ...basicPromptInputs().runtimeInfo, agentId: "main" },
       tools: [{ name: "sessions_spawn" } as never],
-      userTimezone: "UTC",
-      userDate: "2026-01-05",
     });
 
     expect(prompt).toContain("## Delegation");
@@ -160,6 +166,7 @@ describe("buildEmbeddedSystemPrompt", () => {
 
   it("uses deferred capability names without listing them as visible tools", () => {
     const prompt = buildEmbeddedSystemPrompt({
+      ...basicPromptInputs(),
       config: {
         agents: {
           defaults: {
@@ -170,21 +177,9 @@ describe("buildEmbeddedSystemPrompt", () => {
         },
       },
       agentId: "main",
-      workspaceDir: "/tmp/openclaw",
-      reasoningTagHint: false,
-      runtimeInfo: {
-        agentId: "main",
-        host: "local",
-        os: "darwin",
-        arch: "arm64",
-        node: process.version,
-        model: "gpt-5.4",
-        provider: "openai",
-      },
+      runtimeInfo: { ...basicPromptInputs().runtimeInfo, agentId: "main" },
       tools: [{ name: "tool_search" } as never],
       capabilityToolNames: ["sessions_spawn"],
-      userTimezone: "UTC",
-      userDate: "2026-01-05",
     });
 
     expect(prompt).toContain("## Delegation");
@@ -193,6 +188,7 @@ describe("buildEmbeddedSystemPrompt", () => {
 
   it("forwards run-scoped proactive orchestration independently of config preference", () => {
     const prompt = buildEmbeddedSystemPrompt({
+      ...basicPromptInputs(),
       config: {
         agents: {
           defaults: {
@@ -203,8 +199,6 @@ describe("buildEmbeddedSystemPrompt", () => {
         },
       },
       agentId: "main",
-      workspaceDir: "/tmp/openclaw",
-      reasoningTagHint: false,
       proactiveSubagentOrchestration: true,
       runtimeInfo: {
         agentId: "main",
@@ -216,8 +210,6 @@ describe("buildEmbeddedSystemPrompt", () => {
         provider: "openai",
       },
       tools: [{ name: "sessions_spawn" } as never],
-      userTimezone: "UTC",
-      userDate: "2026-01-05",
     });
 
     expect(prompt).toContain("## Proactive Sub-Agent Orchestration");
@@ -228,6 +220,7 @@ describe("buildEmbeddedSystemPrompt", () => {
     // The prompt must steer writes toward workspace-local scratch paths when
     // filesystem tools are constrained to the workspace.
     const prompt = buildEmbeddedSystemPrompt({
+      ...basicPromptInputs(),
       config: {
         tools: {
           fs: {
@@ -235,20 +228,6 @@ describe("buildEmbeddedSystemPrompt", () => {
           },
         },
       },
-      workspaceDir: "/tmp/openclaw",
-      reasoningTagHint: false,
-      runtimeInfo: {
-        host: "local",
-        os: "darwin",
-        arch: "arm64",
-        node: process.version,
-        model: "gpt-5.4",
-        provider: "openai",
-      },
-      tools: [],
-      modelAliasLines: [],
-      userTimezone: "UTC",
-      userDate: "2026-01-05",
     });
 
     expect(prompt).toContain("tools.fs.workspaceOnly ON");
@@ -258,6 +237,7 @@ describe("buildEmbeddedSystemPrompt", () => {
 
   it("omits workspace-only scratch path guidance when fs workspaceOnly is disabled", () => {
     const prompt = buildEmbeddedSystemPrompt({
+      ...basicPromptInputs(),
       config: {
         tools: {
           fs: {
@@ -265,20 +245,6 @@ describe("buildEmbeddedSystemPrompt", () => {
           },
         },
       },
-      workspaceDir: "/tmp/openclaw",
-      reasoningTagHint: false,
-      runtimeInfo: {
-        host: "local",
-        os: "darwin",
-        arch: "arm64",
-        node: process.version,
-        model: "gpt-5.4",
-        provider: "openai",
-      },
-      tools: [],
-      modelAliasLines: [],
-      userTimezone: "UTC",
-      userDate: "2026-01-05",
     });
 
     expect(prompt).not.toContain("tools.fs.workspaceOnly ON");
@@ -287,22 +253,10 @@ describe("buildEmbeddedSystemPrompt", () => {
 
   it("forwards the subagent prompt surface to embedded prompt rendering", () => {
     const prompt = buildEmbeddedSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      reasoningTagHint: false,
+      ...basicPromptInputs(),
       promptSurface: "subagent",
-      runtimeInfo: {
-        host: "local",
-        os: "darwin",
-        arch: "arm64",
-        node: process.version,
-        model: "gpt-5.4",
-        provider: "openai",
-      },
       tools: [{ name: "sessions_spawn" } as never],
       nativeCommandGuidanceLines: ["Subagent-only command guidance."],
-      modelAliasLines: [],
-      userTimezone: "UTC",
-      userDate: "2026-01-05",
       promptMode: "minimal",
     });
 
@@ -321,20 +275,7 @@ describe("buildEmbeddedSystemPrompt", () => {
     registerTestMemoryPromptBuilder(() => ["## Memory Recall", "Use memory carefully.", ""]);
 
     const prompt = buildEmbeddedSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      reasoningTagHint: false,
-      runtimeInfo: {
-        host: "local",
-        os: "darwin",
-        arch: "arm64",
-        node: process.version,
-        model: "gpt-5.4",
-        provider: "openai",
-      },
-      tools: [],
-      modelAliasLines: [],
-      userTimezone: "UTC",
-      userDate: "2026-01-05",
+      ...basicPromptInputs(),
       includeMemorySection: false,
     });
 
@@ -343,20 +284,8 @@ describe("buildEmbeddedSystemPrompt", () => {
 
   it("includes background process guidance whenever process is callable", () => {
     const params = {
-      workspaceDir: "/tmp/openclaw",
-      reasoningTagHint: false,
-      runtimeInfo: {
-        host: "local",
-        os: "darwin",
-        arch: "arm64",
-        node: process.version,
-        model: "gpt-5.4",
-        provider: "openai",
-      },
+      ...basicPromptInputs(),
       tools: [{ name: "process" } as never],
-      modelAliasLines: [],
-      userTimezone: "UTC",
-      userDate: "2026-01-05",
     } satisfies Parameters<typeof buildEmbeddedSystemPrompt>[0];
     const prompt = buildEmbeddedSystemPrompt(params);
 
@@ -372,38 +301,12 @@ describe("buildEmbeddedSystemPrompt", () => {
   });
 
   it.each([
-    {
-      name: "runtime agent fallback",
-      selector: {},
-      runtime: { agentId: "strict" },
-      restricted: true,
-    },
-    {
-      name: "undefined agent fallback",
-      selector: { agentId: undefined },
-      runtime: { agentId: "strict" },
-      restricted: true,
-    },
-    {
-      name: "explicit loose agent",
-      selector: { agentId: "loose" },
-      runtime: { agentId: "strict" },
-      restricted: false,
-    },
-    {
-      name: "explicit strict agent",
-      selector: { agentId: "strict" },
-      runtime: { agentId: "loose" },
-      restricted: true,
-    },
-    {
-      name: "loose runtime agent",
-      selector: {},
-      runtime: { agentId: "loose" },
-      restricted: false,
-    },
-    { name: "no agent identity", selector: {}, runtime: {}, restricted: false },
-  ])("resolves embedded prompt policy for $name", ({ name, selector, runtime, restricted }) => {
+    ["runtime agent fallback", {}, { agentId: "strict" }, true],
+    ["explicit loose agent", { agentId: "loose" }, { agentId: "strict" }, false],
+    ["explicit strict agent", { agentId: "strict" }, { agentId: "loose" }, true],
+    ["loose runtime agent", {}, { agentId: "loose" }, false],
+    ["no agent identity", {}, {}, false],
+  ])("resolves embedded prompt policy for %s", (name, selector, runtime, restricted) => {
     const inputs = fixedEmbeddedPromptInputs();
     const prompt = buildEmbeddedSystemPrompt({
       ...inputs,
@@ -449,6 +352,12 @@ describe("buildEmbeddedSystemPrompt", () => {
       configInput: {
         config: {
           agents: { defaults: { models: { "fixture/configured": { alias: "configured-alias" } } } },
+        },
+        preparedModelRuntime: {
+          isCurrent: () => true,
+          configuredModelAliases: [
+            { alias: "configured-alias", provider: "fixture", model: "configured" },
+          ],
         },
       },
       directHint: false,

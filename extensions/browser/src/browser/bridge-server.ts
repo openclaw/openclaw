@@ -5,14 +5,14 @@
  * host, and node browser integrations that need HTTP access to browser control.
  */
 import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { isIPv6, type AddressInfo } from "node:net";
 import express from "express";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { listenBrowserHttpServer } from "./http-listen.js";
-import type { BrowserRouteRegistrar } from "./routes/types.js";
 import { stopBrowserBridgeRuntime } from "./runtime-lifecycle.js";
 import type { BrowserServerState, ProfileContext } from "./server-context.js";
 import {
@@ -146,7 +146,7 @@ export async function startBrowserBridgeServer(params: {
     getState: () => state,
     onEnsureAttachTarget: params.onEnsureAttachTarget,
   });
-  registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
+  registerBrowserRoutes(app, ctx);
 
   const server = await listenBrowserHttpServer(app, port, host);
 
@@ -159,7 +159,7 @@ export async function startBrowserBridgeServer(params: {
 
   setBridgeAuthForPort(resolvedPort, { token: authToken, password: authPassword });
 
-  const baseUrl = `http://${host}:${resolvedPort}`;
+  const baseUrl = `http://${isIPv6(host) ? `[${host}]` : host}:${resolvedPort}`;
   return { server, port: resolvedPort, baseUrl, state };
 }
 
@@ -209,14 +209,9 @@ export function stopBrowserBridgeServer(server: Server): Promise<void> {
   if (current) {
     return current;
   }
-  let resolveStop!: () => void;
-  let rejectStop!: (reason: unknown) => void;
-  const stopping = new Promise<void>((resolve, reject) => {
-    resolveStop = resolve;
-    rejectStop = reject;
-  });
+  const { promise: stopping, resolve, reject } = createDeferred<void>();
   bridgeStopPromises.set(server, stopping);
-  void stopBrowserBridgeServerOnce(server).then(resolveStop, rejectStop);
+  void stopBrowserBridgeServerOnce(server).then(resolve, reject);
   void stopping
     .finally(() => {
       if (bridgeStopPromises.get(server) === stopping) {

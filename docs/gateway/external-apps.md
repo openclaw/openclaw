@@ -22,7 +22,7 @@ for results, cancel work, or inspect Gateway resources.
   guide pins the verified stable `2026.8.1` packages and explains how package and
   wire versions affect compatibility. If your
   app supervises the Gateway as a child process, also read
-  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
+  [Embedding OpenClaw](/gateway/embedding).
 </Note>
 
 <Note>
@@ -35,9 +35,9 @@ for results, cancel work, or inspect Gateway resources.
 | Surface                                                       | Status          | Use it for                                                                                    |
 | ------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
 | [Gateway client guide](/gateway/clients#install-the-packages) | Stable packages | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
-| [Embedding guide](https://docs.openclaw.ai/gateway/embedding) | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
+| [Embedding guide](/gateway/embedding)                         | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
 | [Gateway protocol](/gateway/protocol)                         | Ready           | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
-| [Gateway RPC reference](/reference/rpc)                       | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [Gateway protocol RPC methods](/gateway/protocol/rpc-methods) | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
 | [`openclaw agent`](/cli/agent)                                | Ready           | One-shot script integration when shelling out to the CLI is enough.                           |
 | [`openclaw message`](/cli/message)                            | Ready           | Sending messages or channel actions from scripts.                                             |
 
@@ -45,7 +45,7 @@ for results, cancel work, or inspect Gateway resources.
 
 1. Run or discover a Gateway.
 2. Connect over the [Gateway protocol](/gateway/protocol).
-3. Call documented RPC methods from [Gateway RPC reference](/reference/rpc).
+3. Call documented RPC methods from [Gateway protocol RPC methods](/gateway/protocol/rpc-methods).
 4. Pin the OpenClaw version you test against.
 5. Recheck the RPC reference when upgrading OpenClaw.
 
@@ -108,7 +108,7 @@ The RPC contract is:
 - `gateway.suspend.prepare` — `operator.admin`; params
   `{ "requestId": "stable-host-operation-id", "terminalPolicy": "preserve", "drain": true }`
 - `gateway.suspend.status` — `operator.read`; params
-  `{ "suspensionId": "id-from-prepare" }`
+  `{ "suspensionId": "id-from-prepare", "includeLifecycle": true }`
 - `gateway.suspend.resume` — `operator.admin`; params
   `{ "suspensionId": "id-from-prepare" }`
 - `gateway.suspend.handoff` — `operator.admin`; params
@@ -173,6 +173,10 @@ Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
 together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
 Each status call refreshes the active-work snapshot. Once every blocker has
 finished, the same lease transitions to `{"status":"ready","expiresAtMs":...}`.
+Status preserves the original response shape by default for published validators.
+Opt into lifecycle metadata with `includeLifecycle: true` to receive `ownerId`,
+the original `requestId`; draining status also includes `phase: "draining"`.
+Use an updated response validator when requesting this metadata.
 Status returns `{"status":"running"}` when no suspension is held; querying a
 different active lease returns a conflict without exposing its identifiers.
 Resume returns `{"ok":true,"status":"running","resumed":true}`; repeating it
@@ -224,6 +228,22 @@ then exits for the external controller. An ordinary stop without an arm keeps
 waiting for active work. Controllers must defer on unsupported methods or
 refused handoffs; a draining lease alone never authorizes interruption.
 
+Once shutdown commits, including an installation-replaced restart during a
+held suspension, the same owner can still poll `status: "draining"`. With
+`includeLifecycle: true`, it also receives `phase: "interrupting"`. Ownership and
+foreign-token conflicts remain stable across authenticated operator reconnects;
+node and worker connections remain fenced. The shutdown record remains available
+past the old lease expiry; this is shutdown progress, not a renewable lease or
+permission to freeze the process. Resume is refused after shutdown commits.
+The owner records `phase: "exiting"` before server teardown; RPC access ends
+when that teardown closes request admission and transports. These facts remain
+in memory until process exit or the next in-process lifecycle resets them.
+
+The running Gateway serves this contract; staging a newer installation does not
+change an older resident's responses. Request lifecycle metadata only once a
+Gateway version supporting it is running. Drivers must still verify their exact
+predecessor and handle transport closure through their lifecycle owner.
+
 A competing request ID or transient scheduler-resume failure returns retryable
 `UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,
 and resume all return that error, the Gateway remains not-ready and
@@ -243,7 +263,10 @@ With `drain: true`, the same suspension owner instead keeps admission closed
 and cron scheduling paused until existing work settles. Already-owned cron
 completion and reconciliation continue.
 
-Both draining and ready leases last two minutes. Repeat `prepare` before
+Both draining and ready leases share a two-minute budget starting before work
+inspection. Preparation that exhausts that budget resumes scheduling and fails
+instead of returning an expired lease. Clock rollback does not extend the budget.
+Repeat `prepare` before
 `expiresAtMs` with the same `requestId`, terminal policy, and drain mode to renew
 the same `suspensionId` unless a restart handoff is armed; changing any of those values conflicts with the
 existing lease. Use `status` for routine polling and reserve `prepare` for
@@ -270,9 +293,13 @@ transports, or control the hosting platform. The host must fence its ingress
 before preparation and remains responsible for wake, snapshot/freeze, and
 stop. `activeCount` is the aggregate tracked-work count, while `blockers`
 contains the non-zero category counts and bounded task details. This is not a
-general process-quiescence barrier. A `background-exec` blocker is aggregate
-only: command text, process IDs, output, and session or scope identifiers never
-cross the protocol. Channel health, maintenance, cache refresh, established
+general process-quiescence barrier. The process registry's `background-exec` entry
+is aggregate only. Durable background exec tasks also use `background-exec`
+and retain their bounded `task` metadata; other task kinds remain `task`.
+A process can contribute to both counts. This classification does not change
+`activeCount` or readiness, and adds no command text, output, operating system
+process IDs, or session or scope identifiers. Channel health, maintenance,
+cache refresh, established
 plugin WebSocket sessions, and unregistered plugin-owned background work can
 remain active.
 The hosting platform must freeze or snapshot the full process tree and its
@@ -284,7 +311,7 @@ contract.
   plugin and project idempotent full snapshots to the external host adapter.
   The hosting controller should not import the Plugin SDK or reconstruct cron
   state from event deltas. See [Safe external cron
-  projection](/plugins/hooks#safe-external-cron-projection).
+  projection](/plugins/hooks/lifecycle#safe-external-cron-projection).
 </Tip>
 
 ## App code vs plugin code
@@ -311,10 +338,10 @@ plugins loaded by OpenClaw.
 
 ## Related
 
-- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
-- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
+- [Building a Gateway client](/gateway/clients)
+- [Embedding OpenClaw](/gateway/embedding)
 - [Gateway protocol](/gateway/protocol)
-- [Gateway RPC reference](/reference/rpc)
+- [Gateway protocol RPC methods](/gateway/protocol/rpc-methods)
 - [CLI agent command](/cli/agent)
 - [CLI message command](/cli/message)
 - [Agent loop](/concepts/agent-loop)

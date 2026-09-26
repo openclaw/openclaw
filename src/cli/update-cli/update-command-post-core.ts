@@ -5,11 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   createPluginInstallRecordMap,
+  parsePluginInstallRecordMap,
   serializePluginInstallRecordMap,
   setPluginInstallRecordMapEntry,
 } from "../../config/plugin-install-record-map.js";
@@ -19,7 +19,18 @@ import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
-import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import {
+  CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
+  readControlPlaneUpdateSentinelMeta,
+  UPDATE_RUN_ID_ENV,
+  type ControlPlaneUpdateSentinelMetaFile,
+} from "../../infra/update-control-plane-sentinel.js";
+import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
+import {
+  normalizeUpdateFailureFacts,
+  type UpdateFailureFact,
+} from "../../infra/update-failure-facts.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   buildPostCoreHandoffEnv,
   POST_CORE_UPDATE_ENV,
@@ -29,7 +40,12 @@ import {
   POST_CORE_UPDATE_STARTED_AT_ENV,
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { UpdateFailureFactSchema } from "../../infra/update-run-schema.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import {
+  createUpdateTimeoutHandoff,
+  isOmittedUpdateTimeout,
+} from "../../infra/update-timeout-provenance.js";
 import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "../../plugins/installed-plugin-index-records.js";
 import { restorePersistedInstalledPluginIndexIfCurrent } from "../../plugins/installed-plugin-index-store-write.js";
@@ -37,11 +53,9 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { runExec } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
-import {
-  normalizePluginInstallRecordMap,
-  writePostCoreSourceConfigFile,
-} from "./update-command-config.js";
+import { writePostCoreSourceConfigFile } from "./update-command-config.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { releaseLegacySourceLock } from "./update-command-runtime.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
@@ -49,17 +63,58 @@ import {
 } from "./update-command-service-env.js";
 
 const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
+const POST_CORE_UPDATE_STOP_GRACE_MS = 1000;
 // v2026.4.29 first shipped target-owned channel persistence during resume.
 // Earlier targets can ignore the handoff and start another core update.
 const POST_CORE_CONFIG_WRITER_MIN_VERSION = "2026.4.29";
 
-type PostCoreUpdateFailure = { status: "failed"; error: string };
+type PostCoreUpdateFailure = {
+  status: "failed";
+  error: string;
+  failureFacts?: UpdateFailureFact[];
+};
+
+export async function postCoreUpdateParentOwnsCompletion(
+  resultPath: string | undefined,
+): Promise<boolean> {
+  if (!resultPath) {
+    return false;
+  }
+  // Transient handoff only; absent preserves the shipped child-owned completion contract.
+  const handoff = await readJsonIfExists<{ completionOwner?: string }>(
+    path.join(path.dirname(resultPath), "handoff.json"),
+  );
+  return handoff?.completionOwner === "parent";
+}
+
+/** Restore operator intent only when the private handoff matches this child command. */
+export async function resolvePostCoreUpdateOperatorOptions(params: {
+  opts: UpdateCommandOptions;
+  resultPath: string | undefined;
+}): Promise<UpdateCommandOptions> {
+  if (!params.resultPath) {
+    return params.opts;
+  }
+  const handoff = await readJsonIfExists<{ sourceRuntimePrepared?: boolean }>(
+    path.join(path.dirname(params.resultPath), "handoff.json"),
+  );
+  const opts =
+    typeof handoff?.sourceRuntimePrepared === "boolean"
+      ? { ...params.opts, sourceRuntimePrepared: handoff.sourceRuntimePrepared }
+      : params.opts;
+  if (opts.timeout === undefined || !isOmittedUpdateTimeout(opts.timeout, handoff)) {
+    // Shipped parents have no provenance. Their received deadline remains explicit-looking.
+    return opts;
+  }
+  return { ...opts, timeout: undefined };
+}
 
 export async function writePostCoreUpdateFailureFile(
   filePath: string | undefined,
   error: unknown,
 ): Promise<void> {
   if (filePath) {
+    const failureFacts = collectUpdateDoctorFailureFacts(error);
     const failure = sanitizeTriageUpdateFailure(
       { error: formatErrorMessage(error) },
       {
@@ -69,8 +124,12 @@ export async function writePostCoreUpdateFailureFile(
     );
     await writeJson(
       filePath,
-      { status: "failed", error: failure.error },
-      { trailingNewline: true },
+      {
+        status: "failed",
+        error: failure.error,
+        ...(failureFacts.length ? { failureFacts } : {}),
+      },
+      { trailingNewline: true, dirMode: 0o700 },
     );
   }
 }
@@ -82,7 +141,7 @@ export async function writePostCorePluginUpdateResultFile(
   if (!filePath) {
     return;
   }
-  await writeJson(filePath, result, { trailingNewline: true });
+  await writeJson(filePath, result, { trailingNewline: true, dirMode: 0o700 });
 }
 
 /** @internal exported for focused handoff contract tests. */
@@ -124,7 +183,11 @@ export async function readPostCorePluginInstallRecordsFile(
     );
   }
   try {
-    return normalizePluginInstallRecordMap(parsed);
+    const records = parsePluginInstallRecordMap(parsed);
+    if (!records) {
+      throw new Error("Invalid plugin install record map");
+    }
+    return records;
   } catch (err) {
     throw new Error(
       `Invalid plugin install records in handoff file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
@@ -178,7 +241,14 @@ async function readPostCoreUpdateResultFile(
       filePath,
     );
     if (parsed?.status === "failed" && typeof parsed.error === "string") {
-      return parsed;
+      const facts = UpdateFailureFactSchema.array().safeParse(parsed.failureFacts);
+      return {
+        status: "failed",
+        error: parsed.error,
+        ...(facts.success && facts.data.length
+          ? { failureFacts: normalizeUpdateFailureFacts(facts.data) }
+          : {}),
+      };
     }
     if (
       parsed &&
@@ -196,20 +266,15 @@ async function readPostCoreUpdateResultFile(
   return undefined;
 }
 
-function stopPostCoreUpdateChild(child: ChildProcess): void {
+async function stopPostCoreUpdateChild(child: ChildProcess): Promise<void> {
   if (process.platform === "win32" && child.pid) {
     try {
-      const killer = spawn(
+      // The canonical exec owner joins the helper, including timeout cleanup.
+      await runExec(
         getWindowsSystem32ExePath("taskkill.exe"),
         ["/PID", String(child.pid), "/T", "/F"],
-        {
-          stdio: "ignore",
-          windowsHide: true,
-        },
+        { logOutput: false, timeoutMs: 5000 },
       );
-      killer.once("error", () => {
-        child.kill();
-      });
       return;
     } catch {
       child.kill();
@@ -268,6 +333,7 @@ export function preparePostCorePluginInstallRecordsForFreshProcess(params: {
 
 export async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
+  sourceRuntimePrepared?: boolean;
   channel: UpdateChannel;
   requestedChannel: UpdateChannel | null;
   opts: UpdateCommandOptions;
@@ -281,6 +347,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   pluginUpdate?: PostCorePluginUpdateResult;
   exitCode?: number;
   error?: string;
+  failureFacts?: UpdateFailureFact[];
 }> {
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);
   if (!entryPath) {
@@ -314,9 +381,14 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   if (params.opts.acceptCapabilities) {
     argv.push("--accept-capabilities");
   }
-  if (params.opts.timeout) {
-    argv.push("--timeout", params.opts.timeout);
-  }
+  // Older targets need the existing allowance. New targets recover operator intent
+  // from the private handoff instead of treating this compatibility value as explicit.
+  const handoff = {
+    ...createUpdateTimeoutHandoff(params.opts.timeout, params.timeoutMs),
+    sourceRuntimePrepared: params.sourceRuntimePrepared,
+  };
+  const serializedTimeout = handoff.timeout.serialized;
+  argv.push("--timeout", serializedTimeout);
   const resultDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-post-core-"));
   const resultPath = path.join(resultDir, "plugins.json");
   const installRecordsPath = path.join(resultDir, "plugin-install-records.json");
@@ -357,6 +429,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     }
     await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
+    await writeJson(path.join(resultDir, "handoff.json"), handoff, { dirMode: 0o700 });
     const jsonMode = params.opts.json === true;
     const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
     const handoffEnv = buildPostCoreHandoffEnv({
@@ -365,7 +438,21 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       requestedChannel: params.requestedChannel,
       sourceConfigPath: params.preUpdateConfig ? sourceConfigPath : undefined,
     });
+    const sentinelMeta = await readControlPlaneUpdateSentinelMeta(baseEnv);
+    if (sentinelMeta?.root) {
+      // Activation can replace a pnpm generation. Bind only this child to the
+      // activated root; the helper retains its original recovery/lease identity.
+      const sentinelPath = path.join(resultDir, "sentinel-meta.json");
+      const sentinel: ControlPlaneUpdateSentinelMetaFile = {
+        version: 1,
+        meta: { ...sentinelMeta, root: resolveUpdateInstallRoot(params.root) },
+      };
+      await fs.writeFile(sentinelPath, JSON.stringify(sentinel), { mode: 0o600 });
+      handoffEnv[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV] = sentinelPath;
+    }
+    await releaseLegacySourceLock(params.root, params.opts.run?.sourceArtifactLock);
     const child = spawn(nodeRunner, argv, {
+      cwd: params.root,
       stdio: childStdio,
       env: {
         ...handoffEnv,
@@ -388,52 +475,88 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       | { kind: "exit"; exitCode: number }
       | { kind: "plugin-update"; pluginUpdate: PostCorePluginUpdateResult }
     >((resolve, reject) => {
-      let settled = false;
-      const finish = (
-        result:
-          | { kind: "exit"; exitCode: number }
-          | { kind: "plugin-update"; pluginUpdate: PostCorePluginUpdateResult },
-      ) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearInterval(resultPoll);
-        resolve(result);
-        if (result.kind === "plugin-update") {
-          // Only the winning result stops the child. Claim completion first so its
-          // signal cannot reject committed work and roll the plugin index back.
-          stopPostCoreUpdateChild(child);
-        }
-      };
+      let closed = false;
+      let exited = false;
+      let committed: PostCorePluginUpdateResult | undefined;
+      let childError: Error | undefined;
+      let terminationError: unknown;
+      let termination = Promise.resolve();
+      let forceStop: NodeJS.Timeout | undefined;
       const resultPoll = setInterval(() => {
         void readPostCoreUpdateResultFile(resultPath)
           .then((pluginUpdate) => {
-            if (pluginUpdate && pluginUpdate.status !== "failed") {
-              finish({ kind: "plugin-update", pluginUpdate });
+            if (
+              closed ||
+              exited ||
+              committed ||
+              childError ||
+              !pluginUpdate ||
+              pluginUpdate.status === "failed"
+            ) {
+              return;
             }
+            committed = pluginUpdate;
+            // Preserve committed convergence even if stopping its writer fails.
+            // Neither a termination signal nor a helper error can undo that commit.
+            tentativePluginIndex = undefined;
+            clearInterval(resultPoll);
+            if (process.platform !== "win32") {
+              forceStop = setTimeout(() => {
+                if (child.exitCode === null && child.signalCode === null) {
+                  try {
+                    child.kill("SIGKILL");
+                  } catch (error) {
+                    terminationError = error;
+                  }
+                }
+              }, POST_CORE_UPDATE_STOP_GRACE_MS);
+              forceStop.unref();
+            }
+            termination = Promise.resolve()
+              .then(() => {
+                if (!exited) {
+                  return stopPostCoreUpdateChild(child);
+                }
+                return undefined;
+              })
+              .catch((error: unknown) => {
+                terminationError = error;
+              });
           })
           .catch(() => undefined);
       }, POST_CORE_UPDATE_RESULT_POLL_MS);
       child.once("error", (error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearInterval(resultPoll);
-        reject(error);
+        childError = error;
       });
-      child.once("exit", (code, signal) => {
-        if (settled) {
-          return;
-        }
-        if (signal) {
-          settled = true;
-          clearInterval(resultPoll);
-          reject(new Error(`post-update process terminated by signal ${signal}`));
-          return;
-        }
-        finish({ kind: "exit", exitCode: code ?? 1 });
+      child.once("exit", () => {
+        exited = true;
+        clearInterval(resultPoll);
+      });
+      child.once("close", (code, signal) => {
+        closed = true;
+        clearInterval(resultPoll);
+        clearTimeout(forceStop);
+        // A result file commits plugin work, but does not settle its writer.
+        // Also join taskkill before handing control to Doctor or checkpoint capture.
+        void termination
+          .then(async () => {
+            // Close may beat an in-flight poll. Read the final committed result
+            // without signaling an exited writer or treating its signal as rollback.
+            const finalResult = committed ?? (await readPostCoreUpdateResultFile(resultPath));
+            if (finalResult && finalResult.status !== "failed") {
+              tentativePluginIndex = undefined;
+              resolve({ kind: "plugin-update", pluginUpdate: finalResult });
+            } else if (terminationError) {
+              reject(new Error("Post-core writer termination failed", { cause: terminationError }));
+            } else if (childError) {
+              reject(childError);
+            } else if (signal) {
+              reject(new Error(`post-update process terminated by signal ${signal}`));
+            } else {
+              resolve({ kind: "exit", exitCode: code ?? 1 });
+            }
+          })
+          .catch(reject);
       });
     });
 
@@ -446,7 +569,12 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       // A phase exception did not commit plugin convergence. Keep its original
       // rollback behavior and carry the child cause through the existing handoff.
       await restoreTentativePluginIndex();
-      return { resumed: false, exitCode: exitCode || 1, error: postCoreResult.error };
+      return {
+        resumed: false,
+        exitCode: exitCode || 1,
+        error: postCoreResult.error,
+        ...(postCoreResult.failureFacts ? { failureFacts: postCoreResult.failureFacts } : {}),
+      };
     }
     const pluginUpdate = postCoreResult;
     if (exitCode !== 0) {
@@ -490,15 +618,6 @@ export function shouldResumePostCoreUpdateInFreshProcess(params: {
   if (params.installKindChanged === true || isPackageManagerUpdateMode(result.mode)) {
     return true;
   }
-  if (result.mode !== "git") {
-    return false;
-  }
-  const beforeSha = normalizeOptionalString(result.before?.sha);
-  const afterSha = normalizeOptionalString(result.after?.sha);
-  if (beforeSha && afterSha && beforeSha !== afterSha) {
-    return true;
-  }
-  const beforeVersion = normalizeOptionalString(result.before?.version);
-  const afterVersion = normalizeOptionalString(result.after?.version);
-  return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
+  // Successful Git activation replaces dist even when local commits leave HEAD unchanged.
+  return result.mode === "git";
 }

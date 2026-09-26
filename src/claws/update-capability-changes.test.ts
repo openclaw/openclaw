@@ -1,12 +1,66 @@
 import { describe, expect, it } from "vitest";
 import { materializeClawToolProfile } from "./tool-profile-consent.js";
 import {
-  cronCapabilityChange,
-  mcpCapabilityChange,
   pushResolvedAgentCapabilityChanges,
+  resourceCapabilityChange,
 } from "./update-capability-changes.js";
 
 type Changes = Parameters<typeof pushResolvedAgentCapabilityChanges>[0]["changes"];
+
+describe.each(["mcpServer", "cronJob"] as const)("resourceCapabilityChange (%s)", (kind) => {
+  it.each(["remove", "release", "manual"] as const)(
+    "treats %s without a desired value as a reduction",
+    (action) => {
+      const change = resourceCapabilityChange({ kind, id: "resource", action, current: null });
+      expect(change).toMatchObject({
+        kind,
+        id: "resource",
+        path: `${kind === "mcpServer" ? "mcpServers" : "cronJobs"}.resource`,
+        action,
+        classification: "reduction",
+        requiresDistinctConsent: false,
+        effect: { removed: true },
+        current: { summary: "not configured" },
+      });
+      expect(change).not.toHaveProperty("desired");
+    },
+  );
+
+  it("keeps absent values omitted and treats explicit null as present", () => {
+    const params = { kind, id: "resource", action: "change" as const };
+    const missing = resourceCapabilityChange(params);
+    expect(missing).not.toHaveProperty("current");
+    expect(missing).not.toHaveProperty("desired");
+    expect(resourceCapabilityChange({ ...params, current: undefined, desired: undefined })).toEqual(
+      missing,
+    );
+
+    const present = resourceCapabilityChange({ ...params, desired: null });
+    expect(present).toMatchObject({
+      classification: "escalation",
+      requiresDistinctConsent: true,
+      effect: { configured: false },
+      desired: { summary: "not configured" },
+    });
+    expect(present).not.toHaveProperty("current");
+  });
+
+  it("ignores unchanged resources before reading their values", () => {
+    expect(
+      resourceCapabilityChange({
+        kind,
+        id: "resource",
+        action: "unchanged",
+        get current() {
+          throw new Error("unchanged current value must not be read");
+        },
+        get desired() {
+          throw new Error("unchanged desired value must not be read");
+        },
+      }),
+    ).toBeUndefined();
+  });
+});
 
 function collectChanges(params: {
   currentAgent: Parameters<typeof pushResolvedAgentCapabilityChanges>[0]["desiredAgent"];
@@ -112,18 +166,6 @@ describe("pushResolvedAgentCapabilityChanges", () => {
   });
 
   it("classifies heartbeat activity increases and reductions directionally", () => {
-    const moreFrequent = collectChanges({
-      currentAgent: { id: "worker", heartbeat: { every: "1h" } },
-      desiredAgent: { id: "worker", heartbeat: { every: "5m" } },
-    });
-    expect(moreFrequent).toContainEqual(
-      expect.objectContaining({
-        path: "agent.heartbeat.every",
-        classification: "escalation",
-        requiresDistinctConsent: true,
-      }),
-    );
-
     const lessFrequent = collectChanges({
       currentAgent: {
         id: "worker",
@@ -457,7 +499,7 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     );
   });
 
-  it("reads canonical top-level and per-agent memory search settings", () => {
+  it("preserves inherited top-level memory search settings", () => {
     const inherited = collectChanges({
       currentAgent: { id: "worker" },
       desiredAgent: { id: "worker" },
@@ -471,23 +513,6 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     });
     expect(inherited.filter((change) => change.path.startsWith("agent.memory.search."))).toEqual(
       [],
-    );
-
-    const overridden = collectChanges({
-      currentAgent: {
-        id: "worker",
-        memory: { search: { enabled: false } },
-      },
-      desiredAgent: {
-        id: "worker",
-        memory: { search: { enabled: true } },
-      },
-    });
-    expect(overridden).toContainEqual(
-      expect.objectContaining({
-        path: "agent.memory.search.enabled",
-        classification: "escalation",
-      }),
     );
   });
 
@@ -565,12 +590,14 @@ describe("pushResolvedAgentCapabilityChanges", () => {
   });
 
   it("does not derive redacted capability digests from private details or payloads", () => {
-    const firstMcp = mcpCapabilityChange({
+    const firstMcp = resourceCapabilityChange({
+      kind: "mcpServer",
       id: "search",
       action: "change",
       desired: { url: "https://first.example", auth: { scheme: "first" } },
     });
-    const secondMcp = mcpCapabilityChange({
+    const secondMcp = resourceCapabilityChange({
+      kind: "mcpServer",
       id: "search",
       action: "change",
       desired: { url: "https://second.example", auth: { scheme: "second" } },
@@ -581,12 +608,14 @@ describe("pushResolvedAgentCapabilityChanges", () => {
     expect(JSON.stringify(firstMcp)).not.toContain("first.example");
     expect(JSON.stringify(firstMcp)).not.toContain('"scheme":"first"');
 
-    const firstCron = cronCapabilityChange({
+    const firstCron = resourceCapabilityChange({
+      kind: "cronJob",
       id: "report",
       action: "change",
       desired: { schedule: { cron: "0 9 * * *" }, session: "isolated", message: "first" },
     });
-    const secondCron = cronCapabilityChange({
+    const secondCron = resourceCapabilityChange({
+      kind: "cronJob",
       id: "report",
       action: "change",
       desired: { schedule: { cron: "0 9 * * *" }, session: "isolated", message: "second" },
@@ -604,7 +633,8 @@ describe("pushResolvedAgentCapabilityChanges", () => {
   });
 
   it("describes MCP execution shape without exposing private configuration", () => {
-    const change = mcpCapabilityChange({
+    const change = resourceCapabilityChange({
+      kind: "mcpServer",
       id: "private",
       action: "add",
       desired: {

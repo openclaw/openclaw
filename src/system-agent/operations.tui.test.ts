@@ -37,16 +37,13 @@ describe("system-agent TUI operations", () => {
   it("refuses doctor repairs before any write or audit", async () => {
     await withTempHome(async (home) => {
       const { runtime, lines } = createSystemAgentTestRuntime();
-      const runDoctor = vi.fn(async () => {});
 
       const result = await executeSystemAgentOperation({ kind: "doctor-fix" }, runtime, {
         approved: true,
-        deps: { runDoctor },
         auditDetails: { rescue: true },
       });
       expect(result).toEqual({ applied: false });
       expect(isPersistentSystemAgentOperation({ kind: "doctor-fix" })).toBe(false);
-      expect(runDoctor).not.toHaveBeenCalled();
       expect(lines.join("\n")).toContain("with OpenClaw stopped");
       expect(lines.join("\n")).toContain("openclaw doctor --fix");
       expect(lines.join("\n")).not.toContain("[openclaw] running: doctor.fix");
@@ -55,6 +52,38 @@ describe("system-agent TUI operations", () => {
       ).rejects.toThrow();
     });
   });
+
+  it.each([undefined, "fixture/primary"])(
+    "checks the requested utility agent's primary before launching its TUI: %s",
+    async (model) => {
+      const { runtime } = createSystemAgentTestRuntime();
+      const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
+      const overview: SystemAgentOverview = {
+        ...createOverview(true),
+        defaultModel: "fixture/primary",
+        agents: [
+          { id: "main", isDefault: true, model: "fixture/primary" },
+          { id: "work", isDefault: false, utilityModel: "fixture/utility", model },
+        ],
+      };
+      const result = await executeSystemAgentOperation(
+        { kind: "open-tui", agentId: "work" },
+        runtime,
+        {
+          deps: { runTui, loadOverview: async () => overview },
+        },
+      );
+      if (model) {
+        expect(runTui).toHaveBeenCalledOnce();
+      } else {
+        expect(runTui).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          applied: false,
+          message: expect.stringContaining("needs a primary model"),
+        });
+      }
+    },
+  );
 
   it("returns from the agent TUI back to OpenClaw", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
@@ -101,22 +130,6 @@ describe("system-agent TUI operations", () => {
       deliver: false,
       historyLimit: 200,
       message: "Wake up, my friend!",
-    });
-  });
-
-  it("keeps the embedded TUI fallback when the Gateway is unreachable", async () => {
-    const { runtime } = createSystemAgentTestRuntime();
-    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
-
-    await executeSystemAgentOperation({ kind: "open-tui", agentId: "work" }, runtime, {
-      deps: { runTui, loadOverview: async () => createOverview(false) },
-    });
-
-    expect(runTui).toHaveBeenCalledWith({
-      local: true,
-      session: "agent:work:main",
-      deliver: false,
-      historyLimit: 200,
     });
   });
 

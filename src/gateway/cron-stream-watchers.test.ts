@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
@@ -8,6 +9,7 @@ import type {
   RunExit,
   SpawnInput,
 } from "../process/supervisor/types.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveStreamStopReason } from "./cron-stream-watchers.js";
 import {
   createCronStreamWatcherFixture,
@@ -66,6 +68,64 @@ describe("cron stream watchers", () => {
     await settle();
     await watchers.stopAll("shutdown");
     expect(watchers.activeJobIds()).toEqual([]);
+  });
+
+  it("owns stream callbacks and settlement after the creating request closes", async () => {
+    vi.useFakeTimers();
+    const creatorContext = new AsyncLocalStorage<string>();
+    const creatorWork = new AsyncWorkScope();
+    const inCreator = creatorContext.run("creator", () =>
+      creatorWork.run(() => AsyncLocalStorage.snapshot()),
+    );
+    const observedContexts: Array<string | undefined> = [];
+    const persistedStatuses: Array<CronJob["state"]["streamStatus"]> = [];
+    const delivered: string[] = [];
+    const fake = fakeSupervisor();
+    const watchers = createWatchers({
+      getProcessSupervisor: () => ({
+        ...fake.supervisor,
+        spawn: async (input: SpawnInput) => {
+          observedContexts.push(creatorContext.getStore());
+          return await fake.spawn(input);
+        },
+      }),
+      minIntervalMs: 1,
+      updateState: async (_jobId, patch) => {
+        await trackAsyncWork(() => {
+          observedContexts.push(creatorContext.getStore());
+          persistedStatuses.push(patch.streamStatus);
+        });
+      },
+      recordFailure: vi.fn(async () => {}),
+      fireBatch: async (_job, batch) =>
+        await trackAsyncWork(() => {
+          observedContexts.push(creatorContext.getStore());
+          delivered.push(batch);
+          return "fired" as const;
+        }),
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+    try {
+      await inCreator(() => watchers.start(job()));
+      await creatorWork.drain();
+      inCreator(() => fake.inputs[0]?.onStdout?.("owned output\n"));
+      await settle();
+      await inCreator(() => vi.advanceTimersByTimeAsync(50));
+      await settle();
+      await inCreator(() => watchers.stopAll("shutdown"));
+
+      expect(delivered).toEqual(["owned output"]);
+      expect(persistedStatuses).toEqual(expect.arrayContaining(["starting", "running", "stopped"]));
+      expect(observedContexts.every((context) => context === undefined)).toBe(true);
+      expect(watchers.activeJobIds()).toEqual([]);
+      expect(fake.runs[0]?.cancel).toHaveBeenCalled();
+      await expect(inCreator(() => trackAsyncWork(() => undefined))).rejects.toThrow(
+        "Async work scope is closed",
+      );
+    } finally {
+      await creatorWork.drain();
+      await watchers.stopAll("shutdown");
+    }
   });
 
   it("does not spawn and records a clear status when trigger trust is disabled", async () => {
@@ -153,13 +213,9 @@ describe("cron stream watchers", () => {
       ...fakeSupervisor().supervisor,
       spawn,
     } satisfies ProcessSupervisor;
-    const watchers = createWatchers({
+    const { watchers } = createCronStreamWatcherFixture({
       getProcessSupervisor: () => supervisor,
       minIntervalMs: 1,
-      updateState: vi.fn(async () => {}),
-      recordFailure: vi.fn(async () => {}),
-      fireBatch: vi.fn(async () => "fired" as const),
-      logger: { info: vi.fn(), warn: vi.fn() },
     });
     const jobs = [job({ id: "stubborn-job" }), job({ id: "healthy-job" })];
     await watchers.reconcile(jobs, true);
@@ -207,13 +263,9 @@ describe("cron stream watchers", () => {
       ...fakeSupervisor().supervisor,
       spawn,
     } satisfies ProcessSupervisor;
-    const watchers = createWatchers({
+    const { watchers } = createCronStreamWatcherFixture({
       getProcessSupervisor: () => supervisor,
       minIntervalMs: 1,
-      updateState: vi.fn(async () => {}),
-      recordFailure: vi.fn(async () => {}),
-      fireBatch: vi.fn(async () => "fired" as const),
-      logger: { info: vi.fn(), warn: vi.fn() },
     });
     await watchers.reconcile([job({ id: "stubborn-job" })], true);
     await settle();
@@ -277,14 +329,11 @@ describe("cron stream watchers", () => {
       spawn,
     } satisfies ProcessSupervisor;
     const recordFailure = vi.fn(async () => {});
-    const watchers = createWatchers({
+    const { watchers } = createCronStreamWatcherFixture({
       getProcessSupervisor: () => supervisor,
       minIntervalMs: 1,
       retryBackoffMs: [1],
-      updateState: vi.fn(async () => {}),
       recordFailure,
-      fireBatch: vi.fn(async () => "fired" as const),
-      logger: { info: vi.fn(), warn: vi.fn() },
     });
     await watchers.reconcile([job()], true);
     await vi.advanceTimersByTimeAsync(10);
@@ -455,12 +504,8 @@ describe("cron stream watchers", () => {
         ...fakeSupervisor().supervisor,
         spawn: vi.fn(async () => await spawned),
       } satisfies ProcessSupervisor;
-      const watchers = createWatchers({
+      const { watchers } = createCronStreamWatcherFixture({
         getProcessSupervisor: () => supervisor,
-        updateState: vi.fn(async () => {}),
-        recordFailure: vi.fn(async () => {}),
-        fireBatch: vi.fn(async () => "fired" as const),
-        logger: { info: vi.fn(), warn: vi.fn() },
       });
 
       const starting = watchers.start(job());
@@ -743,13 +788,10 @@ describe("cron stream watchers", () => {
     vi.useRealTimers();
     const supervisor = createProcessSupervisor();
     const fireBatch = vi.fn(async () => "fired" as const);
-    const watchers = createWatchers({
+    const { watchers } = createCronStreamWatcherFixture({
       getProcessSupervisor: () => supervisor,
       minIntervalMs: 1,
-      updateState: vi.fn(async () => {}),
-      recordFailure: vi.fn(async () => {}),
       fireBatch,
-      logger: { info: vi.fn(), warn: vi.fn() },
     });
     await watchers.reconcile(
       [

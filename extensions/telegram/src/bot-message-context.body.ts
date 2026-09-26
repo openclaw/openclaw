@@ -1,4 +1,3 @@
-// Telegram plugin module implements bot message context.body behavior.
 import {
   buildMentionRegexes,
   classifyChannelInboundEvent,
@@ -8,6 +7,8 @@ import {
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
+  resolveGroupThreadMentionFacts,
+  type GroupThreadMentionFacts,
   resolveUnmentionedGroupInboundPolicy,
   type BuildChannelInboundEventContextParams,
   type BuildMentionRegexesOptions,
@@ -30,7 +31,6 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -41,7 +41,6 @@ import type {
   TelegramMessageContextOptions,
 } from "./bot-message-context.types.js";
 import {
-  buildSenderLabel,
   buildSenderName,
   extractTelegramLocation,
   getTelegramTextParts,
@@ -59,10 +58,13 @@ import {
 } from "./bot/helpers.js";
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
 import type { TelegramContext } from "./bot/types.js";
+import { resolveTelegramDirectPeerId } from "./dm-session-key.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import { resolveTelegramGroupIngestEnabled } from "./group-config-helpers.js";
-import { recordTelegramGroupHistoryEntry } from "./group-history-window.js";
-import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
+import {
+  resolveTelegramCommandIngressAuthorization,
+  resolveTelegramNativeCommandBody,
+} from "./ingress.js";
 type TelegramMentionFacts = NonNullable<
   NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
 >;
@@ -72,7 +74,7 @@ const loadStickerVisionRuntime = createLazyRuntimeModule(
 );
 
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
-  () => import("./media-understanding.runtime.js"),
+  () => import("openclaw/plugin-sdk/media-runtime"),
 );
 
 type TelegramInboundBodyResult = {
@@ -82,10 +84,12 @@ type TelegramInboundBodyResult = {
   commandAuthorized: boolean;
   effectiveWasMentioned: boolean;
   mentionFacts: TelegramMentionFacts;
+  groupThread?: GroupThreadMentionFacts;
   inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
   shouldBypassMention: boolean;
-  hasControlCommand: boolean;
+  commandSource: "native" | "text" | undefined;
+  nativeCommandBody?: string;
   audioTranscribedMediaIndex?: number;
   stickerCacheHit: boolean;
   locationData?: NormalizedLocation;
@@ -135,6 +139,7 @@ async function resolveStickerVisionSupport(params: {
 }
 
 export async function resolveTelegramInboundBody(params: {
+  nativeCommandNames?: ReadonlyMap<string, string>;
   cfg: OpenClawConfig;
   primaryCtx: TelegramContext;
   msg: TelegramContext["message"];
@@ -145,6 +150,7 @@ export async function resolveTelegramInboundBody(params: {
   senderId: string;
   senderUsername: string;
   sessionKey?: string;
+  acpBinding?: boolean;
   resolvedThreadId?: number;
   replyThreadId?: number;
   threadSpec: TelegramThreadSpec;
@@ -157,8 +163,6 @@ export async function resolveTelegramInboundBody(params: {
   providerMentionPatterns?: BuildMentionRegexesOptions["providerPolicy"];
   requireMention?: boolean;
   options?: TelegramMessageContextOptions;
-  groupHistories: Map<string, HistoryEntry[]>;
-  historyLimit: number;
   logger: TelegramLogger;
 }): Promise<TelegramInboundBodyResult | null> {
   const {
@@ -184,8 +188,6 @@ export async function resolveTelegramInboundBody(params: {
     providerMentionPatterns,
     requireMention,
     options,
-    groupHistories,
-    historyLimit,
     logger,
   } = params;
   const botUsername = normalizeOptionalLowercaseString(primaryCtx.me?.username);
@@ -205,7 +207,6 @@ export async function resolveTelegramInboundBody(params: {
     return null;
   }
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
-  const useAccessGroups = true;
   const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, cfg, {
     botUsername,
   });
@@ -219,7 +220,6 @@ export async function resolveTelegramInboundBody(params: {
     senderId,
     effectiveDmAllow,
     effectiveGroupAllow,
-    ownerAccess: { ownerList: [], senderIsOwner: false },
     eventKind: "message",
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
@@ -227,6 +227,18 @@ export async function resolveTelegramInboundBody(params: {
     includeDmAllowForGroupCommands: false,
   });
   const commandAuthorized = commandGate.authorized;
+  const nativeCommandBody = resolveTelegramNativeCommandBody({
+    msg,
+    nativeCommandNames: params.nativeCommandNames,
+    botUsername,
+  });
+  const commandSource =
+    options?.commandSource ??
+    (nativeCommandBody !== undefined
+      ? "native"
+      : commandAuthorized && hasControlCommandInMessage
+        ? "text"
+        : undefined);
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, threadSpec) : undefined;
   const originatingTo =
     providedOriginatingTo ?? buildTelegramInboundOriginTarget(chatId, threadSpec);
@@ -235,10 +247,11 @@ export async function resolveTelegramInboundBody(params: {
   const nativeMediaFacts =
     allMedia.length > 0 ? allMedia : primaryMedia ? [{ kind: primaryMedia.kind }] : [];
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
-  const stickerSupportsVision =
-    msg.sticker && allMedia.some((media) => media.kind === "sticker" && media.path)
-      ? await resolveStickerVisionSupport({ cfg, agentId: routeAgentId })
-      : false;
+  const stickerHasMedia =
+    Boolean(msg.sticker) && allMedia.some((media) => media.kind === "sticker" && media.path);
+  const stickerSupportsVision = stickerHasMedia
+    ? await resolveStickerVisionSupport({ cfg, agentId: routeAgentId })
+    : false;
   const stickerCacheHit = Boolean(cachedStickerDescription) && !stickerSupportsVision;
   let formattedStickerDescription: string | undefined;
   if (stickerCacheHit) {
@@ -260,6 +273,9 @@ export async function resolveTelegramInboundBody(params: {
   if (!rawBody) {
     rawBody = richText ?? resolveTelegramRichMessagePlaceholder(msg) ?? "";
   }
+  if (!rawBody && msg.sticker && !stickerHasMedia && !formattedStickerDescription) {
+    rawBody = msg.sticker.emoji?.trim() || formatMediaPlaceholderText(nativeMediaFacts);
+  }
   if (!rawBody && nativeMediaFacts.length === 0) {
     return null;
   }
@@ -278,8 +294,7 @@ export async function resolveTelegramInboundBody(params: {
   const disableAudioPreflight =
     (topicConfig?.disableAudioPreflight ??
       (groupConfig as TelegramGroupConfig | undefined)?.disableAudioPreflight) === true;
-  const senderAllowedForAudioPreflight =
-    !useAccessGroups || !allowForCommands.hasEntries || commandAuthorized;
+  const senderAllowedForAudioPreflight = !allowForCommands.hasEntries || commandAuthorized;
 
   let preflightTranscript: string | undefined;
   const needsPreflightTranscription =
@@ -324,22 +339,38 @@ export async function resolveTelegramInboundBody(params: {
 
   const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
   const explicitlyMentioned = botUsername
-    ? hasBotMention(msg, botUsername) ||
+    ? hasBotMention(msg, botUsername, primaryCtx.me?.id) ||
       (richText ? hasBotMentionInText(richText, botUsername) : false)
     : false;
-  const computedWasMentioned = matchesMentionWithExplicit({
-    text: messageTextParts.text || richText || "",
-    mentionRegexes,
-    explicit: {
-      hasAnyMention,
-      isExplicitlyMentioned: explicitlyMentioned,
-      canResolveExplicit: Boolean(botUsername),
-    },
-    transcript: preflightTranscript,
+  const groupThread = resolveGroupThreadMentionFacts({
+    cfg,
+    channel: "telegram",
+    peerId: isGroup ? String(chatId) : resolveTelegramDirectPeerId({ chatId, senderId }),
+    text: [messageTextParts.text, richText, preflightTranscript].filter(Boolean).join("\n"),
+    sessionKey: params.sessionKey,
+    acpBinding: params.acpBinding,
   });
-  const wasMentioned = options?.forceWasMentioned === true ? true : computedWasMentioned;
+  const computedWasMentioned =
+    Boolean(groupThread?.mentionedAgentIds.length) ||
+    matchesMentionWithExplicit({
+      text: messageTextParts.text || richText || "",
+      mentionRegexes,
+      explicit: {
+        hasAnyMention,
+        isExplicitlyMentioned: explicitlyMentioned,
+        canResolveExplicit: Boolean(botUsername),
+      },
+      transcript: preflightTranscript,
+    });
+  const wasMentioned =
+    options?.forceWasMentioned === true ||
+    (commandSource === "native" && commandAuthorized) ||
+    computedWasMentioned;
 
-  if (isGroup && commandGate.shouldBlockControlCommand) {
+  if (
+    isGroup &&
+    (commandGate.shouldBlockControlCommand || (commandSource === "native" && !commandAuthorized))
+  ) {
     logInboundDrop({
       log: logVerbose,
       channel: "telegram",
@@ -358,7 +389,8 @@ export async function resolveTelegramInboundBody(params: {
     "reply_to_bot",
     replyToBotMessage && !isReplyToServiceMessage,
   );
-  const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+  const canDetectMention =
+    Boolean(groupThread) || Boolean(botUsername) || mentionRegexes.length > 0;
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
       canDetectMention,
@@ -375,9 +407,6 @@ export async function resolveTelegramInboundBody(params: {
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
-  const commandSource =
-    options?.commandSource ??
-    (commandAuthorized && hasControlCommandInMessage ? "text" : undefined);
   const inboundEventKind = classifyChannelInboundEvent({
     conversation: { kind: isGroup ? "group" : "direct" },
     unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
@@ -391,17 +420,6 @@ export async function resolveTelegramInboundBody(params: {
   });
   if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
     logger.info({ chatId, reason: "no-mention" }, "skipping group message");
-    recordTelegramGroupHistoryEntry({
-      historyMap: groupHistories,
-      historyKey,
-      limit: historyLimit,
-      entry: {
-        sender: buildSenderLabel(msg, senderId || chatId),
-        body: historyBody,
-        timestamp: msg.date ? msg.date * 1000 : undefined,
-        messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
-      },
-    });
     if (sessionKey && resolveTelegramGroupIngestEnabled({ cfg, chatId, accountId, topicConfig })) {
       fireAndForgetHook(
         triggerInternalHook(
@@ -450,6 +468,7 @@ export async function resolveTelegramInboundBody(params: {
     commandAuthorized,
     effectiveWasMentioned,
     inboundEventKind,
+    groupThread,
     mentionFacts: resolveTelegramMentionFacts({
       canDetectMention,
       effectiveWasMentioned,
@@ -461,7 +480,8 @@ export async function resolveTelegramInboundBody(params: {
     }),
     canDetectMention,
     shouldBypassMention: mentionDecision.shouldBypassMention,
-    hasControlCommand: hasControlCommandInMessage,
+    commandSource,
+    nativeCommandBody,
     ...(audioTranscribedMediaIndex !== undefined && audioTranscribedMediaIndex >= 0
       ? { audioTranscribedMediaIndex }
       : {}),

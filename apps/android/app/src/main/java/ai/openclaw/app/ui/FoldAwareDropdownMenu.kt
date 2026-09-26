@@ -157,7 +157,8 @@ private fun MenuBody(
         }
       },
     ) { measurables, constraints ->
-      val padding = 16.dp.roundToPx()
+      // Match Compose PaddingNode: vertical 8.dp rounds each edge, not 16.dp once.
+      val padding = 2 * 8.dp.roundToPx()
       val limit = minOf(constraints.maxWidth, opening.geometry.available.width, 280.dp.roundToPx())
       if (opening.terminal || measurables.isEmpty() || limit < 112.dp.roundToPx()) {
         owner.cancel(opening)
@@ -255,9 +256,45 @@ private class MenuOpening(
   ): IntOffset {
     owner.refresh()
     val admitted = bounds
-    if (anchorBounds != geometry.anchor || admitted?.size != popupContentSize) owner.cancel(this)
-    return admitted?.topLeft ?: geometry.available.topLeft
+    if (anchorBounds != geometry.anchor) {
+      owner.cancel(this)
+    } else if (admitted != null && !foldAwarePopupSizeCompatible(admitted.size, popupContentSize)) {
+      owner.cancel(this)
+    } else if (admitted != null && admitted.size != popupContentSize) {
+      // Compose popup measure can report ±1px vs the admitted layout size.
+      // Re-place so a 1px growth at the safe edge still fits (or flips above the anchor).
+      bounds = IntRect(owner.place(geometry, popupContentSize), popupContentSize)
+    }
+    return bounds?.topLeft ?: geometry.available.topLeft
   }
+}
+
+/** True when popup content matches the admitted size within one-pixel measure noise. */
+internal fun foldAwarePopupSizeCompatible(
+  admitted: IntSize,
+  content: IntSize,
+): Boolean =
+  kotlin.math.abs(admitted.width - content.width) <= 1 &&
+    kotlin.math.abs(admitted.height - content.height) <= 1
+
+/** Place a menu of [size] relative to [anchor] inside [available], preferring below then above. */
+internal fun foldAwareMenuTopLeft(
+  available: IntRect,
+  anchor: IntRect,
+  size: IntSize,
+  direction: LayoutDirection,
+): IntOffset {
+  val start = if (direction == LayoutDirection.Ltr) anchor.left else anchor.right - size.width
+  val end = if (direction == LayoutDirection.Ltr) anchor.right - size.width else anchor.left
+  val x =
+    listOf(start, end).firstOrNull { it >= available.left && it + size.width <= available.right }
+      ?: start.coerceIn(available.left, (available.right - size.width).coerceAtLeast(available.left))
+  val y =
+    listOf(anchor.bottom, anchor.top - size.height).firstOrNull {
+      it >= available.top && it + size.height <= available.bottom
+    }
+      ?: anchor.bottom.coerceIn(available.top, (available.bottom - size.height).coerceAtLeast(available.top))
+  return IntOffset(x, y)
 }
 
 private class AnchoredMenuOwner {
@@ -346,6 +383,11 @@ private class AnchoredMenuOwner {
       next.token == current.geometry.token && next.display == current.geometry.display &&
       next.available.contains(current.bounds ?: current.geometry.available) && itemLayout() == current.items
 
+  fun place(
+    geometry: MenuGeometry,
+    size: IntSize,
+  ): IntOffset = foldAwareMenuTopLeft(geometry.available, geometry.anchor, size, direction)
+
   fun admit(
     current: MenuOpening,
     size: IntSize,
@@ -353,17 +395,7 @@ private class AnchoredMenuOwner {
   ): Boolean {
     if (!valid(current, geometry())) return false
     if (current.bounds == null) {
-      val available = current.geometry.available
-      val anchor = current.geometry.anchor
-      val start = if (direction == LayoutDirection.Ltr) anchor.left else anchor.right - size.width
-      val end = if (direction == LayoutDirection.Ltr) anchor.right - size.width else anchor.left
-      val x =
-        listOf(start, end).firstOrNull { it >= available.left && it + size.width <= available.right }
-          ?: start.coerceIn(available.left, available.right - size.width)
-      val y =
-        listOf(anchor.bottom, anchor.top - size.height).firstOrNull { it >= available.top && it + size.height <= available.bottom }
-          ?: anchor.bottom.coerceIn(available.top, available.bottom - size.height)
-      current.bounds = IntRect(IntOffset(x, y), size)
+      current.bounds = IntRect(place(current.geometry, size), size)
       current.rowLayout = rows
     }
     return current.bounds?.size == size && current.rowLayout?.hasSameLayout(rows) == true
@@ -414,8 +446,8 @@ private class AnchoredMenuOwner {
     }
     val token = host.windowToken ?: return null
     val display = host.display?.displayId ?: return null
-    val origin = host.windowOrigin()
-    val activityOffset = decor.windowOrigin() - origin
+    val origin = host.windowScreenOrigin()
+    val activityOffset = decor.windowScreenOrigin() - origin
     val metrics = WindowMetricsCalculator.getOrCreate().computeCurrentWindowMetrics(activity).bounds
     val full = IntRect(0, 0, metrics.width(), metrics.height())
     val position = anchor.positionInWindow()
@@ -426,11 +458,7 @@ private class AnchoredMenuOwner {
       foldSafeRegions(full, features.features)
         .map { it.translate(activityOffset) }
         .filter { it.contains(actualAnchor) }
-        .minWithOrNull(
-          compareByDescending<IntRect> { it.width.toLong() * it.height }
-            .thenBy { it.top }
-            .thenBy { if (direction == LayoutDirection.Ltr) it.left else -it.right },
-        ) ?: return null
+        .preferredFoldSafeRegion(direction) ?: return null
     val frame = Rect().also(host::getWindowVisibleDisplayFrame)
     val hostPosition = IntArray(2).also(host::getLocationInWindow)
     val hostBounds = IntRect(hostPosition[0], hostPosition[1], hostPosition[0] + host.width, hostPosition[1] + host.height)
@@ -461,12 +489,6 @@ private class AnchoredMenuOwner {
 }
 
 private fun IntRect.contains(other: IntRect): Boolean = other.width > 0 && other.height > 0 && other.left >= left && other.top >= top && other.right <= right && other.bottom <= bottom
-
-private fun View.windowOrigin(): IntOffset {
-  val screen = IntArray(2).also(::getLocationOnScreen)
-  val window = IntArray(2).also(::getLocationInWindow)
-  return IntOffset(screen[0] - window[0], screen[1] - window[1])
-}
 
 private fun View.screenBounds(): IntRect {
   val screen = IntArray(2).also(::getLocationOnScreen)

@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements obsidian behavior.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -32,7 +31,8 @@ type ObsidianCliDeps = {
 async function isExecutableFile(inputPath: string): Promise<boolean> {
   try {
     await fs.access(inputPath, process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
-    return true;
+    // X_OK also succeeds for searchable directories; follow symlinks to check the target type.
+    return (await fs.stat(inputPath)).isFile();
   } catch {
     return false;
   }
@@ -46,10 +46,6 @@ async function resolveCommandOnPath(command: string): Promise<string | null> {
       ? (process.env.PATHEXT?.split(";").filter(Boolean) ?? [".EXE", ".CMD", ".BAT"])
       : [""];
 
-  if (command.includes(path.sep)) {
-    return (await isExecutableFile(command)) ? command : null;
-  }
-
   for (const dir of pathEntries) {
     for (const extension of windowsExts) {
       const candidate = path.join(dir, extension ? `${command}${extension}` : command);
@@ -60,10 +56,6 @@ async function resolveCommandOnPath(command: string): Promise<string | null> {
   }
 
   return null;
-}
-
-function buildVaultPrefix(config: ResolvedMemoryWikiConfig): string[] {
-  return config.obsidian.vaultName ? [`vault=${config.obsidian.vaultName}`] : [];
 }
 
 export async function probeObsidianCli(
@@ -77,18 +69,55 @@ export async function probeObsidianCli(
   };
 }
 
-async function runObsidianCli(params: {
+export const OBSIDIAN_ACTIONS = [
+  {
+    command: "search",
+    description: "Search the current Obsidian vault",
+    argument: { name: "query", description: "Search query" },
+    success: "",
+  },
+  {
+    command: "open",
+    description: "Open a file in Obsidian by vault-relative path",
+    argument: { name: "path", description: "Vault-relative path" },
+    success: "Opened in Obsidian.",
+  },
+  {
+    command: "command",
+    description: "Execute an Obsidian command palette command by id",
+    argument: { name: "id", description: "Obsidian command id" },
+    success: "Command sent to Obsidian.",
+  },
+  {
+    command: "daily",
+    description: "Open today's daily note in Obsidian",
+    argument: undefined,
+    success: "Opened today's daily note.",
+  },
+] as const;
+
+export function assertOfficialObsidianCliSupported(config: ResolvedMemoryWikiConfig): void {
+  if (config.vault.scope === "agent") {
+    throw new Error("Official Obsidian CLI actions do not support memory-wiki vault.scope=agent.");
+  }
+}
+
+export async function runObsidianAction(params: {
   config: ResolvedMemoryWikiConfig;
-  subcommand: string;
-  args?: string[];
+  action: (typeof OBSIDIAN_ACTIONS)[number];
+  value?: string;
   deps?: ObsidianCliDeps;
 }): Promise<ObsidianCliResult> {
-  const resolveCommand = params.deps?.resolveCommand ?? resolveCommandOnPath;
-  const probe = await probeObsidianCli({ resolveCommand });
+  const probe = await probeObsidianCli(params.deps);
   if (!probe.command) {
     throw new Error("Obsidian CLI is not available on PATH.");
   }
-  const argv = [...buildVaultPrefix(params.config), params.subcommand, ...(params.args ?? [])];
+  const { vaultName } = params.config.obsidian;
+  const argv = [
+    ...(vaultName ? [`vault=${vaultName}`] : []),
+    params.action.command,
+    ...(params.action.argument ? [`${params.action.argument.name}=${params.value}`] : []),
+  ];
   const exec = params.deps?.exec ?? runExec;
   const { stdout, stderr } = await exec(probe.command, argv, {
     logOutput: false,
@@ -100,54 +129,4 @@ async function runObsidianCli(params: {
     stdout,
     stderr,
   };
-}
-
-export async function runObsidianSearch(params: {
-  config: ResolvedMemoryWikiConfig;
-  query: string;
-  deps?: ObsidianCliDeps;
-}) {
-  return await runObsidianCli({
-    config: params.config,
-    subcommand: "search",
-    args: [`query=${params.query}`],
-    deps: params.deps,
-  });
-}
-
-export async function runObsidianOpen(params: {
-  config: ResolvedMemoryWikiConfig;
-  vaultPath: string;
-  deps?: ObsidianCliDeps;
-}) {
-  return await runObsidianCli({
-    config: params.config,
-    subcommand: "open",
-    args: [`path=${params.vaultPath}`],
-    deps: params.deps,
-  });
-}
-
-export async function runObsidianCommand(params: {
-  config: ResolvedMemoryWikiConfig;
-  id: string;
-  deps?: ObsidianCliDeps;
-}) {
-  return await runObsidianCli({
-    config: params.config,
-    subcommand: "command",
-    args: [`id=${params.id}`],
-    deps: params.deps,
-  });
-}
-
-export async function runObsidianDaily(params: {
-  config: ResolvedMemoryWikiConfig;
-  deps?: ObsidianCliDeps;
-}) {
-  return await runObsidianCli({
-    config: params.config,
-    subcommand: "daily",
-    deps: params.deps,
-  });
 }

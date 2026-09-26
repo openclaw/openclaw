@@ -8,9 +8,10 @@
  * untestable MV3 service worker, which is why it rotted and was removed.
  */
 import { addAbortListener, once } from "node:events";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveCreateTargetParams } from "./create-target-params.js";
+import { resolveExtensionRelayCommandTimeoutMs } from "./relay-command-timeout.js";
 import {
   type ExtensionToRelayMessage,
   parseExtensionMessage,
@@ -22,8 +23,6 @@ import { RelaySessionOwner, type RelaySessionClient } from "./relay-session-owne
 
 const log = createSubsystemLogger("browser").child("extension-relay");
 
-/** Default timeout for commands forwarded to the extension. */
-const EXTENSION_COMMAND_TIMEOUT_MS = 15_000;
 /** App-level keepalive interval; message traffic keeps the MV3 worker alive. */
 const EXTENSION_PING_INTERVAL_MS = 20_000;
 
@@ -58,7 +57,7 @@ type TabState = {
   target?: { id: string; sessionId?: string };
   attaching?: Promise<{ targetId: string; sessionId: string }>;
   retiring?: Promise<void>;
-  /** Extension loss invalidated attachment work that auto-attach clients still expect restored. */
+  /** Native or extension loss invalidated attachment work that auto-attach clients expect restored. */
   restoreAttachment: boolean;
 };
 
@@ -285,21 +284,17 @@ export class ExtensionRelayBridge {
 
   private handleExtensionMessage(msg: ExtensionToRelayMessage): void {
     switch (msg.type) {
-      case "result": {
-        const pending = this.pendingExtension.get(msg.seq);
-        if (pending) {
-          this.pendingExtension.delete(msg.seq);
-          clearTimeout(pending.timer);
-          pending.resolve(msg.result);
-        }
-        return;
-      }
+      case "result":
       case "error": {
         const pending = this.pendingExtension.get(msg.seq);
         if (pending) {
           this.pendingExtension.delete(msg.seq);
           clearTimeout(pending.timer);
-          pending.reject(new Error(msg.message));
+          if (msg.type === "result") {
+            pending.resolve(msg.result);
+          } else {
+            pending.reject(new Error(msg.message));
+          }
         }
         return;
       }
@@ -316,12 +311,17 @@ export class ExtensionRelayBridge {
       }
       case "detached": {
         const tab = this.tabs.get(msg.tabId);
+        const recover = tab !== undefined && msg.reason === "target_closed" && !tab.retiring;
         if (tab) {
           tab.attaching = undefined;
+          tab.restoreAttachment = recover;
         }
         this.sessions.retireTab(msg.tabId);
         if (tab?.target) {
           tab.target.sessionId = undefined;
+        }
+        if (recover) {
+          this.autoAttachTab(msg.tabId);
         }
         break;
       }
@@ -388,11 +388,7 @@ export class ExtensionRelayBridge {
     this.extension.socket.send(JSON.stringify(msg));
   }
 
-  private callExtension(
-    command: RelayCommandBody,
-    timeoutMs = EXTENSION_COMMAND_TIMEOUT_MS,
-    signal?: AbortSignal,
-  ): Promise<unknown> {
+  private callExtension(command: RelayCommandBody, signal?: AbortSignal): Promise<unknown> {
     signal?.throwIfAborted();
     const seq = this.nextSeq++;
     let abortListener: Disposable | undefined;
@@ -400,7 +396,7 @@ export class ExtensionRelayBridge {
       const timer = setTimeout(() => {
         this.pendingExtension.delete(seq);
         reject(new Error(`extension relay command timed out: ${command.type}`));
-      }, timeoutMs);
+      }, resolveExtensionRelayCommandTimeoutMs(command));
       timer.unref?.();
       this.pendingExtension.set(seq, { resolve, reject, timer });
       if (signal) {
@@ -423,7 +419,6 @@ export class ExtensionRelayBridge {
 
   private syncTabs(tabs: RelayTabInfo[]): void {
     const nextIds = new Set(tabs.map((tab) => tab.tabId));
-    const shouldAutoAttach = [...this.clients].some((client) => client.autoAttach);
     for (const tabId of this.tabs.keys()) {
       if (!nextIds.has(tabId)) {
         this.sessions.retireTab(tabId);
@@ -441,22 +436,23 @@ export class ExtensionRelayBridge {
       } else {
         this.tabs.set(info.tabId, { info, claimants: new Set(), restoreAttachment: false });
       }
-      if (shouldAutoAttach && shouldAttach) {
-        for (const client of this.clients) {
-          if (!client.autoAttach || client.detachedTabs.has(info.tabId)) {
-            continue;
-          }
-          void this.withAttachedTab(client, info.tabId, (attached) => {
-            this.announceAttachedTab(
-              info.tabId,
-              attached,
-              this.autoAttachRecipients(info.tabId, attached.sessionId),
-            );
-          }).catch((err: unknown) =>
-            log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`),
-          );
-        }
+      if (shouldAttach) {
+        this.autoAttachTab(info.tabId);
       }
+    }
+  }
+
+  private autoAttachTab(tabId: number): void {
+    for (const client of this.autoAttachRecipients(tabId)) {
+      void this.withAttachedTab(client, tabId, (attached) => {
+        this.announceAttachedTab(
+          tabId,
+          attached,
+          this.autoAttachRecipients(tabId, attached.sessionId),
+        );
+      }).catch((err: unknown) =>
+        log.warn(`auto-attach of accessible tab ${tabId} failed: ${String(err)}`),
+      );
     }
   }
 
@@ -561,7 +557,6 @@ export class ExtensionRelayBridge {
               method,
               params,
             },
-            EXTENSION_COMMAND_TIMEOUT_MS,
             signal,
           );
           assertCurrent();
@@ -616,8 +611,9 @@ export class ExtensionRelayBridge {
       return { status: "unavailable", reason: "extension-disconnected" };
     }
     // Tabs can arrive while Chrome attaches the previous batch. Visit each tab
-    // generation once; a failed acquisition still rejects the complete inventory.
+    // generation once; only Chrome's permanent page refusal permits an omission.
     const identities = new Map<TabState, string | undefined>();
+    const skipped = new Map<TabState, { url: string; reason: string }>();
     while (this.extensionConnected) {
       const pending = [...this.tabs].filter(([, tab]) => !identities.has(tab));
       if (pending.length === 0) {
@@ -627,16 +623,30 @@ export class ExtensionRelayBridge {
         identities.set(tab, undefined);
       }
       await Promise.allSettled(
-        pending.map(([tabId, tab]) =>
-          this.withAttachedTab(client, tabId, (attached) => {
-            this.announceAttachedTab(
-              tabId,
-              attached,
-              this.autoAttachRecipients(tabId, attached.sessionId),
-            );
-            identities.set(tab, attached.targetId);
-          }),
-        ),
+        pending.map(async ([tabId, tab]) => {
+          const url = tab.info.url;
+          try {
+            await this.withAttachedTab(client, tabId, (attached) => {
+              this.announceAttachedTab(
+                tabId,
+                attached,
+                this.autoAttachRecipients(tabId, attached.sessionId),
+              );
+              identities.set(tab, attached.targetId);
+            });
+          } catch (error) {
+            // Exact Chromium page restrictions, not attachment conflicts,
+            // permission failures, timeouts, or retired tab generations.
+            if (
+              error instanceof Error &&
+              (error.message === "The extensions gallery cannot be scripted." ||
+                error.message === "Cannot access a chrome:// URL" ||
+                error.message === "Cannot access a chrome-extension:// URL of different extension")
+            ) {
+              skipped.set(tab, { url, reason: error.message });
+            }
+          }
+        }),
       );
     }
     if (!this.extensionConnected) {
@@ -644,6 +654,11 @@ export class ExtensionRelayBridge {
     }
     const targetInfos: Record<string, unknown>[] = [];
     for (const [tabId, tab] of this.tabs) {
+      const refusal = skipped.get(tab);
+      if (refusal && refusal.url === tab.info.url) {
+        log.warn(`Skipping tab ${tabId} during target enumeration: ${refusal.reason}`);
+        continue;
+      }
       const targetId = identities.get(tab);
       if (!targetId || (!tab.target?.sessionId && this.autoAttachRecipients(tabId).length > 0)) {
         return { status: "unavailable", reason: "target-identity-unresolved" };
@@ -1183,22 +1198,7 @@ export class ExtensionRelayBridge {
         }
         return;
       }
-      case "Target.closeTarget": {
-        const targetId = request.params?.targetId as string | undefined;
-        const found = targetId ? this.tabByTargetId(targetId) : null;
-        if (!found) {
-          this.respondError(
-            client,
-            request,
-            `No target with given id found: ${String(targetId)}`,
-            -32602,
-          );
-          return;
-        }
-        await this.callExtension({ type: "closeTab", tabId: found.tabId });
-        this.respond(client, request, { success: true });
-        return;
-      }
+      case "Target.closeTarget":
       case "Target.activateTarget": {
         const targetId = request.params?.targetId as string | undefined;
         const found = targetId ? this.tabByTargetId(targetId) : null;
@@ -1211,8 +1211,9 @@ export class ExtensionRelayBridge {
           );
           return;
         }
-        await this.callExtension({ type: "activateTab", tabId: found.tabId });
-        this.respond(client, request, {});
+        const close = request.method === "Target.closeTarget";
+        await this.callExtension({ type: close ? "closeTab" : "activateTab", tabId: found.tabId });
+        this.respond(client, request, close ? { success: true } : {});
         return;
       }
       case "Target.getBrowserContexts": {

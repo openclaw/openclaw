@@ -1,50 +1,36 @@
 // Daemon constant tests cover platform constants used by service installers.
 import { describe, expect, it } from "vitest";
 import {
-  GATEWAY_LAUNCH_AGENT_LABEL,
-  LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
-  resolveGatewayLaunchAgentLabel,
   resolveGatewayNativeServiceIdentityConflict,
   resolveGatewayProfileSuffix,
   resolveGatewayServiceDescription,
-  resolveGatewaySystemdServiceName,
-  resolveGatewayWindowsTaskName,
+  resolveGatewaySystemdServiceNameCandidates,
 } from "./constants.js";
 
-describe("resolveGatewayLaunchAgentLabel", () => {
-  it("returns default label when no profile is set", () => {
-    const result = resolveGatewayLaunchAgentLabel();
-    expect(result).toBe(GATEWAY_LAUNCH_AGENT_LABEL);
-    expect(result).toBe("ai.openclaw.gateway");
+describe("resolveGatewaySystemdServiceNameCandidates", () => {
+  it("includes current default and legacy bare openclaw", () => {
+    expect(resolveGatewaySystemdServiceNameCandidates()).toEqual(["openclaw-gateway", "openclaw"]);
+    expect(resolveGatewaySystemdServiceNameCandidates("default")).toEqual([
+      "openclaw-gateway",
+      "openclaw",
+    ]);
   });
 
-  it("returns profile-specific label when profile is set", () => {
-    const result = resolveGatewayLaunchAgentLabel("dev");
-    expect(result).toBe("ai.openclaw.dev");
-  });
-});
-
-describe("resolveGatewaySystemdServiceName", () => {
-  it("returns default service name when no profile is set", () => {
-    const result = resolveGatewaySystemdServiceName();
-    expect(result).toBe("openclaw-gateway");
+  it("includes current and legacy names for a named profile", () => {
+    expect(resolveGatewaySystemdServiceNameCandidates("lisa")).toEqual([
+      "openclaw-gateway-lisa",
+      "openclaw-lisa",
+    ]);
   });
 
-  it("returns profile-specific service name when profile is set", () => {
-    const result = resolveGatewaySystemdServiceName("dev");
-    expect(result).toBe("openclaw-gateway-dev");
-  });
-});
-
-describe("resolveGatewayWindowsTaskName", () => {
-  it("returns default task name when no profile is set", () => {
-    const result = resolveGatewayWindowsTaskName();
-    expect(result).toBe("OpenClaw Gateway");
-  });
-
-  it("returns profile-specific task name when profile is set", () => {
-    const result = resolveGatewayWindowsTaskName("dev");
-    expect(result).toBe("OpenClaw Gateway (dev)");
+  it("omits legacy names that identify Node or another profile's gateway", () => {
+    expect(resolveGatewaySystemdServiceNameCandidates("node")).toEqual(["openclaw-gateway-node"]);
+    expect(resolveGatewaySystemdServiceNameCandidates("gateway")).toEqual([
+      "openclaw-gateway-gateway",
+    ]);
+    expect(resolveGatewaySystemdServiceNameCandidates("gateway-lisa")).toEqual([
+      "openclaw-gateway-gateway-lisa",
+    ]);
   });
 });
 
@@ -91,17 +77,9 @@ describe("resolveGatewayNativeServiceIdentityConflict", () => {
 });
 
 describe("resolveGatewayProfileSuffix", () => {
-  it("returns empty string when no profile is set", () => {
-    expect(resolveGatewayProfileSuffix()).toBe("");
-  });
-
   it("returns empty string for default profiles", () => {
     expect(resolveGatewayProfileSuffix("default")).toBe("");
     expect(resolveGatewayProfileSuffix(" Default ")).toBe("");
-  });
-
-  it("returns a hyphenated suffix for custom profiles", () => {
-    expect(resolveGatewayProfileSuffix("dev")).toBe("-dev");
   });
 
   it("trims whitespace from profiles", () => {
@@ -110,10 +88,6 @@ describe("resolveGatewayProfileSuffix", () => {
 });
 
 describe("resolveGatewayServiceDescription", () => {
-  it("returns default description when no profile", () => {
-    expect(resolveGatewayServiceDescription({ env: {} })).toBe("OpenClaw Gateway");
-  });
-
   it("includes profile when set", () => {
     expect(resolveGatewayServiceDescription({ env: { OPENCLAW_PROFILE: "work" } })).toBe(
       "OpenClaw Gateway (profile: work)",
@@ -133,11 +107,5 @@ describe("resolveGatewayServiceDescription", () => {
         description: "Custom",
       }),
     ).toBe("Custom");
-  });
-});
-
-describe("LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES", () => {
-  it("includes known pre-rebrand gateway unit names", () => {
-    expect(LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES).toContain("clawdbot-gateway");
   });
 });

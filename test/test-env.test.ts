@@ -15,7 +15,7 @@ import {
 import { isCurrentProcessLaunchdServiceLabel } from "../src/daemon/launchd-current-service.js";
 import { detectGatewayRespawnSupervisor } from "../src/infra/supervisor-markers.js";
 import { closeOpenClawAgentDatabaseByPath } from "../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import {
   captureFullEnv,
@@ -26,25 +26,10 @@ import {
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
 
-const ORIGINAL_ENV = { ...process.env };
+const originalEnv = captureFullEnv();
 
 const tempDirs = new Set<string>();
 const cleanupFns: Array<() => void> = [];
-
-function restoreProcessEnv(): void {
-  for (const key of Object.keys(process.env)) {
-    if (!(key in ORIGINAL_ENV)) {
-      deleteTestEnvValue(key);
-    }
-  }
-  for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
-    if (value === undefined) {
-      deleteTestEnvValue(key);
-    } else {
-      setTestEnvValue(key, value);
-    }
-  }
-}
 
 // Compare every key without printing ambient credentials in assertion failures.
 function changedEnvKeys(expected: NodeJS.ProcessEnv): string[] {
@@ -92,13 +77,24 @@ afterEach(() => {
   while (cleanupFns.length > 0) {
     cleanupFns.pop()?.();
   }
-  restoreProcessEnv();
+  originalEnv.restore();
   vi.restoreAllMocks();
   vi.doUnmock("node:child_process");
   cleanupTempDirs(tempDirs);
 });
 
 describe("installTestEnv", () => {
+  it("isolates native manager sockets and restores the caller runtime directory", () => {
+    const callerRuntime = path.join(createTempHome(), "runtime");
+    withEnv({ XDG_RUNTIME_DIR: callerRuntime }, () => {
+      const testEnv = installTestEnv({ mode: "hermetic" });
+      cleanupFns.push(testEnv.cleanup);
+      expect(process.env.XDG_RUNTIME_DIR).toBe(path.join(testEnv.tempHome, ".runtime"));
+      testEnv.cleanup();
+      expect(process.env.XDG_RUNTIME_DIR).toBe(callerRuntime);
+    });
+  });
+
   it.each([".openclaw", ".claude"])(
     "rolls back live staging failure at %s before another installation",
     (failedDirectory) => {

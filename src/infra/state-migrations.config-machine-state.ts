@@ -53,7 +53,11 @@ export function migrateLegacyConfigMachineState(params: {
       entries.push(["plugins.bundledDiscovery", "compat"]);
     }
   }
-  const tts = asOptionalRecord(raw.tts);
+  const canonicalTts = asOptionalRecord(raw.tts);
+  const tts =
+    canonicalTts && Object.hasOwn(canonicalTts, "prefsPath")
+      ? canonicalTts
+      : asOptionalRecord(asOptionalRecord(raw.messages)?.tts);
   if (tts && Object.hasOwn(tts, "prefsPath")) {
     entries.push(["tts.prefsPath", tts.prefsPath]);
   }

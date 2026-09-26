@@ -3,12 +3,11 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "openclaw/plugin-sdk/gateway-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   type MockOpenAiRequestSnapshot,
   createQaGatewayChild,
@@ -129,16 +128,6 @@ async function startDiscordRestLoopback() {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       }),
-  };
-}
-
-function configureDiscordActivities(cfg: OpenClawConfig): OpenClawConfig {
-  return {
-    ...cfg,
-    tools: {
-      ...cfg.tools,
-      alsoAllow: [...(cfg.tools?.alsoAllow ?? []), "show_widget"],
-    },
   };
 }
 
@@ -274,7 +263,7 @@ async function connectInlineClient(gateway: QaGatewayChild): Promise<GatewayClie
 describe("Discord show_widget contextual presenter process proof", () => {
   const cleanups: Array<() => Promise<void>> = [];
 
-  afterEach(async () => {
+  afterAll(async () => {
     const errors: unknown[] = [];
     for (const cleanup of cleanups.splice(0).toReversed()) {
       try {
@@ -288,7 +277,72 @@ describe("Discord show_widget contextual presenter process proof", () => {
     }
   });
 
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+  let discord: Awaited<ReturnType<typeof startDiscordRestLoopback>>;
+  let mock: Awaited<ReturnType<typeof startQaMockOpenAiServer>>;
+  let gateway: QaGatewayChild;
+
+  beforeEach(() => {
+    discord.requests.length = 0;
+  });
+
+  beforeAll(async () => {
+    const startedAt = performance.now();
+    const scratch = tempDirs.make("openclaw-discord-attachment-e2e-");
+    discord = await startDiscordRestLoopback();
+    cleanups.push(() => discord.stop());
+    const preloadPath = await writeDiscordFetchPreload(scratch);
+    mock = await startQaMockOpenAiServer();
+    cleanups.push(() => mock.stop());
+    const gatewayOwner = createQaGatewayChild();
+    cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+    gateway = await gatewayOwner.start({
+      repoRoot: REPO_ROOT,
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(REPO_ROOT, "dist", "entry.js")],
+        cwd: REPO_ROOT,
+        // This proof uses the checkout's compiled plugins, not release-candidate repair.
+        usePackagedPlugins: false,
+      },
+      providerBaseUrl: `${mock.baseUrl}/v1`,
+      providerMode: "mock-openai",
+      primaryModel: MODEL_REF,
+      alternateModel: MODEL_REF,
+      transport: discordTransport,
+      transportBaseUrl: "http://127.0.0.1:9",
+      controlUiEnabled: false,
+      mutateConfig: (cfg) => ({
+        ...cfg,
+        models: {
+          ...cfg.models,
+          catalogRefresh: { ...cfg.models?.catalogRefresh, enabled: false },
+        },
+        // Public message actions do not need QA Lab's private runtime tools.
+        plugins: {
+          ...cfg.plugins,
+          allow: cfg.plugins?.allow?.filter((id) => id !== "qa-lab"),
+          entries: Object.fromEntries(
+            Object.entries(cfg.plugins?.entries ?? {}).filter(([id]) => id !== "qa-lab"),
+          ),
+        },
+        tools: {
+          ...cfg.tools,
+          alsoAllow: [...(cfg.tools?.alsoAllow ?? []), "message", "show_widget"],
+        },
+      }),
+      runtimeEnvPatch: {
+        DISCORD_BOT_TOKEN: "qa-activities-token",
+        OPENCLAW_QA_DISCORD_REST_BASE: discord.baseUrl,
+        OPENCLAW_SKIP_CANVAS_HOST: undefined,
+        OPENCLAW_SKIP_CHANNELS: "1",
+      },
+      runtimePreloads: [pathToFileURL(preloadPath).href],
+    });
+    process.stdout.write(
+      `${JSON.stringify({ proof: "discord-gateway-shared-fixture", durationMs: performance.now() - startedAt })}\n`,
+    );
+  }, 180_000);
 
   it(
     "preserves component attachment filenames through the public Gateway message action",
@@ -313,48 +367,6 @@ describe("Discord show_widget contextual presenter process proof", () => {
       process.stdout.write(
         `${JSON.stringify({ proof: "discord-gateway-built-revision", head })}\n`,
       );
-      const scratch = tempDirs.make("openclaw-discord-attachment-e2e-");
-      const discord = await startDiscordRestLoopback();
-      cleanups.push(() => discord.stop());
-      const preloadPath = await writeDiscordFetchPreload(scratch);
-      const mock = await startQaMockOpenAiServer();
-      cleanups.push(() => mock.stop());
-      const gatewayOwner = createQaGatewayChild();
-      cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-      const gateway = await gatewayOwner.start({
-        repoRoot: REPO_ROOT,
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: [path.join(REPO_ROOT, "dist", "entry.js")],
-          cwd: REPO_ROOT,
-          usePackagedPlugins: true,
-        },
-        providerBaseUrl: `${mock.baseUrl}/v1`,
-        providerMode: "mock-openai",
-        primaryModel: MODEL_REF,
-        alternateModel: MODEL_REF,
-        transport: discordTransport,
-        transportBaseUrl: "http://127.0.0.1:9",
-        controlUiEnabled: false,
-        mutateConfig: (cfg) => ({
-          ...cfg,
-          // Public message actions do not need QA Lab's private runtime tools.
-          plugins: {
-            ...cfg.plugins,
-            allow: cfg.plugins?.allow?.filter((id) => id !== "qa-lab"),
-            entries: Object.fromEntries(
-              Object.entries(cfg.plugins?.entries ?? {}).filter(([id]) => id !== "qa-lab"),
-            ),
-          },
-          tools: { ...cfg.tools, alsoAllow: [...(cfg.tools?.alsoAllow ?? []), "message"] },
-        }),
-        runtimeEnvPatch: {
-          DISCORD_BOT_TOKEN: "qa-activities-token",
-          NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
-          OPENCLAW_QA_DISCORD_REST_BASE: discord.baseUrl,
-          OPENCLAW_SKIP_CHANNELS: "1",
-        },
-      });
       const invokeAction = async (label: string, args: JsonRecord) => {
         const before = discord.requests.length;
         const response = await fetch(`${gateway.baseUrl}/tools/invoke`, {
@@ -618,40 +630,6 @@ describe("Discord show_widget contextual presenter process proof", () => {
     "routes one core tool through Discord and keeps mismatched and inline paths honest",
     { timeout: 180_000 },
     async () => {
-      process.stdout.write("[discord-widget-e2e] starting isolated Gateway proof\n");
-      const progress = setInterval(() => {
-        process.stdout.write("[discord-widget-e2e] Gateway proof still running\n");
-      }, 10_000);
-      progress.unref();
-      cleanups.push(async () => clearInterval(progress));
-      const scratch = tempDirs.make("openclaw-discord-widget-e2e-");
-      const discord = await startDiscordRestLoopback();
-      cleanups.push(() => discord.stop());
-      const preloadPath = await writeDiscordFetchPreload(scratch);
-      const mock = await startQaMockOpenAiServer();
-      cleanups.push(() => mock.stop());
-      const gatewayOwner = createQaGatewayChild();
-      cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
-      const gateway = await gatewayOwner.start({
-        repoRoot: REPO_ROOT,
-        useRepoCli: true,
-        providerBaseUrl: `${mock.baseUrl}/v1`,
-        providerMode: "mock-openai",
-        primaryModel: MODEL_REF,
-        alternateModel: MODEL_REF,
-        transport: discordTransport,
-        transportBaseUrl: "http://127.0.0.1:9",
-        controlUiEnabled: false,
-        mutateConfig: configureDiscordActivities,
-        runtimeEnvPatch: {
-          DISCORD_BOT_TOKEN: "qa-activities-token",
-          NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
-          OPENCLAW_QA_DISCORD_REST_BASE: discord.baseUrl,
-          OPENCLAW_SKIP_CANVAS_HOST: undefined,
-          OPENCLAW_SKIP_CHANNELS: "1",
-        },
-      });
-
       const started = (await gateway.call("chat.send", {
         sessionKey: DISCORD_SESSION_KEY,
         message: `${INVENTORY_MARKER}: reply exactly INVENTORY_OK without calling tools.`,

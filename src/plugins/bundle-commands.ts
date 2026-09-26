@@ -1,6 +1,7 @@
 // Bundles plugin command metadata for package output.
 import fs from "node:fs";
 import path from "node:path";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -11,8 +12,8 @@ import {
 } from "../../packages/markdown-core/src/frontmatter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { walkDirectorySync } from "../infra/fs-safe.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { parseFrontmatterBool } from "../shared/frontmatter.js";
@@ -57,34 +58,16 @@ function resolveClaudeCommandRootDirs(rootDir: string): string[] {
 }
 
 function listMarkdownFilesRecursive(rootDir: string): string[] {
-  const pending = [rootDir];
-  const files: string[] = [];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) {
-      continue;
-    }
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) {
-        continue;
-      }
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(fullPath);
-        continue;
-      }
-      if (entry.isFile() && normalizeOptionalLowercaseString(entry.name)?.endsWith(".md")) {
-        files.push(fullPath);
-      }
-    }
-  }
-  return files.toSorted((a, b) => a.localeCompare(b));
+  return walkDirectorySync(rootDir, {
+    symlinks: "skip",
+    descend: ({ name }) => !name.startsWith("."),
+    include: ({ kind, name }) =>
+      kind === "file" &&
+      !name.startsWith(".") &&
+      Boolean(normalizeOptionalLowercaseString(name)?.endsWith(".md")),
+  })
+    .entries.map((entry) => entry.path)
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 function toDefaultCommandName(rootDir: string, filePath: string): string {

@@ -171,6 +171,11 @@ openclaw-multi-select {
   background: var(--bg-hover);
 }
 
+.multi-select__option[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .multi-select__option-icon {
   width: 20px;
   height: 20px;

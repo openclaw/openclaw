@@ -157,11 +157,10 @@ export class ConfigFormCollectionDraft extends OpenClawLightDomElement {
       );
       return;
     }
-    if (props.existingValues?.some((value) => configValuesEqual(value, parsed.value))) {
-      this.fail("value", t("configForm.invalidString"));
-      return;
-    }
-    if (props.validateValue && !props.validateValue(parsed.value)) {
+    if (
+      props.existingValues?.some((value) => configValuesEqual(value, parsed.value)) ||
+      props.validateValue?.(parsed.value) === false
+    ) {
       this.fail("value", t("configForm.invalidString"));
       return;
     }

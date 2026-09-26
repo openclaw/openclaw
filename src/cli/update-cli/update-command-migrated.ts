@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { TriageFailureContext } from "../../commands/triage-prompt.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -11,24 +11,37 @@ import {
   resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
 } from "../../infra/update-candidate-state.js";
-import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
+import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
+import { createUpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
-import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
-import type { FinishUpdateParams } from "./update-command-post-update.js";
+import {
+  requiresRetainedUpdateCommandOwner,
+  withUpdateCommandExecutorChild,
+  type UpdateCommandChildGrant,
+} from "./update-command-executor.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import type {
+  MigratedUpdateFinalizationInput,
+  MigratedUpdateFinalizationResult,
+} from "./update-command-migrated-types.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import { releaseLegacySourceLock } from "./update-command-runtime.js";
 import {
   resolveUpdatedInstallCommandEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
+import { recordUpdatePackageCompletion } from "./update-command-terminal.js";
 
-const CLI_NAME = resolveCliName();
+export type { MigratedUpdateFinalizationResult } from "./update-command-migrated-types.js";
 
 /** Inspect private state copies without reopening migrated state through the previous runtime. */
 export async function inspectActivatedUpdateState(
@@ -39,6 +52,7 @@ export async function inspectActivatedUpdateState(
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
     candidateSchemaVersions?: OpenClawSchemaVersions;
+    timeoutMs?: number;
   },
 ): Promise<FinishUpdateParams["rollbackBlockedReason"]> {
   const { result, root, schemaVersions, candidateSchemaVersions, env, config } = params;
@@ -52,6 +66,7 @@ export async function inspectActivatedUpdateState(
       env,
       root: result.root ?? null,
       nodeRunner: params.packageUpdateNodeRunner,
+      timeoutMs: params.timeoutMs,
     });
     const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
     const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
@@ -83,7 +98,7 @@ export async function inspectActivatedUpdateState(
     result.status = "error";
     result.reason = "rollback-state-unverified";
     result.steps.push({
-      name: "state schema verification",
+      name: "state-schema-verification",
       command: "openclaw update",
       cwd: result.root ?? root,
       durationMs: 0,
@@ -94,71 +109,142 @@ export async function inspectActivatedUpdateState(
   }
 }
 
-export type MigratedUpdateFinalizationInput = {
-  params: Omit<FinishUpdateParams, "packageTransaction" | "preManagedServiceStop" | "opts"> & {
-    opts: Omit<FinishUpdateParams["opts"], "run"> & {
-      run?: Omit<NonNullable<FinishUpdateParams["opts"]["run"]>, "requesterAuthority"> & {
-        requesterAuthority?: Pick<UpdateRequesterAuthority, "requester">;
-      };
-    };
-    preManagedServiceStop?: Omit<
-      NonNullable<FinishUpdateParams["preManagedServiceStop"]>,
-      "windowsTaskAutoStartRecovery"
-    >;
-  };
-  bufferedSteps: UpdateRunStep[];
-  windowsTaskAutoStartSuspended?: true;
-  resultPath: string;
-};
-
-export type MigratedUpdateFinalizationResult = {
-  result: UpdateRunResult;
-  exitCode: number;
-  terminalRunId: string;
-  automaticTriage?: TriageFailureContext;
-};
-
 /** After migration, only candidate code may reopen state or finish the run. */
 export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
-): Promise<Omit<MigratedUpdateFinalizationResult, "terminalRunId">> {
+): Promise<
+  Pick<
+    MigratedUpdateFinalizationResult,
+    "result" | "exitCode" | "automaticTriage" | "candidateStartAttempted"
+  > & { databaseRollbackAvailable?: true }
+> {
+  if (params.opts.recovery) {
+    throw new UpdateCommandRecoveryPendingError("Full-state checkpoint recovery is deferred.");
+  }
   const run = params.opts.run;
   if (!run) {
     throw new Error("Migrated update continuation requires its admitted run.");
   }
+  const assertCurrent = createUpdateCommandFinalizationFence(params);
+  assertCurrent();
   const windowsRecovery = params.preManagedServiceStop?.windowsTaskAutoStartRecovery;
   const result = params.result;
-  if (windowsRecovery && params.preManagedServiceStop) {
-    // The parent retains its original definition-refresh grant for compensation.
-    // Only the fresh finalizer may restore autostart at activation after migration.
-    windowsRecovery.handoff(
-      createWindowsTaskAutoStartGuard({
-        root: result.root ?? params.root,
-        before: params.preManagedServiceStop,
-        timeoutMs: params.updateStepTimeoutMs,
-      }),
-    );
-  }
   const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-migrated-"));
   try {
     const root = result.root;
     if (!root) {
-      throw new Error("The active installation root is unknown; candidate finalization is unsafe.");
+      throw new Error("The active installation root is unknown; update finalization is unsafe.");
     }
-    const { packageTransaction: _transaction, preManagedServiceStop, ...serializable } = params;
+    const workerCommand = [
+      params.packageUpdateNodeRunner ?? resolveNodeRunner(),
+      path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
+    ];
+    const workerEnv = {
+      ...stripGatewayServiceMarkerEnv(
+        resolveUpdatedInstallCommandEnv({
+          processEnv: params.ownedManagedUpdateEnv ?? run.env,
+        }),
+      ),
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      TMPDIR: scratchDir,
+      TMP: scratchDir,
+      TEMP: scratchDir,
+    };
+    if (run.executorFence || run.completionOwner) {
+      assertCurrent();
+      const requiresRetainedOwner = run.executorFence
+        ? requiresRetainedUpdateCommandOwner(run.executorFence)
+        : false;
+      // Compatibility only, never authority. An older installed worker ignores
+      // new JSON fields, so refuse before exposing any continuation input.
+      const check = await runUtf8CommandWithTimeout([...workerCommand, "--check"], {
+        cwd: root,
+        baseEnv: {},
+        env: workerEnv,
+        timeoutMs: params.updateStepTimeoutMs,
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+        killGraceMs: 500,
+        maxOutputBytes: 64 * 1024,
+      });
+      assertCurrent();
+      let contract: unknown;
+      try {
+        contract = JSON.parse(check.stdout);
+      } catch (cause) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Update live executor delegation capability could not be inspected.",
+          { cause },
+        );
+      }
+      if (
+        check.termination !== "exit" ||
+        check.code !== 0 ||
+        check.cleanup !== "normal" ||
+        !isRecord(contract) ||
+        (run.executorFence && contract.executorDelegation !== "pid-start-v1") ||
+        (requiresRetainedOwner && contract.retainedOwnerBinding !== true)
+      ) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Update runtime does not support live executor delegation; recovery remains pending.",
+        );
+      }
+      if (run.completionOwner === "gateway-restart" && contract.gatewayRestartCompletion !== true) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Candidate runtime cannot defer foreground update completion to Gateway restart; recovery remains pending.",
+        );
+      }
+    }
+    if (windowsRecovery && params.preManagedServiceStop) {
+      // The parent retains its original definition-refresh grant for compensation.
+      // Only the fresh finalizer may restore autostart at activation after migration.
+      windowsRecovery.handoff(
+        createWindowsTaskAutoStartGuard({
+          root: result.root ?? params.root,
+          before: params.preManagedServiceStop,
+          timeoutMs: params.updateStepTimeoutMs,
+        }),
+      );
+    }
+    const {
+      packageTransaction: _transaction,
+      databaseBackup: _databaseBackup,
+      preManagedServiceStop,
+      ...serializable
+    } = params;
     let stopState: MigratedUpdateFinalizationInput["params"]["preManagedServiceStop"];
     if (preManagedServiceStop) {
       const { windowsTaskAutoStartRecovery: _windows, ...serializableStop } = preManagedServiceStop;
       stopState = serializableStop;
     }
+    if (params.opts.timeout !== undefined) {
+      run.activationTimeoutMs ??= await resolveUpdateFinalizationTimeoutMs(
+        params.updateStepTimeoutMs,
+        {
+          env: params.ownedManagedUpdateEnv ?? run.env,
+          databases: params.schemaVersions,
+          pluginCount: Object.keys(params.preUpdatePluginInstallRecords).length,
+          nodeRunner: params.packageUpdateNodeRunner,
+        },
+      );
+    }
+    const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.updateStepTimeoutMs);
+    assertCurrent();
     const resultPath = path.join(scratchDir, "result.json");
-    const { requesterAuthority, ...runIdentity } = run;
+    const {
+      requesterAuthority,
+      executorFence,
+      sourceArtifactLock: _sourceArtifactLock,
+      ...runIdentity
+    } = run;
     const input: MigratedUpdateFinalizationInput = {
+      ...handoff,
       params: {
         ...serializable,
         opts: {
           ...params.opts,
+          timeout: handoff.timeout.serialized,
           run: {
             ...runIdentity,
             ...(requesterAuthority
@@ -173,37 +259,28 @@ export async function continueMigratedUpdateInFreshProcess(
       ...(windowsRecovery ? { windowsTaskAutoStartSuspended: true } : {}),
       resultPath,
     };
-    const child = await runUtf8CommandWithTimeout(
-      [
-        params.packageUpdateNodeRunner ?? resolveNodeRunner(),
-        path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
-      ],
-      {
+    const runChild = (
+      grant?: UpdateCommandChildGrant,
+      bindChild?: (pid: number, argv?: readonly string[]) => void,
+    ) =>
+      runUtf8CommandWithTimeout(workerCommand, {
         cwd: root,
         baseEnv: {},
-        env: {
-          ...stripGatewayServiceMarkerEnv(
-            resolveUpdatedInstallCommandEnv({
-              processEnv: params.ownedManagedUpdateEnv ?? run.env,
-            }),
-          ),
-          OPENCLAW_UPDATE_IN_PROGRESS: "1",
-          TMPDIR: scratchDir,
-          TMP: scratchDir,
-          TEMP: scratchDir,
-        },
-        input: JSON.stringify(input),
-        // This continuation includes bounded plugin steps as well as service
-        // verification; the whole-process bound must exceed one step's budget.
-        timeoutMs: Math.max(30 * 60_000, params.updateStepTimeoutMs * 6),
+        env: workerEnv,
+        input: JSON.stringify({ ...input, ...(grant ? { executor: grant } : {}) }),
+        beforeInput: bindChild,
+        // Only an operator deadline bounds forward finalization. Probes and
+        // cancellation settlement keep their separate finite allowances.
+        timeoutMs: run.activationTimeoutMs,
         killProcessTree: true,
+        requireProcessTreeExtinction: true,
         killGraceMs: 500,
         maxOutputBytes: 1024 * 1024,
-      },
-    );
-    if (child.stdout) {
-      process.stdout.write(child.stdout);
-    }
+      });
+    await releaseLegacySourceLock(root, run.sourceArtifactLock);
+    const child = executorFence
+      ? await withUpdateCommandExecutorChild(executorFence, root, runChild)
+      : await runChild();
     if (child.stderr) {
       process.stderr.write(child.stderr);
     }
@@ -213,16 +290,45 @@ export async function continueMigratedUpdateInFreshProcess(
     if (
       child.termination !== "exit" ||
       child.code !== 0 ||
-      response.terminalRunId !== run.runId ||
+      child.cleanup !== "normal" ||
+      (executorFence && response.executorDelegation !== "pid-start-v1") ||
+      (response.terminalRunId !== run.runId &&
+        !(
+          run.completionOwner === "gateway-restart" &&
+          run.gatewayRestartRequired === true &&
+          response.restartRunId === run.runId &&
+          response.result.status === "ok"
+        )) ||
       response.result.runId !== run.runId ||
       !Number.isInteger(response.exitCode)
     ) {
-      throw new Error(
-        "Candidate finalization did not confirm the admitted run's terminal outcome.",
-      );
+      throw new Error("Update finalization did not confirm the admitted run's terminal outcome.");
+    }
+    const restoreDatabases =
+      params.databaseBackup !== undefined &&
+      params.packageTransaction !== undefined &&
+      !windowsRecovery &&
+      response.result.status === "error" &&
+      response.candidateStartAttempted === false &&
+      !isUpdateGatewayReadinessPending(response.result);
+    if (restoreDatabases) {
+      // The waiting driver still owns the package transaction and stopped
+      // lifecycle. Its database restoration and rollback publish the final result.
+      return {
+        result: response.result,
+        exitCode: response.exitCode,
+        automaticTriage: response.automaticTriage,
+        candidateStartAttempted: false,
+        databaseRollbackAvailable: true,
+      };
+    }
+    if (child.stdout) {
+      process.stdout.write(child.stdout);
     }
     try {
-      await windowsRecovery?.complete(response.result.status === "ok");
+      await windowsRecovery?.complete(
+        response.result.status === "ok" || isUpdateGatewayReadinessPending(response.result),
+      );
     } catch (cause) {
       throw new UpdateCommandFailure(
         response.result,
@@ -231,27 +337,32 @@ export async function continueMigratedUpdateInFreshProcess(
         { cause },
       );
     }
-    const retained = await params.packageTransaction
-      ?.complete({ activationVerified: response.result.status === "ok" })
-      .catch((error: unknown) => {
-        defaultRuntime.error(`Update backup cleanup failed: ${String(error)}`);
-      });
-    if (retained) {
-      response.result.steps.push(retained);
-      defaultRuntime.error(retained.stderrTail);
+    const cleanupFailure = await recordUpdatePackageCompletion(
+      params,
+      response.result,
+      assertCurrent,
+    );
+    if (cleanupFailure) {
+      throw cleanupFailure;
     }
     return {
       result: response.result,
       exitCode: response.exitCode,
       automaticTriage: response.automaticTriage,
+      candidateStartAttempted: response.candidateStartAttempted,
     };
   } catch (error) {
+    if (error instanceof UpdateCommandRecoveryPendingError) {
+      // A refused compatibility/admission check is not delegated completion and
+      // cannot authorize native restoration in the old, migrated runtime.
+      throw error;
+    }
     try {
       await windowsRecovery?.complete(false);
     } catch (cause) {
       throw new AggregateError(
         [error, cause],
-        `Candidate finalization failed (${formatErrorMessage(error)}) and Windows task autostart compensation failed (${formatErrorMessage(cause)})`,
+        `Update finalization failed (${formatErrorMessage(error)}) and Windows task autostart compensation failed (${formatErrorMessage(cause)})`,
         { cause },
       );
     }

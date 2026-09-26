@@ -30,7 +30,7 @@ function workboardConfigSnapshot() {
 }
 
 suite.define(() => {
-  it("scrolls the toolbar and cards together at the mobile breakpoint", async () => {
+  it("scrolls every mobile column card into view while keeping the toolbar available", async () => {
     await suite.withPage({}, async ({ page }) => {
       const cards = createMobileScrollCards(baseTime);
       await page.setViewportSize({ height: 700, width: 390 });
@@ -75,6 +75,7 @@ suite.define(() => {
       expect((await page.goto(`${suite.server.baseUrl}workboard`))?.status()).toBe(200);
       const content = page.locator(".content--workboard");
       const board = page.locator(".workboard-board");
+      const columnCards = page.locator(".workboard-column--todo .workboard-column__cards");
       const toolbar = page.locator(".workboard-toolbar");
       const lastCard = page
         .locator(".workboard-column--todo .workboard-card", {
@@ -83,29 +84,33 @@ suite.define(() => {
         .first();
       await lastCard.waitFor({ state: "attached" });
 
-      expect(await readMobileScrollGeometry(content, "Mobile workboard card 6")).toEqual(
+      expect(await readMobileScrollGeometry(columnCards, "Mobile workboard card 6")).toEqual(
         expectedMobileScrollGeometry,
       );
       const initialToolbarTop = await toolbar.evaluate(
         (element) => element.getBoundingClientRect().top,
       );
-      await content.hover();
+      await columnCards.hover();
       for (let attempt = 0; attempt < 8; attempt += 1) {
         if (await cardFitsWithinWorkboardContent(lastCard)) {
           break;
         }
-        const previousScrollTop = await content.evaluate((element) => element.scrollTop);
+        const previousScrollTop = await columnCards.evaluate((element) => element.scrollTop);
         await page.mouse.wheel(0, 320);
         await expect
-          .poll(() => content.evaluate((element) => element.scrollTop))
+          .poll(() => columnCards.evaluate((element) => element.scrollTop))
           .toBeGreaterThan(previousScrollTop);
       }
-      await expect.poll(() => content.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      await expect
+        .poll(() => columnCards.evaluate((element) => element.scrollTop))
+        .toBeGreaterThan(0);
       expect(await cardFitsWithinWorkboardContent(lastCard)).toBe(true);
-      expect(await toolbar.evaluate((element) => element.getBoundingClientRect().top)).toBeLessThan(
+      expect(await toolbar.evaluate((element) => element.getBoundingClientRect().top)).toBeCloseTo(
         initialToolbarTop,
+        0,
       );
       expect(await board.evaluate((element) => element.scrollTop)).toBe(0);
+      expect(await content.evaluate((element) => element.scrollTop)).toBe(0);
     });
   });
 });

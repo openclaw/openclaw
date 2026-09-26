@@ -3,10 +3,11 @@ import type { Command } from "commander";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { setVerbose } from "../../globals.js";
 import type { LogLevel } from "../../logging/levels.js";
+import { resolvePluginInstallInvalidConfigPolicy } from "../../plugins/install-config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { getVerboseFlag, isHelpOrVersionInvocation } from "../argv.js";
-import { resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
 import {
   applyCliExecutionStartupPresentation,
   ensureCliExecutionBootstrap,
@@ -16,27 +17,20 @@ import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import { resolveCliStartupPolicy } from "../command-startup-policy.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import { isModelsPlainMachineOutput } from "../models-output-mode.js";
-import {
-  resolvePluginInstallInvalidConfigPolicy,
-  resolvePluginInstallPreactionRequest,
-} from "../plugin-install-config-policy.js";
+import { resolvePluginInstallPreactionRequest } from "../plugin-install-config-policy.js";
 import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 import { isParentDefaultHelpAction } from "./parent-default-help.js";
 
 const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-V", "--version"]);
 
-function setProcessTitleForCommand(actionCommand: Command) {
-  let current: Command = actionCommand;
-  while (current.parent && current.parent.parent) {
-    current = current.parent;
+// Every CLI invocation presents as `openclaw` in process listings instead of `node`; only the
+// long-running Gateway takes a distinct title (see gateway-cli/run-loop.ts), so lock readers and
+// operators can tell it apart from ordinary commands.
+function setProcessTitleForCommand() {
+  if (process.title !== CLI_NAME) {
+    process.title = CLI_NAME;
   }
-  const name = current.name();
-  const cliName = resolveCliName();
-  if (!name || name === cliName) {
-    return;
-  }
-  process.title = `${cliName}-${name}`;
 }
 
 function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
@@ -60,7 +54,7 @@ function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
 }
 
-function getStateMigrationAgentId(actionCommand: Command): string | undefined {
+function getCommandAgentId(actionCommand: Command): string | undefined {
   if (!actionCommand.options.some((option) => option.attributeName() === "agent")) {
     return undefined;
   }
@@ -138,7 +132,7 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
 /** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
-    setProcessTitleForCommand(actionCommand);
+    setProcessTitleForCommand();
     const argv = process.argv;
     const helpOrVersionWasOptionValue = hasCommanderOptionToken(
       actionCommand,
@@ -152,16 +146,25 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     ) {
       return;
     }
-    const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
+    const commandPath = getCommanderCommandPath(actionCommand);
+    const nativeUpdateExecutorCheck =
+      commandPath.length === 2 &&
+      (commandPath[0] === "gateway" || commandPath[0] === "daemon") &&
+      ["install", "restart", "stop"].includes(commandPath[1] ?? "") &&
+      actionCommand.args.length === 0 &&
+      actionCommand.getOptionValueSource("updateExecutor") === "cli" &&
+      actionCommand.getOptionValue("updateExecutor") === "check";
+    const jsonOutputMode =
+      nativeUpdateExecutorCheck || isCommandJsonOutputMode(actionCommand, argv);
     const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv, actionCommand);
     applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
-    const commandPath = getCommanderCommandPath(actionCommand);
     const startupPolicy = resolveCliStartupPolicy({
       argv,
       commandPath,
       jsonOutputMode,
       machineOutputMode,
       env: process.env,
+      nativeUpdateExecutorCheck,
     });
     await applyCliExecutionStartupPresentation({
       startupPolicy,
@@ -176,7 +179,12 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (isGuidedConfigAction(actionCommand) || isGuidedConfigCommandPath(commandPath)) {
+    // Capability discovery precedes staged-update admission and must not migrate live state.
+    if (
+      nativeUpdateExecutorCheck ||
+      isGuidedConfigAction(actionCommand) ||
+      isGuidedConfigCommandPath(commandPath)
+    ) {
       return;
     }
     await runStateStoreGuard(commandPath);
@@ -191,50 +199,39 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       });
       return;
     }
-    let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
-    let skipPristineStartupStateMigrations = false;
-    let skipPristineCoreStateMigrations = false;
+    let beforeStatePreparation: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
     let allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
     if (isGatewayRunAction(actionCommand)) {
-      const {
-        prepareGatewayRunBootstrap,
-        recheckGatewayRunBootstrap,
-        wasPreparedGatewayRunCoreStatePristine,
-        wasPreparedGatewayRunStatePristine,
-      } = await import("../gateway-cli/pre-bootstrap.js");
+      const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =
+        await import("../gateway-cli/pre-bootstrap.js");
       const { resolveGatewayRunOptions } = await import("../gateway-cli/run-options.js");
       const resolvedOptions = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
       allowInvalid ||= resolvedOptions.allowUnconfigured === true;
-      const opts = {
-        force: resolvedOptions.force === true,
-        reset: resolvedOptions.reset === true,
-      };
+      const opts = resolvedOptions;
       const shouldBootstrap = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
       if (!shouldBootstrap) {
         return;
       }
-      skipPristineStartupStateMigrations = wasPreparedGatewayRunStatePristine();
-      skipPristineCoreStateMigrations = wasPreparedGatewayRunCoreStatePristine();
-      beforeStateMigrations = (snapshot) =>
+      beforeStatePreparation = (snapshot) =>
         recheckGatewayRunBootstrap({
           opts,
           runtime: defaultRuntime,
           ...(snapshot ? { snapshot } : {}),
         });
     }
-    const stateMigrationAgentId = getStateMigrationAgentId(actionCommand);
-    if (stateMigrationAgentId) {
-      const existingGuard = beforeStateMigrations;
-      beforeStateMigrations = async (snapshot) => {
+    const commandAgentId = getCommandAgentId(actionCommand);
+    if (commandAgentId) {
+      const existingGuard = beforeStatePreparation;
+      beforeStatePreparation = async (snapshot) => {
         if (snapshot) {
           const { isValidAgentId, normalizeAgentId } =
             await import("@openclaw/normalization-core/agent-id");
-          if (isValidAgentId(stateMigrationAgentId)) {
+          if (isValidAgentId(commandAgentId)) {
             const [{ listAgentIds }, { retainLegacyDefaultAgentId }] = await Promise.all([
               import("../../agents/agent-scope-config.js"),
               import("../../config/legacy.default-agent-owner.js"),
             ]);
-            const agentId = normalizeAgentId(stateMigrationAgentId);
+            const agentId = normalizeAgentId(commandAgentId);
             if (listAgentIds(snapshot.sourceConfig).includes(agentId)) {
               retainLegacyDefaultAgentId(snapshot.sourceConfig, agentId);
             }
@@ -248,11 +245,9 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       commandPath,
       startupPolicy,
       allowInvalid,
-      ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
-      ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
-      ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
+      ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
     });
-    if (beforeStateMigrations && isGatewayRunAction(actionCommand)) {
+    if (beforeStatePreparation && isGatewayRunAction(actionCommand)) {
       const { reloadTrustedGatewayRunEnvironment } =
         await import("../gateway-cli/pre-bootstrap.js");
       await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });

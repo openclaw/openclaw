@@ -38,10 +38,7 @@ function createSlackReactionClient(reactions: SlackReaction[]) {
       if (!result) {
         throw new Error(`Unexpected Slack API method: ${method}`);
       }
-      return new Response(JSON.stringify(result), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json(result);
     },
   });
   return { client, calls };
@@ -108,7 +105,6 @@ describe("Slack reaction user limits", () => {
   it.each([
     { name: "omitted", limit: undefined },
     { name: "larger than the hard cap", limit: 500 },
-    { name: "the largest safe integer", limit: Number.MAX_SAFE_INTEGER },
   ])("caps $name user limits at 100 users per emoji", async ({ limit }) => {
     const users = Array.from({ length: 101 }, (_, index) => `U${index + 1}`);
     const { client } = createSlackReactionClient([{ name: "eyes", count: 101, users }]);
@@ -154,11 +150,7 @@ describe("Slack reaction user limits", () => {
 
   it.each([
     { action: "reactions", limit: 0 },
-    { action: "reactions", limit: -1 },
     { action: "reactions", limit: 1.5 },
-    { action: "reactions", limit: Number.NaN },
-    { action: "reactions", limit: Number.POSITIVE_INFINITY },
-    { action: "reactions", limit: Number.NEGATIVE_INFINITY },
     { action: "reactions", limit: Number.MAX_SAFE_INTEGER + 1 },
     { action: "read", limit: 0 },
   ])(

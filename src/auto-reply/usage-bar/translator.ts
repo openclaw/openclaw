@@ -1,4 +1,5 @@
 import {
+  asFiniteNumber,
   asSafeIntegerInRange,
   expectDefined,
   isRecord as isObject,
@@ -18,12 +19,16 @@ function toGlyphs(scale: unknown): string[] {
   return [];
 }
 
-function num(value: unknown): string {
+function coerceFiniteValue(value: unknown): number | undefined {
   if (value === null || value === undefined || value === "") {
-    return "";
+    return undefined;
   }
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
+  return asFiniteNumber(Number(value));
+}
+
+function num(value: unknown): string {
+  const n = coerceFiniteValue(value);
+  if (n === undefined) {
     return "";
   }
   if (Math.abs(n) >= 1000) {
@@ -34,22 +39,13 @@ function num(value: unknown): string {
 }
 
 function fixed(value: unknown, digits: number): string {
-  if (value === null || value === undefined || value === "") {
-    return "";
-  }
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return "";
-  }
-  return n.toFixed(digits);
+  const n = coerceFiniteValue(value);
+  return n === undefined ? "" : n.toFixed(digits);
 }
 
 function dur(value: unknown): string {
-  if (value === null || value === undefined || value === "") {
-    return "";
-  }
-  const raw = Number(value);
-  if (!Number.isFinite(raw)) {
+  const raw = coerceFiniteValue(value);
+  if (raw === undefined) {
     return "";
   }
   const s = Math.max(0, Math.trunc(raw));
@@ -64,22 +60,13 @@ function dur(value: unknown): string {
 }
 
 function pct(value: unknown): string {
-  if (value === null || value === undefined || value === "") {
-    return "";
-  }
-  const n = Number(value);
-  return Number.isFinite(n) ? `${Math.round(n)}%` : "";
+  const n = coerceFiniteValue(value);
+  return n === undefined ? "" : `${Math.round(n)}%`;
 }
 
 function inv(value: unknown): unknown {
-  if (value === null || value === undefined || value === "") {
-    return value;
-  }
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return value;
-  }
-  return 100 - Math.max(0, Math.min(100, n));
+  const n = coerceFiniteValue(value);
+  return n === undefined ? value : 100 - Math.max(0, Math.min(100, n));
 }
 
 function norm(value: unknown): number {
@@ -215,7 +202,7 @@ function renderSegment(seg: Segment, ctx: unknown, vocab: Vocab): string | null 
   }
   if ("map" in seg) {
     const v = getPath(ctx, String(seg.map));
-    const key = typeof v === "boolean" ? String(v) : String(v);
+    const key = String(v);
     const cases = isObject(seg.cases) ? seg.cases : {};
     const hit = Object.hasOwn(cases, key) ? cases[key] : cases["_default"];
     return typeof hit === "string" ? hit : null;

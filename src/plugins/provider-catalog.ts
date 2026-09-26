@@ -8,7 +8,10 @@ import type {
   ModelCatalogTieredCost,
   NormalizedModelCatalogRow,
 } from "@openclaw/model-catalog-core/model-catalog-types";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -35,15 +38,16 @@ export function findCatalogTemplate(params: {
   providerId: string;
   templateIds: readonly string[];
 }) {
-  return params.templateIds
-    .map((templateId) =>
-      params.entries.find(
-        (entry) =>
-          normalizeProviderId(entry.provider) === normalizeProviderId(params.providerId) &&
-          normalizeLowercaseStringOrEmpty(entry.id) === normalizeLowercaseStringOrEmpty(templateId),
-      ),
-    )
-    .find((entry) => entry !== undefined);
+  let selected: (typeof params.entries)[number] | undefined;
+  params.templateIds.some((templateId) => {
+    selected = params.entries.find(
+      (entry) =>
+        normalizeProviderId(entry.provider) === normalizeProviderId(params.providerId) &&
+        normalizeLowercaseStringOrEmpty(entry.id) === normalizeLowercaseStringOrEmpty(templateId),
+    );
+    return selected !== undefined;
+  });
+  return selected;
 }
 
 /** Selects one complete auth result in caller-defined order, including unresolved secret markers. */
@@ -73,12 +77,9 @@ export async function buildSingleProviderApiKeyCatalog(params: {
     return null;
   }
 
-  const explicitProvider =
-    params.allowExplicitBaseUrl && params.ctx.config.models?.providers
-      ? Object.entries(params.ctx.config.models.providers).find(
-          ([configuredProviderId]) => normalizeProviderId(configuredProviderId) === providerId,
-        )?.[1]
-      : undefined;
+  const explicitProvider = params.allowExplicitBaseUrl
+    ? findNormalizedProviderValue(params.ctx.config.models?.providers, providerId)
+    : undefined;
   const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl) ?? "";
 
   return {
@@ -188,7 +189,7 @@ function cloneManifestCatalogMediaInput(
 function buildManifestCatalogModel(
   model: ModelCatalogModel,
   options: { providerId?: string; filterDocument?: boolean } = {},
-): ModelDefinitionConfig {
+): ModelDefinitionConfig & Pick<ModelCatalogModel, "contextWindows" | "contextWindowDefault"> {
   if (model.contextWindow === undefined) {
     throw new Error(`Manifest modelCatalog row ${model.id} is missing contextWindow`);
   }
@@ -207,6 +208,10 @@ function buildManifestCatalogModel(
     input: buildManifestCatalogModelInput(model, options.filterDocument),
     cost: cloneManifestCatalogCost(model.cost ?? {}),
     contextWindow: model.contextWindow,
+    ...(model.contextWindows
+      ? { contextWindows: model.contextWindows.map((option) => ({ ...option })) }
+      : {}),
+    ...(model.contextWindowDefault ? { contextWindowDefault: model.contextWindowDefault } : {}),
     ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
     maxTokens: model.maxTokens,
     ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),

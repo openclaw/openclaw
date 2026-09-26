@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.isSessionRunActive
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.sessionColor
@@ -14,6 +15,7 @@ import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -57,7 +59,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerInputChange
@@ -69,8 +70,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -81,9 +84,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.CancellationException
 import kotlin.math.abs
-
-@Composable
-internal fun sidebarSearchLabel(): String = nativeString("Search sessions")
 
 @Composable
 internal fun SidebarSearchField(
@@ -97,7 +97,7 @@ internal fun SidebarSearchField(
     onValueChange = onQueryChange,
     modifier = modifier.fillMaxWidth().testTag("sidebar-search"),
     singleLine = true,
-    label = { Text(sidebarSearchLabel()) },
+    label = { Text(nativeString("Search sessions")) },
     leadingIcon = {
       Icon(
         imageVector = Icons.Default.Search,
@@ -155,11 +155,9 @@ internal fun SidebarCollapsibleHeader(
   palette: SidebarPalette,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
-  icon: ImageVector? = null,
-  iconPainter: Painter? = null,
   iconContent: (@Composable () -> Unit)? = null,
-  iconTint: Color = palette.text,
   trailingContent: (@Composable () -> Unit)? = null,
+  attention: SidebarAttention? = null,
 ) {
   Row(
     modifier =
@@ -168,6 +166,7 @@ internal fun SidebarCollapsibleHeader(
         .heightIn(min = 44.dp)
         .clip(RoundedCornerShape(10.dp))
         .clickable(role = Role.Button, onClick = onClick)
+        .semantics { stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed") }
         .padding(horizontal = 8.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -184,22 +183,6 @@ internal fun SidebarCollapsibleHeader(
       modifier = Modifier.size(18.dp),
     )
     iconContent?.invoke()
-    icon?.let {
-      Icon(
-        imageVector = it,
-        contentDescription = null,
-        tint = palette.text,
-        modifier = Modifier.size(18.dp),
-      )
-    }
-    iconPainter?.let {
-      Icon(
-        painter = it,
-        contentDescription = null,
-        tint = iconTint,
-        modifier = Modifier.size(18.dp),
-      )
-    }
     Text(
       text = label,
       style = ClawTheme.type.body.copy(fontSize = 13.sp),
@@ -208,6 +191,7 @@ internal fun SidebarCollapsibleHeader(
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
     )
+    attention?.let { SidebarAttentionIndicator(it, palette) }
     trailingContent?.invoke()
   }
 }
@@ -240,7 +224,9 @@ internal fun SidebarNavigationRow(
   pinned: Boolean? = null,
   palette: SidebarPalette,
   onClick: () -> Unit,
-  onMove: (Int) -> Unit,
+  canMoveUp: Boolean,
+  canMoveDown: Boolean,
+  onMove: (Int) -> Boolean,
   onDragActiveChange: (Boolean) -> Unit,
 ) {
   val thresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
@@ -249,6 +235,8 @@ internal fun SidebarNavigationRow(
   val currentOnDragActiveChange by rememberUpdatedState(onDragActiveChange)
   val pinStateDescription =
     pinned?.let { nativeString(if (it) "Pinned" else "Not pinned") }
+  val moveUpLabel = nativeString("Move up")
+  val moveDownLabel = nativeString("Move down")
   var dragOffset by remember(destination) { mutableFloatStateOf(0f) }
   var dragging by remember(destination) { mutableStateOf(false) }
   var dragGeneration by remember(destination) { mutableLongStateOf(0L) }
@@ -261,18 +249,7 @@ internal fun SidebarNavigationRow(
     }
   }
 
-  Box(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .zIndex(if (visualDragging) 1f else 0f)
-        .graphicsLayer {
-          translationY = if (visualDragging) dragOffset else 0f
-          scaleX = if (visualDragging) 1.015f else 1f
-          scaleY = if (visualDragging) 1.015f else 1f
-          shadowElevation = if (visualDragging) 10.dp.toPx() else 0f
-        },
-  ) {
+  SidebarDragDecoration(visualDragging, dragOffset) {
     NavigationDrawerItem(
       label = {
         Row(
@@ -310,6 +287,11 @@ internal fun SidebarNavigationRow(
           .heightIn(min = 48.dp)
           .semantics {
             if (pinStateDescription != null) stateDescription = pinStateDescription
+            customActions =
+              buildList {
+                if (canMoveUp) add(CustomAccessibilityAction(moveUpLabel) { currentOnMove(-1) })
+                if (canMoveDown) add(CustomAccessibilityAction(moveDownLabel) { currentOnMove(1) })
+              }
           }.pointerInput(destination, thresholdPx) {
             detectSidebarRowDrag(
               rowHost = rowHost,
@@ -343,13 +325,6 @@ internal fun SidebarNavigationRow(
           unselectedTextColor = palette.text,
         ),
     )
-    if (visualDragging) {
-      HorizontalDivider(
-        color = ClawTheme.colors.primary,
-        thickness = 2.dp,
-        modifier = Modifier.align(if (dragOffset < 0f) Alignment.TopCenter else Alignment.BottomCenter),
-      )
-    }
   }
 }
 
@@ -363,10 +338,12 @@ internal enum class SidebarSessionActivity {
 internal fun sidebarSessionActivity(
   status: String?,
   lastRunError: String?,
-  hasActiveRun: Boolean,
+  hasActiveRun: Boolean?,
   unread: Boolean,
+  continuing: Boolean = false,
 ): SidebarSessionActivity? {
   val normalizedStatus = status?.trim()?.lowercase()
+  val active = isSessionRunActive(hasActiveRun, normalizedStatus)
   return when {
     !lastRunError.isNullOrBlank() ||
       normalizedStatus == "failed" ||
@@ -374,9 +351,9 @@ internal fun sidebarSessionActivity(
       normalizedStatus == "killed" ||
       normalizedStatus == "error" -> SidebarSessionActivity.Failed
 
-    normalizedStatus == "queued" -> SidebarSessionActivity.Queued
+    normalizedStatus == "queued" && active -> SidebarSessionActivity.Queued
 
-    hasActiveRun || normalizedStatus == "active" || normalizedStatus == "running" -> SidebarSessionActivity.Running
+    continuing || active -> SidebarSessionActivity.Running
 
     unread -> SidebarSessionActivity.Unread
 
@@ -438,16 +415,17 @@ internal fun SidebarSessionRow(
   onClick: () -> Unit,
   onDragCommit: ((Int) -> Unit)? = null,
   onDragActiveChange: (Boolean) -> Unit = {},
+  attention: SidebarAttention? = null,
 ) {
   val activity =
     sidebarSessionActivity(
       status = session.status,
       lastRunError = session.lastRunError,
-      hasActiveRun = session.hasActiveRun == true,
+      hasActiveRun = session.hasActiveRun,
       unread = session.unread == true,
     )
   val sessionStateDescription =
-    when (activity) {
+    attention?.status ?: when (activity) {
       SidebarSessionActivity.Failed -> nativeString("Run failed")
       SidebarSessionActivity.Queued -> nativeString("Queued")
       SidebarSessionActivity.Running -> nativeString("Working")
@@ -467,22 +445,24 @@ internal fun SidebarSessionRow(
   ) {
     Column(modifier = Modifier.weight(1f)) {
       Text(
-        text = sidebarSessionTitle(session),
+        text = sessionPresentationTitle(session) { session.key },
         style = ClawTheme.type.body.copy(fontSize = 13.sp),
         color = palette.text,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
       Text(
-        text = sidebarSessionSubtitle(session, sessionStateDescription),
+        text = attention?.status ?: sidebarSessionSubtitle(session, sessionStateDescription),
         style = ClawTheme.type.caption.copy(fontSize = 11.sp),
         color = palette.muted,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
     }
-    activity?.let {
-      SidebarSessionActivityIndicator(activity = it, palette = palette)
+    if (attention != null) {
+      SidebarAttentionIndicator(attention, palette)
+    } else {
+      activity?.let { SidebarSessionActivityIndicator(activity = it, palette = palette) }
     }
     if (session.pinned == true) {
       Icon(
@@ -555,18 +535,7 @@ internal fun SidebarRowSurface(
       }
     }
 
-  Box(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .zIndex(if (visualDragging) 1f else 0f)
-        .graphicsLayer {
-          translationY = if (visualDragging) dragOffset else 0f
-          scaleX = if (visualDragging) 1.015f else 1f
-          scaleY = if (visualDragging) 1.015f else 1f
-          shadowElevation = if (visualDragging) 10.dp.toPx() else 0f
-        },
-  ) {
+  SidebarDragDecoration(visualDragging, dragOffset) {
     Row(
       modifier =
         Modifier
@@ -600,6 +569,28 @@ internal fun SidebarRowSurface(
       horizontalArrangement = Arrangement.spacedBy(10.dp),
       content = content,
     )
+  }
+}
+
+@Composable
+private fun SidebarDragDecoration(
+  visualDragging: Boolean,
+  dragOffset: Float,
+  content: @Composable BoxScope.() -> Unit,
+) {
+  Box(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .zIndex(if (visualDragging) 1f else 0f)
+        .graphicsLayer {
+          translationY = if (visualDragging) dragOffset else 0f
+          scaleX = if (visualDragging) 1.015f else 1f
+          scaleY = if (visualDragging) 1.015f else 1f
+          shadowElevation = if (visualDragging) 10.dp.toPx() else 0f
+        },
+  ) {
+    content()
     if (visualDragging) {
       HorizontalDivider(
         color = ClawTheme.colors.primary,
@@ -654,7 +645,7 @@ internal fun sidebarSessionSubtitle(
 ): String =
   sessionListSubtitle(
     session = session,
-    fallback =
-      if (session.hasActiveRun == true) checkNotNull(activeRunLabel) else sessionSourceLabel(session.key),
+    fallback = sessionSourceLabel(session.key),
     nowMs = nowMs,
+    activeRunLabel = activeRunLabel,
   )

@@ -157,10 +157,14 @@ class CliArgumentError extends Error {
   override name = "CliArgumentError";
 }
 
-function remainingTimeoutMs(deadlineMs: number, nowMs = Date.now()): number {
+function remainingTimeoutMs(
+  deadlineMs: number,
+  timeoutError?: () => Error,
+  nowMs = Date.now(),
+): number {
   const remaining = Math.floor(deadlineMs - nowMs);
   if (!Number.isFinite(deadlineMs) || remaining <= 0) {
-    throw new Error("Discord ACP smoke exceeded total timeout.");
+    throw timeoutError?.() ?? new Error("Discord ACP smoke exceeded total timeout.");
   }
   return Math.max(1, remaining);
 }
@@ -559,7 +563,7 @@ async function requestDiscordJson<T>(params: {
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     const controller = new AbortController();
-    const fetchTimeoutMs = remainingTimeoutMs(deadlineMs);
+    const fetchTimeoutMs = remainingTimeoutMs(deadlineMs, timeoutError);
     const response = await withTimeout({
       operation: fetchImpl(`${DISCORD_API_BASE}${params.path}`, {
         method: params.method,
@@ -573,7 +577,7 @@ async function requestDiscordJson<T>(params: {
     });
 
     if (response.status === 429) {
-      const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
+      const bodyTimeoutMs = remainingTimeoutMs(deadlineMs, timeoutError);
       const body = (await withTimeout({
         operation: readDiscordResponseJson({
           response,
@@ -592,7 +596,7 @@ async function requestDiscordJson<T>(params: {
       })) as { retry_after?: number };
       const waitSeconds = typeof body.retry_after === "number" ? body.retry_after : 1;
       const waitMs = Math.ceil(waitSeconds * 1000);
-      const remainingMs = remainingTimeoutMs(deadlineMs);
+      const remainingMs = remainingTimeoutMs(deadlineMs, timeoutError);
       if (waitMs >= remainingMs) {
         throw new Error(
           `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)} exceeded total timeout before retry.`,
@@ -603,7 +607,7 @@ async function requestDiscordJson<T>(params: {
     }
 
     if (!response.ok) {
-      const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
+      const bodyTimeoutMs = remainingTimeoutMs(deadlineMs, timeoutError);
       const text = await withTimeout({
         operation: readDiscordResponseText({
           response,
@@ -626,7 +630,7 @@ async function requestDiscordJson<T>(params: {
       return undefined as T;
     }
 
-    const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
+    const bodyTimeoutMs = remainingTimeoutMs(deadlineMs, timeoutError);
     return (await withTimeout({
       operation: readDiscordResponseJson({
         response,

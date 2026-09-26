@@ -59,6 +59,7 @@ const resolveModelAsyncMock = vi.fn(
       return {
         ...stores,
         model: { ...staticCatalogModel, provider, id: modelId, name: modelId },
+        logicalRef: { provider, model: modelId },
       };
     }
     return {
@@ -128,6 +129,7 @@ vi.mock("./compaction-runtime-preparation.js", () => ({
     modelId,
   }),
   prepareCompactionHarnessAuth: vi.fn(async () => ({
+    ok: true,
     runtimeAuthProfileStore: {},
     runtimeAuthPreparation: {
       plan: { selectedAuthMode: "api-key" },
@@ -157,6 +159,7 @@ vi.mock("../provider-runtime-auth-protection.js", () => ({
 
 vi.mock("../provider-secret-egress.js", () => ({
   unwrapSecretSentinelsForProviderEgress: (value: unknown) => value,
+  unwrapModelHeaderSentinelsForProviderEgress: (model: unknown) => model,
 }));
 
 vi.mock("../provider-request-config.js", () => ({
@@ -185,6 +188,7 @@ function createPreparedModelRuntime(config: Record<string, unknown>) {
     workspaceDir: "/tmp/openclaw-model-resolution",
     pluginRegistry: {},
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => ({ authStorage, modelRegistry: emptyModelRegistry }),
   };
@@ -256,7 +260,7 @@ describe("embedded model resolution consistency", () => {
         modelIdNormalization: {
           providers: {
             "custom-provider": {
-              aliases: { "legacy-model": "modern-model" },
+              aliases: { "legacy-model": "modern-model", "modern-model": "unexpected-second-pass" },
             },
           },
         },
@@ -268,7 +272,7 @@ describe("embedded model resolution consistency", () => {
         agentId: "worker",
         provider: initial.provider,
         model: initial.modelId,
-        requestedRouteResolution: "resolved",
+        requestedRouteResolution: "raw",
         fallbacksOverride: [],
         manifestPlugins,
       }),
@@ -282,7 +286,6 @@ describe("embedded model resolution consistency", () => {
     ]);
     expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalledWith({
       provider: "custom-provider",
-      plugins: manifestPlugins,
       context: {
         provider: "custom-provider",
         modelId: "modern-model",
@@ -302,6 +305,7 @@ describe("embedded model resolution consistency", () => {
     const preparedModelRuntime = createPreparedModelRuntime(config);
 
     const chat = await resolveEmbeddedRunModelSetup({
+      assertCurrent: () => {},
       runParams: {
         config,
         prompt: "hello",

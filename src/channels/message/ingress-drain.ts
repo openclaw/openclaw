@@ -10,6 +10,7 @@ import {
   retainGatewayRootWorkAdmissionContinuation,
   runOutsideGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   createIngressDrainOwnerId,
   deregisterLiveIngressDrainInstance,
@@ -30,7 +31,10 @@ import {
   type ActiveHandlerState,
   type ChannelIngressDrainDispatchResult,
 } from "./ingress-drain-state.js";
-import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
+import {
+  supersedeActiveStatesIfNeeded,
+  type IngressSupersedeDecision,
+} from "./ingress-drain-supersede.js";
 import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
@@ -66,12 +70,13 @@ export type CreateChannelIngressDrainOptions<
     lifecycle: ChannelIngressDispatchLifecycle,
   ) => Promise<ChannelIngressDrainDispatchResult | void> | ChannelIngressDrainDispatchResult | void;
   resolveNonRetryableFailure?: (err: unknown) => IngressNonRetryableFailure | null;
+  /** A returned guard is checked synchronously before cancelling pre-adoption work. */
   shouldSupersedePending?: (
     newEvent:
       | ChannelIngressQueueRecord<TPayload, TMetadata>
       | ChannelIngressQueueClaim<TPayload, TMetadata>,
     pendingEvent: ChannelIngressQueueClaim<TPayload, TMetadata>,
-  ) => boolean | Promise<boolean>;
+  ) => IngressSupersedeDecision | Promise<IngressSupersedeDecision>;
   deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined;
   reconcileStoredLaneKey?: (
     record: ChannelIngressQueueRecord<TPayload, TMetadata>,
@@ -104,6 +109,10 @@ export type ChannelIngressDrain = {
   dispose: () => void;
 };
 
+type OwnedChannelIngressDrain = ChannelIngressDrain & {
+  dispose(options: { waitForSettlements: true }): Promise<void>;
+};
+
 /** Creates a channel-agnostic durable ingress drain over an existing queue. */
 export function createChannelIngressDrain<
   TPayload,
@@ -111,7 +120,8 @@ export function createChannelIngressDrain<
   TCompletedMetadata = unknown,
 >(
   options: CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
-): ChannelIngressDrain {
+  retainOwnerUntilDispose = false,
+): OwnedChannelIngressDrain {
   const queue = options.queue;
   // Unique per drain instance so same-process peers do not share claim ownership.
   const ownerId = options.ownerId ?? createIngressDrainOwnerId();
@@ -148,9 +158,11 @@ export function createChannelIngressDrain<
   };
 
   const abortActiveClaims = () => {
-    // Retire before abort so replacements recover; Set.delete makes disposal repeat safe.
-    // Claim-token fencing prevents this owner from settling a recovered claim.
-    deregisterLiveIngressDrainInstance(ownerId);
+    // Joining monitors retain claim custody through accepted settlement writes.
+    // Standalone drains preserve abort-time recovery for uncooperative handlers.
+    if (!retainOwnerUntilDispose || disposed) {
+      deregisterLiveIngressDrainInstance(ownerId);
+    }
     const reason = disposed
       ? new Error("ingress-drain-disposed")
       : toErrorObject(options.abortSignal?.reason, "ingress-drain-aborted");
@@ -361,11 +373,12 @@ export function createChannelIngressDrain<
         }
       },
       onDeferredHeartbeat: () => {
-        // Abort also covers disposal; retired callbacks cannot restart the watchdog.
-        if (state.phase === "deferred" && !state.abortController.signal.aborted) {
+        // A cleared watchdog marks adoption finalization or retired ownership.
+        if ((state.phase === "dispatching" || state.phase === "deferred") && state.stallTimer) {
           armStallWatchdog(state);
         }
       },
+      deferredHeartbeatIntervalMs: Math.max(1, Math.floor(adoptionStallTimeoutMs / 3)),
       onAdoptionFinalizing: () => {
         if (state.phase !== "dispatching" && state.phase !== "deferred") {
           return;
@@ -445,8 +458,10 @@ export function createChannelIngressDrain<
     // settles; when the inherited root is already released, dispatch outside it
     // so the dead lease cannot make session admission refuse the turn as
     // draining. A real restart drain still refuses both paths at admission.
+    // Dispatches and queued followups outlive the pump's async work scope.
+    // Leave that scope so its closure cannot reject their later tracked work.
     const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
-    state.task = (async () => {
+    state.task = runOutsideAsyncWorkScope(async () => {
       try {
         const result = await (releaseRootWork
           ? options.dispatchClaimedEvent(claim, lifecycle)
@@ -517,7 +532,7 @@ export function createChannelIngressDrain<
       } finally {
         releaseRootWork?.();
       }
-    })();
+    });
 
     activeByClaim.set(activeClaimKey(claim), state);
     laneOwnerByKey.set(laneKey, state);
@@ -703,6 +718,44 @@ export function createChannelIngressDrain<
     return { started };
   };
 
+  function dispose(): void;
+  function dispose(disposeOptions: { waitForSettlements: true }): Promise<void>;
+  function dispose(disposeOptions?: { waitForSettlements: true }): void | Promise<void> {
+    if (disposeOptions?.waitForSettlements) {
+      if (!retainOwnerUntilDispose || !options.abortSignal?.aborted) {
+        return Promise.reject(
+          new Error("Joined ingress disposal requires an already-aborted retained owner"),
+        );
+      }
+      return (async () => {
+        for (;;) {
+          const states = [...activeByClaim.values()];
+          const settlements = states.flatMap((state) =>
+            state.settlement ? [state.settlement] : [],
+          );
+          if (settlements.length === 0) {
+            const failure = states.find((state) => state.settlementFailure)?.settlementFailure;
+            if (failure) {
+              throw failure.error;
+            }
+            // Keep the final empty check and retirement in the same synchronous turn.
+            dispose();
+            return;
+          }
+          await Promise.allSettled(settlements);
+        }
+      })();
+    }
+    disposed = true;
+    options.abortSignal?.removeEventListener("abort", abortActiveClaims);
+    abortActiveClaims();
+    // Snapshot: removeActive mutates activeByClaim during this sweep.
+    const activeStates = Array.from(activeByClaim.values());
+    for (const state of activeStates) {
+      removeActive(state);
+    }
+  }
+
   return {
     recoverStaleClaims,
     drainOnce,
@@ -711,15 +764,6 @@ export function createChannelIngressDrain<
       const tasks = [...activeByClaim.values()].map((state) => state.task);
       await Promise.allSettled(tasks);
     },
-    dispose: () => {
-      disposed = true;
-      options.abortSignal?.removeEventListener("abort", abortActiveClaims);
-      abortActiveClaims();
-      // Snapshot: removeActive mutates activeByClaim during this sweep.
-      const activeStates = Array.from(activeByClaim.values());
-      for (const state of activeStates) {
-        removeActive(state);
-      }
-    },
+    dispose,
   };
 }

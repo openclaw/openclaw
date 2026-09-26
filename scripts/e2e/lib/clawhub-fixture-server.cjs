@@ -11,14 +11,17 @@ const profile = process.argv[2];
 const portFile = process.argv[3];
 const artifactManifestFile = process.argv[4];
 const requireFromApp = createRequire(path.join(process.cwd(), "package.json"));
-const packageName = "@openclaw/kitchen-sink";
+const packageName =
+  profile === "plugins" ? "@openclaw/plugin-e2e-fixture" : "@openclaw/kitchen-sink";
 const pluginId = "openclaw-kitchen-sink-fixture";
 
 async function assertPrepublishRequests(
   baseUrl,
   requestedPackage,
   version,
-  securityMode = "required",
+  securityMode = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE === requestedPackage
+    ? "absent"
+    : "required",
   attempts = "1",
   minimumAttempts = "1",
 ) {
@@ -76,6 +79,29 @@ async function assertNoRequests(baseUrl) {
   const payload = await response.json();
   if (!Array.isArray(payload?.requests)) {
     throw new Error("ClawHub fixture request ledger must contain a requests array");
+  }
+  const legacyPackage = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE;
+  if (legacyPackage) {
+    const packagePath = `/api/v1/packages/${encodeURIComponent(legacyPackage)}`;
+    const artifactPrefix = `GET ${packagePath}/versions/`;
+    const artifactSuffix = "/artifact";
+    const artifactRequest = payload.requests[1] ?? "";
+    const version =
+      artifactRequest.startsWith(artifactPrefix) && artifactRequest.endsWith(artifactSuffix)
+        ? decodeURIComponent(artifactRequest.slice(artifactPrefix.length, -artifactSuffix.length))
+        : "";
+    const expected = [
+      `GET ${packagePath}`,
+      `GET ${packagePath}/versions/${encodeURIComponent(version)}/artifact`,
+      `GET ${packagePath}/versions/${encodeURIComponent(version)}/artifact/download`,
+    ];
+    if (!version || JSON.stringify(payload.requests) !== JSON.stringify(expected)) {
+      throw new Error(
+        `unexpected legacy ClawHub fixture requests: ${JSON.stringify(payload.requests)}`,
+      );
+    }
+    console.log("Verified complete legacy ClawHub artifact audit sequence.");
+    return;
   }
   if (payload.requests.length !== 0) {
     throw new Error(`unexpected ClawHub fixture requests: ${JSON.stringify(payload.requests)}`);
@@ -340,11 +366,13 @@ const profiles = {
       openclaw: { extensions: ["./index.js"] },
     },
     indexJs: `import isNumber from "is-number";
+import { realpathSync } from "node:fs";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 const dependencyUrl = import.meta.resolve("is-number");
-const expectedDependencyBaseUrl = new URL("./node_modules/is-number/", import.meta.url).href;
-if (!dependencyUrl.startsWith(expectedDependencyBaseUrl)) {
+// Captured generations link dependency packages; compare the canonical entry files.
+const expectedDependencyUrl = new URL("./node_modules/is-number/index.js", import.meta.url);
+if (realpathSync(new URL(dependencyUrl)) !== realpathSync(expectedDependencyUrl)) {
   throw new Error(\`kitchen-sink dependency resolved outside plugin root: \${dependencyUrl}\`);
 }
 

@@ -5,8 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   compareRatchetCounts,
   compareRatchetSets,
-  enforceRatchetScalar,
-  formatRatchetMessage,
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
@@ -93,7 +91,6 @@ describe("shrink-ratchet", () => {
   it.each([
     () => parseRatchetScalar("1\n2\n", "scalar.txt"),
     () => parseRatchetScalar("-1\n", "scalar.txt"),
-    () => parseRatchetScalar("many\n", "scalar.txt"),
   ])("rejects malformed scalar baselines", (parse) => {
     expect(parse).toThrow(/exactly one non-negative integer/u);
   });
@@ -140,24 +137,5 @@ describe("shrink-ratchet", () => {
     },
   ])("compares $name without permitting growth", ({ compare, expected }) => {
     expect(compare()).toEqual(expected);
-  });
-
-  it.each([
-    { current: 3, message: "budget grew", messages: { increased: "budget grew" } },
-    { current: 2, message: undefined, messages: {} },
-    { current: 1, message: "shrink the budget", messages: { decreased: "shrink the budget" } },
-  ])("preserves scalar failure messaging", ({ current, message, messages }) => {
-    const enforce = () => enforceRatchetScalar(current, 2, messages);
-    if (message) {
-      expect(enforce).toThrow(message);
-    } else {
-      expect(enforce).not.toThrow();
-    }
-  });
-
-  it("formats shrink guidance", () => {
-    expect(
-      formatRatchetMessage("Shrink baseline entries:", ["src/a.ts: 1 < 2", "src/b.ts: 0 < 1"]),
-    ).toBe("Shrink baseline entries:\n  src/a.ts: 1 < 2\n  src/b.ts: 0 < 1");
   });
 });

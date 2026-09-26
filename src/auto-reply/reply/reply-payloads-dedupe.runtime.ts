@@ -3,7 +3,5 @@ export {
   filterMessagingToolMediaDuplicates,
   filterMessagingToolReplyPayload,
   hasEnabledDeliveryOperation,
-  hasSourceRoutedMessagingToolDelivery,
   resolveMessagingToolPayloadDedupe,
-  shouldDedupeMessagingToolRepliesForRoute,
 } from "./reply-payloads-dedupe.js";

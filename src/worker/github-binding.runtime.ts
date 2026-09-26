@@ -1,15 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 import {
   managedGitHubIdentityEnvironment,
   writeManagedGitHubProfileFiles,
   type PreparedGitHubToolEnvironment,
 } from "../agents/github-tool-identity.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
-import { inspectPathPermissions } from "../infra/permissions.js";
+import { executeGitCommand } from "../infra/git-exec.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import type { WorkerGitHubLaunchBinding } from "./launch-descriptor.js";
 
 const log = createSubsystemLogger("worker/github");
@@ -21,7 +21,7 @@ async function bindWorkerGitHubCheckout(
   signal?: AbortSignal,
 ) {
   const git = (args: string[], timeoutMs = 5_000) =>
-    runCommandWithTimeout(["git", "-C", cwd, ...args], {
+    executeGitCommand(cwd, args, {
       baseEnv,
       timeoutMs,
       maxOutputBytes: { stdout: 1_048_576, stderr: 2_048 },

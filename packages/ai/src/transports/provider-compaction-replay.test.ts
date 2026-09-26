@@ -1,5 +1,6 @@
 import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   createCompactionCapture,
@@ -73,17 +74,7 @@ describe("compaction replay owner rewrites", () => {
     const input = convertResponsesMessages(
       model,
       {
-        messages: [
-          reindexed,
-          {
-            role: "toolResult",
-            toolCallId: "call_1",
-            toolName: "read",
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: 1,
-          },
-        ],
+        messages: [reindexed, makeTextToolResult("call_1", "read", "ok", false, 1)],
       },
       new Set(["openai"]),
       replayIdentity,

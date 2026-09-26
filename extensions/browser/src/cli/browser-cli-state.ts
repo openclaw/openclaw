@@ -1,12 +1,10 @@
-/**
- * Browser CLI state commands for cookies, storage, viewport, emulation, and
- * HTTP context settings.
- */
 import type { Command } from "commander";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseBrowserViewportDimension, runBrowserResizeWithOutput } from "./browser-cli-resize.js";
 import {
@@ -14,15 +12,10 @@ import {
   callBrowserRequest,
   printBrowserJsonResult,
   runBrowserCliCommand as runBrowserCommand,
+  runBrowserCliRequest,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import { registerBrowserCookiesAndStorageCommands } from "./browser-cli-state.cookies-storage.js";
-import { danger, defaultRuntime, parseBooleanValue } from "./core-api.js";
-
-function parseOnOff(raw: string): boolean | null {
-  const parsed = parseBooleanValue(raw);
-  return parsed === undefined ? null : parsed;
-}
 
 function parseFiniteNumberOption(value: string | undefined, label: string): number | undefined {
   if (value === undefined) {
@@ -37,28 +30,6 @@ function parseFiniteNumberOption(value: string | undefined, label: string): numb
   return parsed;
 }
 
-async function runBrowserSetRequest(params: {
-  parent: BrowserParentOpts;
-  path: string;
-  body: Record<string, unknown>;
-  successMessage: string;
-}) {
-  await runBrowserCommand(async () => {
-    const profile = params.parent?.browserProfile;
-    const result = await callBrowserRequest(params.parent, {
-      method: "POST",
-      path: params.path,
-      query: profile ? { profile } : undefined,
-      body: params.body,
-    });
-    if (printBrowserJsonResult(params.parent, result)) {
-      return;
-    }
-    defaultRuntime.log(params.successMessage);
-  });
-}
-
-/** Registers Browser state/configuration commands. */
 export function registerBrowserStateCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -79,17 +50,12 @@ export function registerBrowserStateCommands(
       if (width === undefined || height === undefined) {
         return;
       }
-      const parent = parentOpts(cmd);
-      const profile = parent?.browserProfile;
-      await runBrowserCommand(async () => {
-        await runBrowserResizeWithOutput({
-          parent,
-          profile,
-          width,
-          height,
-          targetId: opts.targetId,
-          successMessage: `viewport set: ${width}x${height}`,
-        });
+      await runBrowserResizeWithOutput({
+        parent: parentOpts(cmd),
+        width,
+        height,
+        targetId: opts.targetId,
+        successMessage: `viewport set: ${width}x${height}`,
       });
     });
 
@@ -100,13 +66,13 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
-      const offline = parseOnOff(value);
-      if (offline === null) {
+      const offline = parseBooleanValue(value);
+      if (offline === undefined) {
         defaultRuntime.error(danger("Expected on|off"));
         defaultRuntime.exit(1);
         return;
       }
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/offline",
         body: {
@@ -167,7 +133,7 @@ export function registerBrowserStateCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (username: string | undefined, password: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/credentials",
         body: {
@@ -202,7 +168,7 @@ export function registerBrowserStateCommands(
         ) {
           return;
         }
-        await runBrowserSetRequest({
+        await runBrowserCliRequest({
           parent,
           path: "/set/geolocation",
           body: {
@@ -233,7 +199,7 @@ export function registerBrowserStateCommands(
         defaultRuntime.exit(1);
         return;
       }
-      await runBrowserSetRequest({
+      await runBrowserCliRequest({
         parent,
         path: "/set/media",
         body: {
@@ -244,57 +210,31 @@ export function registerBrowserStateCommands(
       });
     });
 
-  set
-    .command("timezone")
-    .description("Override timezone (CDP)")
-    .argument("<timezoneId>", "Timezone ID (e.g. America/New_York)")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (timezoneId: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
-        parent,
-        path: "/set/timezone",
-        body: {
-          timezoneId,
-          targetId: normalizeOptionalString(opts.targetId),
-        },
-        successMessage: `timezone: ${timezoneId}`,
+  for (const [command, description, parameter, argumentHelp] of [
+    ["timezone", "Override timezone (CDP)", "timezoneId", "Timezone ID (e.g. America/New_York)"],
+    ["locale", "Override locale (CDP)", "locale", "Locale (e.g. en-US)"],
+    [
+      "device",
+      'Apply a Playwright device descriptor (e.g. "iPhone 14")',
+      "name",
+      "Device name (Playwright devices)",
+    ],
+  ] as const) {
+    set
+      .command(command)
+      .description(description)
+      .argument(`<${parameter}>`, argumentHelp)
+      .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
+      .action(async (value: string, opts, cmd) => {
+        await runBrowserCliRequest({
+          parent: parentOpts(cmd),
+          path: `/set/${command}`,
+          body: {
+            [parameter]: value,
+            targetId: normalizeOptionalString(opts.targetId),
+          },
+          successMessage: `${command}: ${value}`,
+        });
       });
-    });
-
-  set
-    .command("locale")
-    .description("Override locale (CDP)")
-    .argument("<locale>", "Locale (e.g. en-US)")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (locale: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
-        parent,
-        path: "/set/locale",
-        body: {
-          locale,
-          targetId: normalizeOptionalString(opts.targetId),
-        },
-        successMessage: `locale: ${locale}`,
-      });
-    });
-
-  set
-    .command("device")
-    .description('Apply a Playwright device descriptor (e.g. "iPhone 14")')
-    .argument("<name>", "Device name (Playwright devices)")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (name: string, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      await runBrowserSetRequest({
-        parent,
-        path: "/set/device",
-        body: {
-          name,
-          targetId: normalizeOptionalString(opts.targetId),
-        },
-        successMessage: `device: ${name}`,
-      });
-    });
+  }
 }

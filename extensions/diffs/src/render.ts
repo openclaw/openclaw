@@ -1,4 +1,3 @@
-// Diffs plugin module implements render behavior.
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs";
 import { preloadDiffHTML, type PreloadDiffOptions } from "@pierre/diffs/ssr";
@@ -172,26 +171,18 @@ function buildImageRenderOptions(options: DiffRenderOptions): DiffRenderOptions 
   };
 }
 
-function shouldRenderViewer(target: DiffRenderTarget): boolean {
-  return target === "viewer" || target === "both";
-}
-
-function shouldRenderImage(target: DiffRenderTarget): boolean {
-  return target === "image" || target === "both";
-}
-
-function buildRenderVariants(params: { options: DiffRenderOptions; target: DiffRenderTarget }): {
-  viewerOptions?: DiffViewerOptions;
-  imageOptions?: DiffViewerOptions;
-} {
-  return {
-    ...(shouldRenderViewer(params.target)
-      ? { viewerOptions: buildDiffOptions(params.options) }
-      : {}),
-    ...(shouldRenderImage(params.target)
-      ? { imageOptions: buildDiffOptions(buildImageRenderOptions(params.options)) }
-      : {}),
-  };
+function buildRenderVariants(options: DiffRenderOptions, target: DiffRenderTarget) {
+  const viewerOptions =
+    target === "viewer" || target === "both" ? buildDiffOptions(options) : undefined;
+  const imageOptions =
+    target === "image" || target === "both"
+      ? buildDiffOptions(buildImageRenderOptions(options))
+      : undefined;
+  const preloadOptions = viewerOptions ?? imageOptions;
+  if (!preloadOptions) {
+    throw new Error(`Unsupported diff render target: ${target}`);
+  }
+  return { viewerOptions, imageOptions, preloadOptions };
 }
 
 function renderDiffCard(payload: DiffViewerPayload, anchorId?: string): string {
@@ -494,22 +485,30 @@ type RenderedSection = {
   usesLanguagePack?: boolean;
 };
 
-function payloadUsesLanguagePack(payload: DiffViewerPayload | undefined): boolean {
-  return payload?.langs.some((lang) => !isBaseDiffViewerLanguage(lang)) ?? false;
-}
-
-function buildRenderedSection(params: {
-  viewerPayload?: DiffViewerPayload;
-  imagePayload?: DiffViewerPayload;
-  anchorId?: string;
-}): RenderedSection {
+async function renderSection(
+  input: { oldFile: FileContents; newFile: FileContents } | { fileDiff: FileDiffMetadata },
+  { viewerOptions, imageOptions, preloadOptions }: ReturnType<typeof buildRenderVariants>,
+  languagePackAvailable: boolean,
+  anchorId?: string,
+): Promise<RenderedSection> {
+  const prerenderedHTML = await preloadDiffHTMLWithFallback({ ...input, options: preloadOptions });
+  const payload = await normalizeDiffViewerPayloadLanguages(
+    {
+      prerenderedHTML,
+      ...input,
+      options: preloadOptions,
+      langs: collectDiffPayloadLanguageHints(input),
+    },
+    { languagePackAvailable },
+  );
   return {
-    ...(params.viewerPayload
-      ? { viewer: renderDiffCard(params.viewerPayload, params.anchorId) }
+    ...(viewerOptions
+      ? { viewer: renderDiffCard({ ...payload, options: viewerOptions }, anchorId) }
       : {}),
-    ...(params.imagePayload ? { image: renderDiffCard(params.imagePayload, params.anchorId) } : {}),
-    usesLanguagePack:
-      payloadUsesLanguagePack(params.viewerPayload) || payloadUsesLanguagePack(params.imagePayload),
+    ...(imageOptions
+      ? { image: renderDiffCard({ ...payload, options: imageOptions }, anchorId) }
+      : {}),
+    usesLanguagePack: payload.langs.some((lang) => !isBaseDiffViewerLanguage(lang)),
   };
 }
 
@@ -554,34 +553,11 @@ async function renderBeforeAfterDiff(
     contents: input.after,
     ...(lang ? { lang } : {}),
   };
-  const { viewerOptions, imageOptions } = buildRenderVariants({ options, target });
-  const preloadOptions = viewerOptions ?? imageOptions;
-  if (!preloadOptions) {
-    throw new Error(`Unsupported diff render target: ${target}`);
-  }
-  const prerenderedHTML = await preloadDiffHTMLWithFallback({
-    oldFile,
-    newFile,
-    options: preloadOptions,
-  });
-  const normalizedPayload = await normalizeDiffViewerPayloadLanguages(
-    {
-      prerenderedHTML,
-      oldFile,
-      newFile,
-      options: preloadOptions,
-      langs: collectDiffPayloadLanguageHints({ oldFile, newFile }),
-    },
-    { languagePackAvailable },
+  const section = await renderSection(
+    { oldFile, newFile },
+    buildRenderVariants(options, target),
+    languagePackAvailable,
   );
-  const viewerPayload = viewerOptions
-    ? { ...normalizedPayload, options: viewerOptions }
-    : undefined;
-  const imagePayload = imageOptions ? { ...normalizedPayload, options: imageOptions } : undefined;
-  const section = buildRenderedSection({
-    ...(viewerPayload ? { viewerPayload } : {}),
-    ...(imagePayload ? { imagePayload } : {}),
-  });
 
   return {
     ...buildRenderedBodies([section]),
@@ -625,44 +601,16 @@ async function renderPatchDiff(
     );
   }
 
-  const { viewerOptions, imageOptions } = buildRenderVariants({ options, target });
-  const preloadOptions = viewerOptions ?? imageOptions;
-  if (!preloadOptions) {
-    throw new Error(`Unsupported diff render target: ${target}`);
-  }
+  const variants = buildRenderVariants(options, target);
   const navEntries: FileNavEntry[] = files.map((fileDiff, index) => ({
     anchorId: `oc-diff-file-${index + 1}`,
     fileDiff,
     stats: computeFileDiffStats(fileDiff),
   }));
   const sections = await Promise.all(
-    files.map(async (fileDiff, index) => {
-      const prerenderedHTML = await preloadDiffHTMLWithFallback({
-        fileDiff,
-        options: preloadOptions,
-      });
-      const normalizedPayload = await normalizeDiffViewerPayloadLanguages(
-        {
-          prerenderedHTML,
-          fileDiff,
-          options: preloadOptions,
-          langs: collectDiffPayloadLanguageHints({ fileDiff }),
-        },
-        { languagePackAvailable },
-      );
-      const viewerPayload = viewerOptions
-        ? { ...normalizedPayload, options: viewerOptions }
-        : undefined;
-      const imagePayload = imageOptions
-        ? { ...normalizedPayload, options: imageOptions }
-        : undefined;
-
-      return buildRenderedSection({
-        ...(viewerPayload ? { viewerPayload } : {}),
-        ...(imagePayload ? { imagePayload } : {}),
-        anchorId: navEntries[index]?.anchorId,
-      });
-    }),
+    files.map((fileDiff, index) =>
+      renderSection({ fileDiff }, variants, languagePackAvailable, navEntries[index]?.anchorId),
+    ),
   );
   // Single-file patches skip the summary card; one file needs no navigation.
   const navHtml = files.length > 1 ? renderFileSummaryNav(navEntries) : undefined;
@@ -742,7 +690,9 @@ function shouldFallbackToClientHydration(error: unknown): boolean {
   );
 }
 
-async function preloadDiffHTMLWithFallback(params: PreloadDiffOptions<undefined>): Promise<string> {
+async function preloadDiffHTMLWithFallback(
+  params: PreloadDiffOptions<undefined, undefined>,
+): Promise<string> {
   try {
     return await preloadDiffHTML(params);
   } catch (error) {

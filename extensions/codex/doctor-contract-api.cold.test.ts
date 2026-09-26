@@ -9,6 +9,32 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", () => {
   throw new Error("legacy file detection must not load the session runtime");
 });
 
+it("normalizes config without loading sidecar migration code", async () => {
+  vi.resetModules();
+  vi.doMock("./src/migration/session-binding-sidecars.js", () => {
+    throw new Error("config normalization must not load sidecar migrations");
+  });
+  try {
+    const { normalizeCompatibilityConfig } = await import("./doctor-contract-api.js");
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: {
+              config: { codexDynamicToolsProfile: "openclaw-compat", retained: true },
+            },
+          },
+        },
+      },
+    });
+    expect(result.config.plugins?.entries?.codex?.config).toEqual({ retained: true });
+    expect(result.changes).toHaveLength(1);
+  } finally {
+    vi.doUnmock("./src/migration/session-binding-sidecars.js");
+    vi.resetModules();
+  }
+});
+
 it("detects Codex sidecars without loading session storage", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-cold-"));
   const stateDir = path.join(root, "state");

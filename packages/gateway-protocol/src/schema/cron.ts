@@ -144,7 +144,7 @@ const CronCommonOptionalFields = {
   deleteAfterRun: Type.Optional(Type.Boolean()),
 };
 
-function cronIdOrJobIdParams(extraFields: Record<string, TSchema>) {
+function cronIdOrJobIdParams<const Fields extends Record<string, TSchema>>(extraFields: Fields) {
   return Type.Union([
     closedObject({
       id: NonEmptyString,
@@ -233,13 +233,16 @@ const CronAgentTurnPayloadSchema = cronAgentTurnPayloadSchema({
   fallbacks: Type.Array(Type.String()),
   toolsAllow: Type.Array(Type.String()),
   thinking: Type.String(),
+  timeoutSeconds: Type.Number({ minimum: 0 }),
 });
 const CronCommandPayloadSchema = cronCommandPayloadSchema({
   argv: Type.Array(NonEmptyString, { minItems: 1 }),
+  timeoutSeconds: Type.Number({ minimum: 0 }),
   toolsAllow: Type.Array(Type.String()),
 });
 const CronScriptPayloadSchema = cronScriptPayloadSchema({
   script: Type.String({ minLength: 1, maxLength: 65_536 }),
+  timeoutSeconds: Type.Number({ minimum: 1 }),
   toolsAllow: Type.Array(Type.String()),
 });
 
@@ -274,13 +277,16 @@ const CronPayloadPatchSchema = Type.Union([
     fallbacks: Type.Union([Type.Array(Type.String()), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
     thinking: Type.Union([Type.String(), Type.Null()]),
+    timeoutSeconds: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
   }),
   cronCommandPayloadSchema({
     argv: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
+    timeoutSeconds: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
   }),
   cronScriptPayloadSchema({
     script: Type.Optional(Type.String({ minLength: 1, maxLength: 65_536 })),
+    timeoutSeconds: Type.Union([Type.Number({ minimum: 1 }), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
   }),
 ]);
@@ -459,6 +465,9 @@ export const CronJobStateSchema = closedObject({
   lastErrorReason: Type.Optional(FailoverReasonSchema),
   lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
+  // Report-only schedule-computation error counter behind auto-disable;
+  // callers cannot patch this field.
+  scheduleErrorCount: Type.Optional(Type.Integer({ minimum: 0 })),
   // Report-only scheduler ownership fact; callers cannot patch this field.
   autoDisabled: Type.Optional(CronAutoDisabledSchema),
   consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -539,6 +548,8 @@ export const CronJobSchema = closedObject({
 
 /** Query params for listing cron jobs with filters and pagination. */
 export const CronListParamsSchema = closedObject({
+  sessionKey: Type.Optional(NonEmptyString),
+  sessionAgentId: Type.Optional(NonEmptyString),
   includeDisabled: Type.Optional(Type.Boolean()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),

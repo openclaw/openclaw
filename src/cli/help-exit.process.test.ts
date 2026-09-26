@@ -2,21 +2,24 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import {
   CLI_PROCESS_DEADLOCK_GUARD_MS,
   formatCliProcessFailure,
   runCliProcessChild,
 } from "./cli-process-child.test-helpers.js";
-import { registerCoreCliByName } from "./program/command-registry.js";
+import { registerCoreCliByName } from "./program/command-registry-core.js";
 import { createProgramContext } from "./program/context.js";
 import { registerSubCliByName } from "./program/register.subclis.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const preparedCliEntry = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
 const SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS = 240_000;
 const SLOW_DOTENV_TEST_TIMEOUT_MS = SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS + 10_000;
 const LAZY_GROUP_HELP_CASES = [
@@ -97,6 +100,7 @@ registerHooks({
 
 async function runCliProcess(params: {
   args: string[];
+  entry?: URL;
   config?: Record<string, unknown>;
   env?: NodeJS.ProcessEnv;
   forbidTlsImport?: boolean;
@@ -121,6 +125,7 @@ async function runCliProcess(params: {
   const expectedExitCode = params.expectedExitCode ?? 0;
   const exit = await runCliProcessChild({
     nodeArgs: [
+      // Prepared entrypoints still load source-checkout plugins; keep the same TSX loader.
       "--import",
       "tsx",
       // Node runs later sync customization hooks first. Install test guards after
@@ -132,7 +137,7 @@ async function runCliProcess(params: {
       ...(params.failRunMainImport
         ? ["--import", pathToFileURL(fixture.failRunMainImportPath).href]
         : []),
-      "src/entry.ts",
+      params.entry ? fileURLToPath(params.entry) : "src/entry.ts",
       ...params.args,
     ],
     env: {
@@ -197,6 +202,8 @@ describe("CLI help process exit", () => {
       args: ["--help"],
       config: { logging: { consoleStyle: "json", level: "silent" } },
       forbidTlsImport: true,
+      keepAlive: true,
+      env: { NODE_USE_SYSTEM_CA: "0" },
     });
 
     expect(result.stderr).toBe("");
@@ -204,10 +211,26 @@ describe("CLI help process exit", () => {
     expect(() => parseJsonLines(result.stdout)).toThrow();
   });
 
+  it("exits after plugin-sensitive root help with a retained runtime handle", async () => {
+    const result = await runCliProcess({
+      args: ["--help"],
+      config: { plugins: { enabled: false } },
+      keepAlive: true,
+      env: { NODE_USE_SYSTEM_CA: "0" },
+    });
+
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: openclaw [options] [command]");
+  });
+
   // One lazy process is representative by design; the matrix below exercises
   // both core and sub-CLI registrars without multiplying Node+tsx launches.
   it("exits promptly after a lazy group --help", async () => {
-    const result = await runCliProcess({ args: ["backup", "--help"], keepAlive: true });
+    const result = await runCliProcess({
+      args: ["backup", "--help"],
+      entry: preparedCliEntry,
+      keepAlive: true,
+    });
 
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("Usage: openclaw backup [options] [command]");
@@ -215,8 +238,10 @@ describe("CLI help process exit", () => {
   it("flushes explicitly requested entry traces on precomputed help", async () => {
     const result = await runCliProcess({
       args: ["gateway", "--help"],
+      entry: preparedCliEntry,
       config: { logging: { consoleStyle: "json", level: "silent" } },
-      env: { OPENCLAW_GATEWAY_STARTUP_TRACE: "1" },
+      env: { OPENCLAW_GATEWAY_STARTUP_TRACE: "1", NODE_USE_SYSTEM_CA: "0" },
+      keepAlive: true,
     });
 
     expect(parseJsonLines(result.stderr)).toEqual(
@@ -312,6 +337,7 @@ describe("rejected CLI process state isolation", () => {
         "--profile",
         profile,
       ],
+      entry: preparedCliEntry,
       expectedExitCode: 1,
       pristineHome: true,
     });
@@ -334,7 +360,7 @@ describe("models list JSON failure process output", () => {
       {
         provider: "autoqa-no-such-provider",
         message:
-          'Unknown provider filter "autoqa-no-such-provider" for this installation. Run openclaw plugins list --json to see installed providers, or configure it under models.providers.',
+          "Unknown model catalog provider. Use a provider id from the installed plugins or configured providers.",
       },
     ].flatMap(({ provider, message }) => [
       {
@@ -353,6 +379,7 @@ describe("models list JSON failure process output", () => {
   )("renders $name as one clean canonical JSON document", async ({ provider, message, env }) => {
     const result = await runCliProcess({
       args: ["models", "list", "--provider", provider, "--json"],
+      entry: preparedCliEntry,
       config: {},
       env,
       expectedExitCode: 1,
@@ -464,7 +491,7 @@ describe("backup create process", () => {
         nodeArgs: [
           "--import",
           "tsx",
-          "src/entry.ts",
+          fileURLToPath(preparedCliEntry),
           "backup",
           "create",
           "--no-include-workspace",
@@ -540,7 +567,7 @@ describe("backup create process", () => {
         nodeArgs: [
           "--import",
           "tsx",
-          "src/entry.ts",
+          fileURLToPath(preparedCliEntry),
           "backup",
           "create",
           "--no-include-workspace",

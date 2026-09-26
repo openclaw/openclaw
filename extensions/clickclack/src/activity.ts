@@ -2,57 +2,21 @@
  * Publishes agent activity (streamed commentary + tool progress) into
  * ClickClack as durable `agent_commentary` / `agent_tool` message rows,
  * coalesced so one logical step becomes one row instead of a row per frame.
- *
- * Ported from the clickglass agent-bridge sidecar, adapted from gateway
- * websocket frames to the in-process `replyOptions.onItemEvent` seam:
- *
- * - Commentary/reasoning arrives as cumulative text snapshots per item id.
- *   Each segment becomes one durable row: POSTed when the segment starts
- *   streaming and PATCHed (debounced) as the snapshot grows, so prose
- *   interleaves chronologically with tool rows.
- * - Tool/step items can emit several frames (start/update/complete) for the
- *   same call, sometimes with lane-prefixed ids (`tool:X`, `command:X`).
- *   Normalize the prefix away to one key per call, POST one row on the first
- *   frame, and PATCH it when a later frame carries a strictly longer body.
  */
-import { buildChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
-import type { ClickClackMessage, ClickClackMessageProvenance } from "./types.js";
+import {
+  formatChannelProgressDraftLineForEntry,
+  isCompleteAgentPreamble,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { ClickClackClient } from "./http-client.js";
+import type { ClickClackItemEventPayload } from "./progress.js";
+import type { ClickClackMessageProvenance } from "./types.js";
 
-/** Debounce window for PATCHing streaming commentary snapshots. */
 const CLICKCLACK_COMMENTARY_FLUSH_MS = 700;
-
-/** Item event payload shape delivered by `replyOptions.onItemEvent`. */
-type ClickClackItemEventPayload = {
-  itemId?: string;
-  toolCallId?: string;
-  kind?: string;
-  title?: string;
-  name?: string;
-  phase?: string;
-  status?: string;
-  summary?: string;
-  progressText?: string;
-  meta?: string;
-  commandBearing?: boolean;
-};
 
 /** Destination for durable activity rows (channel or DM conversation). */
 type ClickClackActivityTarget = {
   channelId?: string;
   conversationId?: string;
-};
-
-/** Client subset needed by the publisher (satisfied by `createClickClackClient`). */
-type ClickClackActivityClient = {
-  createActivityMessage(params: {
-    channelId?: string;
-    conversationId?: string;
-    body: string;
-    kind: "agent_commentary" | "agent_tool";
-    turnId?: string;
-    provenance?: ClickClackMessageProvenance;
-  }): Promise<ClickClackMessage>;
-  updateMessageBody(messageId: string, body: string): Promise<ClickClackMessage>;
 };
 
 /** Item kinds rendered as agent_tool rows; everything else is commentary. */
@@ -94,7 +58,7 @@ function activityBody(payload: ClickClackItemEventPayload): string {
   // Reuse the shared channel progress-line renderer so ClickClack rows show
   // the same tool name + command/argument detail as Discord/Slack/Telegram
   // progress lines instead of a bespoke format.
-  const line = buildChannelProgressDraftLine({
+  const line = formatChannelProgressDraftLineForEntry(undefined, {
     event: "item",
     itemId: payload.itemId,
     toolCallId: payload.toolCallId,
@@ -107,7 +71,7 @@ function activityBody(payload: ClickClackItemEventPayload): string {
     progressText: payload.progressText,
     meta: payload.meta,
     commandBearing: payload.commandBearing,
-  })?.text?.trim();
+  })?.trim();
   if (line) {
     return line;
   }
@@ -156,7 +120,7 @@ export type ClickClackActivityPublisher = {
  * failures are reported through `onError` and never interrupt the reply turn.
  */
 export function createClickClackActivityPublisher(params: {
-  client: ClickClackActivityClient;
+  client: Pick<ClickClackClient, "createActivityMessage" | "updateMessageBody">;
   target: ClickClackActivityTarget;
   turnId: string;
   flushMs?: number;
@@ -217,20 +181,26 @@ export function createClickClackActivityPublisher(params: {
 
   const handleCommentary = (payload: ClickClackItemEventPayload): void => {
     const body = commentaryBody(payload);
-    if (!body.trim()) {
-      return;
-    }
     const key = payload.itemId?.trim() || "turn";
     let segment = commentaryByItem.get(key);
+    if (!body.trim()) {
+      if (segment) {
+        clearTimeout(segment.timer);
+        commentaryByItem.delete(key);
+        const retracted = segment;
+        void enqueue(async () => {
+          if (retracted.messageId) {
+            await params.client.updateMessageBody(retracted.messageId, "");
+          }
+        });
+      }
+      return;
+    }
     if (!segment) {
       segment = { body: "", dirty: false };
       commentaryByItem.set(key, segment);
     }
-    // Snapshots are cumulative per item; never shrink the row body on a
-    // shorter (stale or whitespace-normalized) frame, and skip identical
-    // snapshots entirely so out-of-order frames cannot queue redundant
-    // PATCHes.
-    if (body.length < segment.body.length || body === segment.body) {
+    if (body === segment.body) {
       return;
     }
     segment.body = body;
@@ -244,16 +214,7 @@ export function createClickClackActivityPublisher(params: {
   };
 
   const toolRowKey = (payload: ClickClackItemEventPayload): string => {
-    // toolCallId is an opaque identifier: use it untouched when present.
-    // itemId carries a lane/lifecycle prefix (`tool:X`, `command:X`) on some
-    // frames and appears bare on others, so normalize only itemId to give
-    // all frames of one call a shared key.
-    const toolCallId = payload.toolCallId?.trim();
-    if (toolCallId) {
-      return toolCallId;
-    }
-    const itemId = payload.itemId?.trim() ?? "";
-    return itemId.replace(/^(tool|command):/, "");
+    return payload.itemId?.trim() || payload.toolCallId?.trim() || "";
   };
 
   const handleDiscreteItem = (payload: ClickClackItemEventPayload): void => {
@@ -261,17 +222,18 @@ export function createClickClackActivityPublisher(params: {
     if (!body) {
       return;
     }
-    const kind = TOOL_ITEM_KINDS.has(payload.kind?.trim().toLowerCase() ?? "")
+    const kind = TOOL_ITEM_KINDS.has(normalizedItemKind(payload))
       ? ("agent_tool" as const)
       : ("agent_commentary" as const);
     // Flush streaming prose first so the commentary row lands before the
     // step row it precedes chronologically.
     void flushAllCommentary();
-    const key = `${kind}:${toolRowKey(payload)}`;
+    const itemKey = toolRowKey(payload);
+    const key = `${kind}:${itemKey}`;
     const existing = toolRows.get(key);
-    if (!existing || !toolRowKey(payload)) {
+    if (!existing || !itemKey) {
       const row: ToolRow = { body };
-      if (toolRowKey(payload)) {
+      if (itemKey) {
         toolRows.set(key, row);
       }
       void enqueue(async () => {
@@ -283,9 +245,7 @@ export function createClickClackActivityPublisher(params: {
       });
       return;
     }
-    // Only upgrade the row when the new frame says strictly more (longer
-    // body), so a bare lane echo like "read" never clobbers a summary.
-    if (body.length <= existing.body.length) {
+    if (body === existing.body) {
       return;
     }
     existing.body = body;
@@ -299,6 +259,26 @@ export function createClickClackActivityPublisher(params: {
 
   return {
     onItemEvent: (payload) => {
+      if (
+        payload.hideFromChannelProgress ||
+        payload.suppressChannelProgress ||
+        payload.suppressDurableProgress
+      ) {
+        const key = toolRowKey(payload);
+        const row = key ? toolRows.get(`agent_tool:${key}`) : undefined;
+        if (row) {
+          toolRows.delete(`agent_tool:${key}`);
+          void enqueue(async () => {
+            if (row.messageId) {
+              await params.client.updateMessageBody(row.messageId, "");
+            }
+          });
+        }
+        return false;
+      }
+      if (payload.kind === "preamble" && !isCompleteAgentPreamble(payload)) {
+        return false;
+      }
       const kind = normalizedItemKind(payload);
       if (STREAMING_COMMENTARY_ITEM_KINDS.has(kind)) {
         handleCommentary(payload);

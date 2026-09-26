@@ -1,4 +1,3 @@
-// Discord plugin module implements component custom id behavior.
 import {
   escapeCustomIdFieldValue,
   needsCustomIdFieldEscaping,
@@ -119,24 +118,21 @@ function isDiscordComponentWildcardRegistrationId(id: string): boolean {
   return /^__openclaw_discord_component_[a-z_]+_wildcard__$/.test(id);
 }
 
-export function parseDiscordComponentCustomIdForInteraction(id: string): ComponentParserResult {
+function parseDiscordCustomIdForInteraction(id: string, key: string): ComponentParserResult {
   if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
     return { key: "*", data: {} };
   }
   const parsed = parseCustomId(id);
-  if (parsed.key !== DISCORD_COMPONENT_CUSTOM_ID_KEY) {
+  if (parsed.key !== key) {
     return parsed;
   }
   return { key: "*", data: decodeParsedCustomIdData(parsed.data) };
 }
 
+export function parseDiscordComponentCustomIdForInteraction(id: string): ComponentParserResult {
+  return parseDiscordCustomIdForInteraction(id, DISCORD_COMPONENT_CUSTOM_ID_KEY);
+}
+
 export function parseDiscordModalCustomIdForInteraction(id: string): ComponentParserResult {
-  if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
-    return { key: "*", data: {} };
-  }
-  const parsed = parseCustomId(id);
-  if (parsed.key !== DISCORD_MODAL_CUSTOM_ID_KEY) {
-    return parsed;
-  }
-  return { key: "*", data: decodeParsedCustomIdData(parsed.data) };
+  return parseDiscordCustomIdForInteraction(id, DISCORD_MODAL_CUSTOM_ID_KEY);
 }

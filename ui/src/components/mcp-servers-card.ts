@@ -4,6 +4,7 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
+import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
 import {
   buildAddMcpServerPatch,
@@ -17,6 +18,7 @@ import {
   type McpServersPatchBuildResult,
 } from "../lib/config/mcp-servers.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
@@ -29,6 +31,9 @@ import {
   renderSettingsSection,
   renderSettingsStatus,
 } from "./settings-ui.ts";
+import { WizardLoginController } from "./wizard-login-controller.ts";
+
+registerMcpEnglish();
 
 type McpServerMessage = { kind: "error" | "success"; text: string };
 
@@ -60,6 +65,13 @@ class McpServersCard extends OpenClawLightDomElement {
   @state() private message: McpServerMessage | null = null;
   @state() private formOpen = false;
   private feedbackGeneration = 0;
+  private readonly login = new WizardLoginController(this, {
+    getClient: () => this.context?.gateway.snapshot.client ?? null,
+    getAgentId: () => null,
+    onClose: () => this.login.reset(),
+    requestFailedMessage: () => t("mcpServers.signInFailed"),
+    sessionExpiredMessage: () => t("mcpServers.signInExpired"),
+  });
 
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
@@ -94,9 +106,18 @@ class McpServersCard extends OpenClawLightDomElement {
     .effect(
       () => this.context?.gateway,
       (gateway) => gateway.subscribe(() => this.requestUpdate()),
+    )
+    .effect(
+      () => this.context?.gateway.snapshot.hello,
+      () => () => this.login.reset(),
+    )
+    .effect(
+      () => this.context?.agentSelection,
+      (selection) => selection.subscribe(() => this.login.reset()),
     );
 
   override disconnectedCallback() {
+    this.login.reset();
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -118,7 +139,26 @@ class McpServersCard extends OpenClawLightDomElement {
   }
 
   private canMutate(): boolean {
-    return this.context !== undefined && this.mutationBlockedReason() === null;
+    return (
+      this.context !== undefined &&
+      this.mutationBlockedReason() === null &&
+      this.login.runner.state.phase === "idle"
+    );
+  }
+
+  private signIn(server: McpServerSummary): void {
+    if (
+      this.busy ||
+      !this.canMutate() ||
+      !server.enabled ||
+      server.signIn !== "operator" ||
+      !canCallGatewayMethod(this.context?.gateway.snapshot, "mcp.authLogin", "operator.admin")
+    ) {
+      return;
+    }
+    this.message = null;
+    this.login.runner.prepareSignIn("oauth", server.name);
+    void this.login.runner.startMcpLogin(server.name);
   }
 
   private async mutate(options: {
@@ -212,7 +252,27 @@ class McpServersCard extends OpenClawLightDomElement {
             kind: server.enabled ? "ok" : "muted",
             label: server.enabled ? t("common.enabled") : t("common.disabled"),
           })}
-          <code>${command}</code>
+          ${
+            server.signIn === "profile"
+              ? html`<span class="settings-row__desc">${t("mcpServers.profileSignIn")}</span>`
+              : server.signIn === "requester"
+                ? html`<span class="settings-row__desc">${t("mcpServers.requesterSignIn")}</span>`
+                : html`<code>${command}</code>`
+          }
+          ${
+            server.enabled &&
+            server.signIn === "operator" &&
+            canCallGatewayMethod(this.context?.gateway.snapshot, "mcp.authLogin", "operator.admin")
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm"
+                  ?disabled=${disabled}
+                  @click=${() => this.signIn(server)}
+                >
+                  ${t("mcpServers.signIn")}
+                </button>`
+              : nothing
+          }
           <button
             type="button"
             class="btn btn--sm"
@@ -307,6 +367,7 @@ class McpServersCard extends OpenClawLightDomElement {
           `,
         )}
       </div>
+      ${this.login.render({ doneMessage: t("mcpServers.authenticationSaved") })}
     `;
   }
 }

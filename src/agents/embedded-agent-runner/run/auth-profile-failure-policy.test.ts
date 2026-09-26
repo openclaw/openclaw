@@ -141,4 +141,14 @@ describe("resolveAuthProfileFailureReason", () => {
       }),
     ).toBeNull();
   });
+
+  it("still records genuine session_expired failures as auth-profile health", () => {
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "session_expired",
+        providerStarted: true,
+        policy: "shared",
+      }),
+    ).toBe("session_expired");
+  });
 });

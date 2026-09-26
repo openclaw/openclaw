@@ -4,6 +4,7 @@ import {
   buildHarnessParityCell,
   buildHarnessParityResult,
   type HarnessRuntimeParityCell,
+  type RuntimeParitySystemPromptReport,
 } from "./harness-parity.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
@@ -77,90 +78,54 @@ function classify(
   }).drift;
 }
 
+function promptReport(overrides: RuntimeParitySystemPromptReport) {
+  return { systemPromptReport: { ...BASE_PROMPT_REPORT, ...overrides } };
+}
+
 describe("harness parity", () => {
   it("classifies prompt and tool surface drift before behavioral drift", () => {
     expect(
       classify(
         {},
-        {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
-            systemPrompt: { chars: 101, projectContextChars: 40, nonProjectContextChars: 61 },
-          },
-        },
+        promptReport({
+          systemPrompt: { chars: 101, projectContextChars: 40, nonProjectContextChars: 61 },
+        }),
       ),
     ).toBe("system-prompt");
     expect(
       classify(
         {},
-        {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
-            systemPrompt: {
-              chars: 100,
-              projectContextChars: 40,
-              nonProjectContextChars: 60,
-              hash: "system-b",
-            },
+        promptReport({
+          systemPrompt: {
+            ...BASE_PROMPT_REPORT.systemPrompt,
+            hash: "system-b",
           },
-        },
+        }),
       ),
     ).toBe("system-prompt");
+    expect(classify({}, promptReport({ skills: { promptChars: 12, hash: "skills-b" } }))).toBe(
+      "system-prompt",
+    );
     expect(
       classify(
         {},
-        {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
-            skills: { promptChars: 12, hash: "skills-b" },
+        promptReport({
+          tools: {
+            schemaChars: 20,
+            entries: [{ ...BASE_PROMPT_REPORT.tools.entries[0], summaryHash: "summary-b" }],
           },
-        },
-      ),
-    ).toBe("system-prompt");
-    expect(
-      classify(
-        {},
-        {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
-            tools: {
-              schemaChars: 20,
-              entries: [
-                {
-                  name: "read",
-                  summaryChars: 8,
-                  summaryHash: "summary-b",
-                  schemaChars: 20,
-                  schemaHash: "schema-a",
-                  propertiesCount: 1,
-                },
-              ],
-            },
-          },
-        },
+        }),
       ),
     ).toBe("tool-description");
     expect(
       classify(
         {},
-        {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
-            tools: {
-              schemaChars: 20,
-              entries: [
-                {
-                  name: "read",
-                  summaryChars: 8,
-                  summaryHash: "summary-a",
-                  schemaChars: 20,
-                  schemaHash: "schema-b",
-                  propertiesCount: 1,
-                },
-              ],
-            },
+        promptReport({
+          tools: {
+            schemaChars: 20,
+            entries: [{ ...BASE_PROMPT_REPORT.tools.entries[0], schemaHash: "schema-b" }],
           },
-        },
+        }),
       ),
     ).toBe("tool-schema");
   });
@@ -240,10 +205,9 @@ describe("harness parity", () => {
       classify(
         {},
         {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
+          ...promptReport({
             systemPrompt: { chars: 101, projectContextChars: 40, nonProjectContextChars: 61 },
-          },
+          }),
           toolCalls: [{ tool: "bash", argsHash: "changed", resultHash: "changed" }],
         },
         "codex-native-workspace",
@@ -253,18 +217,123 @@ describe("harness parity", () => {
       classify(
         {},
         {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
+          ...promptReport({
             tools: {
               schemaChars: 20,
               entries: [{ name: "read", summaryChars: 9, schemaChars: 20, propertiesCount: 1 }],
             },
-          },
+          }),
           toolCalls: [{ tool: "bash", argsHash: "changed", resultHash: "changed" }],
         },
         "outcome-only",
       ),
     ).toBe("tool-description");
+  });
+
+  it.each([
+    {
+      drift: "failure-mode",
+      right: { transportErrorClass: "transport", runtimeErrorClass: "runtime" },
+      details: "at least one harness variant hit a transport failure",
+    },
+    {
+      drift: "system-prompt",
+      right: {
+        systemPromptReport: {
+          ...BASE_PROMPT_REPORT,
+          systemPrompt: { ...BASE_PROMPT_REPORT.systemPrompt, chars: 101 },
+        },
+      },
+      details: "system prompt report differs",
+      promptDelta: { systemPromptChars: 1 },
+    },
+    {
+      drift: "tool-description",
+      right: {
+        systemPromptReport: {
+          ...BASE_PROMPT_REPORT,
+          tools: {
+            ...BASE_PROMPT_REPORT.tools,
+            entries: [{ ...BASE_PROMPT_REPORT.tools.entries[0], summaryChars: 10 }],
+          },
+        },
+      },
+      details: "tool description summary shape differs",
+      promptDelta: { toolSummaryChars: 2 },
+    },
+    {
+      drift: "tool-schema",
+      right: {
+        systemPromptReport: {
+          ...BASE_PROMPT_REPORT,
+          tools: { ...BASE_PROMPT_REPORT.tools, schemaChars: 22 },
+        },
+      },
+      details: "tool schema shape differs",
+      promptDelta: { toolSchemaChars: 2 },
+    },
+    {
+      drift: "tool-call-shape",
+      right: { toolCalls: [{ tool: "read", argsHash: "b", resultHash: "r" }] },
+      details: "tool call 1 differs (read/a vs read/b)",
+    },
+    {
+      drift: "tool-result-shape",
+      right: { toolCalls: [{ tool: "read", argsHash: "a", resultHash: "changed" }] },
+      details: "tool result 1 differs (read)",
+    },
+    {
+      drift: "structural",
+      right: {
+        transcriptBytes: '{"role":"assistant"}\n{"role":"tool"}\n',
+      },
+      details: "transcript/final-text structure differs (1 message records vs 2 message records)",
+    },
+    {
+      drift: "text-only",
+      right: { finalText: "different" },
+      details: "final text differs after whitespace normalization",
+    },
+    { drift: "none", right: {} },
+  ])("keeps complete result metadata for $drift", ({ drift, right, details, promptDelta }) => {
+    const source = makeCell("openclaw", {
+      toolCalls: [{ tool: "read", argsHash: "a", resultHash: "r" }],
+    });
+    const leftCell = buildHarnessParityCell({
+      variant: LEFT,
+      cell: source,
+      tokenUsageSource: "live-usage",
+    });
+    const rightCell = buildHarnessParityCell({
+      variant: RIGHT,
+      cell: {
+        ...source,
+        transcriptBytes: '{"type":"metadata"}\n' + source.transcriptBytes,
+        usage: { inputTokens: 20, outputTokens: 10, totalTokens: 30 },
+        ...right,
+      },
+      tokenUsageSource: "live-usage",
+    });
+
+    expect(
+      buildHarnessParityResult({ scenarioId: "metadata", left: leftCell, right: rightCell }),
+    ).toStrictEqual({
+      scenarioId: "metadata",
+      left: leftCell,
+      right: rightCell,
+      drift,
+      ...(drift === "none" ? {} : { driftDetails: details, firstDriftTurn: 1 }),
+      promptDelta: {
+        systemPromptChars: 0,
+        projectContextChars: 0,
+        skillPromptChars: 0,
+        toolSummaryChars: 0,
+        toolSchemaChars: 0,
+        toolCount: 0,
+        ...promptDelta,
+      },
+      tokenDeltaPercent: 100,
+    });
   });
 
   it("labels mock token estimates separately from live usage", () => {

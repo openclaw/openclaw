@@ -1,15 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeAgentRunRouteChange } from "./agent-run-terminal-receipt.js";
+import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 
 const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
-
-export type AgentRunTerminalReplySnapshot =
-  | { disposition: "visible"; text: string; modelRouteChange?: string }
-  | { disposition: "silent" }
-  | { disposition: "empty"; code?: "message-tool-not-called" };
 
 function isMessageToolNotCalledTerminalReply(
   reply: AgentRunTerminalReplySnapshot | undefined,
@@ -19,11 +15,15 @@ function isMessageToolNotCalledTerminalReply(
 
 /** Sanitizes and caps producer-owned text before it enters lifecycle or durable state. */
 export function sanitizeAgentRunTerminalReplyText(text: string): string {
-  const sanitized = stripInternalMetadataForDisplay(text).trim();
-  if (sanitized.length <= AGENT_RUN_TERMINAL_REPLY_MAX_CHARS) {
-    return sanitized;
-  }
-  return `${truncateUtf16Safe(sanitized, AGENT_RUN_TERMINAL_REPLY_MAX_CHARS - 1).trimEnd()}…`;
+  return truncateWithMarker(
+    stripInternalMetadataForDisplay(text).trim(),
+    AGENT_RUN_TERMINAL_REPLY_MAX_CHARS,
+    {
+      marker: "…",
+      reserve: 1,
+      trimEnd: true,
+    },
+  );
 }
 
 /** Builds the authoritative terminal reply fact while raw assistant text is still available. */

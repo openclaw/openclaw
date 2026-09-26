@@ -77,21 +77,6 @@ vi.mock("../infra/gateway-lock.js", () => ({
   })),
 }));
 
-vi.mock("../terminal/links.js", () => ({
-  formatDocsLink: () => "docs.openclaw.ai/cli/skills",
-}));
-
-vi.mock("../terminal/theme.js", () => ({
-  theme: {
-    command: (value: string) => value,
-    error: (value: string) => value,
-    heading: (value: string) => value,
-    muted: (value: string) => value,
-    success: (value: string) => value,
-    warn: (value: string) => value,
-  },
-}));
-
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.config,
   resetConfigRuntimeState: () => undefined,
@@ -289,31 +274,36 @@ describe("skills workshop cli", () => {
     ).resolves.toContain("Use current conditions");
   });
 
-  it("uses the configured agent directory for inspect, apply, and reject", async () => {
-    const agentDir = await tempDirs.make("openclaw-skills-cli-workshop-agent-dir-");
-    mocks.config = { agents: { entries: { main: { default: true, agentDir } } } };
-    const draftPath = path.join(mocks.workspaceDir, "configured-proposal.md");
-    await fs.writeFile(
-      draftPath,
-      "# Configured CLI Skill\n\nUse the configured directory.\n",
-      "utf8",
-    );
-
+  async function proposeFile(filename: string, name: string, description: string, content: string) {
+    const draftPath = path.join(mocks.workspaceDir, filename);
+    await fs.writeFile(draftPath, content, "utf8");
     await runCommand([
       "skills",
       "workshop",
       "propose-create",
       "--name",
-      "Configured CLI Skill",
+      name,
       "--description",
-      "Use the configured Workshop directory.",
+      description,
       "--proposal",
       draftPath,
     ]);
-    const appliedProposalId = mocks.runtimeStdout.at(-1);
-    if (!appliedProposalId) {
+    const proposalId = mocks.runtimeStdout.at(-1);
+    if (!proposalId) {
       throw new Error("CLI proposal creation did not return an id.");
     }
+    return proposalId;
+  }
+
+  it("uses the configured agent directory for inspect, apply, and reject", async () => {
+    const agentDir = await tempDirs.make("openclaw-skills-cli-workshop-agent-dir-");
+    mocks.config = { agents: { entries: { main: { default: true, agentDir } } } };
+    const appliedProposalId = await proposeFile(
+      "configured-proposal.md",
+      "Configured CLI Skill",
+      "Use the configured Workshop directory.",
+      "# Configured CLI Skill\n\nUse the configured directory.\n",
+    );
 
     await runCommand(["skills", "workshop", "inspect", appliedProposalId]);
     expect(mocks.runtimeStdout.at(-1)).toContain("status: proposal");
@@ -329,44 +319,24 @@ describe("skills workshop cli", () => {
       ),
     ).resolves.toContain("Use the configured directory.");
 
-    const rejectedDraftPath = path.join(mocks.workspaceDir, "configured-rejected-proposal.md");
-    await fs.writeFile(rejectedDraftPath, "# Configured Rejected CLI Skill\n", "utf8");
-    await runCommand([
-      "skills",
-      "workshop",
-      "propose-create",
-      "--name",
+    const rejectedProposalId = await proposeFile(
+      "configured-rejected-proposal.md",
       "Configured Rejected CLI Skill",
-      "--description",
       "Reject from the configured Workshop directory.",
-      "--proposal",
-      rejectedDraftPath,
-    ]);
-    const rejectedProposalId = mocks.runtimeStdout.at(-1);
-    if (!rejectedProposalId) {
-      throw new Error("CLI rejected proposal creation did not return an id.");
-    }
+      "# Configured Rejected CLI Skill\n",
+    );
     await runCommand(["skills", "workshop", "reject", rejectedProposalId]);
     expect(mocks.runtimeStdout.at(-1)).toContain(`Rejected ${rejectedProposalId}`);
   });
 
   it("lists and inspects an agent proposal after its workspace changes", async () => {
     const firstWorkspaceDir = mocks.workspaceDir;
-    const draftPath = path.join(firstWorkspaceDir, "proposal-draft.md");
-    await fs.writeFile(draftPath, "# First CLI Skill\n", "utf8");
-
-    await runCommand([
-      "skills",
-      "workshop",
-      "propose-create",
-      "--name",
+    const proposalId = await proposeFile(
+      "proposal-draft.md",
       "First CLI Skill",
-      "--description",
       "First workspace proposal",
-      "--proposal",
-      draftPath,
-    ]);
-    const proposalId = mocks.runtimeStdout.at(-1);
+      "# First CLI Skill\n",
+    );
     expect(proposalId).toMatch(/^first-cli-skill-/);
 
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-cli-workshop-second-");

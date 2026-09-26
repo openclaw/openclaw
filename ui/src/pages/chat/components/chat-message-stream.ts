@@ -1,17 +1,26 @@
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
+import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
-import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
-import type { ChatItem } from "../../../lib/chat/chat-types.ts";
-import { formatDurationCompact } from "../../../lib/format.ts";
+import type { ChatItem, MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { resolveMessageActionDetails, type MessageReplyTarget } from "./chat-message-markdown.ts";
+import {
+  prepareChatMessageRender,
+  resolveMessageActionDetails,
+  type MessageReplyTarget,
+} from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
+import { renderChatReplyAttribution } from "./chat-reply-attribution.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { shouldToggleSelectableDisclosure, syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
+import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
@@ -27,6 +36,7 @@ type StreamMessageOptions = Pick<
   | "boardProvider"
   | "agentId"
   | "runActive"
+  | "asyncQuestions"
   | "onRequestUpdate"
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
@@ -40,14 +50,18 @@ type StreamMessageOptions = Pick<
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
   | "fetchLinkFavicon"
+  | "pluginToolIcons"
   | "githubRepo"
+  | "githubRepositories"
   | "onOpenWorkspaceFile"
 >;
 
 export type StreamGroupOptions = StreamMessageOptions & {
+  branding?: ThemeBranding;
+  entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
   onReply?: (target: MessageReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
-  assistant?: AssistantIdentity;
+  assistant?: Parameters<typeof renderChatAvatar>[1];
   showAssistantAvatar?: boolean;
   startupLabel?: string;
   waitingApproval?: boolean;
@@ -60,49 +74,61 @@ export function renderStreamGroupParts(
   opts: StreamGroupOptions,
   presentation: "standalone" | "continuation",
 ) {
-  return parts.map((part) => {
-    if (part.kind === "reading-indicator") {
-      return renderChatWorkingIndicator(part, {
-        waitingApproval: opts.waitingApproval === true,
-        startupLabel: opts.startupLabel,
-        outputTokens: opts.runOutputTokens,
-        presentation,
-      });
-    }
-    if (part.kind === "question") {
-      const prompt = opts.questionPrompts?.get(part.questionId);
-      return prompt ? renderChatQuestionSummary(prompt) : nothing;
-    }
-    const message = {
-      role: "assistant",
-      content: [{ type: "text", text: part.text }],
-      timestamp: part.startedAt,
-    };
-    return renderGroupedMessage(
-      message,
-      part.key,
-      {
-        ...opts,
-        isStreaming: part.isStreaming,
-        showReasoning: false,
-        // Settled segments can be replied to without transcript IDs or footer actions.
-        messageActions: resolveMessageActionDetails({
-          message,
-          messageId: part.key,
-          onReply: opts.onReply,
-          senderLabel: opts.assistant?.name ?? "Assistant",
-        }),
-      },
-      opts.onOpenSidebar,
-    );
+  return repeat(
+    parts,
+    (part) => `${part.kind}:${part.key}`,
+    (part) => renderStreamGroupPart(part, opts, presentation),
+  );
+}
+
+export function renderStreamGroupPart(
+  part: StreamGroupPart,
+  opts: StreamGroupOptions,
+  presentation: "standalone" | "continuation",
+) {
+  if (part.kind === "reading-indicator") {
+    return renderChatWorkingIndicator(part, {
+      mascot: opts.branding?.mascot,
+      workingPhrases: opts.branding?.workingPhrases,
+      waitingApproval: opts.waitingApproval === true,
+      startupLabel: opts.startupLabel,
+      outputTokens: opts.runOutputTokens,
+      presentation,
+    });
+  }
+  if (part.kind === "question") {
+    const prompt = opts.questionPrompts?.get(part.questionId);
+    return prompt ? renderChatQuestionSummary(prompt) : nothing;
+  }
+  const source = prepareChatMessageRender({
+    role: "assistant",
+    content: [{ type: "text", text: part.text }],
+    timestamp: part.startedAt,
   });
+  return renderGroupedMessage(
+    source,
+    part.key,
+    {
+      ...opts,
+      isStreaming: part.isStreaming,
+      entryRef: opts.entryRefFor?.(part.key),
+      showReasoning: false,
+      // Settled segments can be replied to without transcript IDs or footer actions.
+      messageActions: resolveMessageActionDetails(source, {
+        messageId: part.key,
+        onReply: opts.onReply,
+        senderLabel: opts.assistant?.name ?? "Assistant",
+      }),
+    },
+    opts.onOpenSidebar,
+  );
 }
 
 // One assistant group per contiguous run of streaming items: a reply that
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  const { assistant, resourceBasePath } = opts;
+  const { assistant } = opts;
   const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
@@ -118,36 +144,40 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   const avatar =
     workingOnly || opts.showAssistantAvatar === false
       ? nothing
-      : renderChatAvatar("assistant", assistant, undefined, resourceBasePath);
+      : renderChatAvatar("assistant", assistant);
   const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`
     <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
-      <div class="chat-group-messages">${renderStreamGroupParts(parts, opts, "standalone")}</div>
+      <div class="chat-group-messages">
+        ${renderChatReplyAttribution(parts.find((part) => part.kind === "stream")?.replyToSender)}
+        ${renderStreamGroupParts(parts, opts, "standalone")}
+      </div>
       ${
-        footerStartedAt !== null && !active
-          ? html`
-              <div class="chat-group-footer">
-                <div class="chat-group-footer__meta">
-                  <span class="chat-sender-name">${name}</span>
-                  ${renderChatTimestamp(footerStartedAt)}
+        footerStartedAt === null
+          ? nothing
+          : active
+            ? emptyGroupFooter
+            : html`
+                <div class="chat-group-footer">
+                  <div class="chat-group-footer__meta">
+                    <span class="chat-sender-name">${name}</span>
+                    ${renderChatTimestamp(footerStartedAt)}
+                  </div>
                 </div>
-              </div>
-            `
-          : nothing
+              `
       }
     </div>
   `;
 }
 
-/**
- * Collapsed-turn rollup header: one slim "Worked for X" disclosure standing in
- * for the turn's intermediate work once the run is done. The check icon is
- * the turn's done indicator; the expanded groups render after this row.
- */
+/** A streaming answer already ends its turn: reserve its footer row before the footer content exists. */
+export const emptyGroupFooter = html`<div class="chat-group-footer" aria-hidden="true"></div>`;
+
+/** Completed work keeps elapsed time and outcomes above the expandable narration. */
 export function renderWorkGroupSummary(
-  item: { key: string; durationMs: number | null },
+  item: { key: string; durationMs: number | null; groups: readonly MessageGroup[] },
   opts: {
     expanded: boolean;
     onToggle: () => void;
@@ -156,7 +186,14 @@ export function renderWorkGroupSummary(
   },
 ) {
   const duration = formatDurationCompact(item.durationMs);
+  const cards = item.groups.flatMap((group) =>
+    group.messages.flatMap(({ message }) => extractToolCardsCached(message)),
+  );
+  const activity = item.groups.flatMap((group) =>
+    group.messages.flatMap(({ message }) => readPreparedActivity(message)),
+  );
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
+  const outcomes = describeToolGroup(activity).outcomes.filter(({ kind }) => kind !== "failed");
   const content = html`
     <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
       <button
@@ -172,8 +209,10 @@ export function renderWorkGroupSummary(
         }}
       >
         <span class="chat-tool-disclosure__content">
-          <span class="chat-activity-group__label" title=${label}>${label}</span>
+          <span class="chat-activity-group__label">${label}</span>
         </span>
+        ${outcomes.map((outcome) => html`<span class="muted">${outcome.label}</span>`)}
+        ${renderToolOutcomeSummary(cards, true, activity.length ? activity : undefined)}
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       <div class="chat-work-group__separator" aria-hidden="true"></div>
@@ -183,7 +222,10 @@ export function renderWorkGroupSummary(
   return opts.presentation === "continuation"
     ? content
     : html`
-        <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
+        <div
+          class="chat-group tool chat-group--turn-block chat-group--work"
+          data-chat-row-key=${item.key}
+        >
           <div class="chat-group-messages">${content}</div>
         </div>
       `;

@@ -1,5 +1,7 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
+import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   ACTIVITY_PERSON_PARAM,
@@ -9,6 +11,8 @@ import {
 } from "../../app-route-paths.ts";
 import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
+
+export { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
 export type ActivityTimeFilter = (typeof ACTIVITY_TIME_FILTERS)[number];
@@ -41,11 +45,6 @@ function isActivityTimeFilter(value: string | null): value is ActivityTimeFilter
   return value === "24h" || value === "7d" || value === "30d" || value === "all";
 }
 
-function normalized(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 export function parseSessionActivityFilters(
   search: string,
   pathPersonId?: string | null,
@@ -53,7 +52,7 @@ export function parseSessionActivityFilters(
   const params = new URLSearchParams(search);
   const rawTime = params.get("time");
   return {
-    personId: pathPersonId ?? normalized(params.get(ACTIVITY_PERSON_PARAM)) ?? null,
+    personId: pathPersonId ?? normalizeOptionalString(params.get(ACTIVITY_PERSON_PARAM)) ?? null,
     query: params.get("q")?.trim() ?? "",
     time: isActivityTimeFilter(rawTime) ? rawTime : DEFAULT_ACTIVITY_TIME_FILTER,
   };
@@ -110,10 +109,6 @@ export function canonicalSessionActivityLocation(
     : { pathname, search, hash: location.hash };
 }
 
-export function sessionActivityTimestamp(row: GatewaySessionRow): number {
-  return row.lastActivityAt ?? row.updatedAt ?? row.createdAt ?? 0;
-}
-
 function compareSessionActivity(a: GatewaySessionRow, b: GatewaySessionRow): number {
   const recency = sessionActivityTimestamp(b) - sessionActivityTimestamp(a);
   return recency || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
@@ -121,13 +116,13 @@ function compareSessionActivity(a: GatewaySessionRow, b: GatewaySessionRow): num
 
 export function sessionActivityOwner(row: GatewaySessionRow): PresenceViewer {
   const actor = row.owner?.actor ?? row.createdActor;
-  const agentId = normalized(row.agentId);
+  const agentId = normalizeOptionalString(row.agentId);
   const { resourceBasePath } = readAvatarGatewayContext();
   return {
-    id: normalized(actor?.id) ?? agentId ?? "system",
-    name: normalized(actor?.label) ?? agentId,
+    id: normalizeOptionalString(actor?.id) ?? agentId ?? "system",
+    name: normalizeOptionalString(actor?.label) ?? agentId,
     avatarUrl: actor
-      ? normalized(actor.avatarUrl)
+      ? normalizeOptionalString(actor.avatarUrl)
       : agentId
         ? buildControlUiResourcePath("agentAvatar", resourceBasePath, agentId)
         : undefined,

@@ -17,6 +17,7 @@ final class DeviceMicrophoneTestModel {
     private var isActive = false
     private var testTask: Task<Void, Never>?
     private var meterTask: Task<Void, Never>?
+    private var meterStopTask: Task<Void, Never>?
 
     init(state: AppState) {
         self.state = state
@@ -27,7 +28,12 @@ final class DeviceMicrophoneTestModel {
         self.isActive = true
         MicRefreshSupport.startObserver(self.micObserver) { [weak self] in
             guard let self, self.isActive else { return }
-            MicRefreshSupport.schedule(refreshTask: &self.meterTask) { [weak self] in
+            let previousMeterTask = self.meterTask
+            previousMeterTask?.cancel()
+            self.meterTask = Task { [weak self] in
+                await previousMeterTask?.value
+                guard !Task.isCancelled else { return }
+                try? await Task.sleep(for: .milliseconds(300))
                 await self?.restartMeter()
             }
         }
@@ -39,13 +45,19 @@ final class DeviceMicrophoneTestModel {
         self.isActive = false
         self.testTask?.cancel()
         self.testTask = nil
-        self.meterTask?.cancel()
+        let meterTask = self.meterTask
+        meterTask?.cancel()
         self.meterTask = nil
         self.tester.stop()
         self.micObserver.stop()
         self.isTesting = false
         self.state.voiceWakeMeterActive = false
-        Task { await self.meter.stop() }
+        let previousStop = self.meterStopTask
+        self.meterStopTask = Task { [meter = self.meter] in
+            await previousStop?.value
+            await meterTask?.value
+            await meter.stop()
+        }
     }
 
     func toggleTest() {
@@ -121,16 +133,16 @@ final class DeviceMicrophoneTestModel {
     }
 
     private func restartMeter() async {
-        guard self.isActive else { return }
+        guard !Task.isCancelled, self.isActive else { return }
+        await self.meterStopTask?.value
+        guard !Task.isCancelled, self.isActive else { return }
         self.meterError = nil
         await self.meter.stop()
         guard !Task.isCancelled, self.isActive else { return }
         do {
             try await self.meter.start { [weak self] level in
-                Task { @MainActor in
-                    guard let self, self.isActive else { return }
-                    self.meterLevel = level
-                }
+                guard let self, self.isActive else { return }
+                self.meterLevel = level
             }
             guard !Task.isCancelled, self.isActive else {
                 await self.meter.stop()

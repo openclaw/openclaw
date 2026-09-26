@@ -10,6 +10,8 @@ export type ProviderLocalServiceTarget = {
   headers?: HeadersInit;
   service?: ModelProviderLocalServiceConfig;
   reconcile?: ProviderLocalServiceReconciler;
+  /** Reports readiness waits only; reconciliation and request work stay outside. */
+  onReadinessWait?: (waiting: boolean) => void;
 };
 
 /** Configured provider endpoint whose host-owned local service may be leased. */

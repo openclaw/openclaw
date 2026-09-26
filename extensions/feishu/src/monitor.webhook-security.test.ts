@@ -1,6 +1,7 @@
 // Feishu tests cover monitor.webhook security plugin behavior.
 import type { IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
+import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createFeishuClientMockModule,
@@ -8,11 +9,42 @@ import {
 } from "./monitor.test-mocks.js";
 import {
   buildWebhookConfig,
-  getFreePort,
+  createFeishuWebhookTestAccount,
+  getGatewayPort,
+  getGatewayServer,
+  signFeishuPayload,
+  waitForWebhookRoute,
   withRunningWebhookMonitor,
 } from "./monitor.webhook.test-helpers.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
+const webhookBodyTimeoutMs = vi.hoisted(() => ({ value: 50 }));
+const preAuthInFlightLimit = vi.hoisted(() => ({ value: undefined as number | undefined }));
+const legacyListener = vi.hoisted(() => ({
+  value: undefined as { port: number; host?: string } | undefined,
+}));
+
+vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>()),
+  getWebhookLegacyListener: () => legacyListener.value,
+}));
+
+vi.mock("openclaw/plugin-sdk/webhook-request-guards", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/webhook-request-guards")>();
+  return {
+    ...actual,
+    createWebhookInFlightLimiter: (
+      options?: Parameters<typeof actual.createWebhookInFlightLimiter>[0],
+    ) =>
+      actual.createWebhookInFlightLimiter({
+        ...options,
+        ...(preAuthInFlightLimit.value === undefined
+          ? {}
+          : { maxInFlightPerKey: preAuthInFlightLimit.value }),
+      }),
+  };
+});
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -29,22 +61,25 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
       res.end("ok");
     },
   ),
+  generateChallenge: vi.fn(() => ({ isChallenge: false })),
 }));
 
 vi.mock("./monitor.state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./monitor.state.js")>();
   return {
     ...actual,
-    FEISHU_WEBHOOK_BODY_TIMEOUT_MS: 50,
+    get FEISHU_WEBHOOK_BODY_TIMEOUT_MS() {
+      return webhookBodyTimeoutMs.value;
+    },
   };
 });
 
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
-import { resolveRequestClientIp } from "./monitor-transport-runtime-api.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
 import { monitorFeishuProvider } from "./monitor.js";
-import { feishuWebhookRateLimiter, httpServers } from "./monitor.state.js";
+import { feishuWebhookRateLimiter } from "./monitor.state.js";
 import { monitorWebhook } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -160,6 +195,70 @@ async function waitForOversizedBodyResponse(url: string): Promise<string> {
   });
 }
 
+function openIncompleteWebhookRequest(url: string): {
+  socket: ReturnType<typeof createConnection>;
+  response: Promise<string>;
+  finish: () => void;
+  isClosed: () => boolean;
+} {
+  const target = new URL(url);
+  const body = '{"type":"url_verification"}';
+  const bodyPrefix = body.slice(0, -1);
+  const bodySuffix = body.slice(-1);
+  const socket = createConnection({
+    host: target.hostname,
+    port: Number(target.port),
+  });
+  let response = "";
+  let settled = false;
+  const responsePromise = new Promise<string>((resolve, reject) => {
+    const failTimer = setTimeout(() => {
+      socket.destroy();
+      if (!settled) {
+        settled = true;
+        reject(new Error("incomplete webhook request did not close within 10000ms"));
+      }
+    }, 10_000);
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(failTimer);
+      resolve(response);
+    };
+
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      response += chunk.toString();
+    });
+    socket.on("close", finish);
+    socket.on("error", (error) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(failTimer);
+        reject(error);
+      }
+    });
+    socket.once("connect", () => {
+      socket.write(`POST ${target.pathname} HTTP/1.1\r\n`);
+      socket.write(`Host: ${target.hostname}\r\n`);
+      socket.write("Content-Type: application/json\r\n");
+      socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\n`);
+      socket.write("Connection: close\r\n");
+      socket.write("\r\n");
+      socket.write(bodyPrefix);
+    });
+  });
+
+  return {
+    socket,
+    response: responsePromise,
+    finish: () => socket.write(bodySuffix),
+    isClosed: () => settled,
+  };
+}
+
 function resolveTestClientIp(remoteAddress: string | undefined): string | undefined {
   return resolveRequestClientIp({
     headers: {},
@@ -167,22 +266,23 @@ function resolveTestClientIp(remoteAddress: string | undefined): string | undefi
   } as IncomingMessage);
 }
 
-function waitForWebhookResponseClose(accountId: string): Promise<void> {
-  const server = httpServers.get(accountId);
-  if (!server) {
-    throw new Error("expected webhook server");
-  }
+function waitForWebhookResponseClose(): Promise<void> {
+  const server = getGatewayServer();
   return new Promise<void>((resolve) => {
     server.once("request", (_req, res) => res.once("close", resolve));
   });
 }
 
 afterEach(async () => {
+  legacyListener.value = undefined;
+  preAuthInFlightLimit.value = undefined;
+  webhookBodyTimeoutMs.value = 50;
   feishuWebhookRateLimiter.clear();
-  cleanupFeishuMonitorStateForTests();
+  await cleanupFeishuMonitorStateForTests();
 });
 
 afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
   vi.doUnmock("./probe.js");
   vi.doUnmock("./client.js");
   vi.doUnmock("./runtime.js");
@@ -198,7 +298,6 @@ describe("Feishu webhook security hardening", () => {
     const cfg = buildWebhookConfig({
       accountId: "missing-token",
       path: "/hook-missing-token",
-      port: await getFreePort(),
     });
 
     await expect(monitorFeishuProvider({ config: cfg })).rejects.toThrow(
@@ -212,7 +311,6 @@ describe("Feishu webhook security hardening", () => {
     const cfg = buildWebhookConfig({
       accountId: "missing-encrypt-key",
       path: "/hook-missing-encrypt",
-      port: await getFreePort(),
       verificationToken: "verify_token",
     });
 
@@ -225,8 +323,6 @@ describe("Feishu webhook security hardening", () => {
       config: {
         enabled: true,
         connectionMode: "webhook",
-        webhookHost: "127.0.0.1",
-        webhookPort: await getFreePort(),
         webhookPath: "/hook-transport-missing-encrypt",
       },
     } as ResolvedFeishuAccount;
@@ -235,11 +331,7 @@ describe("Feishu webhook security hardening", () => {
       monitorWebhook({
         account,
         accountId: account.accountId,
-        runtime: {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: vi.fn(),
-        } as RuntimeEnv,
+        runtime: createRuntimeSpies() as RuntimeEnv,
         abortSignal: new AbortController().signal,
         eventDispatcher: {} as never,
       }),
@@ -285,7 +377,7 @@ describe("Feishu webhook security hardening", () => {
       monitorFeishuProvider,
       async (url) => {
         statusSink.mockClear();
-        const responseClosed = waitForWebhookResponseClose("payload-too-large");
+        const responseClosed = waitForWebhookResponseClose();
         const response = await waitForOversizedBodyResponse(url);
 
         expect(response).toContain("413 Payload Too Large");
@@ -320,7 +412,7 @@ describe("Feishu webhook security hardening", () => {
       monitorFeishuProvider,
       async (url) => {
         statusSink.mockClear();
-        const responseClosed = waitForWebhookResponseClose("slow-body-timeout");
+        const responseClosed = waitForWebhookResponseClose();
         const result = await waitForSlowBodyTimeoutResponse(url, 1_000);
         expect(result.body).toContain("408 Request Timeout");
         expect(result.body).toContain("Request body timeout");
@@ -337,6 +429,205 @@ describe("Feishu webhook security hardening", () => {
         expect(statusSink).not.toHaveBeenCalled();
       },
     );
+  });
+
+  it("rejects excess concurrent pre-auth webhook reads and recovers capacity", async () => {
+    webhookBodyTimeoutMs.value = 5_000;
+    const accountId = "pre-auth-inflight";
+    const path = "/hook-pre-auth-inflight";
+    const port = await getGatewayPort();
+    const abortController = new AbortController();
+    const invokeWebhookEvent = vi.fn(async () => ({
+      kind: "durable" as const,
+      value: { accepted: true },
+    }));
+    const openRequests: Array<ReturnType<typeof openIncompleteWebhookRequest>> = [];
+    const monitorPromise = monitorWebhook({
+      account: createFeishuWebhookTestAccount(accountId, path),
+      accountId,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+      invokeWebhookEvent,
+    });
+
+    try {
+      const url = `http://127.0.0.1:${port}${path}`;
+      await waitForWebhookRoute(url);
+      const server = getGatewayServer();
+      const heldRequestsReceived = new Promise<void>((resolve) => {
+        let requestCount = 0;
+        const onRequest = () => {
+          requestCount += 1;
+          if (requestCount === 64) {
+            server.off("request", onRequest);
+            resolve();
+          }
+        };
+        server.on("request", onRequest);
+      });
+      const held = Array.from({ length: 64 }, () => openIncompleteWebhookRequest(url));
+      openRequests.push(...held);
+      await heldRequestsReceived;
+      expect(held.every((request) => !request.isClosed())).toBe(true);
+
+      const overflowStartedAt = Date.now();
+      const overflow = openIncompleteWebhookRequest(url);
+      openRequests.push(overflow);
+      const overflowResponse = await overflow.response;
+
+      expect(overflowResponse).toContain("429 Too Many Requests");
+      expect(overflowResponse).toMatch(/connection: close/i);
+      expect(Date.now() - overflowStartedAt).toBeLessThan(400);
+      expect(invokeWebhookEvent).not.toHaveBeenCalled();
+
+      for (const request of held) {
+        request.finish();
+      }
+      const heldResponses = await Promise.all(held.map((request) => request.response));
+      expect(heldResponses).toHaveLength(64);
+      expect(heldResponses.every((response) => response.includes("401 Unauthorized"))).toBe(true);
+
+      const rawBody = JSON.stringify({
+        schema: "2.0",
+        header: { event_type: "test.pre_auth_inflight" },
+        event: {},
+      });
+      const recovered = await fetch(url, {
+        method: "POST",
+        headers: signFeishuPayload({ encryptKey: "encrypt_key", rawBody }),
+        body: rawBody,
+      });
+
+      expect(recovered.status).toBe(200);
+      expect(recovered.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+      expect(invokeWebhookEvent).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const request of openRequests) {
+        request.socket.destroy();
+      }
+      webhookBodyTimeoutMs.value = 50;
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
+  it("keeps pre-auth capacity independent for distinct trusted legacy listeners", async () => {
+    preAuthInFlightLimit.value = 1;
+    webhookBodyTimeoutMs.value = 5_000;
+    const { EventDispatcher } =
+      await vi.importActual<typeof import("@larksuiteoapi/node-sdk")>("@larksuiteoapi/node-sdk");
+    const path = "/hook-legacy-pre-auth";
+    const port = await getGatewayPort();
+    const url = `http://127.0.0.1:${port}${path}`;
+    const abortController = new AbortController();
+    const monitors = [3000, 3001].map((legacyPort) => {
+      const account = createFeishuWebhookTestAccount(`legacy-${legacyPort}`, path);
+      return monitorWebhook({
+        account: {
+          ...account,
+          config: { ...account.config, legacyWebhook: { port: legacyPort, host: "127.0.0.1" } },
+        },
+        accountId: account.accountId,
+        abortSignal: abortController.signal,
+        runtime: createRuntimeSpies(),
+        eventDispatcher: new EventDispatcher({ encryptKey: "encrypt_key" }),
+        invokeWebhookEvent: async () => ({ kind: "durable", value: { port: legacyPort } }),
+      });
+    });
+    const heldReceived = new Promise<void>((resolve) => {
+      getGatewayServer().once("request", () => resolve());
+    });
+    const heldClosed = waitForWebhookResponseClose();
+    legacyListener.value = { port: 3000, host: "127.0.0.1" };
+    const held = openIncompleteWebhookRequest(url);
+    const body = JSON.stringify({ schema: "2.0", event: {} });
+    const post = () =>
+      fetch(url, {
+        method: "POST",
+        headers: signFeishuPayload({ encryptKey: "encrypt_key", rawBody: body }),
+        body,
+      });
+    try {
+      await heldReceived;
+      expect(held.isClosed()).toBe(false);
+      legacyListener.value = { port: 3001, host: "127.0.0.1" };
+      const second = await post();
+      expect(second.status).toBe(200);
+      await expect(second.json()).resolves.toEqual({ port: 3001 });
+      legacyListener.value = { port: 3000, host: "127.0.0.1" };
+      expect((await post()).status).toBe(429);
+      expect(held.isClosed()).toBe(false);
+    } finally {
+      held.socket.destroy();
+      await held.response;
+      await heldClosed;
+      legacyListener.value = undefined;
+      abortController.abort();
+      await Promise.all(monitors);
+    }
+  });
+
+  it("releases pre-auth capacity before signed event dispatch", { timeout: 15_000 }, async () => {
+    preAuthInFlightLimit.value = 1;
+    const accountId = "pre-auth-dispatch";
+    const path = "/hook-pre-auth-dispatch";
+    const port = await getGatewayPort();
+    const abortController = new AbortController();
+    let releaseDispatch = () => {};
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const invokeWebhookEvent = vi.fn(async () => {
+      await dispatchGate;
+      return { kind: "durable" as const, value: { accepted: true } };
+    });
+    let signedRequest: Promise<Response> | undefined;
+    const monitorPromise = monitorWebhook({
+      account: createFeishuWebhookTestAccount(accountId, path),
+      accountId,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+      invokeWebhookEvent,
+    });
+
+    try {
+      const url = `http://127.0.0.1:${port}${path}`;
+      await waitForWebhookRoute(url);
+      const rawBody = JSON.stringify({
+        schema: "2.0",
+        header: { event_type: "test.pre_auth_dispatch" },
+        event: {},
+      });
+      signedRequest = fetch(url, {
+        method: "POST",
+        headers: signFeishuPayload({ encryptKey: "encrypt_key", rawBody }),
+        body: rawBody,
+      });
+      await vi.waitFor(() => expect(invokeWebhookEvent).toHaveBeenCalledOnce(), {
+        timeout: 5_000,
+        interval: 10,
+      });
+
+      const admittedInvalidSignature = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(admittedInvalidSignature.status).toBe(401);
+      expect(invokeWebhookEvent).toHaveBeenCalledOnce();
+
+      releaseDispatch();
+      expect((await signedRequest).status).toBe(200);
+    } finally {
+      releaseDispatch();
+      if (signedRequest) {
+        await signedRequest.catch(() => undefined);
+      }
+      abortController.abort();
+      await monitorPromise;
+    }
   });
 
   it("rate limits webhook burst traffic with 429", async () => {
@@ -375,29 +666,14 @@ describe("Feishu webhook security hardening", () => {
       path: "/hook-rate-limit-key",
     };
 
-    expect([
-      buildFeishuWebhookRateLimitKey({
-        ...base,
-        clientIp: resolveTestClientIp("127.0.0.1"),
-      }),
-      buildFeishuWebhookRateLimitKey({
-        ...base,
-        clientIp: resolveTestClientIp("127.0.0.42"),
-      }),
-      buildFeishuWebhookRateLimitKey({
-        ...base,
-        clientIp: resolveTestClientIp("::ffff:127.0.0.1"),
-      }),
-      buildFeishuWebhookRateLimitKey({
-        ...base,
-        clientIp: resolveTestClientIp("::1"),
-      }),
-    ]).toEqual([
-      "rate-limit-key:/hook-rate-limit-key:loopback",
-      "rate-limit-key:/hook-rate-limit-key:loopback",
-      "rate-limit-key:/hook-rate-limit-key:loopback",
-      "rate-limit-key:/hook-rate-limit-key:loopback",
-    ]);
+    for (const address of ["127.0.0.1", "127.0.0.42", "::ffff:127.0.0.1", "::1"]) {
+      expect(
+        buildFeishuWebhookRateLimitKey({
+          ...base,
+          clientIp: resolveTestClientIp(address),
+        }),
+      ).toBe("rate-limit-key:/hook-rate-limit-key:loopback");
+    }
   });
 
   it("keeps non-loopback and unknown webhook rate-limit key suffixes distinct", () => {
@@ -414,22 +690,66 @@ describe("Feishu webhook security hardening", () => {
     );
   });
 
-  it("caps tracked webhook rate-limit keys to prevent unbounded growth", () => {
-    const now = 1_000_000;
-    for (let i = 0; i < 4_500; i += 1) {
-      feishuWebhookRateLimiter.isRateLimited(`/feishu-rate-limit:key-${i}`, now);
-    }
-    expect(feishuWebhookRateLimiter.size()).toBeLessThanOrEqual(4_096);
+  it("rejects correctly signed callbacks with a stale timestamp", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "stale-timestamp",
+        path: "/hook-stale-timestamp",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = { type: "url_verification", challenge: "challenge-token" };
+        const headers = signFeishuPayload({
+          encryptKey: "encrypt_key",
+          rawBody: JSON.stringify(payload),
+          timestamp: (Math.floor(Date.now() / 1000) - 7_200).toString(),
+        });
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(401);
+        expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+        expect(await response.text()).toBe("Invalid signature");
+      },
+    );
   });
 
-  it("prunes stale webhook rate-limit state after window elapses", () => {
-    const now = 2_000_000;
-    for (let i = 0; i < 100; i += 1) {
-      feishuWebhookRateLimiter.isRateLimited(`/feishu-rate-limit-stale:key-${i}`, now);
-    }
-    expect(feishuWebhookRateLimiter.size()).toBe(100);
+  it("rejects correctly signed callbacks with a far-future timestamp", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 
-    feishuWebhookRateLimiter.isRateLimited("/feishu-rate-limit-stale:fresh", now + 60_001);
-    expect(feishuWebhookRateLimiter.size()).toBe(1);
+    await withRunningWebhookMonitor(
+      {
+        accountId: "future-timestamp",
+        path: "/hook-future-timestamp",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = { type: "url_verification", challenge: "challenge-token" };
+        const headers = signFeishuPayload({
+          encryptKey: "encrypt_key",
+          rawBody: JSON.stringify(payload),
+          timestamp: (Math.floor(Date.now() / 1000) + 7_200).toString(),
+        });
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(401);
+        expect(await response.text()).toBe("Invalid signature");
+      },
+    );
   });
 });

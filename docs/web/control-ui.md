@@ -21,9 +21,103 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
-While the initial connection or a route loads, shimmer placeholders reserve the chat layout. They respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
+If the Gateway's request queue is full, automatic sidebar session discovery keeps the current rows and retries up to three times, respecting the server's retry delay. A persistent failure shows "The server is busy. Please try again in a moment." Other actions can show this message immediately; wait briefly, then retry the action.
 
-Closed Terminal, Browser, Desktop, and Home/Ask OpenClaw panels initialize when you open them rather than during initial navigation. Panels saved as open still restore after a reload.
+While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
+
+The selected chat loads before automatic sidebar task lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
+
+Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
+
+Live narration retains up to six visible running background sessions, plus the open session. Recency changes keep that window stable; when a session finishes or leaves the visible rows, the most recent eligible session fills its slot. Reconnecting selects a fresh window.
+
+Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
+
+Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Ordinary session patches and command changes wait for a 2.5-second quiet period before refreshing commands and session facts. They reuse the model catalog unless the returned metadata indicates a changed model or account projection. Explicit model, account, and runtime selections refresh promptly. Configuration, catalog, and session lifecycle changes still invalidate the full metadata bundle. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
+
+New Session keeps previously fetched model choices selectable while their catalog
+refreshes in the background. Before the first catalog arrives, it does not turn a
+configured default into a model option. Command palette model results use the same
+catalog cache and appear independently of slower search categories.
+
+Provider authentication status is shared across views and refreshes after account changes and near credential warning or expiry deadlines. Credentials without an expiry do not need periodic refreshes. Hidden tabs defer deadline refreshes until visible again.
+
+The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
+
+Thinking, speed, and context-window changes stay synchronized across panes showing the same session. While a change is pending, the latest selection remains visible. A rejected change restores the latest confirmed value. Delayed events from a replaced session leave the current transcript and unsent draft intact.
+
+While an agent works, completed commentary or preambles appear inline in the
+conversation when the model and runtime provide them. Narration keeps its
+formatting and position alongside tool activity; the working indicator remains
+a separate status for execution, startup, or approval. **Keep commentary** in
+the chat view menu controls whether commentary stays visible after the run,
+not whether the active run’s narration survives a history refresh. Completed
+dashboard turns collapse their narration and tool activity under **Worked for …**
+above the answer. Expanding it restores the sequence with the existing tool-call
+groups. When no run duration is available, the heading reads **Worked**.
+
+Subagent runs appear in inline transcript activity rows and the chat **Tasks** tab,
+outside sidebar navigation. Use the [Tasks CLI](/cli/tasks) to inspect work across conversations.
+Their activity rows lead with the child task's display title, using its configured
+`label` when present, followed by the latest activity. The leading claw moves only
+while running; queued and cancelled tasks stay still, and completion briefly turns
+the claw green. Failed tasks have a warning badge and timed-out tasks a clock badge.
+Hover the row or focus it with the keyboard for a tooltip explaining the exact
+status. Reduced motion keeps the claw still. Tasks without a display title keep
+the generic **Subagent** label. Select a row to open its details.
+
+Select a session's title in the chat header to rename it. Enter saves the name;
+Escape cancels the edit. While an input method is composing text, Enter and
+Escape stay with composition. Finish composing before saving or canceling.
+
+Dragging a session between sidebar groups updates its placement immediately. A successful
+save keeps that placement even if the subsequent list refresh fails; the UI reports
+the refresh error separately. If a connection failure leaves the save unconfirmed,
+refresh and check the session's group before retrying. Other clients' newer group
+changes still reconcile through session events.
+
+The sidebar keeps unread child failures visible on their ancestors. These warnings
+name the child session that failed, even when its parent has finished or continues
+working. Select the warning to open the child session and acknowledge its failure;
+a subagent chat opens without adding a sidebar row.
+
+Choose **New agent** in the sidebar or Agents home to open the custodian chat.
+It recommends a chief of staff, researcher, writer, reviewer, or a small team
+with all four. Reply with a choice, or describe custom work and a name. Role
+choices use the same [role templates](/cli/agents#role-templates) as the CLI;
+creation waits for operator approval. For custom work, the approved purpose is
+saved in the new workspace's `AGENTS.md`; the normal identity ceremony still runs.
+With `skipBootstrap` enabled, only these requested instructions are seeded, without
+the generic identity or bootstrap files.
+Existing workspace instructions are never overwritten. If `AGENTS.md` already
+contains different instructions, choose a new workspace for the custom agent.
+Created agents appear in Agents home and
+the agent switcher.
+Opening **New agent** keeps your existing Ask OpenClaw conversation. Finish any
+pending wizard or approval before opening the creation choices.
+If team creation stops partway through, the custodian reports the retained
+agents so you can inspect them before creating the missing members.
+
+## Watch a desktop in Picture-in-Picture
+
+Connect the Desktop viewer, then choose **Open desktop in Picture-in-Picture** in
+its toolbar. The browser opens a view-only, always-on-top window so you can watch
+the remote computer while using other tabs or apps. The same action is available
+in the docked panel, chat side panel, and focused desktop window.
+
+This requires a secure context (HTTPS or localhost) and a desktop browser that
+exposes the Document Picture-in-Picture API, including supported Chrome and
+Firefox versions. The control is disabled when the API is unavailable or the
+desktop is not connected. Browser permissions can still deny the request; check
+those permissions and click the control again to retry. OpenClaw does not replace
+unsupported PiP with an ordinary popup.
+
+PiP mirrors the existing live connection without taking control or opening a
+second desktop connection. Closing PiP leaves the original viewer and remote task
+running. Disconnecting, changing the viewer's source or session, or closing the
+originating viewer closes PiP; it does not stop the remote task. Keep the opener
+tab open. A sleeping computer or a browser that suspends the entire page cannot
+continue streaming.
 
 ## Quick open (local)
 
@@ -37,19 +131,88 @@ On native Windows LAN binds, Windows Firewall or organization-managed Group Poli
 
 Auth is supplied during the WebSocket handshake via:
 
-- `connect.params.auth.token`
-- `connect.params.auth.password`
+- the configured shared secret in either `connect.params.auth.token` or
+  `connect.params.auth.password`; `gateway.auth.mode` selects the configured
+  value (`gateway.auth.token` or `gateway.auth.password`)
 - Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
 - trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
 
 Gateway auth runs before device pairing. A direct loopback connection does not bypass token or password auth. The login screen and **Settings → Gateway** use one **Gateway secret** field: paste the token or type the password. After a successful connection, the UI keeps the secret in session storage for the current browser tab and Gateway origin only when the Gateway reports token auth. Passwords stay in memory and are never persisted. After pairing, the browser can use its stored per-device token on later connections.
 
-Onboarding usually configures a gateway token for shared-secret auth. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into Control UI settings. Password auth works instead when `gateway.auth.mode` is `"password"`.
+If you paste a setup code from **Devices → Pair device → Copy setup code** into **Gateway secret**, the UI shows an inline hint before you connect. Paste that code into **Settings → Gateway** in the OpenClaw mobile app. For the Control UI, run `openclaw gateway auth-token --show` in an interactive terminal on the Gateway host and paste the shared token instead. If a connection with a setup code is rejected for a token or password mismatch, the login screen repeats this guidance.
+
+Local onboarding generates a Gateway secret in token mode by default, without a token/password picker, and preserves existing password mode. Use `--gateway-auth password` or `--gateway-password <value>` for explicit password setup; Tailscale Funnel requires password mode. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into **Gateway secret**.
+
+## Agents home
+
+Open **Agents** in the sidebar, choose **All agents** in the agent switcher, or
+visit `/agents` to see your configured agents as a roster. Each card shows the
+agent's identity, model, current work status, last activity, and a preview from its
+main chat. **Open chat** opens that agent's
+main session. Working agents appear first, followed by the most recently active.
+
+**Manage agents** opens `/settings/agents`. **New agent** opens the existing
+agent creation flow when available, or agent settings otherwise. `/agents` now
+opens the roster; agent configuration remains at `/settings/agents`.
+
+To browse sessions across agents, choose **Show all agents** in the
+agent switcher. This enables **team mode**, a browser preference that is off by
+default. The top row becomes a workspace header with the configured Gateway display
+name, or **OpenClaw**, and the OpenClaw mark. Its menu contains **Show one agent**,
+**Agent settings**, and the existing documentation, help, community, and changelog
+links. Sessions appear under collapsible agent headers in configured roster order,
+which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
+open that agent's main chat. The separate collapse control only folds its sessions.
+The top **+**, labeled **New conversation**, opens an agent menu with avatars and names in
+the same order as the groups; choosing an agent opens New session for that agent.
+Each group's **+** does this directly, appearing on hover or keyboard focus and remaining visible on touch devices. Selecting a session switches the active
+agent for chat. Choose **Show one agent** in the workspace menu to restore the
+agent chip, Home row, and direct New session button.
+
+Enabling team mode also defaults the shared page scope to **All agents**, while
+remembering the previous scope to restore when you turn it off. That scope,
+including an explicit **All agents** selection, is saved in this browser for each
+gateway. It survives reloads and switching to another gateway and back, even if
+you open a different agent's chat in team mode. Turning team mode off clears the
+remembered value after restoring it. You can still
+choose a narrower scope; navigating between pages does not reset that choice.
+Automations, Dashboards, Sessions, and Usage support all-agent views, with
+agent identity shown on mixed-agent rows. In Settings, choose an agent below the
+sidebar title to keep the same target across Agents, Models, Memory, and Skills.
+Global settings remain global. Skill Workshop uses the agent selected through
+chat; open an agent's main chat from its group header to select it. Chat actions
+always belong to the conversation's agent.
+
+Choose **All sessions** from an agent group’s options menu to open the Sessions
+page filtered to that agent. Open **Agents** in the sidebar to return to the roster
+page. See [Sidebar navigation](/web/control-ui/sessions-and-sidebar#sidebar-navigation)
+for group controls and filtering.
+
+Agent names and avatars follow agent and identity updates. While a configured avatar image loads,
+the avatar keeps its tinted background with no face or text. The image appears when ready;
+an emoji or generated face appears only when no image is configured or the image fails to load.
+This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
+
+Activity and previews on the page and sidebar roster refresh on session events
+and Gateway reconnects. Reusing cached ancestry for the selected session does not
+trigger another list read. Events collect in a randomized four-to-five-second window
+that later events cannot postpone, spreading automatic reads across browsers.
+After an automatic read, the next waits three times its duration,
+bounded between five and 15 seconds. Navigation, reconnects, and explicit refreshes
+bypass that delay. When both are visible, they share one activity window and
+one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading
+stops when neither roster is visible. Each refresh reads at most 300 sessions
+across agents, loading pinned sessions first and then the most recent sessions.
+Pinned sessions count toward that limit; sessions outside the window do not appear
+in the grouped sidebar or contribute to activity summaries, except that the open
+conversation remains visible so direct links keep a selected row. When a main session
+is absent from the window, its agent's most recent session supplies the preview.
 
 ## What each page covers
 
 - [Connect and pair](/web/control-ui/connect-and-pair) — pair a browser or phone, reach the UI over Tailscale, and fix a blank page.
 - [Sessions and sidebar](/web/control-ui/sessions-and-sidebar) — sidebar zones, session menus, and the New session page.
+- [Systems workspace](/web/control-ui/sessions-and-sidebar#systems-workspace) — contextual machine navigation and a desktop-first workspace.
 - [Chat](/web/control-ui/chat) — composer controls, the session rail, transcript rendering, and hosted embeds.
 - [Panels and docks](/web/control-ui/panels) — Ask OpenClaw, the Home dock, the operator terminal, and the browser panel.
 - [Settings](/web/control-ui/settings) — identity, appearance, plugins, updates, MCP, activity, and meetings.
@@ -57,6 +220,8 @@ Onboarding usually configures a gateway token for shared-secret auth. If the Gat
 - [Offline and reconnect](/web/control-ui/offline-and-reconnect) — what survives a dropped connection.
 - [Security model](/web/control-ui/security-model) — content security policy, media route auth, and approval links.
 - [Build and develop](/web/control-ui/development) — build the UI and run the dev server against a Gateway.
+
+Running the Gateway in Docker? See [Using the Control UI browser](/install/docker#using-the-control-ui-browser) for the browser-equipped image and setup requirements.
 
 ## Where each section moved
 
@@ -151,3 +316,4 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Health Checks](/gateway/health) — gateway health monitoring
 - [TUI](/web/tui) — terminal user interface
 - [WebChat](/web/webchat) — browser-based chat interface
+- [Codex session catalog and supervision](/plugins/codex-supervision) — the Native Session Discovery settings surface

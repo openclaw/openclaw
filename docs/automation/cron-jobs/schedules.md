@@ -27,13 +27,17 @@ Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` to
 
 Recurring top-of-hour expressions (minute `0` with a wildcard hour field) are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing, or `--stagger 30s` for an explicit window (cron schedules only).
 
+In the Control UI, enable **Exact timing** to disable staggering. For recurring top-of-hour expressions, turn it off and clear **Stagger window** to restore the default window of up to 5 minutes. For other expressions, clearing a saved window without changing the expression disables staggering and reopens with **Exact timing** enabled. A new schedule with a blank window keeps default timing when its expression changes.
+
+An `on-exit` job disables itself when its payload is queued to run. Re-enable the job to watch again; this also works while the previous payload is still finishing. If the new command exits before that payload finishes, its exit waits for the previous run to settle before disabling the job and starting the next payload. This includes cleanup still running after a timeout response. Disabling or changing the watch cancels its pending exit. You can change the watched command or working directory when re-enabling it.
+
 ### Heartbeat task migration
 
-Older heartbeat scratch supported a structured `tasks:` block. Run `openclaw doctor --fix` after upgrading to convert each entry into an ordinary editable main-session automation job. Doctor preserves the interval and previous last-run timing, creates the jobs before removing the block, and safely converges the same declaration keys on rerun.
+Heartbeat scratch supported a structured `tasks:` block before v2026.8.1. If you are upgrading from an earlier release, run `openclaw doctor --fix` to convert each entry into an ordinary editable main-session automation job. Doctor preserves the interval and previous last-run timing, creates the jobs before removing the block, and safely converges the same declaration keys on rerun.
 
 These migrated jobs carry public `systemEvent` payloads, so `openclaw automations list`, `get`, `edit`, and `remove` plus the `automations` agent tool manage them like other jobs (the tool still accepts its legacy `cron` name as a compatibility alias). Their execution uses the guarded heartbeat task wake: active hours, minimum spacing, flood control, and busy retries still apply, while the scheduler owns each task's independent cadence. Jobs due in the same coalescing window can share one heartbeat turn. A scheduled occurrence outside heartbeat active hours is skipped and retried at the job's next occurrence.
 
-Heartbeat scratch is now monitor prose only. Runtime heartbeats do not parse `tasks:` text as schedules; create new recurring work as automations.
+Heartbeat scratch is monitor prose only. Runtime heartbeats do not parse `tasks:` text as schedules; create new recurring work as automations.
 
 ### Stream sources
 
@@ -52,13 +56,17 @@ openclaw automations add \
 
 `mode: "line"` (the default) accepts every line. `mode: "match"` accepts only lines matching the compiled `match` regex. A batch closes after `batchMs` of quiet (default 250 ms, clamped to 50–5000) or at `maxBatchBytes` (default 16384, clamped to 1024–65536). At the byte cap the batch ends with `[truncated]`. Match mode always evaluates complete lines against their full text, even past `maxBatchBytes` (only the delivered batch is truncated); a line cut at the bounded raw-intake limit is only a prefix, so it is treated as unmatched rather than letting an end-anchored pattern fire on the cut. The batch is appended to the system-event text or agent-turn message. Command payloads are rejected for stream schedules because the source command and payload command would have ambiguous process ownership.
 
-Only one payload fire and one bounded pending batch are retained per job. Lines arriving while a payload runs, or before the built-in 30-second trigger interval has elapsed, coalesce into that pending batch rather than building an unbounded queue. One serialized owner records gate drops, payload errors, and not-running dispatches in `streamDroppedBatches`; bounded merges increment `streamCoalescedBatches`. Failed payloads are not retried because they may not be idempotent. A logical source identity remains stable across supervised child restarts, but rotates when the source is disabled, removed, or replaced, so queued batches from the retired source cannot fire even after an A-to-B-to-A edit. After a stop completes, late callbacks from an old child are inert. V1 does not include a native WebSocket source; bridge one with an argv command such as `websocat wss://example.invalid/events`.
+Matching has a bounded processing budget and queue. If either limit is exceeded, the source stops with a recorded error; check the match expression and Gateway load, then manually re-enable the job.
+
+Only one payload fire and one bounded pending batch are retained per job. Lines arriving while a payload runs, or before the built-in 30-second trigger interval has elapsed, coalesce into that pending batch rather than building an unbounded queue. One serialized owner records gate drops, payload errors, and not-running dispatches in `streamDroppedBatches`; bounded merges increment `streamCoalescedBatches`. Failed payloads are not retried because they may not be idempotent. A logical source identity remains stable across supervised child restarts, but rotates when the source is disabled, removed, or replaced, so queued batches from the retired source cannot fire even after an A-to-B-to-A edit. After a stop completes, late callbacks from an old child are inert. There is no native WebSocket source; bridge one with an argv command such as `websocat wss://example.invalid/events`.
 
 When a stream job also has `trigger.script`, the gate runs once per closed batch. The current batch is available as the deeply frozen `trigger.streamBatch` string alongside `trigger.state`. `fire: false` drops that batch after persisting gate state. `fire: true` keeps existing trigger message semantics, then appends the batch to the resulting payload. A stream job may instead use a script payload without a condition gate; that script receives the batch through the same `trigger.streamBatch` value. Combining a script payload with a condition gate is rejected because both would own the persisted `trigger.state` slot.
 
 ### Dynamic cadence (pacing)
 
 Recurring jobs can set `pacing.min` and/or `pacing.max` to duration strings such as `15m` or `4h`; at least one bound is required. Use `--pacing-min` and `--pacing-max` with `automations add|edit` (`--clear-pacing` removes both bounds).
+
+The Control UI preserves pacing bounds when duplicating a recurring job. Changing a paced job or its duplicate to **Once** removes pacing; other edits retain the existing bounds.
 
 During an agent-turn run, a paced job can call the `automations` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds. A future paced deadline remains the next scheduled check after a Gateway restart.
 
@@ -96,11 +104,16 @@ An event trigger adds a headless condition script to an `every`, `cron`, or `str
 }
 ```
 
-When upgrading, run `openclaw doctor --fix` to migrate persisted trigger scripts that call `tools.call('exec', args)` and read the legacy `.result.details` envelope. Doctor leaves custom or ambiguous legacy scripts unchanged and identifies each affected job for manual conversion; standalone script payloads are not migrated.
+`openclaw doctor --fix` converts persisted trigger scripts that call `tools.call('exec', args)` and read the `.result.details` envelope. Doctor leaves custom or ambiguous scripts unchanged and identifies each affected job for manual conversion; standalone script payloads are not converted.
 
 The script must return `{ fire, message?, state? }`. The previous JSON state is available as the deeply frozen `trigger.state`; stream gates also receive the current batch as `trigger.streamBatch`. Return a new `state` value to persist it. State is capped at 16 KB. When a firing result includes `message`, the scheduler appends it to the system-event text or agent-turn message before execution. `once: true` disables the job after its first successful fired payload.
 
-`fire: false` persists evaluation state and counters, then reschedules without creating run history. If a fired payload run fails, the returned `state` is **not** persisted — the next evaluation sees the previous state and can fire again, so write scripts as read-only checks and keep actions in the payload. Trigger schedules have a built-in minimum interval of 30 seconds. Each evaluation has a 30-second wall-clock budget and up to 5 tool calls.
+Changing a running watcher's condition or saved state protects that edit from the
+old evaluation's state updates and `once` completion, including after a Gateway
+restart. The completed payload still retains its run history. An unchanged
+watcher keeps its usual `once` behavior; renaming it does not reset its condition.
+
+`fire: false` persists evaluation state and counters, then reschedules without creating run history. These quiet evaluations count as completed occurrences during restart catch-up. If a fired payload run fails, the returned `state` is **not** persisted — the next evaluation sees the previous state and can fire again, so write scripts as read-only checks and keep actions in the payload. Trigger schedules have a built-in minimum interval of 30 seconds, preserved through maintenance and Gateway restarts. Each evaluation has a 30-second wall-clock budget and up to 5 tool calls.
 
 Removing or disabling a job during condition evaluation cancels that evaluation before its payload can start. After a main-session payload hands work to heartbeat, that shared heartbeat retains its own lifecycle.
 
@@ -110,7 +123,7 @@ Author watchers around **actionable state**, not only success: a watcher that go
 Condition-trigger scripts and `script` payloads run unattended by default with the owning agent's **full tool policy, including `exec`**. Stream schedules also keep operator-authored commands running unattended. Treat these surfaces as unattended code execution with that agent's permissions. Operators who need a hard stop can set `cron.triggers.enabled: false`; remove it or set it to `true` to re-enable them.
 </Warning>
 
-Create a watcher from a local script file (`-` reads the script from stdin):
+Create a watcher from a local script file (`-` reads the script from stdin). The CLI preserves leading and trailing spaces in file paths; quote the path as one shell argument:
 
 ```bash
 openclaw automations add \

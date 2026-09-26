@@ -1,4 +1,3 @@
-// QA Lab mock provider assistant text fixtures.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   type ResponsesInputItem,
@@ -11,9 +10,6 @@ import {
   QA_SUBAGENT_DIRECT_FALLBACK_MARKER,
   QA_IMAGE_GENERATION_PROMPT_RE,
   QA_SKILL_WORKSHOP_GIF_PROMPT_RE,
-  QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
-  QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
-  buildSlackMpimHistoryBotReply,
   QA_TOOL_SEARCH_PROMPT_RE,
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
 } from "./mock-openai-contracts.js";
@@ -21,12 +17,7 @@ import {
   extractExactReplyDirective,
   extractFinishExactlyDirective,
   extractExactMarkerDirective,
-  extractWhatsAppLocationMarkerDirective,
-  extractWhatsAppContactMarkerDirective,
-  extractWhatsAppStickerMarkerDirective,
-  shouldUseWhatsAppLocationMarker,
-  shouldUseWhatsAppContactMarker,
-  shouldUseWhatsAppStickerMarker,
+  resolveWhatsAppStructuredReply,
   extractToolErrorForNamedCall,
   resolveHeartbeatPromptReply,
   readFirstMediaPath,
@@ -37,13 +28,14 @@ import {
   splitMockConversationContext,
   extractToolOutput,
   extractLatestToolOutput,
-  extractSlackMpimRetainedBotNonce,
+  buildSlackMpimHistoryReply,
   extractAllUserTexts,
   extractUserTurnTexts,
   extractAllRequestTexts,
   extractCurrentImageRequest,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
+import { readMockSubagentCompletion } from "./mock-openai-subagent-completion.js";
 import {
   extractRememberedFact,
   extractOrbitCode,
@@ -120,32 +112,12 @@ export function isCanonicalCompactionRetryWriteResult(toolOutput: string): boole
 }
 
 export function readForkedContextCompletion(input: ResponsesInputItem[]) {
-  const { current } = splitMockConversationContext(extractAllUserTexts(input).at(-1) ?? "");
-  // The yielded requester gets a numbered all-settled finding; active requesters
-  // can receive the individual protected event. Both carry owner-recorded status.
-  const settled =
-    /(?:^|\n)\d+\. qa-fork-context\nstatus: ([^\n]+)\nChild result[^\n]*\n<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/.exec(
-      current,
-    );
-  if (settled && current.includes("sourceTool=subagent_settle")) {
-    const result = settled[2];
-    return settled[1] === "ok" &&
-      result &&
-      /^FORKED-CONTEXT-CHILD: FORKED-CONTEXT-[A-Z0-9-]+$/.test(result)
-      ? result
-      : "FORKED-CONTEXT-MISSING-RESULT";
-  }
-  const eventStart = current.lastIndexOf("[Internal task completion event]");
-  const event = eventStart < 0 ? "" : current.slice(eventStart);
-  if (!/^task:\s*qa-fork-context\s*$/m.test(event)) {
+  const completion = readMockSubagentCompletion(input, "qa-fork-context");
+  if (!completion) {
     return undefined;
   }
-  const result = /^FORKED-CONTEXT-CHILD: FORKED-CONTEXT-[A-Z0-9-]+$/m.exec(event);
-  return /^source:\s*subagent\s*$/m.test(event) &&
-    /^status:\s*completed; ready for parent review\s*$/m.test(event) &&
-    result
-    ? result[0]
-    : "FORKED-CONTEXT-MISSING-RESULT";
+  const result = /^FORKED-CONTEXT-CHILD: FORKED-CONTEXT-[A-Z0-9-]+$/m.exec(completion.result);
+  return completion.ok && result ? result[0] : "FORKED-CONTEXT-MISSING-RESULT";
 }
 
 export function buildAssistantText(input: ResponsesInputItem[], body: Record<string, unknown>) {
@@ -200,15 +172,6 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     promptExactMarkerDirective ?? extractExactMarkerDirective(allUserText);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const currentImageRequest = extractCurrentImageRequest(input, body);
-  const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
-    ? extractWhatsAppLocationMarkerDirective(allInputText)
-    : "";
-  const whatsAppContactMarker = shouldUseWhatsAppContactMarker(prompt)
-    ? extractWhatsAppContactMarkerDirective(allInputText)
-    : "";
-  const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
-    ? extractWhatsAppStickerMarkerDirective(allInputText)
-    : "";
   const finishExactlyDirective =
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
@@ -219,17 +182,9 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     toolJson,
   });
 
-  const slackMpimHistoryRecall = QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE.exec(prompt);
-  if (slackMpimHistoryRecall) {
-    const [, botReplyPrefix, recalledMarker, missingMarker] = slackMpimHistoryRecall;
-    const nonce = botReplyPrefix
-      ? extractSlackMpimRetainedBotNonce(prompt, botReplyPrefix)
-      : undefined;
-    return nonce && recalledMarker ? `${recalledMarker}_${nonce}` : (missingMarker ?? "");
-  }
-  const slackMpimHistorySeed = QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE.exec(prompt)?.[1];
-  if (slackMpimHistorySeed) {
-    return buildSlackMpimHistoryBotReply(slackMpimHistorySeed);
+  const slackMpimHistoryReply = buildSlackMpimHistoryReply(prompt);
+  if (slackMpimHistoryReply !== undefined) {
+    return slackMpimHistoryReply;
   }
   if (/what was the qa canary code/i.test(prompt) && rememberedFact) {
     return `Protocol note: the QA canary code was ${rememberedFact}.`;
@@ -262,14 +217,9 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   ) {
     return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }
-  if (whatsAppLocationMarker) {
-    return whatsAppLocationMarker;
-  }
-  if (whatsAppContactMarker) {
-    return whatsAppContactMarker;
-  }
-  if (whatsAppStickerMarker) {
-    return whatsAppStickerMarker;
+  const whatsAppStructuredReply = resolveWhatsAppStructuredReply(prompt, input, allInputText);
+  if (whatsAppStructuredReply) {
+    return whatsAppStructuredReply;
   }
   if (/\bmarker\b/i.test(prompt) && promptExactMarkerDirective) {
     return promptExactMarkerDirective;
@@ -320,9 +270,6 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   }
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
-  }
-  if (toolOutput && promptExactReplyDirective) {
-    return promptExactReplyDirective;
   }
   if ((toolOutput || allInputText) && /repo contract followthrough check/i.test(allInputText)) {
     const repoEvidenceText = [scenarioToolOutput, allInputText].filter(Boolean).join("\n");
@@ -416,14 +363,6 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   }
   if (/forked subagent context qa check/i.test(splitMockConversationContext(prompt).current)) {
     return "Waiting for the forked child to recover the visible code.";
-  }
-  if (
-    toolOutput &&
-    (/delegate (?:one |a )bounded qa task/i.test(allInputText) ||
-      /subagent handoff/i.test(allInputText))
-  ) {
-    const compact = toolOutput.replace(/\s+/g, " ").trim() || "no delegated output";
-    return `Delegated task:\n- Inspect the QA workspace via a bounded subagent.\nResult:\n- ${compact}\nEvidence:\n- The child result was folded back into the main thread exactly once.`;
   }
   if (toolOutput && /worked, failed, blocked|worked\/failed\/blocked|follow-up/i.test(prompt)) {
     return `Worked:\n- Read seeded QA material.\n- Expanded the report structure.\nFailed:\n- None observed in mock mode.\nBlocked:\n- No live provider evidence in this lane.\nFollow-up:\n- Re-run with a real model for qualitative coverage.`;

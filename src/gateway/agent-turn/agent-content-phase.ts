@@ -50,22 +50,6 @@ type ExplicitRecipientSession = Awaited<
   >
 >;
 
-type AgentContentPhaseResult = {
-  agentId?: string;
-  requestedSessionKey?: string;
-  effectiveTranscriptInputText: string;
-  message: string;
-  images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
-  media: MediaFact[];
-  offloadedRefs: OffloadedRef[];
-  replyTo: string;
-  recipientChannel?: string;
-  recipientAccountId?: string;
-  recipientThreadId?: string | number;
-  to: string;
-};
-
 export async function prepareAgentContentPhase(params: {
   request: AgentRunRequest;
   cfg: OpenClawConfig;
@@ -84,12 +68,12 @@ export async function prepareAgentContentPhase(params: {
   modelOverride?: string;
   explicitRecipientSession?: ExplicitRecipientSession;
   knownAgents: string[];
-}): Promise<AgentContentPhaseResult | undefined> {
+}) {
   const transcriptInputText = (params.request.message ?? "").trim();
   let message = params.isRawModelRun
     ? transcriptInputText
     : annotateInterSessionPromptText(transcriptInputText, params.inputProvenance);
-  let images: AgentContentPhaseResult["images"] = [];
+  let images: ChatImageContent[] = [];
   let imageOrder: PromptImageOrderEntry[] = [];
   let media: MediaFact[] = [];
   let offloadedRefs: OffloadedRef[] = [];
@@ -168,28 +152,29 @@ export async function prepareAgentContentPhase(params: {
   const to = params.sessionKeyFromTo
     ? ""
     : (params.explicitRecipientSession?.to ?? params.requestedToRaw ?? "");
-  const explicitVoiceWakeSessionTarget = params.requestedSessionKeyRaw
-    ? (() => {
-        const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
-          ...(agentId ? { agentId } : {}),
-          clone: false,
-          projection: "list",
-        });
-        const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey, agentId);
-        const compatibilityOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, canonicalKey);
-        if (!compatibilityOwner || routedAgentId !== compatibilityOwner) {
-          return true;
-        }
-        return canonicalKey !== resolveAgentMainSessionKey({ cfg, agentId: routedAgentId });
-      })()
-    : false;
   const canAutoRouteVoiceWake =
+    Object.hasOwn(params.request, "voiceWakeTrigger") &&
     !normalizeOptionalString(params.request.agentId) &&
-    !explicitVoiceWakeSessionTarget &&
     !params.requestedSessionId &&
     !replyTo &&
     !to;
-  if (Object.hasOwn(params.request, "voiceWakeTrigger") && canAutoRouteVoiceWake) {
+  const explicitVoiceWakeSessionTarget =
+    canAutoRouteVoiceWake && params.requestedSessionKeyRaw
+      ? (() => {
+          const { cfg, canonicalKey } = loadSessionEntry(params.requestedSessionKeyRaw!, {
+            ...(agentId ? { agentId } : {}),
+            clone: false,
+            projection: "list",
+          });
+          const routedAgentId = resolveAgentIdFromSessionKey(canonicalKey, agentId);
+          const compatibilityOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, canonicalKey);
+          if (!compatibilityOwner || routedAgentId !== compatibilityOwner) {
+            return true;
+          }
+          return canonicalKey !== resolveAgentMainSessionKey({ cfg, agentId: routedAgentId });
+        })()
+      : false;
+  if (canAutoRouteVoiceWake && !explicitVoiceWakeSessionTarget) {
     try {
       const route = resolveVoiceWakeRouteByTrigger({
         trigger: voiceWakeTrigger || undefined,

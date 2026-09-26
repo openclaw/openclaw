@@ -1,4 +1,3 @@
-// Discord plugin module implements audit core behavior.
 import { ChannelType } from "discord-api-types/v10";
 import type {
   DiscordGuildChannelConfig,
@@ -7,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isDiscordThreadChannelType } from "./channel-type.js";
 
 type DiscordChannelPermissionsAuditEntry = {
   channelId: string;
@@ -26,6 +26,7 @@ export type DiscordChannelPermissionsAudit = {
 };
 
 const REQUIRED_TEXT_CHANNEL_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
+const REQUIRED_THREAD_CHANNEL_PERMISSIONS = ["ViewChannel", "SendMessagesInThreads"] as const;
 const REQUIRED_VOICE_CHANNEL_PERMISSIONS = [
   "ViewChannel",
   "Connect",
@@ -35,20 +36,13 @@ const REQUIRED_VOICE_CHANNEL_PERMISSIONS = [
 ] as const;
 
 export function resolveRequiredDiscordChannelPermissions(channelType?: number): string[] {
+  if (isDiscordThreadChannelType(channelType)) {
+    return [...REQUIRED_THREAD_CHANNEL_PERMISSIONS];
+  }
   if (channelType === ChannelType.GuildVoice || channelType === ChannelType.GuildStageVoice) {
     return [...REQUIRED_VOICE_CHANNEL_PERMISSIONS];
   }
   return [...REQUIRED_TEXT_CHANNEL_PERMISSIONS];
-}
-
-function shouldAuditChannelConfig(config: DiscordGuildChannelConfig | undefined) {
-  if (!config) {
-    return true;
-  }
-  if (config.enabled === false) {
-    return false;
-  }
-  return true;
 }
 
 function listConfiguredGuildChannelKeys(
@@ -74,7 +68,7 @@ function listConfiguredGuildChannelKeys(
       if (channelId === "*") {
         continue;
       }
-      if (!shouldAuditChannelConfig(value as DiscordGuildChannelConfig | undefined)) {
+      if ((value as DiscordGuildChannelConfig | undefined)?.enabled === false) {
         continue;
       }
       ids.add(channelId);

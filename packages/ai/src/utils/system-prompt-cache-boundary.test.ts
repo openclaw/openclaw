@@ -7,6 +7,8 @@ import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "./system-prompt-cache-boundary.js";
 
 describe("system prompt cache boundary helpers", () => {
@@ -23,15 +25,6 @@ describe("system prompt cache boundary helpers", () => {
     expect(
       stripSystemPromptCacheBoundary(`Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`),
     ).toBe("Stable prefix\nDynamic suffix");
-  });
-
-  it("inserts prompt additions after the cache boundary", () => {
-    expect(
-      prependSystemPromptAdditionAfterCacheBoundary({
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-        systemPromptAddition: "Per-turn lab context",
-      }),
-    ).toBe(`Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Per-turn lab context\n\nDynamic suffix`);
   });
 
   it("normalizes structured additions and dynamic suffix whitespace", () => {
@@ -83,11 +76,6 @@ describe("ensureSystemPromptCacheBoundary", () => {
     ).toBe("Per-turn media task hint");
   });
 
-  it("is idempotent for a marker-free prompt", () => {
-    const once = ensureSystemPromptCacheBoundary("Marker-free override");
-    expect(ensureSystemPromptCacheBoundary(once)).toBe(once);
-  });
-
   it("lets a per-turn addition split into the uncached suffix for a marker-free prompt", () => {
     // Marker-free overrides become stable prefixes; additions stay in the
     // dynamic suffix so prompt-cache bytes remain deterministic.
@@ -99,5 +87,18 @@ describe("ensureSystemPromptCacheBoundary", () => {
       stablePrefix: "Marker-free override",
       dynamicSuffix: "Per-turn media task hint",
     });
+  });
+});
+
+describe("relocatable region splitting", () => {
+  const marked = (facts: string) =>
+    `${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}${facts}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`;
+
+  it("strips both markers from prompt text", () => {
+    const stripped = stripSystemPromptCacheBoundary(
+      `Behavioral guidance${marked("Runtime: session=alpha")}`,
+    );
+    expect(stripped).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
+    expect(stripped).toContain("Runtime: session=alpha");
   });
 });

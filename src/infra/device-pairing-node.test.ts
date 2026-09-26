@@ -3,10 +3,9 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
-import {
-  closeOpenClawStateDatabaseByPath,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
@@ -40,6 +39,7 @@ import {
 } from "./node-commands.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
+const databasePaths = new Set<string>();
 const hostStats: NodeHostStats = {
   cpuCount: 4,
   loadAverage: [1.5, 1, 0.5],
@@ -49,12 +49,23 @@ const hostStats: NodeHostStats = {
 };
 
 async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Promise<T> {
-  return await run(await tempDirs.make("case"));
+  const baseDir = await tempDirs.make("case");
+  databasePaths.add(
+    resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: baseDir }),
+  );
+  return await run(baseDir);
 }
 
 async function findPairedNode(nodeId: string, baseDir: string) {
   const pairing = await listNodePairing(baseDir);
   return pairing.paired.find((node) => node.nodeId === nodeId) ?? null;
+}
+
+function requestExpandedSurface(baseDir: string) {
+  return requestNodePairing(
+    { nodeId: "node-1", platform: "darwin", commands: ["system.run", "canvas.snapshot"] },
+    baseDir,
+  );
 }
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
@@ -77,6 +88,9 @@ describe("node surface approvals", () => {
   });
 
   afterAll(async () => {
+    for (const databasePath of databasePaths) {
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    }
     await tempDirs.cleanup();
   });
 
@@ -282,14 +296,7 @@ describe("node surface approvals", () => {
   test("rejects every pending request for one node without removing its approval", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
-      const pending = await requestNodePairing(
-        {
-          nodeId: "node-1",
-          platform: "darwin",
-          commands: ["system.run", "canvas.snapshot"],
-        },
-        baseDir,
-      );
+      const pending = await requestExpandedSurface(baseDir);
       const snapshot = await beginNodePairingConnect("node-1", baseDir);
       expect(snapshot.cleanupClaim).toBeDefined();
 
@@ -311,24 +318,10 @@ describe("node surface approvals", () => {
   test("preserves a pending request refreshed after the connect snapshot", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
-      const pending = await requestNodePairing(
-        {
-          nodeId: "node-1",
-          platform: "darwin",
-          commands: ["system.run", "canvas.snapshot"],
-        },
-        baseDir,
-      );
+      const pending = await requestExpandedSurface(baseDir);
       const snapshot = await beginNodePairingConnect("node-1", baseDir);
       expect(snapshot.cleanupClaim).toBeDefined();
-      const refreshed = await requestNodePairing(
-        {
-          nodeId: "node-1",
-          platform: "darwin",
-          commands: ["system.run", "canvas.snapshot"],
-        },
-        baseDir,
-      );
+      const refreshed = await requestExpandedSurface(baseDir);
       expect(refreshed.request.requestId).toBe(pending.request.requestId);
 
       await expect(finalizeNodePairingCleanupClaim(snapshot.cleanupClaim!)).resolves.toEqual([]);
@@ -339,14 +332,7 @@ describe("node surface approvals", () => {
   test("reuses an unchanged reconnect request without leaving stale cleanup ownership", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
-      const pending = await requestNodePairing(
-        {
-          nodeId: "node-1",
-          platform: "darwin",
-          commands: ["system.run", "canvas.snapshot"],
-        },
-        baseDir,
-      );
+      const pending = await requestExpandedSurface(baseDir);
       const snapshot = await beginNodePairingConnect("node-1", baseDir);
       expect(snapshot.cleanupClaim).toBeDefined();
 
@@ -410,14 +396,7 @@ describe("node surface approvals", () => {
   test("preserves newer cleanup ownership after an older reconnect reuses pending state", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
-      const pending = await requestNodePairing(
-        {
-          nodeId: "node-1",
-          platform: "darwin",
-          commands: ["system.run", "canvas.snapshot"],
-        },
-        baseDir,
-      );
+      const pending = await requestExpandedSurface(baseDir);
       const matchingReconnect = await beginNodePairingConnect("node-1", baseDir);
       const changedReconnect = await beginNodePairingConnect("node-1", baseDir);
       expect(matchingReconnect.cleanupClaim).toBeDefined();
@@ -443,14 +422,7 @@ describe("node surface approvals", () => {
   test("preserves a replacement pending request created after the connect snapshot", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
-      const pending = await requestNodePairing(
-        {
-          nodeId: "node-1",
-          platform: "darwin",
-          commands: ["system.run", "canvas.snapshot"],
-        },
-        baseDir,
-      );
+      const pending = await requestExpandedSurface(baseDir);
       const snapshot = await beginNodePairingConnect("node-1", baseDir);
       expect(snapshot.cleanupClaim).toBeDefined();
       const replacement = await requestNodePairing(
@@ -473,14 +445,7 @@ describe("node surface approvals", () => {
   test("blocks approval until a reconnect cleanup claim is released", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
-      const pending = await requestNodePairing(
-        {
-          nodeId: "node-1",
-          platform: "darwin",
-          commands: ["system.run", "canvas.snapshot"],
-        },
-        baseDir,
-      );
+      const pending = await requestExpandedSurface(baseDir);
       const firstSnapshot = await beginNodePairingConnect("node-1", baseDir);
       const secondSnapshot = await beginNodePairingConnect("node-1", baseDir);
       expect(firstSnapshot.cleanupClaim).toBeDefined();
@@ -559,11 +524,7 @@ describe("node surface approvals", () => {
 
   test("updates remote skill bins and reports missing nodes", async () => {
     await withNodePairingDir(async (baseDir) => {
-      await setupPairedNode(baseDir);
-      const generation = resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir));
-      if (!generation) {
-        throw new Error("expected node pairing generation");
-      }
+      const generation = await setupPairedNode(baseDir);
 
       await expect(recordPairedNodeConnection("node-1", 1_234, baseDir)).resolves.toEqual({
         recorded: true,
@@ -584,11 +545,7 @@ describe("node surface approvals", () => {
 
   test("persists exact session-host consent across read-only and reopened readers", async () => {
     await withNodePairingDir(async (baseDir) => {
-      await setupPairedNode(baseDir);
-      const generation = resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir));
-      if (!generation) {
-        throw new Error("expected node pairing generation");
-      }
+      const generation = await setupPairedNode(baseDir);
       const database = openOpenClawStateDatabase({
         env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
       });
@@ -610,7 +567,7 @@ describe("node surface approvals", () => {
         )?.nodeSurface?.sessionHost,
       ).toBe(true);
 
-      expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
+      expect(await closeOpenClawStateDatabaseByPathAsync(database.path)).toBe(true);
       expect((await findPairedNode("node-1", baseDir))?.sessionHost).toBe(true);
       expect(
         openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } })
@@ -634,11 +591,7 @@ describe("node surface approvals", () => {
 
   test("rejects session-host consent after its connection ownership is replaced", async () => {
     await withNodePairingDir(async (baseDir) => {
-      await setupPairedNode(baseDir);
-      const generation = resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir));
-      if (!generation) {
-        throw new Error("expected node pairing generation");
-      }
+      const generation = await setupPairedNode(baseDir);
       const snapshotLoaded = createDeferred();
       const releaseMutation = createDeferred();
       const lockedMutation = withPairedDeviceRecords(baseDir, async () => {
@@ -813,7 +766,7 @@ describe("node surface approvals", () => {
           baseDir,
         }),
       ).resolves.toBe(true);
-      expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
+      expect(await closeOpenClawStateDatabaseByPathAsync(database.path)).toBe(true);
       expect((await getPairedDevice("node-1", baseDir))?.nodeSurface?.lastHostStats).toEqual(
         hostStats,
       );
@@ -934,14 +887,7 @@ describe("node surface approvals", () => {
     await withNodePairingDir(async (baseDir) => {
       const previousGeneration = await setupPairedNode(baseDir);
 
-      const pending = await requestNodePairing(
-        {
-          nodeId: "node-1",
-          platform: "darwin",
-          commands: ["system.run", "canvas.snapshot"],
-        },
-        baseDir,
-      );
+      const pending = await requestExpandedSurface(baseDir);
       await approveNodePairing(
         pending.request.requestId,
         { callerScopes: ["operator.pairing", "operator.admin", "operator.write"] },
@@ -970,14 +916,7 @@ describe("node surface approvals", () => {
   test("keeps the approved node surface across a device pairing re-approval", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
-      const pendingSurface = await requestNodePairing(
-        {
-          nodeId: "node-1",
-          platform: "darwin",
-          commands: ["system.run", "canvas.snapshot"],
-        },
-        baseDir,
-      );
+      const pendingSurface = await requestExpandedSurface(baseDir);
 
       // A device repair (same id, fresh keypair) rebuilds the paired record;
       // approved and pending node surfaces must survive that rebuild.

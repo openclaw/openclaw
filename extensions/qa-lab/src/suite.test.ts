@@ -1,13 +1,8 @@
 // Qa Lab tests cover suite plugin behavior.
-import fs from "node:fs/promises";
-import path from "node:path";
-import { CRABLINE_SERVER_CHANNELS } from "@openclaw/crabline";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
   buildQaIsolatedScenarioWorkerParams,
@@ -28,19 +23,16 @@ import {
   throwQaSuiteCleanupErrors,
   waitForQaLabReadyOrStopOwned,
 } from "./suite.js";
-import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
-const tempDirs = createTempDirHarness();
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-afterEach(async () => {
+afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
   vi.useRealTimers();
-  await tempDirs.cleanup();
 });
 
 function makeQaSuiteTestLabHandle(): QaLabServerHandle {
@@ -57,6 +49,19 @@ function makeQaSuiteTestLabHandle(): QaLabServerHandle {
 }
 
 describe("qa suite", () => {
+  it("rejects the removed channel-driver selection input", async () => {
+    await expect(
+      runQaFlowSuite(
+        Object.assign(
+          { repoRoot: "." },
+          {
+            channelDriverSelection: { channel: "discord", driver: "crabline" },
+          },
+        ),
+      ),
+    ).rejects.toThrow("channelDriverSelection was removed");
+  });
+
   it("runs the production cleanup plan in dependency order after a failure", async () => {
     const calls: string[] = [];
     const transportFailure = new Error("transport close failed");
@@ -462,12 +467,8 @@ describe("qa suite", () => {
         selectedScenarioCount: 80,
         concurrency: 1,
         transportId: "qa-channel",
-        channelDriverSelection: {
-          capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-          channel: "telegram",
-          channelDriver: "crabline",
-          providerReadinessArtifactPath: "crabline-provider-readiness.json",
-        },
+        channelDriver: "crabline",
+        channelId: "telegram",
       }),
     ).toBe(
       "run start: scenarios=80 concurrency=1 transport=qa-channel channelDriver=crabline channel=telegram",
@@ -536,263 +537,6 @@ describe("qa suite", () => {
     });
   });
 
-  it("writes standalone evidence while keeping suite summary evidence-free", async () => {
-    const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-");
-    try {
-      const artifacts = await writeQaSuiteArtifacts({
-        outputDir,
-        startedAt: new Date("2026-04-11T00:00:00.000Z"),
-        finishedAt: new Date("2026-04-11T00:01:00.000Z"),
-        scenarios: [{ name: "Baseline", status: "pass", steps: [] }],
-        scenarioDefinitions: [
-          {
-            ...makeQaSuiteTestScenario("baseline", {
-              surface: "channel",
-            }),
-            coverage: {
-              primary: ["channels.messages"],
-            },
-          },
-        ],
-        transport: {
-          id: "qa-channel",
-          createReportNotes: () => [],
-        } as unknown as QaTransportAdapter,
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        fastMode: true,
-        concurrency: 1,
-      });
-
-      expect(artifacts.evidencePath).toBe(path.join(outputDir, QA_EVIDENCE_FILENAME));
-      const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
-        kind?: string;
-        entries?: unknown[];
-      };
-      expect(evidence.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
-      expect(evidence.entries).toHaveLength(1);
-      const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
-        evidence?: unknown;
-      };
-      expect(summary.evidence).toBeUndefined();
-      if (process.platform !== "win32") {
-        for (const artifactPath of [
-          artifacts.reportPath,
-          artifacts.evidencePath,
-          artifacts.summaryPath,
-        ]) {
-          expect((await fs.stat(artifactPath)).mode & 0o777).toBe(0o600);
-        }
-      }
-    } finally {
-      await fs.rm(outputDir, { recursive: true, force: true });
-    }
-  });
-
-  it("can return evidence without writing duplicate child evidence files", async () => {
-    const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-memory-evidence-");
-    try {
-      await fs.writeFile(path.join(outputDir, QA_EVIDENCE_FILENAME), "stale evidence\n", "utf8");
-      const artifacts = await writeQaSuiteArtifacts({
-        outputDir,
-        startedAt: new Date("2026-04-11T00:00:00.000Z"),
-        finishedAt: new Date("2026-04-11T00:01:00.000Z"),
-        scenarios: [{ name: "Baseline", status: "pass", steps: [] }],
-        scenarioDefinitions: [makeQaSuiteTestScenario("baseline")],
-        transport: {
-          id: "qa-channel",
-          createReportNotes: () => [],
-        } as unknown as QaTransportAdapter,
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        fastMode: true,
-        concurrency: 1,
-        writeEvidenceFile: false,
-      });
-
-      expect(artifacts.evidence?.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
-      await expect(fs.access(artifacts.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
-      await fs.access(artifacts.reportPath);
-      await fs.access(artifacts.summaryPath);
-    } finally {
-      await fs.rm(outputDir, { recursive: true, force: true });
-    }
-  });
-
-  it("distinguishes partial Markdown from the terminal report shape", async () => {
-    const outputDir = await tempDirs.makeTempDir("qa-suite-report-lifecycle-");
-    const baseParams = {
-      outputDir,
-      startedAt: new Date("2026-04-11T00:00:00.000Z"),
-      finishedAt: new Date("2026-04-11T00:01:00.000Z"),
-      scenarios: [{ name: "Baseline", status: "pass" as const, steps: [] }],
-      scenarioDefinitions: [makeQaSuiteTestScenario("baseline")],
-      transport: {
-        id: "qa-channel",
-        createReportNotes: () => [],
-      } as unknown as QaTransportAdapter,
-      providerMode: "mock-openai" as const,
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      fastMode: true,
-      concurrency: 1,
-    };
-
-    try {
-      const partial = await writeQaSuiteArtifacts({ ...baseParams, status: "running" });
-      expect(partial.report).toContain("# OpenClaw QA Scenario Suite (In Progress)");
-      expect(partial.report).toContain("- Status: running");
-      expect(partial.report).toContain("- Updated: 2026-04-11T00:01:00.000Z");
-      expect(partial.report).not.toContain("- Finished:");
-      await expect(fs.access(partial.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.readFile(partial.summaryPath, "utf8")).resolves.toContain(
-        '"status": "running"',
-      );
-
-      const terminal = await writeQaSuiteArtifacts(baseParams);
-      expect(terminal.report).toContain("# OpenClaw QA Scenario Suite\n");
-      expect(terminal.report).toContain("- Finished: 2026-04-11T00:01:00.000Z");
-      expect(terminal.report).not.toContain("In Progress");
-      expect(terminal.report).not.toContain("- Status: running");
-    } finally {
-      await fs.rm(outputDir, { recursive: true, force: true });
-    }
-  });
-
-  it("writes the selected Crabline driver with an honest failed result", async () => {
-    const outputDir = await tempDirs.makeTempDir("qa-suite-crabline-");
-    try {
-      fetchWithSsrFGuardMock.mockResolvedValue({
-        response: {
-          ok: true,
-          json: vi.fn(async () => ({
-            ok: true,
-            result: {
-              is_bot: true,
-              username: "crabline_bot",
-            },
-          })),
-        },
-        release: vi.fn(async () => {}),
-      });
-
-      const artifacts = await writeQaSuiteArtifacts({
-        outputDir,
-        startedAt: new Date("2026-04-11T00:00:00.000Z"),
-        finishedAt: new Date("2026-04-11T00:01:00.000Z"),
-        scenarios: [
-          {
-            name: "Telegram DM",
-            status: "fail",
-            details: "active transport does not implement this scenario",
-            steps: [],
-          },
-        ],
-        scenarioDefinitions: [
-          {
-            ...makeQaSuiteTestScenario("telegram-dm", {
-              surface: "channel",
-            }),
-            coverage: {
-              primary: ["channels.dm"],
-            },
-          },
-        ],
-        transport: {
-          id: "qa-channel",
-          createReportNotes: () => [],
-        } as unknown as QaTransportAdapter,
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        fastMode: true,
-        concurrency: 1,
-        channel: "telegram",
-        channelDriver: "crabline",
-        channelDriverSelection: {
-          capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-          channel: "telegram",
-          channelDriver: "crabline",
-          providerReadinessArtifactPath: "crabline-provider-readiness.json",
-        },
-      });
-
-      const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
-        run?: {
-          channelCapabilityMatrixPath?: string;
-          channelDriverSmokePath?: string;
-        };
-      };
-      const capabilityMatrixPath = summary.run?.channelCapabilityMatrixPath;
-      const providerReadinessArtifactPath = summary.run?.channelDriverSmokePath;
-      if (
-        typeof capabilityMatrixPath !== "string" ||
-        typeof providerReadinessArtifactPath !== "string"
-      ) {
-        throw new Error("Crabline generation artifact paths missing from QA summary.");
-      }
-      const artifactGenerationDirectory = path.dirname(capabilityMatrixPath);
-      expect(path.dirname(artifactGenerationDirectory)).toBe(".crabline-channel-driver-artifacts");
-      expect(path.basename(artifactGenerationDirectory)).toMatch(/^generation-[^/\\]+$/u);
-      expect(path.basename(capabilityMatrixPath)).toBe("crabline-channel-driver-capabilities.json");
-      expect(path.dirname(providerReadinessArtifactPath)).toBe(artifactGenerationDirectory);
-      expect(path.basename(providerReadinessArtifactPath)).toBe("crabline-provider-readiness.json");
-      await expect(
-        fs.access(path.join(outputDir, "crabline-channel-driver-capabilities.json")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(
-        fs.access(path.join(outputDir, "crabline-provider-readiness.json")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-      const matrix = JSON.parse(
-        await fs.readFile(path.resolve(outputDir, capabilityMatrixPath), "utf8"),
-      ) as {
-        report?: { result?: { selectedChannel?: string; supportedChannels?: string[] } };
-      };
-      expect(matrix.report?.result?.selectedChannel).toBe("telegram");
-      expect(matrix.report?.result?.supportedChannels?.toSorted()).toEqual(
-        [...CRABLINE_SERVER_CHANNELS].toSorted(),
-      );
-      const readiness = JSON.parse(
-        await fs.readFile(path.resolve(outputDir, providerReadinessArtifactPath), "utf8"),
-      ) as { providerReadiness?: { result?: { ok?: boolean; provider?: string } } };
-      expect(readiness.providerReadiness?.result).toMatchObject({
-        ok: true,
-        provider: "telegram",
-      });
-      const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
-        entries?: Array<{
-          execution?: {
-            artifacts?: Array<{ kind?: string; path?: string }>;
-            channel?: { driver?: string; id?: string };
-          };
-          result?: { failure?: { reason?: string }; status?: string };
-        }>;
-      };
-      expect(evidence.entries?.[0]?.execution?.artifacts).toEqual(
-        expect.arrayContaining([
-          { kind: "channel-capability-matrix", path: capabilityMatrixPath, source: "qa-suite" },
-          {
-            kind: "channel-driver-smoke",
-            path: providerReadinessArtifactPath,
-            source: "qa-suite",
-          },
-        ]),
-      );
-      expect(evidence.entries?.[0]?.execution?.channel).toMatchObject({
-        driver: "crabline",
-        id: "telegram",
-      });
-      expect(evidence.entries?.[0]?.result).toMatchObject({
-        failure: { reason: "active transport does not implement this scenario" },
-        status: "fail",
-      });
-    } finally {
-      await fs.rm(outputDir, { recursive: true, force: true });
-    }
-  });
-
   it("arms gateway heap checkpoint env only when requested", () => {
     expect(
       buildQaGatewayHeapCheckpointRuntimeEnvPatch({
@@ -805,16 +549,16 @@ describe("qa suite", () => {
         NODE_OPTIONS: "--max-old-space-size=4096",
       }),
     ).toEqual({
-      NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGUSR2",
+      NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGQUIT",
     });
     expect(
       mergeQaRuntimeEnvPatches(
         { OPENAI_API_KEY: "mock" },
-        { NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2" },
+        { NODE_OPTIONS: "--heapsnapshot-signal=SIGQUIT" },
       ),
     ).toEqual({
       OPENAI_API_KEY: "mock",
-      NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2",
+      NODE_OPTIONS: "--heapsnapshot-signal=SIGQUIT",
     });
   });
 

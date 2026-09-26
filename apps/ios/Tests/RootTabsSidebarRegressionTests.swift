@@ -2,18 +2,17 @@ import Foundation
 import Testing
 
 struct RootTabsSidebarRegressionTests {
-    @Test func `initial sidebar visibility survives first layout measurement`() throws {
+    @Test func `layout modes share one detail shell without conditional branches`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-        let layoutUpdate = try Self.extract(
+        let shell = try Self.extract(
             source,
-            from: "private func updateSidebarLayout(containerSize: CGSize, force: Bool)",
-            to: "private func setSidebarVisible(_ isVisible: Bool)")
+            from: "private var sidebarSplitContent: some View",
+            to: "private var sidebarDetailShell: some View")
 
-        #expect(source.contains("@State private var didResolveSidebarLayout: Bool = false"))
-        #expect(layoutUpdate.contains("let didResolvePreviousLayout = self.didResolveSidebarLayout"))
-        #expect(layoutUpdate.contains("self.didResolveSidebarLayout = true"))
-        #expect(layoutUpdate.contains("if layoutModeDidChange && didResolvePreviousLayout"))
-        #expect(layoutUpdate.contains("guard force || !self.sidebarVisibilityUserOverridden else { return }"))
+        #expect(shell.components(separatedBy: "RootSidebarShell(").count == 2)
+        #expect(shell.components(separatedBy: "detail: self.sidebarDetailNavigationShell").count == 2)
+        #expect(!shell.contains("if isDrawerLayout"))
+        #expect(!shell.contains(".id(isDrawerLayout)"))
     }
 
     @Test func `sidebar controls keep a background-free icon inside their hit target`() throws {
@@ -48,11 +47,11 @@ struct RootTabsSidebarRegressionTests {
 
     @Test func `push reveal uses one full bleed card with local gesture state`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-        let drawerSource = try String(contentsOf: Self.rootSidebarDrawerSourceURL(), encoding: .utf8)
+        let drawerSource = try String(contentsOf: Self.rootSidebarShellSourceURL(), encoding: .utf8)
         let sidebarSource = try String(contentsOf: Self.rootSidebarSourceURL(), encoding: .utf8)
         let drawerContent = try Self.extract(
             source,
-            from: "private func sidebarDrawerContent(",
+            from: "private var sidebarSplitContent: some View",
             to: "private var sidebarDetailShell: some View")
         let contentCard = try Self.extract(
             drawerSource,
@@ -67,8 +66,9 @@ struct RootTabsSidebarRegressionTests {
             from: "private var sidebarDetailShell: some View",
             to: "private func sidebarColumn(")
 
-        #expect(drawerContent.contains("RootSidebarDrawer("))
-        #expect(drawerContent.contains("self.sidebarColumn(drawerSafeAreaInsets: safeAreaInsets)"))
+        #expect(drawerContent.contains("RootSidebarShell("))
+        #expect(drawerContent
+            .contains("self.sidebarColumn(drawerSafeAreaInsets: isDrawerLayout ? proxy.safeAreaInsets : nil)"))
         #expect(drawerContent.contains("self.sidebarDetailNavigationShell"))
         #expect(drawerContent.contains("self.isSidebarDetailRootVisible && self.sidebarNavigationPath.isEmpty"))
         #expect(!source.contains("sidebarDrawerContentSurface"))
@@ -77,18 +77,18 @@ struct RootTabsSidebarRegressionTests {
 
         #expect(drawerSource.contains("@GestureState(resetTransaction:"))
         #expect(drawerSource.contains(".simultaneousGesture("))
-        #expect(drawerSource.contains("isEnabled: !self.reduceMotion"))
+        #expect(drawerSource.contains("isEnabled: self.isDrawerLayout && !self.reduceMotion"))
         #expect(drawerSource.contains(".accessibilityHidden(!self.isPresented)"))
-        #expect(drawerSource.contains(".accessibilityHidden(self.isPresented)"))
+        #expect(drawerSource.contains(".accessibilityHidden(self.isDrawerLayout && self.isPresented)"))
         #expect(drawerSource.contains(".onTapGesture(perform: self.onHide)"))
         #expect(drawerSource.contains(".background(OpenClawSidebarPalette.background)"))
-        #expect(drawerSource.contains(".ignoresSafeArea(.container, edges: .vertical)"))
+        #expect(drawerSource.contains(".ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])"))
         #expect(!drawerSource.contains("Color.black.opacity(0.35)"))
         #expect(!drawerSource.contains("UIScreenEdgePanGestureRecognizer"))
 
         #expect(contentCard.contains(".background(OpenClawProBackground())"))
-        #expect(contentCard.contains(".ignoresSafeArea(.container, edges: .vertical)"))
-        #expect(contentCard.contains(".allowsHitTesting(!self.isPresented)"))
+        #expect(contentCard.contains(".ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])"))
+        #expect(contentCard.contains(".allowsHitTesting(!self.isDrawerLayout || !self.isPresented)"))
         #expect(contentCard.contains(".clipShape(shape)"))
         #expect(contentCard.contains("shape.strokeBorder("))
         #expect(contentCard.contains(".offset(x: offset)"))
@@ -104,8 +104,8 @@ struct RootTabsSidebarRegressionTests {
         #expect(drawerGesture.contains("onShow()"))
         #expect(drawerGesture.contains("onHide()"))
         #expect(drawerSource.contains("UnevenRoundedRectangle("))
-        #expect(drawerSource.contains("topLeadingRadius: RootSidebarDrawerMetric.topLeadingRadius * progress"))
-        #expect(drawerSource.contains("bottomLeadingRadius: RootSidebarDrawerMetric.cornerRadius * progress"))
+        #expect(drawerSource.contains("topLeadingRadius: RootSidebarShellMetric.topLeadingRadius * progress"))
+        #expect(drawerSource.contains("bottomLeadingRadius: RootSidebarShellMetric.cornerRadius * progress"))
 
         #expect(!source.contains("showsDismissButton:"))
         #expect(!sidebarSource.contains("let showsDismissButton: Bool"))
@@ -222,11 +222,11 @@ struct RootTabsSidebarRegressionTests {
             .appendingPathComponent("Sources/RootTabs.swift")
     }
 
-    private static func rootSidebarDrawerSourceURL() -> URL {
+    private static func rootSidebarShellSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("Sources/RootSidebarDrawer.swift")
+            .appendingPathComponent("Sources/RootSidebarShell.swift")
     }
 
     private static func rootSidebarSourceURL() -> URL {

@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
+import type { Duplex } from "node:stream";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
-import type { ConnectedRfbStream, DesktopRfbAttachment } from "./attachment.js";
+import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
+import type { DesktopRfbAttachment } from "./attachment.js";
+import type { DesktopAudioSource } from "./managed-linux-audio.js";
 
 const DEFAULT_LINGER_MS = 60_000;
 const MAX_OBSERVERS = 8;
@@ -23,6 +26,7 @@ export class DesktopSessionStoppedError extends Error {
 
 type DesktopSessionObserver = {
   control: boolean;
+  operatorName?: string;
   /** Epoch the observer token was minted against; a stale token must not reach a newer entry. */
   ownerEpoch: number;
   close(code: number, reason: string): void;
@@ -32,6 +36,9 @@ type DesktopSessionAcquireResult = {
   attachment: DesktopRfbAttachment;
   auth?: "vnc-password" | "ard-account";
   vncPassword?: string;
+  resolveAudio?: () => DesktopAudioSource | undefined;
+  /** Internal setup detail; project only a fixed availability code to viewers. */
+  readonly audioUnavailableReason?: string;
 };
 
 type DesktopSessionAcquireRequest = {
@@ -60,12 +67,13 @@ type DesktopSessionEntry = {
   readySettled: boolean;
   observers: Set<ObserverEntry>;
   observerReservations: Set<symbol>;
+  activities: Set<symbol>;
   controller?: ObserverEntry;
   lingerTimer?: ReturnType<typeof setTimeout>;
   stopped: boolean;
   teardown?: DesktopSessionAcquireRequest["teardown"];
   dispose?: DesktopSessionAcquireRequest["dispose"];
-  pendingStreams: Map<string, { stream: ConnectedRfbStream; reservation: { release(): void } }>;
+  pendingStreams: Map<string, { stream: Duplex; reservation: { release(): void } }>;
 };
 
 /** Owns per-source desktop sessions and their connected observer lifetimes. */
@@ -78,6 +86,18 @@ export function createDesktopSessionRegistry(
   const entries = new Map<string, DesktopSessionEntry>();
   const owners = new Set<DesktopSessionEntry>();
   const claimedOwnerEpochs = new Map<string, number>();
+  const controlListeners = new Set<{
+    sourceKey: string;
+    ownerEpoch: number;
+    changed(controlled: boolean): void;
+  }>();
+  const notifyControl = (entry: DesktopSessionEntry) => {
+    for (const listener of controlListeners) {
+      if (listener.sourceKey === entry.sourceKey && listener.ownerEpoch === entry.ownerEpoch) {
+        listener.changed(entry.controller !== undefined);
+      }
+    }
+  };
 
   const claimOwnerEpoch = (sourceKey: string, ownerEpoch: number): boolean => {
     const claimedEpoch = claimedOwnerEpochs.get(sourceKey);
@@ -123,12 +143,14 @@ export function createDesktopSessionRegistry(
       }
       entry.observers.clear();
       entry.controller = undefined;
+      notifyControl(entry);
       for (const pending of entry.pendingStreams.values()) {
         pending.reservation.release();
         pending.stream.destroy();
       }
       entry.pendingStreams.clear();
       entry.observerReservations.clear();
+      entry.activities.clear();
       if (!entry.readySettled) {
         entry.readySettled = true;
         entry.ready.reject(new DesktopSessionStoppedError());
@@ -167,7 +189,12 @@ export function createDesktopSessionRegistry(
   };
 
   const scheduleLinger = (entry: DesktopSessionEntry): void => {
-    if (!isCurrent(entry) || entry.observers.size > 0 || entry.observerReservations.size > 0) {
+    if (
+      !isCurrent(entry) ||
+      entry.observers.size > 0 ||
+      entry.observerReservations.size > 0 ||
+      entry.activities.size > 0
+    ) {
       return;
     }
     clearTimeout(entry.lingerTimer);
@@ -203,6 +230,7 @@ export function createDesktopSessionRegistry(
       readySettled: false,
       observers: new Set(),
       observerReservations: new Set(),
+      activities: new Set(),
       pendingStreams: new Map(),
       stopped: false,
       ...(request.teardown ? { teardown: request.teardown } : {}),
@@ -271,12 +299,17 @@ export function createDesktopSessionRegistry(
       previous.released = true;
       entry.observers.delete(previous);
       entry.controller = undefined;
-      closeObserver(previous, 4000, "control-taken");
+      // WebSocket close reasons allow 123 UTF-8 bytes, including the takeover marker.
+      const reason = observer.operatorName
+        ? `control-taken:${observer.operatorName}`
+        : "control-taken";
+      closeObserver(previous, 4000, truncateUtf8Prefix(reason, 123));
     }
     const attached: ObserverEntry = { ...observer, released: false };
     entry.observers.add(attached);
     if (attached.control) {
       entry.controller = attached;
+      notifyControl(entry);
     }
     return {
       release() {
@@ -287,6 +320,7 @@ export function createDesktopSessionRegistry(
         entry.observers.delete(attached);
         if (entry.controller === attached) {
           entry.controller = undefined;
+          notifyControl(entry);
         }
         scheduleLinger(entry);
       },
@@ -307,17 +341,115 @@ export function createDesktopSessionRegistry(
     entry.observerReservations.add(reservationId);
     clearTimeout(entry.lingerTimer);
     entry.lingerTimer = undefined;
-    let released = false;
     return {
-      sourceKey,
-      ownerEpoch,
       release() {
-        if (released) {
-          return;
+        if (entry.observerReservations.delete(reservationId)) {
+          scheduleLinger(entry);
         }
-        released = true;
-        entry.observerReservations.delete(reservationId);
-        scheduleLinger(entry);
+      },
+    };
+  }
+
+  function createStream(params: { sourceKey: string; ownerEpoch: number; onStopped(): void }) {
+    const controller = new AbortController();
+    let ticket: { cancel(): void } | undefined;
+    let invocation: Promise<unknown> | undefined;
+    let reservation: ReturnType<typeof reserveObserver>;
+    let attachment: ReturnType<typeof publishStream>;
+    let stream: Duplex | undefined;
+    let unclaimedTimer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const retire = () => {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      clearTimeout(unclaimedTimer);
+      ticket?.cancel();
+      controller.abort();
+      if (!attachment) {
+        reservation?.release();
+      }
+      stream?.destroy();
+    };
+    const stopStream = async () => {
+      retire();
+      await invocation?.catch(() => undefined);
+      params.onStopped();
+    };
+    return {
+      signal: controller.signal,
+      get stopped() {
+        return stopped;
+      },
+      reserve() {
+        reservation = reserveObserver(params.sourceKey, params.ownerEpoch);
+        return reservation !== undefined;
+      },
+      async connect<T extends { stream: Duplex }>(
+        pending: { attached: Promise<T>; cancel(): void },
+        invoke: () => Promise<{ error?: { message?: string } | null }>,
+      ): Promise<T> {
+        ticket = pending;
+        const operation = invoke();
+        invocation = operation;
+        // A stream invocation settles only after its splice closes; it cannot signal readiness.
+        const finished = operation.then((result) => {
+          throw new Error(
+            result.error?.message?.trim() || "node desktop stream closed before attachment",
+          );
+        });
+        void finished.catch(() => undefined);
+        void operation
+          .finally(() => {
+            retire();
+            params.onStopped();
+          })
+          .catch(() => undefined);
+        const attached = await Promise.race([pending.attached, finished]);
+        stream = attached.stream;
+        if (stopped) {
+          stream.destroy();
+        }
+        return attached;
+      },
+      publish() {
+        if (reservation && stream) {
+          attachment = publishStream({ ...params, reservation, stream });
+        }
+        return attachment;
+      },
+      expireAt(expiresAtMs: number) {
+        unclaimedTimer = setTimeout(
+          () => {
+            if (attachment && hasPendingStream(params.sourceKey, attachment)) {
+              void stopStream();
+            }
+          },
+          Math.max(0, expiresAtMs - Date.now()),
+        );
+        unclaimedTimer.unref?.();
+      },
+      stop: stopStream,
+    };
+  }
+
+  /** Keep an active desktop consumer alive independently of browser observers. */
+  function retainActivity(sourceKey: string, ownerEpoch: number) {
+    const entry = entries.get(sourceKey);
+    if (!entry || !entry.readySettled || entry.stopped || entry.ownerEpoch !== ownerEpoch) {
+      return undefined;
+    }
+    const activity = Symbol("desktop-activity");
+    entry.activities.add(activity);
+    clearTimeout(entry.lingerTimer);
+    entry.lingerTimer = undefined;
+    return {
+      isCurrent: () => isCurrent(entry) && entry.activities.has(activity),
+      release() {
+        if (entry.activities.delete(activity)) {
+          scheduleLinger(entry);
+        }
       },
     };
   }
@@ -325,7 +457,7 @@ export function createDesktopSessionRegistry(
   function publishStream(params: {
     sourceKey: string;
     ownerEpoch: number;
-    stream: ConnectedRfbStream;
+    stream: Duplex;
     reservation: NonNullable<ReturnType<typeof reserveObserver>>;
   }) {
     const entry = entries.get(params.sourceKey);
@@ -333,8 +465,6 @@ export function createDesktopSessionRegistry(
       !entry ||
       entry.stopped ||
       entry.ownerEpoch !== params.ownerEpoch ||
-      params.reservation.sourceKey !== params.sourceKey ||
-      params.reservation.ownerEpoch !== params.ownerEpoch ||
       params.stream.destroyed ||
       params.stream.readableEnded ||
       params.stream.writableEnded
@@ -403,10 +533,34 @@ export function createDesktopSessionRegistry(
     acquire,
     activate,
     attachObserver,
-    publishStream,
     claimStream,
-    hasPendingStream,
-    reserveObserver,
+    createStream,
+    retainActivity,
+    hasActivity: (sourceKey: string, ownerEpoch: number) => {
+      const entry = entries.get(sourceKey);
+      return (
+        entry?.ownerEpoch === ownerEpoch &&
+        !entry.stopped &&
+        (entry.observers.size > 0 ||
+          entry.observerReservations.size > 0 ||
+          entry.activities.size > 0)
+      );
+    },
+    hasController: (sourceKey: string, ownerEpoch: number) => {
+      const entry = entries.get(sourceKey);
+      return entry?.ownerEpoch === ownerEpoch && !entry.stopped && entry.controller !== undefined;
+    },
+    onControlChanged: (
+      sourceKey: string,
+      ownerEpoch: number,
+      changed: (controlled: boolean) => void,
+    ) => {
+      const listener = { sourceKey, ownerEpoch, changed };
+      controlListeners.add(listener);
+      return () => {
+        controlListeners.delete(listener);
+      };
+    },
     claimOwnerEpoch,
     isOwnerEpochCurrent: (sourceKey: string, ownerEpoch: number) =>
       claimedOwnerEpochs.get(sourceKey) === ownerEpoch,

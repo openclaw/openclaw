@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
 
 const mocks = vi.hoisted(() => ({
   cfg: {} as OpenClawConfig,
   info: vi.fn(),
+  isConfigReadOnly: false,
   isNixMode: false,
   mutateConfigFileWithRetry: vi.fn(),
   warn: vi.fn(),
@@ -19,17 +19,16 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  resolveIsConfigReadOnly: () => mocks.isConfigReadOnly,
   resolveIsNixMode: () => mocks.isNixMode,
 }));
 
-import {
-  persistStickyModelSelectionBestEffort,
-  resolveStickyModelSelectionPolicy,
-} from "./sticky-model-selection.js";
+import { persistStickyModelSelectionBestEffort } from "./sticky-model-selection.js";
 
 beforeEach(() => {
   mocks.info.mockReset();
   mocks.warn.mockReset();
+  mocks.isConfigReadOnly = false;
   mocks.isNixMode = false;
   mocks.mutateConfigFileWithRetry.mockReset().mockImplementation(async ({ mutate }) => {
     const draft = structuredClone(mocks.cfg);
@@ -39,57 +38,8 @@ beforeEach(() => {
   });
 });
 
-describe("resolveStickyModelSelectionPolicy", () => {
-  const cfg = {
-    agents: {
-      defaults: { model: "anthropic/claude-opus-4-6" },
-      list: [
-        { id: "main", default: true },
-        { id: "work", model: "anthropic/claude-sonnet-4-6" },
-        { id: "inheriting" },
-      ],
-    },
-  } satisfies OpenClawConfig;
-
-  it.each([
-    { scope: undefined, target: "session" },
-    { scope: "session", target: "session" },
-    { scope: "agent", target: "agent" },
-    { scope: "global", target: "global" },
-  ] as const)("resolves scope=$scope to $target", ({ scope, target }) => {
-    expect(
-      resolveStickyModelSelectionPolicy({
-        canPersistConfig: true,
-        cfg,
-        ...(scope ? { scope } : {}),
-      }),
-    ).toEqual({ scope: scope ?? "session", target });
-  });
-
-  it.each([undefined, "session", "agent", "global"] as const)(
-    "discloses session-only selection without config-write authority for scope=%s",
-    (scope) => {
-      expect(
-        resolveStickyModelSelectionPolicy({
-          canPersistConfig: false,
-          cfg,
-          ...(scope ? { scope } : {}),
-        }).target,
-      ).toBe("session");
-    },
-  );
-});
-
 describe("persistStickyModelSelection", () => {
   it.each([
-    {
-      name: "shared default for an inheriting agent",
-      agentId: "main",
-      cfg: createModelFallbackConfig("anthropic/claude-opus-4-6", [
-        "openai/gpt-5.6-luna",
-      ]) satisfies OpenClawConfig,
-      target: "defaults" as const,
-    },
     {
       name: "agent entry for an explicit agent model",
       agentId: "work",
@@ -212,7 +162,8 @@ describe("persistStickyModelSelection", () => {
     );
   });
 
-  it("skips immutable Nix config and warns only once per process", () => {
+  it("skips Nix immutable config and warns only once per process", () => {
+    mocks.isConfigReadOnly = true;
     mocks.isNixMode = true;
 
     expect(

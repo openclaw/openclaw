@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  pauseVirtualClock,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
@@ -15,6 +20,131 @@ import {
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
+  it("refreshes the selected child after a later child-list result", async () => {
+    const baseTime = Date.parse("2026-09-07T12:00:00.000Z");
+    const parentKey = "agent:main:research-parent";
+    const childKey = "agent:main:research-child";
+    const siblingKey = "agent:main:research-sibling";
+    const parentRow = sessionRow(parentKey, "Research handoff", baseTime, {
+      sessionId: "research-parent-session",
+      childSessions: [childKey, siblingKey],
+    });
+    const childRow = sessionRow(childKey, "Research in progress", baseTime + 1, {
+      sessionId: "research-child-session",
+      spawnedBy: parentKey,
+    });
+    const siblingRow = sessionRow(siblingKey, "Supporting research", baseTime + 1, {
+      sessionId: "research-sibling-session",
+      spawnedBy: parentKey,
+    });
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await page.clock.install();
+    const gateway = await installMockGateway(page, {
+      sessions: [parentRow, childRow, siblingRow],
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            {
+              match: { spawnedBy: parentKey },
+              response: sessionsListResponse([childRow, siblingRow]),
+            },
+            { response: sessionsListResponse([parentRow]) },
+          ],
+        },
+      },
+      sessionKey: childKey,
+    });
+    try {
+      const documentResponse = await page.goto(controlUiSessionUrl(suite.server.baseUrl, childKey));
+      expect(documentResponse?.status()).toBe(200);
+      const child = page.locator(`[data-session-key="${childKey}"]`);
+      const sibling = page.locator(`[data-session-key="${siblingKey}"]`);
+      await expect.poll(() => child.textContent()).toContain("Research in progress");
+      await expect.poll(() => sibling.textContent()).toContain("Supporting research");
+      expect(await child.getAttribute("class")).toContain("sidebar-recent-session--active");
+      await captureUiProof(suite, page, "selected-child-before-refresh.png");
+      const childMatch = { spawnedBy: parentKey };
+      const refreshedChildren = [
+        {
+          ...childRow,
+          label: "Research completed",
+          displayName: "Research completed",
+          updatedAt: baseTime + 3,
+        },
+        {
+          ...siblingRow,
+          label: "Supporting research refreshed",
+          displayName: "Supporting research refreshed",
+          updatedAt: baseTime + 3,
+        },
+      ];
+      // Commit the change before its invalidation event so every later read sees it.
+      await gateway.setSessionsListResponse(
+        sessionsListResponse([parentRow, ...refreshedChildren]),
+      );
+      await gateway.setMethodResponse("sessions.list", {
+        cases: [
+          { match: childMatch, response: sessionsListResponse(refreshedChildren) },
+          { response: sessionsListResponse([parentRow]) },
+        ],
+      });
+      const childRequests = (await gateway.getRequests("sessions.list", childMatch)).length;
+      expect(childRequests).toBeGreaterThan(0);
+      await gateway.deferNext("sessions.list", childMatch);
+      await pauseVirtualClock(page);
+      await gateway.emitGatewayEvent("sessions.changed", {
+        key: parentKey,
+        sessionKey: parentKey,
+        reason: "run",
+        updatedAt: baseTime + 2,
+      });
+      await page.clock.fastForward(5_001);
+      await page.clock.resume();
+      await gateway.waitForRequest("sessions.list", { after: childRequests, match: childMatch });
+      await gateway.resolveDeferred("sessions.list", sessionsListResponse(refreshedChildren));
+      // The sibling proves the new child snapshot rendered before checking the selected row.
+      await expect.poll(() => sibling.textContent()).toContain("Supporting research refreshed");
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "selected-child-refreshed.png"),
+        });
+        await writeFile(
+          path.join(suite.artifactDir, "selected-child-requests.json"),
+          JSON.stringify(
+            {
+              requests: await gateway.getRequests("sessions.list"),
+              selectedText: await child.textContent(),
+              siblingText: await sibling.textContent(),
+              documentSha256: createHash("sha256")
+                .update(await documentResponse!.body())
+                .digest("hex"),
+              assets: await page.evaluate(() =>
+                performance
+                  .getEntriesByType("resource")
+                  .map((entry) => entry.name)
+                  .filter((name) => name.includes("/assets/")),
+              ),
+            },
+            null,
+            2,
+          ),
+        );
+      }
+      expect(await child.textContent()).toContain("Research completed");
+      expect(await child.textContent()).not.toContain("Research in progress");
+      expect(await child.count()).toBe(1);
+      expect(await child.getAttribute("class")).toContain("sidebar-recent-session--active");
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each([
     { colorScheme: "dark", pointer: "fine", textScale: 100, width: 1440 },
     { colorScheme: "light", pointer: "fine", textScale: 100, width: 1440 },
@@ -30,6 +160,7 @@ suite.define(() => {
       const activeKey = "agent:main:loading-active";
       const parentKey = "agent:main:loading-parent";
       const childKey = "agent:main:loading-child";
+      const activeRow = sessionRow(activeKey, "Active session", baseTime + 1);
       const parentRow = sessionRow(parentKey, "Research handoff", baseTime, {
         childSessions: [childKey],
       });
@@ -46,6 +177,7 @@ suite.define(() => {
         viewport: { height: 900, width },
       });
       const page = await context.newPage();
+      await page.clock.install();
       if (textScale !== 100) {
         await page.addInitScript(
           ({ scale, settingsKey }) => {
@@ -58,6 +190,7 @@ suite.define(() => {
         );
       }
       const gateway = await installMockGateway(page, {
+        sessions: [activeRow, parentRow, childRow],
         methodResponses: {
           "sessions.list": {
             cases: [
@@ -66,10 +199,7 @@ suite.define(() => {
                 response: sessionsListResponse([childRow]),
               },
               {
-                response: sessionsListResponse([
-                  sessionRow(activeKey, "Active session", baseTime + 1),
-                  parentRow,
-                ]),
+                response: sessionsListResponse([activeRow, parentRow]),
               },
             ],
           },
@@ -121,7 +251,7 @@ suite.define(() => {
           return { left: barBounds.left, rowHeight: rowBounds.height };
         });
         if (textScale === 100) {
-          expect(loadingGeometry.rowHeight).toBe(pointer === "coarse" ? 44 : 30);
+          expect(loadingGeometry.rowHeight).toBe(width === 390 ? 44 : 30);
         } else {
           expect(loadingGeometry.rowHeight).toBeGreaterThan(30);
         }
@@ -144,12 +274,15 @@ suite.define(() => {
         const childMatch = { spawnedBy: parentKey };
         const childRequests = (await gateway.getRequests("sessions.list", childMatch)).length;
         await gateway.deferNext("sessions.list", childMatch);
+        await pauseVirtualClock(page);
         await gateway.emitGatewayEvent("sessions.changed", {
-          key: activeKey,
-          sessionKey: activeKey,
+          key: parentKey,
+          sessionKey: parentKey,
           reason: "run",
           updatedAt: baseTime + 2,
         });
+        await page.clock.fastForward(5_001);
+        await page.clock.resume();
         await gateway.waitForRequest("sessions.list", {
           after: childRequests,
           match: childMatch,
@@ -211,6 +344,7 @@ suite.define(() => {
         : undefined,
     });
     const page = await context.newPage();
+    await page.clock.install();
     const proofVideo = page.video();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -251,6 +385,7 @@ suite.define(() => {
         sessionsListResponse([parentRow, completedChild, ...siblingRows]),
       );
       const listCount = (await gateway.getRequests("sessions.list")).length;
+      await pauseVirtualClock(page);
       await gateway.emitGatewayEvent("sessions.changed", {
         activeRunIds: [],
         endedAt: completedChild.endedAt,
@@ -262,6 +397,8 @@ suite.define(() => {
         status: "done",
         updatedAt: completedChild.updatedAt,
       });
+      await page.clock.fastForward(5_001);
+      await page.clock.resume();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(listCount);

@@ -1,4 +1,4 @@
-// Browser tests cover server context.hot reload profiles plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunningChrome } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -13,6 +13,8 @@ import {
 import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
 
 type TestProfileConfig = {
+  engine?: "chromium" | "lightpanda";
+  attachOnly?: boolean;
   cdpPort?: number;
   cdpUrl?: string;
   color?: string;
@@ -61,8 +63,10 @@ function buildConfig(): TestConfig {
   };
 }
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
     getRuntimeConfigSnapshot: () => null,
@@ -101,7 +105,7 @@ vi.mock("./pw-ai-module.js", () => ({
   getPwAiModule: async () => null,
 }));
 
-const { getRuntimeConfig } = await import("../config/config.js");
+const { getRuntimeConfig } = await import("openclaw/plugin-sdk/runtime-config-snapshot");
 const { resolveBrowserConfig, resolveProfile } = await import("./config.js");
 const { refreshResolvedBrowserConfigFromDisk } = await import("./resolved-config-refresh.js");
 
@@ -110,14 +114,6 @@ function requireValue<T>(value: T | null | undefined, message: string): T {
     throw new Error(message);
   }
   return value;
-}
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function runtimeState(
@@ -257,38 +253,24 @@ describe("server-context hot-reload profiles", () => {
     expect(stillStaleCfg.browser?.profiles?.desktop).toBeUndefined();
   });
 
-  it.each(["constructor", "prototype"] as const)(
-    "treats removed %s profiles as absent during hot reload",
-    (profileName) => {
-      mockState.cfgProfiles = {};
-      const { state, runtime } = createProfileFixture({
-        name: profileName,
-        config: { cdpPort: 18801, color: "#0066CC" },
-        running: { pid: 123 } as never,
-        lastTargetId: "tab-1",
-      });
+  it("treats a removed constructor profile as absent during hot reload", () => {
+    const profileName = "constructor";
+    mockState.cfgProfiles = {};
+    const { state, runtime } = createProfileFixture({
+      name: profileName,
+      config: { cdpPort: 18801, color: "#0066CC" },
+      running: { pid: 123 } as never,
+      lastTargetId: "tab-1",
+    });
 
-      mockState.cfgProfiles = {};
-      mockState.cachedConfig = null;
-      refreshProfiles(state);
-
-      expect(resolveProfile(state.resolved, profileName)).toBeNull();
-      const actor = getProfileLifecycle(runtime);
-      expect(actor.terminal).toBe("config-removed");
-      expect(actor.transitionReason).toBe("profile removed from config");
-    },
-  );
-
-  it("refreshes existing profile config after config cache updates", () => {
-    const { state } = createBrowserState();
-
-    mockState.cfgProfiles.openclaw = { cdpPort: 19999, color: "#FF4500" };
+    mockState.cfgProfiles = {};
     mockState.cachedConfig = null;
-
     refreshProfiles(state);
-    const after = resolveProfile(state.resolved, "openclaw");
-    expect(after?.cdpPort).toBe(19999);
-    expect(state.resolved.profiles.openclaw?.cdpPort).toBe(19999);
+
+    expect(resolveProfile(state.resolved, profileName)).toBeNull();
+    const actor = getProfileLifecycle(runtime);
+    expect(actor.terminal).toBe("config-removed");
+    expect(actor.transitionReason).toBe("profile removed from config");
   });
 
   it("keeps only exact live relay credentials stable across repeated profile refreshes", () => {
@@ -396,8 +378,8 @@ describe("server-context hot-reload profiles", () => {
 
   it("never re-adopts a relay credential while an unexposed close is still pending", async () => {
     const { state, runtime, relay } = createExtensionRelayFixture();
-    const closeStarted = deferred();
-    const closeReleased = deferred();
+    const closeStarted = createDeferred<void>();
+    const closeReleased = createDeferred<void>();
     relay.close.mockImplementationOnce(async () => {
       closeStarted.resolve();
       await closeReleased.promise;
@@ -440,6 +422,31 @@ describe("server-context hot-reload profiles", () => {
       cdpUrl: oldCdpUrl,
     });
   });
+
+  it.each(["chromium", "lightpanda"] as const)(
+    "retires the adapter and stale selection when only engine changes from %s",
+    async (engine) => {
+      const cdpUrl = "ws://127.0.0.1:9222/devtools/browser/engine-fixture";
+      const { state, runtime } = createProfileFixture({
+        name: "switchable",
+        config: { engine, cdpUrl, attachOnly: true },
+        lastTargetId: "old-target",
+      });
+      const nextEngine = engine === "chromium" ? "lightpanda" : "chromium";
+      updateProfile(state, "switchable", { engine: nextEngine, cdpUrl, attachOnly: true }, true);
+
+      expect(runtime.profile.engine).toBe(nextEngine);
+      expect(runtime.profile.cdpUrl).toBe(cdpUrl);
+      expect(runtime.lastTargetId).toBeNull();
+      expect(getProfileLifecycle(runtime).transitionReason).toBe(
+        "profile invariants changed: engine",
+      );
+      expect(lifecycleMocks.retirePlaywrightBrowserConnection).toHaveBeenCalledWith({ cdpUrl });
+      await getProfileLifecycle(runtime).tail;
+      expect(lifecycleMocks.closePlaywrightBrowserConnection).toHaveBeenCalledWith({ cdpUrl });
+      expect(lifecycleMocks.stopOpenClawChrome).not.toHaveBeenCalled();
+    },
+  );
 
   it("marks local managed runtime state for reconcile when profile headless changes", () => {
     const { state, profile, runtime } = createProfileFixture({
@@ -571,8 +578,8 @@ describe("server-context hot-reload profiles", () => {
       name: "work",
       config: { cdpPort: 18801, color: "#0066CC" },
     });
-    const launchA = deferred();
-    const launchAStarted = deferred();
+    const launchA = createDeferred<void>();
+    const launchAStarted = createDeferred<void>();
     const adopted: string[] = [];
     const revisionA = getProfileLifecycle(runtime).configRevision;
     const pendingA = enqueueCurrentProfileStart(state, runtime, async (signal, generation) => {
@@ -652,8 +659,8 @@ describe("server-context hot-reload profiles", () => {
     });
     expect(oldRuntime.running).toBeNull();
     const lateRunning = { pid: 321 } as RunningChrome;
-    const launch = deferred();
-    const launchStarted = deferred();
+    const launch = createDeferred<void>();
+    const launchStarted = createDeferred<void>();
     const pendingStart = enqueueCurrentProfileStart(state, oldRuntime, async () => {
       launchStarted.resolve();
       await launch.promise;

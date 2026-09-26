@@ -7,6 +7,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setDiscordRuntime } from "../runtime.js";
 import {
@@ -35,6 +36,7 @@ async function createStateEnv(): Promise<NodeJS.ProcessEnv> {
 }
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   await Promise.all(
     tempDirs.splice(0).map(async (dir) => {
@@ -133,32 +135,6 @@ describe("discord model picker preferences", () => {
     await expect(
       recordDiscordModelPickerRecentModel({ env, scope, modelRef: "openai/gpt-4.1" }),
     ).resolves.toBeUndefined();
-  });
-
-  it("ignores retired legacy JSON preferences at runtime", async () => {
-    const env = await createStateEnv();
-    const scope = { userId: "legacy-runtime-user" };
-    const legacyPath = path.join(
-      env.OPENCLAW_STATE_DIR as string,
-      "discord",
-      "model-picker-preferences.json",
-    );
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(
-      legacyPath,
-      JSON.stringify({
-        version: 1,
-        entries: {
-          legacy: {
-            recent: ["openai/gpt-4.1"],
-            updatedAt: "2026-01-01T00:00:00.000Z",
-          },
-        },
-      }),
-      "utf8",
-    );
-
-    await expect(readDiscordModelPickerRecentModels({ env, scope })).resolves.toEqual([]);
   });
 
   it("preserves concurrent model picker selections for the same scope", async () => {

@@ -1,18 +1,5 @@
 import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
-import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
-import type {
-  InternalGetReplyOptions,
-  PendingContinuationSettlement,
-  ReplySessionBinding,
-} from "./get-reply.types.js";
-
-export type InternalReplyResolverOptions = {
-  onDeliberateSilentTerminalReply?: () => void;
-  onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
-  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
-  onSessionPrepared?: (binding: ReplySessionBinding) => void;
-  onRunVerbosityResolved?: InternalGetReplyOptions["onRunVerbosityResolved"];
-};
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
 export type PluginBindingTranscriptOwner = {
   agentId: string;

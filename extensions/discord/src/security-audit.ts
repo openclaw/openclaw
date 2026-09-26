@@ -1,4 +1,3 @@
-// Discord plugin module implements security audit behavior.
 import { coerceNativeSetting, normalizeAllowFromList } from "openclaw/plugin-sdk/channel-policy";
 import type {
   DiscordGuildChannelConfig,

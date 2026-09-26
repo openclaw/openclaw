@@ -3,10 +3,8 @@ import { consumeSwarmStructuredOutput } from "../../tools/structured-output-tool
 import { ensureCompletionState } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { updateSubagentArchiveAtMs } from "../registry/subagent-registry-helpers.js";
-import type {
-  SubagentRunRecord,
-  SwarmCollectorStatus,
-} from "../registry/subagent-registry.types.js";
+import type { SwarmCollectorStatus } from "../registry/subagent-registry-read.types.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { loadSubagentSessionEntry } from "../registry/subagent-session-reconciliation.js";
 
 function resolveStatus(
@@ -25,6 +23,27 @@ function resolveStatus(
   // Tool-only structured turns can surface the runner's synthetic completion
   // marker as an error despite having fulfilled the collector contract.
   return hasStructuredResult && entry.execution.outcome?.error === "completed" ? "done" : "failed";
+}
+
+export function prepareTerminatedCollectorLaunch(
+  entry: SubagentRunRecord,
+  endedAt: number,
+  error: string,
+  getRuntimeConfig: () => OpenClawConfig,
+): void {
+  entry.swarmLaunchPending = false;
+  entry.collectorLaunchCleanupPending = true;
+  entry.queuedLaunch = undefined;
+  entry.execution = { ...entry.execution, status: "terminal", endedAt };
+  entry.completion = {
+    required: false,
+    resultText:
+      entry.execution.outcome?.status === "error"
+        ? (entry.execution.outcome.error ?? error)
+        : error,
+    capturedAt: endedAt,
+  };
+  updateSwarmCollectorCompletion(entry, getRuntimeConfig());
 }
 
 /** Freeze the waitable collector record after raw completion capture. */

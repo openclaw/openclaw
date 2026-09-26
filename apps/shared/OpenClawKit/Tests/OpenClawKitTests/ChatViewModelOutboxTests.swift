@@ -16,20 +16,6 @@ func makeOutboxStore() throws -> (
     return (databases.store(gatewayID: "gw-test"), databases, directory)
 }
 
-extension OpenClawChatSQLiteTranscriptCache {
-    private func storeTestTranscript(
-        sessionKey: String,
-        agentID: String? = nil,
-        messages: [OpenClawChatMessage]) async
-    {
-        await storeCanonicalTranscript(
-            sessionKey: sessionKey,
-            agentID: agentID,
-            messages: messages,
-            canonicalMessageIdempotencyKeys: Set(messages.compactMap(\.idempotencyKey)))
-    }
-}
-
 func outboxTestCommand(
     id: String,
     text: String,
@@ -2155,7 +2141,7 @@ struct ChatViewModelOutboxTests {
             await store.loadCommands().count == 1
         }
         try await waitUntil("newer original-session draft preserved") {
-            await MainActor.run { vm.draftsBySession["main"] == "queued once" }
+            await MainActor.run { vm.draftsBySession[vm.composerSessionKey(for: "main")] == "queued once" }
         }
 
         await MainActor.run { vm.switchSession(to: "main") }

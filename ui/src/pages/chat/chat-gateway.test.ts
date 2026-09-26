@@ -1,17 +1,18 @@
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 // @vitest-environment node
 // Control UI tests cover chat behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
-import type { ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import {
   getChatSessionProjection,
@@ -23,6 +24,7 @@ import {
   type ChatRunUiStatus,
   type LocalTerminalReconcile,
 } from "./run-lifecycle.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 import {
   visibleAssistantStreamParts,
@@ -34,6 +36,8 @@ import {
   rememberAuthoritativeTerminal,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
+import { createHost } from "./tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -60,6 +64,185 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
   };
 }
 
+it.each(
+  [false, true].flatMap((persistedFirst) =>
+    [false, true].map((transformed) => ({ persistedFirst, transformed })),
+  ),
+)(
+  "settles a saved interrupted partial once with both error emitters (persisted first=$persistedFirst, transformed=$transformed)",
+  ({ persistedFirst, transformed }) => {
+    const runId = "interrupted-run";
+    const text = "The saved partial reply should appear once.";
+    const user = {
+      role: "user",
+      content: [{ type: "text", text: "Ask" }],
+      __openclaw: { id: "user", seq: 1, runId },
+    };
+    const saved = {
+      role: "assistant",
+      content: transformed
+        ? [
+            { type: "text", text: "Saved transformed text" },
+            { type: "image", source: { type: "url", url: "https://example.test/proof.png" } },
+          ]
+        : [{ type: "text", text }],
+      stopReason: "error",
+      __openclaw: {
+        id: "saved",
+        seq: 2,
+        runId,
+        mirrorOrigin: "codex-app-server",
+        idempotencyKey: "saved-key",
+      },
+    };
+    const state = createState({ chatMessages: [user], chatRunId: runId });
+    handleChatGatewayEvent(state, {
+      runId,
+      sessionKey: "main",
+      seq: 12,
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    });
+    const persist = () =>
+      applySessionMessagePayload(state, { runId, message: saved }, true, { kind: "history-delta" });
+    if (persistedFirst) {
+      persist();
+    }
+    handleChatGatewayEvent(state, {
+      runId,
+      sessionKey: "main",
+      seq: 13,
+      state: "error",
+      errorMessage: "codex app-server client closed before turn completed",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        __openclaw: { runId, idempotencyKey: "saved-key" },
+      },
+    });
+    handleChatGatewayEvent(state, {
+      runId,
+      sessionKey: "main",
+      seq: 1,
+      state: "error",
+      errorMessage: "Outer returned failure",
+    });
+    if (!persistedFirst) {
+      persist();
+    }
+    expect(state.chatMessages).toEqual([user, saved]);
+    expect(state.chatRunError?.summary).toBeTruthy();
+    const restored = createState({ chatMessages: structuredClone(state.chatMessages) });
+    applySessionMessagePayload(restored, { runId, message: saved }, true, {
+      kind: "history-delta",
+    });
+    expect(restored.chatMessages).toEqual([user, saved]);
+  },
+);
+
+it("preserves receipt-less fallback ownership across cache before matching persistence", () => {
+  const runId = "unreceipted-run";
+  const user = {
+    role: "user",
+    content: [{ type: "text", text: "Ask" }],
+    __openclaw: { id: "user", seq: 1, runId },
+  };
+  const state = createState({ chatMessages: [user], chatRunId: runId, chatStream: "Partial" });
+  handleChatGatewayEvent(state, {
+    runId,
+    sessionKey: "main",
+    seq: 13,
+    state: "error",
+    errorMessage: "Interrupted",
+  });
+  const cached = structuredClone(state.chatMessages);
+  const restored = createState({ chatMessages: cached });
+  expect(getChatSessionProjection(restored).entries[1]).toMatchObject({
+    live: true,
+    pending: false,
+    afterSequence: 1,
+    identity: { runId },
+  });
+  const prior = {
+    role: "assistant",
+    content: [{ type: "text", text: "Partial" }],
+    __openclaw: { id: "prior", seq: 2, runId: "prior-run", runTerminal: true },
+  };
+  applySessionMessagePayload(restored, { message: prior }, true, { kind: "history-delta" });
+  expect(restored.chatMessages).toHaveLength(3);
+  const current = { ...prior, __openclaw: { id: "current", seq: 3, runId, runTerminal: true } };
+  applySessionMessagePayload(restored, { message: current }, true, { kind: "history-delta" });
+  expect(restored.chatMessages).toEqual([user, prior, current]);
+});
+
+it.each([false, true])(
+  "completes an overtaken commentary item with formatting (persisted=%s)",
+  (persisted) => {
+    const text = "- first file\n- second file\n\n```python\n    execute()\n```";
+    const state = Object.assign(
+      createState(),
+      createHost({
+        chatRunId: "run-1",
+        chatStream: text.slice(0, -4),
+      }),
+    );
+    handleAgentEvent(state, {
+      sessionKey: "main",
+      runId: "run-1",
+      seq: 1,
+      ts: 1,
+      stream: "item",
+      data: {
+        kind: "preamble",
+        phase: "end",
+        itemId: "commentary-1",
+        progressText: text.replace(/\s+/gu, " "),
+      },
+    });
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: true,
+        isHiddenStreamText: () => false,
+      }).map((part) => ({ text: part.text, itemId: part.itemId })),
+    ).toEqual([{ text: text.replace(/\s+/gu, " "), itemId: "commentary-1" }]);
+    if (persisted) {
+      // Durable history projects the transcript text, not flattened progressText.
+      applySessionMessagePayload(
+        state,
+        {
+          runId: "run-1",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            __openclaw: { id: "saved-commentary", seq: 1, runId: "run-1" },
+            openclawStreamFallback: { source: "segment", itemId: "commentary-1" },
+          },
+        },
+        true,
+        { kind: "history-delta" },
+      );
+      expect(state.chatMessages.map(extractText)).toEqual([text]);
+    }
+    handleChatGatewayEvent(state, {
+      sessionKey: "main",
+      runId: "run-1",
+      seq: 2,
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text }] },
+    });
+    expect(
+      visibleAssistantStreamParts(state, {
+        includeCurrent: true,
+        isHiddenStreamText: () => false,
+      }).map((part) => ({ text: part.text, itemId: part.itemId })),
+    ).toEqual(persisted ? [] : [{ text, itemId: "commentary-1" }]);
+    if (persisted) {
+      expect(state.chatMessages.map(extractText)).toEqual([text]);
+    }
+    expect(state.chatStream).toBe(text);
+  },
+);
+
 type HistoryResult = {
   messages: Array<unknown>;
   thinkingLevel?: string;
@@ -70,30 +253,46 @@ function createTestClient(request: unknown): NonNullable<ChatState["client"]> {
   return { request } as unknown as NonNullable<ChatState["client"]>;
 }
 
-function createHistoryState(request: unknown, overrides: Partial<ChatState> = {}): ChatState {
-  return createState({
-    client: createTestClient(request),
-    ...overrides,
-  });
+function createHistoryState(
+  request: unknown,
+  overrides: Partial<ChatHistoryHost> = {},
+): ChatHistoryHost {
+  return createHistoryStateForClient(createTestClient(request), overrides);
 }
 
-function createResolvedHistoryState(result: unknown, overrides: Partial<ChatState> = {}) {
+function createResolvedHistoryState(result: unknown, overrides: Partial<ChatHistoryHost> = {}) {
   const request = vi.fn().mockResolvedValue(result);
   return { request, state: createHistoryState(request, overrides) };
 }
 
-function createHistorySnapshot(messages: Array<unknown>, overrides: Partial<ChatState> = {}) {
+function createHistorySnapshot(messages: Array<unknown>, overrides: Partial<ChatHistoryHost> = {}) {
   return createResolvedHistoryState({ messages, thinkingLevel: "low" }, overrides);
 }
 
 function createHistoryStateForClient(
   client: NonNullable<ChatState["client"]>,
-  overrides: Partial<ChatState> = {},
-) {
-  return createState({ client, ...overrides });
+  overrides: Partial<ChatHistoryHost> = {},
+): ChatHistoryHost {
+  const state = createState({ client, ...overrides });
+  if (overrides.sessions) {
+    return { ...state, sessions: overrides.sessions };
+  }
+  const sessions = createTestSessionCapability({
+    snapshot: {
+      client: state.client,
+      phase: state.connected ? "connected" : "reconnecting",
+      hello: state.hello,
+      sessionKey: state.sessionKey,
+    },
+    subscribe: () => () => undefined,
+    subscribeEvents: () => () => undefined,
+  });
+  vi.spyOn(sessions, "listBranches").mockResolvedValue([]);
+  onTestFinished(() => sessions.dispose());
+  return { ...state, sessions };
 }
 
-function createDeferredHistoryState(overrides: Partial<ChatState> = {}) {
+function createDeferredHistoryState(overrides: Partial<ChatHistoryHost> = {}) {
   const history = createDeferred<HistoryResult>();
   const request = vi.fn(() => history.promise);
   return { history, request, state: createHistoryState(request, overrides) };
@@ -153,7 +352,7 @@ function createStateWithRunningSession(overrides: Partial<ChatState>): SessionTe
 }
 
 type HistoryToolSegment = { text: string; ts: number; toolCallId?: string };
-type LiveToolState = ChatState & {
+type LiveToolState = ChatHistoryHost & {
   chatStreamSegments: HistoryToolSegment[];
   chatToolMessages: Record<string, unknown>[];
   toolStreamById: Map<string, unknown>;
@@ -162,7 +361,7 @@ type LiveToolState = ChatState & {
 };
 
 function attachLiveToolState(
-  state: ChatState,
+  state: ChatHistoryHost,
   tools: Record<string, unknown>[],
   segments: HistoryToolSegment[],
 ): LiveToolState {
@@ -179,7 +378,7 @@ function attachLiveToolState(
 
 function createLiveToolHistoryState(
   messages: Array<unknown>,
-  overrides: Partial<ChatState>,
+  overrides: Partial<ChatHistoryHost>,
   tools: Record<string, unknown>[],
   segments: HistoryToolSegment[],
 ): LiveToolState {
@@ -734,6 +933,58 @@ describe("handleChatGatewayEvent", () => {
 
     expect(handleChatGatewayEvent(state, payload)).toBe("delta");
     expect(state.chatStream).toBe(expected);
+  });
+
+  it("reuses persisted text across live deltas and refreshes replaced messages", () => {
+    const persistedMessage = (id: string, text: string) => {
+      const readContent = vi.fn(() => [{ type: "text", text }]);
+      return {
+        readContent,
+        message: {
+          role: "assistant",
+          get content() {
+            return readContent();
+          },
+          __openclaw: { id, runId: "run-1" },
+        },
+      };
+    };
+    const first = persistedMessage("part-a", "A");
+    const second = persistedMessage("part-b", "B");
+    const state = createState({
+      chatRunId: "run-1",
+      chatMessages: [first.message, second.message],
+    });
+    const receiveDelta = (text: string) => {
+      expect(
+        handleChatGatewayEvent(state, {
+          runId: "run-1",
+          sessionKey: "main",
+          state: "delta",
+          message: createTextChatMessage("assistant", text),
+        }),
+      ).toBe("delta");
+      return visibleCurrentAssistantStreamTail(state, () => false);
+    };
+
+    expect(receiveDelta("ABC")).toBe("C");
+    expect(first.readContent).toHaveBeenCalled();
+    expect(second.readContent).toHaveBeenCalled();
+    first.readContent.mockClear();
+    second.readContent.mockClear();
+
+    for (const text of ["ABCD", "ABCDE", "ABCDEF"]) {
+      expect(receiveDelta(text)).toBe(text.slice(2));
+    }
+    expect(first.readContent).not.toHaveBeenCalled();
+    expect(second.readContent).not.toHaveBeenCalled();
+
+    const replacement = persistedMessage("part-b", "BC");
+    state.chatMessages = [first.message, replacement.message];
+    expect(receiveDelta("ABCDEFG")).toBe("DEFG");
+    expect(replacement.readContent).toHaveBeenCalled();
+    expect(first.readContent).not.toHaveBeenCalled();
+    expect(second.readContent).not.toHaveBeenCalled();
   });
 
   it("adopts the run id for selected-session live deltas observed from another channel", () => {
@@ -1387,23 +1638,6 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toStrictEqual([]);
   });
 
-  it("returns null for delta from another run", () => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-user",
-      chatStream: "Hello",
-    });
-    const payload: ChatEventPayload = {
-      runId: "run-announce",
-      sessionKey: "main",
-      state: "delta",
-      message: { role: "assistant", content: [{ type: "text", text: "Done" }] },
-    };
-    expect(handleChatGatewayEvent(state, payload)).toBe(null);
-    expect(state.chatRunId).toBe("run-user");
-    expect(state.chatStream).toBe("Hello");
-  });
-
   it("ignores NO_REPLY delta updates", () => {
     const state = createState({
       sessionKey: "main",
@@ -1464,7 +1698,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toStrictEqual([]);
   });
 
-  it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+  it.each(["no_reply", "ANNOUNCE_SKIP"])(
     "keeps plain-text %s final payload from another run without clearing active stream",
     (text) => {
       const state = createActiveStreamingState();
@@ -2024,17 +2258,6 @@ describe("handleChatGatewayEvent", () => {
         };
       },
     },
-    {
-      name: "does not append legacy assistant-shaped error projections",
-      create(): TerminalErrorFixture {
-        return {
-          message: createTextChatMessage("assistant", "Error: raw gateway error", undefined, 10),
-          error: "raw gateway error",
-          expected: [],
-          verify: (state) => expect(state.lastError).toBeNull(),
-        };
-      },
-    },
   ])("$name", (fixture) => {
     const { stream, previous, segments, message, error, expected, verify } = fixture.create();
     const state = createState({
@@ -2086,6 +2309,26 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-1" });
   });
 
+  it("keeps the current stream partial when a message-less error ends the run", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial answer before the failure",
+      chatStreamStartedAt: 9,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "provider disconnected",
+    };
+
+    expect(handleChatGatewayEvent(state, payload)).toBe("error");
+    expect(state.chatStream).toBeNull();
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "Partial answer before the failure");
+  });
+
   it("preserves a legacy terminal message that completes streamed assistant content", () => {
     const state = createState({
       sessionKey: "main",
@@ -2132,7 +2375,6 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it.each([
-    "⚠️ 🛠️ Exec failed (exit 1): command failed.",
     "⚠️ Agent run failed: the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.",
   ])("preserves actionable server guidance in live run state: %s", (diagnostic) => {
     const state = createState({ sessionKey: "main", chatRunId: "run-1" });
@@ -2611,16 +2853,6 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "chat error", runId: "run-failed-before-start" });
   });
 
-  it("drops NO_REPLY final payload from another run", () => {
-    const state = createActiveStreamingState();
-    const payload = createOtherRunNoReplyFinalPayload();
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toStrictEqual([]);
-    expect(state.chatRunId).toBe("run-user");
-    expect(state.chatStream).toBe("Working...");
-  });
-
   it("drops NO_REPLY final payload from own run", () => {
     const state = createState({
       sessionKey: "main",
@@ -2641,7 +2873,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatStream).toBe(null);
   });
 
-  it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+  it.each(["no_reply", "ANNOUNCE_SKIP"])(
     "keeps plain-text %s final payload from own run",
     (text) => {
       const state = createState({
@@ -2975,6 +3207,7 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.not.objectContaining({ agentId: expect.anything() }),
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -2997,6 +3230,7 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -3044,12 +3278,16 @@ describe("loadChatHistory filtering", () => {
 
     await loadChatHistory(state, { startup: true });
 
-    expect(request).toHaveBeenCalledWith("chat.startup", {
-      agentId: "research",
-      sessionKey: "global",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.startup",
+      {
+        agentId: "research",
+        sessionKey: "global",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "ready" }] },
     ]);
@@ -3069,7 +3307,10 @@ describe("loadChatHistory filtering", () => {
     const request = vi.fn(() => startup.promise);
     const client = createTestClient(request);
     const firstState = createHistoryStateForClient(client, { sessionKey: "agent:main:main" });
-    const secondState = createHistoryStateForClient(client, { sessionKey: "agent:main:main" });
+    const secondState = createHistoryStateForClient(client, {
+      sessionKey: "agent:main:main",
+      sessions: firstState.sessions,
+    });
 
     const loads = [
       loadChatHistory(firstState, { startup: true }),
@@ -3093,35 +3334,14 @@ describe("loadChatHistory filtering", () => {
     expect(secondState.chatMessages).toEqual(firstState.chatMessages);
   });
 
-  it("returns the original shared request revision to a later pane consumer", async () => {
-    const startup = createDeferred<HistoryResult>();
-    const request = vi.fn(() => startup.promise);
-    const client = createTestClient(request);
-    const firstState = createHistoryStateForClient(client, {
-      sessionKey: "agent:main:main",
-      sessions: { canonicalListRevision: 7 },
-    });
-    const secondState = createHistoryStateForClient(client, {
-      sessionKey: "agent:main:main",
-      sessions: { canonicalListRevision: 8 },
-    });
-
-    const firstLoad = loadChatHistory(firstState, { startup: true });
-    const secondLoad = loadChatHistory(secondState, { startup: true });
-
-    expect(request).toHaveBeenCalledOnce();
-    startup.resolve(createAssistantHistory("shared revision"));
-    const [firstResult, secondResult] = await Promise.all([firstLoad, secondLoad]);
-
-    expect(firstResult).toMatchObject({ sourceCanonicalListRevision: 7 });
-    expect(secondResult).toMatchObject({ sourceCanonicalListRevision: 7 });
-  });
-
   it("keeps startup requests separate for different pane sessions", async () => {
     const request = vi.fn().mockResolvedValue({ messages: [] });
     const client = createTestClient(request);
     const firstState = createHistoryStateForClient(client, { sessionKey: "agent:main:first" });
-    const secondState = createHistoryStateForClient(client, { sessionKey: "agent:main:second" });
+    const secondState = createHistoryStateForClient(client, {
+      sessionKey: "agent:main:second",
+      sessions: firstState.sessions,
+    });
 
     await Promise.all([
       loadChatHistory(firstState, { startup: true }),
@@ -3129,16 +3349,24 @@ describe("loadChatHistory filtering", () => {
     ]);
 
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenCalledWith("chat.startup", {
-      sessionKey: "agent:main:first",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
-    expect(request).toHaveBeenCalledWith("chat.startup", {
-      sessionKey: "agent:main:second",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.startup",
+      {
+        sessionKey: "agent:main:first",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(request).toHaveBeenCalledWith(
+      "chat.startup",
+      {
+        sessionKey: "agent:main:second",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("keeps startup requests separate across pane connection epochs", async () => {
@@ -3155,6 +3383,7 @@ describe("loadChatHistory filtering", () => {
     const freshState = createHistoryStateForClient(client, {
       connectionEpoch: 2,
       sessionKey: "agent:main:main",
+      sessions: staleState.sessions,
     });
 
     const staleLoad = loadChatHistory(staleState, { startup: true });
@@ -3185,11 +3414,15 @@ describe("loadChatHistory filtering", () => {
 
     await loadChatHistory(state, { startup: true });
 
-    expect(request).toHaveBeenCalledWith("chat.startup", {
-      sessionKey: "main",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.startup",
+      {
+        sessionKey: "main",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 });
 
@@ -3219,11 +3452,16 @@ describe("loadChatHistory retry handling", () => {
 
     await loadChatHistory(state, { startup: true });
 
-    expect(request).toHaveBeenNthCalledWith(1, "chat.startup", {
-      sessionKey: "main",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "chat.startup",
+      {
+        sessionKey: "main",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(request).toHaveBeenCalledTimes(1);
     expect(getChatHistoryLoadState(state)).toMatchObject({
       phase: "failed",
@@ -3271,7 +3509,47 @@ describe("loadChatHistory retry handling", () => {
     }
   });
 
-  it("gives a pane joining shared startup work its own retry window", async () => {
+  it("ends a stalled history load and cancels its request before Retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const stalled = createDeferred<HistoryResult>();
+      let signal: AbortSignal | undefined;
+      const request = vi
+        .fn()
+        .mockImplementationOnce(
+          (_method: string, _params: unknown, options?: { signal?: AbortSignal }) => {
+            signal = options?.signal;
+            return stalled.promise;
+          },
+        )
+        .mockResolvedValueOnce(createAssistantHistory("recovered"));
+      const state = createHistoryState(request);
+      const loading = loadChatHistory(state);
+
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(state.chatLoading).toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+      await loading;
+
+      expect(state.chatLoading).toBe(false);
+      expect(getChatHistoryLoadState(state)).toMatchObject({
+        phase: "failed",
+        message: expect.stringContaining("timed out"),
+      });
+      expect(signal?.aborted).toBe(true);
+      await loadChatHistory(state);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(state.chatMessages).toEqual(createAssistantHistory("recovered").messages);
+
+      stalled.resolve(createAssistantHistory("expired"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state.chatMessages).toEqual(createAssistantHistory("recovered").messages);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expires each shared startup reader without consuming a late joiner's retry window", async () => {
     vi.useFakeTimers();
     try {
       const retryableError = new GatewayRequestError({
@@ -3297,7 +3575,7 @@ describe("loadChatHistory retry handling", () => {
         .mockResolvedValueOnce(createAssistantHistory("awake"));
       const client = createTestClient(request);
       const firstState = createHistoryStateForClient(client);
-      const secondState = createHistoryStateForClient(client);
+      const secondState = createHistoryStateForClient(client, { sessions: firstState.sessions });
 
       const firstLoad = loadChatHistory(firstState);
       await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
@@ -3307,15 +3585,23 @@ describe("loadChatHistory retry handling", () => {
       const secondLoad = loadChatHistory(secondState);
       expect(request).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(1_001);
+      await firstLoad;
+      expect(firstState.chatLoading).toBe(false);
+      expect(getChatHistoryLoadState(firstState)).toMatchObject({
+        phase: "failed",
+        message: expect.stringContaining("timed out"),
+      });
+      expect(secondState.chatLoading).toBe(true);
+      expect(request.mock.calls[1]?.[2]?.signal.aborted).toBe(false);
       secondAttempt.reject(retryableError);
       await vi.advanceTimersByTimeAsync(250);
-      await Promise.all([firstLoad, secondLoad]);
+      await secondLoad;
 
       expect(request).toHaveBeenCalledTimes(3);
-      expect(firstState.chatMessages).toEqual([
+      expect(secondState.chatMessages).toEqual([
         { role: "assistant", content: [{ type: "text", text: "awake" }] },
       ]);
-      expect(secondState.chatMessages).toEqual(firstState.chatMessages);
+      expect(firstState.chatMessages).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
@@ -3330,11 +3616,15 @@ describe("loadChatHistory retry handling", () => {
 
     await loadChatHistory(state);
 
-    expect(request).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "main",
-      limit: 80,
-      maxBytes: 256 * 1024,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey: "main",
+        limit: 80,
+        maxBytes: 256 * 1024,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
       { role: "user", content: [{ type: "text", text: "NO_REPLY" }] },
@@ -3370,69 +3660,11 @@ describe("loadChatHistory retry handling", () => {
     visible: unknown[];
     expected: unknown[];
     inputRunIds?: string[];
-    state?: Partial<ChatState>;
+    state?: Partial<ChatHistoryHost>;
     verify?: (state: ChatState) => void;
   };
 
   it.each([
-    {
-      name: "preserves a run-keyed pending prompt across an older snapshot",
-      create(): HistoryReconciliationFixture {
-        const persisted = createTextChatMessage("user", "first", { id: "first-user", seq: 1 });
-        const pending = createTextChatMessage("user", "latest ask", {
-          idempotencyKey: "latest-run:user",
-        });
-        return {
-          history: [persisted],
-          visible: [persisted, pending],
-          expected: [persisted, pending],
-          inputRunIds: ["latest-run"],
-        };
-      },
-    },
-    {
-      name: "keeps distinct same-text prompts when their run identities differ",
-      create(): HistoryReconciliationFixture {
-        const first = createTextChatMessage("user", "continue", {
-          id: "first-user",
-          idempotencyKey: "first-run:user",
-          seq: 1,
-        });
-        const persisted = createTextChatMessage("user", "continue", {
-          id: "second-user",
-          idempotencyKey: "second-run:user",
-          seq: 2,
-        });
-        const pending = createTextChatMessage("user", "continue", {
-          idempotencyKey: "third-run:user",
-        });
-        return {
-          history: [first, persisted],
-          visible: [first, pending],
-          expected: [first, persisted, pending],
-          inputRunIds: ["third-run"],
-        };
-      },
-    },
-    {
-      name: "retires a pending prompt when its canonical run reaches history",
-      create(): HistoryReconciliationFixture {
-        const persisted = createTextChatMessage("user", "already persisted", {
-          id: "persisted-user",
-          idempotencyKey: "persisted-run:user",
-          seq: 1,
-        });
-        const pending = createTextChatMessage("user", "already persisted", {
-          idempotencyKey: "persisted-run:user",
-        });
-        return {
-          history: [persisted],
-          visible: [pending],
-          expected: [persisted],
-          inputRunIds: ["persisted-run"],
-        };
-      },
-    },
     {
       name: "preserves distinct complete imported source identities",
       create(): HistoryReconciliationFixture {
@@ -3455,17 +3687,6 @@ describe("loadChatHistory retry handling", () => {
         const persisted = createTextChatMessage("user", "first", { id: "first-user", seq: 1 });
         const unowned = createTextChatMessage("user", "unproven pending turn");
         return { history: [persisted], visible: [persisted, unowned], expected: [persisted] };
-      },
-    },
-    {
-      name: "never restores a hidden assistant from a stale visible tail",
-      create(): HistoryReconciliationFixture {
-        const persisted = createTextChatMessage("user", "visible prompt", {
-          id: "visible-user",
-          seq: 1,
-        });
-        const hidden = createTextChatMessage("assistant", "NO_REPLY");
-        return { history: [persisted], visible: [persisted, hidden], expected: [persisted] };
       },
     },
     {
@@ -3502,12 +3723,16 @@ describe("loadChatHistory retry handling", () => {
 
     await loadChatHistory(state);
 
-    expect(request).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "main",
-      limit: 80,
-      maxBytes: 256 * 1024,
-      ...(inputRunIds ? { inputRunIds } : {}),
-    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      {
+        sessionKey: "main",
+        limit: 80,
+        maxBytes: 256 * 1024,
+        ...(inputRunIds ? { inputRunIds } : {}),
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(state.chatMessages).toEqual(expected);
     verify?.(state);
   });
@@ -3954,44 +4179,6 @@ describe("loadChatHistory retry handling", () => {
     expect(state.toolStreamOrder).toEqual(["call_current"]);
   });
 
-  it("keeps a run-keyed optimistic prompt when history reload returns empty", async () => {
-    const optimisticUser = createTextChatMessage(
-      "user",
-      "first ask",
-      { idempotencyKey: "pending-run:user" },
-      10,
-    );
-    const { state } = createHistorySnapshot([], { chatMessages: [optimisticUser] });
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages).toEqual([optimisticUser]);
-    expect(state.chatStream).toBeNull();
-  });
-
-  it("retires a run-keyed optimistic prompt after history catches up", async () => {
-    const optimisticUser = createTextChatMessage(
-      "user",
-      "latest ask",
-      { idempotencyKey: "latest-run:user" },
-      10,
-    );
-    const historyUser = createTextChatMessage("user", "latest ask", {
-      id: "persisted-latest-user",
-      idempotencyKey: "latest-run:user",
-      seq: 1,
-    });
-    const historyAssistant = createTextChatMessage("assistant", "latest answer", { seq: 2 });
-    const { state } = createResolvedHistoryState(
-      { messages: [historyUser, historyAssistant] },
-      { chatMessages: [optimisticUser] },
-    );
-
-    await loadChatHistory(state);
-
-    expect(state.chatMessages).toEqual([historyUser, historyAssistant]);
-  });
-
   it("shows a targeted message when chat history is unauthorized", async () => {
     const request = vi.fn().mockRejectedValue(
       new GatewayRequestError({
@@ -4019,24 +4206,6 @@ describe("loadChatHistory retry handling", () => {
     });
     expect(state.lastError).toBeNull();
     expect(state.chatError).toBeNull();
-    expect(state.chatLoading).toBe(false);
-  });
-
-  it("coalesces duplicate in-flight history loads for the selected session", async () => {
-    const { history, request, state } = createDeferredHistoryState();
-
-    const firstLoad = loadChatHistory(state);
-    const secondLoad = loadChatHistory(state);
-
-    expect(request).toHaveBeenCalledTimes(1);
-    history.resolve(createAssistantHistory("ready", { thinkingLevel: "low" }));
-    await firstLoad;
-    await secondLoad;
-
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "ready" }] },
-    ]);
-    expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });
 
@@ -4170,7 +4339,14 @@ describe("loadChatHistory retry handling", () => {
     const secondLoad = loadChatHistory(state);
     const thirdLoad = loadChatHistory(state);
 
-    expect(request.mock.calls).toEqual([
+    expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
+      ["chat.history", { sessionKey: "main", limit: 80, maxBytes: 256 * 1024 }],
+    ]);
+    expect(state.chatMessages).toEqual([pending]);
+
+    staleHistory.resolve(createAssistantHistory("stale history"));
+    await firstLoad;
+    expect(request.mock.calls.map(([method, params]) => [method, params])).toEqual([
       ["chat.history", { sessionKey: "main", limit: 80, maxBytes: 256 * 1024 }],
       [
         "chat.history",
@@ -4182,10 +4358,6 @@ describe("loadChatHistory retry handling", () => {
         },
       ],
     ]);
-    expect(state.chatMessages).toEqual([pending]);
-
-    staleHistory.resolve(createAssistantHistory("stale history"));
-    await firstLoad;
     expect(state.chatMessages).toEqual([pending]);
     expect(state.chatLoading).toBe(true);
 

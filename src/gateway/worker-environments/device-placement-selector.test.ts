@@ -53,6 +53,7 @@ function nodeProof(environment: EnvironmentSummary): NodeWorkerSupervisorNodePro
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: {
       enabled: true,
+      capturedExecPolicy: true,
       capacity: environment.workerSlots ?? { total: 1, available: 0 },
     },
     commands: ["runtime.exec"],
@@ -63,7 +64,9 @@ async function selectNodes(
   environments: EnvironmentSummary[],
   options: {
     requirement?: DevicePlacementRequirement;
+    executionMode?: "worker-turn" | "remote-exec";
     availability?: (deviceId: string) => Promise<DeviceWorkerAvailability>;
+    admittedSessions?: ReadonlyMap<string, number>;
   } = {},
 ) {
   const proofs = new Map(
@@ -89,33 +92,98 @@ async function selectNodes(
     environmentService,
     requirement: options.requirement ?? WORKER_REQUIREMENT,
     runtimeId: "test-runtime",
+    executionMode:
+      options.executionMode ??
+      (options.requirement === REMOTE_REQUIREMENT ? "remote-exec" : "worker-turn"),
     config: CONFIG,
+    getAdmittedSessionCounts: () => options.admittedSessions,
   });
 }
 
 describe("paired-device automatic placement selection", () => {
-  it("prefers hosts with the most available worker slots", async () => {
-    const result = await selectNodes([
-      nodeEnvironment("alpha", 1),
-      nodeEnvironment("charlie", 2),
-      nodeEnvironment("bravo", 4),
-    ]);
+  it.each([0, 2])(
+    "reports the required node update before capacity when %s slots are free",
+    async (available) => {
+      const environment = nodeEnvironment("outdated", available);
+      const node = nodeProof(environment);
+      delete node.workerHost.capturedExecPolicy;
+      expect(
+        await selectNodes([environment], {
+          availability: async () => ({ available: true, node }),
+        }),
+      ).toEqual({
+        ok: false,
+        error: expect.stringContaining("run openclaw update, then reconnect"),
+      });
+    },
+  );
+
+  it("keeps remote-exec independent of captured policy even when its harness consumes a slot", async () => {
+    const environment = nodeEnvironment("remote", 2);
+    const node = nodeProof(environment);
+    delete node.workerHost.capturedExecPolicy;
+    expect(
+      await selectNodes([environment], {
+        executionMode: "remote-exec",
+        requirement: { ...REMOTE_REQUIREMENT, consumesWorkerSlot: true },
+        availability: async () => ({ available: true, node }),
+      }),
+    ).toEqual({ ok: true, candidates: [{ deviceId: "remote", availableSlots: 2 }] });
+  });
+
+  it.each([1, 2])(
+    "prefers lower admitted demand while a third host still advertises %s free slots",
+    async (available) => {
+      const result = await selectNodes(
+        [
+          nodeEnvironment("alpha", available, { workerSlots: { total: 2, available } }),
+          nodeEnvironment("bravo", 1, { workerSlots: { total: 2, available: 1 } }),
+          nodeEnvironment("charlie", 1, { workerSlots: { total: 2, available: 1 } }),
+        ],
+        {
+          admittedSessions: new Map([
+            ["alpha", 2],
+            ["bravo", 1],
+            ["charlie", 1],
+          ]),
+        },
+      );
+
+      expect(result).toEqual({
+        ok: true,
+        candidates: [
+          { deviceId: "bravo", availableSlots: 1 },
+          { deviceId: "charlie", availableSlots: 1 },
+          { deviceId: "alpha", availableSlots: available },
+        ],
+      });
+    },
+  );
+
+  it("retains physical occupancy for idle workers without double-counting admitted demand", async () => {
+    const result = await selectNodes(
+      [
+        nodeEnvironment("idle-full", 0, { workerSlots: { total: 2, available: 0 } }),
+        nodeEnvironment("admitted", 1, { workerSlots: { total: 2, available: 1 } }),
+        nodeEnvironment("idle-spare", 1, { workerSlots: { total: 2, available: 1 } }),
+      ],
+      { admittedSessions: new Map([["admitted", 1]]) },
+    );
 
     expect(result).toEqual({
       ok: true,
       candidates: [
-        { deviceId: "bravo", availableSlots: 4 },
-        { deviceId: "charlie", availableSlots: 2 },
-        { deviceId: "alpha", availableSlots: 1 },
+        { deviceId: "idle-spare", availableSlots: 1 },
+        { deviceId: "admitted", availableSlots: 1 },
       ],
     });
   });
 
   it("ranks current worker capacity instead of stale environment snapshots", async () => {
     const environments = [
-      nodeEnvironment("alpha", 9),
-      nodeEnvironment("bravo", 1),
       nodeEnvironment("charlie", 5),
+      nodeEnvironment("bravo", 1),
+      nodeEnvironment("alpha", 9),
     ];
     const liveCapacity = new Map([
       ["alpha", 2],
@@ -152,23 +220,6 @@ describe("paired-device automatic placement selection", () => {
     });
   });
 
-  it("breaks equal-capacity ties by device identity, independently of catalog order", async () => {
-    const result = await selectNodes([
-      nodeEnvironment("charlie", 2),
-      nodeEnvironment("alpha", 2),
-      nodeEnvironment("bravo", 2),
-    ]);
-
-    expect(result).toEqual({
-      ok: true,
-      candidates: [
-        { deviceId: "alpha", availableSlots: 2 },
-        { deviceId: "bravo", availableSlots: 2 },
-        { deviceId: "charlie", availableSlots: 2 },
-      ],
-    });
-  });
-
   it("excludes disconnected, full, outdated, non-host, and no-longer-paired nodes", async () => {
     const environments = [
       nodeEnvironment("full", 0),
@@ -198,7 +249,7 @@ describe("paired-device automatic placement selection", () => {
   it("orders remote-exec hosts only by device identity, including hosts with no free slots", async () => {
     const result = await selectNodes(
       [nodeEnvironment("charlie", 5), nodeEnvironment("alpha", 0), nodeEnvironment("bravo", 2)],
-      { requirement: REMOTE_REQUIREMENT },
+      { requirement: REMOTE_REQUIREMENT, admittedSessions: new Map([["alpha", 20]]) },
     );
 
     expect(result).toEqual({
@@ -250,6 +301,7 @@ describe("paired-device automatic placement selection", () => {
       environmentService: {},
       requirement: undefined,
       runtimeId: "cloud-only",
+      executionMode: "remote-exec",
       config: CONFIG,
     });
 

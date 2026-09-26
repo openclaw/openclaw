@@ -18,7 +18,7 @@ import {
 } from "../skills/library/service.js";
 import { resolveSkillLibraryActor } from "../skills/library/store.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { selectResolvedUserProfileById } from "../state/user-profiles-internal.js";
+import { selectResolvedUserProfileMetadataById } from "../state/user-profiles-internal.js";
 import {
   activateLibrarySelection,
   libraryAuthority,
@@ -37,8 +37,8 @@ export function invalidateSkillAuthoringForOtherRequester(
       const db = openOpenClawStateDatabase().db;
       if (
         !profileId ||
-        selectResolvedUserProfileById(db, grant.profileId)?.id !==
-          selectResolvedUserProfileById(db, profileId)?.id
+        selectResolvedUserProfileMetadataById(db, grant.profileId)?.id !==
+          selectResolvedUserProfileMetadataById(db, profileId)?.id
       ) {
         grant.revoke();
       }

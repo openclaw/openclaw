@@ -7,10 +7,8 @@ import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import {
-  openOpenClawStateDatabase,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
@@ -22,6 +20,7 @@ import { coordinateWorkerPlacementDispatch } from "./worker-environments/placeme
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { prepareSessionWorkerPlacementStop } from "./worker-environments/session-placement-lifecycle.js";
 
 const lookup = vi.hoisted(() => ({
   value: undefined as ReturnType<typeof import("./session-utils.js").loadSessionEntry> | undefined,
@@ -34,7 +33,7 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 const roots: string[] = [];
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   lookup.value = undefined;
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -267,7 +266,7 @@ it("a pending dispatch retains its producer while preparation fences new ingress
 });
 
 async function cancellationLoadFixture(
-  options: NonNullable<Parameters<typeof createHarness>[1]> = {},
+  options: NonNullable<Parameters<typeof createHarness>[2]> = {},
   beforeCancellation?: () => Promise<void>,
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-advance-"));
@@ -338,7 +337,7 @@ async function cancellationLoadFixture(
     },
     revokeSessionAuthority: vi.fn(),
   });
-  const harness = createHarness(placements, {
+  const harness = createHarness(database, placements, {
     workspacePath: root,
     runReclaimPreparation: barriers.runReclaimPreparation,
     runReclaimBarrier: barriers.runReclaimBarrier,
@@ -397,7 +396,7 @@ it.each(["same-owner", "replacement", "incarnation", "authorization"] as const)(
         await secondLoaded.promise;
       }
     });
-    vi.mocked(f.harness.environments.create).mockImplementationOnce(async () => {
+    vi.mocked(f.harness.environments.createWithRequest).mockImplementationOnce(async () => {
       provisioning.resolve();
       await provisioned.promise;
       return f.harness.ready;
@@ -483,7 +482,7 @@ it.each(["missing", "local", "reclaimed"] as const)(
   async (state) => {
     const f = await cancellationLoadFixture();
     if (state === "local") {
-      const requested = f.placements.startDispatch(REQUEST);
+      const requested = await f.placements.startDispatch(REQUEST);
       const failed = f.placements.fail({
         sessionId: REQUEST.sessionId,
         expectedGeneration: requested.generation,
@@ -580,22 +579,11 @@ it.each([false, true])(
     const active = await f.coordinated.dispatch(REQUEST);
     if (abandonSource) {
       f.harness.markEnvironmentNodeDeviceId("device-1");
+      f.database.db
+        .prepare("UPDATE worker_environments SET profile_id = ? WHERE environment_id = ?")
+        .run("device:device-1", active.environmentId);
     }
-    f.database.db
-      .prepare(`INSERT INTO worker_environments (
-      environment_id, provider_id, profile_id, profile_snapshot_json,
-      provision_operation_id, lease_id, state, owner_epoch, node_device_id,
-      attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
-    ) VALUES (?, ?, ?, '{}', ?, 'lease-move', 'attached', ?, ?, ?, 1000, 1000, 1000)`)
-      .run(
-        active.environmentId,
-        abandonSource ? "device" : "test",
-        abandonSource ? "device:device-1" : REQUEST.profileId,
-        `provision:${active.environmentId}`,
-        active.activeOwnerEpoch,
-        abandonSource ? "device-1" : null,
-        JSON.stringify([active.sessionId]),
-      );
+
     const transitions: string[] = [];
     let transitionsAtFirstYield: string[] | undefined;
     const beginPlacementMove = f.placements.beginPlacementMove.bind(f.placements);
@@ -687,7 +675,7 @@ it.each(
         : {},
     );
     if (phase === "provisioning") {
-      vi.mocked(f.harness.environments.create).mockImplementationOnce(async () => {
+      vi.mocked(f.harness.environments.createWithRequest).mockImplementationOnce(async () => {
         entered.resolve();
         await released.promise;
         return f.harness.ready;
@@ -736,7 +724,7 @@ it.each(
       expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
       const cancellations = f.cancellationStarted.mock.calls.length;
       if (change === "replacement") {
-        f.placements.startDispatch(REQUEST);
+        await f.placements.startDispatch(REQUEST);
       } else if (change === "incarnation") {
         f.entry.lifecycleRevision = "replacement";
       }
@@ -759,9 +747,17 @@ it.each(
   },
 );
 
-it.each(["syncing", "completed", "failed", "replacement", "incarnation", "observer"] as const)(
-  "Stop retains captured dispatch authority across cancellation loading (%s)",
-  async (advance) => {
+it.each([
+  ...(["syncing", "completed", "failed", "replacement", "incarnation", "observer"] as const).map(
+    (advance) => ({ advance, action: "stop" as const }),
+  ),
+  ...(["syncing", "failed", "replacement"] as const).map((advance) => ({
+    advance,
+    action: "archive" as const,
+  })),
+])(
+  "$action retains captured dispatch authority across cancellation loading ($advance)",
+  async ({ advance, action }) => {
     const {
       placements,
       entry,
@@ -779,14 +775,12 @@ it.each(["syncing", "completed", "failed", "replacement", "incarnation", "observ
     const attaching = createDeferredCore();
     const attached = createDeferredCore();
     let dispatchSignal: AbortSignal | undefined;
-    vi.mocked(harness.environments.create).mockImplementationOnce(
-      async (_profile, _key, _machine, _mode, _project, signal) => {
-        dispatchSignal = signal;
-        provisioning.resolve();
-        await provisioned.promise;
-        return harness.ready;
-      },
-    );
+    vi.mocked(harness.environments.createWithRequest).mockImplementationOnce(async ({ signal }) => {
+      dispatchSignal = signal;
+      provisioning.resolve();
+      await provisioned.promise;
+      return harness.ready;
+    });
     if (advance === "syncing") {
       const attach = harness.environments.attachSession;
       harness.environments.attachSession = vi.fn(async (request) => {
@@ -801,18 +795,32 @@ it.each(["syncing", "completed", "failed", "replacement", "incarnation", "observ
           placement.generation += 100;
         }
       })
-      .then(
-        (result) => result,
-        (error: unknown) => error,
-      );
+      .catch((error: unknown) => error);
     await provisioning.promise;
     armCancellation();
-    const stopping = coordinated.reclaim(REQUEST).then(
-      (result) => result,
-      (error: unknown) => error,
-    );
+    const stopping = Promise.resolve()
+      .then(async () => {
+        if (action === "archive") {
+          return await prepareSessionWorkerPlacementStop({
+            ...REQUEST,
+            action,
+            context: {
+              workerSessionPlacementService: placements,
+              workerPlacementDispatchService: coordinated,
+              workerEnvironmentService: harness.environments,
+            },
+          }).stop();
+        }
+        return await coordinated.reclaim(REQUEST);
+      })
+      .catch((error: unknown) => error);
     try {
-      await loading.promise;
+      await Promise.race([
+        loading.promise,
+        stopping.then((result) => {
+          throw result;
+        }),
+      ]);
       expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
       expect(dispatchSignal?.aborted).toBe(false);
       provisioned.resolve();
@@ -854,7 +862,10 @@ it.each(["syncing", "completed", "failed", "replacement", "incarnation", "observ
         expect(cancellationStarted).not.toHaveBeenCalled();
         expect(harness.environments.destroy).not.toHaveBeenCalled();
       } else {
-        expect(result).toMatchObject({
+        if (action === "archive") {
+          expect(result).toBeUndefined();
+        }
+        expect(action === "archive" ? placements.get(REQUEST.sessionId) : result).toMatchObject({
           state: advance === "completed" || advance === "observer" ? "reclaimed" : "local",
         });
         expect(cancellationStarted).toHaveBeenCalled();
@@ -901,20 +912,7 @@ it.each([
       revokeSessionAuthority: vi.fn(),
     });
     const active = await f.coordinated.dispatch(REQUEST);
-    // Move validates the durable environment owner as well as the provider projection.
-    f.database.db
-      .prepare(`INSERT INTO worker_environments (
-      environment_id, provider_id, profile_id, profile_snapshot_json,
-      provision_operation_id, lease_id, state, owner_epoch,
-      attached_session_ids_json, created_at_ms, updated_at_ms, state_changed_at_ms
-    ) VALUES (?, 'test', ?, '{}', ?, 'lease-move', 'attached', ?, ?, 1000, 1000, 1000)`)
-      .run(
-        active.environmentId,
-        REQUEST.profileId,
-        `provision:${active.environmentId}`,
-        active.activeOwnerEpoch,
-        JSON.stringify([active.sessionId]),
-      );
+
     const localGenerations = new Set<number>();
     const moving = f.coordinated
       .move(
@@ -979,7 +977,7 @@ it.each([
         expect.soft(await moving).toMatchObject({ state: "local" });
       }
       if (advance === "replacement") {
-        f.placements.startDispatch(REQUEST);
+        await f.placements.startDispatch(REQUEST);
       }
       f.loaded.resolve();
       if (advance !== "replacement") {
@@ -1003,7 +1001,7 @@ it.each([
         expect.soft(f.placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
         expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
         expect(f.placements.listPendingWorkspaceResults()).toEqual([]);
-        expect(f.harness.environments.create).toHaveBeenCalledOnce();
+        expect(f.harness.environments.createWithRequest).toHaveBeenCalledOnce();
         expect(f.harness.log.filter((event) => event === "placement:requested")).toHaveLength(1);
       }
     } finally {

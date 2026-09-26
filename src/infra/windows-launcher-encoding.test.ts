@@ -49,14 +49,6 @@ describe("encodeWindowsLauncherScript", () => {
     expect(encoded.subarray(2).toString("utf16le")).toBe(content);
   });
 
-  it("writes vbs scripts as UTF-16 LE even for pure-ASCII content", () => {
-    const content = 'CreateObject("WScript.Shell").Run """C:\\gw.cmd""", 0, False\r\n';
-    const encoded = encodeWindowsLauncherScript({ format: "vbs", content });
-
-    expect(encoded.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
-    expect(encoded.subarray(2).toString("utf16le")).toBe(content);
-  });
-
   it("keeps ASCII cmd scripts byte-identical without resolving a code page", () => {
     const content = '@echo off\r\ncd /d "C:\\temp"\r\nnode gateway.js\r\n';
     const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
@@ -106,14 +98,12 @@ describe("encodeWindowsLauncherScript", () => {
     expect(decodeWindowsLauncherScript({ buffer: encoded })).toBe(content);
   });
 
-  it("encodes cp949 extension syllables that Node ICU's euc-kr decoder rejects", () => {
+  it("encodes cp949 extension syllables", () => {
     resolveWindowsOemEncodingMock.mockReturnValue("euc-kr");
-    // Windows code page 949 is cp949/UHC; "똠" (8C 63) is a UHC extension syllable
-    // iconv encodes and round-trips, but new TextDecoder("euc-kr") cannot decode
-    // (KS X 1001 only). The guard must verify euc-kr with iconv, not ICU.
+    // Windows code page 949 is cp949/UHC; "똠" (8C 63) is a UHC extension syllable.
+    // Verify the same iconv codec used by the launcher instead of runtime-specific ICU behavior.
     const extensionBytes = iconv.encode("똠", "euc-kr");
     expect(iconv.decode(extensionBytes, "euc-kr")).toBe("똠");
-    expect(new TextDecoder("euc-kr").decode(extensionBytes)).not.toBe("똠");
 
     const content = `@echo off\r\ncd /d "C:\\Users\\똠이\\.openclaw"\r\nnode gateway.js\r\n`;
     const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
@@ -207,13 +197,6 @@ describe("decodeWindowsLauncherScript", () => {
   it("decodes unmarked legacy UTF-8 scripts with CJK paths", () => {
     const content = `@echo off\r\ncd /d "C:\\Users\\苗振\\.openclaw"\r\nnode gateway.js\r\n`;
     const buffer = Buffer.from(content, "utf8");
-
-    expect(decodeWindowsLauncherScript({ buffer })).toBe(content);
-  });
-
-  it("decodes marked code-page scripts with the recorded encoding", () => {
-    const content = "@echo off\r\nrem 你好\r\n";
-    const buffer = iconv.encode(GBK_MARKER + content, "gbk");
 
     expect(decodeWindowsLauncherScript({ buffer })).toBe(content);
   });

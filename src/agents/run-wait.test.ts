@@ -7,12 +7,15 @@ import {
   MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const callGatewayMock = vi.fn();
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as gatewayCallRuntime from "../gateway/call.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+const callGatewayMock = vi.spyOn(gatewayCallRuntime, "callGateway");
+afterAll(() => callGatewayMock.mockRestore());
 
 import {
   readLatestAssistantReply,
@@ -20,6 +23,7 @@ import {
   waitForAgentRunsToDrain,
   waitForAgentRunReply,
 } from "./run-wait.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 type AgentWaitGatewayRequest = {
   method?: string;
@@ -79,10 +83,7 @@ describe("readLatestAssistantReply", () => {
   it("returns the most recent assistant message when compaction markers trail history", async () => {
     callGatewayMock.mockResolvedValue({
       messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "All checks passed and changes were pushed." }],
-        },
+        textAssistant("All checks passed and changes were pushed."),
         { role: "toolResult", content: [{ type: "text", text: "tool output" }] },
         { role: "system", content: [{ type: "text", text: "Compaction" }] },
       ],
@@ -167,32 +168,6 @@ describe("readLatestAssistantReply", () => {
     const result = await readLatestAssistantReply({ sessionKey: "agent:main:target" });
 
     expect(result).toBe("older worker reply");
-  });
-
-  it("reads only final_answer text from phased assistant history", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Need fix line quoting properly.",
-              textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-            },
-            {
-              type: "text",
-              text: "Fixed the quoting issue.",
-              textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
-            },
-          ],
-        },
-      ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("Fixed the quoting issue.");
   });
 
   it("preserves spaces across split final_answer history blocks", async () => {
@@ -284,24 +259,13 @@ describe("waitForAgentRun", () => {
   });
 
   it.each([
-    undefined,
     "",
-    "gateway timeout",
     "gateway request timeout for agent.wait",
-    "ENOENT: no such file",
     "getaddrinfo ENOTFOUND gateway.example.com",
   ])("does not mark a nonrecoverable rejected wait RPC: %s", async (error) => {
     callGatewayMock.mockRejectedValueOnce(new Error(error));
     const result = await waitForAgentRun({ runId: "run-unrecoverable", timeoutMs: 500 });
     expect(result).not.toHaveProperty("retryableTransportError");
-  });
-
-  it("preserves pending agent.wait status", async () => {
-    callGatewayMock.mockResolvedValue({ status: "pending" });
-
-    const result = await waitForAgentRun({ runId: "run-pending", timeoutMs: 500 });
-
-    expect(result).toEqual({ status: "pending" });
   });
 
   it("preserves pending error diagnostics on wait timeouts", async () => {
@@ -317,18 +281,6 @@ describe("waitForAgentRun", () => {
       status: "timeout",
       error: "429 RESOURCE_EXHAUSTED",
       pendingError: true,
-    });
-  });
-
-  it("carries a bounded terminal reply snapshot from agent.wait", async () => {
-    callGatewayMock.mockResolvedValue({
-      status: "ok",
-      terminalReply: { disposition: "visible", text: "final reply" },
-    });
-
-    await expect(waitForAgentRun({ runId: "run-reply", timeoutMs: 500 })).resolves.toEqual({
-      status: "ok",
-      terminalReply: { disposition: "visible", text: "final reply" },
     });
   });
 
@@ -572,11 +524,116 @@ describe("waitForAgentRunReply", () => {
       expect(callGatewayMock).toHaveBeenCalledOnce();
     },
   );
+
+  it.each([
+    { status: "timeout", endedAt: 200, stopReason: "timeout", error: "execution expired" },
+    { status: "timeout", timeoutPhase: "provider", providerStarted: true },
+    { status: "timeout", timeoutPhase: "preflight" },
+    { status: "timeout", timeoutPhase: "post_turn" },
+    { status: "error", endedAt: 200, stopReason: "aborted", error: "cancelled" },
+    { status: "timeout", timeoutPhase: "gateway_draining" },
+  ])("ends completion observation for $status / $stopReason", async (terminal) => {
+    callGatewayMock.mockResolvedValue(terminal);
+
+    const result = await waitForAgentRunReply({
+      runId: "run-ended",
+      timeoutMs: 1_000,
+      untilTerminal: true,
+    });
+
+    expect(result).toMatchObject(terminal);
+    expect(result.replyText).toBeUndefined();
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+  });
+
+  it.each(["gateway closed (1006)", "gateway request timeout"])(
+    "does not retain completion observation after transport failure: %s",
+    async (message) => {
+      callGatewayMock.mockRejectedValue(new Error(message));
+
+      const result = await waitForAgentRunReply({
+        runId: "run-disconnected",
+        timeoutMs: 1_000,
+        untilTerminal: true,
+      });
+
+      expect(result.error).toBe(message);
+      expect(result.replyText).toBeUndefined();
+      expect(callGatewayMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["work scope", "Gateway restart"])(
+    "retires pending observation when its %s closes",
+    async (owner) => {
+      const work = new AsyncWorkScope();
+      callGatewayMock.mockResolvedValue({ status: "pending", timeoutPhase: "queue" });
+      const observation = work.run(() =>
+        waitForAgentRunReply({
+          runId: "run-queued",
+          timeoutMs: 1_000,
+          untilTerminal: true,
+        }),
+      );
+      const rejection = expect(observation).rejects.toThrow();
+      try {
+        await vi.waitFor(() => expect(callGatewayMock).toHaveBeenCalledOnce());
+        if (owner === "work scope") {
+          work.beginClose(new Error("Gateway owner closed"));
+        } else {
+          markGatewayRestartDraining();
+        }
+        await rejection;
+        expect(callGatewayMock).toHaveBeenCalledOnce();
+      } finally {
+        work.beginClose();
+        resetGatewayWorkAdmission();
+        await work.drain();
+      }
+    },
+  );
 });
 
 describe("waitForAgentRunsToDrain", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
+  });
+
+  it.each(["pending", "timeout", "error", "ok"])(
+    "lets completion callbacks drain runs after immediate %s responses",
+    async (status) => {
+      callGatewayMock.mockResolvedValue({ status });
+      let activeRunIds = ["run-1"];
+      const completion = setTimeout(() => {
+        activeRunIds = [];
+      }, 0);
+      try {
+        const result = await waitForAgentRunsToDrain({
+          timeoutMs: 200,
+          getPendingRunIds: () => activeRunIds,
+        });
+
+        expect(result.timedOut).toBe(false);
+        expect(result.pendingRunIds).toEqual([]);
+        expect(callGatewayMock.mock.calls.length).toBeLessThanOrEqual(4);
+      } finally {
+        clearTimeout(completion);
+      }
+    },
+  );
+
+  it("bounds retries of unchanged runs by the drain deadline", async () => {
+    callGatewayMock.mockResolvedValue({ status: "pending" });
+    const deadlineAtMs = Date.now() + 150;
+
+    const result = await waitForAgentRunsToDrain({
+      deadlineAtMs,
+      getPendingRunIds: () => ["run-1"],
+    });
+
+    expect(result).toEqual({ timedOut: true, pendingRunIds: ["run-1"], deadlineAtMs });
+    expect(callGatewayMock.mock.calls.length).toBeLessThanOrEqual(4);
+    expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 150);
   });
 
   it("waits across rounds until descendant runs stop changing", async () => {

@@ -1,24 +1,13 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-/**
- * Shared Claude CLI backend normalization for args, thinking, and isolated runs.
- */
+import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/claude-model-runtime";
 import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
-export {
-  CLAUDE_CLI_BACKEND_ID,
-  CLAUDE_CLI_CLEAR_ENV,
-  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
-  CLAUDE_CLI_DEFAULT_MODEL_REF,
-  CLAUDE_CLI_MODEL_ALIASES,
-  CLAUDE_CLI_SESSION_ID_FIELDS,
-} from "./cli-constants.js";
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
@@ -64,7 +53,6 @@ type ClaudeCliEffortArgAction =
   | { mode: "omit" }
   | { mode: "set"; effort: ClaudeCliEffort };
 
-/** Return whether a provider id refers to the Claude CLI backend. */
 export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
 }
@@ -123,17 +111,19 @@ export function resolveClaudeCliThinkingEnv(
   }
 }
 
-/** Return whether the startup-probed Claude Code build supports the cache-control flag. */
+/** Parse only stable versions; prereleases do not establish native feature support. */
+export function parseClaudeCodeVersion(versionOutput: string | undefined): string | undefined {
+  return versionOutput?.match(/(?:^|\s)(\d+\.\d+\.\d+)(?=$|\s)/u)?.[1];
+}
+
 export function supportsClaudeDynamicSystemPromptSections(
   versionOutput: string | undefined,
 ): boolean {
-  // Only stable version tokens prove flag support. A prerelease suffix could
-  // predate the stable release and turn every local invocation into an argv error.
-  const match = versionOutput?.match(/(?:^|\D)(\d+)\.(\d+)\.(\d+)(?=$|\s)/u);
-  if (!match) {
+  const parsed = parseClaudeCodeVersion(versionOutput);
+  if (!parsed) {
     return false;
   }
-  const version = match.slice(1).map(Number);
+  const version = parsed.split(".").map(Number);
   const minimum =
     CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_MINIMUM_VERSION.split(".").map(Number);
   for (const [index, component] of version.entries()) {
@@ -220,7 +210,6 @@ function normalizeClaudeBackendArgs(
   return normalized;
 }
 
-/** Resolve whether a run preserves, removes, or sets a Claude CLI effort override. */
 function resolveClaudeCliEffortArgAction(
   thinkingLevel?: string | null,
   modelId?: string,
@@ -461,7 +450,6 @@ function resolveClaudeCliRestrictedExecutionArgs(
   return normalized;
 }
 
-/** Resolve final Claude CLI execution args for one backend invocation. */
 export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
   options: { excludeDynamicSystemPromptSections?: boolean } = {},
@@ -490,7 +478,6 @@ export function resolveClaudeCliExecutionArgs(
     : resolvedArgs;
 }
 
-/** Normalize Claude CLI backend config before registration or execution. */
 export function normalizeClaudeBackendConfig(
   config: CliBackendConfig,
   context?: CliBackendNormalizeConfigContext,

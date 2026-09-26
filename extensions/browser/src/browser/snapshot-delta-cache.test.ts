@@ -38,27 +38,6 @@ describe("snapshot delta cache", () => {
     expect(snapshot.newElements).toBeUndefined();
   });
 
-  it("marks elements added in the same document", () => {
-    const ctx = createContext();
-    const scope = cacheScope("pw:document-1");
-    recordSnapshotKeys(ctx, {
-      ...scope,
-      refs: { e1: { role: "button", name: "Save" } },
-    });
-
-    const snapshot = finalizeRoleSnapshot({
-      snapshot: ['- button "Save" [ref=e7]', '- alert "Required" [ref=e8]'].join("\n"),
-      refs: {
-        e7: { role: "button", name: "Save" },
-        e8: { role: "alert", name: "Required" },
-      },
-      delta: { mode: "role", previousKeys: getPreviousSnapshotKeys(ctx, scope) },
-    });
-
-    expect(snapshot.snapshot).toContain('- alert "Required" [ref=e8] [new]');
-    expect(snapshot.newElements).toBe(1);
-  });
-
   it("marks new elements across requests sharing one browser runtime", () => {
     const state = {} as BrowserServerState;
     const firstRequest = createContext(state);

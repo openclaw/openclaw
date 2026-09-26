@@ -1,14 +1,20 @@
 // Covers task status snapshots and user-facing task status formatting.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   buildTaskStatusSnapshot,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
-  sanitizeTaskStatusText,
 } from "./task-status.js";
 
 const NOW = 1_000_000_000_000;
+const INTERNAL_CONTEXT = [
+  "OpenClaw runtime context (internal):",
+  "This context is runtime-generated, not user-authored. Keep internal details private.",
+  "",
+  "[Internal task completion event]",
+  "source: subagent",
+].join("\n");
 
 function makeTask(overrides: Partial<TaskRecord>): TaskRecord {
   return {
@@ -28,6 +34,91 @@ function makeTask(overrides: Partial<TaskRecord>): TaskRecord {
 }
 
 describe("task status snapshot", () => {
+  it("partitions in input order without replacing task references", () => {
+    const success = makeTask({ taskId: "success", status: "succeeded", endedAt: NOW - 100 });
+    const running = makeTask({ taskId: "running", createdAt: NOW - 600_000 });
+    const blocked = makeTask({
+      taskId: "blocked",
+      status: "succeeded",
+      terminalOutcome: "blocked",
+      endedAt: NOW - 200,
+    });
+    const expired = makeTask({ taskId: "expired", cleanupAfter: NOW });
+    const queued = makeTask({ taskId: "queued", status: "queued" });
+    const failed = makeTask({ taskId: "failed", status: "failed", endedAt: NOW - 300 });
+    const tasks = [success, running, blocked, expired, queued, failed];
+    const snapshot = buildTaskStatusSnapshot(tasks, { now: NOW });
+
+    expect(snapshot.active).toEqual([running, queued]);
+    expect(snapshot.recentTerminal).toEqual([success, blocked, failed]);
+    const visible = [running, queued, success, blocked, failed];
+    expect(snapshot.visible).toHaveLength(visible.length);
+    snapshot.visible.forEach((task, index) => expect(task).toBe(visible[index]));
+    expect(snapshot.latest).toBe(running);
+    expect(snapshot.focus).toBe(running);
+    expect(snapshot).toMatchObject({ activeCount: 2, totalCount: 5, recentFailureCount: 2 });
+    expect(tasks).toEqual([success, running, blocked, expired, queued, failed]);
+
+    const terminalOnly = buildTaskStatusSnapshot([success, blocked, failed], { now: NOW });
+    expect(terminalOnly.visible).toBe(terminalOnly.recentTerminal);
+    expect(terminalOnly.latest).toBe(success);
+    expect(terminalOnly.focus).toBe(blocked);
+    expect(terminalOnly.recentFailureCount).toBe(2);
+  });
+
+  it.each<{ label: string; timestamps: Partial<TaskRecord>; visible: boolean }>([
+    { label: "inclusive terminal window", timestamps: { endedAt: NOW - 300_000 }, visible: true },
+    {
+      label: "end precedes newer event",
+      timestamps: { endedAt: NOW - 300_001, lastEventAt: NOW },
+      visible: false,
+    },
+    {
+      label: "event precedes newer start",
+      timestamps: { lastEventAt: NOW - 300_001, startedAt: NOW },
+      visible: false,
+    },
+    {
+      label: "start precedes newer creation",
+      timestamps: { startedAt: NOW - 300_001, createdAt: NOW },
+      visible: false,
+    },
+    { label: "creation fallback", timestamps: { createdAt: NOW - 300_000 }, visible: true },
+    { label: "future completion", timestamps: { endedAt: NOW + 1 }, visible: true },
+    {
+      label: "zero completion is not missing",
+      timestamps: { endedAt: 0, lastEventAt: NOW },
+      visible: false,
+    },
+    { label: "inclusive expiry", timestamps: { endedAt: NOW, cleanupAfter: NOW }, visible: false },
+    {
+      label: "not yet expired",
+      timestamps: { endedAt: NOW, cleanupAfter: NOW + 1 },
+      visible: true,
+    },
+  ])("preserves $label", ({ timestamps, visible }) => {
+    const task = makeTask({ status: "succeeded", ...timestamps });
+    const snapshot = buildTaskStatusSnapshot([task], { now: NOW });
+    expect(snapshot.visible).toEqual(visible ? [task] : []);
+    expect(snapshot.visible).toBe(snapshot.recentTerminal);
+    expect(snapshot.latest).toBe(visible ? task : undefined);
+    expect(snapshot.focus).toBe(visible ? task : undefined);
+  });
+
+  it("uses one captured time for all rows when now is omitted", () => {
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(NOW)
+      .mockReturnValue(NOW + 2);
+    try {
+      const tasks = [makeTask({ cleanupAfter: NOW + 1 }), makeTask({ cleanupAfter: NOW + 1 })];
+      expect(buildTaskStatusSnapshot(tasks).activeCount).toBe(2);
+      expect(clock).toHaveBeenCalledTimes(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("keeps old active tasks active without maintenance reconciliation", () => {
     const staleButActive = makeTask({
       createdAt: NOW - 10 * 60_000,
@@ -98,13 +189,7 @@ describe("task status formatting", () => {
   it("strips leaked internal runtime context from task details", () => {
     const task = makeTask({
       status: "failed",
-      error: [
-        "OpenClaw runtime context (internal):",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        "[Internal task completion event]",
-        "source: subagent",
-      ].join("\n"),
+      error: INTERNAL_CONTEXT,
     });
 
     expect(formatTaskStatusDetail(task)).toBeUndefined();
@@ -112,13 +197,7 @@ describe("task status formatting", () => {
 
   it("sanitizes task titles before truncation", () => {
     const task = makeTask({
-      task: [
-        "OpenClaw runtime context (internal):",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        "[Internal task completion event]",
-        "source: subagent",
-      ].join("\n"),
+      task: INTERNAL_CONTEXT,
     });
 
     expect(formatTaskStatusTitle(task)).toBe("Background task");
@@ -127,13 +206,7 @@ describe("task status formatting", () => {
   it("falls back to sanitized terminal summary when the error strips empty", () => {
     const task = makeTask({
       status: "failed",
-      error: [
-        "OpenClaw runtime context (internal):",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        "[Internal task completion event]",
-        "source: subagent",
-      ].join("\n"),
+      error: INTERNAL_CONTEXT,
       terminalSummary: "Needs login approval.",
     });
 
@@ -148,19 +221,5 @@ describe("task status formatting", () => {
     });
 
     expect(formatTaskStatusDetail(task)).toBe("Command did not run: approval timed out.");
-  });
-
-  it("sanitizes free-form task status text for reuse in other surfaces", () => {
-    expect(
-      sanitizeTaskStatusText(
-        [
-          "OpenClaw runtime context (internal):",
-          "This context is runtime-generated, not user-authored. Keep internal details private.",
-          "",
-          "[Internal task completion event]",
-          "source: subagent",
-        ].join("\n"),
-      ),
-    ).toBe("");
   });
 });

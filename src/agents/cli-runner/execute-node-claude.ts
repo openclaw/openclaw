@@ -8,7 +8,7 @@ import type {
   registerExecApprovalRequestForHostOrThrow,
   resolveRegisteredExecApprovalDecision,
 } from "../bash-tools.exec-approval-request.js";
-import { createCliRunCurrentAssertion } from "./execution-target.js";
+import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const NODE_CLI_MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
@@ -187,17 +187,14 @@ export async function executeNodeClaudeRun(params: {
   if (contextParams.abortSignal?.aborted) {
     abortNodeRun();
   }
-  const replyBackendHandle = contextParams.replyOperation
-    ? {
-        kind: "cli" as const,
-        runId: contextParams.runId,
-        toolAuthorityFingerprint: contextParams.toolAuthorityFingerprint,
-        cancel: abortNodeRun,
-      }
-    : undefined;
-  if (replyBackendHandle) {
-    contextParams.replyOperation?.attachBackend(replyBackendHandle);
-  }
+  const detachReplyBackend = attachCliReplyBackend(contextParams, abortNodeRun);
+  const hardTimeoutResult = () => ({
+    ok: false,
+    error: {
+      code: "TIMEOUT",
+      message: "paired-node Claude CLI invocation exceeded its hard timeout",
+    },
+  });
   let nodeResult: Awaited<ReturnType<typeof invokeNodeClaudeCliRun>>;
   let skillRuntime: Awaited<ReturnType<typeof prepareNodeClaudeSkillRuntime>>;
   try {
@@ -211,13 +208,7 @@ export async function executeNodeClaudeRun(params: {
       if (remainingTimeoutMs <= 0) {
         hardDeadlineReached = true;
         nodeAbortController.abort();
-        return {
-          ok: false,
-          error: {
-            code: "TIMEOUT",
-            message: "paired-node Claude CLI invocation exceeded its hard timeout",
-          },
-        };
+        return hardTimeoutResult();
       }
       assertCurrent();
       return await params.deps.invokeNodeClaudeCliRun({
@@ -295,58 +286,31 @@ export async function executeNodeClaudeRun(params: {
     if (!hardDeadlineReached) {
       throw error;
     }
-    nodeResult = {
-      ok: false,
-      error: {
-        code: "TIMEOUT",
-        message: "paired-node Claude CLI invocation exceeded its hard timeout",
-      },
-    };
+    nodeResult = hardTimeoutResult();
   } finally {
     if (skillRuntime?.signal.aborted) {
       nodeAbortController.abort();
     }
     skillRuntime?.close();
     clearTimeout(hardDeadlineTimer);
-    if (replyBackendHandle) {
-      contextParams.replyOperation?.detachBackend(replyBackendHandle);
-    }
+    detachReplyBackend?.();
     contextParams.abortSignal?.removeEventListener("abort", abortNodeRun);
   }
   if (hardDeadlineReached) {
-    nodeResult = {
-      ok: false,
-      error: {
-        code: "TIMEOUT",
-        message: "paired-node Claude CLI invocation exceeded its hard timeout",
-      },
-    };
+    nodeResult = hardTimeoutResult();
   }
-  if (!nodeResult.ok) {
-    const code = nodeResult.error?.code;
-    const timedOut = code === "TIMEOUT" || code === "IDLE_TIMEOUT";
-    const result: RunExit = {
-      reason:
-        code === "IDLE_TIMEOUT"
-          ? "no-output-timeout"
-          : code === "TIMEOUT"
-            ? "overall-timeout"
-            : code === "ABORTED"
-              ? "manual-cancel"
-              : "exit",
-      exitCode: timedOut || code === "ABORTED" ? null : 1,
-      exitSignal: null,
-      durationMs: Date.now() - startedAt,
-      stdout: "",
-      stderr: nodeResult.error?.message ?? "paired-node Claude CLI invocation failed",
-      timedOut,
-      noOutputTimedOut: code === "IDLE_TIMEOUT",
-    };
-    params.consumeStderr(result.stderr);
-    return { result, nodeRunAbortSignal, nodeRunTruncated: false };
-  }
-  const payload = parseNodeClaudeResultPayload(nodeResult);
-  if (payload.stderrTail) {
+  const errorCode = nodeResult.ok ? undefined : nodeResult.error?.code;
+  const failureDurationMs = nodeResult.ok ? undefined : Date.now() - startedAt;
+  const payload = nodeResult.ok
+    ? parseNodeClaudeResultPayload(nodeResult)
+    : {
+        exitCode: 1,
+        stderrTail: nodeResult.error?.message ?? "paired-node Claude CLI invocation failed",
+        truncated: false,
+        timeoutKind:
+          errorCode === "IDLE_TIMEOUT" ? "idle" : errorCode === "TIMEOUT" ? "hard" : undefined,
+      };
+  if (!nodeResult.ok || payload.stderrTail) {
     params.consumeStderr(payload.stderrTail);
   }
   const result: RunExit = {
@@ -355,10 +319,12 @@ export async function executeNodeClaudeRun(params: {
         ? "no-output-timeout"
         : payload.timeoutKind === "hard"
           ? "overall-timeout"
-          : "exit",
-    exitCode: payload.timeoutKind ? null : payload.exitCode,
+          : errorCode === "ABORTED"
+            ? "manual-cancel"
+            : "exit",
+    exitCode: payload.timeoutKind || errorCode === "ABORTED" ? null : payload.exitCode,
     exitSignal: null,
-    durationMs: Date.now() - startedAt,
+    durationMs: failureDurationMs ?? Date.now() - startedAt,
     stdout: "",
     stderr: payload.stderrTail,
     timedOut: payload.timeoutKind !== undefined,

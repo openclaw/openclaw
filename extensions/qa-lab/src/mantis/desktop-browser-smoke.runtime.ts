@@ -1,25 +1,26 @@
-// Qa Lab plugin module implements desktop browser smoke behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
-import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+import { trimToValue } from "../mantis-options.runtime.js";
 import {
   copyCrabboxArtifacts,
   type CommandRunner,
   defaultCommandRunner,
-  inspectCrabbox,
+  createMantisCrabboxSession,
   resolveCrabboxBin,
+  renderMantisBrowserDiscoveryScript,
+  renderMantisDesktopRecordingScript,
+  resolveMantisCrabboxLeaseOptions,
+  type MantisCrabboxLeaseOptions,
   runCommand,
   shellQuote,
-  stopCrabbox,
-  warmupCrabbox,
 } from "./crabbox-runtime.js";
 import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
 
-export type MantisDesktopBrowserSmokeOptions = {
+export type MantisDesktopBrowserSmokeOptions = MantisCrabboxLeaseOptions & {
   browserProfileArchiveEnv?: string;
   browserProfileDir?: string;
   browserUrl?: string;
@@ -27,15 +28,9 @@ export type MantisDesktopBrowserSmokeOptions = {
   crabboxBin?: string;
   env?: NodeJS.ProcessEnv;
   htmlFile?: string;
-  idleTimeout?: string;
-  keepLease?: boolean;
-  leaseId?: string;
-  machineClass?: string;
   now?: () => Date;
   outputDir?: string;
-  provider?: string;
   repoRoot?: string;
-  ttl?: string;
   videoDurationSeconds?: number;
 };
 
@@ -55,17 +50,7 @@ type MantisDesktopBrowserSmokeSummary = MantisCrabboxReportSummary & {
 };
 
 const DEFAULT_BROWSER_URL = "https://openclaw.ai";
-const DEFAULT_PROVIDER = "hetzner";
-const DEFAULT_CLASS = "beast";
-const DEFAULT_IDLE_TIMEOUT = "60m";
-const DEFAULT_TTL = "120m";
 const CRABBOX_BIN_ENV = "OPENCLAW_MANTIS_CRABBOX_BIN";
-const CRABBOX_PROVIDER_ENV = "OPENCLAW_MANTIS_CRABBOX_PROVIDER";
-const CRABBOX_CLASS_ENV = "OPENCLAW_MANTIS_CRABBOX_CLASS";
-const CRABBOX_LEASE_ID_ENV = "OPENCLAW_MANTIS_CRABBOX_LEASE_ID";
-const CRABBOX_KEEP_ENV = "OPENCLAW_MANTIS_KEEP_VM";
-const CRABBOX_IDLE_TIMEOUT_ENV = "OPENCLAW_MANTIS_CRABBOX_IDLE_TIMEOUT";
-const CRABBOX_TTL_ENV = "OPENCLAW_MANTIS_CRABBOX_TTL";
 const BROWSER_PROFILE_ARCHIVE_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64";
 const BROWSER_PROFILE_DIR_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_DIR";
 const DEFAULT_VIDEO_DURATION_SECONDS = 10;
@@ -153,35 +138,8 @@ if [ -n "$profile_archive_b64" ]; then
   rm -f "$profile_archive"
   profile_restored=true
 fi
-browser_bin=""
-for candidate in "\${BROWSER:-}" "\${CHROME_BIN:-}" google-chrome chromium chromium-browser; do
-  if [ -n "$candidate" ] && command -v "$candidate" >/dev/null 2>&1; then
-    browser_bin="$(command -v "$candidate")"
-    break
-  fi
-done
-if [ -z "$browser_bin" ]; then
-  echo "No browser binary found. Checked BROWSER, CHROME_BIN, google-chrome, chromium, chromium-browser." >&2
-  exit 127
-fi
-video_pid=""
-if command -v ffmpeg >/dev/null 2>&1; then
-  :
-else
-  sudo apt-get update -y >>"$out/apt.log" 2>&1 || true
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg >>"$out/apt.log" 2>&1 || true
-fi
-if command -v ffmpeg >/dev/null 2>&1; then
-  display_input="$DISPLAY"
-  case "$display_input" in
-    *.*) ;;
-    *) display_input="$display_input.0" ;;
-  esac
-  ffmpeg -hide_banner -loglevel error -y -f x11grab -framerate 15 -i "$display_input" -t ${videoDurationSeconds} -pix_fmt yuv420p "$out/desktop-browser-smoke.mp4" >"$out/ffmpeg.log" 2>&1 &
-  video_pid=$!
-else
-  echo "ffmpeg missing; video artifact skipped" >"$out/ffmpeg.log"
-fi
+${renderMantisBrowserDiscoveryScript()}
+${renderMantisDesktopRecordingScript("desktop-browser-smoke.mp4", videoDurationSeconds)}
 "$browser_bin" \
   --user-data-dir="$profile" \
   --no-first-run \
@@ -263,15 +221,14 @@ export async function runMantisDesktopBrowserSmoke(
     explicit: opts.crabboxBin,
     repoRoot,
   });
-  const provider =
-    trimToValue(opts.provider) ?? trimToValue(env[CRABBOX_PROVIDER_ENV]) ?? DEFAULT_PROVIDER;
-  const machineClass =
-    trimToValue(opts.machineClass) ?? trimToValue(env[CRABBOX_CLASS_ENV]) ?? DEFAULT_CLASS;
-  const idleTimeout =
-    trimToValue(opts.idleTimeout) ??
-    trimToValue(env[CRABBOX_IDLE_TIMEOUT_ENV]) ??
-    DEFAULT_IDLE_TIMEOUT;
-  const ttl = trimToValue(opts.ttl) ?? trimToValue(env[CRABBOX_TTL_ENV]) ?? DEFAULT_TTL;
+  const {
+    provider,
+    machineClass,
+    idleTimeout,
+    ttl,
+    leaseId: explicitLeaseId,
+    keepLease,
+  } = resolveMantisCrabboxLeaseOptions(opts, env);
   const htmlFileOption = trimToValue(opts.htmlFile);
   const htmlFile = htmlFileOption
     ? resolveRepoBoundFile(repoRoot, htmlFileOption, "Mantis desktop HTML file")
@@ -297,36 +254,22 @@ export async function runMantisDesktopBrowserSmoke(
     Math.floor(opts.videoDurationSeconds ?? DEFAULT_VIDEO_DURATION_SECONDS),
   );
   const runner = opts.commandRunner ?? defaultCommandRunner;
-  const explicitLeaseId = trimToValue(opts.leaseId) ?? trimToValue(env[CRABBOX_LEASE_ID_ENV]);
-  const keepLease = opts.keepLease ?? isTruthyOptIn(env[CRABBOX_KEEP_ENV]);
-  const createdLease = explicitLeaseId === undefined;
   const remoteOutputDir = `/tmp/openclaw-mantis-desktop-${startedAt
     .toISOString()
     .replace(/[^0-9A-Za-z]/gu, "-")}`;
-  let leaseId = explicitLeaseId;
+  const session = createMantisCrabboxSession({
+    crabboxBin,
+    cwd: repoRoot,
+    env,
+    leaseId: explicitLeaseId,
+    provider,
+    runner,
+  });
   let summary: MantisDesktopBrowserSmokeSummary | undefined;
 
   try {
-    leaseId =
-      leaseId ??
-      (await warmupCrabbox({
-        crabboxBin,
-        cwd: repoRoot,
-        env,
-        idleTimeout,
-        machineClass,
-        provider,
-        runner,
-        ttl,
-      }));
-    const inspected = await inspectCrabbox({
-      crabboxBin,
-      cwd: repoRoot,
-      env,
-      leaseId,
-      provider,
-      runner,
-    });
+    const leaseId = await session.acquire({ idleTimeout, machineClass, ttl });
+    const inspected = await session.inspect();
     await runCommand({
       command: crabboxBin,
       args: [
@@ -378,15 +321,7 @@ export async function runMantisDesktopBrowserSmoke(
       },
       browserUrl,
       htmlFile,
-      crabbox: {
-        bin: crabboxBin,
-        createdLease,
-        id: leaseId,
-        provider,
-        slug: inspected.slug,
-        state: inspected.state,
-        vncCommand: `${crabboxBin} vnc --provider ${provider} --id ${leaseId} --open`,
-      },
+      crabbox: session.describe(inspected),
       finishedAt: new Date().toISOString(),
       outputDir,
       remoteOutputDir,
@@ -409,15 +344,7 @@ export async function runMantisDesktopBrowserSmoke(
       },
       browserUrl,
       htmlFile,
-      crabbox: {
-        bin: crabboxBin,
-        createdLease,
-        id: leaseId ?? "unallocated",
-        provider,
-        vncCommand: leaseId
-          ? `${crabboxBin} vnc --provider ${provider} --id ${leaseId} --open`
-          : "unallocated",
-      },
+      crabbox: session.describe(),
       error: formatErrorMessage(error),
       finishedAt: new Date().toISOString(),
       outputDir,
@@ -438,8 +365,8 @@ export async function runMantisDesktopBrowserSmoke(
       await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
       await fs.writeFile(reportPath, renderReport(summary), "utf8");
     }
-    if (summary?.status === "pass" && createdLease && leaseId && !keepLease) {
-      await stopCrabbox({ crabboxBin, cwd: repoRoot, env, leaseId, provider, runner });
+    if (summary?.status === "pass" && session.createdLease && session.leaseId && !keepLease) {
+      await session.stop();
     }
   }
 }

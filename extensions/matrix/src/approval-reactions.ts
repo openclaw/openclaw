@@ -1,5 +1,4 @@
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-// Matrix plugin module implements approval reactions behavior.
 import { createApprovalReactionTargetStore } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -91,7 +90,9 @@ function readPersistedTarget(target: unknown): MatrixApprovalReactionTarget | nu
     !Array.isArray(value.allowedDecisions) ||
     !roomId ||
     !eventId ||
-    (value.approvalKind !== "exec" && value.approvalKind !== "plugin")
+    (value.approvalKind !== "exec" &&
+      value.approvalKind !== "plugin" &&
+      value.approvalKind !== "system-agent")
   ) {
     return null;
   }
@@ -194,7 +195,7 @@ function resolveMatrixApprovalReactionDecision(
   return null;
 }
 
-export function registerMatrixApprovalReactionTarget(params: {
+export async function registerMatrixApprovalReactionTarget(params: {
   accountId: string;
   roomId: string;
   eventId: string;
@@ -202,7 +203,7 @@ export function registerMatrixApprovalReactionTarget(params: {
   approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
-}): void {
+}): Promise<void> {
   const accountId = normalizeAccountId(params.accountId);
   const key = buildReactionTargetKey(accountId, params.roomId, params.eventId);
   const approvalId = params.approvalId.trim();
@@ -217,7 +218,9 @@ export function registerMatrixApprovalReactionTarget(params: {
   if (
     !key ||
     !approvalId ||
-    (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
+    (params.approvalKind !== "exec" &&
+      params.approvalKind !== "plugin" &&
+      params.approvalKind !== "system-agent") ||
     allowedDecisions.length === 0
   ) {
     return;
@@ -237,20 +240,20 @@ export function registerMatrixApprovalReactionTarget(params: {
     expiresAtMs: Date.now() + ttlMs,
   });
   pruneMatrixApprovalReactionTargetIndex();
-  matrixApprovalReactionTargets.register(key, target, { ttlMs });
+  await matrixApprovalReactionTargets.register(key, target, { ttlMs });
 }
 
-export function unregisterMatrixApprovalReactionTarget(params: {
+export async function unregisterMatrixApprovalReactionTarget(params: {
   accountId: string;
   roomId: string;
   eventId: string;
-}): void {
+}): Promise<void> {
   const key = buildReactionTargetKey(params.accountId, params.roomId, params.eventId);
   if (!key) {
     return;
   }
   matrixApprovalReactionTargetIndex.delete(key);
-  matrixApprovalReactionTargets.delete(key);
+  await matrixApprovalReactionTargets.delete(key);
 }
 
 /** Retires every Matrix reaction anchor bound to one canonical approval. */
@@ -297,10 +300,10 @@ export async function unregisterMatrixApprovalReactionTargetsForApproval(params:
     reportPersistentApprovalReactionError(error);
   }
 
-  const persistentDeletes: Promise<boolean>[] = [];
+  const persistentDeletes: Promise<void | boolean>[] = [];
   for (const [key] of matches) {
     matrixApprovalReactionTargetIndex.delete(key);
-    matrixApprovalReactionTargets.delete(key);
+    persistentDeletes.push(matrixApprovalReactionTargets.delete(key));
     if (persistentStore) {
       persistentDeletes.push(persistentStore.delete(key));
     }

@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { buildMentionConfig } from "./mentions.js";
-import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
+import { applyGroupGating } from "./monitor/group-gating.js";
+import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { buildInboundLine } from "./monitor/message-line.js";
 
@@ -199,13 +200,6 @@ function makeOwnerGroupConfig() {
       },
     },
   });
-}
-
-function makeInboundCfg(responsePrefix = "") {
-  return {
-    agents: { defaults: { workspace: "/tmp/openclaw" } },
-    channels: { whatsapp: { responsePrefix } },
-  } as never;
 }
 
 describe("WhatsApp listener diagnostics", () => {
@@ -772,8 +766,6 @@ describe("applyGroupGating", () => {
 describe("buildInboundLine", () => {
   it("prefixes group messages with sender", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createGroupMessage({
         admission: { accountId: "default" },
         body: "ping",
@@ -790,8 +782,6 @@ describe("buildInboundLine", () => {
 
   it("includes reply-to context blocks when replyToBody is present", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createDirectMessage({
         admission: {
           conversation: {
@@ -811,29 +801,8 @@ describe("buildInboundLine", () => {
     expect(line).toContain("[/Replying]");
   });
 
-  it("applies the WhatsApp responsePrefix when configured", () => {
-    const line = buildInboundLine({
-      cfg: makeInboundCfg("[PFX]"),
-      agentId: "main",
-      msg: createDirectMessage({
-        admission: {
-          conversation: {
-            id: "+1555",
-          },
-        },
-        body: "ping",
-        to: "+2666",
-      }),
-      envelope: { includeTimestamp: false },
-    });
-
-    expect(line).toContain("[PFX] ping");
-  });
-
   it("normalizes direct from labels by stripping whatsapp: prefix", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createDirectMessage({
         admission: {
           conversation: {
@@ -854,8 +823,6 @@ describe("buildInboundLine", () => {
 describe("buildInboundLine reply context", () => {
   it("omits reply context when replyToBody is missing", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createDirectMessage({ body: "ping" }),
       envelope: { includeTimestamp: false },
     });
@@ -864,8 +831,6 @@ describe("buildInboundLine reply context", () => {
 
   it("uses unknown sender label when reply sender is absent", () => {
     const line = buildInboundLine({
-      cfg: makeInboundCfg(""),
-      agentId: "main",
       msg: createDirectMessage({ body: "ping", replyToBody: "original" }),
       envelope: { includeTimestamp: false },
     });

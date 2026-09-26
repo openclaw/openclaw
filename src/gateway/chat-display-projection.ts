@@ -13,6 +13,6 @@ export {
 } from "./chat-display-projection.helpers.js";
 export {
   dropPreSessionStartAnnouncePairs,
-  isHeartbeatHistoryTurnBoundaryMessage,
+  isAssistantTtsSupplementMessage,
 } from "./chat-display-projection.history.js";
 export { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";

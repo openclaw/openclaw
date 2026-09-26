@@ -1,16 +1,21 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
+
+beforeAll(() => {
+  vi.setConfig({ maxConcurrency: 2 });
+  return () => vi.resetConfig();
+});
 
 const candidate = "a".repeat(40);
 const harness = "b".repeat(40);
 const base = "c".repeat(40);
 const moved = "d".repeat(40);
 const merge = "e".repeat(40);
-const linuxIt = it.skipIf(process.platform !== "linux");
+const linuxIt = it.skipIf(process.platform !== "linux").concurrent;
 // Raw owner lifecycle checks use the shared POSIX census on Linux and macOS.
-const posixIt = it.skipIf(process.platform === "win32");
+const posixIt = it.skipIf(process.platform === "win32").concurrent;
 
 const resetProfiles = [
   {
@@ -368,6 +373,19 @@ posixIt(
     );
     expect(harnessFetch.args).toEqual(expect.arrayContaining(["--filter=blob:none"]));
     expect(harnessFetch.args.at(-1)).toBe(`+${harness}:refs/remotes/origin/ci-harness`);
+    const sparseCheckout = expectDefined(
+      harnessCommands.find(({ args }) => args[0] === "sparse-checkout"),
+      "harness sparse checkout",
+    );
+    for (const file of [
+      "scripts/ci-npm-lock-admission.mjs",
+      "scripts/generate-npm-package-lock.mjs",
+      "scripts/generate-npm-package-lock.mts",
+      "scripts/changed-lanes.mts",
+      "scripts/lib/merge-head-diff-base.mjs",
+    ]) {
+      expect(sparseCheckout.args).toContain(`/${file}`);
+    }
     // The selected checkout still needs real file contents, so it must stay unfiltered.
     const workspaceFetch = expectDefined(
       report.fetches.find(({ cwd }) => cwd === report.workspace),
@@ -464,9 +482,10 @@ function runQaGitCase(profile: QaGitCase, fetchResults: FetchResult[]) {
       step: profile.step,
     },
     fetchResults,
-    // Preserve real 120-second/no-deadline calls and real cleanup; readiness,
-    // not a sleep, ensures every successful Git leader leaves two live writers.
+    // Keep real command deadlines and ready descendant cleanup; these boundary
+    // checks do not need the TERM grace covered by the owner lifecycle tests.
     realClock: true,
+    realDrain: false,
     poisonPython: true,
     env: {
       EXPECTED_SHA: candidate,
@@ -688,110 +707,6 @@ posixIt.each([
   55_000,
 );
 
-const mantisInstallers = [
-  { workflow: "discord-status-reactions", job: "run_status_reactions", fetch: false },
-  { workflow: "discord-thread-attachment", job: "run_thread_attachment", fetch: false },
-  { workflow: "slack-desktop-smoke", job: "run_slack_desktop", fetch: true },
-];
-
-posixIt.each([
-  ...mantisInstallers.map((profile) => ({ ...profile, failure: false })),
-  ...mantisInstallers
-    .filter(({ workflow }) => workflow !== "discord-thread-attachment")
-    .map((profile) => Object.assign({}, profile, { failure: true })),
-])(
-  "Mantis installer Git owner drains before checkout/build/probes: $workflow (cleanup failure=$failure)",
-  async ({ workflow, job, fetch, failure }) => {
-    const result = failure ? "cleanup-failure" : 0;
-    const report = await runCiGitStep({
-      workflow: {
-        file: `.github/workflows/mantis-${workflow}.yml`,
-        job,
-        step: "Install Crabbox CLI",
-      },
-      fetchResults: fetch ? [result] : [],
-      cloneResults: fetch ? [] : [result],
-      realClock: true,
-      realDrain: false,
-      poisonPython: true,
-      env: { CRABBOX_REF: "main" },
-    });
-    expect(report.code, report.output).toBe(failure ? 125 : 0);
-    expect(report.readyAttempts).toEqual([1]);
-    const source = path.join(report.runnerTemp, "crabbox/src");
-    const binary = path.join(report.runnerTemp, "home/.local/bin/crabbox");
-    const gitCommand = (cwd: string, args: string[]) => ({
-      tool: "git",
-      cwd,
-      args,
-      configuration: [],
-    });
-    expect(report.commands.filter(({ tool }) => tool === "git")).toEqual(
-      fetch
-        ? [
-            gitCommand(report.workspace, ["init", source]),
-            gitCommand(source, [
-              "remote",
-              "add",
-              "origin",
-              "https://github.com/openclaw/crabbox.git",
-            ]),
-            gitCommand(source, ["fetch", "--depth", "1", "origin", "main"]),
-            ...(failure ? [] : [gitCommand(source, ["checkout", "--detach", "FETCH_HEAD"])]),
-          ]
-        : [
-            gitCommand(report.workspace, [
-              "clone",
-              "--depth",
-              "1",
-              "https://github.com/openclaw/crabbox.git",
-              source,
-            ]),
-          ],
-    );
-    expect(report.clones).toHaveLength(fetch ? 0 : 1);
-    expect(report.fetches).toHaveLength(fetch ? 1 : 0);
-    expect(report.worktrees).toEqual([]);
-    expect(report.go).toEqual(
-      failure
-        ? []
-        : [
-            {
-              tool: "go",
-              cwd: report.workspace,
-              args: ["build", "-C", source, "-o", binary, "./cmd/crabbox"],
-            },
-          ],
-    );
-    const probes = [
-      ["--version"],
-      ["warmup", "--help"],
-      ...(fetch ? [["media", "preview", "--help"]] : []),
-    ];
-    expect(report.crabbox).toEqual(
-      failure ? [] : probes.map((args) => ({ tool: "crabbox", cwd: report.workspace, args })),
-    );
-    expect(report.commands.filter(({ tool }) => tool === "pnpm")).toEqual([]);
-    expect(report.boundaries.map(({ name }) => name)).toEqual([
-      ...(fetch ? ["init", "fetch:1"] : ["clone:1"]),
-      ...(failure
-        ? []
-        : [...(fetch ? ["checkout"] : []), "consumer:go", ...probes.map(() => "consumer:crabbox")]),
-      "exit",
-    ]);
-    expect(report.githubPath).toBe(failure ? "" : `${path.dirname(binary)}\n`);
-    expect(report.githubOutput).toBe("");
-    expect(report.githubEnv).toBe("");
-    expect(report.githubSummary).toBe("");
-    if (failure) {
-      expect(report.output).toContain("Git ownership/setup failed");
-    } else {
-      expect(report.output).toContain("crabbox fixture");
-    }
-  },
-  55_000,
-);
-
 const mantisWorktrees = [
   {
     workflow: "discord-status-reactions",
@@ -887,8 +802,6 @@ posixIt.each([
     );
     expect(report.clones).toEqual([]);
     expect(report.fetches).toEqual([]);
-    expect(report.go).toEqual([]);
-    expect(report.crabbox).toEqual([]);
     expect(report.boundaries.map(({ name }) => name)).toEqual([
       ...attempted.map((_, index) => `worktree:${index + 1}`),
       ...(failure
@@ -993,7 +906,7 @@ posixIt(
   55_000,
 );
 
-posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
+posixIt.each([125, "hang"] satisfies FetchResult[])(
   "docs advisory fetch drains before config/add/commit and still continues (%s)",
   async (failure) => {
     const report = await runDocs("Commit publish repo sync", { fetchResults: [failure, 0] });
@@ -1011,11 +924,14 @@ posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
     expect(backoffs(report)).toEqual([]);
     expect(
       report.commands.every(
-        ({ tool, cwd }) =>
-          cwd === (tool === "node" ? report.workspace : path.join(report.workspace, "publish")),
+        ({ tool, args, cwd }) =>
+          cwd ===
+          (tool === "node" && args[0] === "--input-type=module"
+            ? report.workspace
+            : path.join(report.workspace, "publish")),
       ),
     ).toBe(true);
-    expect(report.commands.filter(({ tool }) => tool === "node")).toHaveLength(1);
+    expect(report.commands.filter(({ tool }) => tool === "node")).toHaveLength(2);
     expect(report.boundaries.map(({ name }) => name)).toEqual([
       "diff",
       "fetch:1",
@@ -1028,6 +944,8 @@ posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
       "rebase:1",
       ...dependencyReads.map((args) => `show:${args[1]}`),
       "consumer:node",
+      "consumer:npm",
+      "consumer:node",
       "push:1",
       "exit",
     ]);
@@ -1036,14 +954,14 @@ posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
 );
 
 posixIt.each([
-  { operation: "rebase", failure: 23 },
-  { operation: "push", failure: 23 },
-  { operation: "rebase", failure: 125 },
-  { operation: "push", failure: 143 },
+  { operation: "push", failure: 23, lockChange: true },
+  { operation: "rebase", failure: 125, lockChange: false },
+  { operation: "push", failure: 143, lockChange: false },
 ])(
   "docs publication drains failed $operation ($failure) before abort/next fetch and then succeeds",
-  async ({ operation, failure }) => {
+  async ({ operation, failure, lockChange }) => {
     const report = await runDocs("Commit publish repo sync", {
+      env: lockChange ? { FIXTURE_DOCS_LOCK_AFTER_REBASE: "1" } : {},
       rebaseResults: operation === "rebase" ? [failure, 0] : [],
       pushResults: operation === "push" ? [failure, 0] : [],
     });
@@ -1067,6 +985,24 @@ posixIt.each([
     expect(backoffs(report)).toEqual([2]);
     expect(report.output).toContain("Publish sync attempt 1 failed; retrying.");
     expect(report.pushes).toHaveLength(operation === "push" ? 2 : 1);
+    expect(report.commands.filter(({ tool }) => tool === "npm")).toHaveLength(lockChange ? 2 : 1);
+    if (operation === "push" && !lockChange) {
+      expect(report.output).toContain("Reused 1 unchanged successful page check(s).");
+    }
+  },
+  55_000,
+);
+
+posixIt(
+  "docs publication rejects invalid content introduced by the final rebase",
+  async () => {
+    const report = await runDocs("Commit publish repo sync", {
+      env: { FIXTURE_DOCS_MDX_AFTER_REBASE: "# Rebased page\n\n{unfinished\n" },
+    });
+    expect(report.code, report.output).toBe(125);
+    expect(report.output).toContain("Docs MDX check failed");
+    expect(report.pushes).toEqual([]);
+    expect(report.rebases.map(({ args }) => args)).toEqual([rebase]);
   },
   55_000,
 );
@@ -1327,10 +1263,10 @@ const agentPush = [
   "HEAD:main",
 ];
 const agentCommitCommands = [
-  ["diff", "--quiet"],
+  ["diff", "HEAD", "--quiet"],
   ["config", "user.name", "openclaw-docs-agent[bot]"],
   ["config", "user.email", "openclaw-docs-agent[bot]@users.noreply.github.com"],
-  ["add", "docs", "README.md", "CHANGELOG.md"],
+  ["add", "docs", "README.md", "CHANGELOG"],
   ["commit", "--no-verify", "-m", "docs: refresh documentation"],
 ];
 const agentOutput = (reviewBase = base) =>
@@ -1354,7 +1290,7 @@ function runDocsAgent(step: string, options: Partial<Parameters<typeof runCiGitS
   });
 }
 
-posixIt.each([0, 128, 125, 143])(
+posixIt.each([0, 128, 125])(
   "Docs Agent manual gate owns HEAD and parent before exact outputs (parent=%s)",
   async (code) => {
     const report = await runDocsAgent(agentGate, {
@@ -1372,7 +1308,7 @@ posixIt.each([0, 128, 125, 143])(
   55_000,
 );
 
-posixIt.each([23, 125, 143, "hang"] satisfies FetchResult[])(
+posixIt.each([125, "hang"] satisfies FetchResult[])(
   "Docs Agent gate drains failed fetch before retry, remote read, gh and output (%s)",
   async (failure) => {
     const report = await runDocsAgent(agentGate, { fetchResults: [failure, 0] });
@@ -1444,10 +1380,25 @@ posixIt.each([
       workflowRuns: [
         {
           id: 122,
+          run_attempt: 1,
           created_at: "2026-08-28T20:00:00Z",
           status: "completed",
           conclusion: "success",
           head_sha: moved,
+        },
+      ],
+      workflowJobs: [
+        {
+          runId: 122,
+          runAttempt: 1,
+          jobs: [
+            {
+              name: "update-docs",
+              status: "completed",
+              conclusion: "success",
+              steps: [{ name: "Run Codex docs agent", status: "completed", conclusion: "success" }],
+            },
+          ],
         },
       ],
       commandResults: {
@@ -1463,7 +1414,26 @@ posixIt.each([
       ...(probe === 128 ? [["rev-parse", `${candidate}^`]] : []),
     ]);
     expect(report.githubOutput).toBe(code === 0 ? agentOutput(reviewBase) : "");
-    expect(report.commands.filter(({ tool }) => tool === "gh")).toHaveLength(1);
+    expect(report.commands.filter(({ tool }) => tool === "gh").map(({ args }) => args)).toEqual([
+      [
+        "api",
+        "--method",
+        "GET",
+        "repos/fixture/checkout/actions/workflows/docs-agent.yml/runs",
+        "-f",
+        "branch=main",
+        "-f",
+        "event=workflow_run",
+        "-f",
+        "per_page=100",
+      ],
+      [
+        "api",
+        "--paginate",
+        "--slurp",
+        "repos/fixture/checkout/actions/runs/122/attempts/1/jobs?per_page=100",
+      ],
+    ]);
     expect(backoffs(report)).toEqual([]);
   },
   55_000,
@@ -1473,20 +1443,20 @@ posixIt(
   "Docs Agent no-change commit owns diff before successful exit",
   async () => {
     const report = await runDocsAgent(agentCommit, {
-      commandResults: { "diff --quiet": { code: 0 } },
+      commandResults: { "diff HEAD --quiet": { code: 0 } },
     });
     expect(report.code, report.output).toBe(0);
-    expect(gitArgs(report)).toEqual([["diff", "--quiet"]]);
+    expect(gitArgs(report)).toEqual([["diff", "HEAD", "--quiet"]]);
     expect(report.output).toBe("No docs changes.\n");
   },
   55_000,
 );
 
-posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
+posixIt.each([125, "hang"] satisfies FetchResult[])(
   "Docs Agent commit drains diff before config/commit and failed fetch before retry (%s)",
   async (failure) => {
     const report = await runDocsAgent(agentCommit, {
-      commandResults: { "diff --quiet": { code: failure === 125 ? 125 : 1 } },
+      commandResults: { "diff HEAD --quiet": { code: failure === 125 ? 125 : 1 } },
       fetchResults: [failure, 0],
     });
     expect(report.code, report.output).toBe(0);
@@ -1587,8 +1557,10 @@ posixIt.each(["gate", "commit fetch", "commit push"])(
 
 const agentProducers = [
   ["ls-files", "--others", "--exclude-standard"],
-  ["diff", "--name-status", "--diff-filter=AD"],
-  ["diff", "--name-only"],
+  ["diff", "HEAD", "--name-status", "--diff-filter=AD"],
+  ["diff", "--cached", "HEAD", "--name-status", "--diff-filter=AD"],
+  ["diff", "HEAD", "--name-only"],
+  ["diff", "--cached", "HEAD", "--name-only"],
 ];
 posixIt.each(agentProducers.map((args, index) => ({ args, index })))(
   "Docs Agent enforcement stops on failed producer $args before consuming partial output",

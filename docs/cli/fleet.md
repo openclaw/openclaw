@@ -149,6 +149,11 @@ openclaw fleet status acme
 openclaw fleet status acme --json
 ```
 
+Human-readable status includes `Runtime: docker` or `Runtime: podman` from the cell's
+recorded runtime. This identifies the container engine selected for the cell, not
+whether that engine is currently available. JSON output retains the existing
+`runtime` field.
+
 Status combines the fleet registry row, live container inspection, and a short best-effort request to:
 
 ```text
@@ -164,11 +169,14 @@ Stream a cell's container logs directly to the terminal:
 ```bash
 openclaw fleet logs acme
 openclaw fleet logs acme --follow
+openclaw fleet logs acme --timestamps
 openclaw fleet logs acme --tail 200
 openclaw fleet logs acme --since 10m
 ```
 
 Fleet verifies the registered container's ownership labels before reading any logs, so it refuses a foreign container using the expected cell name. The stream is pinned to that inspected container ID, so a concurrent replacement cannot redirect it to a newer generation. Press Ctrl-C to end `--follow` without treating the operator stop as a command failure. Log output is piped through a redaction filter that replaces the cell's current Gateway token with `<redacted>` before anything reaches the terminal.
+
+Use `--timestamps` to include Docker or Podman timestamps in the raw stream. It can be combined with `--follow`, `--tail`, and `--since`.
 
 `fleet logs` has no `--json` mode because container logs are a raw stdout/stderr stream. For scripts, bound the output with `--tail` and use ordinary shell redirection or pipelines.
 
@@ -182,7 +190,7 @@ openclaw fleet stop acme
 openclaw fleet restart acme
 ```
 
-These commands operate on the registered container name. They fail if the tenant is unknown or the recorded runtime cannot perform the operation.
+These commands resolve the registered container name, verify ownership, and act on that inspected container's ID. They fail if the tenant is unknown or the recorded runtime cannot perform the operation.
 
 ## `fleet upgrade`
 

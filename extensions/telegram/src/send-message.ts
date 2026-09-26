@@ -5,9 +5,16 @@ import {
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import {
+  buildOutboundMediaLoadOptions,
+  getImageMetadata,
+  probeVideoDimensions,
+} from "openclaw/plugin-sdk/media-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { telegramCaptionDeliveryMetadata } from "./caption.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -40,13 +47,6 @@ import {
   reportTelegramProviderDelivery,
 } from "./send-outbound.js";
 import { createTelegramPreparedSender, type TelegramPreparedSendPart } from "./send-prepared.js";
-import {
-  buildOutboundMediaLoadOptions,
-  getImageMetadata,
-  loadWebMedia,
-  probeVideoDimensions,
-  resolveMarkdownTableMode,
-} from "./send.runtime.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
@@ -296,7 +296,7 @@ export async function sendMessageTelegram(
         mediaPlan.deliveryKind !== "image" ||
         mediaPlan.isGif ||
         (await shouldSendTelegramImageAsPhoto(media.buffer));
-      const { sender: mediaSender, documentSender } = resolveTelegramOutboundMediaSenders<Message>({
+      const { sender: mediaSender, documentSender } = resolveTelegramOutboundMediaSenders({
         api,
         chatId,
         media,
@@ -437,7 +437,7 @@ export async function sendMessageTelegram(
             telegramHasInlineKeyboard: part.hasInlineKeyboard,
           };
           telegramCaptionDeliveryMetadata.add(meta);
-          recordSentMessage(chatId, part.messageId, cfg, {
+          await recordSentMessage(chatId, part.messageId, cfg, {
             accountId: account.accountId,
             agentId: ownerAgentId,
           });
@@ -466,10 +466,12 @@ export async function sendMessageTelegram(
             silent: opts.silent,
           });
         },
-        () => ({
-          receipt: buildMediaReceipt(),
-          visibleReplySent: true,
-        }),
+        {
+          partialDeliveryResult: () => ({
+            receipt: buildMediaReceipt(),
+            visibleReplySent: true,
+          }),
+        },
       );
       const mediaMessageId = resolveTelegramMessageIdOrThrow(lastMedia.result, "media send");
       const resolvedChatId = String(lastMedia.result.chat?.id ?? chatId);

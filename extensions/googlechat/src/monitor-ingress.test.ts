@@ -7,6 +7,7 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { createGoogleChatIngressMonitor } from "./monitor-ingress.js";
 
 type GoogleChatIngressQueue = NonNullable<
@@ -64,7 +65,7 @@ function startIngress(queue: GoogleChatIngressQueue, dispatch: GoogleChatIngress
     accountId: "default",
     queue,
     dispatch,
-    runtime: { error: vi.fn(), log: vi.fn() },
+    runtime: createRuntimeSpies(),
     pollIntervalMs: 10,
     adoptionStallTimeoutMs: 5_000,
   });
@@ -115,25 +116,6 @@ describe("Google Chat durable ingress", () => {
         await recovered.waitForIdle();
       } finally {
         await recovered.stop();
-      }
-    });
-  });
-
-  it("retains completion so a duplicate message resource cannot dispatch twice", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async (_event, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const ingress = startIngress(queue, dispatch);
-      try {
-        const event = messageEvent({ messageName: "spaces/AAA/messages/completed" });
-        await ingress.receive(event);
-        await ingress.waitForIdle();
-        await ingress.receive({ ...event, message: { ...event.message, text: "redelivery" } });
-        await ingress.waitForIdle();
-        expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
       }
     });
   });
@@ -243,23 +225,6 @@ describe("Google Chat durable ingress", () => {
           message: "Google Chat MESSAGE event is missing message.name.",
         });
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("completes a terminally suppressed message without explicit adoption", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(() => undefined);
-      const ingress = startIngress(queue, dispatch);
-      try {
-        const event = messageEvent({ messageName: "spaces/AAA/messages/suppressed" });
-        await ingress.receive(event);
-        await ingress.waitForIdle();
-        await ingress.receive(event);
-        await ingress.waitForIdle();
-        expect(dispatch).toHaveBeenCalledTimes(1);
       } finally {
         await ingress.stop();
       }

@@ -1,4 +1,3 @@
-// Memory Core tests cover deleted-file cleanup after same-file legacy migration.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,13 +8,16 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "./test-runtime-mocks.js";
-import { closeAllMemoryIndexManagers, MemoryIndexManager } from "./manager.js";
+import { closeAllMemoryIndexManagers } from "./manager-runtime.js";
+import { MemoryIndexManager } from "./manager.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
@@ -35,7 +37,9 @@ describe("memory legacy migration cleanup", () => {
     await manager?.close();
     manager = undefined;
     await closeAllMemoryIndexManagers();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     if (originalStateDir === undefined) {
       Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
@@ -60,25 +64,14 @@ describe("memory legacy migration cleanup", () => {
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES (
           'chunk-canonical', 'memory/deleted.md', 'memory', 1, 2, 'canonical-chunk-hash',
-          'fts-only', 'obsolete saffronquasar', '[]', 200
+          'fts-only', 'obsolete saffronquasar', x'', 200
         );
         INSERT INTO memory_index_chunks
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
         VALUES (
           'chunk-ownerless', 'memory/ownerless.md', 'memory', 1, 2, 'ownerless-chunk-hash',
-          'fts-only', 'obsolete ambercomet', '[]', 190
+          'fts-only', 'obsolete ambercomet', x'', 190
         );
-        INSERT INTO memory_index_chunks_fts
-          (text, id, path, source, model, start_line, end_line)
-        VALUES
-          (
-            'obsolete saffronquasar', 'chunk-canonical', 'memory/deleted.md',
-            'memory', 'fts-only', 1, 2
-          ),
-          (
-            'obsolete ambercomet', 'chunk-ownerless', 'memory/ownerless.md',
-            'memory', 'fts-only', 1, 2
-          );
         CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
           id TEXT PRIMARY KEY,
           embedding FLOAT[3]
@@ -120,37 +113,22 @@ describe("memory legacy migration cleanup", () => {
       count: 2,
     });
 
-    const createConfig = (params: {
-      extensionPath?: string;
-      provider: "none" | "openai";
-      vectorEnabled: boolean;
-    }) =>
-      ({
-        memory: {
-          backend: "builtin",
-          search: {
-            provider: params.provider,
-            model: params.provider === "none" ? "" : "text-embedding-3-small",
-            rememberAcrossConversations: false,
-            sources: ["memory"],
-            store: {
-              vector: {
-                enabled: params.vectorEnabled,
-                ...(params.extensionPath ? { extensionPath: params.extensionPath } : {}),
-              },
-            },
-            cache: { enabled: false },
-            query: { hybrid: { enabled: true } },
-          },
+    const cfg: OpenClawConfig = {
+      memory: {
+        search: {
+          provider: "none",
+          model: "",
+          rememberAcrossConversations: false,
+          sources: ["memory"],
+          store: { vector: { enabled: false } },
+          cache: { enabled: false },
         },
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-          list: [{ id: "main", default: true }],
-        },
-      }) as OpenClawConfig;
-    const cfg = createConfig({ provider: "none", vectorEnabled: false });
+      },
+      agents: {
+        defaults: { workspace: workspaceDir },
+        list: [{ id: "main", default: true }],
+      },
+    };
     const result = await MemoryIndexManager.get({ cfg, agentId: "main" });
     if (!result) {
       throw new Error("memory manager missing");
@@ -160,27 +138,17 @@ describe("memory legacy migration cleanup", () => {
     expect(Reflect.get(manager, "sessionsFullRetryDirty")).toBe(false);
 
     const db = Reflect.get(manager, "db") as DatabaseSync;
+    const countRows = (table: string, sourcePath: string) =>
+      db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE path = ?`).get(sourcePath);
     expect(
       db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/deleted.md'").get(),
     ).toEqual({ hash: "" });
     expect(
       db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/ownerless.md'").get(),
     ).toEqual({ hash: "" });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE path = ?")
-        .get("memory/deleted.md"),
-    ).toEqual({ count: 1 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
-        .get("memory/deleted.md"),
-    ).toEqual({ count: 1 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
-        .get("memory/ownerless.md"),
-    ).toEqual({ count: 1 });
+    expect(countRows("memory_index_chunks", "memory/deleted.md")).toEqual({ count: 1 });
+    expect(countRows("memory_index_chunks_fts", "memory/deleted.md")).toEqual({ count: 1 });
+    expect(countRows("memory_index_chunks_fts", "memory/ownerless.md")).toEqual({ count: 1 });
 
     await (
       manager as unknown as {
@@ -188,36 +156,15 @@ describe("memory legacy migration cleanup", () => {
       }
     ).syncMemoryFiles({ needsFullReindex: false });
 
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_sources WHERE path = ?")
-        .get("memory/deleted.md"),
-    ).toEqual({ count: 0 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE path = ?")
-        .get("memory/deleted.md"),
-    ).toEqual({ count: 0 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
-        .get("memory/deleted.md"),
-    ).toEqual({ count: 0 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_sources WHERE path = ?")
-        .get("memory/ownerless.md"),
-    ).toEqual({ count: 0 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE path = ?")
-        .get("memory/ownerless.md"),
-    ).toEqual({ count: 0 });
-    expect(
-      db
-        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
-        .get("memory/ownerless.md"),
-    ).toEqual({ count: 0 });
+    for (const sourcePath of ["memory/deleted.md", "memory/ownerless.md"]) {
+      for (const table of [
+        "memory_index_sources",
+        "memory_index_chunks",
+        "memory_index_chunks_fts",
+      ]) {
+        expect(countRows(table, sourcePath), `${table}: ${sourcePath}`).toEqual({ count: 0 });
+      }
+    }
     // Cleanup ran while vectors were disabled. Keep the old table untouched and
     // persist a rebuild marker; one-sided orphan pruning would still miss vector
     // rows that should exist but were never written.

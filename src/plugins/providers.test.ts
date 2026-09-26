@@ -1,10 +1,11 @@
-// Covers provider plugin registration and runtime composition.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.js";
+import { makeEmptyPluginMetadataOwners } from "./current-plugin-metadata.test-support.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -20,6 +21,8 @@ type LoadPluginManifestRegistry =
 type LoadPluginMetadataSnapshot =
   typeof import("./plugin-metadata-snapshot.js").loadPluginMetadataSnapshot;
 type LoadPluginRegistrySnapshot = typeof import("./plugin-registry.js").loadPluginRegistrySnapshot;
+type LoadPluginRegistrySnapshotWithMetadata =
+  typeof import("./plugin-registry.js").loadPluginRegistrySnapshotWithMetadata;
 type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable;
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
@@ -30,6 +33,7 @@ const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_o
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
 const loadPluginMetadataSnapshotMock = vi.fn<LoadPluginMetadataSnapshot>();
 const loadPluginRegistrySnapshotMock = vi.fn<LoadPluginRegistrySnapshot>();
+const loadPluginRegistrySnapshotWithMetadataMock = vi.fn<LoadPluginRegistrySnapshotWithMetadata>();
 const getCurrentPluginMetadataSnapshotMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 
@@ -190,8 +194,9 @@ function createMetadataSnapshotFixture(
     },
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     owners: {
-      channels: ownerMap([]),
-      channelConfigs: ownerMap([]),
+      ...makeEmptyPluginMetadataOwners(),
+      providerAuthContributions:
+        buildPluginMetadataProviderFacts(plugins).providerAuthContributions,
       providers: ownerMap(
         plugins.flatMap((plugin) =>
           plugin.providers.map((providerId) => [providerId, [plugin.id]] as const),
@@ -211,10 +216,6 @@ function createMetadataSnapshotFixture(
           ),
         ),
       ),
-      setupProviders: ownerMap([]),
-      commandAliases: ownerMap([]),
-      contracts: ownerMap([]),
-      modelIdNormalizationPolicies: new Map(),
     },
   };
 }
@@ -507,6 +508,9 @@ describe("resolvePluginProviders", () => {
         ...actual,
         loadPluginRegistrySnapshot: (...args: Parameters<LoadPluginRegistrySnapshot>) =>
           loadPluginRegistrySnapshotMock(...args),
+        loadPluginRegistrySnapshotWithMetadata: (
+          ...args: Parameters<LoadPluginRegistrySnapshotWithMetadata>
+        ) => loadPluginRegistrySnapshotWithMetadataMock(...args),
         resolvePluginContributionOwners: resolvePluginContributionOwnersFixture,
         resolveProviderOwners: resolveProviderOwnersFixture,
       };
@@ -603,12 +607,12 @@ describe("resolvePluginProviders", () => {
 
     expectOwningPluginIds("setup-only-cli");
     loadPluginMetadataSnapshotMock.mockClear();
-    loadPluginRegistrySnapshotMock.mockClear();
+    loadPluginRegistrySnapshotWithMetadataMock.mockClear();
     expect(resolveOwningPluginIdsForProviderRef({ provider: "setup-only-cli" })).toEqual([
       "setup-only-backend-owner",
     ]);
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledOnce();
+    expect(loadPluginRegistrySnapshotWithMetadataMock).toHaveBeenCalledOnce();
   });
 
   it("maps explicit provider refs to provider or cli-backend owners", () => {
@@ -620,6 +624,59 @@ describe("resolvePluginProviders", () => {
       pluginIds: ["anthropic"],
     });
   });
+
+  it.each([true, false])(
+    "resolves installed owners with prepared manifest metadata: %s",
+    (prepared) => {
+      const plugins = [
+        createManifestProviderPlugin({
+          id: "first-owner",
+          providerIds: ["direct-provider"],
+          cliBackends: ["shared-cli"],
+        }),
+        createManifestProviderPlugin({
+          id: "second-owner",
+          providerIds: [],
+          setup: { cliBackends: ["SHARED-CLI"] },
+          enabledByDefault: false,
+        }),
+      ];
+      setManifestPlugins(plugins);
+      const snapshot = createProviderRegistrySnapshotFixture();
+      loadPluginRegistrySnapshotMock.mockReturnValue(snapshot);
+      loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
+        snapshot,
+        source: "derived",
+        diagnostics: [],
+        ...(prepared
+          ? {
+              manifestRegistry: {
+                plugins: [
+                  ...plugins,
+                  createManifestProviderPlugin({
+                    id: "not-installed",
+                    providerIds: ["direct-provider"],
+                    cliBackends: ["shared-cli"],
+                  }),
+                ],
+                diagnostics: [],
+              },
+            }
+          : {}),
+      });
+      loadPluginManifestRegistryMock.mockClear();
+
+      expect(resolveProviderRefOwnership({ provider: " DIRECT-PROVIDER " })).toEqual({
+        status: "owned",
+        pluginIds: ["first-owner"],
+      });
+      expect(resolveProviderRefOwnership({ provider: " Shared-CLI " })).toEqual({
+        status: "ambiguous",
+        pluginIds: ["first-owner", "second-owner"],
+      });
+      expect(loadPluginManifestRegistryMock).toHaveBeenCalledTimes(prepared ? 0 : 2);
+    },
+  );
 
   it("marks explicit provider refs with multiple owners as ambiguous", () => {
     setManifestPlugins([
@@ -641,12 +698,6 @@ describe("resolvePluginProviders", () => {
       status: "ambiguous",
       pluginIds: ["first-owner", "second-owner"],
     });
-  });
-
-  it("maps explicit cli-backend model refs to owning plugin ids", () => {
-    setOwningProviderManifestPlugins();
-
-    expectModelOwningPluginIds("claude-cli/claude-sonnet-4-6", ["anthropic"]);
   });
 
   it("reuses one registry snapshot across explicit model ownership lookups", () => {
@@ -689,6 +740,7 @@ describe("resolvePluginProviders", () => {
     expectOwningPluginIds("openai", ["openai"]);
 
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadPluginRegistrySnapshotWithMetadataMock).not.toHaveBeenCalled();
     expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith({
       config: undefined,
       env: undefined,
@@ -696,20 +748,32 @@ describe("resolvePluginProviders", () => {
     });
   });
 
-  it("uses current metadata owner maps for cli backend provider refs", () => {
-    const plugins = [
-      createManifestProviderPlugin({
-        id: "anthropic",
-        providerIds: [],
-        cliBackends: ["claude-cli"],
-      }),
-    ];
-    getCurrentPluginMetadataSnapshotMock.mockReturnValue(createMetadataSnapshotFixture(plugins));
+  it.each(["current", "supplied"])(
+    "uses %s metadata owner maps for cli backend provider refs",
+    (source) => {
+      const plugins = [
+        createManifestProviderPlugin({
+          id: "anthropic",
+          providerIds: [],
+          cliBackends: ["claude-cli"],
+        }),
+      ];
+      const metadataSnapshot = createMetadataSnapshotFixture(plugins);
+      if (source === "current") {
+        getCurrentPluginMetadataSnapshotMock.mockReturnValue(metadataSnapshot);
+      }
 
-    expect(resolveOwningPluginIdsForProviderRef({ provider: "claude-cli" })).toEqual(["anthropic"]);
+      expect(
+        resolveOwningPluginIdsForProviderRef({
+          provider: "claude-cli",
+          ...(source === "supplied" ? { metadataSnapshot } : {}),
+        }),
+      ).toEqual(["anthropic"]);
 
-    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-  });
+      expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+      expect(loadPluginRegistrySnapshotWithMetadataMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps normalized case-variant owners from current metadata maps", () => {
     const plugins = [
@@ -765,6 +829,7 @@ describe("resolvePluginProviders", () => {
     ).toEqual(["fresh-owner"]);
 
     expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadPluginRegistrySnapshotWithMetadataMock).not.toHaveBeenCalled();
   });
 
   it("maps manifest provider auth aliases to the target provider owner", () => {
@@ -808,6 +873,12 @@ describe("resolvePluginProviders", () => {
     loadPluginRegistrySnapshotMock.mockImplementation(() =>
       createProviderRegistrySnapshotFixture(),
     );
+    loadPluginRegistrySnapshotWithMetadataMock.mockReset();
+    loadPluginRegistrySnapshotWithMetadataMock.mockImplementation(() => ({
+      snapshot: createProviderRegistrySnapshotFixture(),
+      source: "derived",
+      diagnostics: [],
+    }));
     getCurrentPluginMetadataSnapshotMock.mockReset();
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     const provider: ProviderPlugin = {
@@ -937,21 +1008,6 @@ describe("resolvePluginProviders", () => {
     expect(
       resolveCatalogHookProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv }),
     ).toEqual(["runtime-bundled"]);
-  });
-
-  it("loads bundled Ollama catalog augment hooks from the manifest runtime flag", () => {
-    setManifestPlugin({
-      id: "ollama",
-      providerIds: ["ollama", "ollama-cloud"],
-      enabledByDefault: true,
-      modelCatalog: {
-        runtimeAugment: true,
-      },
-    });
-
-    expect(
-      resolveCatalogHookProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv }),
-    ).toEqual(["ollama"]);
   });
 
   it("loads usage hooks only for manifest-declared providers", () => {
@@ -1672,7 +1728,7 @@ describe("resolvePluginProviders", () => {
     expectModelOwningPluginIds("gpt-5.4", ["workspace-openai"]);
   });
 
-  it("rejects ReDoS modelPatterns via compileSafeRegex guard", () => {
+  it("rejects unsafe model patterns that would match the model", () => {
     setManifestPlugin({
       id: "malicious",
       providerIds: ["malicious"],
@@ -1681,21 +1737,26 @@ describe("resolvePluginProviders", () => {
       },
     });
 
-    // Without the guard, this input causes catastrophic backtracking.
-    // With compileSafeRegex, the pattern is rejected and the plugin is not matched.
-    const start = performance.now();
-    expectModelOwningPluginIds("a".repeat(30) + "!", undefined);
-    expect(performance.now() - start).toBeLessThan(50);
+    // An unguarded pattern would match and incorrectly claim the model.
+    expectModelOwningPluginIds("a", undefined);
   });
 
   it("preserves LM Studio @iq* quant suffixes when resolving model-owned provider plugins", () => {
-    setManifestPlugin({
-      id: "lmstudio",
-      providerIds: ["lmstudio"],
-      modelSupport: {
-        modelPatterns: ["^qwen3\\.6-27b@iq3_xxs$"],
-      },
-    });
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "lmstudio",
+        providerIds: ["lmstudio"],
+        modelSupport: {
+          modelPatterns: ["^qwen3\\.6-27b@iq3_xxs$"],
+        },
+      }),
+      createManifestProviderPlugin({
+        id: "workspace-prefix",
+        providerIds: ["workspace-prefix"],
+        origin: "workspace",
+        modelSupport: { modelPrefixes: ["qwen3.6-27b@"] },
+      }),
+    ]);
     const provider: ProviderPlugin = {
       id: "lmstudio",
       label: "LM Studio",
@@ -1727,14 +1788,23 @@ describe("resolvePluginProviders", () => {
     });
   });
 
-  it("auto-loads a model-owned provider plugin from shorthand model refs", () => {
-    setManifestPlugin({
-      id: "openai",
-      providerIds: ["openai", "openai"],
-      modelSupport: {
-        modelPrefixes: ["gpt-", "o1", "o3", "o4"],
-      },
-    });
+  it("auto-loads a same-id prefix record after ambiguous pattern matches", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "openai",
+        providerIds: ["openai", "openai"],
+        modelSupport: {
+          modelPrefixes: ["gpt-", "o1", "o3", "o4"],
+        },
+      }),
+      ...["openai", "second-pattern"].map((id) =>
+        createManifestProviderPlugin({
+          id,
+          providerIds: [id],
+          modelSupport: { modelPatterns: ["^gpt-"], modelPrefixes: ["gpt-"] },
+        }),
+      ),
+    ]);
     const provider: ProviderPlugin = {
       id: "openai",
       label: "OpenAI",

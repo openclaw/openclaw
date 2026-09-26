@@ -35,6 +35,7 @@ export type RestartRecoveryDispatchStartOutcome =
 export async function dispatchRestartRecoveryUntilStarted(params: {
   agentParams: AgentRunRequest;
   gatewayRuntime: GatewayRecoveryRuntime;
+  onSettled?: () => void;
 }): Promise<RestartRecoveryDispatchStartOutcome> {
   let dispatchAccepted = false;
   let executionStarted = false;
@@ -143,10 +144,12 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
         return executionStartTimeoutPromise;
       }
       clearExecutionStartTimer();
+      params.onSettled?.();
       return { kind: "terminal", observation: observe(), result };
     },
     (error: unknown) => {
       clearExecutionStartTimer();
+      params.onSettled?.();
       return { kind: "failed", error, observation: observe() };
     },
   );
@@ -158,4 +161,29 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
       observation: observe(),
     })),
   ]);
+}
+
+export type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
+
+export function normalizeRestartRecoveryTerminalStatus(
+  value: unknown,
+): RestartRecoveryTerminalStatus | undefined {
+  return value === "error" || value === "ok" || value === "timeout" ? value : undefined;
+}
+
+export async function probeRestartRecoveryTerminalStatus(
+  runId: string,
+  gatewayRuntime: GatewayRecoveryRuntime,
+): Promise<RestartRecoveryTerminalStatus | undefined> {
+  try {
+    const result = await gatewayRuntime.waitForAgent<{ endedAt?: unknown; status?: unknown }>(
+      { runId, timeoutMs: 0 },
+      2_000,
+    );
+    const status = normalizeRestartRecoveryTerminalStatus(result.status);
+    // A zero-time wait also reports timeout for active or unknown work.
+    return status === "timeout" && typeof result.endedAt !== "number" ? undefined : status;
+  } catch {
+    return undefined;
+  }
 }

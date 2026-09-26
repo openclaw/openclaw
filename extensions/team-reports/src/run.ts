@@ -1,12 +1,12 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { aggregateDay, aggregateDays, boundReportDocument } from "./aggregate.js";
 import type { TeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
 import { describePeriod } from "./periods.js";
 import { renderMarkdown } from "./render/markdown.js";
 import { buildRoster } from "./roster.js";
-import { createDiscordSource, createGithubSource } from "./sources/index.js";
+import { createDiscordSource } from "./sources/discord/index.js";
+import { createGithubSource } from "./sources/github/index.js";
 import type { TeamReportsStore } from "./store.js";
-import { generateSummaries } from "./summaries.js";
+import { generateSummaries, type SummaryLlm } from "./summaries.js";
 import type {
   DiscordSource,
   GithubSource,
@@ -46,11 +46,29 @@ export function runPeriods(
   return [...periods.values()];
 }
 
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      const reason: unknown = signal.reason;
+      reject(
+        reason instanceof Error
+          ? reason
+          : new Error(typeof reason === "string" ? reason : "Team Reports run aborted"),
+      );
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) {
+      abort();
+    }
+    void work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
 export async function generateReportPeriods(params: {
   config: TeamReportsConfig;
   resolved: ResolvedTeamReportsConfig;
   store: TeamReportsStore;
-  llm: OpenClawPluginApi["runtime"]["llm"];
+  llm: SummaryLlm;
   periods: PeriodDescriptor[];
   runtime: SourceRuntime & { signal: AbortSignal };
   sources: ReportSourceFactory;
@@ -58,7 +76,7 @@ export async function generateReportPeriods(params: {
 }): Promise<Record<string, SourceStatus>> {
   const { config, resolved, store, runtime } = params;
   const sources = params.sources(runtime);
-  const loaded = await sources.github.loadRoster(resolved.github);
+  const loaded = await untilAborted(sources.github.loadRoster(resolved.github), runtime.signal);
   runtime.signal.throwIfAborted();
   if (!loaded.status.ok) {
     throw new Error("GitHub roster unavailable; check token access and configured teams");
@@ -66,18 +84,34 @@ export async function generateReportPeriods(params: {
   const roster = buildRoster(resolved.people, loaded.people);
   params.onRoster([...new Set(roster.byLogin.values())]);
   const statuses: Record<string, SourceStatus> = {};
+  const rejectedDays: PeriodDescriptor[] = [];
   for (const period of params.periods) {
     runtime.signal.throwIfAborted();
-    const previous = store.getPeriod(period.period, period.key);
+    // runPeriods orders days before rollups. A rejected acquisition must also
+    // preserve its parents during this generation, even if an older day exists.
+    if (
+      period.period !== "day" &&
+      rejectedDays.some((day) => day.sinceMs < period.untilMs && day.untilMs > period.sinceMs)
+    ) {
+      continue;
+    }
+    const previous = await store.getPeriodDocument(period.period, period.key);
+    runtime.signal.throwIfAborted();
     let report;
     if (period.period === "day") {
       const cutoffMs = Date.now();
       const window = { sinceMs: period.sinceMs, untilMs: Math.min(cutoffMs, period.untilMs) };
-      const github = await sources.github.collect(resolved.github, window, roster);
+      const github = await untilAborted(
+        sources.github.collect(resolved.github, window, roster),
+        runtime.signal,
+      );
       runtime.signal.throwIfAborted();
       const discord =
         resolved.discord && sources.discord
-          ? await sources.discord.collect(resolved.discord, window, roster)
+          ? await untilAborted(
+              sources.discord.collect(resolved.discord, window, roster),
+              runtime.signal,
+            )
           : undefined;
       runtime.signal.throwIfAborted();
       const githubStatus: SourceStatus = {
@@ -102,7 +136,7 @@ export async function generateReportPeriods(params: {
       report = aggregateDays({
         period,
         nowMs: Date.now(),
-        days: store.getDayReports(period.sinceMs, period.untilMs),
+        days: await store.getDayReports(period.sinceMs, period.untilMs),
         roster,
         orgs: resolved.github.orgs,
       });
@@ -110,6 +144,12 @@ export async function generateReportPeriods(params: {
     statuses[`${period.period}/${period.key}/github`] = report.sources.github;
     if (report.sources.discord) {
       statuses[`${period.period}/${period.key}/discord`] = report.sources.discord;
+    }
+    // Failed recollection is diagnostic evidence, not a replacement activity
+    // snapshot. Keep accepted counts/prose; the run still records these failures.
+    if (period.period === "day" && Object.values(report.sources).some((source) => !source.ok)) {
+      rejectedDays.push(period);
+      continue;
     }
     // Commit collected evidence before the model call, including deterministic text for readers.
     const fallback = await generateSummaries({
@@ -120,30 +160,35 @@ export async function generateReportPeriods(params: {
     });
     runtime.signal.throwIfAborted();
     const boundedFallback = boundReportDocument(fallback.report);
-    store.upsertPeriod({
+    await store.upsertPeriod({
       report: boundedFallback,
       summary: fallback.summary,
       markdown: renderMarkdown(boundedFallback, fallback.summary),
     });
+    runtime.signal.throwIfAborted();
     if (config.summaries.enabled) {
-      const summarized = await generateSummaries({
-        report,
-        options: config.summaries,
-        llm: params.llm,
-        logger: runtime.logger,
-        previous: previous?.summary
-          ? { report: previous.report, summary: previous.summary }
-          : undefined,
-        signal: runtime.signal,
-      });
+      const summarized = await untilAborted(
+        generateSummaries({
+          report,
+          options: config.summaries,
+          llm: params.llm,
+          logger: runtime.logger,
+          previous: previous?.summary
+            ? { report: previous.report, summary: previous.summary }
+            : undefined,
+          signal: runtime.signal,
+        }),
+        runtime.signal,
+      );
       runtime.signal.throwIfAborted();
       const bounded = boundReportDocument(summarized.report);
-      store.upsertPeriod({
+      await store.upsertPeriod({
         report: bounded,
         summary: summarized.summary,
         markdown: renderMarkdown(bounded, summarized.summary),
       });
     }
+    runtime.signal.throwIfAborted();
   }
   return statuses;
 }

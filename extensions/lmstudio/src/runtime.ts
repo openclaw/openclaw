@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
-// Lmstudio plugin module implements runtime behavior.
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
@@ -16,6 +15,8 @@ import {
   LMSTUDIO_PROVIDER_ID,
 } from "./defaults.js";
 import { hasLmstudioAuthorizationHeader } from "./provider-auth.js";
+
+export class LmstudioConfigResolutionError extends Error {}
 
 type LmstudioAuthHeadersParams = {
   apiKey?: string;
@@ -88,7 +89,7 @@ export async function resolveLmstudioConfiguredApiKeyForProvider(params: {
     return undefined;
   }
 
-  const path = params.path ?? `models.providers.${params.providerId}.apiKey`;
+  const path = params.path ?? `models.providers[${JSON.stringify(params.providerId)}].apiKey`;
   const env = params.env ?? process.env;
   const directApiKey = normalizeOptionalSecretInput(apiKeyInput);
   const resolved = await resolveConfiguredSecretInputString({
@@ -102,7 +103,7 @@ export async function resolveLmstudioConfiguredApiKeyForProvider(params: {
     if (params.allowUnresolved) {
       return undefined;
     }
-    throw new Error(`${path}: ${resolved.unresolvedRefReason}`);
+    throw new LmstudioConfigResolutionError(`${path}: ${resolved.unresolvedRefReason}`);
   }
   const resolvedValue = normalizeOptionalSecretInput(resolved.value);
   const trimmed = resolvedValue ? normalizeApiKeyConfig(resolvedValue).trim() : "";
@@ -149,11 +150,13 @@ export async function resolveLmstudioProviderHeaders(params: {
       config: params.config,
       env: params.env ?? process.env,
       value: headerValue,
-      path: `${pathPrefix}.${headerName}`,
+      path: `${pathPrefix}[${JSON.stringify(headerName)}]`,
       unresolvedReasonStyle: "detailed",
     });
     if (resolvedHeader.unresolvedRefReason) {
-      throw new Error(`${pathPrefix}.${headerName}: ${resolvedHeader.unresolvedRefReason}`);
+      throw new LmstudioConfigResolutionError(
+        `${pathPrefix}.${headerName}: ${resolvedHeader.unresolvedRefReason}`,
+      );
     }
     const resolvedValue = resolvedHeader.value;
     if (!resolvedValue) {
@@ -192,9 +195,6 @@ export async function resolveLmstudioRequestContext(params: {
   return { apiKey, headers };
 }
 
-/**
- * Resolves LM Studio runtime API key from config.
- */
 export async function resolveLmstudioRuntimeApiKey(params: {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -208,17 +208,12 @@ export async function resolveLmstudioRuntimeApiKey(params: {
   const providerHeaders =
     params.headers ?? config.models?.providers?.[LMSTUDIO_PROVIDER_ID]?.headers;
   const hasAuthorizationHeader = hasLmstudioAuthorizationHeader(providerHeaders);
-  let configuredApiKeyPromise: Promise<string | undefined> | undefined;
-  const getConfiguredApiKey = async () => {
-    configuredApiKeyPromise ??= resolveLmstudioConfiguredApiKey({
+  const resolveConfiguredApiKeyOrThrow = async () => {
+    const configuredApiKey = await resolveLmstudioConfiguredApiKey({
       config,
       env: params.env,
       allowUnresolved: hasAuthorizationHeader,
     });
-    return await configuredApiKeyPromise;
-  };
-  const resolveConfiguredApiKeyOrThrow = async () => {
-    const configuredApiKey = await getConfiguredApiKey();
     if (configuredApiKey) {
       return configuredApiKey;
     }
@@ -244,9 +239,8 @@ export async function resolveLmstudioRuntimeApiKey(params: {
   } catch {
     return await resolveConfiguredApiKeyOrThrow();
   }
-  // Normalize empty/whitespace keys to undefined for callers.
   const resolvedApiKey = resolved.apiKey?.trim();
-  if (!resolvedApiKey || resolvedApiKey.length === 0) {
+  if (!resolvedApiKey) {
     return await resolveConfiguredApiKeyOrThrow();
   }
   if (shouldSuppressResolvedRuntimeApiKeyForHeaderAuth(resolved.source, hasAuthorizationHeader)) {

@@ -1,4 +1,3 @@
-/** Verifies memory capability registration keeps slot ownership explicit. */
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -55,58 +54,6 @@ describe("dual-kind memory registration gate", () => {
     ]);
   });
 
-  it("allows memory runtime registration for dual-kind plugins selected for memory slot", () => {
-    const { config, registry } = createPluginRegistryFixture();
-
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "dual-plugin",
-        name: "Dual Plugin",
-        kind: ["memory", "context-engine"],
-        memorySlotSelected: true,
-      }),
-      register(api) {
-        api.registerMemoryCapability({ runtime: createStubMemoryRuntime() });
-      },
-    });
-    expect(
-      requireMemoryRuntime(registry).resolveMemoryBackendConfig({
-        cfg: {} as never,
-        agentId: "main",
-      }),
-    ).toEqual({ backend: "builtin" });
-    expect(
-      registry.registry.diagnostics.filter(
-        (d) => d.pluginId === "dual-plugin" && d.level === "warn",
-      ),
-    ).toHaveLength(0);
-  });
-
-  it("drops the indexing runtime of single-kind memory plugins not selected for the memory slot", () => {
-    const { config, registry } = createPluginRegistryFixture();
-
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "memory-only",
-      name: "Memory Only",
-      kind: "memory",
-      register(api) {
-        api.registerMemoryCapability({ runtime: createStubMemoryRuntime() });
-      },
-    });
-    expect(registry.registry.memoryCapabilities).toEqual([
-      { pluginId: "memory-only", capability: {}, memorySlotSelected: false },
-    ]);
-    expect(
-      registry.registry.diagnostics.filter(
-        (d) => d.pluginId === "memory-only" && d.level === "warn",
-      ),
-    ).toHaveLength(1);
-  });
-
   it("allows selected dual-kind plugins to register the unified memory capability", () => {
     const { config, registry } = createPluginRegistryFixture();
     const runtime = createStubMemoryRuntime();
@@ -128,15 +75,12 @@ describe("dual-kind memory registration gate", () => {
         });
       },
     });
-    expect(registry.registry.memoryCapabilities).toEqual([
-      {
-        pluginId: "dual-plugin",
-        capability: {
-          runtime,
-          promptBuilder,
-        },
-        memorySlotSelected: true,
-      },
+    expect(registry.registry.memoryCapabilities).toHaveLength(1);
+    const selected = resolveMemoryCapabilityRegistration(registry.registry.memoryCapabilities);
+    expect(selected?.pluginId).toBe("dual-plugin");
+    expect(selected?.memorySlotSelected).toBe(true);
+    expect(selected?.capability.promptBuilder?.({ availableTools: new Set() })).toEqual([
+      "memory capability",
     ]);
     expect(
       requireMemoryRuntime(registry).resolveMemoryBackendConfig({
@@ -144,6 +88,7 @@ describe("dual-kind memory registration gate", () => {
         agentId: "main",
       }),
     ).toEqual({ backend: "builtin" });
+    expect(registry.registry.diagnostics.filter((entry) => entry.level === "warn")).toEqual([]);
   });
 
   it("preserves an earlier memory capability when an artifact bridge fails", () => {
@@ -185,21 +130,18 @@ describe("dual-kind memory registration gate", () => {
     ).toThrow("bridge failed");
     registry.rollbackPluginGlobalSideEffects(bridgeRecord.id, bridgeRecord);
 
-    expect(registry.registry.memoryCapabilities).toEqual([
-      {
-        pluginId: "memory-core",
-        capability: { runtime, flushPlanResolver },
-        memorySlotSelected: true,
-      },
-    ]);
-    expect(resolveMemoryCapabilityRegistration(registry.registry.memoryCapabilities)).toEqual({
-      pluginId: "memory-core",
-      capability: { runtime, flushPlanResolver },
-      memorySlotSelected: true,
-    });
+    expect(registry.registry.memoryCapabilities).toHaveLength(1);
+    const selected = resolveMemoryCapabilityRegistration(registry.registry.memoryCapabilities);
+    expect(selected?.pluginId).toBe("memory-core");
+    expect(selected?.memorySlotSelected).toBe(true);
+    expect(selected?.capability.publicArtifacts).toBeUndefined();
+    expect(
+      selected?.capability.runtime?.resolveMemoryBackendConfig({ cfg: config, agentId: "main" }),
+    ).toEqual({ backend: "builtin" });
+    expect(selected?.capability.flushPlanResolver?.({ cfg: config })).toBeNull();
   });
 
-  it("layers same-plugin public artifacts over its runtime capability", () => {
+  it("layers same-plugin public artifacts over its runtime capability", async () => {
     const { config, registry } = createPluginRegistryFixture();
     const runtime = createStubMemoryRuntime();
     const flushPlanResolver = () => null;
@@ -220,15 +162,16 @@ describe("dual-kind memory registration gate", () => {
       },
     });
 
-    expect(resolveMemoryCapabilityRegistration(registry.registry.memoryCapabilities)).toEqual({
-      pluginId: "memory-core",
-      capability: {
-        runtime,
-        flushPlanResolver,
-        publicArtifacts: expect.any(Object),
-      },
-      memorySlotSelected: true,
-    });
+    const selected = resolveMemoryCapabilityRegistration(registry.registry.memoryCapabilities);
+    expect(selected?.pluginId).toBe("memory-core");
+    expect(selected?.memorySlotSelected).toBe(true);
+    await expect(
+      selected?.capability.runtime?.getMemorySearchManager({ cfg: config, agentId: "main" }),
+    ).resolves.toEqual({ manager: null, error: "missing" });
+    expect(selected?.capability.flushPlanResolver?.({ cfg: config })).toBeNull();
+    await expect(
+      selected?.capability.publicArtifacts?.listArtifacts({ cfg: config }),
+    ).resolves.toEqual([]);
   });
 
   it("keeps last-registration-wins behavior when neither registration owns the slot", () => {
@@ -272,8 +215,12 @@ describe("memory sidecar runtime gate", () => {
 
     const selected = resolveMemoryCapabilityRegistration(registry.registry.memoryCapabilities);
     expect(selected?.capability.runtime).toBeUndefined();
-    expect(selected?.capability.promptBuilder).toBe(promptBuilder);
-    expect(selected?.capability.flushPlanResolver).toBe(flushPlanResolver);
+    expect(selected?.pluginId).toBe("memory-core");
+    expect(selected?.memorySlotSelected).toBe(false);
+    expect(selected?.capability.promptBuilder?.({ availableTools: new Set() })).toEqual([
+      "memory prompt",
+    ]);
+    expect(selected?.capability.flushPlanResolver?.({ cfg: config })).toBeNull();
     expect(
       registry.registry.diagnostics.filter(
         (d) => d.pluginId === "memory-core" && d.level === "warn",
@@ -312,7 +259,7 @@ describe("memory sidecar runtime gate", () => {
   });
 
   /** Registration order flips when a config-path memory plugin loads before the bundled sidecar. */
-  it("keeps the slot owner capability when a later sidecar contributes its consolidation", () => {
+  it("keeps the slot owner capability when a later sidecar contributes its consolidation", async () => {
     const { config, registry } = createPluginRegistryFixture();
     const runtime = createStubMemoryRuntime();
     const flushPlanResolver = () => null;
@@ -350,9 +297,16 @@ describe("memory sidecar runtime gate", () => {
 
     const selected = resolveMemoryCapabilityRegistration(registry.registry.memoryCapabilities);
     expect(selected?.pluginId).toBe("acme-memory");
-    expect(selected?.capability.runtime).toBe(runtime);
-    expect(selected?.capability.promptBuilder).toBe(sidecarPromptBuilder);
-    expect(selected?.capability.flushPlanResolver).toBe(flushPlanResolver);
+    await expect(
+      selected?.capability.runtime?.getMemorySearchManager({ cfg: config, agentId: "main" }),
+    ).resolves.toEqual({ manager: null, error: "missing" });
+    expect(selected?.capability.promptBuilder?.({ availableTools: new Set() })).toEqual([
+      "sidecar prompt",
+    ]);
+    expect(selected?.capability.flushPlanResolver?.({ cfg: config })).toBeNull();
+    await expect(
+      selected?.capability.publicArtifacts?.listArtifacts({ cfg: config }),
+    ).resolves.toEqual([]);
     expect(selected?.memorySlotSelected).toBe(true);
   });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
+import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator-errors.js";
 import {
   classifyAcceptedChatSendFailure,
   runAcceptedChatSendDispatch,
@@ -79,3 +80,26 @@ describe("accepted chat-send retry classification", () => {
     expect(waitForRetry).toHaveBeenCalledTimes(2);
   });
 });
+
+it.each([false, true])(
+  "never replays a dispatch after lifecycle contention (effects=%s)",
+  async (effects) => {
+    const error = new StateDatabaseCoordinatorContentionError("state-lifecycle");
+    const operation = vi.fn().mockRejectedValue(error);
+    const waitForRetry = vi.fn();
+    await expect(
+      runAcceptedChatSendDispatch({
+        operation,
+        waitForRetry,
+        classify: (failure) =>
+          classifyAcceptedChatSendFailure({
+            error: failure,
+            phase: "post-ack",
+            sideEffectsObserved: effects,
+          }),
+      }),
+    ).rejects.toBe(error);
+    expect(operation).toHaveBeenCalledOnce();
+    expect(waitForRetry).not.toHaveBeenCalled();
+  },
+);

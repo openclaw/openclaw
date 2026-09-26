@@ -1,24 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { shouldAdmitFreshChannelOwnerCronAuthority } from "../../agents/cron-creator-authority-context.js";
+import { isFreshChannelCronAuthorityTurn } from "../../agents/cron-creator-authority-context.js";
 
 const BASE = {
-  senderIsOwner: true,
   messageProvider: "telegram",
   senderId: "owner-1",
   isHeartbeat: false,
   isRoomEvent: false,
 };
 
-describe("fresh channel owner cron authority admission", () => {
-  it.each(["telegram", "discord", "slack", "custom-channel"])(
-    "admits an authenticated direct owner turn from %s without channel-specific policy",
-    (messageProvider) => {
-      expect(shouldAdmitFreshChannelOwnerCronAuthority({ ...BASE, messageProvider })).toBe(true);
-    },
-  );
+describe("fresh channel cron authority turn", () => {
+  it("recognizes a fresh authenticated turn without channel-specific policy", () => {
+    expect(isFreshChannelCronAuthorityTurn({ ...BASE, messageProvider: "custom-channel" })).toBe(
+      true,
+    );
+  });
 
   it.each([
-    { name: "non-owner", overrides: { senderIsOwner: false } },
     { name: "missing provider", overrides: { messageProvider: undefined } },
     { name: "missing sender", overrides: { senderId: undefined } },
     { name: "heartbeat", overrides: { isHeartbeat: true } },
@@ -27,6 +24,6 @@ describe("fresh channel owner cron authority admission", () => {
     { name: "spawned session", overrides: { spawnedBy: "agent:parent" } },
     { name: "replayed turn", overrides: { suppressNextUserMessagePersistence: true } },
   ])("rejects $name", ({ overrides }) => {
-    expect(shouldAdmitFreshChannelOwnerCronAuthority({ ...BASE, ...overrides })).toBe(false);
+    expect(isFreshChannelCronAuthorityTurn({ ...BASE, ...overrides })).toBe(false);
   });
 });

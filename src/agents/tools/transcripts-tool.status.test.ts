@@ -1,21 +1,20 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
-const { getTranscriptSourceProviderMock } = vi.hoisted(() => ({
-  getTranscriptSourceProviderMock: vi.fn(),
-}));
-vi.mock("../../transcripts/provider-registry.js", () => ({
-  getTranscriptSourceProvider: getTranscriptSourceProviderMock,
-  listTranscriptSourceProviders: () => [],
-}));
 const tempDirs = createTempDirTracker();
 
 describe("transcripts status display", () => {
-  afterEach(() => {
-    getTranscriptSourceProviderMock.mockReset();
+  afterEach(async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     tempDirs.cleanup();
   });
@@ -27,13 +26,20 @@ describe("transcripts status display", () => {
   ])(
     "bounds status by $limit without clipping canonical selectors",
     async ({ idChars, count, shown }) => {
-      getTranscriptSourceProviderMock.mockReturnValue({
+      const provider: TranscriptSourceProvider = {
         id: "room-audio",
         name: "Room Audio",
         sourceKinds: ["live-audio"],
         start: async (request) => ({ ok: true, session: request.session }),
         stop: async (request) => ({ ok: true, sessionId: request.sessionId }),
-      } satisfies TranscriptSourceProvider);
+      };
+      const registry = createEmptyPluginRegistry();
+      registry.transcriptSourceProviders.push({
+        pluginId: provider.id,
+        provider,
+        source: import.meta.url,
+      });
+      setActivePluginRegistry(registry);
       const tool = createTranscriptsTool({
         stateDir: tempDirs.make("openclaw-transcripts-status-"),
         caller: { kind: "operator", source: "local" },

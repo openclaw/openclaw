@@ -1,15 +1,26 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import { runPreparedChannelTurn } from "../channels/turn/execution.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptEventsSync,
+  loadSessionEntry,
   replaceTranscriptEventsSync,
+  replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
   runWithSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "../config/sessions/session-transcript-read-fence.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import { readLatestAssistantTextFromSessionTranscript } from "../config/sessions/transcript.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB } from "../state/openclaw-agent-db.generated.js";
+import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
   appendSessionTranscriptMessageByIdentity,
   readLatestAssistantTextByIdentity,
@@ -121,6 +132,117 @@ describe("session transcript runtime read fence", () => {
       hasMore: false,
     });
   });
+
+  it.each(["sdk latest", "core latest", "legacy marker latest", "channel preparation"] as const)(
+    "restores cold history before %s with its history boundary",
+    async (reader) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "cold-fenced-session",
+        sessionKey: "agent:main:cold-fenced",
+        storePath,
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const priorUser = await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: { role: "user", content: "prior question", timestamp: 1_000 },
+        now: 1_000,
+      });
+      const priorAssistant = await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: { role: "assistant", content: "prior answer", timestamp: 2_000 },
+        parentId: priorUser?.messageId,
+        now: 2_000,
+      });
+      const admitted = await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: { role: "user", content: "current question", timestamp: 3_000 },
+        parentId: priorAssistant?.messageId,
+        now: 3_000,
+      });
+      await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: { role: "assistant", content: "current answer", timestamp: 4_000 },
+        parentId: admitted?.messageId,
+        now: 4_000,
+      });
+      if (!admitted?.anchor || !priorAssistant) {
+        throw new Error("expected transcript admission and prior assistant");
+      }
+      const options = { agentId: scope.agentId, path: admitted.anchor.storePath };
+      await waitForSessionTranscriptIndexReconcile(options);
+      await replaceSessionEntry(scope, {
+        ...loadSessionEntry(scope),
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        lastActivityAt: 1,
+        lastInteractionAt: 1,
+      });
+      runOpenClawAgentWriteTransaction(({ db }) => {
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<DB>(db)
+            .updateTable("session_windows")
+            .set({ updated_at: 1, transcript_updated_at: 1 })
+            .where("session_id", "=", scope.sessionId),
+        );
+      }, options);
+      await expect(
+        runSessionColdStorageMaintenance({
+          config: {
+            agents: { list: [{ id: "main" }] },
+            session: {
+              store: options.path,
+              maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+            },
+          },
+        }),
+      ).resolves.toMatchObject({ archivedTranscripts: 1 });
+      expect(() => loadTranscriptEventsSync(scope)).toThrow(/cold storage/);
+      if (reader === "channel preparation") {
+        const ctx: FinalizedMsgContext = {
+          Body: "continue",
+          CommandAuthorized: false,
+          AgentId: scope.agentId,
+          SessionKey: scope.sessionKey,
+          Timestamp: 3_000,
+          SessionTranscriptContext: { historyLimit: 10 },
+        };
+        let dispatched = false;
+        await runPreparedChannelTurn({
+          channel: "slack",
+          routeSessionKey: scope.sessionKey,
+          storePath,
+          ctxPayload: ctx,
+          recordInboundSession: async () => undefined,
+          runDispatch: async () => {
+            dispatched = true;
+            expect(ctx.InboundHistory?.map((entry) => entry.body)).toEqual([
+              "prior question",
+              "prior answer",
+            ]);
+            return { queuedFinal: false };
+          },
+        });
+        expect(dispatched).toBe(true);
+        return;
+      }
+      const receipt = {
+        ...admitted.anchor,
+        logicalTurnId: "cold-fenced-turn",
+        role: "user" as const,
+      };
+      await runWithSessionTranscriptReadFence(receipt, async () => {
+        const latest =
+          reader === "sdk latest"
+            ? await readLatestAssistantTextByIdentity(scope)
+            : await readLatestAssistantTextFromSessionTranscript(
+                reader === "core latest" ? scope : formatSqliteSessionFileMarker(scope),
+              );
+        expect(latest).toMatchObject({ id: priorAssistant.messageId, text: "prior answer" });
+      });
+    },
+  );
 
   it("rejects a read fence when any immutable admission field changes", async () => {
     const scope = {

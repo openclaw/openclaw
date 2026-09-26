@@ -17,10 +17,14 @@ export class UpdateSchemaRefusalError extends Error {
   constructor(
     readonly databases: readonly UpdateSchemaRefusalDatabase[],
     readonly updaterVersion: string,
-    options: { targetVersion: string; cause?: unknown },
+    options: {
+      targetVersion: string;
+      cause?: unknown;
+      recovery?: { message: string; commands: string[] };
+    },
   ) {
     const { targetVersion } = options;
-    const commands = [
+    const commands = options.recovery?.commands ?? [
       "openclaw gateway stop",
       `npm install -g openclaw@${targetVersion} --allow-scripts=openclaw`,
       "openclaw doctor --fix",
@@ -39,9 +43,12 @@ export class UpdateSchemaRefusalError extends Error {
           )
           .join(" ") +
         reason +
-        " The blocked schema change was not applied. Let the updater restore the previous package, then update manually: " +
-        `${commands.join(" && ")}. ` +
-        `Use the package manager that owns this install (pnpm: pnpm add -g --allow-build=openclaw openclaw@${targetVersion}; Bun: bun add -g --trust openclaw@${targetVersion}). On npm 11.15 and earlier, omit --allow-scripts=openclaw.`,
+        " The blocked schema change was not applied." +
+        (options.recovery
+          ? `\n${options.recovery.message}`
+          : " Let the updater restore the previous package, then update manually: " +
+            `${commands.join(" && ")}. ` +
+            `Use the package manager that owns this install (pnpm: pnpm add -g --allow-build=openclaw openclaw@${targetVersion}; Bun: bun add -g --trust openclaw@${targetVersion}). On npm 11.15 and earlier, omit --allow-scripts=openclaw.`),
       options,
     );
     this.name = "UpdateSchemaRefusalError";

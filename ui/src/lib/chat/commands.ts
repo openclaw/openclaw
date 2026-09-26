@@ -1,13 +1,23 @@
-// Control UI chat domain owns pure slash command rules.
-
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+// Control UI chat domain owns pure slash command rules.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import type { CommandArgValues } from "../../../../src/auto-reply/commands-args.types.js";
-import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
+import {
+  buildBuiltinChatCommands,
+  shouldForwardModelCommandToServer,
+} from "../../../../src/auto-reply/commands-registry.shared.js";
+import type { ChatCommandDefinition } from "../../../../src/auto-reply/commands-registry.types.js";
+import {
+  isModelIndependentDirectiveCommand,
+  resolveReplyDirectiveCommand,
+} from "../../../../src/auto-reply/reply/directive-handling.parse.js";
 import type { IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
+
+registerCommandPaletteEnglish();
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -24,6 +34,7 @@ export type SlashCommandDef = {
   category?: SlashCommandCategory;
   /** When true, the command is executed client-side via RPC instead of sent to the agent. */
   executeLocal?: boolean;
+  modelIndependent?: ChatCommandDefinition["modelIndependent"];
   /** Fixed argument choices for inline hints. */
   argOptions?: string[];
   /** Whether a multi-word argument may execute from an inline prose position. */
@@ -45,6 +56,7 @@ type CommandLike = {
   name: string;
   aliases?: string[];
   description: string;
+  modelIndependent?: ChatCommandDefinition["modelIndependent"];
   args?: Array<{
     name: string;
     required?: boolean;
@@ -72,35 +84,41 @@ const MAX_REMOTE_NAME_LENGTH = 200;
 const MAX_REMOTE_DESCRIPTION_LENGTH = 2_000;
 const MAX_REMOTE_ARG_NAME_LENGTH = 200;
 
-const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
-  help: "book",
-  status: "barChart",
-  usage: "barChart",
-  export: "download",
-  export_session: "download",
-  tools: "terminal",
-  dashboard: "layoutDashboard",
-  skill: "zap",
-  commands: "book",
-  new: "plus",
-  reset: "refresh",
-  compact: "loader",
-  stop: "stop",
-  clear: "trash",
-  model: "brain",
-  models: "brain",
-  think: "brain",
-  verbose: "terminal",
-  fast: "zap",
-  agents: "monitor",
-  subagents: "folder",
-  steer: "send",
-  tts: "volume2",
+const COMMAND_PRESENTATION: Partial<Record<string, Pick<SlashCommandDef, "icon" | "category">>> = {
+  help: { icon: "book", category: "tools" },
+  status: { icon: "barChart", category: "tools" },
+  usage: { icon: "barChart", category: "tools" },
+  export: { icon: "download" },
+  export_session: { icon: "download", category: "tools" },
+  tools: { icon: "terminal", category: "tools" },
+  dashboard: { icon: "layoutDashboard" },
+  skill: { icon: "zap", category: "tools" },
+  commands: { icon: "book", category: "tools" },
+  new: { icon: "plus", category: "session" },
+  reset: { icon: "refresh", category: "session" },
+  compact: { icon: "loader", category: "session" },
+  stop: { icon: "stop", category: "session" },
+  clear: { icon: "trash" },
+  model: { icon: "brain", category: "model" },
+  models: { icon: "brain", category: "model" },
+  think: { icon: "brain", category: "model" },
+  verbose: { icon: "terminal", category: "model" },
+  fast: { icon: "zap", category: "model" },
+  agents: { icon: "monitor", category: "agents" },
+  subagents: { icon: "folder", category: "agents" },
+  steer: { icon: "send", category: "agents" },
+  tts: { icon: "volume2", category: "tools" },
+  redirect: { category: "agents" },
+  session: { category: "session" },
+  reasoning: { category: "model" },
+  elevated: { category: "model" },
+  queue: { category: "model" },
 };
 
 const INLINE_MULTI_WORD_COMMANDS = new Set(["dashboard"]);
 
 const LOCAL_COMMANDS = new Set([
+  "btw",
   "help",
   "new",
   "reset",
@@ -126,6 +144,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "trash",
     category: "session",
     executeLocal: true,
+    modelIndependent: "always",
     tier: "standard",
   },
   {
@@ -137,63 +156,31 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     icon: "refresh",
     category: "agents",
     executeLocal: true,
+    modelIndependent: "no-args",
     tier: "power",
   },
 ];
 
-const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
-  help: "tools",
-  commands: "tools",
-  tools: "tools",
-  skill: "tools",
-  status: "tools",
-  export_session: "tools",
-  usage: "tools",
-  tts: "tools",
-  agents: "agents",
-  subagents: "agents",
-  steer: "agents",
-  redirect: "agents",
-  session: "session",
-  stop: "session",
-  reset: "session",
-  new: "session",
-  compact: "session",
-  model: "model",
-  models: "model",
-  think: "model",
-  verbose: "model",
-  fast: "model",
-  reasoning: "model",
-  elevated: "model",
-  queue: "model",
-};
-
 const COMMAND_DESCRIPTION_KEYS: Partial<Record<string, string>> = {
   steer: "chat.commands.steerDescription",
+  "export-session": "chat.commands.exportDescription",
 };
 
 const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
   steer: "Inject a message into the active run",
+  "export-session": "Download this conversation as Markdown",
 };
 
 const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
   steer: "<message>",
+  "export-session": undefined,
 };
-
-function normalizeUiKey(command: CommandLike): string {
-  return command.key.replace(/[:.-]/g, "_");
-}
 
 function getSlashAliases(command: CommandLike): string[] {
   return (command.aliases ?? [])
     .map((alias) => alias.trim())
     .filter(Boolean)
     .map((alias) => (alias.startsWith("/") ? alias.slice(1) : alias));
-}
-
-function getPrimarySlashName(command: CommandLike): string | null {
-  return command.name.trim() || null;
 }
 
 function formatArgs(command: CommandLike): string | undefined {
@@ -224,27 +211,6 @@ function getArgOptions(command: CommandLike): string[] | undefined {
   return options?.length ? options : undefined;
 }
 
-function mapCategory(command: CommandLike): SlashCommandCategory {
-  const override = CATEGORY_OVERRIDES[normalizeUiKey(command)];
-  if (override) {
-    return override;
-  }
-  switch (command.category) {
-    case "session":
-      return "session";
-    case "options":
-      return "model";
-    case "management":
-      return "tools";
-    default:
-      return "tools";
-  }
-}
-
-function mapIcon(command: CommandLike): IconName | undefined {
-  return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
-}
-
 function mapTier(command: CommandLike): SlashCommandTier {
   const raw = command.tier;
   if (raw === "essential" || raw === "standard" || raw === "power") {
@@ -257,11 +223,12 @@ function toSlashCommand(
   command: CommandLike,
   source: "local" | "remote" = "local",
 ): SlashCommandDef | null {
-  const name = getPrimarySlashName(command);
+  const name = command.name.trim();
   if (!name) {
     return null;
   }
   const resolvedSource = command.source ?? (source === "local" ? "native" : undefined);
+  const presentation = COMMAND_PRESENTATION[command.key.replace(/[:.-]/g, "_")];
   return {
     key: command.key,
     name,
@@ -270,10 +237,19 @@ function toSlashCommand(
     ...(COMMAND_DESCRIPTION_KEYS[command.key]
       ? { descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key] }
       : {}),
-    args: COMMAND_ARGS_OVERRIDES[command.key] ?? formatArgs(command),
-    icon: mapIcon(command),
-    category: mapCategory(command),
+    args: Object.hasOwn(COMMAND_ARGS_OVERRIDES, command.key)
+      ? COMMAND_ARGS_OVERRIDES[command.key]
+      : formatArgs(command),
+    icon: presentation?.icon ?? "terminal",
+    category:
+      presentation?.category ??
+      (command.category === "session"
+        ? "session"
+        : command.category === "options"
+          ? "model"
+          : "tools"),
     executeLocal: source === "local" && LOCAL_COMMANDS.has(command.key),
+    modelIndependent: command.modelIndependent,
     argOptions: getArgOptions(command),
     allowsInlineMultiWordArgs: INLINE_MULTI_WORD_COMMANDS.has(command.key),
     tier: source === "local" ? mapTier(command) : "standard",
@@ -298,18 +274,6 @@ function normalizeSlashIdentifier(raw: string): string | null {
 function clampText(value: unknown, maxLength: number): string {
   const text = typeof value === "string" ? value : "";
   return text.length > maxLength ? truncateUtf16Safe(text, maxLength) : text;
-}
-
-function getEntryArgs(
-  entry: CommandEntry | Record<string, unknown>,
-): Array<Record<string, unknown>> {
-  const rawArgs = "args" in entry ? entry.args : undefined;
-  if (!Array.isArray(rawArgs)) {
-    return [];
-  }
-  return rawArgs
-    .map((arg) => asRecord(arg))
-    .filter((arg): arg is Record<string, unknown> => arg !== null);
 }
 
 function getArgChoices(arg: Record<string, unknown>): LocalArgChoice[] {
@@ -367,13 +331,14 @@ function normalizeClientPresentation(
   return { when: "no-arguments", action: { kind: "device-pairing" } };
 }
 
-function buildLocalSlashCommands(): SlashCommandDef[] {
+export function buildFallbackSlashCommands(): SlashCommandDef[] {
   const builtins = buildBuiltinChatCommands()
     .map((command) => ({
       key: command.key,
       name: command.textAliases[0]?.replace(/^\//u, "") ?? command.key,
       aliases: command.textAliases,
       description: command.description,
+      modelIndependent: command.modelIndependent,
       args: command.args?.map((arg) => ({
         name: arg.name,
         required: arg.required,
@@ -388,7 +353,7 @@ function buildLocalSlashCommands(): SlashCommandDef[] {
   return [...builtins, ...UI_ONLY_COMMANDS];
 }
 
-function buildReservedLocalSlashNames(localCommands = buildLocalSlashCommands()): Set<string> {
+function buildReservedLocalSlashNames(localCommands = buildFallbackSlashCommands()): Set<string> {
   const reserved = new Set<string>();
   for (const command of localCommands) {
     reserved.add(normalizeLowercaseStringOrEmpty(command.name));
@@ -417,7 +382,9 @@ function normalizeCommandEntry(
   if (!primaryName || reservedLocalNames.has(primaryName)) {
     return null;
   }
-  const args = getEntryArgs(entry)
+  const args = (Array.isArray(entry.args) ? entry.args : [])
+    .map((arg) => asRecord(arg))
+    .filter((arg) => arg !== null)
     .slice(0, MAX_REMOTE_ARGS)
     .map((arg) => ({
       name: clampText(arg.name, MAX_REMOTE_ARG_NAME_LENGTH),
@@ -459,7 +426,7 @@ export function replaceSlashCommands(next: SlashCommandDef[]) {
 }
 
 export function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef[] {
-  const local = buildLocalSlashCommands();
+  const local = buildFallbackSlashCommands();
   const reservedLocalNames = buildReservedLocalSlashNames(local);
   const mapped = entries
     .slice(0, MAX_REMOTE_COMMANDS)
@@ -488,10 +455,6 @@ export function getRemoteCommandEntries(
   return commands
     .map((entry) => asRecord(entry))
     .filter((entry): entry is CommandEntry => entry !== null);
-}
-
-export function buildFallbackSlashCommands(): SlashCommandDef[] {
-  return buildLocalSlashCommands();
 }
 
 export const SLASH_COMMANDS: SlashCommandDef[] = buildFallbackSlashCommands();
@@ -558,25 +521,13 @@ export function getSlashCommandCompletions(
     commands = commands.filter((cmd) => (cmd.tier ?? "standard") !== "power");
   }
 
-  return commands.toSorted((a, b) => {
-    if (lower) {
-      const relevance = getSlashCommandRelevance(a, lower) - getSlashCommandRelevance(b, lower);
-      if (relevance !== 0) {
-        return relevance;
-      }
-    }
-    const aTier = TIER_ORDER[a.tier ?? "standard"] ?? 1;
-    const bTier = TIER_ORDER[b.tier ?? "standard"] ?? 1;
-    if (aTier !== bTier) {
-      return aTier - bTier;
-    }
-    const ai = CATEGORY_ORDER.indexOf(a.category ?? "session");
-    const bi = CATEGORY_ORDER.indexOf(b.category ?? "session");
-    if (ai !== bi) {
-      return ai - bi;
-    }
-    return 0;
-  });
+  return commands.toSorted(
+    (a, b) =>
+      (lower ? getSlashCommandRelevance(a, lower) - getSlashCommandRelevance(b, lower) : 0) ||
+      (TIER_ORDER[a.tier ?? "standard"] ?? 1) - (TIER_ORDER[b.tier ?? "standard"] ?? 1) ||
+      CATEGORY_ORDER.indexOf(a.category ?? "session") -
+        CATEGORY_ORDER.indexOf(b.category ?? "session"),
+  );
 }
 
 export type InlineSlashCompletion = {
@@ -609,9 +560,6 @@ export function findInlineSlashCompletion(
     end += 1;
   }
   const query = match[1] ?? "";
-  if (!/^[^\s/:]*$/u.test(query)) {
-    return null;
-  }
   return {
     query,
     start,
@@ -684,4 +632,36 @@ export function parseSlashCommand(text: string): ParsedSlashCommand | null {
   }
 
   return { command, args };
+}
+
+/** Stop and approval controls must remain usable while transcript admission is held. */
+export function isChatControlCommand(text: string): boolean {
+  const key = parseSlashCommand(text)?.command.key;
+  return normalizeLowercaseStringOrEmpty(text.trim()) === "/stop" || key === "approve";
+}
+
+export function canSubmitBeforeChatHistory(text: string): boolean {
+  return !text.trimStart().startsWith("/") || isChatControlCommand(text);
+}
+
+export function isModelIndependentChatCommand(text: string): boolean {
+  const parsed = parseSlashCommand(text);
+  if (!parsed) {
+    return false;
+  }
+  const policy = parsed.command.modelIndependent;
+  if (policy === "directive") {
+    const name = resolveReplyDirectiveCommand(parsed.command.key);
+    return (
+      name !== undefined &&
+      ((name === "model" && !shouldForwardModelCommandToServer(parsed.args)) ||
+        isModelIndependentDirectiveCommand(name, parsed.args))
+    );
+  }
+  return (
+    policy === "always" ||
+    (policy === "no-args"
+      ? parsed.args === ""
+      : typeof policy === "function" && policy(parsed.args))
+  );
 }

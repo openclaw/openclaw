@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiSessionPreview } from "../../../src/gateway/control-ui-contract.js";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -10,9 +11,12 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { findLocalSessionReference } from "../pages/chat/route-loader-short-cache.ts";
-import { markdownSessionPublicOrigin, parseMarkdownSessionUrl } from "./markdown-session-links.ts";
+import {
+  markdownSessionPublicOrigin,
+  parseLocalMarkdownSessionUrl,
+} from "./markdown-session-links.ts";
+import { SESSION_PROGRESS_HOVER_LINK_SELECTOR } from "./session-progress-hovercard-target.ts";
 
-const SESSION_LINK_SELECTOR = "a.markdown-session-link, [data-session-href]";
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 100;
@@ -69,11 +73,13 @@ export class SessionLinkTitler {
   }
 
   refresh(root = this.host): void {
-    if (root.matches(SESSION_LINK_SELECTOR)) {
-      void this.decorate(root);
+    // Share repeated references only within this synchronous roster projection.
+    const targets = new Map<string, SessionTitleTarget | null>();
+    if (root.matches(SESSION_PROGRESS_HOVER_LINK_SELECTOR)) {
+      void this.decorate(root, false, targets);
     }
-    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_LINK_SELECTOR)) {
-      void this.decorate(anchor);
+    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_PROGRESS_HOVER_LINK_SELECTOR)) {
+      void this.decorate(anchor, false, targets);
     }
   }
 
@@ -81,8 +87,12 @@ export class SessionLinkTitler {
     this.observer.disconnect();
   }
 
-  async decorate(element: HTMLElement, load = false): Promise<void> {
-    const target = this.targetForAnchor(element);
+  async decorate(
+    element: HTMLElement,
+    load = false,
+    targets?: Map<string, SessionTitleTarget | null>,
+  ): Promise<void> {
+    const target = this.targetForAnchor(element, targets);
     const anchor = element instanceof HTMLAnchorElement ? element : document.createElement("a");
     if (element !== anchor && element.classList.contains("markdown-session-link")) {
       anchor.dataset.sessionHref = element.dataset.sessionHref;
@@ -116,49 +126,58 @@ export class SessionLinkTitler {
     });
   }
 
-  private targetForAnchor(anchor: HTMLElement): SessionTitleTarget | null {
+  private targetForAnchor(
+    anchor: HTMLElement,
+    targets?: Map<string, SessionTitleTarget | null>,
+  ): SessionTitleTarget | null {
     const rawKey = anchor.dataset.sessionKey?.trim();
     if (rawKey && !anchor.dataset.sessionHref) {
       const parsed = parseAgentSessionKey(rawKey);
       return parsed ? { sessionKey: rawKey, agentId: parsed.agentId, namespace: "chat" } : null;
     }
-    const path = parseMarkdownSessionUrl(
+    const path = parseLocalMarkdownSessionUrl(
       anchor.dataset.sessionHref ?? anchor.getAttribute("href") ?? "",
-      this.context?.basePath,
-      this.mainKey(),
+      {
+        basePath: this.context?.basePath,
+        mainKey: this.mainKey(),
+        publicOrigin: markdownSessionPublicOrigin(this.context),
+      },
     );
-    if (
-      !path ||
-      (path.url.origin !== globalThis.location.origin &&
-        path.url.origin !== markdownSessionPublicOrigin(this.context))
-    ) {
+    if (!path) {
       return null;
     }
     // Keep URL route intent (face, query, fragment) even when its identity is cached.
-    anchor.setAttribute("href", `${path.url.pathname}${path.url.search}${path.url.hash}`);
-    anchor.classList.add("markdown-session-link");
+    const href = `${path.url.pathname}${path.url.search}${path.url.hash}`;
+    if (anchor.getAttribute("href") !== href) {
+      anchor.setAttribute("href", href);
+    }
+    if (!anchor.classList.contains("markdown-session-link")) {
+      anchor.classList.add("markdown-session-link");
+    }
     anchor.removeAttribute("target");
     anchor.removeAttribute("rel");
-    anchor.removeAttribute("data-session-key");
-    const row = findLocalSessionReference(
-      this.context?.sessions.state.result?.sessions ?? [],
-      path.target,
-      this.mainKey(),
-    );
-    return row
-      ? { sessionKey: row.key, agentId: path.target.agentId, namespace: path.target.namespace }
-      : null;
+    let target = targets?.get(path.url.pathname);
+    if (target === undefined) {
+      const row = findLocalSessionReference(
+        this.context?.sessions.state.result?.sessions ?? [],
+        path.target,
+        this.mainKey(),
+      );
+      target = row
+        ? { sessionKey: row.key, agentId: path.target.agentId, namespace: path.target.namespace }
+        : null;
+      targets?.set(path.url.pathname, target);
+    }
+    if (!target) {
+      anchor.removeAttribute("data-session-key");
+    }
+    return target;
   }
 
   private setCacheEntry(key: string, entry: CacheEntry): void {
     this.cache.delete(key);
     this.cache.set(key, entry);
-    for (const oldest of this.cache.keys()) {
-      if (this.cache.size <= CACHE_LIMIT) {
-        break;
-      }
-      this.cache.delete(oldest);
-    }
+    pruneMapToMaxSize(this.cache, CACHE_LIMIT);
   }
 
   private cachedOrSeededEntry(target: SessionTitleTarget): CacheEntry | undefined {
@@ -233,8 +252,12 @@ export class SessionLinkTitler {
       this.context?.basePath,
       { displayName: title, exactKey: true, mainKey: this.mainKey() },
     );
-    anchor.dataset.sessionKey = target.sessionKey;
-    anchor.classList.add("markdown-session-link");
+    if (anchor.dataset.sessionKey !== target.sessionKey) {
+      anchor.dataset.sessionKey = target.sessionKey;
+    }
+    if (!anchor.classList.contains("markdown-session-link")) {
+      anchor.classList.add("markdown-session-link");
+    }
     if (!anchor.dataset.sessionHref && href && anchor.getAttribute("href") !== href) {
       anchor.setAttribute("href", href);
     }
@@ -242,7 +265,13 @@ export class SessionLinkTitler {
       return;
     }
     anchor.classList.add("markdown-session-link--titled");
-    anchor.textContent = title;
+    // Keep a producer's label node so Lit can still update its text binding.
+    const label =
+      anchor.querySelector<HTMLSpanElement>(":scope > .session-label") ??
+      document.createElement("span");
+    label.className = "session-label";
+    label.textContent = title;
+    anchor.replaceChildren(label);
     anchor.title = target.sessionKey;
   }
 }

@@ -60,7 +60,7 @@ describe("scheduled show_widget", () => {
       status: "pinned",
       boardWidgetName: "scheduled-status",
       capabilityState: "none",
-      text: "Widget pinned to dashboard tab main as scheduled-status",
+      text: "Widget pinned to dashboard tab main as scheduled-status. Open this dashboard tab in Control UI to view it.",
     });
     expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
       "board.widget.put",

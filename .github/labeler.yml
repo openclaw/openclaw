@@ -4,17 +4,20 @@
           - "extensions/azure-speech/**"
           - "docs/providers/azure-speech.md"
           - "docs/tools/tts.md"
+          - "docs/tools/tts/**"
 "plugin: geolocation":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/geolocation/**"
           - "docs/plugins/geolocation.md"
+          - "docs/plugins/reference/geolocation.md"
 "plugin: file-transfer":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+          - "docs/plugins/sdk-runtime/**"
 "plugin: linux-node":
   - changed-files:
       - any-glob-to-any-file:
@@ -22,6 +25,11 @@
           - "docs/nodes/camera.md"
           - "docs/nodes/location-command.md"
           - "docs/platforms/linux.md"
+"plugin: code-mode-quickjs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/code-mode-quickjs/**"
+          - "docs/plugins/reference/code-mode-quickjs.md"
 "plugin: cua-computer":
   - changed-files:
       - any-glob-to-any-file:
@@ -31,6 +39,18 @@
       - any-glob-to-any-file:
           - "extensions/pixverse/**"
           - "docs/providers/pixverse.md"
+"plugin: typesafe":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/typesafe/**"
+          - "docs/plugins/typesafe.md"
+          - "docs/plugins/reference/typesafe.md"
+"plugin: onnx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/onnx/**"
+          - "docs/plugins/onnx.md"
+          - "docs/plugins/reference/onnx.md"
 "channel: a2a":
   - changed-files:
       - any-glob-to-any-file:
@@ -41,6 +61,7 @@
       - any-glob-to-any-file:
           - "extensions/discord/**"
           - "docs/channels/discord.md"
+          - "docs/channels/discord/**"
 "channel: irc":
   - changed-files:
       - any-glob-to-any-file:
@@ -56,6 +77,7 @@
       - any-glob-to-any-file:
           - "extensions/feishu/**"
           - "docs/channels/feishu.md"
+          - "docs/channels/feishu/**"
 "channel: googlechat":
   - changed-files:
       - any-glob-to-any-file:
@@ -66,16 +88,26 @@
       - any-glob-to-any-file:
           - "extensions/logbook/**"
           - "docs/plugins/logbook.md"
+          - "docs/plugins/reference/logbook.md"
 "plugin: imap":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/imap/**"
           - "docs/automation/imap.md"
+"plugin: facetime":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/facetime/**"
+          - "docs/plugins/facetime.md"
+          - "docs/plugins/facetime-recovery.md"
+          - "docs/plugins/reference/facetime.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+          - "docs/plugins/google-meet/**"
+          - "docs/plugins/reference/google-meet.md"
 "plugin: teams-meetings":
   - changed-files:
       - any-glob-to-any-file:
@@ -106,6 +138,12 @@
           - "extensions/beam/**"
           - "docs/plugins/beam.md"
           - "docs/plugins/reference/beam.md"
+"plugin: session-share":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/session-share/**"
+          - "docs/plugins/session-share.md"
+          - "docs/plugins/reference/session-share.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:
@@ -135,6 +173,7 @@
       - any-glob-to-any-file:
           - "extensions/imessage/**"
           - "docs/channels/imessage.md"
+          - "docs/channels/imessage/**"
 "channel: line":
   - changed-files:
       - any-glob-to-any-file:
@@ -145,6 +184,7 @@
       - any-glob-to-any-file:
           - "extensions/matrix/**"
           - "docs/channels/matrix.md"
+          - "docs/channels/matrix/**"
 "channel: mattermost":
   - changed-files:
       - any-glob-to-any-file:
@@ -155,6 +195,7 @@
       - any-glob-to-any-file:
           - "extensions/msteams/**"
           - "docs/channels/msteams.md"
+          - "docs/channels/msteams/**"
 "channel: nextcloud-talk":
   - changed-files:
       - any-glob-to-any-file:
@@ -191,6 +232,7 @@
           - "qa/scenarios/**"
           - "docs/maturity/**"
           - "docs/concepts/qa-e2e-automation.md"
+          - "docs/concepts/qa-e2e-automation/**"
           - "docs/concepts/personal-agent-benchmark-pack.md"
           - "docs/channels/qa-channel.md"
 "channel: signal":
@@ -203,6 +245,7 @@
       - any-glob-to-any-file:
           - "extensions/slack/**"
           - "docs/channels/slack.md"
+          - "docs/channels/slack/**"
 "channel: sms":
   - changed-files:
       - any-glob-to-any-file:
@@ -218,6 +261,7 @@
       - any-glob-to-any-file:
           - "extensions/telegram/**"
           - "docs/channels/telegram.md"
+          - "docs/channels/telegram/**"
 "channel: tlon":
   - changed-files:
       - any-glob-to-any-file:
@@ -350,7 +394,9 @@
           - "src/config/**/*sandbox*"
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
+          - "docs/gateway/sandboxing/**"
           - "docs/install/docker.md"
+          - "docs/install/docker/**"
           - "docs/tools/multi-agent-sandbox-tools.md"
 
 "deploy: cloudflare":
@@ -442,10 +488,6 @@
           - "extensions/onepassword/**"
           - "docs/plugins/onepassword.md"
           - "docs/plugins/reference/onepassword.md"
-"extensions: webhooks":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/webhooks/**"
 "extensions: web-readability":
   - changed-files:
       - any-glob-to-any-file:
@@ -575,6 +617,7 @@
           - "extensions/fish-audio-speech/**"
           - "docs/providers/fish-audio.md"
           - "docs/tools/tts.md"
+          - "docs/tools/tts/**"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:
@@ -588,17 +631,24 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: agentsapi":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/agentsapi/**"
 "extensions: openai":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openai/**"
+          - "docs/providers/openai/authentication.md"
 "extensions: codex":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/codex/**"
           - "docs/plugins/codex-harness.md"
+          - "docs/plugins/codex-harness/**"
           - "docs/plugins/codex-harness-reference.md"
           - "docs/plugins/codex-harness-runtime.md"
+          - "docs/plugins/codex-harness-runtime/**"
           - "docs/plugins/codex-supervision.md"
           - "docs/specs/codex-supervision.md"
 "extensions: copilot":
@@ -606,6 +656,7 @@
       - any-glob-to-any-file:
           - "extensions/copilot/**"
           - "docs/plugins/copilot.md"
+          - "docs/plugins/reference/copilot.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:
@@ -647,6 +698,12 @@
           - "extensions/qwen/**"
           - "docs/providers/qwen.md"
           - "docs/plugins/reference/qwen.md"
+"extensions: radius":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/radius/**"
+          - "docs/providers/radius.md"
+          - "docs/plugins/reference/radius.md"
 "extensions: runway":
   - changed-files:
       - any-glob-to-any-file:
@@ -684,6 +741,7 @@
       - any-glob-to-any-file:
           - "extensions/tts-local-cli/**"
           - "docs/tools/tts.md"
+          - "docs/tools/tts/**"
 "extensions: venice":
   - changed-files:
       - any-glob-to-any-file:
@@ -744,6 +802,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/anthropic-vertex/**"
+"extensions: apple-fm":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/apple-fm/**"
+          - "docs/plugins/apple-fm.md"
+          - "docs/plugins/reference/apple-fm.md"
 "extensions: brave":
   - changed-files:
       - any-glob-to-any-file:
@@ -786,6 +850,11 @@
           - "extensions/fireworks/**"
           - "docs/providers/fireworks.md"
           - "docs/plugins/reference/fireworks.md"
+"extensions: github":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/github/**"
+          - "docs/plugins/github.md"
 "extensions: github-copilot":
   - changed-files:
       - any-glob-to-any-file:

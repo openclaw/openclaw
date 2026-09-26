@@ -1,4 +1,3 @@
-// Matrix type declarations define plugin contracts.
 import { MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
 import type { EncryptedFile, MessageEventContent } from "../sdk.js";
 export type { MatrixRawEvent } from "../sdk.js";

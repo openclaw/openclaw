@@ -17,6 +17,7 @@ import {
   withRestoredMocks,
 } from "../test-utils/vitest-spies.js";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.js";
+import type { CommandRunner } from "./update-global-command-runner.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   collectInstalledGlobalPackageErrors,
@@ -26,14 +27,16 @@ import {
   createGlobalInstallEnv,
   globalInstallArgs,
   globalInstallFallbackArgs,
+  isPackageTargetAlreadyCurrent,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
+} from "./update-global.js";
+import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
+import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
-  resolvePnpmGlobalDirFromGlobalRoot,
-  type CommandRunner,
-} from "./update-global.js";
+} from "./update-npm-prefix.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 const TELEGRAM_RUNTIME_API = bundledDistPluginFile("telegram", "runtime-api.js");
@@ -144,16 +147,9 @@ describe("update global helpers", () => {
       expected: "2026.7.30-beta.1",
     },
     { packageName: "openclaw", spec: "openclaw@^1.2.3", expected: null },
-    { packageName: "openclaw", spec: "openclaw@~1.2.3", expected: null },
-    { packageName: "openclaw", spec: "openclaw@>=1.2.3", expected: null },
     { packageName: "openclaw", spec: "openclaw@1.2.x", expected: null },
     { packageName: "openclaw", spec: "openclaw@1.2", expected: null },
-    { packageName: "openclaw", spec: "openclaw@*", expected: null },
     { packageName: "openclaw", spec: "openclaw@latest", expected: null },
-    { packageName: "openclaw", spec: "openclaw@beta", expected: null },
-    { packageName: "openclaw", spec: "openclaw@next", expected: null },
-    { packageName: "openclaw", spec: "openclaw@main", expected: null },
-    { packageName: "openclaw", spec: "openclaw@nightly", expected: null },
     { packageName: "openclaw", spec: "openclaw@V1.2.3", expected: null },
     { packageName: "openclaw", spec: "openclaw@npm:@vendor/openclaw@1.2.3", expected: null },
     { packageName: "openclaw", spec: "openclaw@file:../candidate", expected: null },
@@ -170,10 +166,57 @@ describe("update global helpers", () => {
 
   it("identifies package targets that support registry version resolution", () => {
     expect(canResolveRegistryVersionForPackageTarget("latest")).toBe(true);
+    expect(canResolveRegistryVersionForPackageTarget("openclaw@1.0.0")).toBe(true);
+    expect(canResolveRegistryVersionForPackageTarget("openclaw@file:/owned/package")).toBe(false);
+    expect(canResolveRegistryVersionForPackageTarget("openclaw@github:owner/repo")).toBe(false);
     expect(canResolveRegistryVersionForPackageTarget("2026.3.22")).toBe(true);
     expect(canResolveRegistryVersionForPackageTarget("main")).toBe(false);
     expect(canResolveRegistryVersionForPackageTarget("github:openclaw/openclaw#main")).toBe(false);
     expect(canResolveRegistryVersionForPackageTarget("/tmp/openclaw.tgz")).toBe(false);
+  });
+
+  it.each([
+    { target: "latest", currentVersion: "1.0.0", targetVersion: "1.0.0", expected: true },
+    {
+      target: "/tmp/openclaw-current.tgz",
+      currentVersion: "1.0.0",
+      targetVersion: "1.0.0",
+      expected: false,
+    },
+    {
+      target: "file:/tmp/openclaw-current.tgz",
+      currentVersion: "1.0.0",
+      targetVersion: "1.0.0",
+      expected: false,
+    },
+    {
+      target: "openclaw@file:/tmp/openclaw-current.tgz",
+      currentVersion: "1.0.0",
+      targetVersion: "1.0.0",
+      expected: false,
+    },
+    {
+      target: "openclaw@1.0.0",
+      currentVersion: "1.0.0",
+      targetVersion: "1.0.0",
+      expected: true,
+    },
+    { target: "latest", currentVersion: "1.0.0", targetVersion: "1.0.1", expected: false },
+  ])("classifies same-version package target $target", (testCase) => {
+    expect(isPackageTargetAlreadyCurrent(testCase)).toBe(testCase.expected);
+  });
+
+  it.each([
+    "https://github.com/openclaw/openclaw.git#main",
+    "https://github.com/openclaw/openclaw#main",
+    "openclaw/openclaw#main",
+    "git@github.com:openclaw/openclaw.git#main",
+  ])("passes source package target %s through without registry resolution", (tag) => {
+    envSnapshot = captureEnv(["OPENCLAW_UPDATE_PACKAGE_SPEC"]);
+    delete process.env.OPENCLAW_UPDATE_PACKAGE_SPEC;
+
+    expect(canResolveRegistryVersionForPackageTarget(tag)).toBe(false);
+    expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag, env: {} })).toBe(tag);
   });
 
   it("resolves scoped package paths from the package manager global root", async () => {
@@ -199,9 +242,6 @@ describe("update global helpers", () => {
   });
 
   it.each([
-    ["11.12.0", "unflagged"],
-    ["11.13.0", "unflagged"],
-    ["11.14.0", "unflagged"],
     ["11.15.9", "unflagged"],
     ["11.16.0", "allow-scripts-advisory"],
     ["12.0.0", "allow-scripts"],

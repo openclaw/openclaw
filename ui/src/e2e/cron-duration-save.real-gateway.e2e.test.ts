@@ -2,8 +2,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type WaSelect from "@awesome.me/webawesome/dist/components/select/select.js";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -11,9 +9,11 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let instance: OpenClawTestInstance | undefined;
@@ -132,7 +132,7 @@ catalogSuite.define(() => {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 900, width: 1280 },
-          recordVideo: { dir: catalogSuite.artifactDir },
+          ...(captureEnabled ? { recordVideo: { dir: catalogSuite.artifactDir } } : {}),
         },
         async ({ page }) => {
           await page.routeWebSocket(`ws://127.0.0.1:${owner.port}/**`, (socket) => {
@@ -183,13 +183,21 @@ catalogSuite.define(() => {
           await page.locator('[data-test-id="cron-new-task"]').click();
           await page.locator("#cron-name").fill("Retain this draft");
           await page.locator("#cron-payload-text").fill("Do not submit this draft");
-          const picker = page.locator("#cron-payload-model-picker");
-          await expect.poll(() => picker.locator('wa-option[value="retiring"]').count()).toBe(1);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
+          await expect
+            .poll(() => picker.locator('[role="option"][data-value="retiring"]').count())
+            .toBe(1);
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
+          }
           await publish("published");
-          await expect.poll(() => picker.locator('wa-option[value="published"]').count()).toBe(1);
-          expect(await picker.locator('wa-option[value="retiring"]').count()).toBe(0);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+          await expect
+            .poll(() => picker.locator('[role="option"][data-value="published"]').count())
+            .toBe(1);
+          expect(await picker.locator('[role="option"][data-value="retiring"]').count()).toBe(0);
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
+          }
 
           rejectCatalogReplies = true;
           await publish("held");
@@ -197,18 +205,26 @@ catalogSuite.define(() => {
           const error = page.locator(".cron-error-banner");
           await error.waitFor({ state: "visible" });
           expect(await error.textContent()).toContain("Catalog transport unavailable");
-          expect(await picker.locator('wa-option[value="published"]').count()).toBe(1);
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "read-failure.png") });
+          expect(await picker.locator('[role="option"][data-value="published"]').count()).toBe(1);
+          if (captureEnabled) {
+            await page.screenshot({
+              path: path.join(catalogSuite.artifactDir, "read-failure.png"),
+            });
+          }
 
           rejectCatalogReplies = false;
           await publish("recovered");
-          await expect.poll(() => picker.locator('wa-option[value="recovered"]').count()).toBe(1);
+          await expect
+            .poll(() => picker.locator('[role="option"][data-value="recovered"]').count())
+            .toBe(1);
           await error.waitFor({ state: "hidden" });
           expect(await page.locator("#cron-name").inputValue()).toBe("Retain this draft");
           expect(await page.locator("#cron-payload-text").inputValue()).toBe(
             "Do not submit this draft",
           );
-          await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+          if (captureEnabled) {
+            await page.screenshot({ path: path.join(catalogSuite.artifactDir, "recovered.png") });
+          }
         },
       );
     } finally {
@@ -438,30 +454,84 @@ async function seedAlertJob(cliJson: CliJson, name: string, failureAlert: CronJo
   return { id, stored };
 }
 
-async function pickerValue(picker: Locator) {
-  return picker.evaluate((element) => {
-    // SAFETY: Callers locate only registered wa-select controls rendered by the cron form.
-    return (element as WaSelect).value;
-  });
-}
-
 async function choosePicker(picker: Locator, value: string) {
-  await picker.click();
-  await picker.locator(`wa-option[value="${value}"]`).click();
+  await selectPickerValue(picker, value);
   await expect.poll(() => pickerValue(picker)).toBe(value);
 }
 
 async function readAlertFields(page: Page) {
-  const mode = page.locator("#cron-failure-alert-delivery-mode");
+  const mode = page.locator("openclaw-select-picker:has(#cron-failure-alert-delivery-mode)");
   return {
     after: await page.locator("#cron-failure-alert-after").inputValue(),
     cooldown: await page.locator("#cron-failure-alert-cooldown-seconds").inputValue(),
     mode: await pickerValue(mode),
-    modeLabel: await mode.locator('input[role="combobox"]').inputValue(),
+    modeLabel: await mode.locator(".picker-select__trigger .picker-select__label").textContent(),
   };
 }
 
 suite.define(() => {
+  it("timeout override: clearing restores the default after save and reload", async () => {
+    await withGatewayCommands("real-timeout-clear-commands.json", async (cliJson) => {
+      const job = await cliJson([
+        "automations",
+        "add",
+        "--name",
+        "Clear timeout override",
+        "--agent",
+        "main",
+        "--session",
+        "isolated",
+        "--message",
+        "Synthetic paused timeout fixture",
+        "--disabled",
+        "--every",
+        "2h",
+        "--timeout-seconds",
+        "90",
+        "--no-deliver",
+        "--json",
+      ]);
+      const jobId = cronJobId(job);
+      await withCronJobPage(cliJson, jobId, async (evidence) => {
+        const { page, servedDocumentSha256, servedAssets } = evidence;
+        await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
+        await page.locator("details.cron-advanced > summary").click();
+        const timeout = page.locator("#cron-timeout-seconds");
+        expect(await timeout.inputValue()).toBe("90");
+        await timeout.fill("");
+        const cleared = await submitCronForm(evidence, cliJson, "cron.update");
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await page.locator("details.cron-advanced > summary").click();
+        await timeout.scrollIntoViewIfNeeded();
+        await capture(page, "real-timeout-clear-reloaded", {
+          ...cleared,
+          reloadedTimeout: await timeout.inputValue(),
+          servedDocumentSha256,
+          servedAssets: await Promise.all(servedAssets),
+        });
+        if (captureEnabled) {
+          const formBounds = await page.locator(".cron-page").boundingBox();
+          if (!formBounds) {
+            throw new Error("Automation form has no visible bounds");
+          }
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "real-timeout-form-reloaded.png"),
+            clip: { x: formBounds.x, y: 0, width: formBounds.width, height: 900 },
+          });
+        }
+        expect(cleared.stored.payload).not.toHaveProperty("timeoutSeconds");
+        expect(await timeout.inputValue()).toBe("");
+        for (const value of ["0", "0.25"]) {
+          await timeout.fill(value);
+          const saved = await submitCronForm(evidence, cliJson, "cron.update");
+          expect(saved.stored.payload).toMatchObject({ timeoutSeconds: Number(value) });
+          expect(await timeout.inputValue()).toBe(value);
+        }
+      });
+    });
+  });
+
   it("configured duration precision: saves stagger through the real Gateway and CLI readback", async () => {
     await withGatewayCommands("real-gateway-commands.json", async (cliJson) => {
       const job = await cliJson([
@@ -612,23 +682,27 @@ suite.define(() => {
         });
         await page.locator("#cron-failure-alert-after").fill("");
         await page.locator("#cron-failure-alert-cooldown-seconds").fill("");
-        const deliveryMode = page.locator("#cron-failure-alert-delivery-mode");
-        await deliveryMode.click();
+        const deliveryMode = page.locator(
+          "openclaw-select-picker:has(#cron-failure-alert-delivery-mode)",
+        );
+        await deliveryMode.locator(".picker-select__trigger").click();
         await capture(page, "real-alert-clear-choice", {
-          options: await deliveryMode.locator("wa-option").evaluateAll((options) =>
+          options: await deliveryMode.locator('[role="option"]').evaluateAll((options) =>
             options.map((option) => ({
-              value: option.getAttribute("value"),
+              value: option.getAttribute("data-value"),
               label: option.textContent?.trim(),
             })),
           ),
         });
-        const inheritOption = deliveryMode.locator('wa-option[value=""]');
+        const inheritOption = deliveryMode.locator('[role="option"][data-value=""]');
         await inheritOption.waitFor({ state: "visible" });
         expect(await inheritOption.textContent()).toContain("Inherit global setting");
         await inheritOption.click();
         await expect.poll(() => pickerValue(deliveryMode)).toBe("");
         await expect
-          .poll(() => deliveryMode.locator('input[role="combobox"]').inputValue())
+          .poll(() =>
+            deliveryMode.locator(".picker-select__trigger .picker-select__label").textContent(),
+          )
           .toBe("Inherit global setting");
         const cleared = await submitCronForm(evidence, cliJson, "cron.update");
         expect(cleared.request.params).toMatchObject({
@@ -640,7 +714,7 @@ suite.define(() => {
           includeSkipped: true,
         });
         await capture(page, "real-alert-cleared", cleared);
-        const policyMode = page.locator("#cron-failure-alert-mode");
+        const policyMode = page.locator("openclaw-select-picker:has(#cron-failure-alert-mode)");
         await choosePicker(policyMode, "inherit");
         const inherited = await submitCronForm(evidence, cliJson, "cron.update");
         expect(inherited.request.params).toMatchObject({ patch: { failureAlert: null } });

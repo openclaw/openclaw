@@ -1,8 +1,5 @@
-// Multi-value combobox: the current values sit inside a full-width field as
-// removable chips, the dropdown lists the remaining options filtered by what
-// the operator types, and optional free-text entry appends values the option
-// list does not know. Light DOM so the shared stylesheet applies.
 import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -10,8 +7,10 @@ import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { configureAnchoredPopup } from "./anchored-overlay.ts";
 import { icons } from "./icons.ts";
 import { renderProviderBrandIcon } from "./provider-icon.ts";
+import { revealInScrollRegion } from "./scroll-state.ts";
 import "../styles/multi-select.css";
 
 export type MultiSelectOption = {
@@ -19,6 +18,7 @@ export type MultiSelectOption = {
   label: string;
   provider?: string;
   detail?: string;
+  disabled?: boolean;
 };
 
 type MultiSelectRow = MultiSelectOption & { custom?: boolean };
@@ -41,8 +41,10 @@ export class MultiSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) options: readonly MultiSelectOption[] = [];
   /** Current values in display order. Controlled: the host owns them. */
   @property({ attribute: false }) value: readonly string[] = [];
-  /** Values kept out of the dropdown without being chips, e.g. a primary model. */
-  @property({ attribute: false }) exclude: readonly string[] = [];
+  /** Caller-owned exclusions, such as the effective primary model. */
+  @property({ attribute: false }) isExcluded: (value: string) => boolean = () => false;
+  /** The caller owns value identity; search remains case-insensitive. */
+  @property({ attribute: false }) getValueKey: (value: string) => string = (value) => value;
   @property({ attribute: false }) placeholder = "";
   @property({ attribute: false }) accessibleLabel = "";
   /** Accept typed values, including comma-separated input, outside the option list. */
@@ -64,7 +66,13 @@ export class MultiSelect extends OpenClawLightDomElement {
     if (changed.has("disabled") && this.disabled && this.open) {
       this.closeMenu();
     }
-    if (this.open && (changed.has("options") || changed.has("value") || changed.has("exclude"))) {
+    if (
+      this.open &&
+      (changed.has("options") ||
+        changed.has("value") ||
+        changed.has("isExcluded") ||
+        changed.has("getValueKey"))
+    ) {
       this.activeIndex = Math.min(this.activeIndex, Math.max(0, this.rows().length - 1));
     }
   }
@@ -72,45 +80,38 @@ export class MultiSelect extends OpenClawLightDomElement {
   protected override updated(changed: PropertyValues) {
     if (
       !this.open ||
-      !["open", "query", "activeIndex", "options", "value", "exclude"].some((key) =>
-        changed.has(key),
+      !["open", "query", "activeIndex", "options", "value", "isExcluded", "getValueKey"].some(
+        (key) => changed.has(key),
       )
     ) {
       return;
     }
     const menu = this.querySelector<HTMLElement>(".multi-select__menu");
     const option = menu?.querySelector<HTMLElement>('[aria-selected="true"]');
-    if (!menu || !option) {
-      return;
-    }
-    const menuBounds = menu.getBoundingClientRect();
-    const optionBounds = option.getBoundingClientRect();
-    // Keep keyboard navigation inside this popup without scrolling the settings page.
-    if (optionBounds.top < menuBounds.top) {
-      menu.scrollTop -= menuBounds.top - optionBounds.top;
-    } else if (optionBounds.bottom > menuBounds.bottom) {
-      menu.scrollTop += optionBounds.bottom - menuBounds.bottom;
+    if (menu && option) {
+      revealInScrollRegion(menu, option);
     }
   }
 
   private optionFor(value: string): MultiSelectOption | undefined {
-    const key = value.toLowerCase();
-    return this.options.find((option) => option.value.toLowerCase() === key);
+    const key = this.getValueKey(value);
+    return this.options.find((option) => this.getValueKey(option.value) === key);
   }
 
   /** Dropdown rows: unchosen options matching the query, then the custom entry. */
   private rows(): MultiSelectRow[] {
-    const taken = new Set([...this.value, ...this.exclude].map((entry) => entry.toLowerCase()));
+    const taken = new Set(this.value.map((entry) => this.getValueKey(entry)));
     const custom = this.query.trim();
+    const customKey = this.getValueKey(custom);
     const query = custom.toLowerCase();
     const rows: MultiSelectRow[] = [];
     let exact: MultiSelectRow | null = null;
     for (const option of this.options) {
-      const key = option.value.toLowerCase();
-      if (taken.has(key)) {
+      const key = this.getValueKey(option.value);
+      if (taken.has(key) || this.isExcluded(option.value)) {
         continue;
       }
-      if (key === query) {
+      if (key === customKey) {
         exact = option;
         continue;
       }
@@ -121,7 +122,7 @@ export class MultiSelect extends OpenClawLightDomElement {
     }
     if (exact) {
       rows.unshift(exact);
-    } else if (this.allowCustom && custom && !taken.has(query)) {
+    } else if (this.allowCustom && custom && !taken.has(customKey) && !this.isExcluded(custom)) {
       rows.push({
         value: custom,
         label: custom,
@@ -141,6 +142,13 @@ export class MultiSelect extends OpenClawLightDomElement {
     this.onOpen();
   }
 
+  private activeRowIndex(rows: readonly MultiSelectRow[]): number {
+    const activeRow = rows[this.activeIndex];
+    return activeRow && !activeRow.disabled
+      ? this.activeIndex
+      : rows.findIndex((row) => !row.disabled);
+  }
+
   private closeMenu() {
     this.open = false;
     this.query = "";
@@ -151,12 +159,12 @@ export class MultiSelect extends OpenClawLightDomElement {
     if (this.disabled) {
       return;
     }
-    const taken = new Set([...this.value, ...this.exclude].map((entry) => entry.toLowerCase()));
+    const taken = new Set(this.value.map((entry) => this.getValueKey(entry)));
     const additions: string[] = [];
     for (const value of values) {
       const next = value.trim();
-      const key = next.toLowerCase();
-      if (next && !taken.has(key)) {
+      const key = this.getValueKey(next);
+      if (next && !taken.has(key) && !this.isExcluded(next) && !this.optionFor(next)?.disabled) {
         taken.add(key);
         additions.push(next);
       }
@@ -169,13 +177,13 @@ export class MultiSelect extends OpenClawLightDomElement {
   }
 
   private commitTypedQuery() {
-    const values = normalizeCsvOrLooseStringList(this.query).map(
-      (value) => this.optionFor(value)?.value ?? value,
-    );
-    this.commit(values);
+    this.commit(normalizeCsvOrLooseStringList(this.query));
   }
 
   private selectRow(row: MultiSelectRow) {
+    if (row.disabled) {
+      return;
+    }
     if (row.custom) {
       this.commitTypedQuery();
     } else {
@@ -199,24 +207,13 @@ export class MultiSelect extends OpenClawLightDomElement {
     this.input = element instanceof HTMLInputElement ? element : null;
   };
 
-  // Ref callbacks run in DOM order, so the field anchor exists by the time the
-  // popup mounts. Positioning mirrors the shared anchored overlay tuning.
+  // Ref callbacks run in DOM order, so the field anchor exists when the popup mounts.
   private readonly configurePopup = (element?: Element) => {
     if (!(element instanceof WaPopup) || !this.field) {
       return;
     }
-    const popup = element;
-    popup.anchor = this.field;
-    popup.placement = "bottom-start";
-    popup.boundary = "viewport";
-    popup.distance = 6;
-    popup.flip = true;
-    popup.flipPadding = 8;
-    popup.shift = true;
-    popup.shiftPadding = 12;
-    popup.autoSize = "vertical";
-    popup.autoSizePadding = 8;
-    popup.sync = "width";
+    configureAnchoredPopup(element, this.field, "bottom");
+    element.sync = "width";
   };
 
   private readonly handleFieldClick = (event: MouseEvent) => {
@@ -248,10 +245,15 @@ export class MultiSelect extends OpenClawLightDomElement {
           this.openMenu();
           return;
         }
-        const count = this.rows().length;
-        if (count > 0) {
-          const step = event.key === "ArrowDown" ? 1 : count - 1;
-          this.activeIndex = (this.activeIndex + step) % count;
+        const rows = this.rows();
+        const indices = rows.flatMap((row, index) => (row.disabled ? [] : [index]));
+        if (indices.length > 0) {
+          const current = indices.indexOf(this.activeRowIndex(rows));
+          const step = event.key === "ArrowDown" ? 1 : indices.length - 1;
+          this.activeIndex = expectDefined(
+            indices[(current + step) % indices.length],
+            "selectable option index",
+          );
         }
         return;
       }
@@ -259,7 +261,8 @@ export class MultiSelect extends OpenClawLightDomElement {
         if (!this.open) {
           return;
         }
-        const row = this.rows()[this.activeIndex];
+        const rows = this.rows();
+        const row = rows[this.activeRowIndex(rows)];
         if (row) {
           event.preventDefault();
           this.selectRow(row);
@@ -287,15 +290,10 @@ export class MultiSelect extends OpenClawLightDomElement {
     }
   };
 
-  // Leaving the field keeps a typed custom value rather than dropping it, the
-  // same contract the free-text chip input had.
   private readonly handleFocusOut = (event: FocusEvent) => {
     const next = event.relatedTarget;
     if (next instanceof Node && this.contains(next)) {
       return;
-    }
-    if (this.allowCustom) {
-      this.commitTypedQuery();
     }
     this.closeMenu();
   };
@@ -327,7 +325,7 @@ export class MultiSelect extends OpenClawLightDomElement {
 
   override render() {
     const rows = this.open ? this.rows() : [];
-    const active = this.open && rows.length > 0 ? Math.min(this.activeIndex, rows.length - 1) : -1;
+    const active = this.activeRowIndex(rows);
     const label = this.accessibleLabel || this.placeholder;
     return html`
       <div
@@ -367,11 +365,12 @@ export class MultiSelect extends OpenClawLightDomElement {
                 role="option"
                 id=${`${this.listboxId}-${index}`}
                 aria-selected=${index === active ? "true" : "false"}
+                aria-disabled=${row.disabled ? "true" : "false"}
                 data-value=${row.value}
                 ?data-custom=${Boolean(row.custom)}
                 @mousedown=${keepInputFocus}
                 @mousemove=${() => {
-                  if (this.activeIndex !== index) {
+                  if (!row.disabled && this.activeIndex !== index) {
                     this.activeIndex = index;
                   }
                 }}

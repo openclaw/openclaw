@@ -19,8 +19,10 @@ Standard and Step Plan are **separate providers** with different endpoints and m
 
 ```bash
 openclaw plugins install @openclaw/stepfun-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Region and endpoint overview
 
@@ -77,7 +79,8 @@ Step Plan (`stepfun-plan`):
       </Step>
       <Step title="Non-interactive alternative">
         ```bash
-        openclaw onboard --auth-choice stepfun-standard-api-key-intl \
+        openclaw onboard --non-interactive --accept-risk --skip-health \
+          --auth-choice stepfun-standard-api-key-intl \
           --stepfun-api-key "$STEPFUN_API_KEY"
         ```
       </Step>
@@ -116,7 +119,8 @@ Step Plan (`stepfun-plan`):
       </Step>
       <Step title="Non-interactive alternative">
         ```bash
-        openclaw onboard --auth-choice stepfun-plan-api-key-intl \
+        openclaw onboard --non-interactive --accept-risk --skip-health \
+          --auth-choice stepfun-plan-api-key-intl \
           --stepfun-api-key "$STEPFUN_API_KEY"
         ```
       </Step>
@@ -228,9 +232,9 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
   </Accordion>
 
   <Accordion title="Notes">
-    - `step-3.7-flash` accepts text and image input through OpenClaw. StepFun's API also supports video, which is not yet a model input modality in OpenClaw.
+    - `step-3.7-flash` accepts text and image input through OpenClaw. StepFun's API also supports video, which OpenClaw does not declare as an input modality for StepFun models.
     - Step 3.7 supports `low`, `medium`, and `high` reasoning effort. Because the model has no non-reasoning mode, `/think off` maps to `low`.
-    - `step-3.5-flash-2603` is currently exposed only on `stepfun-plan`.
+    - `step-3.5-flash-2603` is exposed only on `stepfun-plan`.
     - Use `openclaw models list` and `openclaw models set <provider/model>` to inspect or switch models.
 
   </Accordion>

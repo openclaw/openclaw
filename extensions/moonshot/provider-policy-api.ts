@@ -1,6 +1,8 @@
 // Moonshot policy module exposes model-specific thinking controls before runtime registration.
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
-import { isNativeMoonshotBaseUrl } from "./provider-catalog.js";
+
+export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 
 export const KIMI_K2_7_CODE_MODEL_ID = "kimi-k2.7-code";
 export const KIMI_K2_7_CODE_HIGHSPEED_MODEL_ID = "kimi-k2.7-code-highspeed";
@@ -10,6 +12,12 @@ const ALWAYS_THINKING_PROFILES = {
   [KIMI_K2_7_CODE_MODEL_ID]: { id: "low", label: "on" },
   [KIMI_K2_7_CODE_HIGHSPEED_MODEL_ID]: { id: "low", label: "on" },
 } as const;
+
+export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
+  return [MOONSHOT_BASE_URL, MOONSHOT_CN_BASE_URL].some(
+    (official) => baseUrl === official || baseUrl === `${official}/`,
+  );
+}
 
 export function isMoonshotK3NativeVideoRoute(route: {
   provider?: string;
@@ -26,12 +34,14 @@ export function isMoonshotK3NativeVideoRoute(route: {
 }
 
 export function isMoonshotAlwaysThinkingModelId(modelId: string): boolean {
-  return modelId.trim().toLowerCase() in ALWAYS_THINKING_PROFILES;
+  return Object.hasOwn(ALWAYS_THINKING_PROFILES, modelId.trim().toLowerCase());
 }
 
 export function resolveThinkingProfile(context: ProviderDefaultThinkingPolicyContext) {
   const modelId = context.modelId.trim().toLowerCase();
-  const profile = ALWAYS_THINKING_PROFILES[modelId as keyof typeof ALWAYS_THINKING_PROFILES];
+  const profile = Object.hasOwn(ALWAYS_THINKING_PROFILES, modelId)
+    ? ALWAYS_THINKING_PROFILES[modelId as keyof typeof ALWAYS_THINKING_PROFILES]
+    : undefined;
   if (profile) {
     return {
       levels: [profile],

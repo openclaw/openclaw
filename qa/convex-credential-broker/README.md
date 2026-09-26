@@ -152,7 +152,10 @@ For `kind: "telegram"`, broker `admin/add` validates that payload includes:
 
 For `kind: "telegram-test-userbot"`, broker `admin/add` accepts only Test
 Server schema version 1 with numeric chat, bot, and tester ids; a bot token and
-username; a base64 TDLib archive and SHA-256 hash; and a TDLib version.
+username; a base64 TDLib archive and SHA-256 hash; and a TDLib version. Optional
+participant-identity fixtures add a negative `forumGroupId`, positive numeric
+`forumTopicId`, and independently authorized `participants` with distinct
+lowercase aliases, tester ids, TDLib archives, hashes, and versions.
 
 For `kind: "buzz"`, broker `admin/add` validates that payload includes:
 

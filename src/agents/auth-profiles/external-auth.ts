@@ -94,12 +94,12 @@ function resolveAllowedExternalCliAuthProfiles(params: {
 }): ProviderExternalAuthProfile[] {
   const env = params.env ?? process.env;
   const explicitProfileIds = resolveExplicitProfileIds(params.externalCli?.externalCliProfileIds);
-  const cliProfiles =
-    externalCliSync.resolveExternalCliAuthProfiles?.(params.store, {
-      allowKeychainPrompt: params.externalCli?.allowKeychainPrompt,
-      providerIds: params.externalCli?.externalCliProviderIds,
-      profileIds: explicitProfileIds,
-    }) ?? [];
+  const cliProfiles = externalCliSync.resolveExternalCliAuthProfiles(params.store, {
+    allowKeychainPrompt: params.externalCli?.allowKeychainPrompt,
+    ...(params.env ? { env: params.env } : {}),
+    providerIds: params.externalCli?.externalCliProviderIds,
+    profileIds: explicitProfileIds,
+  });
   return cliProfiles.flatMap((profile) =>
     isExternalAuthProfileAllowed(
       profile,
@@ -127,13 +127,7 @@ function hasPersistableExternalCliSyncCandidate(
     return true;
   }
   // MiniMax keeps its persisted external profile fresh without an explicit scope.
-  for (const profileId of [MINIMAX_CLI_PROFILE_ID]) {
-    const credential = store.profiles[profileId];
-    if (credential?.type === "oauth") {
-      return true;
-    }
-  }
-  return false;
+  return store.profiles[MINIMAX_CLI_PROFILE_ID]?.type === "oauth";
 }
 
 function hasScopedExternalCliOverlay(params?: ExternalCliOverlayOptions): boolean {
@@ -161,7 +155,11 @@ export function syncPersistedExternalCliAuthProfiles(
   for (const profile of persistedProfiles) {
     const target = next ?? store;
     const existing = target.profiles[profile.profileId];
-    if (existing?.type === "oauth" && areOAuthCredentialsEquivalent(existing, profile.credential)) {
+    if (
+      existing?.type === "oauth" &&
+      existing.authFlow === profile.credential.authFlow &&
+      areOAuthCredentialsEquivalent(existing, profile.credential)
+    ) {
       continue;
     }
     next ??= cloneAuthProfileStore(store);
@@ -238,14 +236,7 @@ export function createExternalAuthRuntime(
     env?: NodeJS.ProcessEnv;
     externalCli?: ExternalCliOverlayOptions;
   }): RuntimeExternalOAuthProfile[] {
-    return Array.from(
-      resolveExternalAuthProfiles({
-        store: params.store,
-        agentDir: params.agentDir,
-        env: params.env,
-        externalCli: params.externalCli,
-      }).profiles.values(),
-    );
+    return Array.from(resolveExternalAuthProfiles(params).profiles.values());
   }
 
   /** Overlay external auth profiles onto a cloned auth store for runtime use. */

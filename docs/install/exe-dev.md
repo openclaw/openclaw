@@ -173,9 +173,9 @@ From your local machine, create a patch file and pipe it to the VM:
   },
   agents: {
     defaults: {
-      model: { primary: "openai/gpt-5.6-sol" },
+      model: { primary: "openai/gpt-6-astra" },
       models: {
-        "openai/gpt-5.6-sol": { params: { fastMode: true } },
+        "openai/gpt-6-astra": { params: { fastMode: true } },
       },
     },
   },

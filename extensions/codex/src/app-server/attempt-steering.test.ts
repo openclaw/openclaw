@@ -10,8 +10,14 @@ import { buildCodexUserInput } from "./user-input.js";
 
 type QueueParams = Parameters<typeof createCodexSteeringQueue>[0];
 
-const prepareMessage: QueueParams["prepareMessage"] = async (text, options) =>
-  buildCodexUserInput(text, options.images);
+const prepareMessage: QueueParams["prepareMessage"] = async (text, options) => ({
+  input: buildCodexUserInput(text, options.images),
+  message: {
+    role: "user",
+    content: [{ type: "text", text }, ...(options.images ?? [])],
+    timestamp: 1,
+  },
+});
 
 const PNG_1X1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z0V8AAAAASUVORK5CYII=";
@@ -114,7 +120,7 @@ describe("Codex app-server steering queue", () => {
     },
   );
 
-  it.each(["open", "closed", "reassigned"] as const)(
+  it.each(["open", "revoked"] as const)(
     "rechecks each source after later batch preparation at actual I/O: %s",
     async (transition) => {
       const harness = createClientHarness({
@@ -129,21 +135,19 @@ describe("Codex app-server steering queue", () => {
       const controller = new AbortController();
       const queue = createQueue(harness.client, {
         signal: controller.signal,
-        prepareMessage: async (text, options) => {
+        prepareMessage: async (text, options, assertCurrent) => {
           if (text === "independent") {
             preparing.resolve();
             await release.promise;
           }
-          return prepareMessage(text, options);
+          return prepareMessage(text, options, assertCurrent);
         },
       });
       const acceptance = vi.fn();
       const first = queue
         .queue("controlled", { debounceMs: 5, onQueueAccepted: acceptance }, () => {
           if (!sourceCurrent) {
-            throw new Error(
-              transition === "reassigned" ? "source claim replaced" : "source closed",
-            );
+            throw new Error("source claim replaced");
           }
         })
         .then(
@@ -438,7 +442,11 @@ describe("Codex app-server steering queue", () => {
 
     queue.cancel();
     await rejected;
+    expect(queue.getAcceptedMessages()).toEqual([
+      { role: "user", content: [{ type: "text", text: "completion wake" }], timestamp: 1 },
+    ]);
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(false);
+    expect(queue.getAcceptedMessages()).toHaveLength(1);
     await expect(queue.queue("too late", { debounceMs: 0 })).rejects.toThrow(
       "steering queue cancelled",
     );
@@ -481,7 +489,7 @@ describe("Codex app-server steering queue", () => {
       },
     );
     const images = [{ type: "image" as const, data: PNG_1X1, mimeType: "image/png" }];
-    const prepared = await prepareMessage("delayed image", { images });
+    const prepared = await prepareMessage("delayed image", { images }, () => {});
     const onQueueAccepted = vi.fn();
     const queued = queue.queue("delayed image", { images, debounceMs: 0, onQueueAccepted });
     const rejected = expect(queued).rejects.toThrow(reason);
@@ -630,7 +638,11 @@ describe("Codex app-server steering queue", () => {
 
     await rejected;
     expect(onQueueAccepted).toHaveBeenCalledWith(true);
+    expect(queue.getAcceptedMessages()).toEqual([
+      { role: "user", content: [{ type: "text", text: "on the wire" }], timestamp: 1 },
+    ]);
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(false);
+    expect(queue.getAcceptedMessages()).toHaveLength(1);
     acceptSteer?.();
     await vi.advanceTimersByTimeAsync(0);
   });

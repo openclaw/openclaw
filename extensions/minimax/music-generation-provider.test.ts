@@ -1,10 +1,12 @@
-// Minimax tests cover music generation provider plugin behavior.
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  expectAllowPrivateNetworkPolicy,
+  expectMinimaxGuardedFetchCall,
   getMinimaxProviderHttpMocks,
   installMinimaxProviderHttpMockCleanup,
   loadMinimaxMusicGenerationProviderModule,
+  mockCallArg,
 } from "./provider-http.test-helpers.js";
 
 const {
@@ -44,30 +46,6 @@ function mockMusicGenerationResponse(json: Record<string, unknown>): void {
   });
 }
 
-function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected mock call ${index}`);
-  }
-  return call[0] as Record<string, unknown>;
-}
-
-function expectMinimaxGuardedFetchCall(index: number, url: string) {
-  const call = fetchWithTimeoutGuardedMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected MiniMax guarded fetch call ${index + 1}`);
-  }
-  const [actualUrl, init, timeoutMs, fetchFn, options] = call;
-  expect(actualUrl).toBe(url);
-  expect((init as RequestInit | undefined)?.method).toBe("GET");
-  expect(Number.isInteger(timeoutMs)).toBe(true);
-  expect(timeoutMs).toBeGreaterThan(0);
-  expect(fetchFn).toBe(fetch);
-  return {
-    options: options as Record<string, unknown> | undefined,
-  };
-}
-
 function expectDownloadFetchTimeout(url: string, totalTimeoutMs: number): void {
   const call = fetchWithTimeoutMock.mock.calls[0];
   if (!call) {
@@ -79,12 +57,6 @@ function expectDownloadFetchTimeout(url: string, totalTimeoutMs: number): void {
   expect(timeoutMs).toBeGreaterThan(totalTimeoutMs - 1_000);
   expect(timeoutMs).toBeLessThanOrEqual(totalTimeoutMs);
   expect(fetchFn).toBe(fetch);
-}
-
-function expectAllowPrivateNetworkPolicy(options: Record<string, unknown> | undefined): void {
-  expect(options).toEqual({
-    ssrfPolicy: { allowPrivateNetwork: true },
-  });
 }
 
 function streamedAudioResponse(bytes: string): Response {
@@ -179,13 +151,10 @@ describe("minimax music generation provider", () => {
     "rejects a successful $contentType download through $provider",
     async ({ provider: providerId, contentType, body }) => {
       postJsonRequestMock.mockResolvedValue({
-        response: new Response(
-          JSON.stringify({
-            data: { audio_url: "https://example.com/invalid.mp3" },
-            base_resp: { status_code: 0 },
-          }),
-          { headers: { "content-type": "application/json" } },
-        ),
+        response: Response.json({
+          data: { audio_url: "https://example.com/invalid.mp3" },
+          base_resp: { status_code: 0 },
+        }),
         release: vi.fn(async () => {}),
       });
       fetchWithTimeoutMock.mockResolvedValueOnce(
@@ -214,13 +183,10 @@ describe("minimax music generation provider", () => {
   it("cancels invalid music responses before releasing their guarded dispatcher", async () => {
     const cleanupOrder: string[] = [];
     postJsonRequestMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          data: { audio_url: "https://example.com/invalid-open.mp3" },
-          base_resp: { status_code: 0 },
-        }),
-        { headers: { "content-type": "application/json" } },
-      ),
+      response: Response.json({
+        data: { audio_url: "https://example.com/invalid-open.mp3" },
+        base_resp: { status_code: 0 },
+      }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
@@ -361,17 +327,12 @@ describe("minimax music generation provider", () => {
 
   it("rejects inline generated music that exceeds the configured media cap before decoding", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          data: {
-            audio: Buffer.from("too-large").toString("hex"),
-          },
-          base_resp: { status_code: 0 },
-        }),
-        {
-          headers: { "content-type": "application/json" },
+      response: Response.json({
+        data: {
+          audio: Buffer.from("too-large").toString("hex"),
         },
-      ),
+        base_resp: { status_code: 0 },
+      }),
       release: vi.fn(async () => {}),
     });
 
@@ -414,15 +375,12 @@ describe("minimax music generation provider", () => {
 
   it("rejects generated music downloads that exceed the configured media cap", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          data: {
-            audio: "https://example.com/too-large.mp3",
-          },
-          base_resp: { status_code: 0 },
-        }),
-        { headers: { "content-type": "application/json" } },
-      ),
+      response: Response.json({
+        data: {
+          audio: "https://example.com/too-large.mp3",
+        },
+        base_resp: { status_code: 0 },
+      }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock.mockResolvedValueOnce(streamedAudioResponse("too-large"));
@@ -556,14 +514,11 @@ describe("minimax music generation provider", () => {
       headers: { "X-MiniMax-Music-Policy": "enabled" },
     };
     postJsonRequestMock.mockResolvedValue({
-      response: new Response(
-        JSON.stringify({
-          task_id: "task-retry",
-          audio_url: "https://example.com/retry.mp3",
-          base_resp: { status_code: 0 },
-        }),
-        { headers: { "content-type": "application/json" } },
-      ),
+      response: Response.json({
+        task_id: "task-retry",
+        audio_url: "https://example.com/retry.mp3",
+        base_resp: { status_code: 0 },
+      }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock

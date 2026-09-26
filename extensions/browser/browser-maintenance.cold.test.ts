@@ -1,4 +1,5 @@
 import {
+  createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -19,8 +20,8 @@ vi.mock("openclaw/plugin-sdk/browser-config", async (importOriginal) => {
   runtime.coldImports.push("browser-config");
   return await importOriginal();
 });
-vi.mock("./src/utils.js", async (importOriginal) => {
-  runtime.coldImports.push("utils");
+vi.mock("./src/browser/config.js", async (importOriginal) => {
+  runtime.coldImports.push("browser-config-resolution");
   return await importOriginal();
 });
 vi.mock("./src/browser/client.js", () => {
@@ -54,6 +55,7 @@ it("loads browser close runtimes only for owned tabs", async () => {
       await import("./src/browser/session-tab-store.js");
     initializeBrowserSessionTabStore({
       state: {
+        openKeyedStore: (options) => createPluginStateKeyedStoreForTests("browser", options),
         openSyncKeyedStore: (options) =>
           createPluginStateSyncKeyedStoreForTests("browser", options),
       },
@@ -114,6 +116,7 @@ it("loads browser close runtimes only for owned tabs", async () => {
         1,
       );
       expect(runtime.loaded.toSorted()).toEqual(["cdp", "client", "control"]);
+      expect(runtime.coldImports).toContain("browser-config-resolution");
       expect(runtime.closeDurable).toHaveBeenCalledWith(
         expect.objectContaining({
           profileName: "remote",

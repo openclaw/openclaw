@@ -1,0 +1,387 @@
+{
+  "version": 3,
+  "declaredCapabilities": [" location ", "camera", "camera"],
+  "expectedCapabilities": ["camera", "location"],
+  "declaredCommands": [
+    " example.allowed ",
+    "example.local-denied",
+    "example.approval-pending",
+    "example.policy-withheld"
+  ],
+  "expectedCommands": [
+    "example.allowed",
+    "example.approval-pending",
+    "example.local-denied",
+    "example.policy-withheld"
+  ],
+  "authoritySnapshots": [
+    {
+      "name": "baseline",
+      "connectionId": "conn-1",
+      "pairingGeneration": "pair-1",
+      "sessionActive": true,
+      "declaredCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.policy-withheld"
+      ],
+      "approvedCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.policy-withheld"
+      ],
+      "effectiveCommands": ["example.allowed", "example.local-denied"],
+      "withheldCommands": ["example.policy-withheld"],
+      "gatewayPolicy": {
+        "allow": [
+          "example.allowed",
+          "example.local-denied",
+          "example.approval-pending",
+          "example.policy-withheld",
+          "example.undeclared"
+        ],
+        "deny": ["example.policy-withheld"]
+      },
+      "expectedStates": [
+        { "command": "example.allowed", "state": "invocable" },
+        { "command": "example.local-denied", "state": "invocable" },
+        { "command": "example.approval-pending", "state": "undeclared" },
+        { "command": "example.policy-withheld", "state": "unauthorized" },
+        { "command": "example.undeclared", "state": "undeclared" }
+      ]
+    },
+    {
+      "name": "widened-pending",
+      "connectionId": "conn-2",
+      "pairingGeneration": "pair-1",
+      "sessionActive": true,
+      "declaredCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "approvedCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.policy-withheld"
+      ],
+      "effectiveCommands": ["example.allowed", "example.local-denied"],
+      "withheldCommands": ["example.policy-withheld"],
+      "gatewayPolicy": {
+        "allow": [
+          "example.allowed",
+          "example.local-denied",
+          "example.approval-pending",
+          "example.policy-withheld",
+          "example.undeclared"
+        ],
+        "deny": ["example.policy-withheld"]
+      },
+      "expectedStates": [
+        { "command": "example.allowed", "state": "invocable" },
+        { "command": "example.approval-pending", "state": "pending-approval" },
+        { "command": "example.policy-withheld", "state": "unauthorized" },
+        { "command": "example.undeclared", "state": "undeclared" }
+      ]
+    },
+    {
+      "name": "reapproved",
+      "connectionId": "conn-2",
+      "pairingGeneration": "pair-1",
+      "sessionActive": true,
+      "declaredCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "approvedCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "effectiveCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending"
+      ],
+      "withheldCommands": ["example.policy-withheld"],
+      "gatewayPolicy": {
+        "allow": [
+          "example.allowed",
+          "example.local-denied",
+          "example.approval-pending",
+          "example.policy-withheld",
+          "example.undeclared"
+        ],
+        "deny": ["example.policy-withheld"]
+      },
+      "expectedStates": [
+        { "command": "example.allowed", "state": "invocable" },
+        { "command": "example.approval-pending", "state": "invocable" },
+        { "command": "example.policy-withheld", "state": "unauthorized" },
+        { "command": "example.undeclared", "state": "undeclared" }
+      ]
+    },
+    {
+      "name": "policy-revoked",
+      "connectionId": "conn-2",
+      "pairingGeneration": "pair-1",
+      "sessionActive": true,
+      "declaredCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "approvedCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "effectiveCommands": ["example.local-denied", "example.approval-pending"],
+      "withheldCommands": ["example.allowed", "example.policy-withheld"],
+      "gatewayPolicy": {
+        "allow": [
+          "example.allowed",
+          "example.local-denied",
+          "example.approval-pending",
+          "example.policy-withheld",
+          "example.undeclared"
+        ],
+        "deny": ["example.allowed", "example.policy-withheld"]
+      },
+      "expectedStates": [
+        { "command": "example.allowed", "state": "unauthorized" },
+        { "command": "example.approval-pending", "state": "invocable" },
+        { "command": "example.policy-withheld", "state": "unauthorized" },
+        { "command": "example.undeclared", "state": "undeclared" }
+      ]
+    },
+    {
+      "name": "policy-restored",
+      "connectionId": "conn-2",
+      "pairingGeneration": "pair-1",
+      "sessionActive": true,
+      "declaredCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "approvedCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "effectiveCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "withheldCommands": [],
+      "gatewayPolicy": {
+        "allow": [
+          "example.allowed",
+          "example.local-denied",
+          "example.approval-pending",
+          "example.policy-withheld",
+          "example.undeclared"
+        ],
+        "deny": []
+      },
+      "expectedStates": [
+        { "command": "example.allowed", "state": "invocable" },
+        { "command": "example.approval-pending", "state": "invocable" },
+        { "command": "example.policy-withheld", "state": "invocable" },
+        { "command": "example.undeclared", "state": "undeclared" }
+      ]
+    },
+    {
+      "name": "generation-promoted",
+      "connectionId": "conn-2",
+      "pairingGeneration": "pair-2",
+      "sessionActive": true,
+      "declaredCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "approvedCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "effectiveCommands": [
+        "example.allowed",
+        "example.local-denied",
+        "example.approval-pending",
+        "example.policy-withheld"
+      ],
+      "withheldCommands": [],
+      "gatewayPolicy": {
+        "allow": [
+          "example.allowed",
+          "example.local-denied",
+          "example.approval-pending",
+          "example.policy-withheld",
+          "example.undeclared"
+        ],
+        "deny": []
+      },
+      "expectedStates": [
+        { "command": "example.allowed", "state": "invocable" },
+        { "command": "example.approval-pending", "state": "invocable" },
+        { "command": "example.policy-withheld", "state": "invocable" },
+        { "command": "example.undeclared", "state": "undeclared" }
+      ]
+    }
+  ],
+  "authorityTransitions": [
+    {
+      "name": "surface-widened",
+      "from": "baseline",
+      "to": "widened-pending",
+      "command": "example.approval-pending",
+      "fromState": "undeclared",
+      "toState": "pending-approval",
+      "preservesConnection": false,
+      "cancelsActive": false,
+      "retiresPairingGeneration": false
+    },
+    {
+      "name": "surface-reapproved",
+      "from": "widened-pending",
+      "to": "reapproved",
+      "command": "example.approval-pending",
+      "fromState": "pending-approval",
+      "toState": "invocable",
+      "preservesConnection": true,
+      "cancelsActive": false,
+      "retiresPairingGeneration": false
+    },
+    {
+      "name": "policy-revoked",
+      "from": "reapproved",
+      "to": "policy-revoked",
+      "command": "example.allowed",
+      "fromState": "invocable",
+      "toState": "unauthorized",
+      "preservesConnection": true,
+      "cancelsActive": true,
+      "retiresPairingGeneration": false
+    },
+    {
+      "name": "policy-reconciled",
+      "from": "policy-revoked",
+      "to": "policy-restored",
+      "command": "example.allowed",
+      "fromState": "unauthorized",
+      "toState": "invocable",
+      "preservesConnection": true,
+      "cancelsActive": false,
+      "retiresPairingGeneration": false
+    },
+    {
+      "name": "pairing-generation-promoted",
+      "from": "policy-restored",
+      "to": "generation-promoted",
+      "command": "example.allowed",
+      "fromState": "invocable",
+      "toState": "invocable",
+      "preservesConnection": true,
+      "cancelsActive": true,
+      "retiresPairingGeneration": true
+    }
+  ],
+  "invocations": [
+    {
+      "snapshot": "baseline",
+      "command": "example.allowed",
+      "gatewayState": "invocable",
+      "gatewayDelivery": "deliver",
+      "localAdmission": "allow",
+      "expected": "success"
+    },
+    {
+      "snapshot": "baseline",
+      "command": "example.local-denied",
+      "gatewayState": "invocable",
+      "gatewayDelivery": "deliver",
+      "localAdmission": "deny",
+      "expected": "failure",
+      "errorCode": "LOCAL_POLICY_DENIED",
+      "errorMessage": "command is outside the embedding's current local policy"
+    },
+    {
+      "snapshot": "widened-pending",
+      "command": "example.approval-pending",
+      "gatewayState": "pending-approval",
+      "gatewayDelivery": "reject",
+      "localAdmission": "not-evaluated"
+    },
+    {
+      "snapshot": "baseline",
+      "command": "example.policy-withheld",
+      "gatewayState": "unauthorized",
+      "gatewayDelivery": "reject",
+      "localAdmission": "not-evaluated"
+    },
+    {
+      "snapshot": "baseline",
+      "command": "example.undeclared",
+      "gatewayState": "undeclared",
+      "gatewayDelivery": "reject",
+      "localAdmission": "not-evaluated"
+    }
+  ],
+  "cleanup": [
+    {
+      "trigger": "deadline",
+      "owner": "node-runtime",
+      "effects": [
+        "cancel-handler",
+        "close-input",
+        "reject-progress",
+        "remove-active-invocation"
+      ]
+    },
+    {
+      "trigger": "node.invoke.cancel",
+      "owner": "node-runtime",
+      "effects": [
+        "cancel-handler",
+        "close-input",
+        "reject-progress",
+        "remove-active-invocation"
+      ]
+    },
+    {
+      "trigger": "policy-revocation",
+      "owner": "gateway",
+      "effects": [
+        "cancel-handler",
+        "close-input",
+        "reject-progress",
+        "remove-active-invocation"
+      ]
+    },
+    {
+      "trigger": "pairing-generation-change",
+      "owner": "gateway",
+      "effects": [
+        "cancel-handler",
+        "close-input",
+        "reject-progress",
+        "remove-active-invocation"
+      ]
+    }
+  ]
+}

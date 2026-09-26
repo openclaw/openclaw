@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Exercises package-to-git and git-to-package update channel switching in Docker.
 # Both package and git fixtures are derived from the same prepared npm tarball.
 set -euo pipefail
@@ -33,6 +37,9 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
   -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
+  -e OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT \
+  -e OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT \
+  -e OPENCLAW_E2E_GIT_CHANNEL_TIMEOUT \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
@@ -56,8 +63,7 @@ mkdir -p "$git_root"
 # Build the fake git install from the packed package contents, not the checkout.
 tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
 node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
-# The package-derived fixture can carry patchedDependencies whose targets are
-# absent from the trimmed tarball install; that should not block update preflight.
+# Validate the package-derived fixture and prepare its generated build metadata.
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
 (
   cd "$git_root"
@@ -99,12 +105,16 @@ done
 node scripts/docker/verify-fs-safe-native.mjs \
   --package-root /tmp/npm-prefix/lib/node_modules/openclaw \
   --mode fallback
-OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
-  node scripts/e2e/lib/package-compat.mjs "$package_version"
-)"
-export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
+OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT:-0}"
+export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT
+OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT:-0}"
+export OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
+# Channel switches install dependencies and swap the whole package inside the
+# container, which outgrew the ordinary per-command budget; every other CLI call
+# keeps the OPENCLAW_E2E_COMMAND_TIMEOUT default.
+git_channel_timeout="${OPENCLAW_E2E_GIT_CHANNEL_TIMEOUT:-900s}"
 
 registry_port_file=/tmp/openclaw-update-channel-registry.port
 registry_log=/tmp/openclaw-update-channel-registry.log
@@ -170,25 +180,27 @@ printf "%s\n" "$status_json"
 STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
 
 assert_package_dry_run() {
-  local expected_kind="$1" expected_channel="$2"
-  shift 2
+  local expected_kind="$1" expected_channel="$2" selection="$3"
+  shift 3
   local preview
   preview="$(openclaw update --dry-run --json --no-restart "$@")"
   printf "%s\n" "$preview"
   UPDATE_JSON="$preview" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
-    assert-dry-run "$expected_kind" "$expected_channel"
+    assert-dry-run "$expected_kind" "$expected_channel" "$selection"
   node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
 }
 dev_channel_args=(--channel dev)
-# Legacy package acceptance permits missing channel persistence; keep its explicit switch.
-if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" != "1" ]; then
-  echo "==> package dry-run channel and one-off tag precedence"
-  openclaw config set update.channel dev
-  assert_package_dry_run git dev
-  assert_package_dry_run git dev --channel dev
-  assert_package_dry_run git dev --channel dev --tag beta
-  assert_package_dry_run package dev --tag beta
-  assert_package_dry_run package stable --channel stable
+echo "==> package dry-run channel and one-off tag precedence"
+openclaw config set update.channel dev
+assert_package_dry_run git dev stored
+assert_package_dry_run git dev explicit --channel dev
+assert_package_dry_run git dev explicit --channel dev --tag beta
+assert_package_dry_run package dev stored --tag beta
+assert_package_dry_run package stable explicit --channel stable
+# 7.33 reports a stored dev channel as a package update even though an
+# explicit --channel dev selects Git. Keep the explicit selector for the
+# destructive admission and actual switch probes on that frozen contract.
+if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then
   dev_channel_args=()
 fi
 
@@ -198,16 +210,20 @@ set +e
 dirty_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
 dirty_status=$?
 set -e
-if [ "$dirty_status" -eq 0 ]; then
-  echo "Git update unexpectedly admitted ordinary untracked user notes" >&2
-  exit 1
-fi
-UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs   assert-dirty-update "$git_root" "$fixture_sha"
+# Historical update CLIs can report a blocked structured result with exit zero.
+# Admit only that exact legacy status; timeouts, signals, and other failures stay fatal.
+node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+  assert-dirty-exit \
+  "$dirty_status" \
+  "$OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT"
+# The payload assertion proves the update was rejected and no checkout state changed.
+UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+  assert-dirty-update "$git_root" "$fixture_sha"
 node -e "require(\"node:fs\").unlinkSync(process.argv[1])" "$git_root/operator-update-notes.tmp"
 
 echo "==> package -> git dev channel"
 set +e
-dev_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
+dev_json="$(OPENCLAW_E2E_COMMAND_TIMEOUT="$git_channel_timeout" openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
 dev_status=$?
 set -e
 printf "%s\n" "$dev_json"
@@ -224,7 +240,7 @@ STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions
 
 echo "==> git -> package stable channel"
 set +e
-stable_json="$(openclaw update --channel stable --tag "$pkg_tgz_path" --yes --json --no-restart)"
+stable_json="$(OPENCLAW_E2E_COMMAND_TIMEOUT="$git_channel_timeout" openclaw update --channel stable --tag "$pkg_tgz_path" --yes --json --no-restart)"
 stable_status=$?
 set -e
 printf "%s\n" "$stable_json"

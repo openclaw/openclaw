@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import pMap from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
+import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { selectDeterministicTranslation } from "./android-app-i18n.ts";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
@@ -18,6 +19,8 @@ export type NativeI18nEntry = {
   source: string;
   surface: NativeI18nSurface;
   sites: NativeI18nSite[];
+  /** Request-only owner excerpt; never persisted in the source inventory. */
+  sourceContext?: string;
 };
 
 export type NativeI18nSite = {
@@ -35,6 +38,7 @@ type Candidate = NativeI18nSite & {
   line: number;
   source: string;
   surface: NativeI18nSurface;
+  sourceContext?: string;
 };
 type NativeTranslationArtifactV1 = {
   entries: Array<{ id: string; source: string; translated: string }>;
@@ -64,6 +68,7 @@ export type NativeI18nQualityFinding = {
 type NativeTranslator = typeof translateNativeEntries;
 type NativeLocaleSyncOptions = {
   force?: boolean;
+  refreshIds?: string[];
   glossary?: Array<{ source: string; target: string }>;
   translate?: NativeTranslator;
   translationsDir?: string;
@@ -71,6 +76,7 @@ type NativeLocaleSyncOptions = {
 type NativeI18nCommand = {
   command: "baseline" | "check" | "sync" | "verify";
   force?: boolean;
+  refreshIds?: string[];
   locale?: string;
   write: boolean;
 };
@@ -97,6 +103,7 @@ const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
 const NATIVE_FORMAT_RE = /%(?:%|(?:\d+\$)?[@a-z])/giu;
 const NATIVE_SOURCE_READ_CONCURRENCY = 32;
+const NATIVE_SOURCE_CONTEXT_MAX_CHARS = 1200;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_LOCALIZED_STRING_CALLS =
@@ -402,11 +409,16 @@ function lineNumber(source: string, offset: number): number {
   return source.slice(0, offset).split("\n").length;
 }
 
-function findClosingBrace(source: string, openingBrace: number): number | null {
+function findClosingDelimiter(
+  source: string,
+  openingIndex: number,
+  opening: string,
+  closing: string,
+): number | null {
   let depth = 0;
   let quoted = false;
   let escaped = false;
-  for (let index = openingBrace; index < source.length; index += 1) {
+  for (let index = openingIndex; index < source.length; index += 1) {
     const character = source[index];
     if (escaped) {
       escaped = false;
@@ -423,9 +435,9 @@ function findClosingBrace(source: string, openingBrace: number): number | null {
     if (quoted) {
       continue;
     }
-    if (character === "{") {
+    if (character === opening) {
       depth += 1;
-    } else if (character === "}") {
+    } else if (character === closing) {
       depth -= 1;
       if (depth === 0) {
         return index;
@@ -451,28 +463,8 @@ function readSwiftStringLiteral(
         return null;
       }
       if (next === "(") {
-        let depth = 1;
-        let quoted = false;
-        let escaped = false;
-        let end = index + 2;
-        for (; end < source.length; end += 1) {
-          const interpolationCharacter = source[end];
-          if (escaped) {
-            escaped = false;
-          } else if (quoted && interpolationCharacter === "\\") {
-            escaped = true;
-          } else if (interpolationCharacter === '"') {
-            quoted = !quoted;
-          } else if (!quoted && interpolationCharacter === "(") {
-            depth += 1;
-          } else if (!quoted && interpolationCharacter === ")") {
-            depth -= 1;
-            if (depth === 0) {
-              break;
-            }
-          }
-        }
-        if (depth !== 0) {
+        const end = findClosingDelimiter(source, index + 1, "(", ")");
+        if (end === null) {
           return null;
         }
         raw += source.slice(index, end + 1);
@@ -512,28 +504,8 @@ function readKotlinStringLiteral(
   for (let index = openingQuote + 1; index < source.length; index += 1) {
     const character = source[index];
     if (character === "$" && source[index + 1] === "{") {
-      let depth = 1;
-      let quoted = false;
-      let escaped = false;
-      let end = index + 2;
-      for (; end < source.length; end += 1) {
-        const interpolationCharacter = source[end];
-        if (escaped) {
-          escaped = false;
-        } else if (quoted && interpolationCharacter === "\\") {
-          escaped = true;
-        } else if (interpolationCharacter === '"') {
-          quoted = !quoted;
-        } else if (!quoted && interpolationCharacter === "{") {
-          depth += 1;
-        } else if (!quoted && interpolationCharacter === "}") {
-          depth -= 1;
-          if (depth === 0) {
-            break;
-          }
-        }
-      }
-      if (depth !== 0) {
+      const end = findClosingDelimiter(source, index + 1, "{", "}");
+      if (end === null) {
         return null;
       }
       raw += source.slice(index, end + 1);
@@ -980,7 +952,7 @@ export function extractNativeI18nCandidates(
     for (const property of source.matchAll(APPLE_STRING_PROPERTY)) {
       const name = property[1];
       const openingBrace = (property.index ?? 0) + property[0].lastIndexOf("{");
-      const closingBrace = findClosingBrace(source, openingBrace);
+      const closingBrace = findClosingDelimiter(source, openingBrace, "{", "}");
       if (!name || !UI_STRING_NAME_RE.test(name) || closingBrace === null) {
         continue;
       }
@@ -1033,35 +1005,19 @@ export function extractNativeI18nCandidates(
       const bodyStart = (helper.index ?? 0) + helper[0].length;
       if (bodyKind === "{") {
         const openingBrace = bodyStart - 1;
-        const closingBrace = findClosingBrace(source, openingBrace);
+        const closingBrace = findClosingDelimiter(source, openingBrace, "{", "}");
         if (closingBrace === null) {
           continue;
         }
         const body = source.slice(bodyStart, closingBrace);
-        for (const returnKeyword of body.matchAll(/\breturn\b/gu)) {
-          const openingQuote = skipWhitespaceAndBrace(
-            source,
-            bodyStart + (returnKeyword.index ?? 0) + returnKeyword[0].length,
-          );
-          const literal = readAdjacentStringLiterals(surface, source, openingQuote);
-          if (literal) {
-            addCandidate(
-              entries,
-              surface,
-              repoPath,
-              literal.value,
-              "conditional-branch",
-              lineNumber(source, openingQuote),
-            );
-          }
-        }
+        addBranchCandidates(entries, surface, repoPath, source, bodyStart, body, /\breturn\b/gu);
         continue;
       }
       const expression = source.slice(bodyStart);
       const whenMatch = expression.match(/^\s*when\s*\([^)]*\)\s*\{/u);
       if (whenMatch) {
         const openingBrace = bodyStart + whenMatch[0].lastIndexOf("{");
-        const closingBrace = findClosingBrace(source, openingBrace);
+        const closingBrace = findClosingDelimiter(source, openingBrace, "{", "}");
         if (closingBrace === null) {
           continue;
         }
@@ -1178,7 +1134,7 @@ export function extractNativeI18nCandidates(
       }
     }
   }
-  return [
+  const unique = [
     ...new Map(
       entries.map((entry) => [
         [entry.surface, entry.path, entry.kind, entry.source].join("\u0000"),
@@ -1186,6 +1142,20 @@ export function extractNativeI18nCandidates(
       ]),
     ).values(),
   ];
+  const lines = source.split(/\r?\n/u);
+  const beforeBudget = Math.floor(NATIVE_SOURCE_CONTEXT_MAX_CHARS / 3);
+  for (const entry of unique) {
+    const index = entry.line - 1;
+    const before = lines.slice(Math.max(0, index - 8), index).join("\n");
+    const after = lines.slice(index, index + 9).join("\n");
+    entry.sourceContext = [
+      sliceUtf16Safe(before, -beforeBudget),
+      sliceUtf16Safe(after, 0, NATIVE_SOURCE_CONTEXT_MAX_CHARS - beforeBudget - 1),
+    ]
+      .join("\n")
+      .trim();
+  }
+  return unique;
 }
 
 async function walkFiles(root: string, surface: NativeI18nSurface): Promise<string[]> {
@@ -1222,22 +1192,18 @@ function nativeEntryIdentity(entry: Pick<NativeI18nEntry, "source" | "surface">)
 }
 
 export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEntry[] {
-  const sitesByIdentity = new Map<string, Map<string, NativeI18nSite>>();
+  const sitesByIdentity = new Map<string, Map<string, Candidate>>();
   const entryByIdentity = new Map<string, Pick<NativeI18nEntry, "source" | "surface">>();
   for (const candidate of entries) {
     const identity = nativeEntryIdentity(candidate);
     entryByIdentity.set(identity, { source: candidate.source, surface: candidate.surface });
-    const sites = sitesByIdentity.get(identity) ?? new Map<string, NativeI18nSite>();
-    const site = { kind: candidate.kind, path: candidate.path };
-    sites.set(`${site.path}\u0000${site.kind}`, site);
+    const sites = sitesByIdentity.get(identity) ?? new Map<string, Candidate>();
+    sites.set(`${candidate.path}\u0000${candidate.kind}`, candidate);
     sitesByIdentity.set(identity, sites);
   }
   return [...entryByIdentity]
-    .map(([identity, entry]) => ({
-      id: `native.${entry.surface}.${createHash("sha256").update(identity).digest("hex").slice(0, 16)}`,
-      source: entry.source,
-      surface: entry.surface,
-      sites: [
+    .map(([identity, entry]) => {
+      const sites = [
         ...expectDefined(
           sitesByIdentity.get(identity),
           `native i18n sites for ${identity}`,
@@ -1245,8 +1211,16 @@ export function assignNativeI18nIds(entries: readonly Candidate[]): NativeI18nEn
       ].toSorted(
         (left, right) =>
           compareCodePoints(left.path, right.path) || compareCodePoints(left.kind, right.kind),
-      ),
-    }))
+      );
+      const sourceContext = sites[0]?.sourceContext;
+      return {
+        id: `native.${entry.surface}.${createHash("sha256").update(identity).digest("hex").slice(0, 16)}`,
+        source: entry.source,
+        surface: entry.surface,
+        sites: sites.map(({ kind, path: sitePath }) => ({ kind, path: sitePath })),
+        sourceContext,
+      };
+    })
     .toSorted(
       (left, right) =>
         compareCodePoints(left.surface, right.surface) ||
@@ -1299,17 +1273,27 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
       stopOnError: true,
     },
   );
-  const typedSources: Array<{
+  return collectNativeI18nEntriesFromSources(sources);
+}
+
+export function collectNativeI18nEntriesFromSources(
+  sources: ReadonlyArray<{
     repoPath: string;
     source: string;
     surface: NativeI18nSurface;
-  }> = sources;
-  const uiCallNames = new Set([...APPLE_BUILTIN_UI_CALLS, ...ANDROID_BUILTIN_UI_CALLS]);
-  for (const { source, surface } of typedSources) {
+  }>,
+): NativeI18nEntry[] {
+  // Learned UI helpers belong to their platform. A Swift View helper named
+  // header must not enroll Kotlin HTTP header names in translation resources.
+  const uiCallNames: Record<NativeI18nSurface, Set<string>> = {
+    android: new Set([...APPLE_BUILTIN_UI_CALLS, ...ANDROID_BUILTIN_UI_CALLS]),
+    apple: new Set([...APPLE_BUILTIN_UI_CALLS, ...ANDROID_BUILTIN_UI_CALLS]),
+  };
+  for (const { source, surface } of sources) {
     if (surface === "android") {
       for (const match of source.matchAll(ANDROID_COMPOSABLE_FUNCTION)) {
         if (match[1]) {
-          uiCallNames.add(match[1]);
+          uiCallNames[surface].add(match[1]);
         }
       }
       continue;
@@ -1317,13 +1301,13 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
     for (const pattern of [APPLE_VIEW_TYPE, APPLE_VIEW_FUNCTION, APPLE_ALERT_FUNCTION]) {
       for (const match of source.matchAll(pattern)) {
         if (match[1]) {
-          uiCallNames.add(match[1]);
+          uiCallNames[surface].add(match[1]);
         }
       }
     }
   }
-  const entries = typedSources.flatMap(({ repoPath, source, surface }) =>
-    extractNativeI18nCandidates(surface, repoPath, source, uiCallNames),
+  const entries = sources.flatMap(({ repoPath, source, surface }) =>
+    extractNativeI18nCandidates(surface, repoPath, source, uiCallNames[surface]),
   );
   return assignNativeI18nIds(entries);
 }
@@ -1334,7 +1318,8 @@ export function serializeNativeI18nInventory(entries: readonly NativeI18nEntry[]
     '  "version": 2,',
     '  "entries": [',
     ...entries.map(
-      (entry, index) => `    ${JSON.stringify(entry)}${index === entries.length - 1 ? "" : ","}`,
+      ({ id, source, surface, sites }, index) =>
+        `    ${JSON.stringify({ id, source, surface, sites })}${index === entries.length - 1 ? "" : ","}`,
     ),
     "  ]",
     "}",
@@ -1345,6 +1330,7 @@ export function serializeNativeI18nInventory(entries: readonly NativeI18nEntry[]
 async function syncNativeI18n(options: {
   checkInventory: boolean;
   checkLocales: boolean;
+  reportObsolete?: (message: string) => void;
   write: boolean;
 }): Promise<NativeI18nEntry[]> {
   const currentInventory = await readNativeI18nInventory();
@@ -1357,7 +1343,11 @@ async function syncNativeI18n(options: {
     );
   }
   if (options.checkLocales) {
-    const findings = await checkNativeLocaleArtifacts(entries);
+    const findings = await checkNativeLocaleArtifacts(
+      entries,
+      TRANSLATIONS_DIR,
+      options.reportObsolete,
+    );
     for (const finding of findings) {
       process.stdout.write(`native-app-i18n: advisory=${JSON.stringify(finding)}\n`);
     }
@@ -1489,8 +1479,10 @@ export function validateNativeLocaleArtifact(
   inventory: readonly NativeI18nEntry[],
   artifactValue: unknown,
   glossary: readonly { source: string; target: string }[] = [],
+  reportObsolete?: (message: string) => void,
 ): NativeI18nQualityFinding[] {
   const errors: string[] = [];
+  const obsolete: string[] = [];
   if (!artifactValue || typeof artifactValue !== "object" || Array.isArray(artifactValue)) {
     throw new Error(`invalid native locale artifact ${locale}: expected an object`);
   }
@@ -1520,7 +1512,7 @@ export function validateNativeLocaleArtifact(
   const inventoryById = new Map(inventory.map((entry) => [entry.id, entry]));
   for (const id of Object.keys(translations)) {
     if (!inventoryById.has(id)) {
-      errors.push(`unknown translation id ${JSON.stringify(id)}`);
+      (reportObsolete ? obsolete : errors).push(`unknown translation id ${JSON.stringify(id)}`);
     }
     if (typeof translations[id] !== "string") {
       errors.push(`translation must be a string for ${id}`);
@@ -1539,6 +1531,9 @@ export function validateNativeLocaleArtifact(
   if (errors.length > 0) {
     throw new Error(`invalid native locale artifact ${locale}:\n- ${errors.join("\n- ")}`);
   }
+  if (obsolete.length > 0) {
+    reportObsolete?.(`native locale ${locale}: ${obsolete.join(", ")}`);
+  }
   return collectNativeI18nQualityFindings(
     locale,
     inventory,
@@ -1549,6 +1544,7 @@ export function validateNativeLocaleArtifact(
 export async function checkNativeLocaleArtifacts(
   inventory: readonly NativeI18nEntry[],
   translationsDir = TRANSLATIONS_DIR,
+  reportObsolete?: (message: string) => void,
 ): Promise<NativeI18nQualityFinding[]> {
   const expectedFiles = NATIVE_I18N_LOCALES.map((locale) => `${locale}.json`).toSorted(
     compareCodePoints,
@@ -1570,7 +1566,13 @@ export async function checkNativeLocaleArtifacts(
     try {
       const artifact: unknown = JSON.parse(await readFile(artifactPath, "utf8"));
       findings.push(
-        ...validateNativeLocaleArtifact(locale, inventory, artifact, await loadGlossary(locale)),
+        ...validateNativeLocaleArtifact(
+          locale,
+          inventory,
+          artifact,
+          await loadGlossary(locale),
+          reportObsolete,
+        ),
       );
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
@@ -1587,11 +1589,29 @@ export async function checkNativeLocaleArtifacts(
   );
 }
 
+function normalizeNativeRefreshIds(ids: readonly string[], force = false): string[] {
+  const distinct = [...new Set(ids)].toSorted(compareCodePoints);
+  if (distinct.length > 64) {
+    throw new Error("native refresh accepts at most 64 distinct `--refresh-id` values");
+  }
+  if (distinct.length > 0 && force) {
+    throw new Error("native refresh cannot combine `--refresh-id` with `--force`");
+  }
+  return distinct;
+}
+
 export async function syncNativeLocale(
   locale: string,
   entries: NativeI18nEntry[],
   options: NativeLocaleSyncOptions = {},
 ) {
+  const refreshIds = new Set(normalizeNativeRefreshIds(options.refreshIds ?? [], options.force));
+  const inventoryIds = new Set(entries.map((entry) => entry.id));
+  for (const id of refreshIds) {
+    if (!inventoryIds.has(id)) {
+      throw new Error(`unknown native refresh ID: ${id}`);
+    }
+  }
   // Native runtime resources are owned by the Android and Apple slices; these
   // artifacts keep the shared translation-memory handoff current between them.
   const artifactPath = path.join(options.translationsDir ?? TRANSLATIONS_DIR, `${locale}.json`);
@@ -1634,16 +1654,25 @@ export async function syncNativeLocale(
       }
     }
   }
-  const glossaryChanged = previous?.version === 2 && previous.glossaryHash !== currentGlossaryHash;
+  const glossaryChanged =
+    (previous?.version === 2 || (migratingV1 && refreshIds.size > 0)) &&
+    previous?.glossaryHash !== currentGlossaryHash;
   const pending = entries
-    .filter((entry) => options.force || glossaryChanged || !reusableById.get(entry.id))
+    .filter(
+      (entry) =>
+        options.force || refreshIds.has(entry.id) || glossaryChanged || !reusableById.get(entry.id),
+    )
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
       sourcePath: entry.sites[0]?.path ?? "apps/.i18n/native-source.json",
+      sourceContext: entry.sourceContext,
     }));
+  // Default v1 migration is provider-free; an explicit refresh also completes
+  // its ordinary pending work instead of silently carrying selected translations.
+  const translatePending = !migratingV1 || options.force || refreshIds.size > 0;
   const translated =
-    pending.length && (!migratingV1 || options.force)
+    pending.length && translatePending
       ? await (options.translate ?? translateNativeEntries)(
           pending,
           locale,
@@ -1679,7 +1708,7 @@ export async function syncNativeLocale(
   process.stdout.write(
     `native-app-i18n: locale=${locale} entries=${entries.length} carried=${reusableById.size} translated=${translated.size} sourceFallback=${fallback} changed=${changed}\n`,
   );
-  if (migratingV1 && pending.length > 0) {
+  if (migratingV1 && !translatePending && pending.length > 0) {
     process.stdout.write(
       `native-app-i18n: locale=${locale} migration-source-fallback=${pending.length} ids=${pending.map((entry) => entry.id).join(",")}\n`,
     );
@@ -1691,10 +1720,11 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
   const [command, ...args] = argv;
   if (command !== "baseline" && command !== "check" && command !== "sync" && command !== "verify") {
     throw new Error(
-      "usage: node --import tsx scripts/native-app-i18n.ts baseline --write|check|sync [--write] [--locale <code>] [--force]|verify",
+      "usage: node --import tsx scripts/native-app-i18n.ts baseline --write|check|sync [--write] [--locale <code>] [--force | --refresh-id <native-id> ...]|verify",
     );
   }
   let locale: string | undefined;
+  const requestedRefreshIds: string[] = [];
   let force = false;
   let write = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -1705,6 +1735,15 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
     }
     if (argument === "--write") {
       write = true;
+      continue;
+    }
+    if (argument === "--refresh-id") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("-")) {
+        throw new Error("native refresh requires an ID after `--refresh-id`");
+      }
+      requestedRefreshIds.push(value);
+      index += 1;
       continue;
     }
     if (argument === "--locale") {
@@ -1720,6 +1759,12 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
       continue;
     }
     throw new Error(`unsupported native i18n argument: ${argument}`);
+  }
+  const refreshIds = normalizeNativeRefreshIds(requestedRefreshIds, force);
+  if (refreshIds.length > 0 && (command !== "sync" || !write || !locale)) {
+    throw new Error(
+      "native selected refresh requires `sync --write --locale <code> --refresh-id <native-id>`",
+    );
   }
   if (locale) {
     if (command !== "sync" || !write) {
@@ -1740,22 +1785,36 @@ export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
   if (force && (command !== "sync" || !write || !locale)) {
     throw new Error("native full refresh requires `sync --write --locale <code> --force`");
   }
-  return { command, locale, write, ...(force ? { force } : {}) };
+  return {
+    command,
+    locale,
+    write,
+    ...(force ? { force } : {}),
+    ...(refreshIds.length > 0 ? { refreshIds } : {}),
+  };
 }
 
 async function main() {
   const parsed = parseNativeI18nCommand(process.argv.slice(2));
+  const reportObsolete =
+    parsed.command === "check" && (process.env.CI === "true" || process.env.CI === "1")
+      ? (message: string) => process.stderr.write(`::warning::${message}\n`)
+      : undefined;
   const entries = await syncNativeI18n({
     checkInventory:
       parsed.command === "check" || parsed.command === "verify" || parsed.locale !== undefined,
     checkLocales: parsed.command === "check",
+    reportObsolete,
     write:
       (parsed.command === "baseline" || parsed.command === "sync") &&
       parsed.write &&
       parsed.locale === undefined,
   });
   if (parsed.locale) {
-    await syncNativeLocale(parsed.locale, entries, { force: parsed.force });
+    await syncNativeLocale(parsed.locale, entries, {
+      force: parsed.force,
+      refreshIds: parsed.refreshIds,
+    });
   }
   if (parsed.command === "verify" || parsed.command === "check") {
     const android = await import("./android-app-i18n.ts");
@@ -1764,8 +1823,8 @@ async function main() {
       await android.verifyAndroidAppI18n();
       await apple.verifyAppleAppI18n();
     } else {
-      await android.checkAndroidAppI18n();
-      await apple.checkAppleAppI18n();
+      await android.checkAndroidAppI18n({ reportObsolete });
+      await apple.checkAppleAppI18n({ reportObsolete });
     }
   }
   if (parsed.command === "sync" && parsed.write && !parsed.locale) {

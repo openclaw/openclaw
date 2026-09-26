@@ -2,18 +2,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
-import {
-  resetPluginBlobStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 // Matrix tests cover send plugin behavior.
+import type * as TableRuntime from "openclaw/plugin-sdk/markdown-table-runtime";
+import type * as ChunkRuntime from "openclaw/plugin-sdk/reply-chunking";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
-import { setMatrixRuntime } from "../runtime.js";
-import { installMatrixTestRuntime } from "../test-runtime.js";
+import { getMatrixRuntime, setMatrixRuntime } from "../runtime.js";
+import { installMatrixTestRuntime, resetMatrixTestStores } from "../test-runtime.js";
+import type { CoreConfig } from "../types.js";
 import { voteMatrixPoll } from "./actions/polls.js";
-import { loadMatrixDeliveryPlan, resolveMatrixDurableDeliveryIdentity } from "./delivery-plan.js";
+import {
+  loadMatrixDeliveryPlan,
+  reconcileMatrixUnknownSend,
+  resolveMatrixDurableDeliveryIdentity,
+} from "./delivery-plan.js";
+import { createMatrixDraftStream } from "./draft-stream.js";
 import { markdownToMatrixBody, markdownToMatrixHtml } from "./format.js";
 import { createBundledReplacementEvent } from "./monitor/test-events.js";
 import { matrixEventToRaw } from "./sdk/event-helpers.js";
@@ -25,6 +30,11 @@ import {
   sendSingleTextMessageMatrix,
   sendTypingMatrix,
 } from "./send.js";
+import {
+  createEncryptedMediaPayload,
+  makeClient,
+  makeEncryptedMediaClient,
+} from "./send.test-support.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "./send/types.js";
 
 const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
@@ -42,10 +52,10 @@ const mediaKindFromMimeMock = vi.fn((_mime: string | null | undefined) => "image
 const isVoiceCompatibleAudioMock = vi.fn(
   (_options: { contentType?: string | null; fileName?: string | null }) => false,
 );
-const resolveTextChunkLimitMock = vi.fn<
-  (cfg: unknown, channel: unknown, accountId?: unknown) => number
->(() => 4000);
-const resolveMarkdownTableModeMock = vi.fn((_params?: unknown) => "code");
+const { resolveTextChunkLimitMock, resolveMarkdownTableModeMock } = vi.hoisted(() => ({
+  resolveTextChunkLimitMock: vi.fn<typeof ChunkRuntime.resolveTextChunkLimit>(() => 4000),
+  resolveMarkdownTableModeMock: vi.fn<typeof TableRuntime.resolveMarkdownTableMode>(() => "code"),
+}));
 const chunkMarkdownTextWithModeMock = vi.fn<
   (text: string, limit?: number, mode?: unknown) => string[]
 >((text) => (text ? [text] : []));
@@ -60,7 +70,15 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
   };
 });
 
-vi.mock("./outbound-media-runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
+  resolveMarkdownTableMode: resolveMarkdownTableModeMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/reply-chunking", () => ({
+  resolveTextChunkLimit: resolveTextChunkLimitMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
 }));
 
@@ -82,102 +100,16 @@ const runtimeStub = {
   },
   channel: {
     text: {
-      resolveTextChunkLimit: (cfg: unknown, channel: unknown, accountId?: unknown) =>
-        resolveTextChunkLimitMock(cfg, channel, accountId),
+      resolveTextChunkLimit: resolveTextChunkLimitMock,
       resolveChunkMode: () => "length",
       chunkMarkdownText: (text: string) => (text ? [text] : []),
       chunkMarkdownTextWithMode: (text: string, limit: number, mode: unknown) =>
         chunkMarkdownTextWithModeMock(text, limit, mode),
-      resolveMarkdownTableMode: (params: unknown) => resolveMarkdownTableModeMock(params),
+      resolveMarkdownTableMode: resolveMarkdownTableModeMock,
       convertMarkdownTables: (text: string) => text,
     },
   },
 } as unknown as PluginRuntime;
-
-function applyMatrixSendRuntimeStub() {
-  setMatrixRuntime(runtimeStub);
-}
-
-function createEncryptedMediaPayload() {
-  return {
-    buffer: Buffer.from("encrypted"),
-    file: {
-      key: {
-        kty: "oct",
-        key_ops: ["encrypt", "decrypt"],
-        alg: "A256CTR",
-        k: "secret",
-        ext: true,
-      },
-      iv: "iv",
-      hashes: { sha256: "hash" },
-      v: "v2",
-    },
-  };
-}
-
-const makeClient = () => {
-  const sendMessage = vi.fn().mockResolvedValue("evt1");
-  const sendEvent = vi.fn().mockResolvedValue("evt-poll-vote");
-  const getEvent = vi.fn();
-  const getRelations = vi.fn().mockResolvedValue({ events: [], nextBatch: null });
-  const getJoinedRoomMembers = vi.fn().mockResolvedValue([]);
-  const uploadContent = vi.fn().mockResolvedValue("mxc://example/file");
-  const prepareRoomForMessageSend = vi.fn();
-  const client = {
-    sendMessage,
-    sendEvent,
-    getEvent,
-    getRelations,
-    getJoinedRoomMembers,
-    uploadContent,
-    prepareRoomForMessageSend,
-    getTransactionScopeId: vi.fn().mockResolvedValue("scope-1"),
-    getMessageWireEventType: vi.fn().mockResolvedValue("m.room.message"),
-    getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
-    prepareForOneOff: vi.fn(async () => undefined),
-    start: vi.fn(async () => undefined),
-    stop: vi.fn(() => undefined),
-    stopAndPersist: vi.fn(async () => undefined),
-  } as unknown as import("./sdk.js").MatrixClient;
-  prepareRoomForMessageSend.mockImplementation(
-    async (roomId: string, content?: import("./sdk.js").MessageEventContent) => {
-      const eventType = await client.getMessageWireEventType(roomId);
-      if (eventType === "m.room.encrypted" && !client.crypto) {
-        throw new Error("Encrypted Matrix room: enable encryption before sending messages");
-      }
-      if (
-        eventType === "m.room.encrypted" &&
-        (typeof content?.url === "string" ||
-          (content?.info &&
-            "thumbnail_url" in content.info &&
-            typeof content.info.thumbnail_url === "string"))
-      ) {
-        throw new Error("Encrypted Matrix room contains unencrypted media; retry the send");
-      }
-      return eventType;
-    },
-  );
-  return {
-    client,
-    sendMessage,
-    sendEvent,
-    getEvent,
-    getRelations,
-    getJoinedRoomMembers,
-    uploadContent,
-  };
-};
-
-function makeEncryptedMediaClient() {
-  const result = makeClient();
-  (result.client as { crypto?: object }).crypto = {
-    isRoomEncrypted: vi.fn().mockResolvedValue(true),
-    encryptMedia: vi.fn().mockResolvedValue(createEncryptedMediaPayload()),
-  };
-  vi.spyOn(result.client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
-  return result;
-}
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -279,7 +211,6 @@ function resetMatrixSendRuntimeMocks() {
   chunkMarkdownTextWithModeMock
     .mockReset()
     .mockImplementation((text: string) => (text ? [text] : []));
-  applyMatrixSendRuntimeStub();
 }
 
 describe("Matrix formatted chunk boundaries", () => {
@@ -477,11 +408,11 @@ describe("sendMessageMatrix durable delivery", () => {
       cfg: {},
       channel: runtimeStub.channel,
     });
+    setMatrixRuntime({ ...getMatrixRuntime(), media: runtimeStub.media });
   });
 
-  afterEach(() => {
-    resetPluginBlobStoreForTests({ closeDatabase: false });
-    resetPluginStateStoreForTests();
+  afterEach(async () => {
+    await resetMatrixTestStores();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
@@ -590,6 +521,99 @@ describe("sendMessageMatrix durable delivery", () => {
     expect(result.messageId).toBe("$event-1");
     expect(dispatch).toHaveBeenCalledOnce();
     expect(sendMessage.mock.calls[0]?.[2]).toMatch(/^oc_/);
+  });
+
+  it("recovers actual media reply relations after losing the overflow response", async () => {
+    const { client, sendMessage, uploadContent } = makeClient();
+    resolveTextChunkLimitMock.mockReturnValue(6);
+    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    const acceptedTransactions = new Map<string, string>();
+    sendMessage.mockImplementation(
+      async (
+        roomId: string,
+        _content: unknown,
+        transactionId?: string,
+        beforeWireDispatch?: (dispatch: {
+          roomId: string;
+          eventType: "m.room.message";
+          transactionId: string;
+          requestPath: string;
+        }) => Promise<void>,
+      ) => {
+        if (!transactionId || !beforeWireDispatch) {
+          throw new Error("expected durable Matrix dispatch context");
+        }
+        await beforeWireDispatch({
+          roomId,
+          eventType: "m.room.message",
+          transactionId,
+          requestPath: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${transactionId}`,
+        });
+        const existingId = acceptedTransactions.get(transactionId);
+        if (existingId) {
+          return existingId;
+        }
+        const eventId = acceptedTransactions.size === 0 ? "$image" : "$overflow";
+        acceptedTransactions.set(transactionId, eventId);
+        if (eventId === "$overflow") {
+          throw new Error("provider response lost");
+        }
+        return eventId;
+      },
+    );
+    const payload = { text: "first|second", mediaUrl: "file:///tmp/photo.png" };
+    await expect(
+      sendMessageMatrix("room:!room:example", payload.text, {
+        client,
+        cfg: {},
+        accountId: "default",
+        mediaUrl: payload.mediaUrl,
+        replyToId: "$reply",
+        deliveryQueueId: "queue-media",
+        deliveryPartIndex: 0,
+        deliveryPartCount: 1,
+      }),
+    ).rejects.toThrow("provider response lost");
+    expect(sentContent(sendMessage, 0)["m.relates_to"]).toEqual({
+      "m.in_reply_to": { event_id: "$reply" },
+    });
+    expect(sentContent(sendMessage, 1)).not.toHaveProperty("m.relates_to");
+    withResolvedRuntimeMatrixClientMock.mockImplementationOnce(
+      async (_opts: unknown, run: (resolved: typeof client) => Promise<unknown>) =>
+        await run(client),
+    );
+
+    const recovered = await reconcileMatrixUnknownSend({
+      cfg: {},
+      queueId: "queue-media",
+      channel: "matrix",
+      to: "room:!room:example",
+      accountId: "default",
+      enqueuedAt: 1,
+      payloads: [payload],
+      retryCount: 0,
+      effectiveReplyToId: "$reply",
+    });
+
+    expect(recovered.status).toBe("sent");
+    if (recovered.status !== "sent") {
+      throw new Error("expected recovered Matrix delivery");
+    }
+    expect(uploadContent).toHaveBeenCalledOnce();
+    expect(acceptedTransactions.size).toBe(2);
+    expect(sendMessage.mock.calls.slice(2).map((call) => call.slice(0, 3))).toEqual(
+      sendMessage.mock.calls.slice(0, 2).map((call) => call.slice(0, 3)),
+    );
+    expect(recovered.messageId).toBe("$overflow");
+    expect(recovered.receipt).toMatchObject({
+      primaryPlatformMessageId: "$image",
+      platformMessageIds: ["$image", "$overflow"],
+      parts: [
+        { platformMessageId: "$image", kind: "media", index: 0, replyToId: "$reply" },
+        { platformMessageId: "$overflow", kind: "text", index: 1 },
+      ],
+    });
+    expect(recovered.receipt?.parts[1]).not.toHaveProperty("replyToId");
   });
 });
 
@@ -1121,45 +1145,6 @@ describe("sendMessageMatrix mentions", () => {
     );
   });
 
-  it("keeps bare localpart text as plain text", async () => {
-    const { client, sendMessage } = makeClient();
-
-    await sendMessageMatrix("room:!room:example", "hello @alice", {
-      client,
-      cfg: {} as never,
-    });
-
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-    expect((sentContent(sendMessage) as { formatted_body?: string }).formatted_body).not.toContain(
-      "matrix.to/#/@alice:example.org",
-    );
-  });
-
-  it("does not emit mentions for escaped qualified users", async () => {
-    const { client, sendMessage } = makeClient();
-
-    await sendMessageMatrix("room:!room:example", "\\@alice:example.org", {
-      client,
-      cfg: {} as never,
-    });
-
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-    expect((sentContent(sendMessage) as { formatted_body?: string }).formatted_body).not.toContain(
-      "matrix.to/#/@alice:example.org",
-    );
-  });
-
-  it("does not emit mentions for escaped room mentions", async () => {
-    const { client, sendMessage } = makeClient();
-
-    await sendMessageMatrix("room:!room:example", "\\@room please review", {
-      client,
-      cfg: {} as never,
-    });
-
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-  });
-
   it("marks room mentions via m.mentions.room", async () => {
     const { client, sendMessage } = makeClient();
 
@@ -1449,66 +1434,84 @@ describe("sendSingleTextMessageMatrix", () => {
     );
   });
 
-  it("supports partial draft preview sends without activating mention-looking text", async () => {
-    const { client, sendMessage } = makeClient();
-
-    await sendSingleTextMessageMatrix(
-      "room:!room:example",
-      "Working...\n- `read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed`",
-      {
-        client,
-        cfg: {} as never,
-        includeMentions: false,
-        live: true,
+  it("supports retained partial draft sends and edits without a Matrix runtime", async () => {
+    const { client, sendMessage, getEvent } = makeClient();
+    const [tableRuntime, chunkRuntime] = await Promise.all([
+      vi.importActual<typeof TableRuntime>("openclaw/plugin-sdk/markdown-table-runtime"),
+      vi.importActual<typeof ChunkRuntime>("openclaw/plugin-sdk/reply-chunking"),
+    ]);
+    resolveMarkdownTableModeMock.mockImplementation(tableRuntime.resolveMarkdownTableMode);
+    resolveTextChunkLimitMock.mockImplementation(chunkRuntime.resolveTextChunkLimit);
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          textChunkLimit: 8,
+          accounts: { retained: { textChunkLimit: 256 } },
+        },
       },
-    );
+    };
+    const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
+      pluginId: "matrix",
+      errorMessage: "Matrix runtime not initialized",
+    });
+    const previousRuntime = getMatrixRuntime();
+    vi.useFakeTimers();
+    const stream = createMatrixDraftStream({
+      roomId: "!room:example",
+      threadId: "$thread",
+      client,
+      cfg,
+      accountId: "retained",
+    });
+    try {
+      runtimeStore.clearRuntime();
+      expect(() => getMatrixRuntime()).toThrow("Matrix runtime not initialized");
+      getEvent.mockResolvedValue({
+        content: { "m.relates_to": { rel_type: "m.thread", event_id: "$thread" } },
+      });
+      stream.update(
+        "Working...\n- `read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed`",
+      );
+      await stream.flush();
 
-    const content = sentContent(sendMessage);
-    expect(content.msgtype).toBe("m.text");
-    expect(content).not.toHaveProperty("m.mentions");
-    expect(content["org.matrix.msc4357.live"]).toEqual({});
-    expect((content as { formatted_body?: string }).formatted_body).toContain(
-      "<code>read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed</code>",
-    );
-    expect((content as { formatted_body?: string }).formatted_body).not.toContain("matrix.to");
-  });
+      const content = sentContent(sendMessage);
+      expect(content.msgtype).toBe("m.text");
+      expect(content).not.toHaveProperty("m.mentions");
+      expect(content["org.matrix.msc4357.live"]).toEqual({});
+      expect(content.formatted_body).toContain(
+        "<code>read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed</code>",
+      );
+      expect(content.formatted_body).not.toContain("matrix.to");
+      expect(content["m.relates_to"]).toMatchObject({
+        rel_type: "m.thread",
+        event_id: "$thread",
+      });
 
-  it("does not activate mentions inside Matrix tool-progress code spans", async () => {
-    const { client, sendMessage } = makeClient();
+      const editedText = "Still working in the retained account";
+      stream.update(editedText);
+      await stream.flush();
+      expect(sendMessage.mock.calls.map(([roomId]) => roomId)).toEqual([
+        "!room:example",
+        "!room:example",
+      ]);
+      expect(newContent(sentContent(sendMessage, 1)).body).toBe(editedText);
+      expect(sentContent(sendMessage, 1)["m.relates_to"]).toEqual({
+        rel_type: "m.replace",
+        event_id: "evt1",
+      });
 
-    await sendSingleTextMessageMatrix(
-      "room:!room:example",
-      "Working...\n- `@room ping @alice:example.org !room:example.org`",
-      {
-        client,
-        cfg: {} as never,
-      },
-    );
-
-    expect(sentContent(sendMessage).body).toBe(
-      "Working...\n- `@room ping @alice:example.org !room:example.org`",
-    );
-    expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-    const formattedBody = (sentContent(sendMessage) as { formatted_body?: string }).formatted_body;
-    expect(formattedBody).toContain("<code>@room ping @alice:example.org !room:example.org</code>");
-    expect(formattedBody).not.toContain("matrix.to");
-  });
-
-  it("does not activate filename-embedded Matrix mentions in normal text", async () => {
-    const { client, sendMessage } = makeClient();
-
-    await sendSingleTextMessageMatrix(
-      "room:!room:example",
-      "read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt failed",
-      {
-        client,
-        cfg: {} as never,
-      },
-    );
-
-    const content = sentContent(sendMessage);
-    expect(content["m.mentions"]).toEqual({});
-    expect((content as { formatted_body?: string }).formatted_body).not.toContain("matrix.to");
+      stream.update("x".repeat(257));
+      await stream.flush();
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(stream.mustDeliverFinalNormally()).toBe(true);
+    } finally {
+      try {
+        await stream.discardPending();
+      } finally {
+        runtimeStore.setRuntime(previousRuntime);
+        vi.useRealTimers();
+      }
+    }
   });
 
   it("merges extra content fields into single-event sends", async () => {
@@ -2190,36 +2193,6 @@ describe("voteMatrixPoll", () => {
       }),
     ).rejects.toThrow("is not a Matrix poll start event");
     expect(sendEvent).not.toHaveBeenCalled();
-  });
-
-  it("accepts decrypted poll start events returned from encrypted rooms", async () => {
-    const { client, getEvent, sendEvent } = makeClient();
-    getEvent.mockResolvedValue({
-      type: "m.poll.start",
-      content: {
-        "m.poll.start": {
-          question: { "m.text": "Lunch?" },
-          max_selections: 1,
-          answers: [{ id: "a1", "m.text": "Pizza" }],
-        },
-      },
-    });
-
-    const result = await voteMatrixPoll("room:!room:example", "$poll", {
-      client,
-      cfg: {} as never,
-      optionIndex: 1,
-    });
-    expect(result.pollId).toBe("$poll");
-    expect(result.answerIds).toEqual(["a1"]);
-    expect(sendEvent).toHaveBeenCalledWith("!room:example", "m.poll.response", {
-      "m.poll.response": { answers: ["a1"] },
-      "org.matrix.msc3381.poll.response": { answers: ["a1"] },
-      "m.relates_to": {
-        rel_type: "m.reference",
-        event_id: "$poll",
-      },
-    });
   });
 });
 

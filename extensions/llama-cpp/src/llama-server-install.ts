@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs, { type BigIntStats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { sha256File as hashFile } from "@openclaw/fs-safe/durability";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveLlamaCppDataDir } from "./defaults.js";
@@ -106,16 +107,7 @@ export async function sha256File(filePath: string, signal?: AbortSignal): Promis
     const handle = await fsp.open(filePath, "r");
     try {
       const before = fileIdentity(await handle.stat({ bigint: true }));
-      const hash = createHash("sha256");
-      // Bind the digest to an open file, not a pathname that can be replaced during the scan.
-      const input = handle.createReadStream({
-        autoClose: false,
-        highWaterMark: 1024 * 1024,
-        signal,
-      });
-      for await (const chunk of input) {
-        hash.update(chunk);
-      }
+      const { digest: sha256 } = await hashFile(handle, { signal });
       const after = await handle.stat({ bigint: true });
       if (
         before !== fileIdentity(after) ||
@@ -123,7 +115,6 @@ export async function sha256File(filePath: string, signal?: AbortSignal): Promis
       ) {
         throw new Error(`File changed during integrity verification: ${filePath}. Retry setup.`);
       }
-      const sha256 = hash.digest("hex");
       rememberVerifiedFile(filePath, after, sha256);
       return sha256;
     } finally {
@@ -204,9 +195,9 @@ export async function downloadVerifiedFile(params: {
               rollingBytesPerSecond === 0
                 ? currentRate
                 : rollingBytesPerSecond * 0.75 + currentRate * 0.25;
+            previousSize = downloadedSize;
+            previousAt = now;
           }
-          previousSize = downloadedSize;
-          previousAt = now;
           params.onProgress?.({ downloadedSize, totalSize, bytesPerSecond: rollingBytesPerSecond });
         }
         if (params.expectedSize && downloadedSize !== params.expectedSize) {

@@ -1,7 +1,7 @@
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
-import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
@@ -18,7 +18,7 @@ const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
 
 export function createGatewayActiveWorkTracker(options: {
-  params: GatewayReloadHandlerParams;
+  params: Pick<GatewayReloadHandlerParams, "logReload">;
   myGeneration: number;
 }) {
   const { params, myGeneration } = options;
@@ -96,9 +96,14 @@ export function createGatewayActiveWorkTracker(options: {
     return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
   };
   const formatDeferredWorkStatus = (status: "active" | "still active") => {
-    const details = formatActiveDetails(getActiveCounts()).join(", ");
-    const taskBlockers = formatTaskBlockers();
-    return `${details} ${status}${taskBlockers ? ` (${taskBlockers})` : ""}`;
+    try {
+      const details = formatActiveDetails(getActiveCounts()).join(", ");
+      const taskBlockers = formatTaskBlockers();
+      return `${details} ${status}${taskBlockers ? ` (${taskBlockers})` : ""}`;
+    } catch (err) {
+      // Diagnostics must not prevent the existing timeout from forcing a restart.
+      return `pending work unknown (${String(err)})`;
+    }
   };
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,

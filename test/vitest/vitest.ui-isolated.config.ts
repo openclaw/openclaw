@@ -16,6 +16,7 @@ export function createUiIsolatedVitestConfig(
     deps: jsdomOptimizedDeps,
     environment: "jsdom",
     env,
+    intersectIncludeFile: true,
     excludeUnitFastTests: false,
     includeOpenClawRuntimeSetup: false,
     isolate: true,

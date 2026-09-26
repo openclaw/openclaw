@@ -2,23 +2,29 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-// Control UI module implements session display behavior.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isCronSessionDisplayKey } from "../../../src/shared/session-list-visibility.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 
-const CHANNEL_LABELS: Record<string, string> = {
-  imessage: "iMessage",
-  telegram: "Telegram",
-  discord: "Discord",
-  signal: "Signal",
-  slack: "Slack",
-  whatsapp: "WhatsApp",
-  matrix: "Matrix",
-  email: "Email",
-  sms: "SMS",
-};
+const CHANNEL_LABELS = new Map<string, string>([
+  ["imessage", "iMessage"],
+  ["telegram", "Telegram"],
+  ["discord", "Discord"],
+  ["signal", "Signal"],
+  ["slack", "Slack"],
+  ["whatsapp", "WhatsApp"],
+  ["matrix", "Matrix"],
+  ["msteams", "Microsoft Teams"],
+  ["bluebubbles", "BlueBubbles"],
+  ["googlechat", "Google Chat"],
+  ["mattermost", "Mattermost"],
+  ["irc", "IRC"],
+  ["email", "Email"],
+  ["sms", "SMS"],
+]);
 
-const KNOWN_CHANNEL_KEYS = Object.keys(CHANNEL_LABELS);
+const KNOWN_CHANNEL_KEYS = [...CHANNEL_LABELS.keys()];
 
 /** Raw peer ids stay out of the sidebar; keep a short recognizable tail only. */
 function shortenPeerId(identifier: string): string {
@@ -66,6 +72,7 @@ export function resolveChannelSessionInfo(
 type SessionWorktreeDisplayRow = {
   worktree?: { branch?: string; repoRoot?: string };
   repository?: { url: string; branch: string };
+  placement?: GatewaySessionRow["placement"];
   execNode?: string;
   execCwd?: string;
   spawnedWorkspaceDir?: string;
@@ -73,7 +80,7 @@ type SessionWorktreeDisplayRow = {
 };
 
 export type SessionWorkContext =
-  | { kind: "project"; name: string; path: string; branch?: string }
+  | { kind: "project"; name: string; path: string; cwd?: string; branch?: string }
   | { kind: "workspace"; name: string; path: string };
 
 /** Basename shown for a repository path on every Control UI surface. */
@@ -84,23 +91,39 @@ export function repoName(repoRoot: string): string {
 export function resolveSessionWorkContext(
   row: SessionWorktreeDisplayRow,
 ): SessionWorkContext | undefined {
+  // Cloud repository identity is not a Gateway filesystem path. A bare node
+  // cwd likewise must not borrow repository facts from a local worktree.
+  const repoRoot =
+    normalizeOptionalString(row.repository?.url.replace(/\.git$/u, "")) ??
+    (row.execNode ? undefined : normalizeOptionalString(row.worktree?.repoRoot));
+  if (repoRoot) {
+    const remoteDirectory =
+      row.placement && "remoteWorkspaceDir" in row.placement
+        ? normalizeOptionalString(row.placement.remoteWorkspaceDir)
+        : undefined;
+    const repositoryDirectory =
+      remoteDirectory ?? (row.execNode ? normalizeOptionalString(row.execCwd) : undefined);
+    const branch =
+      normalizeOptionalString(row.repository?.branch) ??
+      normalizeOptionalString(row.worktree?.branch);
+    return {
+      kind: "project",
+      name: repoName(repoRoot),
+      // Project grouping uses the source repository, not this task checkout.
+      path: repoRoot,
+      cwd: row.repository ? repositoryDirectory : normalizeOptionalString(row.spawnedCwd),
+      branch:
+        !row.repository && branch?.startsWith(WORKTREE_BRANCH_PREFIX)
+          ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
+          : branch,
+    };
+  }
+
   if (row.execNode) {
     const workspacePath = normalizeOptionalString(row.execCwd);
     return workspacePath
       ? { kind: "workspace", name: repoName(workspacePath), path: workspacePath }
       : undefined;
-  }
-  const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
-  if (repoRoot) {
-    const branch = normalizeOptionalString(row.worktree?.branch);
-    return {
-      kind: "project",
-      name: repoName(repoRoot),
-      path: repoRoot,
-      branch: branch?.startsWith(WORKTREE_BRANCH_PREFIX)
-        ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
-        : branch,
-    };
   }
 
   // Match the chat workspace owner: local spawned sessions own their recorded
@@ -128,9 +151,10 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   const rawBranch =
     normalizeOptionalString(row.repository?.branch) ??
     normalizeOptionalString(row.worktree?.branch);
-  const branch = rawBranch?.startsWith(WORKTREE_BRANCH_PREFIX)
-    ? rawBranch.slice(WORKTREE_BRANCH_PREFIX.length)
-    : rawBranch;
+  const branch =
+    !row.repository && rawBranch?.startsWith(WORKTREE_BRANCH_PREFIX)
+      ? rawBranch.slice(WORKTREE_BRANCH_PREFIX.length)
+      : rawBranch;
   const checkout = repoRoot
     ? branch
       ? `${repoName(repoRoot)} ⎇ ${branch}`
@@ -143,10 +167,8 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   return checkout ?? node;
 }
 
-/** Machine identity of a typed session, derived from the session key. */
 type SessionTypedKind = "subagent" | "automation";
 
-/** Parsed type / context extracted from a session key. */
 type SessionKeyInfo = {
   /** Typed-session identity; display branching keys off this, not label text. */
   kind?: SessionTypedKind;
@@ -192,23 +214,17 @@ type SessionDisplayOptions = {
   includeSubagentPrefix?: boolean;
 };
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+export function formatSessionChannelLabel(channel: string): string {
+  return CHANNEL_LABELS.get(channel) ?? channel.charAt(0).toUpperCase() + channel.slice(1);
 }
 
-/**
- * Parse a session key to extract type information and a human-readable
- * fallback display name. Exported for testing.
- */
 function parseSessionKey(key: string): SessionKeyInfo {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
-  // Main session.
   if (key === "main" || /^agent:[^:]+:main$/u.test(key)) {
     return { prefix: "", fallbackName: "Main Session" };
   }
 
-  // Subagent.
   if (key.includes(":subagent:")) {
     const prefix = typedSessionPrefix("subagent");
     return { kind: "subagent", prefix, fallbackName: prefix };
@@ -232,7 +248,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
     if (!channel || !identifier) {
       return { prefix: "", fallbackName: key, accountId };
     }
-    const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
+    const channelLabel = formatSessionChannelLabel(channel);
     return {
       prefix: "",
       fallbackName: `${channelLabel} · ${shortenPeerId(identifier)}`,
@@ -249,7 +265,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
     if (!channel) {
       return { prefix: "", fallbackName: key };
     }
-    const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
+    const channelLabel = formatSessionChannelLabel(channel);
     return { prefix: "", fallbackName: `${channelLabel} Group` };
   }
 
@@ -257,7 +273,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // pre-agent-scoped builds still surface in session lists; label, don't leak keys.
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
+      return { prefix: "", fallbackName: `${formatSessionChannelLabel(ch)} Session` };
     }
   }
 
@@ -276,7 +292,6 @@ function parseSessionKey(key: string): SessionKeyInfo {
     return { prefix: "", fallbackName: shortenOpaqueIdRuns(agentKeyName) };
   }
 
-  // Unknown: return key as-is.
   return { prefix: "", fallbackName: key };
 }
 
@@ -332,12 +347,9 @@ export function resolveSessionDisplayName(
   return withAccountDisambiguator(resolveNamedOrFallback(), accountId);
 }
 
-export function isCronSessionKey(key: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(key);
-  const parts = normalized.split(":").filter(Boolean);
-  // Display classification also accepts whitespace-only owners; routing rejects them.
-  return (
-    normalized.startsWith("cron:") ||
-    (normalized.startsWith("agent:") && parts.length >= 4 && parts[2] === "cron")
-  );
+// Wire kinds exclude cron; labels, sorting and grouping share this display classification.
+export function resolveSessionDisplayKind(
+  row: GatewaySessionRow,
+): GatewaySessionRow["kind"] | "cron" {
+  return isCronSessionDisplayKey(row.key) ? "cron" : row.kind;
 }

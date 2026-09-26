@@ -11,10 +11,10 @@ const TENCENT_PROVIDER_IDS: ReadonlySet<string> = new Set([
   TOKENPLAN_PROVIDER_ID,
 ]);
 
-type StreamModel = Parameters<StreamFn>[0];
 type StreamOptions = Parameters<StreamFn>[2];
 
-const TENCENT_REASONING_EFFORT_MAP: Readonly<Record<string, string>> = Object.freeze({
+// Only hy3 has a verified two-rung override. Other models retain shared effort handling.
+const TENCENT_TWO_RUNG_EFFORT_MAP: Readonly<Record<string, string>> = Object.freeze({
   off: "none",
   none: "none",
   minimal: "high",
@@ -23,8 +23,6 @@ const TENCENT_REASONING_EFFORT_MAP: Readonly<Record<string, string>> = Object.fr
   high: "high",
   xhigh: "high",
 });
-
-const TOKENHUB_HY3_PREVIEW_REASONING_EFFORTS = new Set(["none", "low", "high"]);
 
 function resolveRequestedEffort(
   thinkingLevel: OpenAICompatibleThinkingLevel,
@@ -39,54 +37,24 @@ function resolveRequestedEffort(
   return raw ? raw.trim().toLowerCase() : undefined;
 }
 
-function mapEffortForTencent(model: StreamModel, effort: string | undefined): string | undefined {
-  if (!effort) {
-    return undefined;
-  }
-  if (
-    (model as { provider?: unknown }).provider === TOKENHUB_PROVIDER_ID &&
-    (model as { id?: unknown }).id === "hy3-preview"
-  ) {
-    if (effort === "off") {
-      return "none";
-    }
-    // Preview supports low directly. Leave unsupported requests to the shared
-    // model fallback that already normalized the underlying payload.
-    return TOKENHUB_HY3_PREVIEW_REASONING_EFFORTS.has(effort) ? effort : undefined;
-  }
-  return TENCENT_REASONING_EFFORT_MAP[effort];
-}
-
-function isTencentCompletionsCall(model: StreamModel): boolean {
-  const provider = (model as { provider?: unknown }).provider;
-  const api = (model as { api?: unknown }).api;
-  return (
-    typeof provider === "string" &&
-    TENCENT_PROVIDER_IDS.has(provider) &&
-    api === "openai-completions"
-  );
-}
-
 export function wrapTencentProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
   return createPayloadPatchStreamWrapper(
     ctx.streamFn,
-    ({ payload, model, options }) => {
+    ({ payload, options }) => {
       const requested = resolveRequestedEffort(ctx.thinkingLevel, options);
-      const mapped = mapEffortForTencent(model, requested);
-
-      if (mapped === undefined) {
-        return;
+      const mapped =
+        requested && Object.hasOwn(TENCENT_TWO_RUNG_EFFORT_MAP, requested)
+          ? TENCENT_TWO_RUNG_EFFORT_MAP[requested]
+          : undefined;
+      if (mapped !== undefined) {
+        payload.reasoning_effort = mapped;
       }
-
-      if (mapped === "none" || mapped === "off") {
-        payload.reasoning_effort = "none";
-        return;
-      }
-
-      payload.reasoning_effort = mapped;
     },
     {
-      shouldPatch: ({ model }) => isTencentCompletionsCall(model),
+      shouldPatch: ({ model }) =>
+        TENCENT_PROVIDER_IDS.has(model.provider) &&
+        model.api === "openai-completions" &&
+        model.id === "hy3",
     },
   );
 }

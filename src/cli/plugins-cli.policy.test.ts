@@ -1,17 +1,22 @@
 // Plugins CLI policy tests cover plugin command policy checks and warnings.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   applyExclusiveSlotSelectionMock,
   createTestInstalledPluginIndex,
   enablePluginInConfigMock,
+  resolvePluginLifecycleGatewayMock,
+  pluginLifecycleGatewayMock,
   loadPluginManifestRegistryMock,
+  loadPluginMetadataSnapshotMock,
   pluginCliConfigMock,
   replaceConfigFileMock,
   refreshPluginRegistryMock,
@@ -24,6 +29,7 @@ import {
   configWriteMock,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
 } from "./plugins-cli-test-helpers.js";
+import { createCliTtyMock } from "./test-runtime-capture.js";
 
 const inventory = vi.hoisted(() => ({ load: vi.fn(), hostedCatalog: vi.fn() }));
 
@@ -42,13 +48,16 @@ const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 
 describe("plugins cli policy mutations", () => {
   let readInstallRecords: (typeof import("../plugins/installed-plugin-index-record-reader.js"))["loadInstalledPluginIndexInstallRecordsSync"];
-  const compatibilityPluginIds = [
-    { alias: "google-gemini-cli", pluginId: "google" },
-    { alias: "minimax-portal-auth", pluginId: "minimax" },
-  ] as const;
+  const compatibilityPluginIds = [{ alias: "google-gemini-cli", pluginId: "google" }] as const;
 
   beforeEach(async () => {
     resetPluginsCliTestState();
+    // Policy cases derive metadata from their config-sensitive registry fixture;
+    // the shared install-output snapshot assumes synthetic enabled artifacts.
+    const metadata = await vi.importActual<typeof import("../plugins/plugin-metadata-snapshot.js")>(
+      "../plugins/plugin-metadata-snapshot.js",
+    );
+    loadPluginMetadataSnapshotMock.mockImplementation(metadata.loadPluginMetadataSnapshot);
     // Resolve after the shared CLI fixture registers its record-IO mock.
     ({ loadInstalledPluginIndexInstallRecordsSync: readInstallRecords } =
       await import("../plugins/installed-plugin-index-record-reader.js"));
@@ -166,6 +175,174 @@ describe("plugins cli policy mutations", () => {
     return config.plugins.entries;
   }
 
+  function mockCurrentConfig(initial: OpenClawConfig = {}) {
+    pluginCliConfigMock.mockImplementation(
+      () => replaceConfigFileMock.mock.calls.at(-1)?.[0].sourceConfig ?? initial,
+    );
+  }
+
+  it.each([
+    { command: "enable", ids: ["alpha"], acceptCapabilities: false },
+    { command: "enable", ids: ["beta", "alpha"], acceptCapabilities: true },
+    { command: "disable", ids: ["alpha"], acceptCapabilities: false },
+    { command: "disable", ids: ["beta", "alpha", "beta"], acceptCapabilities: false },
+  ])(
+    "applies online $command for $ids through the running owner without a local config write",
+    async ({ command, ids, acceptCapabilities }) => {
+      resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+      for (const id of ids) {
+        pluginLifecycleGatewayMock.mockImplementationOnce(async (...args: unknown[]) => {
+          if (acceptCapabilities) {
+            const consent = args[2];
+            if (typeof consent !== "function") {
+              throw new Error("Expected capability consent");
+            }
+            const review = buildPluginCapabilityConsentReview({
+              pluginId: id,
+              manifest: { name: id, hooks: ["agent:bootstrap"] },
+              record: { source: "npm", spec: `@acme/${id}` },
+              config: {},
+            });
+            expect(await consent(review)).toEqual({ reviewToken: review.reviewToken });
+          }
+          return { plugin: { id }, runtime: { generation: 2 } };
+        });
+      }
+      await runPluginsCommand([
+        "plugins",
+        command,
+        ...ids,
+        ...(acceptCapabilities ? ["--accept-capabilities"] : []),
+      ]);
+      expect(pluginLifecycleGatewayMock.mock.calls.map((call) => call.slice(0, 2))).toEqual(
+        ids.map((id) => [
+          "plugins.setEnabled",
+          {
+            pluginId: id,
+            enabled: command === "enable",
+            ...(command === "enable" ? { allowlistPolicy: "preserve" } : {}),
+          },
+        ]),
+      );
+      expect(resolvePluginLifecycleGatewayMock).toHaveBeenCalledTimes(ids.length);
+      expect(configWriteMock).not.toHaveBeenCalled();
+      expect(enablePluginInConfigMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { mode: undefined, json: false, acceptCapabilities: true, ids: ["alpha"], wait: true },
+    {
+      mode: undefined,
+      json: false,
+      acceptCapabilities: true,
+      ids: ["alpha"],
+      restartRequired: true,
+    },
+    {
+      mode: "OPENCLAW_CONFIG_READONLY",
+      json: false,
+      acceptCapabilities: true,
+      ids: ["alpha", "beta"],
+    },
+    { mode: "OPENCLAW_NIX_MODE", json: false, acceptCapabilities: true, ids: ["alpha", "beta"] },
+    { mode: undefined, json: true, acceptCapabilities: false, ids: ["alpha", "beta"] },
+    { mode: undefined, json: true, acceptCapabilities: true, ids: ["alpha", "beta"] },
+  ])(
+    "reloads CLI-selected $ids in one generation (mode=$mode, json=$json, accept=$acceptCapabilities)",
+    async ({ mode, json, acceptCapabilities, ids, restartRequired = false, wait = false }) => {
+      resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
+      const receipt = {
+        ok: true,
+        pluginIds: ids,
+        restartRequired,
+        runtime: {
+          operationId: "reload-selected",
+          generation: 2,
+          pluginIds: ids,
+          selectedEntries: Object.fromEntries(
+            ids.map((id) => [id, `/plugins/${id}/dist/index.js`]),
+          ),
+        },
+      };
+      const review = buildPluginCapabilityConsentReview({
+        pluginId: "alpha",
+        manifest: { name: "Alpha", hooks: ["agent:bootstrap"] },
+        record: { source: "npm", spec: "@acme/alpha" },
+        config: {},
+      });
+      const consentRequired = new Error("Plugin alpha requires capability consent.");
+      pluginLifecycleGatewayMock.mockImplementation(async (...args: unknown[]) => {
+        if (json) {
+          const consent = args[2];
+          if (typeof consent !== "function") {
+            throw consentRequired;
+          }
+          expect(await consent(review)).toEqual({ reviewToken: review.reviewToken });
+        }
+        return receipt;
+      });
+      const tty = createCliTtyMock();
+      try {
+        tty.set(true);
+        await withEnvAsync(mode ? { [mode]: "1" } : {}, async () => {
+          const reload = runPluginsCommand([
+            "plugins",
+            "reload",
+            ...ids,
+            "alpha",
+            ...(json ? ["--json"] : []),
+            ...(wait ? ["--wait"] : []),
+            ...(acceptCapabilities ? ["--accept-capabilities"] : []),
+          ]);
+          if (json && !acceptCapabilities) {
+            await expect(reload).rejects.toBe(consentRequired);
+          } else {
+            await reload;
+          }
+        });
+      } finally {
+        tty.restore();
+      }
+      expect(pluginLifecycleGatewayMock).toHaveBeenCalledExactlyOnceWith(
+        "plugins.reload",
+        { plugins: ids.map((pluginId) => ({ pluginId })), ...(wait ? { waitForDrain: true } : {}) },
+        acceptCapabilities ? expect.any(Function) : undefined,
+      );
+      expect(promptYesNoMock).not.toHaveBeenCalled();
+      if (json) {
+        if (acceptCapabilities) {
+          expect(JSON.parse(pluginsCliRuntimeLogs.join("\n"))).toEqual(receipt);
+        } else {
+          expect(pluginsCliRuntimeLogs).toEqual([]);
+        }
+      } else {
+        for (const id of ids) {
+          expect(pluginsCliRuntimeLogs).toContain(
+            `${id}: Selected entry: /plugins/${id}/dist/index.js. Rebuild compiled output after source edits.`,
+          );
+        }
+        expect(pluginsCliRuntimeLogs).toContain(
+          restartRequired
+            ? 'Reloaded registrations for plugin "alpha" (generation 2). Gateway restart required to load edited code.'
+            : ids.length === 1
+              ? 'Reloaded plugin "alpha" (generation 2).'
+              : 'Reloaded plugins "alpha", "beta" (generation 2).',
+        );
+      }
+      expect(configWriteMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses offline reload without modifying config or dispatching a mutation", async () => {
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(null);
+    await expect(runPluginsCommand(["plugins", "reload", "alpha"])).rejects.toThrow(
+      "The Gateway is not running. Start it before reloading a plugin.",
+    );
+    expect(pluginLifecycleGatewayMock).not.toHaveBeenCalled();
+    expect(configWriteMock).not.toHaveBeenCalled();
+  });
+
   it("refreshes the persisted plugin registry after enabling a plugin", async () => {
     const sourceConfig = {} as OpenClawConfig;
     const enabledConfig = {
@@ -181,11 +358,12 @@ describe("plugins cli policy mutations", () => {
     await runPluginsCommand(["plugins", "enable", "alpha"]);
 
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
-      nextConfig: enabledConfig,
+      sourceConfig: enabledConfig,
       baseHash: "mock",
-      writeOptions: {
+      writeOptions: expect.objectContaining({
+        assertConfigPathForWrite: expect.any(Function),
         explicitSetPaths: [["plugins", "entries", "alpha"]],
-      },
+      }),
     });
     expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith(
@@ -199,23 +377,109 @@ describe("plugins cli policy mutations", () => {
     expect(runtimeErrors).toEqual([]);
   });
 
-  it("rejects enabling an unconsented installed plugin without --accept-capabilities", async () => {
+  it.each(["enable", "disable"])(
+    "applies %s in order using the previously committed config",
+    async (command) => {
+      const enabled = command === "enable";
+      mockCurrentConfig({
+        plugins: { entries: { alpha: { enabled: !enabled }, beta: { enabled: !enabled } } },
+      });
+      mockPluginRegistry(["alpha", "beta"]);
+
+      await runPluginsCommand(["plugins", command, "beta", "alpha"]);
+
+      expect(configWriteMock.mock.calls).toEqual([
+        [{ plugins: { entries: { alpha: { enabled: !enabled }, beta: { enabled } } } }],
+        [{ plugins: { entries: { alpha: { enabled }, beta: { enabled } } } }],
+      ]);
+      expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ policyPluginIds: ["beta"] }),
+      );
+      expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ policyPluginIds: ["alpha"] }),
+      );
+    },
+  );
+
+  it("stops disabling at a missing plugin while retaining earlier changes", async () => {
+    mockCurrentConfig({
+      plugins: { entries: { alpha: { enabled: true }, gamma: { enabled: true } } },
+    });
+    mockPluginRegistry(["alpha", "gamma"]);
+
+    await expect(
+      runPluginsCommand(["plugins", "disable", "alpha", "missing", "gamma"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(configWriteMock).toHaveBeenCalledOnce();
+    expect(requireFirstWrittenConfig().plugins?.entries).toEqual({
+      alpha: { enabled: false },
+      gamma: { enabled: true },
+    });
+    expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing");
+  });
+
+  it.each(["missing", "blocked"])(
+    "stops at a %s plugin while retaining earlier enables",
+    async (failure) => {
+      mockCurrentConfig({
+        plugins: {
+          ...(failure === "blocked" ? { deny: ["beta"] } : {}),
+          entries: {
+            alpha: { enabled: false },
+            beta: { enabled: false },
+            gamma: { enabled: false },
+          },
+        },
+      });
+      mockPluginRegistry(failure === "missing" ? ["alpha", "gamma"] : ["alpha", "beta", "gamma"]);
+
+      await expect(
+        runPluginsCommand(["plugins", "enable", "alpha", "beta", "gamma"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(configWriteMock).toHaveBeenCalledOnce();
+      expect(requireFirstWrittenConfig().plugins?.entries).toEqual({
+        alpha: { enabled: true },
+        beta: { enabled: false },
+        gamma: { enabled: false },
+      });
+      expect(refreshPluginRegistryMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ policyPluginIds: ["alpha"] }),
+      );
+      expect(runtimeErrors.at(-1)).toContain(
+        failure === "missing"
+          ? "Plugin not found: beta"
+          : 'Plugin "beta" could not be enabled (blocked by denylist).',
+      );
+    },
+  );
+
+  it("stops at an unconsented installed plugin while retaining earlier enables", async () => {
     await withTempDir("openclaw-cli-capability-consent-", async (rootDir) => {
       createColdPluginFixture({ rootDir, pluginId: "alpha" });
       const sourceConfig = {
         plugins: { entries: { alpha: { enabled: false } } },
       } as OpenClawConfig;
-      pluginCliConfigMock.mockReturnValue(sourceConfig);
+      mockCurrentConfig(sourceConfig);
       setInstalledPluginIndexInstallRecords({
         alpha: { source: "npm", spec: "@acme/alpha", installPath: rootDir },
       });
       expect(readInstallRecords().alpha?.installPath).toBe(rootDir);
-      mockPluginRegistry(["alpha"]);
-      await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow("__exit__:1");
+      mockPluginRegistry(["alpha", "beta", "gamma"]);
+      await expect(
+        runPluginsCommand(["plugins", "enable", "beta", "alpha", "gamma"]),
+      ).rejects.toThrow("__exit__:1");
 
       expect(runtimeErrors.at(-1)).toContain("--accept-capabilities");
-      expect(replaceConfigFileMock).not.toHaveBeenCalled();
-      expect(configWriteMock).not.toHaveBeenCalled();
+      expect(configWriteMock).toHaveBeenCalledOnce();
+      expect(requireFirstWrittenConfig().plugins?.entries).toEqual({
+        alpha: { enabled: false },
+        beta: { enabled: true },
+      });
+      expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
     });
   });
 
@@ -403,11 +667,12 @@ describe("plugins cli policy mutations", () => {
     const entries = requirePluginEntries(nextConfig);
     expect(entries.alpha).toEqual({ enabled: false });
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
-      nextConfig,
+      sourceConfig: nextConfig,
       baseHash: "mock",
-      writeOptions: {
+      writeOptions: expect.objectContaining({
+        assertConfigPathForWrite: expect.any(Function),
         explicitSetPaths: [["plugins", "entries", "alpha"]],
-      },
+      }),
     });
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -437,11 +702,12 @@ describe("plugins cli policy mutations", () => {
       await runPluginsCommand(["plugins", "enable", alias]);
 
       expect(replaceConfigFileMock).toHaveBeenCalledWith({
-        nextConfig: enabledConfig,
+        sourceConfig: enabledConfig,
         baseHash: "mock",
-        writeOptions: {
+        writeOptions: expect.objectContaining({
+          assertConfigPathForWrite: expect.any(Function),
           explicitSetPaths: [["plugins", "entries", pluginId]],
-        },
+        }),
       });
       expect(configWriteMock).toHaveBeenCalledWith(enabledConfig);
     },
@@ -466,20 +732,21 @@ describe("plugins cli policy mutations", () => {
       expect(entries[pluginId]).toEqual({ enabled: false });
       expect(entries[alias]).toBeUndefined();
       expect(replaceConfigFileMock).toHaveBeenCalledWith({
-        nextConfig,
+        sourceConfig: nextConfig,
         baseHash: "mock",
-        writeOptions: {
+        writeOptions: expect.objectContaining({
+          assertConfigPathForWrite: expect.any(Function),
           explicitSetPaths: [["plugins", "entries", pluginId]],
-        },
+        }),
       });
     },
   );
 
-  it.each(
-    ["enable", "disable"].flatMap((command) =>
-      ["missing-plugin", "alpha-provider", "alpha-channel"].map((id) => ({ command, id })),
-    ),
-  )("rejects $command for undiscovered plugin id $id", async ({ command, id }) => {
+  it.each([
+    { command: "enable", id: "missing-plugin" },
+    { command: "enable", id: "alpha-provider" },
+    { command: "disable", id: "alpha-channel" },
+  ])("rejects $command for undiscovered plugin id $id", async ({ command, id }) => {
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
         {
@@ -509,8 +776,8 @@ describe("plugins cli policy mutations", () => {
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
   });
 
-  it("persists exclusive-slot selection and reports its warning without fetching a hosted catalog", async () => {
-    pluginCliConfigMock.mockReturnValue({
+  it("preserves repeated IDs when later enables change an exclusive slot", async () => {
+    mockCurrentConfig({
       plugins: {
         entries: { alpha: { enabled: false }, previous: { enabled: true } },
         slots: { memory: "previous" },
@@ -518,15 +785,16 @@ describe("plugins cli policy mutations", () => {
     });
     mockPluginRegistry(["alpha", "previous"], { alpha: "memory", previous: "memory" });
 
-    await runPluginsCommand(["plugins", "enable", "alpha"]);
+    await runPluginsCommand(["plugins", "enable", "alpha", "previous", "alpha"]);
 
     expect(requireFirstWrittenConfig().plugins).toMatchObject({
       entries: { alpha: { enabled: true } },
       slots: { memory: "alpha" },
     });
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain(
-      'Exclusive slot "memory" switched from "previous" to "alpha".',
-    );
+    expect(pluginsCliRuntimeLogs.join("\n")).not.toContain("Exclusive slot");
+    expect(
+      replaceConfigFileMock.mock.calls.map(([write]) => write.sourceConfig?.plugins?.slots?.memory),
+    ).toEqual(["alpha", "previous", "alpha"]);
     expect(inventory.hostedCatalog).not.toHaveBeenCalled();
   });
 

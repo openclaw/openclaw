@@ -2,14 +2,13 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
+import { acquireTestPortBlock, withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { expect } from "vitest";
-import { WebSocket } from "ws";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
 import { stopBrowserControlService } from "../../control-service.js";
 import { runExtensionRelayDaemon } from "../relay-daemon.js";
-import { getFreePort } from "../test-port.js";
 import {
   createRelayProof,
   randomRelayNonce,
@@ -23,6 +22,8 @@ import {
   BROWSER_RELAY_AUTH_COMPLETE_PATH,
 } from "./auth-v2.js";
 import { RawHttpConnection } from "./relay-http.test-support.js";
+
+const INITIAL_PORT_SELECTION_ATTEMPTS = 3;
 
 /** An ordinary external v2 client: HTTP authentication/discovery/upgrade on one socket. */
 export async function externalRelayClient(port: number, token: string): Promise<WebSocket> {
@@ -99,184 +100,217 @@ export async function withConnectedDaemon(
     port: number,
     stateDir: string,
     config: object,
-  ) => Promise<{ stop: () => void; done: Promise<unknown> }>,
+  ) => Promise<{ port: number | null; stop: () => void; done: Promise<unknown> }>,
   handleExtensionCommand?: (
     command: Record<string, unknown>,
     send: (message: Record<string, unknown>) => void,
   ) => boolean,
 ) {
-  await withTempDir("relay-coexistence-", async (dir) => {
-    const stateDir = await fs.realpath(dir);
-    const credentials = path.join(stateDir, "credentials");
-    const port = await getFreePort();
-    const token = relayTestKey(9);
-    await fs.mkdir(credentials);
-    await fs.writeFile(path.join(credentials, "browser-extension-relay.secret"), token, {
-      mode: 0o600,
-    });
-    const config = {
-      gateway: { auth: { mode: "token" as const, token: "coexistence-test" } },
-      browser: { profiles: { chrome: { driver: "extension" as const, cdpPort: port } } },
-    };
-    setRuntimeConfigSnapshot(config, config);
-    await withEnvAsync(
-      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_OAUTH_DIR: credentials },
-      async () => {
-        let daemon = startDaemon
-          ? await startDaemon(port, stateDir, config)
-          : await runExtensionRelayDaemon({ port });
-        const extension = new WebSocket(
-          `ws://127.0.0.1:${port}/extension`,
-          BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
-          { origin: "chrome-extension://coexistence-test" },
-        );
-        let nativeTarget = "fixture-target";
-        let detachHeld = false;
-        let detachEntered = () => {};
-        const detachReplies: Array<() => void> = [];
-        try {
-          await once(extension, "open");
-          const challengeMessage = once(extension, "message");
-          extension.send(
-            JSON.stringify({
-              type: "auth.hello",
-              v: 2,
-              keyId: relayKeyIdFromHex(token),
-              clientNonce: randomRelayNonce(),
-            }),
-          );
-          const [raw] = await challengeMessage;
-          const challenge = JSON.parse(rawDataToString(raw));
-          const authenticated = once(extension, "message");
-          extension.send(
-            JSON.stringify({
-              type: "auth.response",
-              v: 2,
-              sessionId: challenge.sessionId,
-              clientProof: createRelayProof(token, "client", challenge),
-            }),
-          );
-          const [ok] = await authenticated;
-          expect(JSON.parse(rawDataToString(ok))).toMatchObject({ type: "auth.ok", v: 2 });
-          extension.on("message", (frame) => {
-            const command = JSON.parse(rawDataToString(frame)) as {
-              seq: number;
-              type: string;
-              method?: string;
-            };
-            if (command.type === "ping") {
-              extension.send(JSON.stringify({ type: "pong" }));
-              return;
-            }
-            const send = (message: Record<string, unknown>) =>
-              extension.send(JSON.stringify(message));
-            if (handleExtensionCommand?.(command, send)) {
-              return;
-            }
-            if (command.type === "detach" && detachHeld) {
-              detachReplies.push(() =>
-                extension.send(JSON.stringify({ type: "result", seq: command.seq, result: {} })),
-              );
-              detachEntered();
-              return;
-            }
-            const result =
-              command.type === "attach"
-                ? { targetId: nativeTarget }
-                : command.method === "Target.getTargetInfo"
-                  ? {
-                      targetInfo: {
-                        targetId: nativeTarget,
-                        title: "Fixture",
-                        type: "page",
-                        url: "https://example.com/fixture",
-                      },
-                    }
-                  : command.method === "Page.getFrameTree"
-                    ? {
-                        frameTree: {
-                          frame: {
-                            id: nativeTarget,
-                            name: "",
-                            loaderId: "loader",
-                            url: "https://example.com/fixture",
-                            securityOrigin: "https://example.com",
-                            mimeType: "text/html",
-                          },
-                        },
-                      }
-                    : {};
-            extension.send(JSON.stringify({ type: "result", seq: command.seq, result }));
-          });
-          extension.send(
-            JSON.stringify({
-              type: "hello",
-              browserVersion: "Chrome/test",
-              userAgent: "coexistence-test",
-              extensionVersion: "2",
-              tabs: [
-                { tabId: 1, url: "https://example.com/fixture", title: "Fixture", active: true },
-              ],
-            }),
-          );
-
-          await run({
-            port,
-            token,
-            extension,
-            stateDir,
-            restartDaemon: async () => {
-              daemon.stop();
-              await daemon.done;
-              daemon = startDaemon
-                ? await startDaemon(port, stateDir, config)
-                : await runExtensionRelayDaemon({ port });
-            },
-            holdDetach: () => {
-              detachHeld = true;
-              const entered = new Promise<void>((resolve) => {
-                detachEntered = resolve;
-              });
-              return {
-                entered,
-                release: () => {
-                  detachHeld = false;
-                  for (const reply of detachReplies.splice(0)) {
-                    reply();
-                  }
+  let portClaim: Awaited<ReturnType<typeof acquireTestPortBlock>> | undefined =
+    await acquireTestPortBlock({ offsets: [0] });
+  const releasePortClaim = async () => {
+    const claim = portClaim;
+    portClaim = undefined;
+    await claim?.release();
+  };
+  try {
+    await withTempDir("relay-coexistence-", async (dir) => {
+      const stateDir = await fs.realpath(dir);
+      const credentials = path.join(stateDir, "credentials");
+      const token = relayTestKey(9);
+      await fs.mkdir(credentials);
+      await fs.writeFile(path.join(credentials, "browser-extension-relay.secret"), token, {
+        mode: 0o600,
+      });
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_OAUTH_DIR: credentials },
+        async () => {
+          const start = async (mayReselectPort = false) => {
+            const attempts = mayReselectPort ? INITIAL_PORT_SELECTION_ATTEMPTS : 1;
+            for (let attempt = 1; attempt <= attempts; attempt += 1) {
+              portClaim ??= await acquireTestPortBlock({ offsets: [0] });
+              const port = portClaim.port;
+              const config = {
+                gateway: { auth: { mode: "token" as const, token: "coexistence-test" } },
+                browser: {
+                  profiles: { chrome: { driver: "extension" as const, cdpPort: port } },
                 },
               };
-            },
-            setTarget: (value) => {
-              nativeTarget = value;
-            },
-            sendTabs: (granted) =>
-              extension.send(
-                JSON.stringify({
-                  type: "tabs",
-                  tabs: granted
-                    ? [
-                        {
-                          tabId: 1,
-                          url: "https://example.com/fixture",
-                          title: "Fixture",
-                          active: true,
-                        },
-                      ]
-                    : [],
-                }),
-              ),
-          });
-        } finally {
+              setRuntimeConfigSnapshot(config, config);
+              const started = startDaemon
+                ? await startDaemon(port, stateDir, config)
+                : await runExtensionRelayDaemon({ port });
+              if (started.port === port) {
+                return { daemon: started, port };
+              }
+              started.stop();
+              const reason = await started.done;
+              if (reason === "port-in-use" && attempt < attempts) {
+                await releasePortClaim();
+                continue;
+              }
+              throw new Error(
+                `Relay fixture startup failed: expected port ${port}, got ${started.port ?? "no listener"} (${String(reason)})`,
+              );
+            }
+            throw new Error("Relay fixture exhausted its initial port selections");
+          };
+          const started = await start(true);
+          const port = started.port;
+          let daemon = started.daemon;
+          const extension = new WebSocket(
+            `ws://127.0.0.1:${port}/extension`,
+            BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
+            { origin: "chrome-extension://coexistence-test" },
+          );
+          let nativeTarget = "fixture-target";
+          let detachHeld = false;
+          let detachEntered = () => {};
+          const detachReplies: Array<() => void> = [];
           try {
-            await stopBrowserControlService();
+            await once(extension, "open");
+            const challengeMessage = once(extension, "message");
+            extension.send(
+              JSON.stringify({
+                type: "auth.hello",
+                v: 2,
+                keyId: relayKeyIdFromHex(token),
+                clientNonce: randomRelayNonce(),
+              }),
+            );
+            const [raw] = await challengeMessage;
+            const challenge = JSON.parse(rawDataToString(raw));
+            const authenticated = once(extension, "message");
+            extension.send(
+              JSON.stringify({
+                type: "auth.response",
+                v: 2,
+                sessionId: challenge.sessionId,
+                clientProof: createRelayProof(token, "client", challenge),
+              }),
+            );
+            const [ok] = await authenticated;
+            expect(JSON.parse(rawDataToString(ok))).toMatchObject({ type: "auth.ok", v: 2 });
+            extension.on("message", (frame) => {
+              const command = JSON.parse(rawDataToString(frame)) as {
+                seq: number;
+                type: string;
+                method?: string;
+              };
+              if (command.type === "ping") {
+                extension.send(JSON.stringify({ type: "pong" }));
+                return;
+              }
+              const send = (message: Record<string, unknown>) =>
+                extension.send(JSON.stringify(message));
+              if (handleExtensionCommand?.(command, send)) {
+                return;
+              }
+              if (command.type === "detach" && detachHeld) {
+                detachReplies.push(() =>
+                  extension.send(JSON.stringify({ type: "result", seq: command.seq, result: {} })),
+                );
+                detachEntered();
+                return;
+              }
+              const result =
+                command.type === "attach"
+                  ? { targetId: nativeTarget }
+                  : command.method === "Target.getTargetInfo"
+                    ? {
+                        targetInfo: {
+                          targetId: nativeTarget,
+                          title: "Fixture",
+                          type: "page",
+                          url: "https://example.com/fixture",
+                        },
+                      }
+                    : command.method === "Page.getFrameTree"
+                      ? {
+                          frameTree: {
+                            frame: {
+                              id: nativeTarget,
+                              name: "",
+                              loaderId: "loader",
+                              url: "https://example.com/fixture",
+                              securityOrigin: "https://example.com",
+                              mimeType: "text/html",
+                            },
+                          },
+                        }
+                      : {};
+              extension.send(JSON.stringify({ type: "result", seq: command.seq, result }));
+            });
+            extension.send(
+              JSON.stringify({
+                type: "hello",
+                browserVersion: "Chrome/test",
+                userAgent: "coexistence-test",
+                extensionVersion: "2",
+                tabs: [
+                  { tabId: 1, url: "https://example.com/fixture", title: "Fixture", active: true },
+                ],
+              }),
+            );
+
+            await run({
+              port,
+              token,
+              extension,
+              stateDir,
+              restartDaemon: async () => {
+                daemon.stop();
+                await daemon.done;
+                daemon = (await start()).daemon;
+              },
+              holdDetach: () => {
+                detachHeld = true;
+                const entered = new Promise<void>((resolve) => {
+                  detachEntered = resolve;
+                });
+                return {
+                  entered,
+                  release: () => {
+                    detachHeld = false;
+                    for (const reply of detachReplies.splice(0)) {
+                      reply();
+                    }
+                  },
+                };
+              },
+              setTarget: (value) => {
+                nativeTarget = value;
+              },
+              sendTabs: (granted) =>
+                extension.send(
+                  JSON.stringify({
+                    type: "tabs",
+                    tabs: granted
+                      ? [
+                          {
+                            tabId: 1,
+                            url: "https://example.com/fixture",
+                            title: "Fixture",
+                            active: true,
+                          },
+                        ]
+                      : [],
+                  }),
+                ),
+            });
           } finally {
-            extension.terminate();
-            daemon.stop();
-            await daemon.done;
+            try {
+              await stopBrowserControlService();
+            } finally {
+              extension.terminate();
+              daemon.stop();
+              await daemon.done;
+            }
           }
-        }
-      },
-    );
-  });
+        },
+      );
+    });
+  } finally {
+    await releasePortClaim();
+  }
 }

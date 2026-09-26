@@ -1,6 +1,12 @@
 import { formatErrorMessage } from "../infra/errors.js";
-import { findActiveUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
-import type { UpdateRunPhase } from "../infra/update-run-record.js";
+import { gatewayUpdateCampaign } from "../infra/update-campaign.js";
+import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
+import {
+  findActiveUpdateRun,
+  getUpdateRun,
+  reconcileAbandonedUpdateRuns,
+} from "../infra/update-run-ledger.js";
+import type { UpdateRunPhase, UpdateRunRecord } from "../infra/update-run-record.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { reconcileOpenClawStateSchemaPublication } from "../state/openclaw-state-db.js";
 import { GATEWAY_EVENT_UPDATE_RUN_CHANGED } from "./events.js";
@@ -24,6 +30,9 @@ export function startUpdateRunWatcher(params: {
   let publicationTimer: ReturnType<typeof setTimeout> | undefined;
   let watched: { runId: string; revision?: number; phase?: UpdateRunPhase } | undefined;
   let notices = Promise.resolve();
+  const reconciled: UpdateRunRecord[] = [];
+  let polling = false;
+  let pollAgain = false;
 
   const schedulePublication = () => {
     if (publicationTimer) {
@@ -48,20 +57,31 @@ export function startUpdateRunWatcher(params: {
     }
   };
 
-  const poll = () => {
+  const scan = (reconcileAll = true) => {
     if (work.isClosing) {
       return;
     }
+    if (timer) {
+      clearTimeout(timer);
+    }
     timer = undefined;
     try {
+      reconciled.push(
+        ...reconcileAbandonedUpdateRuns({ legacyOnly: !reconcileAll }).filter(
+          (run) => run.runId !== watched?.runId,
+        ),
+      );
       schedulePublication();
-      const run = watched ? getUpdateRun(watched.runId) : findActiveUpdateRun();
+      const run = watched
+        ? getUpdateRun(watched.runId)
+        : (reconciled.shift() ?? findActiveUpdateRun());
       if (!run) {
         watched = undefined;
         return;
       }
       watched ??= { runId: run.runId };
       const terminal = run.status !== "running";
+      gatewayUpdateCampaign.reconcileRun(run);
       if (watched.revision !== run.updatedAtMs || terminal) {
         params.broadcast(GATEWAY_EVENT_UPDATE_RUN_CHANGED, {
           runId: run.runId,
@@ -98,7 +118,7 @@ export function startUpdateRunWatcher(params: {
       }
       if (terminal) {
         watched = undefined;
-        poll();
+        scan(reconcileAll);
         return;
       }
       // Named freshness-poll exception: the detached orchestrator writes the
@@ -110,6 +130,46 @@ export function startUpdateRunWatcher(params: {
       watched = undefined;
       params.log.warn(`update run watcher stopped: ${formatErrorMessage(error)}`);
     }
+  };
+  const poll = () => {
+    if (work.isClosing) {
+      return;
+    }
+    timer = undefined;
+    // Candidate verification must not delay terminal observations or schema publication.
+    // Other abandonment still waits for candidate verification.
+    scan(false);
+    if (polling) {
+      pollAgain = true;
+      return;
+    }
+    polling = true;
+    void work
+      .track(async () => {
+        const settled = await reconcileInterruptedUpdateRuns({ signal: work.signal });
+        if (work.isClosing) {
+          return;
+        }
+        reconciled.push(...settled.filter((run) => run.runId !== watched?.runId));
+        if (settled.length || watched || pollAgain) {
+          scan();
+        }
+      })
+      .catch((error: unknown) => {
+        if (!work.isClosing) {
+          params.log.warn(`update run reconciliation deferred: ${formatErrorMessage(error)}`);
+          scan();
+        }
+      })
+      .finally(() => {
+        polling = false;
+        if (pollAgain) {
+          pollAgain = false;
+          if (!timer) {
+            poll();
+          }
+        }
+      });
   };
   const wake = () => {
     if (!timer && !watched) {

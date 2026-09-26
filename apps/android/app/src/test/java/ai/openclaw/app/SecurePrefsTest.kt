@@ -20,6 +20,42 @@ class SecurePrefsTest {
     )
 
   @Test
+  fun textSizeDefaultsTo100AndEveryWebStopSurvivesReconstruction() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = testPrefs(context)
+    assertEquals(100, prefs.appearanceTextScale.value.percent)
+    for (percent in listOf(90, 100, 110, 125, 140)) {
+      prefs.setAppearanceTextScale(AppearanceTextScale.fromPercent(percent))
+      assertEquals(percent, prefs.appearanceTextScale.value.percent)
+      assertEquals(percent, testPrefs(context).appearanceTextScale.value.percent)
+      assertTrue(prefs.pendingAppearancePreferenceKeysForGateway("synthetic-gateway").isEmpty())
+    }
+  }
+
+  @Test
+  fun invalidTextSizeFallsBackTo100WithoutChangingExistingAppearance() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs
+      .edit()
+      .clear()
+      .putString("appearance.themeMode", "light")
+      .commit()
+    for (invalid in listOf(-1, 0, 99, 115, 141, Int.MAX_VALUE)) {
+      plainPrefs.edit().putInt("appearance.textScale", invalid).commit()
+      val prefs = testPrefs(context)
+      assertEquals(AppearanceTextScale.Standard, prefs.appearanceTextScale.value)
+      assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
+    }
+    plainPrefs.edit().putString("appearance.textScale", "125").commit()
+    assertEquals(AppearanceTextScale.Standard, testPrefs(context).appearanceTextScale.value)
+    plainPrefs.edit().putBoolean("appearance.textScale", true).commit()
+    assertEquals(AppearanceTextScale.Standard, testPrefs(context).appearanceTextScale.value)
+  }
+
+  @Test
   fun backgroundSettingsResolutionRequiresBothPermissionLevels() {
     assertEquals(
       LocationMode.Always,

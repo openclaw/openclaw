@@ -4,12 +4,9 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createRuntimeSpies();
 const WEB_LOGOUT_TEST_TIMEOUT_MS = 15_000;
 
 describe("web logout", () => {
@@ -64,51 +61,22 @@ describe("web logout", () => {
     vi.restoreAllMocks();
   });
 
-  it(
-    "deletes cached credentials when present",
-    { timeout: WEB_LOGOUT_TEST_TIMEOUT_MS },
-    async () => {
-      const authDir = await createAuthCase({ "creds.json": "{}" });
-      const result = await logoutWeb({ authDir, runtime: runtime as never });
-      expect(result).toBe(true);
-      expect(fs.existsSync(authDir)).toBe(false);
-    },
-  );
-
   it("removes oauth.json too when not using legacy auth dir", async () => {
     const authDir = await createAuthCase({
       "creds.json": "{}",
       "oauth.json": '{"token":true}',
       "session-abc.json": "{}",
     });
-    const result = await logoutWeb({ authDir, runtime: runtime as never });
+    const result = await logoutWeb({ authDir, runtime });
     expect(result).toBe(true);
     expect(fs.existsSync(authDir)).toBe(false);
   });
 
   it("no-ops when nothing to delete", { timeout: WEB_LOGOUT_TEST_TIMEOUT_MS }, async () => {
     const authDir = await makeCaseDir();
-    const result = await logoutWeb({ authDir, runtime: runtime as never });
+    const result = await logoutWeb({ authDir, runtime });
     expect(result).toBe(false);
     expect(runtime.log).toHaveBeenCalled();
-  });
-
-  it("keeps shared oauth.json when using legacy auth dir", async () => {
-    const credsDir = path.join(fixtureRoot, "oauth");
-    await fsPromises.mkdir(credsDir, { recursive: true });
-    await fsPromises.writeFile(path.join(credsDir, "creds.json"), "{}", "utf-8");
-    await fsPromises.writeFile(path.join(credsDir, "oauth.json"), '{"token":true}', "utf-8");
-    await fsPromises.writeFile(path.join(credsDir, "session-abc.json"), "{}", "utf-8");
-
-    const result = await logoutWeb({
-      authDir: credsDir,
-      isLegacyAuthDir: true,
-      runtime: runtime as never,
-    });
-    expect(result).toBe(true);
-    expect(fs.existsSync(path.join(credsDir, "oauth.json"))).toBe(true);
-    expect(fs.existsSync(path.join(credsDir, "creds.json"))).toBe(false);
-    expect(fs.existsSync(path.join(credsDir, "session-abc.json"))).toBe(false);
   });
 
   it("does not delete custom auth directories outside the OpenClaw auth root", async () => {
@@ -119,7 +87,7 @@ describe("web logout", () => {
     await fsPromises.writeFile(path.join(authDir, "notes.txt"), "keep", "utf-8");
     await fsPromises.writeFile(path.join(authDir, "nested", "session-abc.json"), "keep", "utf-8");
 
-    const result = await logoutWeb({ authDir, runtime: runtime as never });
+    const result = await logoutWeb({ authDir, runtime });
     expect(result).toBe(false);
     expect(fs.existsSync(authDir)).toBe(true);
     expect(fs.existsSync(path.join(authDir, "creds.json"))).toBe(true);
@@ -136,7 +104,7 @@ describe("web logout", () => {
     await fsPromises.writeFile(path.join(externalDir, "notes.txt"), "keep", "utf-8");
     await fsPromises.symlink(externalDir, authDir, "dir");
 
-    const result = await logoutWeb({ authDir, runtime: runtime as never });
+    const result = await logoutWeb({ authDir, runtime });
     expect(result).toBe(false);
     expect(fs.existsSync(authDir)).toBe(true);
     expect(fs.existsSync(path.join(externalDir, "creds.json"))).toBe(true);
@@ -154,7 +122,7 @@ describe("web logout", () => {
     await fsPromises.writeFile(path.join(externalAuthDir, "notes.txt"), "keep", "utf-8");
     await fsPromises.symlink(externalRoot, linkedParent, "dir");
 
-    const result = await logoutWeb({ authDir, runtime: runtime as never });
+    const result = await logoutWeb({ authDir, runtime });
     expect(result).toBe(false);
     expect(fs.existsSync(authDir)).toBe(true);
     expect(fs.existsSync(path.join(externalAuthDir, "creds.json"))).toBe(true);

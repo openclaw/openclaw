@@ -1,4 +1,3 @@
-// Discord type declarations define plugin contracts.
 import type { APIAttachment, APIStickerItem } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
@@ -47,7 +46,7 @@ export type DiscordThreadStarterRestAuthor = {
   discriminator?: string | null;
 };
 
-export type DiscordThreadStarterRestMember = {
+type DiscordThreadStarterRestMember = {
   nick?: string | null;
   displayName?: string | null;
   roles?: string[];

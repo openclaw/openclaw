@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 import {
+  readSessionIngestionState,
+  writeSessionIngestionState,
+} from "./dreaming-ingestion-state.js";
+import {
   deleteMemoryCoreWorkspaceEntry,
   readMemoryCoreWorkspaceEntries,
   SESSION_BACKFILL_REWIND_NAMESPACE,
@@ -9,7 +13,6 @@ import type {
   SessionBackfillExecution,
   SessionBackfillResult,
 } from "./session-backfill-contract.js";
-import { readSessionIngestionState, writeSessionIngestionState } from "./session-ingestion.js";
 
 // Batch keys are SHA-256 hex digests, so this colon-delimited marker cannot collide.
 const SESSION_BACKFILL_BASELINE_KEY_PREFIX = "complete-baseline:";

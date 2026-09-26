@@ -11,6 +11,7 @@ import {
   type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
+import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
 import type { CodexCommandDeps } from "./command-handler-deps.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
@@ -64,6 +65,8 @@ export type PreparedCodexCommandAuthority = {
   storePath: string | undefined;
   assertHostCurrent: () => void;
   assertCurrent: () => void;
+  assertMutationCurrent: () => void;
+  assertHostMutationCurrent: () => void;
 };
 
 export async function resolvePreparedCodexCommandAuthority(
@@ -126,14 +129,22 @@ export async function resolvePreparedCodexCommandAuthority(
     storePath,
     assertHostCurrent,
     assertCurrent,
+    assertMutationCurrent: () => {
+      assertCodexHostOwnerCurrent(ctx);
+      assertCurrent();
+    },
+    assertHostMutationCurrent: () => {
+      assertCodexHostOwnerCurrent(ctx);
+      assertHostCurrent();
+    },
   };
 }
 
-export async function resolveCommandAppServerScope(
+export async function resolveCommandAppServerContext(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
-): Promise<CommandAppServerScope> {
+) {
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
   const { target, binding } = authority;
   const fallback = resolveCodexConversationControlScope(ctx);
@@ -146,12 +157,15 @@ export async function resolveCommandAppServerScope(
           agentDir,
           config: ctx.config,
         });
-  const connection = resolveCodexBindingAppServerConnection({
+  const connection = await resolveCodexBindingAppServerConnection({
     binding,
     authProfileId,
     pluginConfig,
+    agentDir,
+    config: ctx.config,
+    assertCurrent: authority.assertCurrent,
   });
-  return {
+  const scope: CommandAppServerScope = {
     agentId: target?.agentId ?? fallback.agentId,
     agentDir,
     ...(connection.clientAuthProfileId !== undefined
@@ -163,6 +177,15 @@ export async function resolveCommandAppServerScope(
     ...(authority.storePath ? { storePath: authority.storePath } : {}),
     assertCurrent: authority.assertCurrent,
   };
+  return { scope, target, binding };
+}
+
+export async function resolveCommandAppServerScope(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+): Promise<CommandAppServerScope> {
+  return (await resolveCommandAppServerContext(deps, ctx, pluginConfig)).scope;
 }
 
 export function conversationBindingIdentity(

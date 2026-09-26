@@ -15,6 +15,7 @@ import {
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import type { SpawnInput } from "../process/supervisor/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
@@ -124,28 +125,16 @@ vi.mock("../infra/shell-env.js", () => ({
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
 }));
 
-vi.mock("../process/supervisor/index.js", () => {
+vi.mock("../process/supervisor/index.js", async () => {
+  const { createProcessSupervisor } = await import("../process/supervisor/supervisor.js");
+  const nativeSupervisor = createProcessSupervisor();
+  afterAll(() => nativeSupervisor.shutdown());
   const stdoutFor = (command: string) => {
     if (
       command.includes("calendar events primary --today --json") ||
       command.includes("gog-wrapper")
     ) {
       return '{"events":[]}\n';
-    }
-    if (command.includes("printf delayed-ok")) {
-      return "delayed-ok";
-    }
-    if (command.includes("printf webchat-ok")) {
-      return "webchat-ok";
-    }
-    if (command.includes("printf approval-one")) {
-      return "approval-one";
-    }
-    if (command.includes("printf approval-two")) {
-      return "approval-two";
-    }
-    if (command.includes("echo allow-always")) {
-      return "allow-always\n";
     }
     if (command.includes("echo cron-ok")) {
       return "cron-ok\n";
@@ -157,9 +146,20 @@ vi.mock("../process/supervisor/index.js", () => {
   };
   return {
     getProcessSupervisor: () => ({
-      spawn: async (input: { argv?: string[]; onStdout?: (chunk: string) => void }) => {
-        const command = input.argv?.join(" ") ?? "";
-        const stdout = stdoutFor(command);
+      spawn: async (input: SpawnInput) => {
+        const command = "argv" in input ? input.argv.join(" ") : "";
+        const inlineOutput = [
+          "delayed-ok",
+          "webchat-ok",
+          "approval-one",
+          "approval-two",
+          "allow-always",
+        ].find((value) => command.includes(value));
+        // Let the real POSIX shell handle executable quoting; Windows keeps the routing fixture.
+        if (inlineOutput && process.platform !== "win32") {
+          return nativeSupervisor.spawn(input);
+        }
+        const stdout = inlineOutput ?? stdoutFor(command);
         if (stdout) {
           input.onStdout?.(stdout);
         }
@@ -268,6 +268,26 @@ function expectPendingCommandText(
   const text = getResultText(result);
   expect(text).toContain("Command:\n```sh\n");
   expect(text).toContain(command);
+}
+
+function mockNodeExecution(stdout = "ok") {
+  const calls: string[] = [];
+  const runs: Record<string, unknown>[] = [];
+  vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+    calls.push(method);
+    if (method === "node.invoke") {
+      const invoke = requireRecord(params, "node invoke");
+      if (invoke.command === "system.run.prepare") {
+        return buildPreparedSystemRunPayload(params);
+      }
+      if (invoke.command === "system.run") {
+        runs.push(requireRecord(invoke.params, "system.run params"));
+        return { payload: { success: true, stdout } };
+      }
+    }
+    return { ok: true };
+  });
+  return { calls, runs };
 }
 
 function mockGatewayOkCalls(calls: string[]) {
@@ -578,127 +598,48 @@ describe("exec approvals", () => {
     expect(calls).not.toContain("exec.approval.request");
   });
 
-  it("preserves explicit workdir for node exec", async () => {
-    const remoteWorkdir = "/Users/vv";
-    let runCwd: string | undefined;
-
-    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
-      if (method === "node.invoke") {
-        const invoke = params as { command?: string; params?: { cwd?: string } };
-        if (invoke.command === "system.run.prepare") {
-          return buildPreparedSystemRunPayload(params);
-        }
-        if (invoke.command === "system.run") {
-          runCwd = invoke.params?.cwd;
-          return { payload: { success: true, stdout: "ok" } };
-        }
-      }
-      return { ok: true };
-    });
-
+  it.each([
+    {
+      name: "preserves explicit workdir for node exec",
+      defaults: {},
+      workdir: "/Users/vv",
+      expectedCwd: "/Users/vv",
+    },
+    {
+      name: "does not forward the gateway default cwd to node exec when workdir is omitted",
+      defaults: { cwd: "/gateway/workspace" },
+      workdir: undefined,
+      expectedCwd: undefined,
+    },
+    {
+      name: "forwards the node-only default cwd when node workdir is omitted",
+      defaults: { cwd: "/gateway/workspace", nodeCwd: "/remote/node/workspace" },
+      workdir: undefined,
+      expectedCwd: "/remote/node/workspace",
+    },
+  ])("$name", async ({ defaults, workdir, expectedCwd }) => {
+    const { runs } = mockNodeExecution();
     const tool = createExecTool({
       host: "node",
       ask: "off",
       security: "full",
       approvalRunningNoticeMs: 0,
+      ...defaults,
     });
-
     const result = await tool.execute("call-node-cwd", {
       command: "/bin/pwd",
-      workdir: remoteWorkdir,
+      ...(workdir === undefined ? {} : { workdir }),
     });
 
     expect(result.details.status).toBe("completed");
-    expect(runCwd).toBe(remoteWorkdir);
-  });
-
-  it("does not forward the gateway default cwd to node exec when workdir is omitted", async () => {
-    const gatewayWorkspace = "/gateway/workspace";
-    let runHasCwd = false;
-    let runCwd: string | undefined;
-
-    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
-      if (method === "node.invoke") {
-        const invoke = params as { command?: string; params?: { cwd?: string } };
-        if (invoke.command === "system.run.prepare") {
-          return buildPreparedSystemRunPayload(params);
-        }
-        if (invoke.command === "system.run") {
-          runHasCwd = Object.hasOwn(invoke.params ?? {}, "cwd");
-          runCwd = invoke.params?.cwd;
-          return { payload: { success: true, stdout: "ok" } };
-        }
-      }
-      return { ok: true };
-    });
-
-    const tool = createExecTool({
-      host: "node",
-      ask: "off",
-      security: "full",
-      approvalRunningNoticeMs: 0,
-      cwd: gatewayWorkspace,
-    });
-
-    const result = await tool.execute("call-node-default-cwd", {
-      command: "/bin/pwd",
-    });
-
-    expect(result.details.status).toBe("completed");
-    expect(runHasCwd).toBe(false);
-    expect(runCwd).toBeUndefined();
-  });
-
-  it("forwards the node-only default cwd when node workdir is omitted", async () => {
-    let runCwd: string | undefined;
-
-    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
-      if (method === "node.invoke") {
-        const invoke = params as { command?: string; params?: { cwd?: string } };
-        if (invoke.command === "system.run.prepare") {
-          return buildPreparedSystemRunPayload(params);
-        }
-        if (invoke.command === "system.run") {
-          runCwd = invoke.params?.cwd;
-          return { payload: { success: true, stdout: "ok" } };
-        }
-      }
-      return { ok: true };
-    });
-
-    const tool = createExecTool({
-      host: "node",
-      ask: "off",
-      security: "full",
-      approvalRunningNoticeMs: 0,
-      cwd: "/gateway/workspace",
-      nodeCwd: "/remote/node/workspace",
-    });
-
-    const result = await tool.execute("call-node-session-cwd", {
-      command: "/bin/pwd",
-    });
-
-    expect(result.details.status).toBe("completed");
-    expect(runCwd).toBe("/remote/node/workspace");
+    expect(runs).toHaveLength(1);
+    const run = requireRecord(runs[0], "system.run params");
+    expect(Object.hasOwn(run, "cwd")).toBe(expectedCwd !== undefined);
+    expect(run.cwd).toBe(expectedCwd);
   });
 
   it("routes explicit host=node to node invoke when elevated default is on under auto host", async () => {
-    const calls: string[] = [];
-
-    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
-      calls.push(method);
-      if (method === "node.invoke") {
-        const invoke = params as { command?: string };
-        if (invoke.command === "system.run.prepare") {
-          return buildPreparedSystemRunPayload(params);
-        }
-        if (invoke.command === "system.run") {
-          return { payload: { success: true, stdout: "node-ok" } };
-        }
-      }
-      return { ok: true };
-    });
+    const { calls } = mockNodeExecution("node-ok");
 
     const tool = createExecTool({
       host: "auto",
@@ -719,18 +660,7 @@ describe("exec approvals", () => {
   });
 
   it("keeps the background fallback warning when node exec actually runs inline", async () => {
-    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
-      if (method === "node.invoke") {
-        const invoke = params as { command?: string };
-        if (invoke.command === "system.run.prepare") {
-          return buildPreparedSystemRunPayload(params);
-        }
-        if (invoke.command === "system.run") {
-          return { payload: { success: true, stdout: "node-ok" } };
-        }
-      }
-      return { ok: true };
-    });
+    mockNodeExecution("node-ok");
 
     const tool = createExecTool({
       host: "node",
@@ -793,14 +723,6 @@ describe("exec approvals", () => {
           defaults: { security: "full", ask: "off", askFallback: "full" },
           agents: {},
         },
-      },
-      {
-        config: {
-          version: 1,
-          defaults: { security: "full", ask: "off", askFallback: "full" },
-          agents: {},
-        },
-        security: undefined,
       },
     ];
 
@@ -882,6 +804,7 @@ describe("exec approvals", () => {
     });
 
     expect(second.details.status).toBe("completed");
+    expect(getResultText(second)).toContain("allow-always");
     expect(calls).not.toContain("exec.approval.request");
     expect(calls).not.toContain("exec.approval.waitDecision");
   });

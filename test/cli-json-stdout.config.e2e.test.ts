@@ -7,6 +7,92 @@ import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 describe("cli json stdout contract", () => {
   it.each([
+    { name: "routed agents list", overrides: {} },
+    { name: "Commander agents list", overrides: { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } },
+  ])("drains large invalid-config JSON for $name", async ({ overrides }) => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "openclaw.json");
+        const agentIds = Array.from({ length: 16_384 }, (_, index) => `agent_${index}`);
+        const config = JSON.stringify({
+          agents: {
+            ownership: "explicit",
+            entries: Object.fromEntries(agentIds.map((id) => [id, { workspace: 42 }])),
+          },
+        });
+        await fs.writeFile(configPath, config);
+
+        const result = runBuiltCli(
+          tempHome,
+          ["agents", "list", "--json"],
+          {
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: path.join(tempHome, "state"),
+            ...overrides,
+          },
+          { inheritEnvironment: false },
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining("OpenClaw config is invalid:"),
+          },
+          issues: agentIds.map((id) => ({
+            path: `agents.entries.${id}.workspace`,
+            message: "Invalid input: expected string, received number",
+          })),
+        });
+        expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(1024 * 1024);
+        expect(result.stderr).toBe("");
+        expect(await fs.readFile(configPath, "utf8")).toBe(config);
+      },
+      { prefix: "openclaw-agents-large-invalid-config-json-" },
+    );
+  });
+
+  it.each([
+    { name: "routed agents list", overrides: {} },
+    { name: "Commander agents list", overrides: { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } },
+  ])("reports shared invalid config as JSON for $name", async ({ overrides }) => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "openclaw.json");
+        const config = `${JSON.stringify({ gateway: { port: "invalid-port" } })}\n`;
+        await fs.writeFile(configPath, config);
+
+        const result = runBuiltCli(
+          tempHome,
+          ["agents", "list", "--json"],
+          {
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: path.join(tempHome, "state"),
+            ...overrides,
+          },
+          { inheritEnvironment: false },
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining("OpenClaw config is invalid:"),
+          },
+          issues: [{ path: "gateway.port", message: expect.stringContaining("expected number") }],
+        });
+        expect(result.stderr).toBe("");
+        expect(await fs.readFile(configPath, "utf8")).toBe(config);
+      },
+      { prefix: "openclaw-agents-invalid-config-json-" },
+    );
+  });
+
+  it.each([
     ["memory", "status", "--json"],
     ["nodes", "canvas", "snapshot", "--json"],
   ])("reports invalid config before discovering plugin command %s", async (...args) => {

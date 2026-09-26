@@ -1,10 +1,9 @@
-// Slack plugin module implements shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { isSlackPluginAccountConfigured } from "./account-configured.js";
 import { inspectSlackAccount } from "./account-inspect.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
+import { SLACK_CHANNEL_META, type ChannelPlugin } from "./channel-api.js";
 import { slackSetupPlugin } from "./channel.setup.js";
 import { slackBaseConfigAdapter } from "./config-adapter.js";
 import { slackDoctor } from "./doctor.js";
@@ -43,7 +42,7 @@ export function createSlackPluginBase(params: {
   return {
     ...slackSetupPlugin,
     meta: {
-      ...getChatChannelMeta(slackSetupPlugin.id),
+      ...SLACK_CHANNEL_META,
       preferSessionLookupForAnnounceTarget: true,
     },
     setupWizard: params.setupWizard,
@@ -51,13 +50,13 @@ export function createSlackPluginBase(params: {
     doctor: slackDoctor,
     agentPrompt: {
       inboundFormattingHints: () => ({
-        text_markup: "slack_mrkdwn",
+        text_markup: "markdown",
         rules: [
-          "Use Slack mrkdwn, not standard Markdown.",
-          "Bold uses *single asterisks*.",
-          "Links use <url|label>.",
-          "Code blocks use triple backticks without a language identifier.",
-          "Do not use markdown headings or pipe tables.",
+          "Write replies in standard Markdown; OpenClaw converts them to Slack mrkdwn.",
+          "Bold uses **double asterisks**; *single asterisks* or _underscores_ produce italics.",
+          "Links use [label](url). Keep Slack mentions as <@USER_ID>.",
+          "Use presentation table blocks for tabular data; Markdown pipe tables are not auto-promoted.",
+          "Only raw Block Kit or presentation text fields use Slack mrkdwn directly: *bold*, _italic_, ~strike~, and <url|label> links. Avoid Markdown headings or pipe tables in those fields.",
         ],
       }),
       messageToolHints: () => [
@@ -73,7 +72,7 @@ export function createSlackPluginBase(params: {
     config: {
       ...slackSetupPlugin.config,
       ...slackConfigAdapter,
-      isConfigured: (account) => isSlackPluginAccountConfigured(account),
+      isConfigured: isSlackPluginAccountConfigured,
       describeAccount: (account) =>
         describeAccountSnapshot({
           account,

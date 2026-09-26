@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect } from "vitest";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createSqliteAcpEventLedger, type AcpEventLedger } from "./event-ledger.js";
 import type { AcpLedgerOptions } from "./event-ledger.types.js";

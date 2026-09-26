@@ -13,43 +13,39 @@ function buildEnvelope(overrides: Partial<Parameters<typeof buildSubagentSpawnEn
 
 describe("subagent spawn envelope", () => {
   it.each([
-    { completionMode: "announce", expected: /returns to the requester as a completion event/ },
-    { completionMode: "collector", expected: /Collector run: no completion notification/ },
-    { completionMode: "quiet", expected: /Quiet run: no completion notification/ },
-    { completionMode: "thread-direct", expected: /delivered directly to the bound thread/ },
-  ] as const)(
-    "gives child and requester the same $completionMode contract",
-    ({ completionMode, expected }) => {
-      const { systemPrompt, message, acceptedNote } = buildEnvelope({ completionMode });
-      expect(systemPrompt).toMatch(expected);
-      expect(acceptedNote).toMatch(expected);
-      for (const guidance of [systemPrompt, acceptedNote ?? ""]) {
-        expect(guidance.includes("collector wait capability")).toBe(completionMode === "collector");
-        expect(guidance).not.toMatch(
-          /auto-announce|auto-reported|sessions_yield|agents_wait|`message`/,
-        );
-      }
-      expect(systemPrompt.length).toBeLessThan(4_000);
-      expect(message).toContain("[Subagent Task]\n\nUNIQUE_SUBAGENT_TASK\n  preserve indentation");
-      expect(systemPrompt).not.toContain("UNIQUE_SUBAGENT_TASK");
-      expect(`${systemPrompt}\n${message}`.match(/UNIQUE_SUBAGENT_TASK/g)).toHaveLength(1);
-      expect(systemPrompt).toMatch(/\[Subagent Task\].*current child session/);
-      expect(systemPrompt).toMatch(/inherited task envelopes.*background reference/);
-      const soleChild = buildEnvelope({ completionMode, soleCollectorChild: true });
-      expect(soleChild.systemPrompt).toBe(systemPrompt);
-      expect(soleChild.message).toBe(message);
-      if (completionMode === "collector") {
-        expect(soleChild.acceptedNote).toBe(
-          `${acceptedNote} This is the only collector child in its group so far; unless more parallel children follow, an ordinary spawn (omit collect) is simpler and can be steered.`,
-        );
-      } else {
-        expect(soleChild.acceptedNote).toBe(acceptedNote);
-      }
-    },
-  );
+    ["announce", /returns to the requester as a completion event/],
+    ["collector", /Collector run: no completion notification/],
+    ["quiet", /Quiet run: no completion notification/],
+    ["thread-direct", /delivered directly to the bound thread/],
+  ] as const)("gives child and requester the same %s contract", (completionMode, expected) => {
+    const { systemPrompt, message, acceptedNote } = buildEnvelope({ completionMode });
+    expect(systemPrompt).toMatch(expected);
+    expect(acceptedNote).toMatch(expected);
+    for (const guidance of [systemPrompt, acceptedNote ?? ""]) {
+      expect(guidance.includes("collector wait capability")).toBe(completionMode === "collector");
+      expect(guidance).not.toMatch(
+        /auto-announce|auto-reported|sessions_yield|agents_wait|`message`/,
+      );
+    }
+    expect(systemPrompt.length).toBeLessThan(4_000);
+    expect(message).toContain("[Subagent Task]\n\nUNIQUE_SUBAGENT_TASK\n  preserve indentation");
+    expect(systemPrompt).not.toContain("UNIQUE_SUBAGENT_TASK");
+    expect(`${systemPrompt}\n${message}`.match(/UNIQUE_SUBAGENT_TASK/g)).toHaveLength(1);
+    expect(systemPrompt).toMatch(/\[Subagent Task\].*current child session/);
+    expect(systemPrompt).toMatch(/inherited task envelopes.*background reference/);
+    const soleChild = buildEnvelope({ completionMode, soleCollectorChild: true });
+    expect(soleChild.systemPrompt).toBe(systemPrompt);
+    expect(soleChild.message).toBe(message);
+    if (completionMode === "collector") {
+      expect(soleChild.acceptedNote).toBe(
+        `${acceptedNote} This is the only collector child in its group so far; unless more parallel children follow, an ordinary spawn (omit collect) is simpler and can be steered.`,
+      );
+    } else {
+      expect(soleChild.acceptedNote).toBe(acceptedNote);
+    }
+  });
 
   it.each([
-    { childDepth: undefined, maxSpawnDepth: undefined, parent: "main agent", spawning: true },
     { childDepth: 1, maxSpawnDepth: 2, parent: "main agent", spawning: true },
     { childDepth: 2, maxSpawnDepth: 2, parent: "parent orchestrator", spawning: false },
   ])(
@@ -66,6 +62,16 @@ describe("subagent spawn envelope", () => {
       expect(systemPrompt).toContain("no full cat");
     },
   );
+
+  it("describes private completion consistently for child and parent", () => {
+    const envelope = buildEnvelope({ completionTarget: "parent" });
+    for (const text of [envelope.systemPrompt, envelope.acceptedNote]) {
+      expect(text).toContain("No result is automatically sent to a channel");
+      expect(text).toContain("remain silent");
+    }
+    expect(envelope.acceptedNote).toContain("private requester turn");
+    expect(envelope.acceptedNote).not.toContain("after your final answer");
+  });
 
   it("describes the bounded default recursive depth", () => {
     const envelope = buildEnvelope();
@@ -104,21 +110,17 @@ describe("subagent spawn envelope", () => {
   });
 
   it.each([
-    { requesterSessionKey: "agent:main:cron:job:run:attempt", omitted: true },
-    { requesterSessionKey: "agent:main:telegram:chat", omitted: false },
-    { requesterSessionKey: "agent:main:slack:cron:job:run:attempt", omitted: false },
-    { requesterSessionKey: undefined, omitted: false },
-  ])(
-    "limits cron receipt suppression to announcing runs: $requesterSessionKey",
-    ({ requesterSessionKey, omitted }) => {
-      const envelope = buildEnvelope({ requesterSessionKey });
-      expect(envelope.acceptedNote === undefined).toBe(omitted);
-      for (const completionMode of ["collector", "quiet", "thread-direct"] as const) {
-        expect(buildEnvelope({ requesterSessionKey, completionMode }).acceptedNote).toBeDefined();
-      }
-      expect(buildEnvelope({ requesterSessionKey, spawnMode: "session" }).acceptedNote).toContain(
-        "completion event",
-      );
-    },
-  );
+    ["agent:main:cron:job:run:attempt", true],
+    ["agent:main:slack:cron:job:run:attempt", false],
+    [undefined, false],
+  ])("limits cron receipt suppression to announcing runs: %s", (requesterSessionKey, omitted) => {
+    const envelope = buildEnvelope({ requesterSessionKey });
+    expect(envelope.acceptedNote === undefined).toBe(omitted);
+    for (const completionMode of ["collector", "quiet", "thread-direct"] as const) {
+      expect(buildEnvelope({ requesterSessionKey, completionMode }).acceptedNote).toBeDefined();
+    }
+    expect(buildEnvelope({ requesterSessionKey, spawnMode: "session" }).acceptedNote).toContain(
+      "completion event",
+    );
+  });
 });

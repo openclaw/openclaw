@@ -1,12 +1,16 @@
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { collectModuleReferencesFromSource } from "../../../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const THIS_TEST_FILE = "src/plugins/contracts/extension-test-api-consumption.test.ts";
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 type ExtensionTestApi = {
   absoluteStem: string;
@@ -60,10 +64,10 @@ function objectStringProperty(node: ts.ObjectLiteralExpression, name: string): s
     }
     const propertyName = ts.isIdentifier(property.name)
       ? property.name.text
-      : ts.isStringLiteralLike(property.name)
+      : ts.isStringLiteralLikeNode(property.name)
         ? property.name.text
         : undefined;
-    if (propertyName === name && ts.isStringLiteralLike(property.initializer)) {
+    if (propertyName === name && ts.isStringLiteralLikeNode(property.initializer)) {
       return property.initializer.text;
     }
   }
@@ -71,12 +75,12 @@ function objectStringProperty(node: ts.ObjectLiteralExpression, name: string): s
 }
 
 function collectTestApiSourceReferences(source: string, fileName = "source.ts") {
-  const moduleSpecifiers = ts
-    .preProcessFile(source, true, true)
-    .importedFiles.map((entry) => entry.fileName)
+  const sourceFile = parser.parseSourceFile(fileName, source);
+  const moduleSpecifiers = collectModuleReferencesFromSource(sourceFile)
+    .filter((entry) => entry.kind !== "import-meta-url")
+    .map((entry) => entry.specifier)
     .toSorted();
   const pluginIds = new Set<string>();
-  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
 
   function visit(node: ts.Node): void {
     if (ts.isCallExpression(node)) {
@@ -89,7 +93,7 @@ function collectTestApiSourceReferences(source: string, fileName = "source.ts") 
       if (
         name === "loadQaRunnerBundledPluginTestApi" &&
         pluginId &&
-        ts.isStringLiteralLike(pluginId)
+        ts.isStringLiteralLikeNode(pluginId)
       ) {
         pluginIds.add(pluginId.text);
       }
@@ -99,7 +103,7 @@ function collectTestApiSourceReferences(source: string, fileName = "source.ts") 
         pluginIds.add(pluginId);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -180,7 +184,7 @@ describe("extension test API consumption", () => {
         export { helper } from "../test-api.js";
         type TestApi = typeof import("./test-api.js");
         loadQaRunnerBundledPluginTestApi("matrix");
-        loadBundledPluginPublicSurface({ pluginId: "codex", artifactBasename: "test-api.js" });
+        loadBundledPluginFacade({ pluginId: "codex", artifactBasename: "test-api.js" });
       `),
     ).toStrictEqual({
       moduleSpecifiers: ["../test-api.js", "./test-api.js", "@openclaw/example/test-api.js"],

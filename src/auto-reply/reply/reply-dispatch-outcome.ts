@@ -1,5 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isDeliveryRecoveryOwnedRetry,
+  isRetryableDeliveryNotSentError,
+} from "../../infra/delivery-recovery.shared.js";
+import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.types.js";
 import type { ReplyDispatchSettledCounts } from "./reply-dispatcher.types.js";
+
+export type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.types.js";
 
 const REPLY_DISPATCH_DELIVERY_ERROR_CODE = "REPLY_DISPATCH_DELIVERY_ERROR";
 
@@ -9,9 +16,9 @@ export const REPLY_DISPATCH_OUTCOME_COUNTS = {
   "channel-transform": "deliveredNotVisible",
   cancelled: "cancelled",
   "failed-before-deliver": "failedBeforeSend",
+  "recovery-owned": "failedBeforeSend",
   "failed-deliver": "failedAfterSend",
-} as const satisfies Record<string, keyof ReplyDispatchSettledCounts>;
-export type ReplyDispatchDeliveryOutcome = keyof typeof REPLY_DISPATCH_OUTCOME_COUNTS;
+} as const satisfies Record<ReplyDispatchDeliveryOutcome, keyof ReplyDispatchSettledCounts>;
 
 export class ReplyDispatchDeliveryError extends Error {
   readonly code = REPLY_DISPATCH_DELIVERY_ERROR_CODE;
@@ -52,6 +59,9 @@ export function resolveReplyDispatchDeliveryOutcome(result: unknown): ReplyDispa
   if (isReplyDispatchDeliveryPending(result)) {
     return "delivered-not-visible";
   }
+  if (isRecord(result) && result.ambiguous === true) {
+    return "failed-deliver";
+  }
   if (!isRecord(result) || result.visibleReplySent !== false) {
     return "delivered";
   }
@@ -68,4 +78,40 @@ export function createReplyDispatchSettledCounts(): ReplyDispatchSettledCounts {
     failedBeforeSend: 0,
     failedAfterSend: 0,
   };
+}
+
+export function resolveReplyDispatchErrorOutcome(error: unknown): ReplyDispatchDeliveryOutcome {
+  // Retained custody does not prove no-send. Keep ambiguity in the counts;
+  // pending-delivery evidence separately prevents competing retries.
+  return isRetryableDeliveryNotSentError(error)
+    ? isDeliveryRecoveryOwnedRetry(error)
+      ? "recovery-owned"
+      : "failed-before-deliver"
+    : "failed-deliver";
+}
+
+export function resolveRoutedReplyDeliveryOutcome(result: {
+  ok: boolean;
+  delivered: boolean;
+  ambiguous?: boolean;
+  queueCustody?: "held" | "released";
+  reason?: string;
+  cause?: unknown;
+}): ReplyDispatchDeliveryOutcome {
+  if (result.ambiguous) {
+    return "failed-deliver";
+  }
+  if (result.delivered) {
+    return "delivered";
+  }
+  if (result.queueCustody === "held") {
+    return "recovery-owned";
+  }
+  if (!result.ok) {
+    return resolveReplyDispatchErrorOutcome(result.cause);
+  }
+  return resolveReplyDispatchDeliveryOutcome({
+    visibleReplySent: result.delivered,
+    suppression: { reason: result.reason },
+  });
 }

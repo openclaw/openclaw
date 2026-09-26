@@ -2,7 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { normalizePluginId } from "./config-state.js";
-import { CONFIG_PATH_ACTIVATION_COMPAT_CODE } from "./installed-plugin-index-config-path-scope.js";
+import { hasMissingConfigPathActivationMetadata } from "./installed-plugin-index-config-path-scope.js";
 import { getInstalledPluginIndexFacts } from "./installed-plugin-index-facts.js";
 import type {
   InstalledPluginIndex,
@@ -12,6 +12,7 @@ import type {
 const PROVIDER_CONTRIBUTION_CONTRACTS = [
   "externalAuthProviders",
   "embeddingProviders",
+  "decisionProviders",
   "speechProviders",
   "realtimeTranscriptionProviders",
   "realtimeVoiceProviders",
@@ -155,12 +156,7 @@ export function createInstalledPluginIndexScopeLookup(
     },
     hasChannelContributionOwners: channelContributionOwners.has,
     hasAgentHarnessOwners: agentHarnessOwners.has,
-    hasCompleteConfigPathActivationMetadata: () =>
-      index.plugins.every(
-        (plugin) =>
-          !plugin.compat.includes(CONFIG_PATH_ACTIVATION_COMPAT_CODE) ||
-          plugin.startup.configPaths !== undefined,
-      ),
+    hasCompleteConfigPathActivationMetadata: () => !hasMissingConfigPathActivationMetadata(index),
     hasDirectChannelOwners: directChannelOwners.has,
     hasInstalledPluginIds: (ids) => installedPluginOwners.has([...ids]),
     hasProviderContributionOwners: providerContributionOwners.has,

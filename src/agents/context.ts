@@ -19,8 +19,9 @@ import {
 } from "./context-cache.js";
 import {
   type ContextTokenResolutionParams,
+  type ModelContextTokenProjection,
   type ModelsConfig,
-  resolveContextTokensForModelFromCache,
+  resolveModelContextTokenProjectionFromCache,
 } from "./context-resolution.js";
 import {
   beginContextWindowCacheRefresh,
@@ -104,29 +105,22 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
       }
       let stagedTokenCache = new Map<string, number>();
       try {
-        const catalogResult = await (async () => {
-          const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
-          return await loadPreparedModelCatalogOwnerSnapshot({
-            config: cfg,
-            readOnly: true,
-          }).then(
-            (value) => ({ status: "fulfilled" as const, value }),
-            (reason: unknown) => ({ status: "rejected" as const, reason }),
-          );
-        })();
+        const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
+        const owner = await loadPreparedModelCatalogOwnerSnapshot({
+          config: cfg,
+          readOnly: true,
+        });
         if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
           return;
         }
-        if (catalogResult.status === "fulfilled") {
-          stagedTokenCache = await prepareDiscoveredContextTokenCache({
-            modelCatalog: catalogResult.value.modelCatalog,
-            assertCurrent: () => {
-              if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-                throw new Error("context window cache generation was superseded");
-              }
-            },
-          });
-        }
+        stagedTokenCache = await prepareDiscoveredContextTokenCache({
+          modelCatalog: owner.modelCatalog,
+          assertCurrent: () => {
+            if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
+              throw new Error("context window cache generation was superseded");
+            }
+          },
+        });
       } catch {
         // Static and discovered rows belong to one atomic generation. If its owner fails, keep
         // config overrides only instead of mixing in independently rediscovered static metadata.
@@ -247,13 +241,18 @@ export async function waitForContextWindowCacheLoad(options?: {
   }
 }
 
-/** Replace cached model context metadata for the active runtime configuration. */
-export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
+/** Restore configured context limits without acquiring a model catalog. */
+export function resetContextWindowCache(cfg: OpenClawConfig): void {
   beginContextWindowCacheRefresh();
   const caches = getContextWindowCaches();
   caches.configuredTokenCache.clear();
   caches.contextWindowCache.clear();
   primeConfiguredContextWindowsFromConfig(cfg);
+}
+
+/** Replace cached model context metadata for the active runtime configuration. */
+export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
+  resetContextWindowCache(cfg);
   await ensureContextWindowCacheLoaded();
 }
 
@@ -291,14 +290,16 @@ export function lookupContextTokens(
 export function resolveContextTokensForModel(
   params: ContextTokenResolutionParams,
 ): number | undefined {
+  return resolveModelContextTokenProjection(params).contextTokens;
+}
+
+export function resolveModelContextTokenProjection(
+  params: ContextTokenResolutionParams,
+): ModelContextTokenProjection {
   const lookupOptions = {
     allowAsyncLoad: params.allowAsyncLoad,
     skipRuntimeConfigLoad: Boolean(params.cfg),
   };
   prepareContextWindowCache(lookupOptions);
-  return resolveContextTokensForModelFromCache(
-    params,
-    (modelId) => lookupCachedContextTokens(modelId),
-    (modelId) => lookupCachedContextWindow(modelId),
-  );
+  return resolveModelContextTokenProjectionFromCache(params);
 }

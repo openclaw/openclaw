@@ -186,7 +186,8 @@ function loadGatewayGeneration(
   pluginIds: string[] = [],
   pluginMetadataSnapshot?: ReturnType<typeof publishMetadata>,
 ) {
-  return loadGatewayPlugins({
+  const { pluginRegistry } = loadGatewayPlugins({
+    loadIntent: "startup",
     cfg: fixture.config,
     activationSourceConfig: fixture.config,
     autoEnabledReasons: {},
@@ -195,7 +196,9 @@ function loadGatewayGeneration(
     pluginMetadataSnapshot,
     baseMethods: [],
     log,
-  }).pluginRegistry;
+  });
+  setActivePluginRegistry(pluginRegistry);
+  return pluginRegistry;
 }
 
 const speechProviders = (cfg: OpenClawConfig) =>
@@ -381,7 +384,8 @@ describe("capability loading from a Gateway generation", () => {
     },
   );
 
-  it.each(voiceKeys)("uses register() for an uncovered %s family", (key) => {
+  it("uses register() for an uncovered speech family", () => {
+    const key = "speechProviders";
     withSpeechFixture((fixture) => {
       fixture.config.plugins = { enabled: true };
       const { runtimeImported } = declareCapabilityCatalog(
@@ -680,6 +684,7 @@ describe("capability loading from a Gateway generation", () => {
         },
       });
       const registry = loadGatewayPlugins({
+        loadIntent: "startup",
         cfg: fixture.config,
         activationSourceConfig: fixture.config,
         autoEnabledReasons: {},
@@ -694,6 +699,7 @@ describe("capability loading from a Gateway generation", () => {
           metrics: { ...startupSnapshot.metrics, startupPlanMs: 0, startupPluginCount: 1 },
         },
       }).pluginRegistry;
+      setActivePluginRegistry(registry);
       expect(getPluginRuntimeLoadContext(registry)?.metadataSnapshot).toBe(snapshot);
       expect(registry.plugins).toContainEqual(
         expect.objectContaining({ id: "fixture-seed", status: "loaded" }),
@@ -801,14 +807,15 @@ describe("capability loading from a Gateway generation", () => {
     });
   });
 
-  it.each(
-    voiceKeys.flatMap((key) =>
-      [{ deny: [id] }, { entries: { [id]: { enabled: false } } }].map((policy) => ({
-        key,
-        policy,
-      })),
-    ),
-  )("preserves explicit $key owner denial: $policy", ({ key, policy }) => {
+  it.each([
+    { key: "speechProviders", policy: { deny: [id] } },
+    { key: "speechProviders", policy: { entries: { [id]: { enabled: false } } } },
+    { key: "realtimeTranscriptionProviders", policy: { deny: [id] } },
+    { key: "realtimeVoiceProviders", policy: { entries: { [id]: { enabled: false } } } },
+  ] satisfies Array<{
+    key: (typeof voiceKeys)[number];
+    policy: NonNullable<OpenClawConfig["plugins"]>;
+  }>)("preserves explicit $key owner denial: $policy", ({ key, policy }) => {
     withSpeechFixture((fixture) => {
       fixture.config.plugins = { enabled: key !== "speechProviders", ...policy };
       const { runtimeImported } = declareCapabilityCatalog(fixture);

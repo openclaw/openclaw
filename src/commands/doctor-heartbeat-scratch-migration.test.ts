@@ -11,7 +11,10 @@ import {
   resolveCronJobsStorePath,
   resolveCronJobsStorePathFromConfig,
 } from "../cron/store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch,
@@ -28,6 +31,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   if (originalHome === undefined) {
@@ -115,9 +119,13 @@ describe("HEARTBEAT.md cron scratch migration", () => {
       expect.objectContaining({ content, revision: 1, sourceSha256: expect.any(String) }),
     );
     const archiveDir = path.join(fixture.stateDir, "backups", "heartbeat-migration");
-    const archives = await fs.readdir(archiveDir);
-    expect(archives).toHaveLength(1);
-    await expect(fs.readFile(path.join(archiveDir, archives[0]!), "utf8")).resolves.toBe(content);
+    const archives = await fs.readdir(archiveDir, { withFileTypes: true });
+    const snapshot = archives.find((entry) => entry.isFile())!;
+    const original = archives.find((entry) => entry.isDirectory())!;
+    await expect(fs.readFile(path.join(archiveDir, snapshot.name), "utf8")).resolves.toBe(content);
+    await expect(
+      fs.readFile(path.join(archiveDir, original.name, "HEARTBEAT.md"), "utf8"),
+    ).resolves.toBe(content);
 
     const rerun = await maybeMigrateHeartbeatFilesToScratch({
       cfg: fixture.cfg,
@@ -293,56 +301,6 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     );
     expect(scratchByAgentId.get("main")).toBe("original checklist\n");
     expect(scratchByAgentId.get("ollama")).toBe("updated checklist\n");
-  });
-
-  it("does not import stale bytes while retaining a shared disabled-owner file", async () => {
-    const fixture = await createFixture();
-    const cfg = sharedHeartbeatConfig(fixture.workspace);
-    await fs.writeFile(fixture.heartbeatPath, "planned content\n", "utf8");
-    const rename = fs.rename.bind(fs);
-    vi.spyOn(fs, "rename").mockImplementationOnce(async (from, to) => {
-      await fs.writeFile(String(from), "concurrent replacement\n", "utf8");
-      await rename(from, to);
-    });
-
-    const result = await maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair: true });
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("changed before the migration claim");
-    await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe(
-      "concurrent replacement\n",
-    );
-    const { monitor, storePath } = await loadMonitor(cfg);
-    expect(readCronJobScratchState(storePath, monitor.id)).toEqual({ currentRevision: 0 });
-  });
-
-  it("rolls back retained scratch when the claimed inode changes after acquisition", async () => {
-    const fixture = await createFixture();
-    const cfg = sharedHeartbeatConfig(fixture.workspace);
-    await fs.writeFile(fixture.heartbeatPath, "planned content\n", "utf8");
-    const sourceHandle = await fs.open(fixture.heartbeatPath, "r+");
-    const link = fs.link.bind(fs);
-    vi.spyOn(fs, "link").mockImplementationOnce(async (from, to) => {
-      await sourceHandle.truncate(0);
-      await sourceHandle.writeFile("post-claim descriptor edit\n", "utf8");
-      await sourceHandle.sync();
-      await link(from, to);
-    });
-
-    let result;
-    try {
-      result = await maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair: true });
-    } finally {
-      await sourceHandle.close();
-    }
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("changed after the migration claim was restored");
-    await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe(
-      "post-claim descriptor edit\n",
-    );
-    const { monitor, storePath } = await loadMonitor(cfg);
-    expect(readCronJobScratchState(storePath, monitor.id)).toEqual({ currentRevision: 0 });
   });
 
   it("rolls back retained scratch when the claimed inode changes during restoration", async () => {

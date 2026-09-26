@@ -1,11 +1,17 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 // Qwen tests cover index plugin behavior.
 import {
+  createQueuedWizardPrompter,
+  createRuntimeEnv,
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ProviderCatalogResult } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   QWEN_36_FLASH_MODEL_ID,
@@ -47,6 +53,77 @@ describe("qwen provider plugin", () => {
     );
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    {
+      id: "standard-api-key-cn",
+      label: "Standard API Key for China (pay-as-you-go)",
+      prompt: "Enter Qwen Cloud API key (China standard endpoint)",
+      title: "Qwen Cloud Standard (China)",
+      endpoint: "dashscope.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    },
+    {
+      id: "standard-api-key",
+      label: "Standard API Key for Global/Intl (pay-as-you-go)",
+      prompt: "Enter Qwen Cloud API key (Global/Intl standard endpoint)",
+      title: "Qwen Cloud Standard (Global/Intl)",
+      endpoint: "dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    },
+    {
+      id: "api-key-cn",
+      label: "Coding Plan API Key for China (subscription)",
+      prompt: "Enter Qwen Cloud Coding Plan API key (China)",
+      title: "Qwen Cloud Coding Plan (China)",
+      endpoint: "coding.dashscope.aliyuncs.com",
+      baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+    },
+    {
+      id: "api-key",
+      label: "Coding Plan API Key for Global/Intl (subscription)",
+      prompt: "Enter Qwen Cloud Coding Plan API key (Global/Intl)",
+      title: "Qwen Cloud Coding Plan (Global/Intl)",
+      endpoint: "coding-intl.dashscope.aliyuncs.com",
+      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+    },
+  ])("preserves the $id setup flow and regional endpoint", async (fixture) => {
+    const provider = await registerQwenProvider();
+    const method = provider.auth.find((entry) => entry.id === fixture.id);
+    if (!method) {
+      throw new Error(`missing Qwen auth method ${fixture.id}`);
+    }
+    const { prompter, text, note } = createQueuedWizardPrompter({
+      textValues: ["qwen-fixture-key"],
+    });
+    const result = await method.run({
+      config: {},
+      env: {},
+      workspaceDir: "/tmp/qwen-auth-fixture",
+      prompter,
+      runtime: createRuntimeEnv(),
+      secretInputMode: "plaintext",
+      isRemote: false,
+      openUrl: vi.fn<ProviderAuthContext["openUrl"]>(),
+      oauth: {
+        createVpsAwareHandlers: vi.fn<ProviderAuthContext["oauth"]["createVpsAwareHandlers"]>(),
+      },
+    });
+    expect(method.label).toBe(fixture.label);
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ message: fixture.prompt }));
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(`Endpoint: ${fixture.endpoint}`),
+      fixture.title,
+    );
+    expect(result.configPatch?.models?.providers?.qwen?.baseUrl).toBe(fixture.baseUrl);
+    expect(result.defaultModel).toBe("qwen/qwen3.5-plus");
+    expect(result.profiles).toEqual([
+      {
+        profileId: "qwen:default",
+        credential: { type: "api_key", provider: "qwen", key: "qwen-fixture-key" },
+      },
+    ]);
+  });
 
   it("keeps Standard-only models out of Coding Plan normalized catalogs", async () => {
     const provider = await registerQwenProvider();
@@ -260,6 +337,60 @@ describe("qwen provider plugin", () => {
       });
     }
   });
+
+  it.each(
+    ["qwen", "qwen-token-plan"].flatMap((providerId) =>
+      (["off", "low", "high"] as const).map((thinkingLevel) => ({ providerId, thinkingLevel })),
+    ),
+  )(
+    "applies $providerId simple-completion thinking at $thinkingLevel through the original API",
+    async ({ providerId, thinkingLevel }) => {
+      const { providers } = await registerProviderPlugin({
+        plugin: qwenPlugin,
+        id: "qwen",
+        name: "Qwen Provider",
+      });
+      const provider = requireRegisteredProvider(providers, providerId);
+      const wireModel: Model<"openai-completions"> = {
+        id: "qwen3.8-max",
+        name: "Qwen 3.8 Max",
+        provider: providerId,
+        api: "openai-completions",
+        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        reasoning: true,
+        input: ["text"],
+        contextWindow: 1_000_000,
+        maxTokens: 131_072,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      };
+      const model = { ...wireModel, api: "openclaw-provider-simple:qwen-fixture" };
+      let payload: Record<string, unknown> | undefined;
+      const streamFn: StreamFn = (_model, context, options) => {
+        payload = buildOpenAICompletionsParams(wireModel, context, { reasoning: thinkingLevel });
+        options?.onPayload?.(payload, wireModel);
+        const stream = createAssistantMessageEventStream();
+        stream.end();
+        return stream;
+      };
+      const wrapped = provider.wrapSimpleCompletionStreamFn?.({
+        provider: providerId,
+        modelId: model.id,
+        model,
+        sourceApi: wireModel.api,
+        streamFn,
+        thinkingLevel,
+      });
+      expect(wrapped).toBeTypeOf("function");
+      await wrapped?.(model, { messages: [] }, { reasoning: thinkingLevel });
+
+      expect(payload?.enable_thinking).toBe(thinkingLevel !== "off");
+      if (thinkingLevel === "off") {
+        expect(payload).not.toHaveProperty("reasoning_effort");
+      } else {
+        expect(payload?.reasoning_effort).toBe(thinkingLevel === "low" ? "low" : "xhigh");
+      }
+    },
+  );
 
   it("switches Token Plan regions without replacing custom catalog rows", () => {
     const initialGlobal = applyQwenTokenPlanConfig({ models: { mode: "replace" } }, "global");

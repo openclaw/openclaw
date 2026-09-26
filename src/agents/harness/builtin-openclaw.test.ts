@@ -16,6 +16,11 @@ describe("createOpenClawAgentHarness", () => {
     runEmbeddedAttempt.mockImplementation(async (params: EmbeddedRunAttemptParams) => {
       params.onAttemptDeadlineChanged?.({ kind: "bounded", deadlineAtMs: 123_456 });
       params.onAttemptTimeoutArmed?.();
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: params.deferTerminalLifecycle ? "finishing" : "end" },
+      });
       return {
         terminal: { kind: "ok" },
         sessionIdUsed: "session-1",
@@ -67,10 +72,11 @@ describe("createOpenClawAgentHarness", () => {
     expect(runEmbeddedAttempt).toHaveBeenCalledWith(params);
   });
 
-  it("enforces tool-free finalization while forwarding execution deadline notifications", async () => {
+  it("enforces tool-free finalization while forwarding execution and lifecycle notifications", async () => {
     const prepareAssistantTranscriptMessage = vi.fn();
     const onAttemptDeadlineChanged = vi.fn();
     const onAttemptTimeoutArmed = vi.fn();
+    const onAgentEvent = vi.fn<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>();
     const attempt = {
       prompt: "finalize",
       disableTools: false,
@@ -82,6 +88,8 @@ describe("createOpenClawAgentHarness", () => {
       onPartialReply: vi.fn(),
       onAttemptDeadlineChanged,
       onAttemptTimeoutArmed,
+      onAgentEvent,
+      deferTerminalLifecycle: true,
       prepareAssistantTranscriptMessage,
     } as never;
     const harness = createOpenClawAgentHarness();
@@ -93,6 +101,10 @@ describe("createOpenClawAgentHarness", () => {
       deadlineAtMs: 123_456,
     });
     expect(onAttemptTimeoutArmed).toHaveBeenCalledOnce();
+    expect(onAgentEvent.mock.calls).toEqual([
+      [{ stream: "lifecycle", data: { phase: "start" } }],
+      [{ stream: "lifecycle", data: { phase: "finishing" } }],
+    ]);
     expect(runEmbeddedAttempt).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: "finalize",

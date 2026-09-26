@@ -19,6 +19,12 @@ const fallbackCases = [
     htmlTrigger: "empty-content",
   },
   {
+    name: "rich-message-non-empty",
+    message: "Bad Request: rich message must be non-empty",
+    richTrigger: "rich-content-required",
+    htmlTrigger: "empty-content",
+  },
+  {
     name: "html-parse",
     message: "Bad Request: can't parse entities: unsupported tag",
     richTrigger: "html-parse",
@@ -61,7 +67,6 @@ describe("withTelegramPlainFallback", () => {
       plainText: "fallback body",
       warn,
       limit: 8,
-      chunkCount: 3,
       sendFormatted,
       sendPlain,
     });
@@ -78,7 +83,7 @@ describe("withTelegramPlainFallback", () => {
     expect(sendPlain).toHaveBeenCalledWith(
       {
         plainText: "fallback body",
-        chunks: ["fallb", "ack ", "body"],
+        chunks: ["fallback", " body"],
       },
       "test send-plain",
     );
@@ -90,6 +95,7 @@ describe("withTelegramPlainFallback", () => {
 
   it.each([
     { kind: "rich" as const, message: "Bad Request: RICH_MESSAGE_URL_INVALID" },
+    { kind: "rich" as const, message: "Bad Request: rich message must be non-empty" },
     { kind: "html" as const, message: "Bad Request: message text is empty" },
   ])("rethrows $kind failures when plain text is empty", async ({ kind, message }) => {
     const error = new Error(message);
@@ -118,6 +124,7 @@ describe("isTelegramEmptyContentError", () => {
     "Bad Request: message text is empty",
     "Bad Request: text must be non-empty",
     "Bad Request: RICH_MESSAGE_CONTENT_REQUIRED",
+    "Bad Request: rich message must be non-empty",
   ])("recognizes %s", (message) => {
     expect(isTelegramEmptyContentError(new Error(message))).toBe(true);
   });

@@ -9,6 +9,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
+import {
+  neutralizeCodexExplicitMentionSigils,
+  type CodexProjectedImageGroup,
+} from "./context-engine-projection.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
@@ -27,7 +32,13 @@ import { buildCodexUserInput } from "./user-input.js";
 
 const CODEX_CURRENT_SENDER_FIELD_MAX_CHARS = 256;
 
-function buildCodexCurrentSenderContextValue(params: EmbeddedRunAttemptParams): string | undefined {
+type CodexCurrentSender = {
+  id?: string;
+  name?: string;
+  username?: string;
+};
+
+function readCodexCurrentSender(params: EmbeddedRunAttemptParams): CodexCurrentSender | undefined {
   const metadata = asOptionalRecord(
     asOptionalRecord(params.userTurnTranscriptRecorder?.message as unknown)?.["__openclaw"],
   );
@@ -47,13 +58,24 @@ function buildCodexCurrentSenderContextValue(params: EmbeddedRunAttemptParams): 
     return undefined;
   }
   const bound = (value: string) => truncateUtf16Safe(value, CODEX_CURRENT_SENDER_FIELD_MAX_CHARS);
-  return JSON.stringify({
-    sender: {
-      ...(id ? { id: bound(id) } : {}),
-      ...(name ? { name: bound(name) } : {}),
-      ...(username ? { username: bound(username) } : {}),
-    },
-  });
+  return {
+    ...(id ? { id: bound(id) } : {}),
+    ...(name ? { name: bound(name) } : {}),
+    ...(username ? { username: bound(username) } : {}),
+  };
+}
+
+export function buildCodexHistoryProvenancePrefix(
+  params: EmbeddedRunAttemptParams,
+): string | undefined {
+  const sender = readCodexCurrentSender(params);
+  // A label is not identity. Native thread history must only attach provenance
+  // when OpenClaw supplied a stable sender id, matching generic compaction.
+  return sender?.id
+    ? neutralizeCodexExplicitMentionSigils(
+        `[OpenClaw conversation info: sender=${JSON.stringify(sender)}]\n`,
+      )
+    : undefined;
 }
 
 export function buildTurnStartParams(
@@ -63,24 +85,27 @@ export function buildTurnStartParams(
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
+    contextImageGroups?: CodexProjectedImageGroup[];
     explicitSkillInputs?: Array<Extract<CodexUserInput, { type: "skill" }>>;
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
     model?: string | null;
     modelProvider?: string | null;
     turnScopedDeveloperInstructions?: string;
-    skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
+    parentLocalEgress?: boolean;
     clearInheritedServiceTier?: boolean;
     sessionStatusAvailable?: boolean;
     messageToolAvailable?: boolean;
     requireExplicitMessageTarget?: boolean;
+    historyProvenancePrefix?: string;
   },
 ): CodexTurnStartParams {
   const modelSelection = options.preserveNativeTurnSettings
     ? undefined
     : resolveCodexAppServerRequestModelSelection({
+        homeScope: options.appServer.start.homeScope,
         model: options.model ?? params.modelId,
         modelProvider: options.modelProvider,
         authProfileId: params.authProfileId,
@@ -92,22 +117,28 @@ export function buildTurnStartParams(
     ? buildTurnCollaborationMode(params, {
         model: modelSelection.model,
         turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
-        skillsCollaborationInstructions: options.skillsCollaborationInstructions,
         memoryCollaborationInstructions: options.memoryCollaborationInstructions,
       })
     : undefined;
+  if (collaborationMode && options.parentLocalEgress) {
+    // Catalog collaboration stays native; parent-local context exists only at inference egress.
+    collaborationMode.settings.developer_instructions = null;
+  }
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
-  const currentSenderContext =
-    params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
+  const currentSender = params.trigger === "user" ? readCodexCurrentSender(params) : undefined;
   // Codex emits only changed values and cannot retract omitted fragments from model history.
   // Always send configured-or-host context so warm threads see rollover and removed overrides.
-  let additionalContext = buildCodexTemporalAdditionalContext(params, {
-    sessionStatusAvailable: options.sessionStatusAvailable === true,
-  });
-  // Codex retains earlier fragments in history. Always state the current policy,
-  // including automatic/disabled defaults, without replacing other context entries.
-  additionalContext = {
-    ...additionalContext,
+  const additionalContext: NonNullable<CodexTurnStartParams["additionalContext"]> = {
+    ...buildCodexTemporalAdditionalContext(params, {
+      sessionStatusAvailable: options.sessionStatusAvailable === true,
+    }),
+    // Codex emits changed context only. Unknown must replace a disconnected Mac's hint.
+    openclaw_active_computer: {
+      kind: "application",
+      value:
+        params.hostCapabilities.activeComputerContext?.() ??
+        "Current active computer: active_node=unknown (host presence unavailable)",
+    },
     openclaw_source_delivery: {
       kind: "application",
       value: [
@@ -121,30 +152,37 @@ export function buildTurnStartParams(
     },
   };
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
-  if (currentSenderContext) {
-    additionalContext = {
-      ...additionalContext,
-      openclaw_current_sender: { kind: "untrusted", value: currentSenderContext },
+  if (currentSender) {
+    additionalContext.openclaw_current_sender = {
+      kind: "untrusted",
+      value: JSON.stringify({ sender: currentSender }),
     };
   }
   if (params.permissionChange?.notice) {
     // Application context is a developer message in Codex 0.151.0 and also
     // reaches native-preserved threads without overriding their turn settings.
-    additionalContext = {
-      ...additionalContext,
-      openclaw_permission_change: { kind: "application", value: params.permissionChange.notice },
+    additionalContext.openclaw_permission_change = {
+      kind: "application",
+      value: params.permissionChange.notice,
     };
   }
   return {
     threadId: options.threadId,
+    ...(params.trigger ? { turnTrigger: params.trigger } : {}),
     // codex-rs/app-server-protocol/src/protocol/v2/turn.rs:292-324 at 91d6f48992ad defines
     // UserInput::Skill; skills/src/selection.rs:60-92 blocks those names from duplicate text
     // selection while leaving unmatched Codex-native-only names scannable.
     input: [
-      ...buildCodexUserInput(options.promptText ?? params.prompt, params.images),
+      ...buildCodexUserInput(
+        options.promptText ?? params.prompt,
+        params.images,
+        options.contextImageGroups,
+        options.historyProvenancePrefix ??
+          (params.trigger === "user" ? buildCodexHistoryProvenancePrefix(params) : undefined),
+      ),
       ...(options.explicitSkillInputs ?? []),
     ],
-    ...(additionalContext ? { additionalContext } : {}),
+    additionalContext,
     cwd: options.cwd,
     ...(options.appServer.sessionRoot
       ? { runtimeWorkspaceRoots: [options.appServer.sessionRoot] }
@@ -204,7 +242,6 @@ export function buildTurnCollaborationMode(
   options: {
     model?: string;
     turnScopedDeveloperInstructions?: string;
-    skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
   } = {},
 ): CodexTurnCollaborationMode {
@@ -223,26 +260,34 @@ export function buildTurnCollaborationMode(
   };
 }
 
-function buildTurnScopedCollaborationInstructions(
+export function buildCodexParentLocalInstructions(
   params: EmbeddedRunAttemptParams,
   options: {
     turnScopedDeveloperInstructions?: string;
-    skillsCollaborationInstructions?: string;
+    skillsInstructions?: string;
     memoryCollaborationInstructions?: string;
   } = {},
 ): string | null {
   const contextInstructions = joinPresentSections(
     options.turnScopedDeveloperInstructions,
+    options.skillsInstructions,
     options.memoryCollaborationInstructions,
-    options.skillsCollaborationInstructions,
   );
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
   }
-  if (contextInstructions?.trim()) {
-    return joinPresentSections(buildDefaultCollaborationInstructions(), contextInstructions);
-  }
-  return null;
+  return contextInstructions || null;
+}
+
+function buildTurnScopedCollaborationInstructions(
+  params: EmbeddedRunAttemptParams,
+  options: Parameters<typeof buildCodexParentLocalInstructions>[1],
+): string | null {
+  const instructions = buildCodexParentLocalInstructions(params, options);
+  // Shipped external app-server compatibility: preserve its existing collaboration carrier.
+  return instructions && params.trigger !== "cron"
+    ? joinPresentSections(buildDefaultCollaborationInstructions(), instructions)
+    : instructions;
 }
 
 function buildDefaultCollaborationInstructions(): string {
@@ -260,7 +305,7 @@ function buildDefaultCollaborationInstructions(): string {
     "",
     "Use the `request_user_input` tool only when it is listed in the available tools for this turn.",
     "",
-    "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.",
+    "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. When a missing preference, constraint, or clarification warrants a question, use `request_user_input_async` if it is available and continue independent work. Answers arrive as ordinary user messages. A suggested or preselected answer is not consent; wait for explicit approval before dependent actions that require it. If neither question tool is available, ask a concise plain-text question. Never write a multiple choice question as a textual assistant message.",
   ].join("\n");
 }
 
@@ -271,8 +316,4 @@ function buildCronCollaborationInstructions(): string {
     "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
     "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
   ].join("\n\n");
-}
-
-function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }

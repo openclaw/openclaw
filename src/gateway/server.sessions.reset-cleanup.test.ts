@@ -2,21 +2,26 @@
 // hook emission, thread bindings, and browser/MCP cleanup side effects.
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
+import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
-import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
+import { peekSystemEvents } from "../infra/system-events.js";
+import { enqueueSystemEvent } from "../plugin-sdk/system-event-runtime.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { runExclusiveSessionLifecycle } from "../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
@@ -39,41 +44,32 @@ import {
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 
-type ResetAcpState = {
-  backend?: string;
-  agent?: string;
-  runtimeSessionName?: string;
-  identity?: {
-    state?: string;
-    acpxRecordId?: string;
-    acpxSessionId?: string;
-  };
-  mode?: string;
-  runtimeOptions?: {
-    runtimeMode?: string;
-    timeoutSeconds?: number;
-  };
-  cwd?: string;
-  state?: string;
-};
 type ConfigFilePatch = Parameters<(typeof import("../config/config.js"))["writeConfigFile"]>[0];
 
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   closeOpenClawStateDatabaseForTest();
 });
 
-function expectResetAcpState(acp: ResetAcpState | undefined) {
-  expect(acp?.backend).toBe("acpx");
-  expect(acp?.agent).toBe("codex");
-  expect(acp?.runtimeSessionName).toBe("runtime:reset");
-  expect(acp?.identity?.state).toBe("pending");
-  expect(acp?.identity?.acpxRecordId).toBe("agent:main:main");
+function expectResetAcpState(acp: SessionAcpMeta | undefined) {
+  expect(acp).toMatchObject({
+    backend: "acpx",
+    agent: "codex",
+    runtimeSessionName: "runtime:reset",
+    identity: { state: "pending", acpxRecordId: "agent:main:main" },
+    mode: "persistent",
+    runtimeOptions: { runtimeMode: "auto", timeoutSeconds: 30 },
+    cwd: "/tmp/acp-session",
+    state: "idle",
+  });
   expect(acp?.identity?.acpxSessionId).toBeUndefined();
-  expect(acp?.mode).toBe("persistent");
-  expect(acp?.runtimeOptions?.runtimeMode).toBe("auto");
-  expect(acp?.runtimeOptions?.timeoutSeconds).toBe(30);
-  expect(acp?.cwd).toBe("/tmp/acp-session");
-  expect(acp?.state).toBe("idle");
+}
+
+async function seedMainSession() {
+  const seeded = await createSessionStoreDir();
+  await writeSingleLineSession(seeded.dir, "sess-main", "hello");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+  return seeded;
 }
 
 async function seedWaitingActiveMainSession() {
@@ -181,9 +177,8 @@ test("sessions.reset aborts active runs and clears queues", async () => {
     "sess-main",
     "main",
   );
-  expect(peekSystemEvents("main")).toStrictEqual([]);
   expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
-  expect(peekSystemEvents("sess-main")).toStrictEqual([]);
+  expect(peekSystemEvents("agent:main:sess-main")).toStrictEqual([]);
   expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenNthCalledWith(1, {
     sessionId: "sess-main",
     reason: "gateway-session-cleanup",
@@ -301,14 +296,8 @@ test("sessions.reset keeps watching a replacement registered after waiter settle
 test("sessions.reset reuses the watcher while prior MCP retirement is still disposing", async () => {
   await seedActiveMainSession();
   embeddedRunMock.waitResults.set("sess-main", false);
-  let releaseFirstRetirement = () => {};
-  const firstRetirementReleased = new Promise<void>((resolve) => {
-    releaseFirstRetirement = resolve;
-  });
-  let markFirstRetirementStarted = () => {};
-  const firstRetirementStarted = new Promise<void>((resolve) => {
-    markFirstRetirementStarted = resolve;
-  });
+  const { promise: firstRetirementReleased, resolve: releaseFirstRetirement } = createDeferred();
+  const { promise: firstRetirementStarted, resolve: markFirstRetirementStarted } = createDeferred();
   let heldFirstRetirement = false;
   bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async (params) => {
     if (params.retainAcrossReuse === false && !heldFirstRetirement) {
@@ -339,32 +328,60 @@ test("sessions.reset reuses the watcher while prior MCP retirement is still disp
   });
 });
 
-test("sessions.reset forwards the retired generation to registered agent harnesses", async () => {
+test("sessions.reset clears retained native conversations from every execution owner", async () => {
   const registeredHarnesses = listRegisteredAgentHarnesses();
-  const reset = vi.fn(async () => undefined);
-  registerAgentHarness({
+  const current = new Map([["sess-main", "gateway conversation"]]);
+  const firstModel = new Map([
+    ["sess-main", "first model context"],
+    ["sibling", "keep me"],
+  ]);
+  const secondModel = new Map([["sess-main", "second model context"]]);
+  const harness = (history: Map<string, string>) => ({
     id: "reset-observer",
     label: "Reset observer",
     supports: () => ({ supported: false }),
     runAttempt: async () => {
       throw new Error("not used");
     },
-    reset,
+    reset: async ({ sessionId }: { sessionId?: string }) => {
+      if (sessionId) {
+        history.delete(sessionId);
+      }
+    },
   });
+  registerAgentHarness(harness(current));
+  const registries = [firstModel, secondModel].map((history) => {
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "native-fixture",
+      source: "test",
+      harness: harness(history),
+    });
+    return registry;
+  });
+  let retained = false;
+  const acquire = vi
+    .spyOn(preparedModelRuntime, "acquireAgentRuntimeCleanupRegistries")
+    .mockImplementation(async () => {
+      retained = true;
+      return {
+        registries,
+        async [Symbol.asyncDispose]() {
+          retained = false;
+        },
+      };
+    });
   try {
     await seedWaitingActiveMainSession();
-
     const response = await resetMainSession();
-
     expect(response.ok).toBe(true);
-    expect(reset).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionId: "sess-main",
-      sessionKey: "agent:main:main",
-      sessionFile: "agent:main:main",
-      reason: "reset",
-    });
+    expect(current.has("sess-main")).toBe(false);
+    expect(firstModel.has("sess-main")).toBe(false);
+    expect(secondModel.has("sess-main")).toBe(false);
+    expect(firstModel.get("sibling")).toBe("keep me");
+    expect(retained).toBe(false);
   } finally {
+    acquire.mockRestore();
     restoreRegisteredAgentHarnesses(registeredHarnesses);
   }
 });
@@ -422,10 +439,7 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
     },
   });
   let releaseMutation = () => {};
-  let markMutationStarted = () => {};
-  const mutationStarted = new Promise<void>((resolve) => {
-    markMutationStarted = resolve;
-  });
+  const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
   const blocker = runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities: ["agent:main:main", "sess-main"],
@@ -508,27 +522,16 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(reset.payload?.entry).not.toHaveProperty("acp");
   expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
   expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
-  const closeSessionCall = acpManagerMocks.closeSession.mock.calls.at(0) as unknown as
-    | [
-        {
-          allowBackendUnavailable?: boolean;
-          cfg?: unknown;
-          discardPersistentState?: boolean;
-          requireAcpSession?: boolean;
-          reason?: string;
-          sessionKey?: string;
-        },
-      ]
-    | undefined;
-  const closeSessionParams = closeSessionCall?.[0];
-  expect(closeSessionParams?.allowBackendUnavailable).toBe(true);
-  if (!closeSessionParams?.cfg) {
-    throw new Error("expected closeSession config");
-  }
-  expect(closeSessionParams?.discardPersistentState).toBe(true);
-  expect(closeSessionParams?.requireAcpSession).toBe(false);
-  expect(closeSessionParams?.reason).toBe("session-reset");
-  expect(closeSessionParams?.sessionKey).toBe("agent:main:main");
+  expect(acpManagerMocks.closeSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      allowBackendUnavailable: true,
+      cfg: expect.any(Object),
+      discardPersistentState: true,
+      requireAcpSession: false,
+      reason: "session-reset",
+      sessionKey: "agent:main:main",
+    }),
+  );
   expect(prepareFreshSession).toHaveBeenCalledWith({
     sessionKey: "agent:main:main",
     agentId: "main",
@@ -601,17 +604,11 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
   await writeSingleLineSession(dir, "sess-archive-race", "hello");
   await writeSessionStore({
     entries: {
-      [sessionKey]: sessionStoreEntry("sess-archive-race"),
+      [sessionKey]: sessionStoreEntry("sess-archive-race", { lifecycleRevision: "before-reset" }),
     },
   });
-  let releaseHook = () => {};
-  const hookReleased = new Promise<void>((resolve) => {
-    releaseHook = resolve;
-  });
-  let markHookStarted = () => {};
-  const hookStarted = new Promise<void>((resolve) => {
-    markHookStarted = resolve;
-  });
+  const { promise: hookReleased, resolve: releaseHook } = createDeferred();
+  const { promise: hookStarted, resolve: markHookStarted } = createDeferred();
   sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
     markHookStarted();
     await hookReleased;
@@ -629,6 +626,7 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
     key: sessionKey,
     archived: true,
     expectedSessionId: "sess-archive-race",
+    expectedLifecycleRevision: "before-reset",
   });
   releaseHook();
 
@@ -654,10 +652,7 @@ test("sessions.patch rejects an archive queued behind a rotated session", async 
   // Resolve the lazy handler/config imports before queue ordering begins.
   await Promise.all([getSessionsHandlers(), getGatewayConfigModule()]);
   let releaseBlocker = () => {};
-  let markBlockerStarted = () => {};
-  const blockerStarted = new Promise<void>((resolve) => {
-    markBlockerStarted = resolve;
-  });
+  const { promise: blockerStarted, resolve: markBlockerStarted } = createDeferred();
   const blocker = runExclusiveSessionLifecycle({
     scope: storePath,
     identities: [sessionKey, initialSessionId],
@@ -975,13 +970,7 @@ test("sessions.reset closes child ACP runtimes concurrently so stuck children do
 });
 
 test("sessions.reset does not emit lifecycle events when key does not exist", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-  });
+  await seedMainSession();
 
   const reset = await directSessionReq<{
     ok: true;
@@ -1031,13 +1020,7 @@ test("sessions.reset emits subagent targetKind for subagent sessions", async () 
 });
 
 test("sessions.reset directly unbinds thread bindings when hooks are unavailable", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-    },
-  });
+  await seedMainSession();
   subagentLifecycleHookState.hasSubagentEndedHook = false;
 
   const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
@@ -1063,6 +1046,7 @@ test("sessions.reset preserves explicit session preferences across session rollo
     category: "Operator group",
     icon: "🦞",
     boardFace: "dashboard",
+    boardPresentation: "expanded",
     visibility: "draft",
   } satisfies Partial<InternalSessionEntry>;
   await writeSessionStore({

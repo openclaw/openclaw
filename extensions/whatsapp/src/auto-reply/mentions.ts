@@ -1,9 +1,9 @@
-// Whatsapp plugin module implements mentions behavior.
 import {
   buildMentionRegexes,
   normalizeMentionText,
 } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   getComparableIdentityValues,
   getMentionIdentities,
@@ -13,7 +13,7 @@ import {
 } from "../identity.js";
 import { requireWhatsAppInboundAdmission } from "../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
-import { isSelfChatMode, normalizeE164 } from "../text-runtime.js";
+import { isSelfChatMode } from "../targets-runtime.js";
 
 export type MentionConfig = {
   mentionRegexes: RegExp[];
@@ -35,21 +35,11 @@ export function buildMentionConfig(
   return { mentionRegexes, allowFrom: cfg.channels?.whatsapp?.allowFrom };
 }
 
-function resolveMentionTargets(msg: AdmittedWebInboundMessage, authDir?: string): MentionTargets {
-  const normalizedMentions = getMentionIdentities(msg, authDir);
-  const self = getSelfIdentity(msg, authDir);
-  return { normalizedMentions, self };
-}
-
 function isBotMentionedFromTargets(
   msg: AdmittedWebInboundMessage,
   mentionCfg: MentionConfig,
   targets: MentionTargets,
 ): boolean {
-  const clean = (text: string) =>
-    // Remove zero-width and directionality markers WhatsApp injects around display names
-    normalizeMentionText(text);
-
   const explicitSelfChatOverride = typeof mentionCfg.isSelfChat === "boolean";
   // `isSelfChatMode` is a config-shaped check ("is the bot's own E.164 in
   // allowFrom?"), not a conversation-shaped check, so it returns true even
@@ -75,10 +65,8 @@ function isBotMentionedFromTargets(
         return true;
       }
     }
-  } else if (hasMentions && isSelfChat) {
-    // Self-chat mode: ignore WhatsApp @mention JIDs, otherwise @mentioning the owner in self-chat triggers the bot.
   }
-  const bodyClean = clean(msg.payload.body);
+  const bodyClean = normalizeMentionText(msg.payload.body);
   if (mentionCfg.mentionRegexes.some((re) => re.test(bodyClean))) {
     return true;
   }
@@ -113,7 +101,10 @@ export function debugMention(
   mentionCfg: MentionConfig,
   authDir?: string,
 ): { wasMentioned: boolean; details: Record<string, unknown> } {
-  const mentionTargets = resolveMentionTargets(msg, authDir);
+  const mentionTargets = {
+    normalizedMentions: getMentionIdentities(msg, authDir),
+    self: getSelfIdentity(msg, authDir),
+  };
   const result = isBotMentionedFromTargets(msg, mentionCfg, mentionTargets);
   const admission = requireWhatsAppInboundAdmission(msg);
   const details = {

@@ -58,8 +58,7 @@ actor SessionPreviewLimiter {
 
     private let maxConcurrent: Int
     private var available: Int
-    private var waitQueue: [UUID] = []
-    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    private var waiters: [CheckedContinuation<Void, Never>] = []
 
     init(maxConcurrent: Int) {
         let normalized = max(1, maxConcurrent)
@@ -79,19 +78,14 @@ actor SessionPreviewLimiter {
             self.available -= 1
             return
         }
-        let id = UUID()
         await withCheckedContinuation { cont in
-            self.waitQueue.append(id)
-            self.waiters[id] = cont
+            self.waiters.append(cont)
         }
     }
 
     private func release() {
-        if let id = self.waitQueue.first {
-            self.waitQueue.removeFirst()
-            if let cont = self.waiters.removeValue(forKey: id) {
-                cont.resume()
-            }
+        if !self.waiters.isEmpty {
+            self.waiters.removeFirst().resume()
             return
         }
         self.available = min(self.available + 1, self.maxConcurrent)
@@ -321,11 +315,13 @@ enum SessionMenuPreviewLoader {
         let normalized = entry.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch normalized {
         case "ok":
-            return SessionMenuPreviewSnapshot(items: items, status: items.isEmpty ? .empty : .ready)
+            return self.snapshot(from: items)
         case "empty":
             return SessionMenuPreviewSnapshot(items: items, status: .empty)
         case "missing":
             return SessionMenuPreviewSnapshot(items: items, status: .error("Thread missing"))
+        case "cold":
+            return SessionMenuPreviewSnapshot(items: [], status: .error("History archived; open chat to restore"))
         default:
             return SessionMenuPreviewSnapshot(items: items, status: .error("Preview unavailable"))
         }
@@ -373,7 +369,7 @@ enum SessionMenuPreviewLoader {
         let built = messages.compactMap { message -> SessionPreviewItem? in
             guard let text = self.previewText(for: message) else { return nil }
             let isTool = self.isToolCall(message)
-            let role = self.previewRole(message.role, isTool: isTool)
+            let role = isTool ? .tool : self.previewRoleFromRaw(message.role)
             let id = "\(message.timestamp ?? 0)-\(UUID().uuidString)"
             return SessionPreviewItem(id: id, role: role, text: text)
         }
@@ -389,19 +385,8 @@ enum SessionMenuPreviewLoader {
         }
     }
 
-    private static func previewRole(_ raw: String, isTool: Bool) -> PreviewRole {
-        if isTool { return .tool }
-        return self.previewRoleFromRaw(raw)
-    }
-
     private static func previewRoleFromRaw(_ raw: String) -> PreviewRole {
-        switch raw.lowercased() {
-        case "user": .user
-        case "assistant": .assistant
-        case "system": .system
-        case "tool": .tool
-        default: .other
-        }
+        PreviewRole(rawValue: raw.lowercased()) ?? .other
     }
 
     private static func previewText(for message: OpenClawChatMessage) -> String? {
@@ -456,12 +441,7 @@ enum SessionMenuPreviewLoader {
 
     private static func dedupePreservingOrder(_ values: [String]) -> [String] {
         var seen = Set<String>()
-        var result: [String] = []
-        for value in values where !seen.contains(value) {
-            seen.insert(value)
-            result.append(value)
-        }
-        return result
+        return values.filter { seen.insert($0).inserted }
     }
 
     private static func uniqueKeys(_ keys: [String]) -> [String] {

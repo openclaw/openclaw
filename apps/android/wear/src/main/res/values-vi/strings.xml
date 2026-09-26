@@ -6,6 +6,8 @@
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Các tùy chọn điều khiển"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Trò chuyện bằng giọng nói"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Âm thanh trên đồng hồ gặp lỗi"</string>
+    <string name="microphone_permission_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Cần có quyền truy cập micrô"</string>
+    <string name="open_settings" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Mở cài đặt"</string>
     <string name="dictate" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nhập bằng giọng nói"</string>
     <string name="live" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Trực tiếp"</string>
     <string name="thread" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Luồng"</string>
@@ -26,6 +28,7 @@
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đọc câu trả lời mới nhất"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đang nói"</string>
     <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đang lắng nghe"</string>
+    <string name="stopping" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Đang kết thúc cuộc gọi…"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đang kết nối"</string>
     <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đang suy nghĩ"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đang nhập"</string>
@@ -79,6 +82,8 @@
     <string name="message_not_sent" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hành động không được chấp nhận"</string>
     <string name="something_went_wrong" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đã xảy ra lỗi"</string>
     <string name="refresh_and_try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Làm mới các danh sách rồi thử lại."</string>
+    <string name="model_catalog_refresh_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Không thể làm mới một số mô hình. Các mô hình được liệt kê vẫn khả dụng."</string>
+    <string name="model_catalog_update_required" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Cập nhật OpenClaw trên điện thoại và Gateway để chọn mô hình cho cuộc trò chuyện này."</string>
     <string name="try_again" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Thử lại từ đồng hồ."</string>
     <string name="update_required" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cần cập nhật"</string>
     <string name="update_required_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cập nhật OpenClaw trên cả điện thoại và đồng hồ."</string>
@@ -121,4 +126,14 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Đã xếp hàng %1$d, Đang chạy %2$d, Hoàn tất %3$d, Thất bại %4$d, Đã ẩn %5$d"</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Còn các giai đoạn khác chưa được hiển thị"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Không xác định"</string>
+    <string name="read_full_reply" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Đọc toàn bộ câu trả lời"</string>
+    <string name="reply_stream_preview" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Bản xem trước trực tiếp. Đọc toàn bộ câu trả lời khi hoàn tất."</string>
+    <string name="reply_previous_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Phần trước"</string>
+    <string name="reply_next_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Phần tiếp theo"</string>
+    <string name="reply_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Đang tải toàn bộ câu trả lời…"</string>
+    <string name="reply_unsupported" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Cập nhật ứng dụng trên điện thoại và Gateway để đọc toàn bộ câu trả lời."</string>
+    <string name="reply_too_large" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Phản hồi này quá dài để đọc tại đây. Hãy mở trên điện thoại của bạn."</string>
+    <string name="reply_changed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Phản hồi hoặc kết nối đã thay đổi. Hãy thử lại từ đầu."</string>
+    <string name="reply_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Toàn bộ văn bản không còn khả dụng."</string>
+    <string name="reply_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Không thể tải toàn bộ câu trả lời. Vui lòng thử lại."</string>
 </resources>

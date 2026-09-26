@@ -1,17 +1,83 @@
 import type { ExecHost } from "../infra/exec-approvals.js";
 import { requireValidExecTarget } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { invalidateTaskActivity } from "../tasks/task-registry-activity.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
+import { getActiveBackgroundExecSession } from "./bash-process-registry.js";
 import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
-import { type ExecProcessOutcome, resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import { resolveExecTarget, type ExecProcessHandle } from "./bash-tools.exec-runtime.js";
+import {
+  type BackgroundExecTaskHandle,
+  createBackgroundExecTask,
+  finalizeBackgroundExecTask,
+} from "./bash-tools.exec-task-tracking.js";
 import type {
+  ExecProcessOutcome,
   ExecToolApprovalReview,
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { failedTextResult, textResult } from "./tools/common.js";
+import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+
+export function createExecProcessSettlement() {
+  let registration: Promise<void> | undefined;
+  let lastActivityAt: number | undefined;
+  let backgroundTask: BackgroundExecTaskHandle | null = null;
+  const settlement: {
+    outcome: ExecProcessOutcome | null;
+    register: (
+      run: ExecProcessHandle,
+      sessionKey: string | undefined,
+      agentId: string | undefined,
+    ) => void | Promise<void>;
+    settle: (outcome: ExecProcessOutcome) => void | Promise<void>;
+    activity: (at: number) => void;
+  } = {
+    outcome: null,
+    register(run, sessionKey, agentId) {
+      return withoutGatewayToolCallerIdentity(() => {
+        const created = createBackgroundExecTask({
+          processSessionId: run.session.id,
+          command: run.session.command,
+          sessionKey,
+          agentId,
+          startedAt: run.startedAt,
+          assertCurrent() {
+            if (getActiveBackgroundExecSession(run.session.id) !== run.session) {
+              throw new Error("Background exec process owner is no longer active");
+            }
+          },
+        });
+        const accept = (task: BackgroundExecTaskHandle | null) => {
+          backgroundTask = task;
+          if (task && lastActivityAt !== undefined && !settlement.outcome) {
+            invalidateTaskActivity(task.taskId, lastActivityAt);
+          }
+        };
+        if (created instanceof Promise) {
+          registration = created.then(accept);
+          return registration;
+        }
+        return accept(created);
+      });
+    },
+    activity(at) {
+      lastActivityAt = at;
+      if (backgroundTask && !settlement.outcome) {
+        invalidateTaskActivity(backgroundTask.taskId, at);
+      }
+    },
+    settle(outcome: ExecProcessOutcome) {
+      settlement.outcome = outcome;
+      const finalize = () => finalizeBackgroundExecTask({ handle: backgroundTask, outcome });
+      return registration ? registration.then(finalize) : finalize();
+    },
+  };
+  return settlement;
+}
 
 export function attachExecApprovalReview(
   result: AgentToolResult<ExecToolDetails>,

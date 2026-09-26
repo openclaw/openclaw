@@ -6,8 +6,8 @@ const { hasAnthropicVertexAvailableAuthMock } = vi.hoisted(() => ({
   hasAnthropicVertexAvailableAuthMock: vi.fn(),
 }));
 
-vi.mock("./api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api.js")>();
+vi.mock("./region.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./region.js")>();
   return {
     ...actual,
     hasAnthropicVertexAvailableAuth: hasAnthropicVertexAvailableAuthMock,
@@ -27,7 +27,7 @@ describe("anthropic-vertex provider plugin", () => {
   });
 
   afterAll(() => {
-    vi.doUnmock("./api.js");
+    vi.doUnmock("./region.js");
     vi.resetModules();
   });
 
@@ -328,7 +328,7 @@ describe("anthropic-vertex provider plugin", () => {
       provider: "anthropic-vertex",
       modelId: "claude-fable-5",
     } as never);
-    expect(fableProfile?.defaultLevel).toBe("high");
+    expect(fableProfile?.defaultLevel).toBe("medium");
     expect(fableProfile?.preserveWhenCatalogReasoningFalse).toBe(true);
 
     const aliasProfile = provider.resolveThinkingProfile?.({
@@ -336,7 +336,7 @@ describe("anthropic-vertex provider plugin", () => {
       modelId: "production-claude",
       params: { canonicalModelId: "claude-fable-5" },
     } as never);
-    expect(aliasProfile?.defaultLevel).toBe("high");
+    expect(aliasProfile?.defaultLevel).toBe("medium");
   });
 
   it("restores Fable metadata for explicit Vertex catalog rows", async () => {

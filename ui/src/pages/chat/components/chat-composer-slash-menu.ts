@@ -54,7 +54,7 @@ export type SlashMenuHost = {
   getTextarea: () => HTMLTextAreaElement | null;
   resolveArgOptions: (command: SlashCommandDef) => string[];
   runCommand: () => void;
-  canRun: (inline: boolean) => boolean;
+  canRun: (inline: boolean, command?: SlashCommandDef, args?: string) => boolean;
   runInlineCommand?: (command: string) => void;
   refreshCommands?: () => void | Promise<void>;
   commandFilter?: (command: SlashCommandDef) => boolean;
@@ -205,8 +205,12 @@ export function updateSlashMenu(
   const items = getSlashCommandCompletions(completion.query, {
     showAll: true,
     inlineOnly: completion.inline,
-    allowImmediateInlineCommands: host.canRun(true) && !completion.skillOnly,
-  }).filter((command) => host.commandFilter?.(command) ?? true);
+    allowImmediateInlineCommands: !completion.skillOnly,
+  }).filter(
+    (command) =>
+      (host.commandFilter?.(command) ?? true) &&
+      (!completion.inline || command.source === "skill" || host.canRun(true, command)),
+  );
   state.slashMenuCompletion = completion;
   state.slashMenuItems = [
     ...items.filter((command) => command.source !== "skill"),
@@ -230,7 +234,7 @@ function beginInlineSlashArguments(
     !state.slashMenuCompletion?.inline ||
     cmd.source === "skill" ||
     !cmd.args ||
-    !host.canRun(true) ||
+    !host.canRun(true, cmd) ||
     !host.runInlineCommand
   ) {
     return false;
@@ -263,13 +267,13 @@ function selectSlashCommand(
   requestUpdate: () => void,
   completeOnly = false,
 ): void {
-  if (!completeOnly && host.activateComposerMode?.(cmd)) {
+  if (host.activateComposerMode?.(cmd)) {
     return;
   }
   if (
     !completeOnly &&
     cmd.source !== "skill" &&
-    !host.canRun(true) &&
+    !host.canRun(true, cmd) &&
     state.slashMenuCompletion?.inline
   ) {
     return;
@@ -282,7 +286,7 @@ function selectSlashCommand(
     !completeOnly &&
     state.slashMenuCompletion?.inline &&
     executesInlineImmediately(cmd) &&
-    host.canRun(true) &&
+    host.canRun(true, cmd) &&
     host.runInlineCommand &&
     removeInlineSlashSelection(state, host)
   ) {
@@ -313,7 +317,12 @@ function selectSlashCommand(
     host.commitDraft(cmd.args ? `/${cmd.name} ` : `/${cmd.name}`);
     resetSlashMenuState(state);
     requestUpdate();
-  } else if (cmd.executeLocal && !cmd.args) {
+  } else if (
+    cmd.executeLocal &&
+    !cmd.args &&
+    // Catalog continuations and viewer suggestions do not dispatch live chat commands.
+    (cmd.key !== "btw" || host.canRun(true, cmd))
+  ) {
     resetSlashMenuState(state);
     host.commitDraft(`/${cmd.name}`);
     host.runCommand();
@@ -331,7 +340,10 @@ function selectSlashArg(
   run: boolean,
 ): void {
   const { slashMenuCommand: command, slashMenuCompletion: completion } = state;
-  if (command?.source !== "skill" && !host.canRun(completion?.inline === true)) {
+  if (
+    command?.source !== "skill" &&
+    !host.canRun(completion?.inline === true, command ?? undefined, arg)
+  ) {
     return;
   }
   const cmdName = command?.name ?? "";
@@ -340,7 +352,7 @@ function selectSlashArg(
     state.slashMenuCompletion?.inline &&
     command &&
     executesInlineImmediately(command) &&
-    host.canRun(true) &&
+    host.canRun(true, command, arg) &&
     host.runInlineCommand &&
     removeInlineSlashSelection(state, host)
   ) {
@@ -378,7 +390,6 @@ function submitInlineSlashArgument(
     !completion?.inline ||
     !command ||
     !executesInlineImmediately(command) ||
-    !host.canRun(true) ||
     !host.runInlineCommand
   ) {
     return false;
@@ -386,7 +397,7 @@ function submitInlineSlashArgument(
   const current = host.getTextarea()?.value ?? host.getDraft();
   const argumentStart = completion.argumentStart ?? completion.start + `/${command.name} `.length;
   const args = current.slice(argumentStart, completion.end).trim();
-  if (!removeInlineSlashSelection(state, host)) {
+  if (!host.canRun(true, command, args) || !removeInlineSlashSelection(state, host)) {
     return false;
   }
   resetSlashMenuState(state);
@@ -396,7 +407,7 @@ function submitInlineSlashArgument(
 }
 
 function beginDirectInlineSlashArgument(state: SlashMenuState, host: SlashMenuHost): boolean {
-  if (!host.canRun(true) || !host.runInlineCommand) {
+  if (!host.runInlineCommand) {
     return false;
   }
   const current = host.getTextarea()?.value ?? host.getDraft();
@@ -441,7 +452,8 @@ export function handleInlineSlashArgKeydown(
     return false;
   }
   event.preventDefault();
-  return submitInlineSlashArgument(state, host, requestUpdate);
+  submitInlineSlashArgument(state, host, requestUpdate);
+  return true;
 }
 
 export function handleSlashMenuKeydown(

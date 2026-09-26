@@ -121,6 +121,7 @@
   --accent-2-subtle: rgba(20, 184, 166, 0.1);
 
   /* Theme-invariant presentation colors. */
+  --task-suggestion-action-fg: #fafafa;
   --button-icon-bg: #ffffff;
   --brand-logo-chip-bg: #ffffff;
   --qr-bg: #ffffff;
@@ -243,6 +244,7 @@
   --control-ui-text-lg: calc(16px * var(--control-ui-text-scale));
   --control-ui-input-text-size: max(16px, calc(14px * var(--control-ui-text-scale)));
   --chat-text-size: var(--control-ui-text-md);
+  --chat-block-gap: var(--chat-text-size);
 
   /* Shadows - Subtle, layered depth */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
@@ -267,6 +269,9 @@
   --space-6: 24px;
   --space-7: 32px;
   --space-8: 40px;
+
+  /* Shared by mobile headers, transcripts, and independently loaded composers. */
+  --chat-mobile-edge-inset: var(--space-3);
 
   /* One inset shared by every widget frame (chat preview panel, board card)
      so agent-authored widget documents meet identical breathing room on all
@@ -300,6 +305,9 @@
      inherit the widened surface treatment (excluded selectors, the tokens
      exported to embedded MCP apps in mcp-app-theme.ts). */
   --openclaw-corner-radius-scale: 1;
+  /* Theme-facing composer corner family; themes may pick e.g. `scoop scoop round round`.
+     Engines without corner-shape keep the circular radius. */
+  --chat-composer-corner-shape: superellipse(1.5);
 
   /* Menu items stay optically parallel to their panel edge: radius 6 + padding 4
      = panel radius 10. Shared knobs keep transient menus from drifting again. */
@@ -367,16 +375,15 @@
    border-radius declaration in its home file, which always loads later.
    Each selector below is doubled (`.card.card`) to outrank that one bare
    declaration by specificity regardless of load order — deliberately not
-   !important, so a genuinely more specific state override elsewhere (e.g.
-   `.chat:has(> .agent-chat__search-bar)`, `.chat-task-detail__transcript >
-   .chat-thread`, both already in the app) keeps winning as it did before
-   this block existed, instead of every such rule needing a matching
-   !important of its own. */
+   !important, so a genuinely more specific state override elsewhere keeps
+   winning as it did before this block existed, instead of every such rule
+   needing a matching !important of its own. */
 @supports (corner-shape: superellipse(1.5)) {
   :root {
     --openclaw-corner-radius-scale: 1.25;
   }
 
+  .agent-chat__search-bar.agent-chat__search-bar,
   .exec-approval-card.exec-approval-card,
   .exec-approval-list.exec-approval-list,
   .cmd-palette.cmd-palette,
@@ -397,37 +404,30 @@
   .sidebar-recent-session.sidebar-recent-session,
   .settings-sidebar__item.settings-sidebar__item,
   .btn.btn,
+  .agent-select__trigger.agent-select__trigger,
   .settings-input.settings-input,
   .field.field :is(input, textarea, select) {
     border-radius: calc(10px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
-  .code-block-wrapper.code-block-wrapper {
+  /* CRT owns its near-square geometry; rounded transcript bubbles share the fence shape. */
+  .code-block-wrapper.code-block-wrapper,
+  :where(:root:not([data-theme="crt"], [data-theme="crt-light"]))
+    :is(.chat-thread, .chat-session-rail__thread)
+    .chat-group.user
+    .chat-bubble,
+  :where(:root:not([data-theme="crt"], [data-theme="crt-light"]))
+    :is(.chat-thread, .chat-session-rail__thread)
+    .chat-group.user
+    :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
+    > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
-  /* The composer's resting shape is the multiline one; its single-line pill
-     opts back out to a circular corner in chat/layout.css, because the
-     superellipse flattens a fully rounded end. */
-  .option-card.option-card,
-  .agent-chat__input.agent-chat__input {
+  .option-card.option-card {
     border-radius: calc(20px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
-  }
-
-  /* The transcript search bar's bottom corners round with its .card ancestor
-     so the two edges stay optically parallel; only two corners are rounded,
-     and .chat:has(> .agent-chat__search-bar) zeroes .card's own radius while
-     the search bar is present (see chat/layout.css). corner-shape still
-     needs to be set here even though the top two corners are 0 (a 0-radius
-     corner draws no curve either way): the bottom two are standing in for
-     .card's own squircle corner at the seam, so they need the same shape,
-     not just the same radius, to actually match it. */
-  .agent-chat__search-bar.agent-chat__search-bar {
-    border-radius: 0 0 calc(14px * var(--openclaw-corner-radius-scale))
-      calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
@@ -499,8 +499,14 @@
   }
 }
 
-/* The claw family deepens only the text-bearing destructive fill. */
+/* Named palette overrides win even when their stylesheet loads before the app. */
+:root:where([data-theme]) {
+  --primary-hover: var(--accent-hover);
+}
+
+/* The claw family deepens text-bearing primary and destructive fills. */
 :root[data-theme="dark"] {
+  --primary-hover: #c22e2e;
   --destructive: #d32f2f;
   --destructive-hover: #bc2a2a;
 }
@@ -849,8 +855,29 @@ input:is(
 
 a {
   color: var(--accent);
-  text-decoration: underline;
+  text-decoration: none;
   text-underline-offset: 2px;
+}
+
+/* Content links opt in; navigation and button anchors stay undecorated. */
+a:where(
+    :not([class]),
+    [class=""],
+    .activity-entry__run-link,
+    .settings-row__value,
+    .memory-page__link,
+    .portals-preview__notice-url,
+    .settings-account,
+    .transcripts-back,
+    .chat-text a,
+    .chat-thinking a,
+    .sidebar-markdown a,
+    .markdown a,
+    .markdown-body a,
+    .chat-session-rail__answer a,
+    .dreams-diary__para a
+  ):not(:where(.btn, [role="button"])) {
+  text-decoration: underline;
 }
 
 /* Real links keep the hand even when styled as controls. */
@@ -868,11 +895,6 @@ a:hover {
   text-decoration-thickness: 2px;
 }
 
-.learn-more-link,
-.learn-more-link:hover {
-  text-decoration: none;
-}
-
 /* Web Awesome defaults checked switches to brand blue. Keep every switch on
    the Control UI accent, matching native check controls and custom switches. */
 wa-switch {
@@ -880,15 +902,25 @@ wa-switch {
   --wa-color-focus: var(--ring);
 }
 
-/* Web Awesome dropdown items ship `cursor: pointer` on their shadow host.
+/* Keep neutral menu hover, keyboard focus, and open submenus on the active theme.
+   Web Awesome dropdown items ship `cursor: pointer` on their shadow host.
    Document rules beat `:host`, so route them through the policy here — and
    re-add the disabled cue this override would otherwise clobber. */
 wa-dropdown-item {
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
   cursor: var(--cursor-action);
 }
 
 wa-dropdown-item[disabled] {
   cursor: not-allowed;
+}
+
+/* The submenu safe triangle follows the pointer and can cover sibling rows,
+   trapping hover on tall or flipped menus. Let real rows receive the pointer;
+   Web Awesome still owns submenu closing and its pointer-exit grace period. */
+wa-dropdown-item::part(submenu)::before {
+  pointer-events: none;
 }
 
 /* Keep Web Awesome's checkbox rail trailing so it cannot shift menu icons and labels. */
@@ -1041,17 +1073,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   }
 }
 
-@keyframes dashboard-enter {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @keyframes shimmer {
   from {
     transform: translateX(-100%);
@@ -1091,8 +1112,7 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
     transparent 75%
   );
   content: "";
-  /* Rest offscreen: with reduced motion the animation collapses to one instant
-     iteration, and without this the highlight band would settle over the block. */
+  /* Keep the highlight offscreen when reduced motion disables the sweep. */
   transform: translateX(-100%);
   animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
   will-change: transform;
@@ -1129,6 +1149,7 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
     --hide-duration: 0ms;
   }
 
+  .skeleton::after,
   .chat-controls__inline-select[open] > wa-popup::part(popup) {
     animation: none !important;
   }
@@ -1138,7 +1159,9 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    /* A positive duration enables the default transition-property: all, even
+       on static controls. Keep reduced-motion updates immediate instead. */
+    transition-duration: 0ms !important;
     scroll-behavior: auto !important;
   }
 }

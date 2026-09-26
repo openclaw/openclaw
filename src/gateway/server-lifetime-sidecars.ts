@@ -1,4 +1,5 @@
 import { getRuntimeConfig } from "../config/config.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { purgeExpiredSecretStoreEntries } from "../secrets/store/secret-store.js";
 import {
   createGitHubOAuthLifecycle,
@@ -9,81 +10,41 @@ import {
   broadcastChatMetadataChanged,
   type createGatewayChatMetadataLifecycle,
 } from "./server-chat-metadata-lifecycle.js";
+import { attachSessionChangeEventLifetime } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { startIncognitoSessionLifetime } from "./session-incognito-lifetime.js";
 
 type GatewayChatMetadataLifecycle = Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>;
-const SECRET_STORE_EXPIRY_INTERVAL_MS = 60_000;
-const GITHUB_PUBLICATION_RECONCILE_INTERVAL_MS = 60_000;
-
-function startGitHubPublicationMaintenance(
-  reconcile: () => Promise<void>,
-  logWarning: (message: string) => void,
-): GatewayPostReadySidecarHandle {
-  let current: Promise<void> | undefined;
-  let stopped = false;
-  const run = () => {
-    if (stopped || current) {
-      return;
-    }
-    const operation = reconcile()
-      .catch(() => logWarning("GitHub publication recovery failed; will retry."))
-      .finally(() => {
-        if (current === operation) {
-          current = undefined;
-        }
-      });
-    current = operation;
-  };
-  run();
-  const interval = setInterval(run, GITHUB_PUBLICATION_RECONCILE_INTERVAL_MS);
-  interval.unref?.();
-  return {
-    stop: async () => {
-      stopped = true;
-      clearInterval(interval);
-      await current;
-    },
-  };
-}
-
-function startSecretStoreExpiryMaintenance(
-  logWarning: (message: string) => void,
-): GatewayPostReadySidecarHandle {
-  let warned = false;
-  const purge = () => {
-    try {
-      purgeExpiredSecretStoreEntries();
-      warned = false;
-    } catch {
-      if (!warned) {
-        logWarning("Secret store expiry cleanup failed; will retry.");
-        warned = true;
-      }
-    }
-  };
-  purge();
-  const interval = setInterval(purge, SECRET_STORE_EXPIRY_INTERVAL_MS);
-  interval.unref?.();
-  return { stop: () => clearInterval(interval) };
-}
 
 export async function attachInitialGatewayLifetimeSidecars(params: {
+  scheduler: GatewayScheduler;
   chatMetadataLifecycle: GatewayChatMetadataLifecycle;
   gatewayRequestContext: GatewayRequestContext;
-  flushPendingSessionsChangedEvents: (context?: object) => void;
+  flushPendingSessionsChangedEvents: (context?: object) => Promise<void>;
   minimalTestGateway: boolean;
   logWarning: (message: string) => void;
   reconcileGitHubPublications?: () => Promise<void>;
-  sidecars: GatewayPostReadySidecarHandle[];
+  publishSidecars: GatewaySidecarStopOwner["publish"];
 }): Promise<void> {
-  await params.chatMetadataLifecycle.attachContext(params.gatewayRequestContext, params.sidecars);
+  // Kernel preparation precedes HTTP/internal dispatch. Incognito has no restart inventory.
+  params.publishSidecars(
+    startIncognitoSessionLifetime({
+      scheduler: params.scheduler,
+      context: params.gatewayRequestContext,
+      logWarning: params.logWarning,
+    }),
+  );
+  await params.chatMetadataLifecycle.attachContext(
+    params.gatewayRequestContext,
+    params.publishSidecars,
+  );
   const modelAccountConnect = createModelAccountConnectService({
     getConfig: params.gatewayRequestContext.getRuntimeConfig,
     onChanged: () => broadcastChatMetadataChanged(params.gatewayRequestContext),
   });
   params.gatewayRequestContext.modelAccountConnectService = modelAccountConnect;
-  params.sidecars.push({
+  params.publishSidecars({
     stop: async () => {
       await modelAccountConnect.stop();
       if (params.gatewayRequestContext.modelAccountConnectService === modelAccountConnect) {
@@ -92,6 +53,7 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     },
   });
   const githubOAuth = createGitHubOAuthLifecycle({
+    scheduler: params.scheduler,
     getConfig: params.gatewayRequestContext.getRuntimeConfig,
     getPersistedConfig: () => getRuntimeConfig({ pin: false }),
     warn: params.logWarning,
@@ -101,7 +63,7 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
   if (!params.minimalTestGateway) {
     githubOAuth.start();
   }
-  params.sidecars.push({
+  params.publishSidecars({
     stop: async () => {
       uninstallGitHubOAuth();
       await githubOAuth.stop();
@@ -111,16 +73,45 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     },
   });
   if (!params.minimalTestGateway) {
-    params.sidecars.push(startSecretStoreExpiryMaintenance(params.logWarning));
-  }
-  if (params.reconcileGitHubPublications) {
-    params.sidecars.push(
-      startGitHubPublicationMaintenance(params.reconcileGitHubPublications, params.logWarning),
+    let warned = false;
+    params.publishSidecars(
+      params.scheduler.schedule({
+        id: "maintenance:secret-expiry",
+        atMs: params.scheduler.now(),
+        everyMs: 60_000,
+        run: () =>
+          purgeExpiredSecretStoreEntries()
+            .then(() => {
+              warned = false;
+            })
+            .catch(() => {
+              if (!warned) {
+                params.logWarning("Secret store expiry cleanup failed; will retry.");
+                warned = true;
+              }
+            }),
+      }),
     );
   }
-  params.sidecars.push({
-    stop: () => {
-      params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
-    },
-  });
+  const reconcileGitHubPublications = params.reconcileGitHubPublications;
+  if (reconcileGitHubPublications) {
+    params.publishSidecars(
+      params.scheduler.schedule({
+        id: "maintenance:github-publication",
+        atMs: params.scheduler.now(),
+        everyMs: 60_000,
+        run: () =>
+          reconcileGitHubPublications().catch(() =>
+            params.logWarning("GitHub publication recovery failed; will retry."),
+          ),
+      }),
+    );
+  }
+  attachSessionChangeEventLifetime(params.gatewayRequestContext, () =>
+    params.publishSidecars({
+      stop: async () => {
+        await params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
+      },
+    }),
+  );
 }

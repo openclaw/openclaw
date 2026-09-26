@@ -6,7 +6,7 @@ import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
-import ai.openclaw.app.GatewayNodeApprovalState
+import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayNodeSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.saveable.SaverScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -423,8 +424,7 @@ class ShellScreenLogicTest {
                   deviceFamily = "Android",
                   paired = true,
                   connected = true,
-                  approvalState = GatewayNodeApprovalState.PendingApproval,
-                  pendingRequestId = null,
+                  approvalState = GatewayNodeCapabilityApproval.PendingApproval(null),
                   capabilities = emptyList(),
                   commands = emptyList(),
                 ),
@@ -478,8 +478,7 @@ class ShellScreenLogicTest {
                   deviceFamily = "Android",
                   paired = true,
                   connected = true,
-                  approvalState = GatewayNodeApprovalState.PendingReapproval,
-                  pendingRequestId = "node-request",
+                  approvalState = GatewayNodeCapabilityApproval.PendingReapproval("node-request"),
                   capabilities = emptyList(),
                   commands = emptyList(),
                 ),
@@ -494,10 +493,9 @@ class ShellScreenLogicTest {
     assertEquals(listOf("Gateway", "Nodes", "Approvals", "Threads", "Files"), cards.map { it.title })
     assertEquals("Online", cards.single { it.title == "Gateway" }.value)
     assertEquals("Review highlighted items", cards.single { it.title == "Gateway" }.subtitle)
-    assertEquals("1/1", cards.single { it.title == "Nodes" }.value)
+    assertNull(cards.single { it.title == "Nodes" }.value)
     assertEquals("Review node access", cards.single { it.title == "Nodes" }.subtitle)
     assertEquals(ClawStatus.Warning, cards.single { it.title == "Nodes" }.status)
-    assertEquals(1f, cards.single { it.title == "Nodes" }.progressFraction ?: 0f, 0.001f)
     assertEquals("2", cards.single { it.title == "Approvals" }.value)
     assertEquals("4", cards.single { it.title == "Threads" }.value)
     assertEquals("Browse", cards.single { it.title == "Files" }.value)
@@ -511,7 +509,7 @@ class ShellScreenLogicTest {
         ChatSessionEntry(key = "session-$index", updatedAtMs = index.toLong())
       }
 
-    assertEquals(50, overviewRecentSessionCount(sessions))
+    assertEquals(50, overviewRecentSessions(sessions).size)
     assertEquals((51 downTo 2).map { "session-$it" }, overviewRecentSessions(sessions).map { it.key })
   }
 
@@ -616,56 +614,72 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun overviewNodeCardShowsRoundedOnlinePercentWhenNoNodeApprovalIsPending() {
-    val cards =
-      overviewMetricCardSpecs(
-        isConnected = true,
-        hasAttention = false,
-        nodesDevicesSummary =
-          GatewayNodesDevicesSummary(
-            nodes =
-              (1..3).map { index ->
-                GatewayNodeSummary(
-                  id = "node-$index",
-                  displayName = "Node $index",
-                  remoteIp = null,
-                  version = null,
-                  deviceFamily = null,
-                  paired = true,
-                  connected = index <= 2,
-                  approvalState = GatewayNodeApprovalState.Approved,
-                  pendingRequestId = null,
-                  capabilities = emptyList(),
-                  commands = emptyList(),
-                )
-              },
-            pendingDevices = emptyList(),
-            pairedDevices = emptyList(),
-          ),
-        pendingApprovals = 0,
-        sessionCount = 0,
-      )
+  fun overviewNodeCardSummarizesOnlineNodesOnceWhenNoApprovalIsPending() {
+    for ((online, total, expected) in listOf(
+      Triple(8, 9, "8 of 9 online"),
+      Triple(9, 9, "9 online"),
+      Triple(0, 9, "0 of 9 online"),
+      Triple(0, 0, "None paired"),
+      Triple(1, 1, "1 online"),
+    )) {
+      val cards =
+        overviewMetricCardSpecs(
+          isConnected = true,
+          hasAttention = false,
+          nodesDevicesSummary =
+            GatewayNodesDevicesSummary(
+              nodes =
+                (1..total).map { index ->
+                  GatewayNodeSummary(
+                    id = "node-$index",
+                    displayName = "Node $index",
+                    remoteIp = null,
+                    version = null,
+                    deviceFamily = null,
+                    paired = true,
+                    connected = index <= online,
+                    approvalState = GatewayNodeCapabilityApproval.Approved,
+                    capabilities = emptyList(),
+                    commands = emptyList(),
+                  )
+                },
+              pendingDevices = emptyList(),
+              pairedDevices = emptyList(),
+            ),
+          pendingApprovals = 0,
+          sessionCount = 0,
+        )
 
-    val nodes = cards.single { it.title == "Nodes" }
-    assertEquals("2/3", nodes.value)
-    assertEquals("67% online", nodes.subtitle)
-    assertEquals(2f / 3f, nodes.progressFraction ?: 0f, 0.001f)
+      val nodes = cards.single { it.title == "Nodes" }
+      assertNull(nodes.value)
+      assertEquals(expected, nodes.subtitle)
+      assertEquals(SettingsRoute.NodesDevices, nodes.settingsRoute)
+    }
   }
 
   @Test
-  fun overviewGatewayCardOnlyClaimsNominalWhenNoAttentionExists() {
+  fun overviewGatewayCardDoesNotClaimHealthWhenProviderAvailabilityIsUnknown() {
+    val attentionRows =
+      homeAttentionRows(
+        isConnected = true,
+        pendingApprovals = 0,
+        channelsSummary = emptyChannels(),
+        nodesDevicesSummary = emptyNodesDevices(),
+        readyProviderCount = 0,
+        unknownProviderCount = 1,
+      )
     val cards =
       overviewMetricCardSpecs(
         isConnected = true,
-        hasAttention = false,
+        hasAttention = attentionRows.isNotEmpty(),
         nodesDevicesSummary = emptyNodesDevices(),
         pendingApprovals = 0,
         sessionCount = 0,
       )
 
     val gateway = cards.single { it.title == "Gateway" }
-    assertEquals("Healthy", gateway.value)
-    assertEquals("All systems nominal", gateway.subtitle)
+    assertEquals("Online", gateway.value)
+    assertEquals("No highlighted items", gateway.subtitle)
     assertEquals(ClawStatus.Success, gateway.status)
   }
 

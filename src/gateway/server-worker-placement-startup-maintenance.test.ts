@@ -4,10 +4,12 @@ import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { observeSessionMaintenanceChanges } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
 import { collectSessionMaintenancePreserveKeys } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as workspaceRetention from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
@@ -37,6 +39,7 @@ vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) 
   createWorkerPlacementDiskSpaceMonitor: runtimeFactoryMocks.createDiskSpace,
 }));
 
+import { getRuntimeConfig } from "../config/config.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 
 type PlacementFixture = {
@@ -97,20 +100,26 @@ function createMaintenanceRuntime(params: {
       goneEnvironmentIds.has(environmentId)
         ? { state: "destroyed" as const, leaseId: null }
         : { state: "attached" as const, leaseId: "cloud-lease" },
+    subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
     installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
     start: vi.fn(),
     stop,
   };
   const runtime = createGatewayWorkerPlacementRuntime({
+    scheduler: createTestGatewayScheduler(),
+    getCommittedRuntimeConfig: getRuntimeConfig,
     cancelSessionWork: vi.fn(async () => {}),
     placements: {
       workspaceResultInstanceId: () => "gateway-test",
       get: (sessionId: string) =>
         params.placements.find((placement) => placement.sessionId === sessionId),
       list: () => params.placements,
-      listForReconcile: () =>
+      listForReconcile: (sessionKey?: string) =>
         params.placements.filter(
-          (placement) => placement.state !== "local" && placement.state !== "reclaimed",
+          (placement) =>
+            placement.state !== "local" &&
+            placement.state !== "reclaimed" &&
+            (sessionKey === undefined || placement.sessionKey === sessionKey),
         ),
       retireSessionPlacement: vi.fn(),
       pruneOrphanedWorkspaceReconciliations: () => {
@@ -201,7 +210,7 @@ describe("worker placement session maintenance ownership", () => {
     { maintenance: "stale pruning", sessionKey: "agent:main:explicit:cloud-owned-prune" },
     { maintenance: "entry capping", sessionKey: "agent:main:explicit:cloud-owned-cap" },
   ] as const)(
-    "preserves active placements during write-triggered $maintenance and releases them on stop",
+    "preserves active placements during $maintenance and releases them for maintenance after stop",
     async ({ maintenance, sessionKey }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const now = Date.now();
@@ -256,7 +265,9 @@ describe("worker placement session maintenance ownership", () => {
           );
 
         try {
+          const sentinelArchived = observeSessionMaintenanceChanges(storePath, sentinelKey);
           await triggerMaintenance();
+          await sentinelArchived;
           await vi.waitFor(() => {
             expect(loadSessionEntry(sessionScope(sentinelKey))).toMatchObject({
               sessionId: sentinelEntry.sessionId,
@@ -272,13 +283,24 @@ describe("worker placement session maintenance ownership", () => {
 
           await sidecar.stop();
           expect(collectSessionMaintenancePreserveKeys()?.has(sessionKey)).not.toBe(true);
-          await triggerMaintenance();
-          await vi.waitFor(() => {
-            expect(loadSessionEntry(sessionScope(sessionKey))).toMatchObject({
-              sessionId: placement.sessionId,
-              archivedAt: expect.any(Number),
+          // Released age protection is reconsidered at the periodic deadline; caps remain due.
+          const recheckClock =
+            maintenance === "entry capping"
+              ? undefined
+              : vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30 * 60 * 1_000);
+          try {
+            const placementArchived = observeSessionMaintenanceChanges(storePath, sessionKey);
+            await triggerMaintenance();
+            await placementArchived;
+            await vi.waitFor(() => {
+              expect(loadSessionEntry(sessionScope(sessionKey))).toMatchObject({
+                sessionId: placement.sessionId,
+                archivedAt: expect.any(Number),
+              });
             });
-          });
+          } finally {
+            recheckClock?.mockRestore();
+          }
         } finally {
           await sidecar.stop();
         }

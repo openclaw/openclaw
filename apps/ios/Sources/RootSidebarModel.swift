@@ -213,7 +213,8 @@ final class RootSidebarModel {
         currentSessionKey: String,
         mainSessionKey: String,
         activeAgentID: String?,
-        groups: [OpenClawChatSessionGroup]) -> [ChatSessionSidebarModel.Section]
+        groups: [OpenClawChatSessionGroup],
+        sessionRoutingContract: String? = nil) -> [ChatSessionSidebarModel.Section]
     {
         ChatSessionSidebarModel.sections(
             sessions: self.sessions,
@@ -222,7 +223,8 @@ final class RootSidebarModel {
             activeAgentID: activeAgentID,
             groups: groups,
             excludesMainSession: true,
-            query: query)
+            query: query,
+            sessionRoutingContract: sessionRoutingContract)
     }
 
     func refresh(appModel: NodeAppModel) async {
@@ -506,8 +508,10 @@ final class RootSidebarModel {
             return
         }
         if let totalCount = roster.totalCount {
+            // Localization: arguments (20, 100) mean 20 displayed out of 100 total, with 80 still to load.
+            // Keep the displayed count first; rephrase the sentence instead of reversing argument roles.
             self.sessionErrorText = String(
-                format: String(localized: "Showing %lld of %lld sessions. Refresh to load the rest."),
+                format: String(localized: "Showing %lld sessions; %lld total. Refresh to load the rest."),
                 roster.sessions.count,
                 totalCount)
         } else {

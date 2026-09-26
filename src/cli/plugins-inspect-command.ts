@@ -8,8 +8,16 @@ import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
-import { tracePluginLifecyclePhase } from "../plugins/plugin-lifecycle-trace.js";
+import {
+  tracePluginLifecyclePhase,
+  tracePluginLifecyclePhaseAsync,
+} from "../plugins/plugin-lifecycle-trace.js";
 import { formatPluginTrustDiagnostic } from "../plugins/plugin-trust.js";
+import type {
+  PluginCompatibilityNotice,
+  PluginInspectReport,
+  PluginStatusReport,
+} from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
@@ -33,7 +41,8 @@ function failPluginInspect(message: string, json: boolean | undefined): void {
   defaultRuntime.exit(1);
 }
 
-function writeGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[]): void {
+function formatGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[]): string {
+  const lines: string[] = [];
   for (const { pluginId, level, message } of diagnostics) {
     if (!pluginId) {
       const line = formatConsoleDiagnosticLine({
@@ -41,9 +50,10 @@ function writeGlobalPluginDiagnostics(diagnostics: readonly PluginDiagnostic[]):
         message: shortenHomeInString(`${level.toUpperCase()}: ${message}`),
       });
       // Global discovery diagnostics also matter when the JSON result is an empty array.
-      process.stderr.write(`${line}\n`);
+      lines.push(`${line}\n`);
     }
   }
+  return lines.join("");
 }
 
 function formatInspectSection(title: string, lines: string[]): string[] {
@@ -80,53 +90,33 @@ function formatInstallLines(install: PluginInstallRecord | undefined): string[] 
     return [];
   }
   const lines = [`Source: ${install.source}`];
-  if (install.spec) {
-    lines.push(`Spec: ${install.spec}`);
-  }
-  if (install.sourcePath) {
-    lines.push(`Source path: ${shortenHomePath(install.sourcePath)}`);
-  }
-  if (install.installPath) {
-    lines.push(`Install path: ${shortenHomePath(install.installPath)}`);
-  }
-  if (install.version) {
-    lines.push(`Recorded version: ${install.version}`);
-  }
-  if (install.clawhubPackage) {
-    lines.push(`ClawHub package: ${install.clawhubPackage}`);
-  }
-  if (install.clawhubChannel) {
-    lines.push(`ClawHub channel: ${install.clawhubChannel}`);
-  }
-  if (install.artifactKind) {
-    lines.push(`Artifact kind: ${install.artifactKind}`);
-  }
-  if (install.artifactFormat) {
-    lines.push(`Artifact format: ${install.artifactFormat}`);
-  }
-  if (install.npmIntegrity) {
-    lines.push(`Npm integrity: ${install.npmIntegrity}`);
-  }
-  if (install.npmShasum) {
-    lines.push(`Npm shasum: ${install.npmShasum}`);
-  }
-  if (install.npmTarballName) {
-    lines.push(`Npm tarball: ${install.npmTarballName}`);
-  }
-  if (install.clawpackSha256) {
-    lines.push(`ClawPack sha256: ${install.clawpackSha256}`);
-  }
-  if (install.clawpackSpecVersion !== undefined) {
-    lines.push(`ClawPack spec: ${install.clawpackSpecVersion}`);
-  }
-  if (install.clawpackManifestSha256) {
-    lines.push(`ClawPack manifest sha256: ${install.clawpackManifestSha256}`);
-  }
-  if (install.clawpackSize !== undefined) {
-    lines.push(`ClawPack size: ${install.clawpackSize} bytes`);
-  }
-  if (install.installedAt) {
-    lines.push(`Installed at: ${install.installedAt}`);
+  for (const [label, value] of [
+    ["Spec", install.spec],
+    ["Source path", install.sourcePath ? shortenHomePath(install.sourcePath) : undefined],
+    ["Install path", install.installPath ? shortenHomePath(install.installPath) : undefined],
+    ["Recorded version", install.version],
+    ["ClawHub package", install.clawhubPackage],
+    ["ClawHub channel", install.clawhubChannel],
+    ["Artifact kind", install.artifactKind],
+    ["Artifact format", install.artifactFormat],
+    ["Npm integrity", install.npmIntegrity],
+    ["Npm shasum", install.npmShasum],
+    ["Npm tarball", install.npmTarballName],
+    ["ClawPack sha256", install.clawpackSha256],
+    [
+      "ClawPack spec",
+      install.clawpackSpecVersion === undefined ? undefined : String(install.clawpackSpecVersion),
+    ],
+    ["ClawPack manifest sha256", install.clawpackManifestSha256],
+    [
+      "ClawPack size",
+      install.clawpackSize === undefined ? undefined : `${install.clawpackSize} bytes`,
+    ],
+    ["Installed at", install.installedAt],
+  ]) {
+    if (value) {
+      lines.push(`${label}: ${value}`);
+    }
   }
   return lines;
 }
@@ -138,7 +128,7 @@ export async function runPluginsInspectCommand(
 ): Promise<void> {
   const {
     buildAllPluginInspectReports,
-    buildPluginDiagnosticsReport,
+    withPluginDiagnosticsReportForInspection,
     buildPluginInspectReport,
     buildPluginSnapshotReport,
     formatPluginCompatibilityNotice,
@@ -167,59 +157,47 @@ export async function runPluginsInspectCommand(
     ...reportParams,
     runtimeInspection: true,
   };
+  let globalDiagnostics = "";
   if (opts.all) {
     if (id) {
       failPluginInspect("Pass either a plugin id or --all, not both.", opts.json);
       return;
     }
-    const report = runtimeInspect
-      ? tracePluginLifecyclePhase(
-          "runtime plugin registry load",
-          () => buildPluginDiagnosticsReport(runtimeReportParams),
-          { command: "inspect", all: true },
-        )
-      : tracePluginLifecyclePhase(
-          "plugin registry snapshot",
-          () => buildPluginSnapshotReport(reportParams),
-          { command: "inspect", all: true },
-        );
-    writeGlobalPluginDiagnostics(report.diagnostics);
-    const inspectAll = buildAllPluginInspectReports({
-      config: cfg,
-      ...loggerParams,
-      report,
-    });
-    const inspectAllWithInstall = inspectAll.map((inspect) => ({
-      ...inspect,
-      install: resolveInstallRecord(inspect.plugin.id),
-    }));
-
-    if (opts.json) {
-      defaultRuntime.writeJson(inspectAllWithInstall);
-      return;
-    }
-
-    const tableWidth = getTerminalTableWidth();
-    const rows = inspectAll.map((inspect) => ({
-      Name: inspect.plugin.name || inspect.plugin.id,
-      ID: inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id ? inspect.plugin.id : "",
-      Status: formatPluginStatus(inspect.plugin, runtimeInspect),
-      Shape: inspect.shape,
-      Capabilities: formatCapabilityKinds(inspect.capabilities),
-      Compatibility:
-        inspect.compatibility.length > 0
-          ? inspect.compatibility
-              .map((entry) => (entry.severity === "warn" ? `warn:${entry.code}` : entry.code))
-              .join(", ")
-          : "none",
-      Bundle: inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
-      Hooks: formatHookSummary({
-        typedHookCount: inspect.typedHooks.length,
-        customHookCount: inspect.customHooks.length,
-      }),
-    }));
-    defaultRuntime.log(
-      renderTable({
+    const formatReport = (report: PluginStatusReport): string => {
+      globalDiagnostics = formatGlobalPluginDiagnostics(report.diagnostics);
+      const inspectAll = buildAllPluginInspectReports({
+        config: cfg,
+        ...loggerParams,
+        report,
+      });
+      if (opts.json) {
+        const inspectAllWithInstall = inspectAll.map((inspect) => ({
+          ...inspect,
+          install: resolveInstallRecord(inspect.plugin.id),
+        }));
+        return JSON.stringify(inspectAllWithInstall, null, 2);
+      }
+      const tableWidth = getTerminalTableWidth();
+      const rows = inspectAll.map((inspect) => ({
+        Name: inspect.plugin.name || inspect.plugin.id,
+        ID:
+          inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id ? inspect.plugin.id : "",
+        Status: formatPluginStatus(inspect.plugin, runtimeInspect),
+        Shape: inspect.shape,
+        Capabilities: formatCapabilityKinds(inspect.capabilities),
+        Compatibility:
+          inspect.compatibility.length > 0
+            ? inspect.compatibility
+                .map((entry) => (entry.severity === "warn" ? `warn:${entry.code}` : entry.code))
+                .join(", ")
+            : "none",
+        Bundle: inspect.bundleCapabilities.length > 0 ? inspect.bundleCapabilities.join(", ") : "-",
+        Hooks: formatHookSummary({
+          typedHookCount: inspect.typedHooks.length,
+          customHookCount: inspect.customHooks.length,
+        }),
+      }));
+      return renderTable({
         width: tableWidth,
         columns: [
           { key: "Name", header: "Name", minWidth: 14, flex: true },
@@ -232,8 +210,27 @@ export async function runPluginsInspectCommand(
           { key: "Hooks", header: "Hooks", minWidth: 20, flex: true },
         ],
         rows,
-      }).trimEnd(),
-    );
+      }).trimEnd();
+    };
+    const output = runtimeInspect
+      ? await tracePluginLifecyclePhaseAsync(
+          "runtime plugin registry load",
+          () => withPluginDiagnosticsReportForInspection(runtimeReportParams, formatReport),
+          { command: "inspect", all: true },
+        )
+      : formatReport(
+          tracePluginLifecyclePhase(
+            "plugin registry snapshot",
+            () => buildPluginSnapshotReport(reportParams),
+            { command: "inspect", all: true },
+          ),
+        );
+    process.stderr.write(globalDiagnostics);
+    if (opts.json) {
+      defaultRuntime.writeStdout(output);
+    } else {
+      defaultRuntime.log(output);
+    }
     return;
   }
 
@@ -251,7 +248,7 @@ export async function runPluginsInspectCommand(
     snapshotReport.plugins.find((entry) => entry.id === id) ??
     snapshotReport.plugins.find((entry) => entry.name === id);
   if (!targetPlugin) {
-    writeGlobalPluginDiagnostics(snapshotReport.diagnostics);
+    process.stderr.write(formatGlobalPluginDiagnostics(snapshotReport.diagnostics));
     if (id === "skill-workshop") {
       const { detectSkillWorkshopToolPolicyDiagnostic } =
         await import("../skills/workshop/tool-policy-diagnostic.js");
@@ -278,39 +275,58 @@ export async function runPluginsInspectCommand(
     failPluginInspect(formatMissingPluginMessage({ id, includeSearch: true }), opts.json);
     return;
   }
-  const report = runtimeInspect
-    ? tracePluginLifecyclePhase(
+  const formatReport = (report: PluginStatusReport): string | undefined => {
+    globalDiagnostics = formatGlobalPluginDiagnostics(report.diagnostics);
+    const inspect = buildPluginInspectReport({
+      id: targetPlugin.id,
+      config: cfg,
+      ...loggerParams,
+      report,
+    });
+    if (inspect) {
+      return formatPluginInspection(
+        inspect,
+        resolveInstallRecord(inspect.plugin.id),
+        opts,
+        formatPluginCompatibilityNotice,
+      );
+    }
+    return undefined;
+  };
+  const output = runtimeInspect
+    ? await tracePluginLifecyclePhaseAsync(
         "runtime plugin registry load",
         () =>
-          buildPluginDiagnosticsReport({
-            ...runtimeReportParams,
-            onlyPluginIds: [targetPlugin.id],
-          }),
+          withPluginDiagnosticsReportForInspection(
+            { ...runtimeReportParams, onlyPluginIds: [targetPlugin.id] },
+            formatReport,
+          ),
         { command: "inspect", pluginId: targetPlugin.id },
       )
-    : snapshotReport;
-  writeGlobalPluginDiagnostics(report.diagnostics);
-  const inspect = buildPluginInspectReport({
-    id: targetPlugin.id,
-    config: cfg,
-    ...loggerParams,
-    report,
-  });
-  if (!inspect) {
+    : formatReport(snapshotReport);
+  process.stderr.write(globalDiagnostics);
+  if (output === undefined) {
     failPluginInspect(
       formatMissingPluginMessage({ id, listCommand: "openclaw plugins list --json" }),
       opts.json,
     );
-    return;
+  } else if (opts.json) {
+    defaultRuntime.writeStdout(output);
+  } else {
+    defaultRuntime.log(output);
   }
-  const install = resolveInstallRecord(inspect.plugin.id);
+}
+
+function formatPluginInspection(
+  inspect: PluginInspectReport,
+  install: PluginInstallRecord | undefined,
+  opts: PluginInspectOptions,
+  formatPluginCompatibilityNotice: (notice: PluginCompatibilityNotice) => string,
+): string {
+  const runtimeInspect = opts.runtime === true;
 
   if (opts.json) {
-    defaultRuntime.writeJson({
-      ...inspect,
-      install,
-    });
-    return;
+    return JSON.stringify({ ...inspect, install }, null, 2);
   }
 
   const lines: string[] = [];
@@ -335,7 +351,7 @@ export async function runPluginsInspectCommand(
       `${theme.muted("Bundle format:")} ${formatPluginBundleFormat(inspect.plugin.bundleFormat)}`,
     );
   }
-  lines.push(`${theme.muted("Source:")} ${shortenHomeInString(inspect.plugin.source)}`);
+  lines.push(`${theme.muted("Source:")} ${shortenHomePath(inspect.plugin.source)}`);
   lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
   if (inspect.plugin.trust) {
     lines.push(`${theme.muted("Trust:")} ${formatPluginTrustDiagnostic(inspect.plugin.trust)}`);
@@ -441,5 +457,5 @@ export async function runPluginsInspectCommand(
       inspect.plugin.status === "error" ? theme.error("Error:") : theme.muted("Reason:");
     lines.push("", `${label} ${inspect.plugin.error}`);
   }
-  defaultRuntime.log(lines.join("\n"));
+  return lines.join("\n");
 }

@@ -77,7 +77,6 @@ type ApprovalPushSender = (params: {
 }) => Promise<ApprovalPushSendResult>;
 
 type ApprovalRequestLike = { id: string };
-type ApprovalResolvedLike = { id: string };
 
 type ApprovalPushDriver<TRequest extends ApprovalRequestLike> = {
   approvalKind: ChannelApprovalKind;
@@ -98,6 +97,12 @@ type ApprovalPushDriver<TRequest extends ApprovalRequestLike> = {
 function isIosPlatform(platform: string | undefined): boolean {
   const normalized = normalizeOptionalLowercaseString(platform) ?? "";
   return normalized.startsWith("ios") || normalized.startsWith("ipados");
+}
+
+function approvalPushTransport(target: DeliveryTarget, plan: DeliveryPlan) {
+  return target.registration.transport === "direct"
+    ? { nodeId: target.nodeId, registration: target.registration, auth: plan.directAuth! }
+    : { nodeId: target.nodeId, registration: target.registration, relayConfig: plan.relayConfig! };
 }
 
 function resolveActiveOperatorToken(device: PairedDevice): DeviceAuthToken | null {
@@ -451,7 +456,7 @@ function createApprovalIosPushDelivery<TRequest extends ApprovalRequestLike>(par
     },
 
     /** Sends cleanup wakes for resolved approval requests. */
-    async handleResolved(resolved: ApprovalResolvedLike): Promise<void> {
+    async handleResolved(resolved: ApprovalRequestLike): Promise<void> {
       await sendCleanupPushForApproval(resolved.id);
     },
 
@@ -469,37 +474,17 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
     driver: {
       approvalKind: "exec",
       sendRequested: async ({ request, target, plan, gatewayDeviceId }) =>
-        target.registration.transport === "direct"
-          ? await sendApnsExecApprovalAlert({
-              registration: target.registration,
-              nodeId: target.nodeId,
-              approvalId: request.id,
-              gatewayDeviceId,
-              auth: plan.directAuth!,
-            })
-          : await sendApnsExecApprovalAlert({
-              registration: target.registration,
-              nodeId: target.nodeId,
-              approvalId: request.id,
-              gatewayDeviceId,
-              relayConfig: plan.relayConfig!,
-            }),
+        await sendApnsExecApprovalAlert({
+          ...approvalPushTransport(target, plan),
+          approvalId: request.id,
+          gatewayDeviceId,
+        }),
       sendResolved: async ({ approvalId, target, plan, gatewayDeviceId }) =>
-        target.registration.transport === "direct"
-          ? await sendApnsExecApprovalResolvedWake({
-              registration: target.registration,
-              nodeId: target.nodeId,
-              approvalId,
-              gatewayDeviceId,
-              auth: plan.directAuth!,
-            })
-          : await sendApnsExecApprovalResolvedWake({
-              registration: target.registration,
-              nodeId: target.nodeId,
-              approvalId,
-              gatewayDeviceId,
-              relayConfig: plan.relayConfig!,
-            }),
+        await sendApnsExecApprovalResolvedWake({
+          ...approvalPushTransport(target, plan),
+          approvalId,
+          gatewayDeviceId,
+        }),
     },
   });
 }
@@ -512,41 +497,19 @@ export function createPluginApprovalIosPushDelivery(params: { log: GatewayLikeLo
       approvalKind: "plugin",
       sendRequested: async ({ request, target, plan, gatewayDeviceId }) =>
         // Keep reviewer-only detail out of size-constrained lock-screen push payloads.
-        target.registration.transport === "direct"
-          ? await sendApnsPluginApprovalAlert({
-              registration: target.registration,
-              nodeId: target.nodeId,
-              approvalId: request.id,
-              gatewayDeviceId,
-              title: request.request.title,
-              description: request.request.description,
-              auth: plan.directAuth!,
-            })
-          : await sendApnsPluginApprovalAlert({
-              registration: target.registration,
-              nodeId: target.nodeId,
-              approvalId: request.id,
-              gatewayDeviceId,
-              title: request.request.title,
-              description: request.request.description,
-              relayConfig: plan.relayConfig!,
-            }),
+        await sendApnsPluginApprovalAlert({
+          ...approvalPushTransport(target, plan),
+          approvalId: request.id,
+          gatewayDeviceId,
+          title: request.request.title,
+          description: request.request.description,
+        }),
       sendResolved: async ({ approvalId, target, plan, gatewayDeviceId }) =>
-        target.registration.transport === "direct"
-          ? await sendApnsPluginApprovalResolvedWake({
-              registration: target.registration,
-              nodeId: target.nodeId,
-              approvalId,
-              gatewayDeviceId,
-              auth: plan.directAuth!,
-            })
-          : await sendApnsPluginApprovalResolvedWake({
-              registration: target.registration,
-              nodeId: target.nodeId,
-              approvalId,
-              gatewayDeviceId,
-              relayConfig: plan.relayConfig!,
-            }),
+        await sendApnsPluginApprovalResolvedWake({
+          ...approvalPushTransport(target, plan),
+          approvalId,
+          gatewayDeviceId,
+        }),
     },
   });
 }

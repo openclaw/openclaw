@@ -4,7 +4,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "ui.seamColor":
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
   "ui.prefs.accent":
-    "User-selected Control UI accent color in #RRGGBB format. Overrides ui.seamColor; clear it to restore the configured seam color or theme default.",
+    "Control UI accent: #RRGGBB for a custom color, or 'theme' for the selected theme’s palette. Overrides ui.seamColor; clear it to inherit the configured seam color or theme default.",
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
@@ -37,7 +37,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.entries.*.hooks.allowConversationAccess":
     "Controls whether this plugin may read raw conversation content from typed hooks such as `before_agent_run`, `before_model_resolve`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
   "plugins.entries.*.hooks.timeoutMs":
-    "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. Use this to bound slow plugin hooks without changing plugin code; per-hook values in hooks.timeouts take precedence.",
+    "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. When unset, each hook uses the plugin's declared timeout or the Gateway's per-hook policy; there is no single fixed default. Per-hook values in hooks.timeouts take precedence.",
   "plugins.entries.*.hooks.timeouts":
     "Per-hook timeout overrides in milliseconds keyed by typed hook name, capped at 600000. Use narrow overrides for known slow hooks such as before_prompt_build or agent_end instead of raising every hook timeout.",
   "plugins.entries.*.subagent":
@@ -69,10 +69,22 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.embeddedAgent.cyberFailover":
+    "Automatic Daybreak escalation for replay-safe OpenAI cyber-policy refusals in the embedded runtime.",
+  "agents.defaults.embeddedAgent.cyberFailover.mode":
+    'Enable automatic escalation ("auto", default) or keep provider refusals terminal ("off").',
+  "agents.defaults.embeddedAgent.cyberFailover.model":
+    "Provider/model target used for automatic cyber-policy escalation.",
+  "agents.defaults.embeddedAgent.cyberFailover.cooloffMs":
+    "How long an unavailable escalation target is skipped for the current session.",
   "agents.defaults.utilityModel":
     "Optional lower-cost model (provider/model or alias) for short internal tasks such as generated titles and progress narration. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
   "agents.entries.*.utilityModel":
     "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
+  "agents.defaults.decisionModel":
+    "Optional provider/model for typed choices, scores, and boolean probabilities. Unset or empty disables decision calls. Supporting plugins send bounded task evidence to this provider; chat and utility models are unchanged.",
+  "agents.entries.*.decisionModel":
+    "Per-agent decision model. Unset inherits agents.defaults.decisionModel; an empty string disables decision calls for this agent.",
   "agents.entries.*.models": "Per-agent model catalog overrides keyed by full provider/model IDs.",
   "agents.entries.*.modelPolicy":
     "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",
@@ -204,7 +216,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
   "commands.restart":
-    "Allow /restart, /update, and external SIGUSR1 restart requests (default: true).",
+    "Allow /restart, /update, and external SIGUSR2 restart requests (default: true).",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-scoped commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
   "commands.allowFrom":

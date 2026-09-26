@@ -6,17 +6,18 @@
  */
 import path from "node:path";
 import { Type } from "typebox";
+import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   isSystemAgentNavigationOperation,
   type SystemAgentNavigationOperation,
 } from "../../system-agent/operation-types.js";
-import { assertConfigWriteDoesNotBypassInferenceVerification } from "../../system-agent/operations-execution-helpers.js";
 import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
   SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF,
   SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
+  secretStoreNameForConfigPath,
   type SystemAgentOperation,
 } from "../../system-agent/operations.js";
 import {
@@ -24,6 +25,7 @@ import {
   type SystemAgentProposalRef,
 } from "../../system-agent/operator-approval.js";
 import { validateSystemAgentPluginInstallSpec } from "../../system-agent/plugin-install-spec.js";
+import { listAgentRoles } from "../agent-roles.js";
 import { stringEnum } from "../schema/typebox.js";
 import { textResult, ToolInputError, readToolStringParam, type AnyAgentTool } from "./common.js";
 
@@ -166,8 +168,10 @@ const SYSTEM_AGENT_TOOL_ACTIONS = [
   "setup",
   "set_default_model",
   "config_set",
+  "config_unset",
   "config_set_ref",
   "create_agent",
+  "create_team",
   "gateway_start",
   "gateway_stop",
   "gateway_restart",
@@ -181,7 +185,7 @@ const SystemAgentToolSchema = Type.Object({
   path: Type.Optional(
     Type.String({
       description:
-        "Config path for config_* actions; absolute packed archive path for plugin_activate_artifact",
+        "Dotted config key for config_* actions, e.g. gateway.port or agents.defaults.model; use . for the root schema. For plugin_activate_artifact only, an absolute archive file path.",
     }),
   ),
   sha256: Type.Optional(
@@ -191,11 +195,37 @@ const SystemAgentToolSchema = Type.Object({
     }),
   ),
   value: Type.Optional(Type.String({ description: "Value for config_set (JSON5 or string)" })),
-  envVar: Type.Optional(Type.String({ description: "Env var name for config_set_ref" })),
+  envVar: Type.Optional(
+    Type.String({ description: "Env var name for config_set_ref (instead of secret)" }),
+  ),
+  secret: Type.Optional(
+    Type.String({
+      description:
+        "For config_set_ref: an API key or token the user gave you. OpenClaw stores it in its secret store and points the config key at it.",
+    }),
+  ),
   model: Type.Optional(Type.String({ description: "provider/model ref" })),
   workspace: Type.Optional(Type.String({ description: "Workspace directory" })),
   agentId: Type.Optional(
     Type.String({ description: "Agent id for create_agent/open_agent/set_default_model" }),
+  ),
+  name: Type.Optional(
+    Type.String({ description: "Display name for create_agent, separate from agentId" }),
+  ),
+  purpose: Type.Optional(
+    Type.String({
+      description: "Operating purpose for a custom agent, saved in its workspace AGENTS.md",
+    }),
+  ),
+  role: Type.Optional(
+    stringEnum(listAgentRoles(), {
+      description: "Bundled role for create_agent; coordinator is the chief of staff",
+    }),
+  ),
+  coordinatorId: Type.Optional(Type.String({ description: "Chief of staff id for create_team" })),
+  prefix: Type.Optional(Type.String({ description: "Prefix for every create_team member id" })),
+  workspaceRoot: Type.Optional(
+    Type.String({ description: "Parent directory for separate create_team workspaces" }),
   ),
   channel: Type.Optional(
     Type.String({
@@ -369,28 +399,69 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       };
     }
     case "create_agent": {
+      const role = listAgentRoles().find((candidate) => candidate === params.role);
+      if (params.role !== undefined && !role) {
+        throw new ToolInputError(`openclaw: unknown role; choose ${listAgentRoles().join(", ")}`);
+      }
       const workspace = readToolStringParam(params, "workspace")?.trim();
+      const name = readToolStringParam(params, "name")?.trim();
+      const purpose = readToolStringParam(params, "purpose")?.trim();
       const model = readToolStringParam(params, "model")?.trim();
       return {
         kind: "create-agent",
         agentId: requireParam(params, "agentId"),
+        ...(name ? { name } : {}),
+        ...(purpose ? { purpose } : {}),
+        ...(role ? { role } : {}),
         ...(workspace ? { workspace } : {}),
         ...(model ? { model } : {}),
       };
     }
+    case "create_team": {
+      const coordinatorId = readToolStringParam(params, "coordinatorId")?.trim();
+      const prefix = readToolStringParam(params, "prefix")?.trim();
+      const workspaceRoot = readToolStringParam(params, "workspaceRoot")?.trim();
+      return {
+        kind: "create-team",
+        ...(coordinatorId ? { coordinatorId } : {}),
+        ...(prefix ? { prefix } : {}),
+        ...(workspaceRoot ? { workspaceRoot } : {}),
+      };
+    }
+    case "config_unset":
+      return { kind: "config-unset", path: requireParam(params, "path") };
     case "config_set":
       return {
         kind: "config-set",
         path: requireParam(params, "path"),
         value: requireParam(params, "value"),
       };
-    case "config_set_ref":
+    case "config_set_ref": {
+      const configPath = requireParam(params, "path");
+      const secret = readToolStringParam(params, "secret", { trim: false });
+      if (!secret?.trim()) {
+        return {
+          kind: "config-set-ref",
+          path: configPath,
+          source: "env",
+          id: requireParam(params, "envVar"),
+        };
+      }
+      // Before the proposal exists anywhere, so plans, logs, and transcripts mask it.
+      registerSecretValueForRedaction(secret);
+      if (readToolStringParam(params, "envVar")) {
+        throw new ToolInputError(
+          "openclaw: config_set_ref accepts either secret or envVar, not both",
+        );
+      }
       return {
         kind: "config-set-ref",
-        path: requireParam(params, "path"),
-        source: "env",
-        id: requireParam(params, "envVar"),
+        path: configPath,
+        source: "store",
+        id: secretStoreNameForConfigPath(configPath),
+        secret,
       };
+    }
     default:
       throw new ToolInputError(`openclaw: unknown action "${action}"`);
   }
@@ -406,12 +477,12 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
     description: [
       "System agent. Setup, config, channels, plugins, agents, repair.",
       "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_list, plugin_search, validate_config, doctor, audit.",
-      "Handoff: connect_channel, configure_skills, configure_search, configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent.",
-      "Personal model accounts: manage_model_accounts opens the human-owned account controls; no change is made by the handoff. Shared provider/auth setup: exit; run `openclaw onboard`. Never request credentials.",
-      "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_set_ref, create_agent, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
+      "Handoff: connect_channel, configure_skills, configure_search (web search), configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent. These open interactive setup flows.",
+      "Model providers: configure_model_provider returns Settings → Models sign-in guidance for provider accounts and OAuth. Personal accounts: manage_model_accounts opens the account controls.",
+      "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_unset, config_set_ref, create_agent (optional role), create_team, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
       "plugin_install: ClawHub/bundled/official only. Arbitrary source: exit, trusted shell.",
       "plugin_activate_artifact: for a task-authored plugin built with openclaw plugins pack, pass its absolute archive path and sha256. Copies and reviews exact bytes before proposing; approval includes trusted backend code, declared capabilities, and native UI. No dependency fetching. Backend activation requires Gateway restart. Native UI separately requires enabling Settings > Labs > Custom plugin UI, then Gateway restart and browser reload; artifact approval does not enable Labs.",
-      "Unknown config: config_schema first. Secrets: config_set_ref env. No plaintext. No raw auth/models/env/secrets/$include, plugin install/load policy, default-route model/runtime/params, or agent identity/topology; use set_default_model / onboard.",
+      "Unknown config: config_schema first. Remove a setting with config_unset and path; setting null is not deletion. Config writes are proposed, approved, then checked by the canonical config validator and writer. Validation or write errors return to you; propose one correction for fresh approval. Config writes do not test whether a model route or API key works. API keys and tokens the user gives you: config_set_ref with path and secret saves the value in the secret store and points that key at it (for example models.providers.<id>.apiKey, memory.search.remote.apiKey, or a web search provider's apiKey); config_set_ref with envVar points it at an environment variable instead. Never echo secret values. Memory embeddings are memory.search.* (config_set), not web search. set_default_model is the shortcut for switching the primary model.",
       "No doctor repair. Writes validated, audited. Invalid config: fix now.",
     ].join(" "),
     parameters: SystemAgentToolSchema,
@@ -430,7 +501,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
         }
         if (directive.kind === "model-accounts") {
           return textResult(
-            `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host hands the user to personal model account controls. Nothing has changed yet. The user completes sign-in or selects a default there; never request, repeat, or put credentials in chat.`,
+            `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host hands the user to personal model account controls. Nothing has changed yet. The user completes sign-in or selects a default there.`,
             {},
           );
         }
@@ -446,7 +517,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
                   : directive.kind === "memory-import"
                     ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host chat now starts guided copy-only memory import with the user. Tell the user the detected local-agent memory choices come next; do not describe steps yourself.`
                     : directive.kind === "model-setup"
-                      ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the active inference route cannot be changed inside OpenClaw. Tell the user to exit OpenClaw and run \`openclaw onboard\`; do not ask for provider credentials here.`
+                      ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host returns protected Models sign-in guidance next. Nothing has changed; do not ask for provider credentials or describe steps yourself.`
                       : directive.kind === "open-tui"
                         ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`
                         : directive.target === "channels"
@@ -461,13 +532,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
       }
       const persistent = isPersistentSystemAgentOperation(operation);
       if (persistent) {
-        // Validate before approval-state reads: owner lookup can yield, and
-        // a rejected or cancelled operation must never become a proposal.
-        if (operation.kind === "config-set" || operation.kind === "config-set-ref") {
-          signal?.throwIfAborted();
-          await assertConfigWriteDoesNotBypassInferenceVerification(operation);
-          signal?.throwIfAborted();
-        }
+        signal?.throwIfAborted();
         const operationHash = hashSystemAgentOperation(operation);
         const armedForThisOperation =
           params.approved === true &&

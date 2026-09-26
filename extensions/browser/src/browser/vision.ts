@@ -5,8 +5,8 @@
 
 import { readFile } from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { saveMediaBuffer as SaveMediaBufferFn } from "openclaw/plugin-sdk/media-runtime";
 import type { describeImageFile as DescribeImageFileFn } from "openclaw/plugin-sdk/media-understanding-runtime";
-import type { saveMediaBuffer as SaveMediaBufferFn } from "../sdk-setup-tools.js";
 import type { normalizeBrowserScreenshot as NormalizeBrowserScreenshotFn } from "./screenshot.js";
 
 /** Default prompt for turning browser screenshots into text-only page context. */

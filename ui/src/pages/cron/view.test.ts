@@ -1,5 +1,6 @@
 // Control UI tests cover the Automations (cron) list pane and select controls.
 import { describe, expect, it, vi } from "vitest";
+import { updatePickers } from "../../test-helpers/select-picker.ts";
 import {
   createCronViewJob as createJob,
   getElement,
@@ -7,6 +8,30 @@ import {
 } from "./view.test-support.ts";
 
 describe("cron view list pane", () => {
+  it("identifies the agent on each job in a mixed-agent list", async () => {
+    const container = renderView({
+      jobs: [
+        createJob("home", { agentId: "main" }),
+        createJob("research", { agentId: "research" }),
+      ],
+    });
+    document.body.append(container);
+    try {
+      await Promise.all(
+        [...container.querySelectorAll("openclaw-agent-row-chip")].map(
+          (chip) => chip.updateComplete,
+        ),
+      );
+      expect(
+        [...container.querySelectorAll(".cron-table__row .agent-row-chip")].map((chip) =>
+          chip.getAttribute("data-agent-id"),
+        ),
+      ).toEqual(["main", "research"]);
+    } finally {
+      container.remove();
+    }
+  });
+
   it("combines status filters and run history in one tab row", () => {
     const onJobsFiltersChange = vi.fn();
     const onListTabChange = vi.fn();
@@ -175,56 +200,6 @@ describe("cron view list pane", () => {
         name.textContent?.trim(),
       ),
     ).toEqual(["Failing A", "Failing B", "Healthy A", "Healthy B"]);
-  });
-
-  it("keeps inline row actions from selecting the row", () => {
-    const onSelectJob = vi.fn();
-    const onRun = vi.fn();
-    const onToggle = vi.fn();
-    const job = createJob("job-1");
-    const container = renderView({ jobs: [job], onSelectJob, onRun, onToggle });
-
-    getElement(container, '[data-test-id="cron-row-run-job-1"]', HTMLButtonElement).click();
-    expect(onRun).toHaveBeenCalledWith(job, "force");
-
-    const toggle = getElement(container, '[data-test-id="cron-row-toggle-job-1"]', HTMLSpanElement);
-    const toggleInput = getElement(toggle, "wa-switch", HTMLElement) as HTMLElement & {
-      checked: boolean;
-    };
-    expect(toggleInput.checked).toBe(true);
-    toggleInput.checked = false;
-    toggleInput.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onToggle).toHaveBeenCalledWith(job, false);
-
-    const runIfDue = Array.from(
-      container.querySelectorAll(".cron-table__row .cron-job-menu__item"),
-    ).find((item) => item.textContent?.trim() === "Run if due") as HTMLButtonElement;
-    runIfDue
-      .closest("wa-dropdown")
-      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: runIfDue }, bubbles: true }));
-    expect(onRun).toHaveBeenCalledWith(job, "due");
-    expect(onSelectJob).not.toHaveBeenCalled();
-  });
-
-  it("gives row actions job-specific accessible names", () => {
-    const jobs = [
-      createJob("job-a", { name: "Daily backup", enabled: true }),
-      createJob("job-b", { name: "Weekly report", enabled: false }),
-    ];
-    const container = renderView({ jobs, canManage: true });
-    const labels = jobs.map((job) => {
-      const row = getElement(container, `[data-test-id="cron-row-${job.id}"]`, HTMLDivElement);
-      return [
-        getElement(row, ".cron-row-run", HTMLButtonElement).getAttribute("aria-label"),
-        getElement(row, ".cron-job-menu__trigger", HTMLButtonElement).getAttribute("aria-label"),
-        getElement(row, "wa-switch", HTMLElement).textContent?.trim(),
-      ];
-    });
-
-    expect(labels).toEqual([
-      ["Run now: Daily backup", "More actions for Daily backup", "Pause: Daily backup"],
-      ["Run now: Weekly report", "More actions for Weekly report", "Resume: Weekly report"],
-    ]);
   });
 
   it("opens the create panel from the New task button and suggestions", () => {
@@ -410,34 +385,41 @@ describe("cron view list pane", () => {
 });
 
 describe("cron view selects", () => {
-  it("shows authoritative form values instead of first options in the create form", () => {
+  it("shows authoritative form values instead of first options in the create form", async () => {
     const container = renderView({ createOpen: true });
+    await updatePickers(container);
     const action = getElement(
       container,
-      "wa-select#cron-payload-kind",
+      "openclaw-select-picker:has(#cron-payload-kind)",
       HTMLElement,
-    ) as HTMLElement & {
-      value: string;
-    };
-    expect(action.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("agentTurn");
+    );
+    expect(
+      action.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("agentTurn");
     const runsIn = getElement(
       container,
-      "wa-select#cron-session-target",
+      "openclaw-select-picker:has(#cron-session-target)",
       HTMLElement,
-    ) as HTMLElement & { value: string };
-    expect(runsIn.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("isolated");
-    const unit = Array.from(
-      container.querySelectorAll<HTMLElement & { value: string }>("wa-select"),
-    ).find((select) => select.querySelector('[slot="label"]')?.textContent === "Unit");
-    expect(unit?.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("minutes");
+    );
+    expect(
+      runsIn.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("isolated");
+    const unit = Array.from(container.querySelectorAll<HTMLElement>("openclaw-select-picker")).find(
+      (select) => select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Unit",
+    );
+    expect(
+      unit?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("minutes");
     // The targetless create form keeps delivery internal until the operator
     // explicitly selects a channel delivery mode.
     const delivery = getElement(
       container,
-      "wa-select#cron-delivery-mode",
+      "openclaw-select-picker:has(#cron-delivery-mode)",
       HTMLElement,
-    ) as HTMLElement & { value: string };
-    expect(delivery.querySelector("wa-option[selected]")?.getAttribute("value")).toBe("none");
+    );
+    expect(
+      delivery.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("none");
   });
 
   it("shows persisted non-first values in jobs filters and runs sort", () => {

@@ -8,6 +8,7 @@ import {
   type Request,
   type Result,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { connectMcpClient, disposeMcpClient } from "./mcp-client-lifecycle.js";
 import { isMcpRequestTimeoutError } from "./mcp-error.js";
 import { McpStdioFrameDecoder, McpStdioFrameError } from "./mcp-stdio-frame-decoder.js";
@@ -36,6 +37,7 @@ export type McpStdioClientParams = {
 
 export type McpStdioClient = {
   isAvailable(): boolean;
+  readonly cleanupResult?: ProcessCleanupResult;
   request(
     method: string,
     params: Record<string, unknown>,
@@ -54,6 +56,7 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
   let stopped = false;
   let failure: Error | undefined;
   let shutdown: Promise<void> | undefined;
+  let cleanupError: unknown;
   let inFlight = 0;
   let stderr = Buffer.alloc(0);
 
@@ -163,9 +166,12 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
       transport,
       transportType: "stdio",
       detachStderr: () => transport.stderr?.off("data", onStderr),
+      onCleanupError: (error) => {
+        cleanupError = error;
+      },
     }).then((outcome) => {
       if (outcome !== "closed") {
-        throw errors.unavailable("proxy cleanup could not be confirmed");
+        throw errors.unavailable("proxy cleanup could not be confirmed", cleanupError);
       }
     });
     void shutdown.catch(() => {});
@@ -223,6 +229,9 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
 
   return {
     isAvailable: () => available && !failure && !stopped,
+    get cleanupResult() {
+      return transport.cleanupResult;
+    },
     async request(method, requestParams, options) {
       await startup;
       return request(method, requestParams, options);

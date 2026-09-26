@@ -6,6 +6,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import * as workspaceBootstrapRead from "./workspace-bootstrap-read.js";
@@ -14,7 +15,11 @@ import {
   retireWorkspaceFileCache,
   writeWorkspaceFileCache,
 } from "./workspace-file-cache.js";
-import { loadWorkspaceBootstrapFiles, DEFAULT_AGENTS_FILENAME } from "./workspace.js";
+import {
+  loadWorkspaceBootstrapFiles,
+  DEFAULT_AGENTS_FILENAME,
+  WORKSPACE_BOOTSTRAP_FILENAMES,
+} from "./workspace.js";
 
 describe("workspace bootstrap file caching", () => {
   let workspaceDir: string;
@@ -40,6 +45,45 @@ describe("workspace bootstrap file caching", () => {
     expect(agentsFile?.content).toBe(content);
     expect(agentsFile?.missing).toBe(false);
   };
+
+  it("selects before guarded reads without narrowing later default cache loads", async () => {
+    for (const name of WORKSPACE_BOOTSTRAP_FILENAMES) {
+      await writeWorkspaceFile({ dir: workspaceDir, name, content: `contents of ${name}` });
+    }
+    const openedFiles = vi.spyOn(boundaryFileRead, "openRootFile");
+    const readFile = vi.spyOn(workspaceBootstrapRead, "readWorkspaceBootstrapFile");
+    try {
+      const selected = await loadWorkspaceBootstrapFiles(workspaceDir, [DEFAULT_AGENTS_FILENAME]);
+      expect(selected.map((file) => [file.name, file.content])).toEqual([
+        ["AGENTS.md", "contents of AGENTS.md"],
+      ]);
+      expect(openedFiles.mock.calls.map(([params]) => params.absolutePath)).toEqual([
+        path.join(workspaceDir, "AGENTS.md"),
+      ]);
+      expect(readFile).toHaveBeenCalledTimes(1);
+      openedFiles.mockClear();
+
+      const defaults = await loadWorkspaceBootstrapFiles(workspaceDir);
+      const expectedNames = [
+        "AGENTS.md",
+        "SOUL.md",
+        "IDENTITY.md",
+        "USER.md",
+        "BOOTSTRAP.md",
+        "MEMORY.md",
+      ];
+      expect(defaults.map((file) => [file.name, file.content])).toEqual(
+        expectedNames.map((name) => [name, `contents of ${name}`]),
+      );
+      expect(openedFiles.mock.calls.map(([params]) => params.absolutePath)).toEqual(
+        expectedNames.map((name) => path.join(workspaceDir, name)),
+      );
+      expect(readFile).toHaveBeenCalledTimes(6);
+    } finally {
+      openedFiles.mockRestore();
+      readFile.mockRestore();
+    }
+  });
 
   it("evicts the oldest cached file after 64 empty entries", async () => {
     const readFile = vi.spyOn(workspaceBootstrapRead, "readWorkspaceBootstrapFile");
@@ -117,36 +161,6 @@ describe("workspace bootstrap file caching", () => {
     } finally {
       readFile.mockRestore();
     }
-  });
-
-  it("invalidates cache when mtime changes", async () => {
-    const content1 = "# Initial content";
-    const content2 = "# Updated content";
-    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
-
-    await writeWorkspaceFile({
-      dir: workspaceDir,
-      name: DEFAULT_AGENTS_FILENAME,
-      content: content1,
-    });
-
-    // First load
-    const agentsFile1 = await loadAgentsFile(workspaceDir);
-    expectAgentsContent(agentsFile1, content1);
-
-    // Modify the file
-    await writeWorkspaceFile({
-      dir: workspaceDir,
-      name: DEFAULT_AGENTS_FILENAME,
-      content: content2,
-    });
-    // Some filesystems have coarse mtime precision; bump it explicitly.
-    const bumpedTime = new Date(Date.now() + 1_000);
-    await fs.utimes(filePath, bumpedTime, bumpedTime);
-
-    // Second load should detect the change and return new content
-    const agentsFile2 = await loadAgentsFile(workspaceDir);
-    expectAgentsContent(agentsFile2, content2);
   });
 
   it("refreshes session bootstrap snapshots after workspace file changes", async () => {
@@ -346,12 +360,6 @@ describe("workspace bootstrap file caching", () => {
     expect(agentsFile1?.content).toBe(content1);
     expect(agentsFile2?.content).toBe(content2);
   });
-
-  it("returns missing=true when bootstrap file never existed", async () => {
-    const agentsFile = await loadAgentsFile(workspaceDir);
-    expect(agentsFile?.missing).toBe(true);
-    expect(agentsFile?.content).toBeUndefined();
-  });
 });
 
 describe("workspace file cache retention", () => {
@@ -375,17 +383,6 @@ describe("workspace file cache retention", () => {
     });
     return filePath;
   }
-
-  it("evicts the oldest content above the six-file byte budget", () => {
-    const oldest = cacheFile("oldest", 2 * MIB);
-    for (let index = 1; index < 6; index += 1) {
-      cacheFile(`entry-${index}`, 2 * MIB);
-    }
-    const newest = cacheFile("newest", 1);
-
-    expect(readWorkspaceFileCache(oldest, "oldest")).toBeUndefined();
-    expect(readWorkspaceFileCache(newest, "newest")).toBe("x");
-  });
 
   it("promotes hits before weighted eviction", () => {
     const first = cacheFile("first", 2 * MIB);

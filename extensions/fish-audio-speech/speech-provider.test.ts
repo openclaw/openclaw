@@ -45,22 +45,42 @@ describe("Fish Audio speech provider", () => {
     expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 1_000 })).toBe(true);
   });
 
+  it("preserves Talk setting precedence and explicit blank-key clearing", () => {
+    const provider = buildFishAudioSpeechProvider();
+    const params = {
+      modelId: " ",
+      model: "s1",
+      speakerVoiceId: " voice-123 ",
+      voiceId: "other",
+      speed: 1.2,
+    };
+    const talk = provider.resolveTalkConfig?.({
+      cfg: {},
+      baseTtsConfig: { providers: { "fish-audio": { apiKey: "base-key", model: "s2-pro" } } },
+      talkProviderConfig: { ...params, apiKey: " ", baseUrl: " " },
+      timeoutMs: 1000,
+    });
+    expect(talk).toMatchObject({
+      apiKey: undefined,
+      baseUrl: "https://api.fish.audio",
+      model: "s2-pro",
+      referenceId: "voice-123",
+      speed: 1.2,
+    });
+    expect(provider.resolveTalkOverrides?.({ talkProviderConfig: {}, params })).toStrictEqual({
+      referenceId: "voice-123",
+      speed: 1.2,
+    });
+  });
+
   it("maps hosted synthesis and preserves Fish expression tags", async () => {
     globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
       expect(url).toBe("https://api.fish.audio/v1/tts");
       expect(new Headers(init?.headers).get("model")).toBe("s2.1-pro");
       expect(new Headers(init?.headers).get("authorization")).toBe("Bearer fish-test");
-      expect(requestBody(init)).toEqual({
-        text: "[whisper] Keep this quiet. [excited] Now celebrate!",
-        format: "mp3",
-        reference_id: "voice-123",
-        sample_rate: 44100,
-        latency: "normal",
-        prosody: { speed: 1.1 },
-        temperature: 0.6,
-        top_p: 0.8,
-        normalize: false,
-      });
+      expect(init?.body).toBe(
+        '{"text":"[whisper] Keep this quiet. [excited] Now celebrate!","format":"mp3","reference_id":"voice-123","sample_rate":44100,"latency":"normal","prosody":{"speed":1.1},"temperature":0.6,"top_p":0.8,"normalize":false}',
+      );
       return new Response(new Uint8Array([1, 2, 3]), {
         headers: { "content-type": "audio/mpeg" },
       });
@@ -157,7 +177,12 @@ describe("Fish Audio speech provider", () => {
       return Response.json({
         items: [
           { _id: "own-0", title: "Duplicate" },
-          { _id: "public-1", title: "Public", languages: ["en"], tags: ["warm"] },
+          {
+            _id: "public-1",
+            title: "Public",
+            languages: [null, " en ", "", 1],
+            tags: [" warm ", false, " ", "warm"],
+          },
         ],
       });
     }) as unknown as typeof fetch;
@@ -167,7 +192,11 @@ describe("Fish Audio speech provider", () => {
       timeoutMs: 9_000,
     });
     expect(voices).toHaveLength(102);
-    expect(voices?.at(-1)).toMatchObject({ id: "public-1", locale: "en", personalities: ["warm"] });
+    expect(voices?.at(-1)).toMatchObject({
+      id: "public-1",
+      locale: "en",
+      personalities: ["warm", "warm"],
+    });
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(3);
   });
 
@@ -187,5 +216,32 @@ describe("Fish Audio speech provider", () => {
       }),
     ).rejects.toThrow("Fish Audio API key missing");
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { key: "temperature", value: "0", overrides: { temperature: 0 } },
+    { key: "fish_temperature", value: "-0", overrides: { temperature: -0 } },
+    { key: "top_p", value: "0", overrides: { topP: 0 } },
+    { key: "topp", value: "1", overrides: { topP: 1 } },
+    { key: "speed", value: "0.5", overrides: { speed: 0.5 } },
+    { key: "fish_speed", value: "2", overrides: { speed: 2 } },
+  ])("accepts the $key=$value directive boundary", ({ key, value, overrides }) => {
+    const provider = buildFishAudioSpeechProvider();
+    expect(
+      provider.parseDirectiveToken?.({
+        key,
+        value,
+        policy: {
+          enabled: true,
+          allowText: true,
+          allowProvider: true,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        },
+      }),
+    ).toEqual({ handled: true, overrides });
   });
 });

@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
@@ -8,59 +9,41 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
-import {
-  hasInterSessionUserProvenance,
-  isCompletionReportInputProvenance,
-} from "../../sessions/input-provenance.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
-import { isAnnounceRunId } from "../announce-idempotency.js";
+import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
 import {
   getTranscriptMessageRole as getMessageRole,
   isTerminalSilentAssistantMessage,
   readTerminalSourceReplyDeliveryMirror,
 } from "../embedded-agent-runner/message-visibility.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
+import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
 import { isRestartAbortTailArtifact } from "./main-session-restart-recovery-resume-policy.js";
 import {
   mainSessionRecoveryLog,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 
-export function hasOnlyAnnounceRecoveryRuns(entry: SessionEntry): boolean {
-  const runs = entry.restartRecoveryRuns;
-  return Boolean(runs?.length && runs.every((run) => isAnnounceRunId(run.runId)));
-}
-
-export function hasCompletionReportUserTail(messages: readonly unknown[]): boolean {
-  const message = messages.findLast((candidate) => getMessageRole(candidate) === "user");
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const userMessage = message as { role?: unknown; provenance?: unknown };
-  return (
-    hasInterSessionUserProvenance(userMessage) &&
-    isCompletionReportInputProvenance(userMessage.provenance)
-  );
-}
-
-export async function reconcileInterruptedCompletionReport(params: {
-  entry: SessionEntry;
-  source: "announce_runs" | "transcript";
-  storePath: string;
-  sessionKey: string;
-}): Promise<{ outcome: "reconciled" } | { outcome: "changed"; entry: SessionEntry | null }> {
+export async function reconcileInvalidHarnessCompletion(
+  params: MainSessionRecoveryStoreTarget & {
+    entry: SessionEntry;
+  },
+): Promise<{ outcome: "reconciled" } | { outcome: "changed"; entry: SessionEntry | null }> {
   let didReconcile = false;
   const current = await updateSessionEntry(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
+    params,
     (entry) => {
-      const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
-      const stillMatchesSource =
-        params.source === "announce_runs" ? hasOnlyAnnounceRecoveryRuns(entry) : !hasRecoveryRuns;
+      const claim = entry.restartRecoveryHarnessCompletion;
       if (
         entry.sessionId !== params.entry.sessionId ||
         entry.status !== "running" ||
         entry.abortedLastRun !== true ||
-        !stillMatchesSource
+        !claim ||
+        claim.taskId !== params.entry.restartRecoveryHarnessCompletion?.taskId ||
+        entry.restartRecoveryDeliveryRunId !== params.entry.restartRecoveryDeliveryRunId ||
+        entry.restartRecoveryDeliverySourceRunId !==
+          params.entry.restartRecoveryDeliverySourceRunId ||
+        getOwedHarnessCompletionTask(claim, entry)
       ) {
         return null;
       }
@@ -84,7 +67,7 @@ export async function reconcileInterruptedCompletionReport(params: {
   );
   if (didReconcile) {
     mainSessionRecoveryLog.info(
-      `reconciled interrupted completion report to non-running: ${params.sessionKey}`,
+      `retired invalid harness completion recovery: ${params.sessionKey}`,
     );
     return { outcome: "reconciled" };
   }
@@ -152,6 +135,20 @@ function readToolCallId(message: Record<string, unknown>): string | undefined {
     .find(Boolean);
 }
 
+function readAssistantToolCalls(message: unknown): Record<string, unknown>[] | undefined {
+  const content = asOptionalObjectRecord(message)?.content;
+  if (getMessageRole(message) !== "assistant" || !Array.isArray(content)) {
+    return undefined;
+  }
+  return content.flatMap((block) => {
+    const record = asOptionalObjectRecord(block);
+    const type = normalizeOptionalString(record?.type);
+    return record && (type === "toolCall" || type === "toolUse" || type === "tool_use")
+      ? [record]
+      : [];
+  });
+}
+
 function findMessageToolCallIndexInSourceTurn(params: {
   messages: readonly unknown[];
   sourceTurnRange: { startIndex: number; endIndex: number };
@@ -162,52 +159,16 @@ function findMessageToolCallIndexInSourceTurn(params: {
     index > params.sourceTurnRange.startIndex;
     index -= 1
   ) {
-    const message = params.messages[index];
-    if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
-      continue;
-    }
-    const content = (message as { content?: unknown }).content;
-    if (!Array.isArray(content)) {
-      continue;
-    }
-    const matched = content.some((block) => {
-      if (!block || typeof block !== "object") {
-        return false;
-      }
-      const record = block as Record<string, unknown>;
-      const type = normalizeOptionalString(record.type);
-      return (
-        (type === "toolCall" || type === "toolUse" || type === "tool_use") &&
-        normalizeOptionalString(record.id) === params.toolCallId &&
-        normalizeOptionalString(record.name) === "message"
-      );
-    });
+    const matched = readAssistantToolCalls(params.messages[index])?.some(
+      (block) =>
+        normalizeOptionalString(block.id) === params.toolCallId &&
+        normalizeOptionalString(block.name) === "message",
+    );
     if (matched) {
       return index;
     }
   }
   return undefined;
-}
-
-function hasSiblingAssistantToolCalls(message: unknown): boolean {
-  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
-    return true;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return true;
-  }
-  let toolCallCount = 0;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const type = normalizeOptionalString((block as { type?: unknown }).type);
-    if (type === "toolCall" || type === "toolUse" || type === "tool_use") {
-      toolCallCount += 1;
-    }
-  }
-  return toolCallCount !== 1;
 }
 
 function isSuccessfulMessageToolResult(message: unknown, toolCallId: string): boolean {
@@ -387,7 +348,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   }
   if (
     messageToolCallIndex !== undefined &&
-    hasSiblingAssistantToolCalls(params.messages[messageToolCallIndex])
+    readAssistantToolCalls(params.messages[messageToolCallIndex])?.length !== 1
   ) {
     return {
       outcome: "unsafe-transcript",
@@ -475,6 +436,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     return { outcome: completed ? "completed" : "changed" };
   }
   const marked = await applySessionEntryReplacements({
+    agentId: params.agentId,
     sessionKeys: [params.sessionKey],
     storePath: params.storePath,
     update: (entries) => {

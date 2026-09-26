@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const CODEX_SUITE_PREFIX = "live-codex-harness";
 const GENERIC_CODEX_SUITE = "live-codex-harness-docker";
@@ -19,11 +20,15 @@ function appendLine(file, line) {
   appendFileSync(file, `${line}\n`, "utf8");
 }
 
-function readTargetModelIds(targetRoot) {
-  const catalogPath = path.join(targetRoot, "extensions/codex/provider-catalog.ts");
-  if (!existsSync(catalogPath)) {
-    const harnessPath = path.join(targetRoot, "scripts/test-live-codex-harness-docker.sh");
-    const source = readFileSync(harnessPath, "utf8");
+function readTargetModelIds(readSource) {
+  const catalogPath = "extensions/codex/provider-catalog.ts";
+  const catalog = readSource(catalogPath);
+  if (catalog === null) {
+    const harnessPath = "scripts/test-live-codex-harness-docker.sh";
+    const source = readSource(harnessPath);
+    if (source === null) {
+      throw new Error(`missing frozen Codex harness: ${harnessPath}`);
+    }
     const defaults = new Set(
       [...source.matchAll(/\$\{OPENCLAW_LIVE_CODEX_HARNESS_MODEL:-[^/}]+\/([^}\s]+)\}/gu)].map(
         (match) => match[1],
@@ -36,7 +41,7 @@ function readTargetModelIds(targetRoot) {
     // lanes need the explicit cohort declaration from the historical catalog.
     return { modelIds: new Set(defaults), supportsGpt56Cohort: false };
   }
-  const source = readFileSync(catalogPath, "utf8");
+  const source = catalog;
   const start = source.indexOf("export const FALLBACK_CODEX_MODELS = [");
   const end = source.indexOf("] satisfies", start);
   if (start < 0 || end < 0) {
@@ -53,8 +58,8 @@ function readTargetModelIds(targetRoot) {
   return { modelIds, supportsGpt56Cohort: hasSol && hasLuna };
 }
 
-function resolveFrozenCodexCompatibility({ suiteId, targetRoot }) {
-  const { modelIds, supportsGpt56Cohort } = readTargetModelIds(targetRoot);
+export function resolveFrozenCodexCompatibility({ suiteId, readSource }) {
+  const { modelIds, supportsGpt56Cohort } = readTargetModelIds(readSource);
 
   if (suiteId === GENERIC_CODEX_SUITE) {
     const model = modelIds.has("gpt-5.6-luna")
@@ -89,9 +94,13 @@ function main() {
     return;
   }
 
+  const targetRoot = requireEnv("OPENCLAW_FROZEN_TARGET_ROOT");
   const result = resolveFrozenCodexCompatibility({
     suiteId,
-    targetRoot: requireEnv("OPENCLAW_FROZEN_TARGET_ROOT"),
+    readSource: (relativePath) => {
+      const file = path.join(targetRoot, relativePath);
+      return existsSync(file) ? readFileSync(file, "utf8") : null;
+    },
   });
   appendLine(outputFile, `run_lane=${result.runLane}`);
 
@@ -111,9 +120,21 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+let invokedAsMain = false;
+if (process.argv[1]) {
+  try {
+    invokedAsMain =
+      realpathSync.native(fileURLToPath(import.meta.url)) === realpathSync.native(process.argv[1]);
+  } catch {
+    // Inline and stdin importers need not have a filesystem entrypoint.
+  }
+}
+
+if (invokedAsMain) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }

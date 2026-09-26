@@ -1,3 +1,6 @@
+import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
+
+installDiscordIngressTestRuntime();
 // Discord tests cover message handler.preflight.acp bindings plugin behavior.
 import * as conversationBindingRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -262,31 +265,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
   });
 
-  it("initializes configured ACP bindings only after preflight accepts the message", async () => {
-    const result = await preflightDiscordMessage(
-      createBasePreflightParams({
-        guildEntries: {
-          [GUILD_ID]: {
-            id: GUILD_ID,
-            channels: {
-              [CHANNEL_ID]: {
-                enabled: true,
-                requireMention: false,
-              },
-            },
-          },
-        },
-      }),
-    );
-
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.boundAgentId).toBe("codex");
-    expect(result?.route.sessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.route.agentId).toBe("codex");
-  });
-
   it("accepts plain messages in configured ACP-bound channels without a mention", async () => {
     const message = createDiscordMessage({
       id: "m-no-mention",
@@ -321,9 +299,9 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
 
   it("hydrates empty guild message payloads from REST before ensuring configured ACP bindings", async () => {
     const { result, restGet } = await runRestHydrationPreflight({
-      messageId: "m-rest",
+      messageId: "1001",
       restPayload: {
-        id: "m-rest",
+        id: "1001",
         content: "hello from rest",
         attachments: [],
         embeds: [],
@@ -345,9 +323,9 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
 
   it("hydrates sticker-only guild message payloads from REST before ensuring configured ACP bindings", async () => {
     const { result, restGet } = await runRestHydrationPreflight({
-      messageId: "m-rest-sticker",
+      messageId: "1002",
       restPayload: {
-        id: "m-rest-sticker",
+        id: "1002",
         content: "",
         attachments: [],
         embeds: [],

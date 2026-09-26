@@ -7,9 +7,10 @@
 
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { cloneHookIsolationValue } from "../../plugins/hook-isolation.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { applyTranscriptSenderIdentityToWrite } from "../../sessions/user-turn-transcript.metadata.js";
-import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
+import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
 import { consumeAdjustedParamsForToolCall } from "../agent-tools.before-tool-call.js";
 import type { AgentMessage } from "../runtime/index.js";
 
@@ -35,19 +36,20 @@ export async function runAgentHarnessAfterToolCallHook(params: {
     adjustedArgs && typeof adjustedArgs === "object"
       ? (adjustedArgs as Record<string, unknown>)
       : params.startArgs;
-  const eventArgs = structuredClone(resolvedArgs);
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("after_tool_call")) {
     return;
   }
   try {
+    const eventArgs = structuredClone(resolvedArgs);
+    const eventResult = cloneHookIsolationValue("after_tool_call", params.result);
     await hookRunner.runAfterToolCall(
       {
         toolName: params.toolName,
         params: eventArgs,
         ...(params.runId ? { runId: params.runId } : {}),
         toolCallId: params.toolCallId,
-        ...(params.result ? { result: params.result } : {}),
+        ...(eventResult ? { result: eventResult } : {}),
         ...(params.error ? { error: params.error } : {}),
         ...(params.startedAt != null ? { durationMs: Date.now() - params.startedAt } : {}),
       },
@@ -80,7 +82,7 @@ export function runAgentHarnessBeforeMessageWriteHook(params: {
     params.prepareAssistantTranscriptMessage &&
     params.message.role === "assistant" &&
     Reflect.get(params.message, "display") !== false
-      ? extractAssistantPhaseText(params.message)
+      ? extractAssistantTranscriptSourceText(params.message)
       : undefined;
   const hookRunner = getGlobalHookRunner();
   const message =

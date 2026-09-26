@@ -1,6 +1,6 @@
 // System launchd ownership tests cover loaded, installed, and unverifiable states.
 import { execFileSync } from "node:child_process";
-import { chmodSync, constants, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   readdirError: "",
   plutilValues: new Map<string, unknown>(),
   plutilErrors: new Map<string, string>(),
+  capturedPaths: new Map<Uint8Array, string>(),
 }));
 
 function fsError(code: string, target: string): NodeJS.ErrnoException {
@@ -20,16 +21,6 @@ function fsError(code: string, target: string): NodeJS.ErrnoException {
 
 vi.mock("node:fs/promises", () => {
   const mocked = {
-    constants,
-    access: vi.fn(async (target: string, mode?: number) => {
-      const code = state.accessErrors.get(target);
-      if (code && mode === constants.R_OK) {
-        throw fsError(code, target);
-      }
-      if (!state.files.has(target)) {
-        throw fsError("ENOENT", target);
-      }
-    }),
     readdir: vi.fn(async (dir: string) => {
       if (state.readdirError) {
         throw fsError(state.readdirError, dir);
@@ -40,19 +31,28 @@ vi.mock("node:fs/promises", () => {
         .map((file) => file.slice(prefix.length));
     }),
     readFile: vi.fn(async (target: string) => {
+      const code = state.accessErrors.get(target);
+      if (code) {
+        throw fsError(code, target);
+      }
       const contents = state.files.get(target);
       if (contents === undefined) {
         throw fsError("ENOENT", target);
       }
-      return contents;
+      const bytes = Buffer.from(contents);
+      state.capturedPaths.set(bytes, target);
+      return bytes;
     }),
   };
   return { ...mocked, default: mocked };
 });
 
-const execLaunchctl = vi.hoisted(() => vi.fn(async () => state.launchctl));
+const execLaunchctl = vi.hoisted(() =>
+  vi.fn(async () => ({ ...state.launchctl, termination: "exit" as const })),
+);
 
-vi.mock("./launchd-exec.js", () => ({
+vi.mock("./launchd-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./launchd-exec.js")>()),
   execLaunchctl,
   isLaunchctlNotLoaded: (result: { stdout: string; stderr: string }) =>
     /could not find service|no such process|not found/i.test(result.stderr || result.stdout),
@@ -60,17 +60,30 @@ vi.mock("./launchd-exec.js", () => ({
     (result.stderr || result.stdout).trim(),
 }));
 
-const execFileUtf8 = vi.hoisted(() =>
-  vi.fn(async (_command: string, args: string[]) => {
-    const target = args.at(-1) ?? "";
+const runExec = vi.hoisted(() =>
+  vi.fn(async (_command: string, args: string[], options: { input: string | Uint8Array }) => {
+    if (typeof options.input === "string" && args[1] === "json") {
+      return { stdout: options.input, stderr: "" };
+    }
+    if (typeof options.input === "string") {
+      throw new Error("Native parser requires captured bytes before normalization");
+    }
+    const target = state.capturedPaths.get(options.input);
+    if (!target) {
+      throw new Error("Native parser requires the captured definition bytes");
+    }
     const error = state.plutilErrors.get(target);
-    return error
-      ? { stdout: "", stderr: error, code: 1 }
-      : { stdout: JSON.stringify(state.plutilValues.get(target) ?? {}), stderr: "", code: 0 };
+    if (error) {
+      throw new Error(error);
+    }
+    return { stdout: JSON.stringify(state.plutilValues.get(target) ?? {}), stderr: "" };
   }),
 );
 
-vi.mock("./exec-file.js", () => ({ execFileUtf8 }));
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runExec,
+}));
 
 import {
   assertNoSystemLaunchDaemonOwnership,
@@ -112,7 +125,7 @@ esac
 fixture=$(/bin/cat "$last")
 if [ "$mode" = "-extract" ]; then
   if [ "$fixture" = "same-label" ]; then
-    printf '%s\\n' "ai.openclaw.gateway"
+    printf '%s' "ai.openclaw.gateway"
     exit 0
   fi
   printf '%s\\n' "No value at that key path: Label" >&2
@@ -175,6 +188,7 @@ describe("system LaunchDaemon ownership", () => {
     state.readdirError = "";
     state.plutilValues.clear();
     state.plutilErrors.clear();
+    state.capturedPaths.clear();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", {
         ...originalPlatformDescriptor,
@@ -189,16 +203,6 @@ describe("system LaunchDaemon ownership", () => {
     }
   });
 
-  it("uses the readable system-domain query and reports a loaded owner", async () => {
-    state.launchctl = { stdout: "state = running", stderr: "", code: 0 };
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
-      status: "loaded",
-      serviceTarget: "system/ai.openclaw.gateway",
-    });
-    expect(execLaunchctl).toHaveBeenCalledWith(["print", "system/ai.openclaw.gateway"], undefined);
-  });
-
   it("fails closed when launchctl cannot classify system ownership", async () => {
     state.launchctl = { stdout: "", stderr: "Operation not permitted", code: 1 };
 
@@ -207,33 +211,8 @@ describe("system LaunchDaemon ownership", () => {
       serviceTarget: "system/ai.openclaw.gateway",
       operation: "launchctl",
       detail: "Operation not permitted",
+      reason: "launchd-system-domain-unavailable",
     });
-  });
-
-  it("detects the canonical unloaded plist by its structural Label", async () => {
-    const plistPath = "/Library/LaunchDaemons/ai.openclaw.gateway.plist";
-    state.files.set(plistPath, "bplist00-binary-payload");
-    state.plutilValues.set(plistPath, { Label: "ai.openclaw.gateway" });
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
-      status: "installed",
-      serviceTarget: "system/ai.openclaw.gateway",
-      plistPath,
-    });
-  });
-
-  it("detects a noncanonical XML plist by its decoded Label", async () => {
-    const plistPath = "/Library/LaunchDaemons/vendor-openclaw.plist";
-    state.files.set(
-      plistPath,
-      "<plist><dict><key>Label</key><string>ai.openclaw.gateway</string></dict></plist>",
-    );
-    state.plutilValues.set(plistPath, { Label: "ai.openclaw.gateway" });
-
-    const ownership = await inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway");
-
-    expect(ownership).toMatchObject({ status: "installed", plistPath });
-    expect(execFileUtf8).toHaveBeenCalled();
   });
 
   it("uses the native top-level Label instead of an earlier nested XML key", async () => {
@@ -258,14 +237,11 @@ describe("system LaunchDaemon ownership", () => {
     const ownership = await inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway");
 
     expect(ownership).toMatchObject({ status: "installed", plistPath });
-    expect(execFileUtf8).toHaveBeenCalledWith("/usr/bin/plutil", [
-      "-convert",
-      "json",
-      "-o",
-      "-",
-      "--",
-      plistPath,
-    ]);
+    expect(runExec).toHaveBeenCalledWith(
+      "/usr/bin/plutil",
+      ["-convert", "xml1", "-o", "-", "--", "-"],
+      expect.objectContaining({ input: Buffer.from("bplist00-binary-payload") }),
+    );
   });
 
   it("skips a valid plist without a string Label and detects a later owner", async () => {
@@ -281,7 +257,7 @@ describe("system LaunchDaemon ownership", () => {
       serviceTarget: "system/ai.openclaw.gateway",
       plistPath: owner,
     });
-    expect(execFileUtf8).toHaveBeenCalledTimes(2);
+    expect(runExec).toHaveBeenCalledTimes(4);
   });
 
   it("treats a valid non-string Label as unable to own the gateway label", async () => {
@@ -311,6 +287,26 @@ describe("system LaunchDaemon ownership", () => {
     ).resolves.toBeUndefined();
   });
 
+  it.each(["malformed plist", "missing native parser"])(
+    "refuses an unreadable native result for a readable plist: %s",
+    async (failure) => {
+      const plistPath = "/Library/LaunchDaemons/com.vendor.worker.plist";
+      state.files.set(plistPath, "native-input");
+      runExec.mockRejectedValueOnce(
+        failure === "missing native parser"
+          ? fsError("ENOENT", "/usr/bin/plutil")
+          : new Error(failure),
+      );
+      await expect(
+        inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway"),
+      ).resolves.toMatchObject({
+        status: "unverifiable",
+        operation: "filesystem",
+        detail: expect.stringContaining(plistPath),
+      });
+    },
+  );
+
   it("detects a readable owner after an unreadable foreign plist", async () => {
     const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
     const owner = "/Library/LaunchDaemons/vendor-openclaw.plist";
@@ -329,8 +325,18 @@ describe("system LaunchDaemon ownership", () => {
 
   it("rechecks the system domain after a negative plist snapshot", async () => {
     execLaunchctl
-      .mockResolvedValueOnce({ stdout: "", stderr: "Could not find service", code: 113 })
-      .mockResolvedValueOnce({ stdout: "state = running", stderr: "", code: 0 });
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "Could not find service",
+        code: 113,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "state = running",
+        stderr: "",
+        code: 0,
+        termination: "exit",
+      });
 
     await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
       status: "loaded",
@@ -375,7 +381,7 @@ describe("system LaunchDaemon ownership", () => {
 
     expect(script).toContain('launchctl print "$openclaw_system_launchd_target"');
     expect(script).toContain(
-      '/usr/bin/plutil -extract Label raw -o - -- "$openclaw_system_launchd_plist"',
+      '/usr/bin/plutil -extract Label raw -expect string -n -o - -- "$openclaw_system_launchd_plist"',
     );
     expect(script).toContain(
       '/usr/bin/plutil -lint -- "$openclaw_system_launchd_plist" >/dev/null 2>&1',

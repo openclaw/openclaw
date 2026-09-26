@@ -4,7 +4,11 @@ import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { CodexThread, JsonValue } from "./protocol.js";
+import { readCodexAsyncQuestions } from "./async-questions.js";
+import { auditNativeToolName, itemName, itemStatus } from "./event-projector-items.js";
+import { codexProviderRefusalDetails, readCodexProviderRefusal } from "./event-projector-values.js";
+import type { CodexThread, CodexTurn, JsonValue } from "./protocol.js";
+import type { CodexHistoryItemEntry } from "./thread-history-page.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 const CODEX_HISTORY_IMPORT_MAX_MESSAGES = 200;
@@ -36,8 +40,35 @@ type BoundedCodexThreadHistoryProjection = CodexThreadHistoryImportResult & {
 type ProjectedCodexHistoryMessage = {
   message: AgentMessage;
   responseItem: JsonValue;
-  textBytes: number;
+  messageBytes: number;
 };
+
+function projectCodexHistoryMessage(
+  message: Extract<AgentMessage, { role: "user" | "assistant" }>,
+  text: string,
+): ProjectedCodexHistoryMessage {
+  const phase =
+    message.role === "assistant" &&
+    "phase" in message &&
+    (message.phase === "commentary" || message.phase === "final_answer")
+      ? message.phase
+      : undefined;
+  return {
+    message,
+    responseItem: {
+      type: "message",
+      role: message.role,
+      content: [{ type: message.role === "assistant" ? "output_text" : "input_text", text }],
+      ...(phase ? { phase } : {}),
+    },
+    messageBytes:
+      Buffer.byteLength(text, "utf8") +
+      (message.role === "assistant"
+        ? Buffer.byteLength(message.errorMessage ?? "", "utf8") +
+          (message.diagnostics ? Buffer.byteLength(JSON.stringify(message.diagnostics), "utf8") : 0)
+        : 0),
+  };
+}
 
 function normalizeImportedHistoryText(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -114,9 +145,10 @@ function selectTurnsThroughBoundary(
 
 function projectCodexThreadHistory(params: {
   thread: CodexThread;
-  throughTurnId: string | null;
+  turns: CodexTurn[];
   importedAt: number;
   modelProvider?: string;
+  includeErrorOnlyTurns?: boolean;
 }): ProjectedCodexHistoryMessage[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
   const threadTimestamp =
@@ -124,7 +156,16 @@ function projectCodexThreadHistory(params: {
       ? params.thread.createdAt * 1000
       : params.importedAt;
   let itemOffset = 0;
-  for (const turn of selectTurnsThroughBoundary(params.thread, params.throughTurnId)) {
+  for (const turn of params.turns) {
+    const refusal =
+      turn.status === "failed"
+        ? readCodexProviderRefusal(turn.error?.message, turn.error?.codexErrorInfo, {
+            misalignment: turn.error?.misalignment,
+            nativeThreadId: params.thread.id,
+            nativeTurnId: turn.id,
+          })
+        : undefined;
+    let hasAssistantMessage = false;
     for (const value of turn.items) {
       const item = value;
       const itemId = normalizeOptionalString(item.id);
@@ -156,6 +197,9 @@ function projectCodexThreadHistory(params: {
       const phase =
         item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
       const asyncDelivery = item.delivery === "async";
+      const terminalAssistant = role === "assistant" && phase !== "commentary" && !asyncDelivery;
+      hasAssistantMessage ||= terminalAssistant;
+      const questions = asyncDelivery ? readCodexAsyncQuestions(item.questions) : undefined;
       const message =
         role === "assistant"
           ? attachCodexMirrorIdentity(
@@ -178,28 +222,65 @@ function projectCodexThreadHistory(params: {
                 ...(turn.status === "failed" && turn.error?.message
                   ? { errorMessage: turn.error.message }
                   : {}),
+                ...(refusal && terminalAssistant
+                  ? {
+                      diagnostics: [
+                        {
+                          type: "provider_refusal",
+                          timestamp,
+                          details: codexProviderRefusalDetails(refusal),
+                        },
+                      ],
+                    }
+                  : {}),
                 ...(phase ? { phase } : {}),
-                ...(asyncDelivery && itemId ? { openclawAsyncDelivery: { itemId } } : {}),
+                ...(asyncDelivery && itemId
+                  ? { openclawAsyncDelivery: { itemId, ...(questions ? { questions } : {}) } }
+                  : {}),
                 timestamp,
               } satisfies AssistantMessage,
               identity,
             )
-          : attachCodexMirrorIdentity({ role, content: text, timestamp } as AgentMessage, identity);
-      projected.push({
-        message,
-        responseItem: {
-          type: "message",
-          role,
-          content: [
-            {
-              type: role === "assistant" ? "output_text" : "input_text",
-              text,
-            },
-          ],
-          ...(role === "assistant" && phase ? { phase } : {}),
+          : attachCodexMirrorIdentity({ role, content: text, timestamp }, identity);
+      projected.push(projectCodexHistoryMessage(message, text));
+    }
+    if (
+      params.includeErrorOnlyTurns &&
+      !hasAssistantMessage &&
+      turn.status === "failed" &&
+      turn.error?.message
+    ) {
+      const timestamp = (turn.completedAt ?? turn.startedAt ?? threadTimestamp / 1000) * 1000;
+      const text = normalizeImportedHistoryText(turn.error.message) ?? "Codex turn failed.";
+      const message: AssistantMessage = attachCodexMirrorIdentity(
+        {
+          role: "assistant",
+          content: [],
+          api: CODEX_HISTORY_ASSISTANT_API,
+          provider:
+            normalizeOptionalString(params.modelProvider) ??
+            normalizeOptionalString(params.thread.modelProvider) ??
+            CODEX_HISTORY_ASSISTANT_PROVIDER,
+          model: CODEX_HISTORY_ASSISTANT_MODEL,
+          usage: CODEX_HISTORY_ZERO_USAGE,
+          stopReason: "error",
+          errorMessage: text,
+          ...(refusal
+            ? {
+                diagnostics: [
+                  {
+                    type: "provider_refusal",
+                    timestamp,
+                    details: codexProviderRefusalDetails(refusal),
+                  },
+                ],
+              }
+            : {}),
+          timestamp,
         },
-        textBytes: Buffer.byteLength(text, "utf8"),
-      });
+        `${turn.id}:assistant`,
+      );
+      projected.push(projectCodexHistoryMessage(message, ""));
     }
   }
   return projected;
@@ -217,12 +298,12 @@ function selectBoundedCodexHistoryTail(
     }
     if (
       selected.length >= CODEX_HISTORY_IMPORT_MAX_MESSAGES ||
-      selectedBytes + candidate.textBytes > CODEX_HISTORY_IMPORT_MAX_BYTES
+      selectedBytes + candidate.messageBytes > CODEX_HISTORY_IMPORT_MAX_BYTES
     ) {
       break;
     }
     selected.push(candidate);
-    selectedBytes += candidate.textBytes;
+    selectedBytes += candidate.messageBytes;
   }
   return selected.toReversed();
 }
@@ -236,8 +317,9 @@ export function projectBoundedCodexThreadHistory(params: {
 }): BoundedCodexThreadHistoryProjection {
   const projected = projectCodexThreadHistory({
     thread: params.thread,
-    throughTurnId: params.throughTurnId,
+    turns: selectTurnsThroughBoundary(params.thread, params.throughTurnId),
     importedAt: params.importedAt,
+    includeErrorOnlyTurns: true,
     ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
   });
   const selected = selectBoundedCodexHistoryTail(projected);
@@ -264,19 +346,19 @@ export function projectBoundedCodexVisibleSessionHistory(
   entries: readonly SessionTranscriptMessageEntry[],
 ): JsonValue[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
-  for (const entry of entries) {
-    if ((entry.role !== "user" && entry.role !== "assistant") || !("content" in entry.message)) {
+  for (const { message } of entries) {
+    if ((message.role !== "user" && message.role !== "assistant") || !("content" in message)) {
       continue;
     }
     if (
-      entry.role === "assistant" &&
-      (("stopReason" in entry.message &&
-        (entry.message.stopReason === "aborted" || entry.message.stopReason === "error")) ||
-        "openclawAsyncDelivery" in entry.message)
+      message.role === "assistant" &&
+      (message.stopReason === "aborted" ||
+        message.stopReason === "error" ||
+        "openclawAsyncDelivery" in message)
     ) {
       continue;
     }
-    const content = entry.message.content;
+    const content = message.content;
     const text = normalizeImportedHistoryText(
       typeof content === "string"
         ? content
@@ -293,20 +375,91 @@ export function projectBoundedCodexVisibleSessionHistory(
     if (!text) {
       continue;
     }
-    projected.push({
-      message: entry.message,
-      responseItem: {
-        type: "message",
-        role: entry.role,
-        content: [
-          {
-            type: entry.role === "assistant" ? "output_text" : "input_text",
-            text,
-          },
-        ],
-      },
-      textBytes: Buffer.byteLength(text, "utf8"),
-    });
+    projected.push(projectCodexHistoryMessage(message, text));
   }
   return selectBoundedCodexHistoryTail(projected).map(({ responseItem }) => responseItem);
+}
+
+/** Displays native items through the shared transcript roles, including an unfinished turn. */
+export function projectCodexThreadHistoryItem(
+  thread: CodexThread,
+  entry: CodexHistoryItemEntry,
+  // Catalog registration shares this module; only the lazy history reader loads tool runtime.
+  toolItems: Pick<
+    typeof import("./event-projector-tool-items.js"),
+    "itemToolArgs" | "itemTranscriptResultText"
+  >,
+): AgentMessage[] {
+  const { item } = entry;
+  const timestamp = (entry.turn?.startedAt ?? thread.createdAt ?? 0) * 1000;
+  if (item.type === "userMessage" || item.type === "agentMessage") {
+    return projectCodexThreadHistory({
+      thread,
+      turns: [{ ...entry.turn, id: entry.turnId, items: [item] }],
+      importedAt: timestamp,
+    }).map(({ message }) => message);
+  }
+  const identity = `${entry.turnId}:${item.id}`;
+  const assistant = (content: AssistantMessage["content"], toolUse = false): AssistantMessage =>
+    attachCodexMirrorIdentity(
+      {
+        role: "assistant",
+        content,
+        api: CODEX_HISTORY_ASSISTANT_API,
+        provider: normalizeOptionalString(thread.modelProvider) ?? CODEX_HISTORY_ASSISTANT_PROVIDER,
+        model: CODEX_HISTORY_ASSISTANT_MODEL,
+        usage: CODEX_HISTORY_ZERO_USAGE,
+        stopReason: toolUse ? "toolUse" : "stop",
+        timestamp,
+      },
+      identity,
+    );
+  if (item.type === "reasoning") {
+    const parts =
+      Array.isArray(item.summary) && item.summary.length > 0 ? item.summary : item.content;
+    const thinking = normalizeImportedHistoryText(
+      Array.isArray(parts)
+        ? parts.filter((part) => typeof part === "string").join("\n")
+        : item.text,
+    );
+    return thinking ? [assistant([{ type: "thinking", thinking }])] : [];
+  }
+  if (item.type === "contextCompaction") {
+    return [assistant([{ type: "text", text: "Context compacted." }])];
+  }
+  const toolName = itemName(item) ?? auditNativeToolName(item);
+  if (!toolName) {
+    const text = normalizeImportedHistoryText(item.text ?? item.title);
+    return text ? [assistant([{ type: "text", text }])] : [];
+  }
+  const messages: AgentMessage[] = [
+    assistant(
+      [
+        {
+          type: "toolCall",
+          id: item.id,
+          name: toolName,
+          arguments: toolItems.itemToolArgs(item) ?? {},
+        },
+      ],
+      true,
+    ),
+  ];
+  const status = itemStatus(item);
+  if (status !== "running") {
+    messages.push(
+      attachCodexMirrorIdentity(
+        {
+          role: "toolResult",
+          toolCallId: item.id,
+          toolName,
+          content: [{ type: "text", text: toolItems.itemTranscriptResultText(item) ?? status }],
+          isError: status === "failed" || status === "blocked",
+          timestamp,
+        },
+        `${identity}:result`,
+      ),
+    );
+  }
+  return messages;
 }

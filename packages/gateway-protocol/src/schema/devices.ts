@@ -210,7 +210,7 @@ export const DevicePairSetupCodeParamsSchema = closedObject({
  * Setup code plus non-secret connection metadata. `setupId` is an opaque
  * correlation id independent from the embedded bearer, while `expiresAtMs`
  * is the authoritative setup expiry. `auth` is a label only ("token" |
- * "password"); the gateway credential itself is never returned.
+ * "password" | "trusted-proxy"); the gateway credential itself is never returned.
  * `accessDowngraded` reports the plaintext-LAN safety fallback from full to
  * limited access so the presenting client can explain how to upgrade.
  */
@@ -225,7 +225,11 @@ export const DevicePairSetupCodeResultSchema = closedObject({
   gatewayUrls: Type.Optional(
     Type.Array(NonEmptyString, { minItems: 2, maxItems: 8, uniqueItems: true }),
   ),
-  auth: Type.Union([Type.Literal("token"), Type.Literal("password")]),
+  auth: Type.Union([
+    Type.Literal("token"),
+    Type.Literal("password"),
+    Type.Literal("trusted-proxy"),
+  ]),
   urlSource: NonEmptyString,
   access: Type.Optional(
     Type.Union([Type.Literal("full"), Type.Literal("limited"), Type.Literal("node")]),

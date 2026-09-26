@@ -1,16 +1,20 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import type { SpawnResult } from "../process/exec.js";
-import type { NodeWorkerWorkspaceTransferInput } from "./node-workspace-transfer-protocol.js";
-import { hasExactOwnKeys } from "./protocol-record.js";
+import { NodeWorkerWorkspaceTransferInputSchema } from "./node-workspace-transfer-protocol.js";
+import {
+  hasExactOwnKeys,
+  WorkerGatewayNamespace,
+  workerProtocolIdentifier as identifier,
+  workerProtocolObject,
+} from "./protocol-record.js";
 import {
   isWorkspaceInspectionCommand,
   WORKSPACE_INSPECTION_COMMAND,
   WORKSPACE_INSPECTION_MAX_BYTES,
 } from "./workspace-inspection-protocol.js";
 
-const IDENTIFIER_MAX_CHARS = 256;
-const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const REQUEST_MAX_BYTES = 256 * 1024;
 export const NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES = 128 * 1024;
 const OUTPUT_MAX_BYTES = 64 * 1024;
@@ -22,24 +26,81 @@ const ARG_MAX_BYTES = 128 * 1024;
 const TIMEOUT_MAX_MS = 10 * 60 * 1000;
 export const NODE_WORKSPACE_DRAIN_COMMAND = "openclaw-internal-workspace-drain";
 
-export type NodeWorkerWorkspaceSeedInput =
-  | { action: "apply"; key: string }
-  | { action: "store"; key: string; maxAgeMs: number };
-
-export type NodeWorkerWorkspaceExecInput = {
-  gatewayNamespace: string;
-  environmentId: string;
-  sessionId: string;
-  generation: number;
-  argv: string[];
-  input?: string;
-  timeoutMs?: number;
-  resetWorkspace?: boolean;
-  transfer?: NodeWorkerWorkspaceTransferInput;
-  seed?: NodeWorkerWorkspaceSeedInput;
+const SeedKey = z.string().regex(/^[a-f0-9]{64}$/u);
+const WorkspaceProcess = workerProtocolObject({
+  action: z.enum(["start", "status", "stop"]),
+  processId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u),
+});
+export type NodeWorkerWorkspaceProcessInput = z.infer<typeof WorkspaceProcess>;
+type NodeWorkerWorkspaceProcessResult = {
+  processId: string;
+  state: "running" | "exited";
 };
+const SeedInput = z.union([
+  workerProtocolObject({ action: z.literal("apply"), key: SeedKey }),
+  workerProtocolObject({
+    action: z.literal("store"),
+    key: SeedKey,
+    maxAgeMs: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  }),
+]);
+const WorkspaceInput = workerProtocolObject({
+  gatewayNamespace: WorkerGatewayNamespace,
+  environmentId: identifier("environmentId"),
+  sessionId: identifier("sessionId"),
+  sessionKey: identifier("sessionKey", 1_024).optional(),
+  preparationKey: z
+    .custom<string>((value) => typeof value === "string" && /^[a-f0-9]{64}$/u.test(value), {
+      error: "INVALID_REQUEST: preparationKey must be a SHA-256 hex digest",
+    })
+    .optional(),
+  generation: z.custom<number>(
+    (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0,
+    { error: "INVALID_REQUEST: generation must be a non-negative safe integer" },
+  ),
+  argv: z
+    .custom<string[]>(
+      (value) =>
+        Array.isArray(value) &&
+        value.length > 0 &&
+        value.length <= ARGV_MAX_ITEMS &&
+        value.every(
+          (arg) =>
+            typeof arg === "string" &&
+            arg.length > 0 &&
+            !arg.includes("\0") &&
+            Buffer.byteLength(arg, "utf8") <= ARG_MAX_BYTES,
+        ),
+      { error: "INVALID_REQUEST: argv must be a bounded non-empty string array" },
+    )
+    .transform((argv) => [...argv]),
+  input: z
+    .string({ error: "INVALID_REQUEST: workspace command input exceeds its bound" })
+    .optional(),
+  timeoutMs: z
+    .custom<number>(
+      (value) =>
+        typeof value === "number" &&
+        Number.isSafeInteger(value) &&
+        value >= 1 &&
+        value <= TIMEOUT_MAX_MS,
+      { error: "INVALID_REQUEST: workspace command timeout is invalid" },
+    )
+    .optional(),
+  resetWorkspace: z
+    .boolean({ error: "INVALID_REQUEST: resetWorkspace must be a boolean" })
+    .optional(),
+  transfer: NodeWorkerWorkspaceTransferInputSchema.optional(),
+  seed: SeedInput.optional(),
+  process: WorkspaceProcess.optional(),
+});
+export type NodeWorkerWorkspaceSeedInput = z.infer<typeof SeedInput>;
+export type NodeWorkerWorkspaceExecInput = z.infer<typeof WorkspaceInput>;
 
-export type NodeWorkerWorkspaceExecResult = SpawnResult & { workspaceDir: string };
+export type NodeWorkerWorkspaceExecResult = SpawnResult & {
+  workspaceDir: string;
+  process?: NodeWorkerWorkspaceProcessResult;
+};
 
 function parseJson(raw?: string | null): unknown {
   if (!raw || Buffer.byteLength(raw, "utf8") > WORKSPACE_INSPECTION_MAX_BYTES * 2) {
@@ -52,75 +113,64 @@ function parseJson(raw?: string | null): unknown {
   }
 }
 
-function requireIdentifier(value: unknown, label: string): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > IDENTIFIER_MAX_CHARS ||
-    value.trim() !== value ||
-    value.includes("\0")
-  ) {
-    throw new Error(`INVALID_REQUEST: ${label} must be a bounded non-empty identifier`);
-  }
-  return value;
-}
-
 export function parseNodeWorkerWorkspaceExecInput(
   raw?: string | null,
 ): NodeWorkerWorkspaceExecInput {
   const value = parseJson(raw);
+  const parsed = WorkspaceInput.safeParse(value);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    if (issue?.path[0] === "transfer") {
+      throw new Error("INVALID_REQUEST: workspace transfer is invalid");
+    }
+    if (issue?.path[0] === "process") {
+      throw new Error("INVALID_REQUEST: workspace process operation is invalid");
+    }
+    if (issue?.path[0] === "seed") {
+      const validKey =
+        isRecord(value) && isRecord(value.seed) && SeedKey.safeParse(value.seed.key).success;
+      throw new Error(
+        validKey
+          ? "INVALID_REQUEST: workspace seed action or maxAgeMs is invalid"
+          : "INVALID_REQUEST: workspace seed key must be a SHA-256 hex digest",
+      );
+    }
+    throw new Error(
+      issue?.path.length ? issue.message : "INVALID_REQUEST: invalid node worker workspace request",
+    );
+  }
+  const input = parsed.data;
+  if (input.process && (input.seed || input.transfer || input.resetWorkspace !== undefined)) {
+    throw new Error("INVALID_REQUEST: workspace process owns its operation");
+  }
   if (
-    !isRecord(value) ||
-    !hasExactOwnKeys(
-      value,
-      ["gatewayNamespace", "environmentId", "sessionId", "generation", "argv"],
-      ["input", "timeoutMs", "resetWorkspace", "transfer", "seed"],
-    )
+    input.process &&
+    input.process.action !== "start" &&
+    (input.argv.length !== 1 ||
+      input.argv[0] !== "openclaw-internal-workspace-process" ||
+      input.input !== undefined)
   ) {
-    throw new Error("INVALID_REQUEST: invalid node worker workspace request");
+    throw new Error("INVALID_REQUEST: workspace process control accepts no command");
   }
-  const gatewayNamespace = requireIdentifier(value.gatewayNamespace, "gatewayNamespace");
-  if (!GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
-    throw new Error("INVALID_REQUEST: gatewayNamespace must be a safe bounded path component");
-  }
+  const inspection = isWorkspaceInspectionCommand(input.argv);
   if (
-    !Number.isSafeInteger(value.generation) ||
-    typeof value.generation !== "number" ||
-    value.generation < 0
-  ) {
-    throw new Error("INVALID_REQUEST: generation must be a non-negative safe integer");
-  }
-  if (
-    !Array.isArray(value.argv) ||
-    value.argv.length === 0 ||
-    value.argv.length > ARGV_MAX_ITEMS ||
-    !value.argv.every(
-      (arg) =>
-        typeof arg === "string" &&
-        arg.length > 0 &&
-        !arg.includes("\0") &&
-        Buffer.byteLength(arg, "utf8") <= ARG_MAX_BYTES,
-    )
-  ) {
-    throw new Error("INVALID_REQUEST: argv must be a bounded non-empty string array");
-  }
-  const inspection = isWorkspaceInspectionCommand(value.argv);
-  if (
-    value.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND &&
-    (value.argv.length !== 1 ||
-      value.input !== undefined ||
-      value.transfer !== undefined ||
-      value.seed !== undefined ||
-      value.resetWorkspace !== undefined)
+    input.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND &&
+    (input.argv.length !== 1 ||
+      input.input !== undefined ||
+      input.transfer !== undefined ||
+      input.seed !== undefined ||
+      input.process !== undefined ||
+      input.resetWorkspace !== undefined)
   ) {
     throw new Error("INVALID_REQUEST: workspace drain owns its operation");
   }
   if (
-    value.argv[0] === WORKSPACE_INSPECTION_COMMAND &&
+    input.argv[0] === WORKSPACE_INSPECTION_COMMAND &&
     (!inspection ||
-      value.transfer !== undefined ||
-      value.seed !== undefined ||
-      value.resetWorkspace !== undefined)
+      input.transfer !== undefined ||
+      input.seed !== undefined ||
+      input.process !== undefined ||
+      input.resetWorkspace !== undefined)
   ) {
     throw new Error("INVALID_REQUEST: workspace inspection owns its operation");
   }
@@ -128,140 +178,21 @@ export function parseNodeWorkerWorkspaceExecInput(
     throw new Error("INVALID_REQUEST: workspace command request exceeds its bound");
   }
   if (
-    value.input !== undefined &&
-    (typeof value.input !== "string" ||
-      Buffer.byteLength(value.input, "utf8") >
-        (inspection ? WORKSPACE_INSPECTION_MAX_BYTES : NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES))
+    input.input !== undefined &&
+    Buffer.byteLength(input.input, "utf8") >
+      (inspection ? WORKSPACE_INSPECTION_MAX_BYTES : NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES)
   ) {
     throw new Error("INVALID_REQUEST: workspace command input exceeds its bound");
   }
   if (
-    value.timeoutMs !== undefined &&
-    (typeof value.timeoutMs !== "number" ||
-      !Number.isSafeInteger(value.timeoutMs) ||
-      value.timeoutMs < 1 ||
-      value.timeoutMs > TIMEOUT_MAX_MS)
+    input.seed !== undefined &&
+    (input.transfer !== undefined || input.resetWorkspace !== undefined)
   ) {
-    throw new Error("INVALID_REQUEST: workspace command timeout is invalid");
+    throw new Error(
+      "INVALID_REQUEST: workspace seed cannot combine with transfer or resetWorkspace",
+    );
   }
-  if (value.resetWorkspace !== undefined && typeof value.resetWorkspace !== "boolean") {
-    throw new Error("INVALID_REQUEST: resetWorkspace must be a boolean");
-  }
-  let seed: NodeWorkerWorkspaceSeedInput | undefined;
-  if (value.seed !== undefined) {
-    if (value.transfer !== undefined || value.resetWorkspace !== undefined) {
-      throw new Error(
-        "INVALID_REQUEST: workspace seed cannot combine with transfer or resetWorkspace",
-      );
-    }
-    if (
-      !isRecord(value.seed) ||
-      typeof value.seed.key !== "string" ||
-      !/^[a-f0-9]{64}$/u.test(value.seed.key)
-    ) {
-      throw new Error("INVALID_REQUEST: workspace seed key must be a SHA-256 hex digest");
-    }
-    const { action, key, maxAgeMs } = value.seed;
-    if (action === "apply" && hasExactOwnKeys(value.seed, ["action", "key"])) {
-      seed = { action, key };
-    } else if (
-      action === "store" &&
-      hasExactOwnKeys(value.seed, ["action", "key", "maxAgeMs"]) &&
-      typeof maxAgeMs === "number" &&
-      Number.isSafeInteger(maxAgeMs) &&
-      maxAgeMs >= 0
-    ) {
-      seed = { action, key, maxAgeMs };
-    } else {
-      throw new Error("INVALID_REQUEST: workspace seed action or maxAgeMs is invalid");
-    }
-  }
-  let transfer: NodeWorkerWorkspaceTransferInput | undefined;
-  if (value.transfer !== undefined) {
-    if (!isRecord(value.transfer)) {
-      throw new Error("INVALID_REQUEST: workspace transfer is invalid");
-    }
-    const direction = value.transfer.direction;
-    const token = value.transfer.token;
-    const manifestRef = value.transfer.manifestRef;
-    const baseManifestRef = value.transfer.baseManifestRef;
-    const referenceManifestRef = value.transfer.referenceManifestRef;
-    const validRef = (candidate: unknown): candidate is string =>
-      typeof candidate === "string" && /^sha256:[a-f0-9]{64}$/u.test(candidate);
-    if (
-      typeof token !== "string" ||
-      token.length === 0 ||
-      token.length > 1_024 ||
-      token.includes("\0") ||
-      (direction === "download"
-        ? !hasExactOwnKeys(
-            value.transfer,
-            ["direction", "token", "manifestRef"],
-            ["attachments", "seedKey", "checkpointBaseManifestRef"],
-          ) ||
-          (value.transfer.attachments !== undefined && value.transfer.attachments !== true) ||
-          (value.transfer.checkpointBaseManifestRef !== undefined &&
-            (!validRef(value.transfer.checkpointBaseManifestRef) ||
-              value.transfer.attachments !== undefined ||
-              value.transfer.seedKey !== undefined)) ||
-          (value.transfer.seedKey !== undefined &&
-            (typeof value.transfer.seedKey !== "string" ||
-              !/^[a-f0-9]{64}$/u.test(value.transfer.seedKey) ||
-              value.transfer.attachments !== undefined))
-        : direction === "upload"
-          ? !hasExactOwnKeys(
-              value.transfer,
-              ["direction", "token", "baseManifestRef", "referenceManifestRef"],
-              ["publicationBaseCommit"],
-            ) ||
-            (value.transfer.publicationBaseCommit !== undefined &&
-              (typeof value.transfer.publicationBaseCommit !== "string" ||
-                !/^[a-f0-9]{40}$/u.test(value.transfer.publicationBaseCommit)))
-          : true)
-    ) {
-      throw new Error("INVALID_REQUEST: workspace transfer is invalid");
-    }
-    if (direction === "download") {
-      if (!validRef(manifestRef)) {
-        throw new Error("INVALID_REQUEST: workspace transfer is invalid");
-      }
-      transfer = {
-        direction,
-        token,
-        manifestRef,
-        ...(typeof value.transfer.seedKey === "string" ? { seedKey: value.transfer.seedKey } : {}),
-        ...(value.transfer.attachments === true ? { attachments: true } : {}),
-        ...(typeof value.transfer.checkpointBaseManifestRef === "string"
-          ? { checkpointBaseManifestRef: value.transfer.checkpointBaseManifestRef }
-          : {}),
-      };
-    } else {
-      if (!validRef(baseManifestRef) || !validRef(referenceManifestRef)) {
-        throw new Error("INVALID_REQUEST: workspace transfer is invalid");
-      }
-      transfer = {
-        direction: "upload",
-        token,
-        baseManifestRef,
-        referenceManifestRef,
-        ...(typeof value.transfer.publicationBaseCommit === "string"
-          ? { publicationBaseCommit: value.transfer.publicationBaseCommit }
-          : {}),
-      };
-    }
-  }
-  return {
-    gatewayNamespace,
-    environmentId: requireIdentifier(value.environmentId, "environmentId"),
-    sessionId: requireIdentifier(value.sessionId, "sessionId"),
-    generation: value.generation,
-    argv: [...value.argv],
-    ...(value.input === undefined ? {} : { input: value.input }),
-    ...(value.timeoutMs === undefined ? {} : { timeoutMs: value.timeoutMs }),
-    ...(value.resetWorkspace === undefined ? {} : { resetWorkspace: value.resetWorkspace }),
-    ...(transfer ? { transfer } : {}),
-    ...(seed ? { seed } : {}),
-  };
+  return input;
 }
 
 function isBoundedText(value: unknown, maxBytes: number): value is string {
@@ -287,6 +218,7 @@ export function parseNodeWorkerWorkspaceExecResult(
         "noOutputTimedOut",
         "outputLimitExceeded",
         "outputErrorStream",
+        "process",
       ],
     ) ||
     typeof value.workspaceDir !== "string" ||
@@ -308,6 +240,16 @@ export function parseNodeWorkerWorkspaceExecResult(
       value.termination !== "timeout" &&
       value.termination !== "no-output-timeout" &&
       value.termination !== "signal")
+  ) {
+    return null;
+  }
+  if (
+    value.process !== undefined &&
+    (!isRecord(value.process) ||
+      !hasExactOwnKeys(value.process, ["processId", "state"], []) ||
+      typeof value.process.processId !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value.process.processId) ||
+      (value.process.state !== "running" && value.process.state !== "exited"))
   ) {
     return null;
   }

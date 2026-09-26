@@ -35,21 +35,17 @@ export function createMeetingStatusPreludeSource(
   params: MeetingStatusPreludeParams,
   options: MeetingStatusPreludeSourceOptions,
 ): string {
-  const selectors = params.selectors;
-  const expectedIdentity = params.expectedIdentity;
-  const toggleStateFunction = params.toggleStateFunction;
-  const pageIdentityFunctionSource = () => params.pageIdentitySource;
   const audioOutputsGlobal = JSON.stringify(options.platform.globals.audioOutputs);
   const captionArchiveGlobal = JSON.stringify(options.platform.globals.captionArchive);
   const captionsGlobal = JSON.stringify(options.platform.globals.captions);
   const meetingGlobal = JSON.stringify(options.platform.globals.meeting);
   const transcriptMaxLines = options.transcriptMaxLines ?? 500;
   return `async () => {
-  ${pageIdentityFunctionSource()}
+  ${params.pageIdentitySource}
   ${options.setupSource ?? ""}
-  const parseToggleState = ${toggleStateFunction};
-  const selectors = ${selectors};
-  const expectedIdentity = ${JSON.stringify(expectedIdentity)};
+  const parseToggleState = ${params.toggleStateFunction};
+  const selectors = ${params.selectors};
+  const expectedIdentity = ${JSON.stringify(params.expectedIdentity)};
   const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
   const allowSessionAdoption = ${JSON.stringify(params.allowSessionAdoption)};
   const autoJoin = ${JSON.stringify(params.autoJoin)};
@@ -376,6 +372,10 @@ export function createMeetingStatusPreludeSource(
   );
   const identityMatchedUrl = Boolean(expectedIdentity && currentIdentity === expectedIdentity);
   const identityVerifiedBeforeCall = identityMatchedUrl;
+  const previousRemoteCapture = window.__openclawMeetingRemoteAudio;
+  if (canMutateSession && allowSessionAdoption && previousRemoteCapture && previousRemoteCapture.sessionId !== sessionId) {
+    await previousRemoteCapture.stop();
+  }
   ${options.lifecycleSource}
   const micMuted = microphoneState === "off" ? true : microphoneState === "on" ? false : undefined;
   const cameraOff = cameraState === "off" ? true : cameraState === "on" ? false : undefined;

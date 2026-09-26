@@ -1,6 +1,6 @@
 // Gateway agent list projection.
 // Combines configured agents and existing on-disk agent state for lightweight UI use.
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -10,10 +10,16 @@ import type { SessionScope } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, normalizeMainKey } from "../routing/session-key.js";
 import type { GatewayAgentKind } from "../shared/session-types.js";
+import {
+  readAgentDatabaseAdmissionRefusal,
+  type AgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 import { SYSTEM_AGENT_ROSTER_ENTRIES } from "../system-agent/agent-id.js";
 
 type GatewayAgentListRow = {
   id: string;
+  status?: "degraded";
+  admissionRefusal?: AgentDatabaseAdmissionRefusal;
   kind?: GatewayAgentKind;
   name?: string;
 };
@@ -26,19 +32,12 @@ type GatewayAgentSelectionState = {
   selectionRequired: boolean;
 };
 
-const OWNER_ROSTER_ENTRIES = SYSTEM_AGENT_ROSTER_ENTRIES satisfies ReadonlyArray<{
-  id: string;
-  kind: GatewayAgentKind;
-}>;
-
-function listExistingAgentIdsFromDisk(): string[] {
+async function listExistingAgentIdsFromDisk(): Promise<string[]> {
   const agentsDir = path.join(resolveStateDir(), "agents");
   try {
-    return fs
-      .readdirSync(agentsDir, { withFileTypes: true })
+    return (await fs.readdir(agentsDir, { withFileTypes: true }))
       .filter((entry) => entry.isDirectory())
-      .map((entry) => normalizeAgentId(entry.name))
-      .filter(Boolean);
+      .map((entry) => normalizeAgentId(entry.name));
   } catch {
     return [];
   }
@@ -62,26 +61,27 @@ export function resolveGatewayAgentSelectionState(cfg: OpenClawConfig): GatewayA
   const defaultId = normalizeAgentId(legacyCompatibleId);
   return {
     defaultId,
-    ownership: legacyAgentId ? "legacy" : "explicit",
+    ownership: legacyAgentId && cfg.agents?.ownership !== "explicit" ? "legacy" : "explicit",
     selectionRequired: !legacyAgentId,
   };
 }
 
 /** Lists gateway-visible agents with canonical membership, ordering, and semantic kind. */
-export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelectionState & {
-  mainKey: string;
-  scope: SessionScope;
-  agents: GatewayAgentListRow[];
-} {
+export async function listGatewayAgentsBasic(cfg: OpenClawConfig): Promise<
+  GatewayAgentSelectionState & {
+    mainKey: string;
+    scope: SessionScope;
+    agents: GatewayAgentListRow[];
+  }
+> {
   const ownerEntries = new Map(
-    OWNER_ROSTER_ENTRIES.map((entry) => [normalizeAgentId(entry.id), entry] as const),
+    SYSTEM_AGENT_ROSTER_ENTRIES.map((entry) => [normalizeAgentId(entry.id), entry] as const),
   );
   const selection = resolveGatewayAgentSelectionState(cfg);
   const defaultId = selection.defaultId;
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const scope = cfg.session?.scope ?? "per-sender";
-  const configuredById = new Map<string, { name?: string }>();
-  const explicitIds = new Set<string>();
+  const configuredById = new Map<string, string | undefined>();
   const diskIds = new Set<string>();
   const agentIds = new Set<string>();
   agentIds.add(normalizeAgentId(defaultId));
@@ -93,17 +93,16 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelecti
     const id = normalizeAgentId(entry.id);
     const configuredName = normalizeOptionalString(entry.name);
     const identityName = normalizeOptionalString(entry.identity?.name);
-    configuredById.set(id, { name: configuredName ?? identityName });
-    explicitIds.add(id);
+    configuredById.set(id, configuredName ?? identityName);
     agentIds.add(id);
   }
 
-  for (const id of listExistingAgentIdsFromDisk()) {
+  for (const id of await listExistingAgentIdsFromDisk()) {
     diskIds.add(id);
     agentIds.add(id);
   }
 
-  const allowedIds = explicitIds.size > 0 ? new Set(explicitIds) : null;
+  const allowedIds = configuredById.size > 0 ? configuredById : null;
   const visibleIds = [...agentIds].filter(
     (id) =>
       !allowedIds ||
@@ -120,11 +119,21 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): GatewayAgentSelecti
     orderedIds.push(mainKey);
   }
 
-  const agents: GatewayAgentListRow[] = orderedIds.map((id) => ({
-    id,
-    kind:
-      !explicitIds.has(id) && diskIds.has(id) ? (ownerEntries.get(id)?.kind ?? "agent") : "agent",
-    name: configuredById.get(id)?.name,
-  }));
+  const agents: GatewayAgentListRow[] = orderedIds.map((id) => {
+    const admissionRefusal = readAgentDatabaseAdmissionRefusal(id);
+    const agent: GatewayAgentListRow = {
+      id,
+      kind:
+        !configuredById.has(id) && diskIds.has(id)
+          ? (ownerEntries.get(id)?.kind ?? "agent")
+          : "agent",
+      name: configuredById.get(id),
+    };
+    if (admissionRefusal) {
+      agent.status = "degraded";
+      agent.admissionRefusal = admissionRefusal;
+    }
+    return agent;
+  });
   return { ...selection, mainKey, scope, agents };
 }

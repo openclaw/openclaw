@@ -1,6 +1,4 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { PresenceEntry } from "../../api/types.ts";
-import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 
 const PLACE_TOPOLOGY_EVENTS = new Set([
   "config.changed",
@@ -15,27 +13,16 @@ export function isPlaceTopologyEvent(event: string): boolean {
   return PLACE_TOPOLOGY_EVENTS.has(event);
 }
 
-export function presenceStateSignature(entries: PresenceEntry[]): string {
+export function nodePresenceStateSignature(entries: PresenceEntry[]): string {
   const states = new Map<string, "connected" | "offline">();
   for (const entry of entries) {
     const id = (entry.deviceId ?? entry.instanceId)?.trim().toLowerCase();
-    if (!id || entry.mode?.trim().toLowerCase() === "gateway") {
+    if (!id || !entry.roles?.includes("node")) {
       continue;
     }
     states.set(id, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
   }
   return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
-}
-
-export function createControllerHost(element: OpenClawLightDomElement): ReactiveControllerHost {
-  return {
-    addController: (controller: ReactiveController) => element.addController(controller),
-    removeController: (controller: ReactiveController) => element.removeController(controller),
-    requestUpdate: () => element.requestUpdate(),
-    get updateComplete() {
-      return element.updateComplete;
-    },
-  };
 }
 
 export function closeAgentPicker(root: ParentNode) {

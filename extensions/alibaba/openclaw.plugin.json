@@ -1,5 +1,6 @@
 {
   "id": "alibaba",
+  "categories": ["media"],
   "activation": {
     "onStartup": false
   },

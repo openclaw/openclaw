@@ -18,6 +18,7 @@ import {
   type EventFrame,
   type HelloOk,
   resolveGatewayConnectScopes,
+  resolveModelCatalogConnect,
   selectGatewayConnectAuth,
   shouldRetryGatewayWithDeviceToken,
   isRetryableGatewayStartupUnavailableError,
@@ -40,6 +41,7 @@ import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
 } from "../../../src/shared/device-bootstrap-profile.js";
+import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { formatUiError } from "../lib/format-error.ts";
 import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
@@ -76,6 +78,14 @@ function browserSecureContext(): boolean {
   return win?.isSecureContext === true;
 }
 
+function browserDeviceFamily(): string | undefined {
+  if (navigator.platform !== "MacIntel") {
+    return undefined;
+  }
+  // Desktop-mode iPads share the Mac platform string; keep that pairing identity unchanged.
+  return navigator.maxTouchPoints > 1 || /iPad/u.test(navigator.userAgent) ? "iPad" : "Mac";
+}
+
 function isTrustedRetryEndpoint(url: string): boolean {
   try {
     const gatewayUrl = new URL(url, window.location.href);
@@ -97,7 +107,7 @@ export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | 
   policy?: Partial<HelloOk["policy"]>;
 };
 
-const CONTROL_UI_OPERATOR_ROLE = "operator";
+export const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.admin",
@@ -130,6 +140,7 @@ export type GatewayBrowserClientOptions = {
   mode?: GatewayClientMode;
   instanceId?: string;
   scopes?: string[];
+  modelCatalog?: ConnectParams["modelCatalog"];
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: EventFrame) => void;
   onClose?: (info: {
@@ -271,8 +282,8 @@ export class GatewayBrowserClient {
           retryable: error.retryable,
           retryAfterMs: error.retryAfterMs,
         }),
-      buildConnectPlan: ({ nonce, challengeTs, generation }) =>
-        this.buildConnectPlan(nonce, challengeTs, generation),
+      buildConnectPlan: ({ nonce, challengeTs, generation, serverCapabilities }) =>
+        this.buildConnectPlan(nonce, challengeTs, generation, serverCapabilities),
       buildConnectParams: (plan) => plan.params,
       onConnectHello: (hello, context) => this.handleConnectHello(hello, context.plan),
       onHello: (hello) => this.opts.onHello?.(hello),
@@ -360,6 +371,11 @@ export class GatewayBrowserClient {
     );
   }
 
+  /** Changes before a stopped or replaced connection can deliver stale auth work. */
+  get connectionGeneration(): number {
+    return this.recovery.generation;
+  }
+
   get recoveryScope() {
     return this.recovery.value;
   }
@@ -390,6 +406,7 @@ export class GatewayBrowserClient {
     connectNonce: string | null,
     connectChallengeTs: number | null | undefined,
     generation: number,
+    serverCapabilities: readonly string[],
   ): Promise<ConnectPlan> {
     this.recovery = { ...this.recovery, generation, resolved: false };
     const role = CONTROL_UI_OPERATOR_ROLE;
@@ -403,7 +420,9 @@ export class GatewayBrowserClient {
       version: this.opts.clientVersion ?? "control-ui",
       buildId: this.opts.clientBuildId,
       platform: this.opts.platform ?? navigator.platform ?? "web",
-      deviceFamily: this.opts.deviceFamily,
+      deviceFamily:
+        this.opts.deviceFamily ??
+        (this.opts.platform === undefined ? browserDeviceFamily() : undefined),
       mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
       instanceId: this.opts.instanceId,
       ...(timeZone ? { timeZone } : {}),
@@ -458,17 +477,24 @@ export class GatewayBrowserClient {
         scopes,
         device,
         // Tests bind these compact wire literals to the canonical capability registry.
-        caps: [
-          "agent-kind",
-          "approvals",
-          "task-suggestions",
-          "terminal-offset-seq",
-          "terminal-session-metadata",
-          "tool-events",
-          "inline-widgets",
-          "ui-commands",
-          "usage-refreshing",
-        ],
+        ...resolveModelCatalogConnect({
+          modelCatalog: this.opts.modelCatalog,
+          serverCapabilities,
+          caps: [
+            "agent-kind",
+            "approvals",
+            "task-suggestions",
+            "terminal-offset-seq",
+            "terminal-session-metadata",
+            "terminal-upload-path-style",
+            "tool-events",
+            "session-scoped-events",
+            "inline-widgets",
+            "model-selection-policy",
+            "ui-commands",
+            "usage-refreshing",
+          ],
+        }),
         auth: buildGatewayConnectAuth(selectedAuth),
         userAgent: navigator.userAgent,
         locale: navigator.language,
@@ -484,6 +510,9 @@ export class GatewayBrowserClient {
   }
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
+    // Publish this connection's identity before listeners can capture recovery intent.
+    // A legacy hello must not retain its predecessor while its digest is pending.
+    this.recovery.value = hello.auth?.recoveryScope ?? "";
     this.maxPayloadBytes = hello.policy?.maxPayload;
     this.startTickWatch(hello);
     this.pendingDeviceTokenRetry = false;
@@ -620,9 +649,11 @@ export class GatewayBrowserClient {
     const storedScopes = storedEntry?.scopes ?? [];
     const storedTokenCanRead =
       params.role !== CONTROL_UI_OPERATOR_ROLE ||
-      storedScopes.includes("operator.read") ||
-      storedScopes.includes("operator.write") ||
-      storedScopes.includes("operator.admin");
+      roleScopesAllow({
+        role: params.role,
+        requestedScopes: ["operator.sessions.read"],
+        allowedScopes: storedScopes,
+      });
     return selectGatewayConnectAuth({
       token: this.opts.token,
       bootstrapToken: this.opts.bootstrapToken,

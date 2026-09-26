@@ -46,6 +46,47 @@ export function resolveVitestProcessEnv(env: NodeJS.ProcessEnv = process.env): N
   };
 }
 
+/** Intersects resolved group budgets without changing any group's environment. */
+export function resolveSharedVitestCompilerEnv(
+  environments: NodeJS.ProcessEnv[],
+): NodeJS.ProcessEnv {
+  const resolved = environments.map((env) => resolveVitestProcessEnv(env));
+  const shared = { ...resolved[0] };
+  const testOnlyKeys = new Set([
+    "OPENCLAW_VITEST_MAX_WORKERS",
+    "OPENCLAW_TEST_WORKERS",
+    "OPENCLAW_VITEST_SHARD_NAME",
+    "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON",
+    "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS",
+    "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS",
+  ]);
+  // Compilation has one owner before any group requests it. Only scheduling
+  // facts may differ; loaders, Node flags and source-build inputs must agree.
+  for (const key of new Set(resolved.flatMap((env) => Object.keys(env)))) {
+    const values = resolved.map((env) => env[key]);
+    if (values.every((value) => value === shared[key])) {
+      continue;
+    }
+    if (testOnlyKeys.has(key)) {
+      delete shared[key];
+      continue;
+    }
+    if (key === "RAYON_NUM_THREADS" || key === "TOKIO_WORKER_THREADS") {
+      const limits = values.filter((value) => value?.trim()).map(parsePositiveInt);
+      if (limits.every((limit) => limit !== null)) {
+        if (limits.length > 0) {
+          shared[key] = String(Math.min(...limits));
+        } else {
+          delete shared[key];
+        }
+        continue;
+      }
+    }
+    throw new Error(`CI groups cannot share a compiler with differing ${key}`);
+  }
+  return shared;
+}
+
 /** Default watchdog timeout for Vitest runs that stop producing output. */
 const DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS = 120_000;
 /** Default heartbeat interval while waiting on silent Vitest output. */
@@ -59,6 +100,11 @@ const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
 export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
   ["test/vitest/vitest.e2e.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
+  // Keep the SDK fixture's E2E silence window while it builds packages with captured output.
+  [
+    "test/vitest/vitest.package-contract.config.ts",
+    DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  ],
   ["test/vitest/vitest.tui-pty.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   [GATEWAY_VITEST_CONFIG, DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   ["test/vitest/vitest.ui-e2e.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
@@ -69,6 +115,12 @@ export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
   ["test/vitest/vitest.full-agentic.config.ts", DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
   [
     "test/vitest/vitest.full-core-contracts.config.ts",
+    DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  ],
+  // The package-acceptance high-cardinality admission test can remain silent
+  // for ~165s under Bun while staying inside its declared 420s test budget.
+  [
+    "test/vitest/vitest.full-core-tooling.config.ts",
     DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   ],
   [
@@ -98,6 +150,10 @@ export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
     "test/vitest/vitest.gateway-server.config.ts",
     DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   ],
+  [
+    "test/vitest/vitest.gateway-database-workers.config.ts",
+    DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  ],
 ]);
 for (const owner of embeddedAgentVitestProjectOwners) {
   VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS.set(
@@ -109,11 +165,14 @@ for (const owner of embeddedAgentVitestProjectOwners) {
  * Resolves default Node flags for Vitest, including the local Maglev opt-in.
  */
 export function resolveVitestNodeArgs(env: NodeJS.ProcessEnv = process.env): string[] {
-  if (parsePermissiveBooleanToken(env.OPENCLAW_VITEST_ENABLE_MAGLEV) === true) {
-    return [];
-  }
-
-  return ["--no-maglev"];
+  // Node 24 can join a Sparkplug compiler at process.exit while that compiler
+  // waits for main-thread GC. Keep baseline compilation on the main thread.
+  return [
+    ...(parsePermissiveBooleanToken(env.OPENCLAW_VITEST_ENABLE_MAGLEV) === true
+      ? []
+      : ["--no-maglev"]),
+    "--no-concurrent-sparkplug",
+  ];
 }
 
 /**
@@ -134,19 +193,6 @@ export function resolveVitestNoOutputHeartbeatMs(
   return parsePositiveInt(env[VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]);
 }
 
-export function resolveVitestCompileCacheSafeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  if (!env.NODE_COMPILE_CACHE && !env.NODE_COMPILE_CACHE_PORTABLE) {
-    return env;
-  }
-  // Coverage can be enabled inside a dynamic Vitest config, which this wrapper
-  // cannot know before spawning. Keep the cache for orchestration/build tools,
-  // but never let a Vitest child deserialize bytecode into V8 coverage.
-  const spawnEnv: NodeJS.ProcessEnv = { ...env, NODE_DISABLE_COMPILE_CACHE: "1" };
-  delete spawnEnv.NODE_COMPILE_CACHE;
-  delete spawnEnv.NODE_COMPILE_CACHE_PORTABLE;
-  return spawnEnv;
-}
-
 /**
  * Adds default watchdog env for non-watch Vitest runs.
  */
@@ -154,19 +200,16 @@ export function resolveRunVitestSpawnEnv(
   env: NodeJS.ProcessEnv = process.env,
   argv: string[] = [],
 ): NodeJS.ProcessEnv {
-  const baseEnv = resolveVitestCompileCacheSafeEnv(env);
   const explicitMode = resolveExplicitVitestMode(argv);
   if (explicitMode === "watch") {
-    return baseEnv;
+    return env;
   }
-  if (explicitMode !== "run" && parsePermissiveBooleanToken(baseEnv.CI) !== true) {
-    return baseEnv;
+  if (explicitMode !== "run" && parsePermissiveBooleanToken(env.CI) !== true) {
+    return env;
   }
   const defaultTimeoutMs = resolveDefaultVitestNoOutputTimeoutMs(argv);
-  const hasTimeout = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
-  const envTimeoutMs = hasTimeout
-    ? parsePositiveInt(baseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY])
-    : null;
+  const hasTimeout = Object.hasOwn(env, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
+  const envTimeoutMs = hasTimeout ? parsePositiveInt(env[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]) : null;
   // Per-config entries in VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS are measured
   // silence floors for healthy lanes; a global env value (CI sets one for
   // every shard) may widen a mapped lane's window but must not shrink it
@@ -180,9 +223,9 @@ export function resolveRunVitestSpawnEnv(
       ? envTimeoutMs
       : Math.max(envTimeoutMs, configFloorMs)
     : defaultTimeoutMs;
-  const hasHeartbeat = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
+  const hasHeartbeat = Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
   return {
-    ...baseEnv,
+    ...env,
     ...(timeoutMs !== null && timeoutMs !== envTimeoutMs
       ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(timeoutMs) }
       : {}),

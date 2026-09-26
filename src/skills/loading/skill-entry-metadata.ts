@@ -1,40 +1,45 @@
-import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isPathInside } from "../../infra/path-guards.js";
+import { readRootJsonObjectSync } from "../../infra/json-files.js";
 import type { OpenClawSkillMetadata, ParsedSkillFrontmatter } from "../types.js";
-import { resolveSkillManifestMetadata } from "./frontmatter.js";
+import { resolveSkillInvocationPolicy, resolveSkillManifestMetadata } from "./frontmatter.js";
+import { SKILL_SOURCE_ORIGIN_RELATIVE_PATH } from "./skill-entry-metadata-path.js";
+import type { LoadedSkillRecord } from "./skill-root-loader.js";
 import { tryRealpath } from "./symlink-targets.js";
+import type { WorkspaceSkillSources } from "./workspace-skill-sources.types.js";
 
-const SKILL_SOURCE_ORIGIN_RELATIVE_PATH = path.join(".openclaw", "source-origin.json");
 const MAX_SKILL_SOURCE_ORIGIN_BYTES = 16 * 1024;
 
 function readSourceInstallSkillKey(skillDir: string): string | undefined {
   try {
     const sourceOriginPath = path.join(skillDir, SKILL_SOURCE_ORIGIN_RELATIVE_PATH);
-    const stat = fs.lstatSync(sourceOriginPath);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SKILL_SOURCE_ORIGIN_BYTES) {
+    const parentRealPath = tryRealpath(path.dirname(sourceOriginPath));
+    if (!parentRealPath) {
       return undefined;
     }
     const skillDirRealPath = tryRealpath(skillDir);
-    const sourceOriginRealPath = tryRealpath(sourceOriginPath);
-    if (
-      !skillDirRealPath ||
-      !sourceOriginRealPath ||
-      !isPathInside(skillDirRealPath, sourceOriginRealPath)
-    ) {
+    if (!skillDirRealPath) {
       return undefined;
     }
-    const raw = fs.readFileSync(sourceOriginPath, "utf8");
-    // SAFETY: Only the optional slug field is read and normalized after parsing.
-    const parsed = JSON.parse(raw) as { slug?: unknown };
-    return normalizeOptionalString(parsed.slug);
+    // Preserve contained parent aliases while refusing final symlinks.
+    const result = readRootJsonObjectSync({
+      rootDir: skillDirRealPath,
+      rootRealPath: skillDirRealPath,
+      relativePath: path.relative(
+        skillDirRealPath,
+        path.join(parentRealPath, path.basename(sourceOriginPath)),
+      ),
+      boundaryLabel: "skill directory",
+      rejectHardlinks: false,
+      maxBytes: MAX_SKILL_SOURCE_ORIGIN_BYTES,
+    });
+    return result.ok ? normalizeOptionalString(result.value.slug) : undefined;
   } catch {
     return undefined;
   }
 }
 
-export function resolveSkillEntryMetadata(params: {
+function resolveSkillEntryMetadata(params: {
   frontmatter: ParsedSkillFrontmatter;
   skillDir: string;
 }): OpenClawSkillMetadata | undefined {
@@ -47,4 +52,30 @@ export function resolveSkillEntryMetadata(params: {
     return metadata;
   }
   return { ...metadata, skillKey: sourceInstallSkillKey };
+}
+
+export function createSkillEntry(
+  record: LoadedSkillRecord & { sourceOrder?: number },
+): WorkspaceSkillSources["entries"][number] {
+  const { skill, frontmatter } = record;
+  const invocation = resolveSkillInvocationPolicy(frontmatter);
+  const entry: WorkspaceSkillSources["entries"][number] = {
+    ...(record.sourceOrder !== undefined ? { sourceOrder: record.sourceOrder } : {}),
+    skill,
+    frontmatter,
+    metadata: resolveSkillEntryMetadata({ frontmatter, skillDir: skill.baseDir }),
+    invocation,
+    exposure: {
+      includeInRuntimeRegistry: true,
+      includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
+      userInvocable: invocation.userInvocable ?? true,
+    },
+  };
+  if (record.syncSourceDir !== undefined) {
+    entry.syncSourceDir = record.syncSourceDir;
+  }
+  if (record.syncDirName !== undefined) {
+    entry.syncDirName = record.syncDirName;
+  }
+  return entry;
 }

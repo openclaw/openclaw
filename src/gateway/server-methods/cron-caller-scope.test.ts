@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { CronJob, CronJobCreate } from "../../cron/types.js";
 import {
+  createCronCreatorAuthorityRunScope,
+  mintCronCreatorAuthorityGrant,
+  revokeCronCreatorAuthorityRunScope,
+} from "../cron-creator-authority-grant.js";
+import {
   cronJobMatchesCallerScope,
   cronJobMatchesDeclarationScope,
   readCronCallerScope,
@@ -57,6 +62,38 @@ describe("cron caller scope ownership", () => {
       });
     },
   );
+
+  it("uses an admitted local grant over its webchat transport label", () => {
+    const runId = "local-webchat-run";
+    const capability = createCronCreatorAuthorityRunScope(runId, { kind: "local" });
+    const grant = mintCronCreatorAuthorityGrant(
+      capability,
+      undefined,
+      undefined,
+      undefined,
+      "requester",
+    );
+    const scope = readCronCallerScope({
+      internal: {
+        agentRuntimeIdentity: {
+          kind: "agentRuntime",
+          agentId: "main",
+          sessionKey: "agent:main:control-ui",
+          turnSourceAccountId: "work",
+          turnSourceChannel: "webchat",
+          operationalRunInstance: { runId },
+          cronCreatorAuthorityGrant: grant,
+        },
+      },
+    } as never);
+
+    expect(scope?.toolsAllowProvenance).toEqual({
+      version: 1,
+      source: "authenticated-requester",
+      callerOrigin: { kind: "local" },
+    });
+    revokeCronCreatorAuthorityRunScope(capability);
+  });
 
   it("uses a scoped session key before the configured default", () => {
     const job = createScopedJob();

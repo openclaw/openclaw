@@ -144,6 +144,118 @@ describe("Browser panel stream ownership", () => {
     },
   );
 
+  it("reconnects while a fallback screenshot is still pending", async () => {
+    const screenshot = createDeferred<unknown>();
+    const { controller, calls } = setup(async (envelope) =>
+      envelope.path === "/screenshot" ? screenshot.promise : undefined,
+    );
+    const socket = await start(controller);
+    socket.disconnect(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls("/screenshot")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls("/screencast")).toHaveLength(2);
+    sockets[1]!.receive(screencastFrame(NEXT_URL));
+    await flush();
+    const recovered = controller.view;
+    expect(recovered?.url).toBe(NEXT_URL);
+    screenshot.resolve({ path: "/old.png", targetId: "raw-a", url: PAGE_URL });
+    await flush();
+    expect(controller.view).toBe(recovered);
+  });
+
+  it("keeps a pending fallback screenshot when the reconnect fails", async () => {
+    const screenshot = createDeferred<unknown>();
+    const { controller, calls } = setup(async (envelope) =>
+      envelope.path === "/screenshot" ? screenshot.promise : undefined,
+    );
+    const socket = await start(controller);
+    socket.disconnect(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls("/screenshot")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls("/screencast")).toHaveLength(2);
+    sockets[1]!.disconnect(1006);
+    await flush();
+    expect(calls("/screenshot")).toHaveLength(1);
+    screenshot.resolve({ path: "/fresh.png", targetId: "raw-a", url: PAGE_URL });
+    await flush();
+    expect(controller.view?.dataUrl).toMatch(/^data:/);
+    expect(controller.loading).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(calls("/screencast")).toHaveLength(3);
+    sockets[2]!.disconnect(1006);
+    await flush();
+    expect(calls("/screenshot")).toHaveLength(2);
+  });
+
+  it.each(["annotate", "inspect"] as const)(
+    "defers a resize restart until %s ends",
+    async (mode) => {
+      const { controller, host, calls } = setup();
+      let width = 500;
+      const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
+      Object.defineProperty(stage, "clientWidth", { get: () => width });
+      controller.handleViewportResize(width, 300);
+      const socket = await start(controller);
+      controller.setMode(mode);
+      const pinned = controller.view;
+      width = 800;
+      controller.handleViewportResize(width, 300);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(socket.close).not.toHaveBeenCalled();
+      expect(calls("/screencast")).toHaveLength(1);
+      expect(controller.view).toBe(pinned);
+
+      controller.exitCaptureModes();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(socket.close).toHaveBeenCalledOnce();
+      expect(calls("/screencast")).toHaveLength(2);
+      expect(calls("/screencast")[1]?.[1]).toMatchObject({ body: { maxWidth: 800 } });
+      sockets[1]!.receive(screencastFrame(PAGE_URL, 800, 300));
+      await flush();
+      expect(controller.view?.dataUrl).toBe("blob:frame-1");
+      expect(calls("/screenshot")).toHaveLength(0);
+    },
+  );
+
+  it("recaptures when a late first frame closes before decoding", async () => {
+    const screenshot = createDeferred<unknown>();
+    let captures = 0;
+    const { controller, calls } = setup(async (envelope) =>
+      envelope.path === "/screenshot" && captures++ === 0 ? screenshot.promise : undefined,
+    );
+    const initial = controller.refreshAll();
+    await flush();
+    sockets[0]!.disconnect(1006);
+    await flush();
+    expect(calls("/screenshot")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const images: EventTarget[] = [];
+    vi.stubGlobal(
+      "Image",
+      class extends EventTarget {
+        constructor() {
+          super();
+          images.push(this);
+        }
+        src = "";
+      },
+    );
+    sockets[1]!.receive(screencastFrame());
+    sockets[1]!.disconnect(1006);
+    screenshot.resolve({ path: "/old.png", targetId: "raw-a", url: PAGE_URL });
+    await initial;
+    stubScreenshotMedia();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls("/screenshot")).toHaveLength(2);
+    const fallback = controller.view;
+    expect(fallback?.dataUrl).toMatch(/^data:/);
+    images[0]!.dispatchEvent(new Event("load"));
+    await flush();
+    expect(controller.view).toBe(fallback);
+  });
+
   it("keeps annotation context on the displayed frame when navigation metadata arrives first", async () => {
     const { controller } = setup();
     const socket = await start(controller);
@@ -215,8 +327,8 @@ describe("Browser panel stream ownership", () => {
       url: NEXT_URL,
       metrics: { title: "Next", url: NEXT_URL },
     });
-    controller.setUrlDraftEditing(true);
-    controller.setUrlDraft("editing");
+    controller.urlDraftEditing = true;
+    controller.setState("urlDraft", "editing");
     socket.receive(JSON.stringify({ type: "meta", url: PAGE_URL, title: "Page again" }));
     expect(controller.urlDraft).toBe("editing");
   });
@@ -230,17 +342,17 @@ describe("Browser panel stream ownership", () => {
       );
       const pending = controller.refreshAll();
       await flush();
-      await vi.advanceTimersByTimeAsync(1499);
-      expect(calls("/screenshot")).toHaveLength(0);
-      await vi.advanceTimersByTimeAsync(1);
+      sockets[0]!.disconnect(1006);
+      await flush();
       expect(calls("/screenshot")).toHaveLength(1);
-      sockets[0]!.receive(screencastFrame());
+      await vi.advanceTimersByTimeAsync(10_000);
+      sockets[1]!.receive(screencastFrame());
       await flush();
       const streamedView = controller.view;
       expect(streamedView?.dataUrl).toBe("blob:frame-0");
       expect(controller.loading).toBe(false);
       if (closes) {
-        sockets[0]!.disconnect(1006);
+        sockets[1]!.disconnect(1006);
       }
       screenshot.resolve({ path: "/old.png", targetId: "raw-a", url: PAGE_URL });
       await pending;
@@ -309,23 +421,107 @@ describe("Browser panel stream ownership", () => {
     ).toBe(true);
   });
 
-  it("keeps the displayed frame on socket failure, falls back, and rate-limits retries", async () => {
+  it("automatically falls back after socket failure and rate-limits reconnects", async () => {
     const { controller, calls } = setup();
     const socket = await start(controller);
     socket.disconnect(1006);
     expect(controller.view?.dataUrl).toBe("blob:frame-0");
     expect(revokedUrls).toEqual([]);
-    await controller.refreshAll();
+    await vi.advanceTimersByTimeAsync(0);
     expect(controller.view?.dataUrl).toMatch(/^data:/);
     expect(revokedUrls).toEqual(["blob:frame-0"]);
     expect(calls("/screencast")).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(10_000);
-    const retry = controller.refreshAll();
     await flush();
     expect(calls("/screencast")).toHaveLength(2);
     sockets[1]!.disconnect(1006);
-    await retry;
+    await flush();
+    expect(calls("/screenshot")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(9999);
+    expect(calls("/screencast")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(calls("/screencast")).toHaveLength(3);
+    sockets[2]!.receive(screencastFrame(NEXT_URL));
+    await flush();
+    expect(controller.view?.url).toBe(NEXT_URL);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(calls("/screencast")).toHaveLength(3);
   });
+
+  it.each(["annotate", "inspect"] as const)(
+    "defers socket recovery until %s ends",
+    async (mode) => {
+      const { controller, calls } = setup();
+      const socket = await start(controller);
+      controller.setMode(mode);
+      controller.setState("strokes", [{ points: [{ x: 0.1, y: 0.2 }] }]);
+      controller.setState("inspected", createInspectedNode("Pinned button"));
+      const pinned = controller.view;
+      socket.disconnect(1006);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(controller.view).toBe(pinned);
+      expect(controller.strokes).toHaveLength(1);
+      expect(controller.inspected?.name).toBe("Pinned button");
+      expect(calls("/screenshot")).toHaveLength(0);
+      expect(calls("/screencast")).toHaveLength(1);
+
+      controller.exitCaptureModes();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls("/screencast")).toHaveLength(2);
+      sockets[1]!.receive(screencastFrame(NEXT_URL));
+      await flush();
+      expect(controller.view?.url).toBe(NEXT_URL);
+    },
+  );
+
+  it("does not replace a capture entered while the recovery screenshot is pending", async () => {
+    const screenshot = createDeferred<unknown>();
+    const { controller, calls } = setup(async (envelope) =>
+      envelope.path === "/screenshot" ? screenshot.promise : undefined,
+    );
+    const socket = await start(controller);
+    socket.disconnect(1006);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls("/screenshot")).toHaveLength(1);
+    controller.setMode("annotate");
+    const pinned = controller.view;
+    screenshot.resolve({ path: "/fresh.png", targetId: "raw-a", url: PAGE_URL });
+    await flush();
+    expect(controller.view).toBe(pinned);
+    expect(revokedUrls).toEqual([]);
+    controller.exitCaptureModes();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(controller.view?.dataUrl).toMatch(/^data:/);
+  });
+
+  it.each(["disconnect", "reset", "tab", "client", "route", "hidden", "unavailable"])(
+    "does not recover a stream after %s invalidates its owner",
+    async (kind) => {
+      const { controller, host, calls } = setup();
+      const socket = await start(controller);
+      socket.disconnect(1006);
+      await vi.advanceTimersByTimeAsync(0);
+      const screenshots = calls("/screenshot").length;
+      if (kind === "disconnect") {
+        controller.hostDisconnected();
+      } else if (kind === "reset") {
+        controller.resetBrowserState();
+      } else if (kind === "tab") {
+        controller.setState("activeTargetId", "tab-b");
+      } else if (kind === "client") {
+        host.client = null;
+      } else if (kind === "route") {
+        controller.operations.resetRoute({ target: "host", profile: "other" });
+      } else if (kind === "hidden") {
+        host.open = false;
+      } else {
+        host.available = false;
+      }
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(calls("/screencast")).toHaveLength(1);
+      expect(calls("/screenshot")).toHaveLength(screenshots);
+    },
+  );
 
   it("falls back and backs off malformed mint responses without opening a socket", async () => {
     const { controller, calls } = setup(async (envelope) =>
@@ -345,26 +541,33 @@ describe("Browser panel stream ownership", () => {
     expect(sockets).toHaveLength(0);
   });
 
-  it("restarts streaming immediately after a URL-bar navigation on the same tab", async () => {
-    const { controller, calls } = setup(async (envelope) =>
-      envelope.path === "/navigate" ? { targetId: "raw-a", url: NEXT_URL } : undefined,
-    );
-    await start(controller);
-    expect(calls("/screencast")).toHaveLength(1);
-    const navigation = controller.openUrl(NEXT_URL, { newTab: false });
-    await flush();
-    expect(calls("/screencast")).toHaveLength(2);
-    const socket = sockets.at(-1)!;
-    socket.receive(
-      JSON.stringify({ type: "ready", targetId: "raw-a", url: NEXT_URL, title: "Next" }),
-    );
-    socket.receive(screencastFrame(NEXT_URL));
-    await navigation;
-    await flush();
-    expect(controller.view?.dataUrl).toBe("blob:frame-1");
-    expect(controller.view?.url).toBe(NEXT_URL);
-    expect(calls("/screenshot")).toHaveLength(0);
-  });
+  it.each([false, true])(
+    "restarts streaming after navigation (previous stream failed: %s)",
+    async (failed) => {
+      const { controller, calls } = setup(async (envelope) =>
+        envelope.path === "/navigate" ? { targetId: "raw-a", url: NEXT_URL } : undefined,
+      );
+      const initialSocket = await start(controller);
+      if (failed) {
+        initialSocket.disconnect(1006);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(calls("/screencast")).toHaveLength(1);
+      const navigation = controller.openUrl(NEXT_URL, { newTab: false });
+      await flush();
+      expect(calls("/screencast")).toHaveLength(2);
+      const socket = sockets.at(-1)!;
+      socket.receive(
+        JSON.stringify({ type: "ready", targetId: "raw-a", url: NEXT_URL, title: "Next" }),
+      );
+      socket.receive(screencastFrame(NEXT_URL));
+      await navigation;
+      await flush();
+      expect(controller.view?.dataUrl).toBe("blob:frame-1");
+      expect(controller.view?.url).toBe(NEXT_URL);
+      expect(calls("/screenshot")).toHaveLength(failed ? 1 : 0);
+    },
+  );
 
   it.each(["disconnect", "reset", "tab"])("closes and revokes on %s teardown", async (kind) => {
     const { controller } = setup();
@@ -422,9 +625,7 @@ describe("Browser panel stream ownership", () => {
   it("does not let continuous mismatched frames postpone the debounced viewport sync", async () => {
     const { controller, calls } = setup();
     controller.handleViewportResize(500, 300);
-    const schedule = vi.spyOn(controller, "scheduleViewportSync");
     const socket = await start(controller);
-    expect(schedule).toHaveBeenCalledTimes(1);
     for (let elapsed = 100; elapsed <= 600; elapsed += 100) {
       socket.receive(screencastFrame(PAGE_URL, 100, 100));
       await vi.advanceTimersByTimeAsync(100);
@@ -433,15 +634,47 @@ describe("Browser panel stream ownership", () => {
       calls("/act").filter(
         ([, params]) => (params as BrowserRequestEnvelope).body?.kind === "resize",
       );
-    // The sync fired at 300 ms and 600 ms despite a frame every 100 ms; frames
-    // arriving while a sync was pending joined it instead of postponing it.
     expect(resizes()).toHaveLength(1);
     expect(resizes()[0]?.[1]).toMatchObject({ body: { width: 500, height: 300 } });
-    expect(schedule).toHaveBeenCalledTimes(2);
     socket.receive(screencastFrame(PAGE_URL, 100, 100));
-    await flush();
-    expect(schedule).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(resizes()).toHaveLength(1);
   });
+
+  it.each([
+    { acknowledged: true, width: 1300, height: 800 },
+    { acknowledged: true, width: 100, height: 100 },
+    { acknowledged: false, width: 1300, height: 800 },
+  ])(
+    "restores the visible viewport after drift to $width × $height (acknowledged: $acknowledged)",
+    async ({ acknowledged, width, height }) => {
+      const { controller, calls } = setup();
+      controller.handleViewportResize(640, 480);
+      const socket = await start(controller);
+      await vi.advanceTimersByTimeAsync(300);
+      if (acknowledged) {
+        socket.receive(screencastFrame(PAGE_URL, 640, 480));
+        await flush();
+      }
+
+      socket.receive(screencastFrame(PAGE_URL, width, height));
+      await flush();
+      await vi.advanceTimersByTimeAsync(300);
+      const resizes = () =>
+        calls("/act").filter(
+          ([, params]) => (params as BrowserRequestEnvelope).body?.kind === "resize",
+        );
+      expect(resizes()).toHaveLength(2);
+      expect(resizes()[1]?.[1]).toMatchObject({ body: { width: 640, height: 480 } });
+
+      // Repeated frames from a browser that ignores the correction must settle.
+      for (let frame = 0; frame < 4; frame += 1) {
+        socket.receive(screencastFrame(PAGE_URL, width, height));
+        await vi.advanceTimersByTimeAsync(300);
+      }
+      expect(resizes()).toHaveLength(2);
+    },
+  );
 
   it("negotiates pixel density and restarts only after a large debounced width change", async () => {
     const { controller, host, calls } = setup();
@@ -470,6 +703,41 @@ describe("Browser panel stream ownership", () => {
     sockets[1]!.receive(screencastFrame(PAGE_URL, 800, 1200));
     await flush();
   });
+
+  it.each([false, true])(
+    "settles a resize before applying new dimensions (reopened: %s)",
+    async (reopened) => {
+      const firstResize = createDeferred<{ ok: true }>();
+      let resizeCount = 0;
+      const { controller, host, calls } = setup(async (envelope) => {
+        if (envelope.path === "/act" && envelope.body?.kind === "resize") {
+          resizeCount += 1;
+          return resizeCount === 1 ? firstResize.promise : { ok: true };
+        }
+        return undefined;
+      });
+      controller.handleViewportResize(500, 300);
+      await start(controller);
+      await vi.advanceTimersByTimeAsync(300);
+      if (reopened) {
+        host.open = false;
+        controller.suspendView();
+        host.open = true;
+        await start(controller);
+      }
+      controller.handleViewportResize(600, 400);
+      controller.handleViewportResize(640, 480);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(resizeCount).toBe(1);
+
+      firstResize.resolve({ ok: true });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(resizeCount).toBe(2);
+      expect(calls("/act").at(-1)?.[1]).toMatchObject({
+        body: { kind: "resize", width: 640, height: 480 },
+      });
+    },
+  );
 
   it("does not let a retired decoder replace or revoke the new stream's frame", async () => {
     const { controller } = setup();

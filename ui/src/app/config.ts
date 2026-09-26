@@ -8,6 +8,7 @@ import {
   type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
@@ -35,6 +36,8 @@ type ApplicationConfig = {
   allowExternalEmbedUrls: boolean;
   automaticallyFetchFavicons: boolean;
   communityInvite: boolean;
+  /** Null until the serving Gateway publishes its bootstrap policy. */
+  newSessionModelDefaults?: "last-used" | "configured" | null;
   terminalEnabled: boolean;
   cliAgentsEnabled?: boolean;
   pluginAssetsRequireAuth: boolean;
@@ -68,6 +71,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   allowExternalEmbedUrls: false,
   automaticallyFetchFavicons: false,
   communityInvite: false,
+  newSessionModelDefaults: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
   cliAgentsEnabled: false,
   pluginAssetsRequireAuth: true,
@@ -114,15 +118,22 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
     communityInvite: parsed.communityInvite === true,
+    newSessionModelDefaults: parsed.newSessionModelDefaults ?? "last-used",
     terminalEnabled: Boolean(parsed.terminalEnabled),
     cliAgentsEnabled: Boolean(parsed.cliAgentsEnabled),
     pluginAssetsRequireAuth: parsed.pluginAssetsRequireAuth !== false,
-    pluginFrameGrants: (parsed.pluginFrameGrants ?? []).filter(
-      (grant): grant is ControlUiPluginFrameGrantAck =>
-        typeof grant?.pluginId === "string" &&
-        typeof grant.path === "string" &&
-        (grant.match === "exact" || grant.match === "prefix"),
-    ),
+    pluginFrameGrants: (parsed.pluginFrameGrants ?? [])
+      .filter(
+        (grant): grant is ControlUiPluginFrameGrantAck =>
+          typeof grant?.pluginId === "string" &&
+          typeof grant.path === "string" &&
+          (grant.match === "exact" || grant.match === "prefix"),
+      )
+      .map((grant) => ({
+        pluginId: grant.pluginId,
+        path: uiDevGatewayResourceUrl(grant.path),
+        match: grant.match,
+      })),
   };
 }
 

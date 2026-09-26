@@ -1,4 +1,4 @@
-import { Value } from "typebox/value";
+import { Check } from "typebox/schema";
 import {
   SessionParticipantIdentitySchema,
   type SessionParticipantIdentity,
@@ -14,7 +14,7 @@ export function readTranscriptSenderIdentity(value: unknown): TranscriptSenderId
   if (
     typeof value !== "object" ||
     value === null ||
-    !Value.Check(SessionParticipantIdentitySchema, value) ||
+    !Check(SessionParticipantIdentitySchema, value) ||
     (value.type !== "profile" && value.type !== "remote" && value.type !== "observation") ||
     Object.values(value).some((part) => part !== null && (!part.trim() || part.length > 512))
   ) {

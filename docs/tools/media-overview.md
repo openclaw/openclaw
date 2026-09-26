@@ -54,6 +54,19 @@ telephony, meetings, browser realtime, and native push-to-talk clients.
   </Card>
 </CardGroup>
 
+## Local media files
+
+`view_image`, `pdf`, and reference inputs for `image_generate`, `music_generate`,
+and `video_generate` use the task's working directory for relative paths. A task
+running in a Git worktree can read media from that worktree even when the agent's
+default workspace is elsewhere.
+
+Workspace-only access follows the session's approved filesystem root, which can
+include parent directories of the current working directory. Paths and symlinks
+that escape that root are rejected. Sandboxed tools read through the sandbox
+filesystem; selecting a host worktree does not grant access outside the sandbox.
+OpenClaw-managed inbound attachments retain their existing access rules.
+
 ## Provider capability matrix
 
 <Note>

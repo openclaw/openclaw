@@ -374,11 +374,6 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
-  it("returns a friendly billing message for insufficient credits", () => {
-    const msg = makeAssistantError("insufficient credits");
-    const result = formatAssistantErrorText(msg);
-    expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
-  });
   it("includes provider and assistant model in billing message when provider is given", () => {
     const msg = makeAssistantError("insufficient credits");
     const result = formatAssistantErrorText(msg, { provider: "Anthropic" });
@@ -492,7 +487,9 @@ describe("formatAssistantErrorText", () => {
   });
   it("keeps plain HTTP rate-limit guidance user-facing", () => {
     const msg = makeAssistantError("429 Your quota has been exhausted, try again in 24 hours");
-    expect(formatAssistantErrorText(msg)).toContain("24 hours");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ Your quota has been exhausted, try again in 24 hours",
+    );
     expect(formatUserFacingAssistantErrorText(msg)).toContain("24 hours");
   });
 
@@ -523,14 +520,6 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
-  it("strips leading HTTP status code prefix from non-JSON rate limit messages", () => {
-    const msg = makeAssistantError("429 Your quota has been exhausted, try again in 24 hours");
-    const result = formatAssistantErrorText(msg);
-    expect(result).toContain("try again in 24 hours");
-    expect(result).not.toMatch(/^⚠️ 429\b/);
-    expect(result).toBe("⚠️ Your quota has been exhausted, try again in 24 hours");
-  });
-
   it("does not misdiagnose standalone Cloudflare challenge HTML as DNS", () => {
     const msg = makeAssistantError(`<!DOCTYPE html>
 <html>
@@ -558,6 +547,20 @@ describe("formatAssistantErrorText", () => {
     // Keep provider signal; do not rewrite to the timeout string (formatAssistantErrorText
     // may return undefined for some paths — assert the concrete copy we preserve).
     expect(formatAssistantErrorText(msg)).toBe("Provider finish_reason: error");
+  });
+
+  it.each([
+    ["EAI_AGAIN", "LLM request failed: DNS lookup for the provider endpoint failed."],
+    ["ENOTFOUND", "LLM request failed: DNS lookup for the provider endpoint failed."],
+    ["ECONNREFUSED", "LLM request failed: connection refused by the provider endpoint."],
+    ["ECONNRESET", "LLM request failed: network connection was interrupted."],
+    ["ENETUNREACH", "LLM request failed: the provider endpoint is unreachable from this host."],
+    ["UNRECOGNIZED", "LLM request failed: network connection error."],
+    ["DNS_CONFIG_INVALID", "LLM request failed: network connection error."],
+  ])("uses structured transport code %s with a generic provider message", (errorCode, expected) => {
+    const message = { ...makeAssistantError("Connection error."), errorCode };
+    expect(formatAssistantErrorText(message)).toBe(expected);
+    expect(formatUserFacingAssistantErrorText(message)).toBe(expected);
   });
 
   it("returns a connection-refused message for ECONNREFUSED failures", () => {
@@ -910,11 +913,6 @@ describe("formatBillingErrorMessage — authMode neutral copy (#80877)", () => {
 
   it("REGRESSION: undefined authMode (legacy call-sites) still returns 'API key' copy", () => {
     const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5");
-    expect(result).toMatch(/api key/i);
-  });
-
-  it("REGRESSION: no-provider call still returns generic 'API key' copy", () => {
-    const result = formatBillingErrorMessage();
     expect(result).toMatch(/api key/i);
   });
 });

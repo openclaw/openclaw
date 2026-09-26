@@ -4,10 +4,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileUtf8 } from "./exec-file.js";
 import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput,
 } from "./service.test-helpers.js";
+import { systemdManagerVersionProbe } from "./systemd-user-bus.test-support.js";
 
 const assertNoSystemOwnership = vi.hoisted(() =>
   vi.fn<typeof import("./systemd-system.js").assertNoSystemSystemdOwnership>(),
@@ -17,6 +19,7 @@ const reloadUserManager = vi.hoisted(() =>
   vi.fn<typeof import("./systemd-exec.js").reloadSystemdUserManager>(),
 );
 
+vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 vi.mock("./systemd-system.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-system.js")>()),
   assertNoSystemSystemdOwnership: assertNoSystemOwnership,
@@ -58,22 +61,29 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
   let unitPath: string;
   const realNow = Date.now;
   let offset = 0;
+  let monotonicNow = 0;
 
   beforeEach(async () => {
     offset = 0;
+    monotonicNow = 0;
+    vi.mocked(execFileUtf8).mockReset().mockImplementation(systemdManagerVersionProbe);
     vi.spyOn(Date, "now").mockImplementation(() => realNow() + offset);
+    // Filesystem scheduling must not consume this clock-contract fixture's budget.
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
     assertNoSystemOwnership.mockReset().mockResolvedValue(undefined);
     reloadUserManager.mockReset().mockResolvedValue(undefined);
     busctl.mockReset();
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clock-step-")));
     env = {
       HOME: path.join(root, "home"),
+      XDG_RUNTIME_DIR: path.join(root, "runtime"),
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${root}/bus`,
       OPENCLAW_STATE_DIR: path.join(root, "state"),
       OPENCLAW_SYSTEMD_UNIT: "openclaw-owned",
     };
     unitPath = path.join(env.HOME!, ".config/systemd/user/openclaw-owned.service");
-    await fs.mkdir(path.dirname(unitPath), { recursive: true });
-    await fs.mkdir(env.OPENCLAW_STATE_DIR!);
+    await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o700 });
+    await fs.mkdir(env.OPENCLAW_STATE_DIR!, { mode: 0o700 });
   });
 
   afterEach(async () => {
@@ -86,6 +96,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
     async (stepMs) => {
       busctl.mockImplementation(async (serviceEnv) => {
         offset = stepMs;
+        monotonicNow += 100;
         return unitNotFound(serviceEnv.OPENCLAW_SYSTEMD_UNIT ?? "openclaw-owned");
       });
 
@@ -98,6 +109,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
         busctl.mock.calls.map((call) => call[2]),
         BUDGET_MS / 3 - 100,
       );
+      expect(busctl.mock.calls.map((call) => call[2])).toEqual([1_666, 1_633]);
     },
   );
 
@@ -110,6 +122,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
       };
       busctl.mockImplementation(async (_serviceEnv, args) => {
         offset = stepMs;
+        monotonicNow += 100;
         const stdout = args.includes("LoadUnit")
           ? JSON.stringify({
               type: "o",
@@ -130,6 +143,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
         busctl.mock.calls.map((call) => call[2]),
         BUDGET_MS / 3 - 100,
       );
+      expect(busctl.mock.calls.map((call) => call[2])).toEqual([1_666, 2_450, 4_800]);
     },
   );
 
@@ -150,13 +164,14 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
           "Environment=OPENCLAW_GATEWAY_PORT=18789",
           "",
         ].join("\n"),
-        "utf8",
+        { encoding: "utf8", mode: 0o600 },
       );
       busctl.mockImplementation(async (serviceEnv) =>
         unitNotFound(serviceEnv.OPENCLAW_SYSTEMD_UNIT ?? "openclaw-owned"),
       );
       assertNoSystemOwnership.mockImplementation(async () => {
         offset = stepMs;
+        monotonicNow += 100;
       });
 
       await expect(refreshLegacySystemdServiceMetadata(env, BUDGET_MS)).resolves.toBe(true);
@@ -168,6 +183,7 @@ describe.skipIf(process.platform === "win32")("systemd budgets across a wall-clo
       ];
       expect(assertNoSystemOwnership).toHaveBeenCalledTimes(3);
       expectBudgetShares(timeouts, BUDGET_MS - 1_000);
+      expect(timeouts).toEqual([5_000, 4_900, 4_800, 4_700]);
     },
   );
 });

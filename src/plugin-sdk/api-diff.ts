@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { PluginSdkApiDeclarationSection } from "./api-baseline-declaration-closure.js";
 import { renderPluginSdkApiBaseline, type PluginSdkApiExport } from "./api-baseline.js";
 
@@ -60,6 +61,13 @@ type PluginSdkApiDiffPayload = {
 export type PluginSdkApiDiff = PluginSdkApiDiffPayload & {
   digest: string;
 };
+
+export function createPluginSdkApiDiff(payload: PluginSdkApiDiffPayload): PluginSdkApiDiff {
+  return {
+    ...payload,
+    digest: createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex"),
+  };
+}
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -294,57 +302,32 @@ export function diffPluginSdkApi(
     for (const exportName of [...exportNames].toSorted(compareText)) {
       const beforeExport = beforeExports.get(exportName);
       const afterExport = afterExports.get(exportName);
+      let change: PluginSdkApiExportChange["change"];
       if (!beforeExport && afterExport) {
-        payload.exports.push({
-          after: snapshot(afterExport),
-          before: null,
-          change: "added",
-          declarationChanges: [],
-          entrypoint,
-          exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-        });
+        change = "added";
+      } else if (beforeExport && !afterExport) {
+        change = "removed";
+      } else if (!beforeExport || !afterExport) {
         continue;
-      }
-      if (beforeExport && !afterExport) {
-        payload.exports.push({
-          after: null,
-          before: snapshot(beforeExport),
-          change: "removed",
-          declarationChanges: [],
-          entrypoint,
-          exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-        });
-        continue;
-      }
-      if (!beforeExport || !afterExport) {
-        continue;
-      }
-      if (
+      } else if (
         beforeExport.kind !== afterExport.kind ||
         beforeExport.declaration !== afterExport.declaration
       ) {
-        payload.exports.push({
-          after: snapshot(afterExport),
-          before: snapshot(beforeExport),
-          change: "signature",
-          declarationChanges: [],
-          entrypoint,
-          exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-        });
+        change = "signature";
       } else if (beforeExport.closureHash !== afterExport.closureHash) {
-        payload.exports.push({
-          after: snapshot(afterExport),
-          before: snapshot(beforeExport),
-          change: "reachable",
-          declarationChanges: [],
-          entrypoint,
-          exportName,
-          importSpecifier: moduleSurface.importSpecifier,
-        });
+        change = "reachable";
+      } else {
+        continue;
       }
+      payload.exports.push({
+        after: snapshot(afterExport),
+        before: snapshot(beforeExport),
+        change,
+        declarationChanges: [],
+        entrypoint,
+        exportName,
+        importSpecifier: moduleSurface.importSpecifier,
+      });
     }
   }
 
@@ -358,10 +341,7 @@ export function diffPluginSdkApi(
     );
   }
 
-  return {
-    ...payload,
-    digest: createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex"),
-  };
+  return createPluginSdkApiDiff(payload);
 }
 
 export function hasPluginSdkApiChanges(diff: PluginSdkApiDiff): boolean {
@@ -385,22 +365,6 @@ function appendText(lines: string[], label: "after" | "before", text: string | n
   if (textLines.length > REPORT_TEXT_LINE_LIMIT) {
     lines.push(`      … ${textLines.length - REPORT_TEXT_LINE_LIMIT} more lines`);
   }
-}
-
-function truncateUtf8(text: string, maxBytes: number): string {
-  const bytes = Buffer.from(text, "utf8");
-  if (bytes.length <= maxBytes) {
-    return text;
-  }
-  let end = maxBytes;
-  while (end > 0) {
-    const excludedByte = bytes[end];
-    if (excludedByte === undefined || (excludedByte & 0xc0) !== 0x80) {
-      break;
-    }
-    end -= 1;
-  }
-  return bytes.subarray(0, end).toString("utf8");
 }
 
 function appendExportChanges(
@@ -522,5 +486,5 @@ export function formatPluginSdkApiDiffReport(params: {
     return report;
   }
   const suffix = "\n\n… summary truncated; inspect the JSON artifact.\n";
-  return `${truncateUtf8(report, REPORT_BYTE_LIMIT - Buffer.byteLength(suffix, "utf8"))}${suffix}`;
+  return `${truncateUtf8Prefix(report, REPORT_BYTE_LIMIT - Buffer.byteLength(suffix, "utf8"))}${suffix}`;
 }

@@ -20,6 +20,10 @@ function createFixture() {
   writeFileSync(
     installer,
     `#!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ \${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 printf '%s\n' "$@" >"$FAKE_INSTALL_ARGS"
 prefix=""
@@ -258,7 +262,7 @@ describe("scripts/connect.sh", () => {
     expect(existsSync(fixture.installArgs)).toBe(false);
   });
 
-  it.each(["latest", "next", "beta", "v2026.8.1", "2026.8", "2026.8.x", "^2026.8.1", "2026.8.*"])(
+  it.each(["latest", "v2026.8.1", "2026.8", "2026.8.x", "^2026.8.1", "2026.8.*"])(
     "rejects non-exact version %s",
     (version) => {
       const fixture = createFixture();

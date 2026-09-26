@@ -34,15 +34,23 @@ const mockReadSourceConfigSnapshot = vi.hoisted(() => async () => {
   }
 });
 
-const mockReplaceConfigFile = vi.hoisted(() => async ({ nextConfig }: { nextConfig: unknown }) => {
-  const fsLocal = await import("node:fs/promises");
-  const pathLocal = await import("node:path");
-  const configPath = pathLocal.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
-  await fsLocal.writeFile(configPath, JSON.stringify(nextConfig, null, 2), "utf-8");
-});
+const mockReplaceConfigFile = vi.hoisted(
+  () =>
+    async ({ sourceConfig }: { sourceConfig: unknown }) => {
+      const fsLocal = await import("node:fs/promises");
+      const pathLocal = await import("node:path");
+      const configPath = pathLocal.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
+      await fsLocal.writeFile(configPath, JSON.stringify(sourceConfig, null, 2), "utf-8");
+      return { nextConfig: sourceConfig };
+    },
+);
 
 vi.mock("./io.js", () => ({
   readSourceConfigSnapshot: mockReadSourceConfigSnapshot,
+  readSourceConfigSnapshotForWrite: async () => ({
+    snapshot: await mockReadSourceConfigSnapshot(),
+    writeOptions: {},
+  }),
 }));
 
 vi.mock("./mutate.js", () => ({
@@ -77,6 +85,15 @@ async function withMcpConfigHome<T>(
   );
 }
 
+async function readValidMcpConfig() {
+  const loaded = await listConfiguredMcpServers();
+  expect(loaded.ok).toBe(true);
+  if (!loaded.ok) {
+    throw new Error("expected MCP config to load");
+  }
+  return loaded;
+}
+
 describe("config mcp config", () => {
   it("writes and removes top-level mcp servers", async () => {
     await withMcpConfigHome({}, async () => {
@@ -89,11 +106,7 @@ describe("config mcp config", () => {
       });
 
       expect(setResult.ok).toBe(true);
-      const loaded = await listConfiguredMcpServers();
-      expect(loaded.ok).toBe(true);
-      if (!loaded.ok) {
-        throw new Error("expected MCP config to load");
-      }
+      const loaded = await readValidMcpConfig();
       expect(loaded.mcpServers.context7).toEqual({
         command: "uvx",
         args: ["context7-mcp"],
@@ -102,11 +115,7 @@ describe("config mcp config", () => {
       const unsetResult = await unsetConfiguredMcpServer({ name: "context7" });
       expect(unsetResult.ok).toBe(true);
 
-      const reloaded = await listConfiguredMcpServers();
-      expect(reloaded.ok).toBe(true);
-      if (!reloaded.ok) {
-        throw new Error("expected MCP config to reload");
-      }
+      const reloaded = await readValidMcpConfig();
       expect(reloaded.mcpServers).toStrictEqual({});
     });
   });
@@ -208,11 +217,7 @@ describe("config mcp config", () => {
       });
 
       expect(setResult.ok).toBe(true);
-      const loaded = await listConfiguredMcpServers();
-      expect(loaded.ok).toBe(true);
-      if (!loaded.ok) {
-        throw new Error("expected MCP config to load");
-      }
+      const loaded = await readValidMcpConfig();
       expect(loaded.mcpServers.remote).toEqual({
         url: "https://example.com/mcp",
         headers: {
@@ -274,11 +279,7 @@ describe("config mcp config", () => {
         });
 
         expect(setResult.ok).toBe(true);
-        const loaded = await listConfiguredMcpServers();
-        expect(loaded.ok).toBe(true);
-        if (!loaded.ok) {
-          throw new Error("expected MCP config to load");
-        }
+        const loaded = await readValidMcpConfig();
         expect(loaded.mcpServers.billing).toEqual({
           command: "uvx",
           args: [
@@ -388,11 +389,7 @@ describe("config mcp config", () => {
       });
 
       expect(setResult.ok).toBe(true);
-      const loaded = await listConfiguredMcpServers();
-      expect(loaded.ok).toBe(true);
-      if (!loaded.ok) {
-        throw new Error("expected MCP config to load");
-      }
+      const loaded = await readValidMcpConfig();
       expect(loaded.mcpServers.remote).toEqual({
         url: "https://example.com/mcp",
         transport: "streamable-http",
@@ -415,11 +412,7 @@ describe("config mcp config", () => {
       });
 
       expect(setResult.ok).toBe(true);
-      const loaded = await listConfiguredMcpServers();
-      expect(loaded.ok).toBe(true);
-      if (!loaded.ok) {
-        throw new Error("expected MCP config to load");
-      }
+      const loaded = await readValidMcpConfig();
       expect(loaded.mcpServers.remote).toEqual({
         url: "https://example.com/mcp",
         connectionTimeoutMs: 5,

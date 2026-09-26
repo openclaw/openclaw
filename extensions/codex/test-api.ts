@@ -26,8 +26,10 @@ import {
   buildThreadStartParams,
   buildTurnStartParams,
 } from "./src/app-server/thread-lifecycle.js";
+import { buildCodexParentLocalInstructions } from "./src/app-server/turn-params.js";
 
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
+export { createCodexDynamicToolBridge };
 
 /** Keeps host integration tests on the plugin's test boundary without exposing runtime internals. */
 export async function createCodexSessionInitializationFixtureForTest(params: {
@@ -40,8 +42,19 @@ export async function createCodexSessionInitializationFixtureForTest(params: {
   return await createCodexSessionInitializationFixture(params);
 }
 
+// Host finalizer fixtures opt into Vitest hooks without affecting snapshot consumers.
+export const loadCodexSettledFinalizerTestFixture = () =>
+  import("./src/app-server/settled-turn-finalizer.test-support.js");
+
+export const loadCodexNativeSubagentMonitorTestFixture = () =>
+  import("./src/app-server/native-subagent-monitor.test-support.js");
+
+export const loadCodexAbortTranscriptTestFixture = () =>
+  import("./src/app-server/transcript-abort.test-support.js");
+
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
+  parentLocalInstructions: string | null;
   threadStartParams: ReturnType<typeof buildThreadStartParams>;
   threadResumeParams: ReturnType<typeof buildThreadResumeParams>;
   turnStartParams: ReturnType<typeof buildTurnStartParams>;
@@ -78,6 +91,9 @@ export function buildCodexHarnessPromptSnapshot(params: {
   );
   return {
     developerInstructions,
+    parentLocalInstructions: buildCodexParentLocalInstructions(params.attempt, {
+      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
+    }),
     threadStartParams: buildThreadStartParams(params.attempt, {
       cwd: params.cwd,
       dynamicTools: params.dynamicTools,
@@ -97,6 +113,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
       appServer: params.appServer,
       promptText: params.promptText,
       turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
+      parentLocalEgress: true,
       messageToolAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
         (tool) => tool.name === "message",
       ),

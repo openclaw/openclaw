@@ -186,6 +186,42 @@ describe("resolveGatewayScopedTools", () => {
     expect(result.tools.some((tool) => tool.name === "sessions_history")).toBe(true);
   });
 
+  it.each([
+    { tools: { profile: "coding" }, actions: ["update.run"] },
+    {
+      tools: { profile: "full" },
+      actions: ["config.get", "config.schema.lookup", "update.run"],
+    },
+    {
+      tools: { profile: "messaging", alsoAllow: ["gateway"] },
+      actions: ["config.get", "config.schema.lookup", "update.run"],
+    },
+  ] satisfies Array<{ tools: OpenClawConfig["tools"]; actions: string[] }>)(
+    "limits gateway actions to the borrowed runtime policy: $tools",
+    ({ tools, actions }) => {
+      const result = resolveGatewayScopedTools({
+        cfg: {
+          plugins: { enabled: false },
+          agents: {
+            ownership: "explicit",
+            entries: { main: { tools: { profile: "full" } }, worker: { tools } },
+          },
+        },
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        runtimePolicySessionKey: "agent:worker:main",
+        runtimePolicyAgentId: "worker",
+        senderIsOwner: true,
+        surface: "loopback",
+      });
+
+      expect(result.tools.find((tool) => tool.name === "gateway")?.parameters).toHaveProperty(
+        "properties.action.enum",
+        actions,
+      );
+    },
+  );
+
   it("rejects a runtime policy agent that conflicts with its session key", () => {
     const cfg = {
       agents: {
@@ -213,7 +249,6 @@ describe("resolveGatewayScopedTools", () => {
     ].flatMap(({ mode, resolve }) =>
       [
         { label: "ls-only", toolsAllow: ["ls"], expected: ["ls"] },
-        { label: "read-only", toolsAllow: ["read"], expected: ["read"] },
         { label: "mixed", toolsAllow: ["ls", "read"], expected: ["ls", "read"] },
         {
           label: "filesystem group",

@@ -12,7 +12,7 @@ Manifest fields that describe the models a provider plugin exposes: which shorth
 
 ## modelSupport reference
 
-Use `modelSupport` when OpenClaw should infer your provider plugin from shorthand model ids like `gpt-5.6-sol` or `claude-sonnet-4.6` before plugin runtime loads.
+Use `modelSupport` when OpenClaw should infer your provider plugin from shorthand model ids like `gpt-6-astra` or `claude-sonnet-4.6` before plugin runtime loads.
 
 ```json
 {
@@ -106,7 +106,7 @@ Top-level fields:
 
 `modelsDev` opts an owned provider into models.dev metadata hydration when the hosted catalog is published. Declare the upstream provider once per OpenClaw provider, not once per model. Omission means no models.dev hydration; there is no central provider fallback. Keys are normalized as OpenClaw provider ids and source ids are trimmed. Empty or non-string source ids and mappings for unowned providers are ignored; an alias alone does not grant ownership. A mapping does not create catalog provider rows or relax their validation.
 
-Hydration adds eligible model ids and fills only undefined metadata. Explicit manifest values remain authoritative, including `false`; models.dev never supplies transport settings or prices. Prices still follow the provider-owned pricing policy. Opt in only when the provider defaults are appropriate for newly imported rows; providers that choose a transport per model should not opt in unless those defaults are safe. Hydration errors fail publication, leaving the last published artifact intact. The publisher hydrates opted-in metadata even without `--pricing`; that flag controls price enrichment only. A dry run performs the same metadata hydration without writing the artifact.
+Hydration adds eligible model ids and fills only undefined metadata. Explicit manifest values remain authoritative, including `false`; models.dev never supplies transport settings or prices. Prices still follow the provider-owned pricing policy. Opt in only when the provider defaults are appropriate for newly imported rows; providers that choose a transport per model should not opt in unless those defaults are safe. If models.dev is unreachable or its response is malformed, publication fails and the last published artifact stays intact. If only a mapped upstream provider is missing or malformed, that provider publishes its manifest rows without hydration and the run logs a warning naming it; other providers still update. Keep each mapping current when models.dev renames a provider. The publisher hydrates opted-in metadata even without `--pricing`; that flag controls price enrichment only. A dry run performs the same metadata hydration without writing the artifact.
 
 This field is publication-time authoring metadata, not a Gateway discovery hook. It does not add runtime network calls or hot reload; the existing [hosted catalog update lifecycle](/concepts/models#hosted-catalog-updates) is unchanged.
 
@@ -123,6 +123,11 @@ Provider fields:
 | `headers`             | `Record<string, string>` | Optional static headers that apply to this provider catalog.                                                                                                                                                      |
 | `defaultUtilityModel` | `string`                 | Optional provider-recommended small model id for short internal utility tasks (titles, progress narration). Used when `agents.defaults.utilityModel` is unset and this provider serves the agent's primary model. |
 | `models`              | `object[]`               | Required model rows. Rows without an `id` are ignored.                                                                                                                                                            |
+
+`recommendedModels` is an optional ordered shortlist of distinct model
+ids from this provider's `models`. Ids are trimmed and must be non-empty. The field
+is reserved for picker ordering and is not yet used. It is published only in catalog
+v2, never v1. Invalid manifest lists are omitted; invalid remote v2 lists are rejected.
 
 Model fields:
 
@@ -144,7 +149,7 @@ Model fields:
 | `cost`                 | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`.          |
 | `compat`               | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.           |
 | `upstreamModel`        | `string`                                                       | Optional `provider/model` ref of the same upstream model in another bundled catalog. |
-| `mediaInput`           | `object`                                                       | Optional per-modality input config, currently image-only.                            |
+| `mediaInput`           | `object`                                                       | Optional per-modality input config. `image` is the only modality.                    |
 | `status`               | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.                   |
 | `statusReason`         | `string`                                                       | Optional reason shown with non-available status.                                     |
 | `replaces`             | `string[]`                                                     | Older provider-local model ids this model supersedes.                                |
@@ -163,11 +168,15 @@ Suppression fields:
 | `when.baseUrlHosts`        | `string[]` | Optional list of effective provider base URL hosts required before the suppression applies.                                                                |
 | `when.providerConfigApiIn` | `string[]` | Optional list of exact provider-config `api` values required before the suppression applies.                                                               |
 
-Declare retirement only from affirmative provider evidence, never from a failed or empty discovery request. Scope account-route retirements with `when.baseUrlHosts`; matching those rules requires a concrete selected endpoint and leaves sibling endpoints untouched. Unconditional retirement rules do not require credentials. Malformed or empty retirement scopes are ignored rather than becoming global rules. Runtime blocks that retired route, while `openclaw doctor --fix` owns persistent replacement or override removal. Ordinary suppression and a model row's `deprecated` listing status do not authorize retirement repair. Manifest changes take effect after Gateway restart or the owning metadata reload.
+Declare retirement only from affirmative provider evidence, never from a failed or empty discovery request. Scope account-route retirements with `when.baseUrlHosts`; matching those rules requires a concrete selected endpoint and leaves sibling endpoints untouched. Unconditional retirement rules do not require credentials. Malformed or empty retirement scopes are ignored rather than becoming global rules. Runtime blocks that retired route, while [`openclaw doctor --fix`](/cli/doctor) owns persistent replacement or override removal. Ordinary suppression and a model row's `deprecated` listing status do not authorize retirement repair. Manifest changes take effect after Gateway restart or the owning metadata reload.
 
-`upstreamModel` marks a row that serves the same upstream model as a row in another bundled catalog under a different name, for example a subscription endpoint next to the vendor's API endpoint. It is authoring metadata: normalization drops it, and a contract test uses it to keep capability flags such as `compat.codeMode` from drifting between catalogs that ship the same model. Most rows need no marker, because matching ignores a leading vendor namespace and casing: `moonshotai/kimi-k3` and `zai-org/GLM-5.2` already match the first-party `kimi-k3` and `glm-5.2` rows. Reach for `upstreamModel` only when the vendor's own names genuinely differ. See [Code mode](/tools/code-mode#models-shipped-by-more-than-one-provider).
+`upstreamModel` marks a row that serves the same upstream model as a row in another bundled catalog under a different name, for example a subscription endpoint next to the vendor's API endpoint. It is authoring metadata: normalization drops it, and a contract test uses it to keep capability flags such as `compat.codeMode` from drifting between catalogs that ship the same model. Most rows need no marker, because matching ignores a leading vendor namespace and casing: `moonshotai/kimi-k3` and `zai-org/GLM-5.2` already match the first-party `kimi-k3` and `glm-5.2` rows. Reach for `upstreamModel` only when the vendor's own names genuinely differ. See [Code mode](/tools/code-mode/configuration#models-shipped-by-more-than-one-provider).
 
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
+
+Catalog refresh plans keep manual root declarations separate from generated provider inventory. A plugin owning the same provider ID does not turn a manual model into disposable cache data. Merge mode preserves those declarations and auth-only records; explicit replace mode retains its replacement contract. Generated catalogs still follow current ownership, endpoint eligibility, and authoritative replacement rules.
+
+Generated cache reads for plugins with `activation.onStartup: false` require current authentication for at least one currently owned, endpoint-eligible provider in that catalog. Runtime readers use captured auth or a usable key from provider configuration; a retained catalog cannot authenticate itself. Explicitly authored rows remain separate. This membership rule does not delete stored data or grant request authority.
 
 Capabilities belong to the declared API and base URL, not only the provider/model id. When model listing enriches a cached row, it uses manifest capabilities only for a matching route; a custom endpoint must supply its own limits and capabilities.
 
@@ -216,8 +225,9 @@ Use `modelPricing` when the hosted catalog publisher needs provider-specific pri
       },
       "openrouter": {
         "openRouter": {
-          "passthroughProviderModel": true
+          "provider": "openrouter"
         },
+        "modelsDev": false,
         "liteLLM": false
       }
     }
@@ -234,7 +244,8 @@ Provider fields:
 | `deepinfra`  | `false \| object` | Explicit mapping to the public DeepInfra `/models/list` catalog. Never enabled implicitly.      |
 | `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing.   |
 | `openCode`   | `false \| object` | Explicit mapping to the public `models.opencode.ai/api.json` catalog. Never enabled implicitly. |
-| `openRouter` | `false \| object` | OpenRouter publication-key mapping. `false` disables OpenRouter matching for this provider.     |
+| `modelsDev`  | `false \| object` | models.dev price list for the provider that bills the request. Enabled by default.              |
+| `openRouter` | `false \| object` | OpenRouter's own prices. They price only `openrouter/*` keys, never a vendor's models.          |
 | `liteLLM`    | `false \| object` | LiteLLM publication-key mapping. `false` disables LiteLLM matching for this provider.           |
 | `venice`     | `false \| object` | Explicit mapping to the public Venice `/api/v1/models` catalog. Never enabled implicitly.       |
 
@@ -243,14 +254,24 @@ Source fields:
 | Field                      | Type               | What it means                                                                                                        |
 | -------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | `provider`                 | `string`           | External catalog provider id when it differs from the OpenClaw provider id, for example `z-ai` for a `zai` provider. |
-| `passthroughProviderModel` | `boolean`          | Treat slash-containing model ids as nested provider/model refs, useful for proxy providers such as OpenRouter.       |
+| `passthroughProviderModel` | `boolean`          | Treat slash-containing model ids as `vendor/model` refs priced at the vendor's rate, for gateways that bill it.      |
 | `modelIdTransforms`        | `"version-dots"[]` | Extra external catalog model-id variants. `version-dots` tries dotted version ids like `claude-opus-4.6`.            |
 
-A declared provider policy enables only its declared source mappings. Without a
-policy, publication tries OpenRouter, then LiteLLM. Each selected price is a
-complete schedule: base rates and context tiers are never combined across sources.
-OpenRouter's native prompt-length overrides are supported; time-based overrides
-are not represented as static context tiers.
+Prices come from whoever bills the request. A declared provider policy enables
+only its declared source mappings. Without a policy, publication tries the
+provider's models.dev entry, then LiteLLM. The models.dev entry is the one named
+by `modelCatalog.modelsDev`, or by `modelsDev.provider`, and otherwise the
+OpenClaw provider id. OpenRouter's feed describes OpenRouter's billing, including
+its promotions, so it prices only OpenRouter routes.
+
+Gateways with `passthroughProviderModel` use their own price list first when their
+manifest names one, for example a `kilo` or `vercel` models.dev entry. Without a
+named list, a gateway bills the vendor's rate: the vendor's own catalog row, then
+the vendor's standalone price.
+
+Each selected price is a complete schedule: base rates and context tiers are
+never combined across sources. OpenRouter's native prompt-length overrides are
+supported; time-based overrides are not represented as static context tiers.
 
 For authoritative native source mappings, use:
 

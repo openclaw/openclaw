@@ -1,6 +1,7 @@
 import { type FSWatcher, readFileSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { expandHomePrefix } from "../../infra/home-dir.js";
@@ -79,14 +80,6 @@ function isUsableTemplate(value: unknown): value is UsageBarTemplate {
 type InvalidTemplateReason = "invalid-json" | "unreadable" | "unsupported-shape";
 type TemplateReadResult = { template?: UsageBarTemplate; reason?: InvalidTemplateReason };
 
-function getErrorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return undefined;
-  }
-  const code = error.code;
-  return typeof code === "string" ? code : undefined;
-}
-
 function warnInvalidUsageTemplate(source: "inline" | "file", reason: string, path?: string): void {
   const key = `${source}:${reason}:${path ?? ""}`;
   if (warnedTemplateOverrides.check(key)) {
@@ -111,7 +104,7 @@ function readTemplateFile(path: string): TemplateReadResult {
   try {
     raw = readFileSync(path, "utf8");
   } catch (error) {
-    return getErrorCode(error) === "ENOENT" ? {} : { reason: "unreadable" };
+    return extractErrorCode(error) === "ENOENT" ? {} : { reason: "unreadable" };
   }
   if (raw.trim().length === 0) {
     return {};

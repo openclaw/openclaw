@@ -3,8 +3,8 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
-import type { RealtimeTalkStatus } from "../realtime-talk.ts";
+import { RealtimeTalkLevelSignal } from "../talk/level.ts";
+import type { RealtimeTalkStatus } from "../talk/session.ts";
 
 const BAR_GAINS = [0.38, 0.62, 0.84, 1, 0.84, 0.62, 0.38];
 const MICROPHONE_ACTIVITY_TAG = "openclaw-microphone-activity";

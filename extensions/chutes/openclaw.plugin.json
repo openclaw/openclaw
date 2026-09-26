@@ -1,5 +1,6 @@
 {
   "id": "chutes",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -37,6 +38,7 @@
       "method": "oauth",
       "choiceId": "chutes",
       "appGuidedAuth": "oauth",
+      "credentialOnly": true,
       "choiceLabel": "Chutes (OAuth)",
       "choiceHint": "Browser sign-in",
       "groupId": "chutes",

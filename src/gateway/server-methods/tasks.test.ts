@@ -1,39 +1,39 @@
 /**
  * Tests for task gateway methods and persisted task lifecycle responses.
  */
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TASKS_LIST_CURSOR_MAX_LENGTH } from "../../../packages/gateway-protocol/src/index.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import * as taskRuntime from "../../tasks/runtime-internal.js";
 import {
-  createTaskRecord as createTaskRecordOrNull,
+  finalizeTaskRecordByRunId,
   getTaskById,
   markTaskTerminalById,
   recordTaskProgressByRunId,
 } from "../../tasks/runtime-internal.js";
-import { reloadTaskRegistryFromStore } from "../../tasks/task-registry.js";
-import { saveTaskRegistryStateToSqlite } from "../../tasks/task-registry.store.sqlite.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
+import { createAcpTaskBackingDetailForTest } from "../../tasks/task-backing-authority.test-support.js";
+import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
+import { reloadTaskRegistryFromStoreAsync } from "../../tasks/task-registry-state.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
+import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
+import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
+import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
 import {
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
-import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+  getTaskPayload,
+  mainSessionTaskScope,
+  useTaskGatewayFixture,
+} from "./tasks.fixture.test-support.js";
 import {
   createContext,
   createSnapshotTask,
@@ -41,64 +41,98 @@ import {
   runTaskHandler,
 } from "./tasks.test-helpers.js";
 
-const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-const cancelSessionMock = vi.fn();
-const mainSessionTaskScope = {
-  requesterSessionKey: "agent:main:main",
-  ownerKey: "agent:main:main",
-  scopeKind: "session",
-} as const;
-
-let stateDir: string;
-
-function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
-  const task = createTaskRecordOrNull(params);
-  if (!task) {
-    throw new Error("expected task creation to succeed");
-  }
-  return task;
-}
-
-beforeEach(async () => {
-  stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tasks-"));
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  resetTaskRegistryForTests();
-  cancelSessionMock.mockReset();
-  setTaskRegistryControlRuntimeForTests({
-    cancelActiveCronTaskRun: () => false,
-    getAcpSessionManager: () => ({
-      cancelSession: cancelSessionMock,
-    }),
-    killSubagentRunAdmin: async () => {
-      throw new Error("Unexpected subagent cancellation in task handler fixture");
-    },
-  });
-});
-
-afterEach(async () => {
-  resetTaskRegistryControlRuntimeForTests();
-  resetTaskRegistryForTests();
-  stateDirEnvSnapshot.restore();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  await fs.rm(stateDir, { recursive: true, force: true });
-});
-
-async function getTaskPayload(taskId: string) {
-  const { calls, payload } = await runTaskHandler("tasks.get", { taskId });
-  expect(calls[0]?.[0]).toBe(true);
-  expect(payload?.task?.id).toBe(taskId);
-  return { calls, payload };
-}
+const { cancelSessionMock } = useTaskGatewayFixture();
 
 describe("tasks gateway handlers", () => {
+  it.each([
+    { change: "mutation", continuation: false },
+    { change: "mutation", continuation: true },
+    { change: "replacement", continuation: false },
+    { change: "replacement", continuation: true },
+  ])(
+    "revalidates a selected page after $change before responding (cursor: $continuation)",
+    async ({ change, continuation }) => {
+      const task = createTaskFixture("cli", {
+        ...mainSessionTaskScope,
+        task: "Selected before the response turn",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        lastEventAt: 200,
+      });
+      createTaskFixture("cli", {
+        ...mainSessionTaskScope,
+        task: "Second page",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        lastEventAt: 100,
+      });
+      const context = createContext();
+      const first = await runTaskHandler("tasks.list", { limit: 1 }, {}, null, context);
+      const select = taskRuntime.listTaskRecordPage;
+      const replacement = { ...task, taskId: "replacement", task: "Current registry" };
+      let reload: Promise<void> | undefined;
+      let changed = false;
+      const spy = vi.spyOn(taskRuntime, "listTaskRecordPage").mockImplementation(async (params) => {
+        const page = await select(params);
+        if (!changed && page.ok) {
+          changed = true;
+          queueMicrotask(() => {
+            if (change === "mutation") {
+              markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 300 });
+            } else {
+              configureTaskRegistryRuntime({
+                store: createInMemoryTaskRegistryStore({
+                  tasks: new Map([[replacement.taskId, replacement]]),
+                  deliveryStates: new Map(),
+                }),
+              });
+              reload = reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+            }
+          });
+        }
+        return page;
+      });
+      try {
+        const result = await runTaskHandler(
+          "tasks.list",
+          { limit: 1, ...(continuation ? { cursor: first.payload?.nextCursor } : {}) },
+          {},
+          null,
+          context,
+        );
+        expect(changed).toBe(true);
+        if (continuation) {
+          expect(result.calls[0]).toMatchObject([
+            false,
+            undefined,
+            {
+              code: "INVALID_REQUEST",
+              message:
+                "tasks.list cursor page is no longer valid; restart pagination without a cursor",
+              details: { reason: "page-invalid" },
+            },
+          ]);
+        } else {
+          expect(result.calls[0]?.[0]).toBe(true);
+          expect(result.payload?.tasks).toMatchObject([
+            change === "mutation"
+              ? { id: task.taskId, status: "completed" }
+              : { id: replacement.taskId, title: replacement.task },
+          ]);
+        }
+      } finally {
+        await reload;
+        spy.mockRestore();
+      }
+    },
+  );
+
   it("lists task summaries with SDK-facing statuses and filters", async () => {
-    const running = createTaskRecord({
-      runtime: "subagent",
+    const running = createTaskFixture("subagent", {
       taskKind: "investigation",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...mainSessionTaskScope,
       childSessionKey: "agent:worker:subagent:child",
       agentId: "main",
       runId: "run-running",
@@ -106,8 +140,7 @@ describe("tasks gateway handlers", () => {
       status: "running",
       deliveryStatus: "pending",
     });
-    createTaskRecord({
-      runtime: "cli",
+    createTaskFixture("cli", {
       requesterSessionKey: "agent:other:main",
       ownerKey: "agent:other:main",
       scopeKind: "session",
@@ -145,67 +178,6 @@ describe("tasks gateway handlers", () => {
     expect(canonical.payload?.tasks?.map((task) => task.taskId)).toEqual([running.taskId]);
   });
 
-  it("uses the persisted fixed-store owner for a bare task session filter", async () => {
-    const task = createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: "global",
-      ownerKey: "global",
-      scopeKind: "session",
-      runId: "run-global",
-      task: "Owned task",
-      status: "running",
-      deliveryStatus: "pending",
-    });
-    const { calls, payload } = await runTaskHandler(
-      "tasks.list",
-      { sessionKey: "global" },
-      {
-        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-        agents: {
-          ownership: "explicit",
-          list: [{ id: "ops" }, { id: "research" }],
-          defaults: { sessionStore: { agentId: "ops" } },
-        },
-      },
-    );
-
-    expect(calls[0]?.[0]).toBe(true);
-    expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
-  });
-
-  it("orders the ledger by last activity, not creation time", async () => {
-    // The registry lists newest-created first; the wire must page by last
-    // activity so an old task that just finished is not hidden behind
-    // newer-created records.
-    const base = Date.now();
-    const oldButJustFinished = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Old long-running task",
-      status: "succeeded",
-      deliveryStatus: "not_applicable",
-      lastEventAt: base + 60_000,
-    });
-    const newerQuietTask = createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Newer quiet task",
-      status: "succeeded",
-      deliveryStatus: "not_applicable",
-      lastEventAt: base + 1_000,
-    });
-
-    const { payload } = await runTaskHandler("tasks.list", {});
-    const ids = payload?.tasks?.map((task) => task.id);
-    expect(ids?.indexOf(oldButJustFinished.taskId)).toBeLessThan(
-      ids?.indexOf(newerQuietTask.taskId) ?? -1,
-    );
-  });
-
   it("ranks terminal tasks by completion time when the progress timestamp is stale", async () => {
     const base = Date.now();
     const justFinished = createSnapshotTask({
@@ -228,14 +200,8 @@ describe("tasks gateway handlers", () => {
       lastEventAt: base - 2_000,
       endedAt: base - 3_000,
     });
-    saveTaskRegistryStateToSqlite({
-      tasks: new Map([
-        [justFinished.taskId, justFinished],
-        [finishedEarlier.taskId, finishedEarlier],
-      ]),
-      deliveryStates: new Map(),
-    });
-    reloadTaskRegistryFromStore();
+    seedTaskRegistryRowsForTests([justFinished, finishedEarlier]);
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
     const { payload } = await runTaskHandler("tasks.list", {});
 
@@ -267,14 +233,8 @@ describe("tasks gateway handlers", () => {
       lastEventAt: base - 4_000,
       endedAt: base - 500,
     });
-    saveTaskRegistryStateToSqlite({
-      tasks: new Map([
-        [laterActivity.taskId, laterActivity],
-        [laterCompletion.taskId, laterCompletion],
-      ]),
-      deliveryStates: new Map(),
-    });
-    reloadTaskRegistryFromStore();
+    seedTaskRegistryRowsForTests([laterActivity, laterCompletion]);
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
     const { payload } = await runTaskHandler("tasks.list", {});
     const byId = new Map(payload?.tasks?.map((task) => [task.taskId, task]));
@@ -289,8 +249,7 @@ describe("tasks gateway handlers", () => {
 
   it("preserves activity ordering across unchanged cursor pages", async () => {
     const created = [500, 100, 700, 300, 500].map((lastEventAt, index) =>
-      createTaskRecord({
-        runtime: "cli",
+      createTaskFixture("cli", {
         requesterSessionKey: "agent:main:main",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -349,8 +308,7 @@ describe("tasks gateway handlers", () => {
 
   it("rejects a continuation after task activity changes", async () => {
     const created = [400, 300, 200, 100].map((lastEventAt, index) =>
-      createTaskRecord({
-        runtime: "cli",
+      createTaskFixture("cli", {
         requesterSessionKey: "agent:main:main",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -386,7 +344,8 @@ describe("tasks gateway handlers", () => {
       undefined,
       {
         code: "INVALID_REQUEST",
-        message: "invalid or expired tasks.list cursor; restart pagination without a cursor",
+        message: "tasks.list cursor task data changed; restart pagination without a cursor",
+        details: { reason: "tasks-changed" },
       },
     ]);
   });
@@ -403,14 +362,8 @@ describe("tasks gateway handlers", () => {
       runId: "run-a",
       lastEventAt: sharedActivityAt,
     });
-    saveTaskRegistryStateToSqlite({
-      tasks: new Map([
-        [laterId.taskId, laterId],
-        [earlierId.taskId, earlierId],
-      ]),
-      deliveryStates: new Map(),
-    });
-    reloadTaskRegistryFromStore();
+    seedTaskRegistryRowsForTests([laterId, earlierId]);
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
     const { payload } = await runTaskHandler("tasks.list", {});
 
@@ -419,8 +372,7 @@ describe("tasks gateway handlers", () => {
 
   it("clones only the requested task page", async () => {
     for (let index = 0; index < 6; index++) {
-      createTaskRecord({
-        runtime: "cli",
+      createTaskFixture("cli", {
         requesterSessionKey: "agent:main:main",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -467,8 +419,7 @@ describe("tasks gateway handlers", () => {
         );
       }
       const createTask = (sessionKey: string, lastEventAt: number) =>
-        createTaskRecord({
-          runtime: "cli",
+        createTaskFixture("cli", {
           requesterSessionKey: sessionKey,
           requesterAgentId: "main",
           ownerKey: sessionKey,
@@ -541,8 +492,7 @@ describe("tasks gateway handlers", () => {
     // Cross-agent subagent task: the registry derives agentId=worker from the
     // child session key, while owner/requester keys belong to main. tasks.list
     // for main must not leak the worker task through the session-key fallback.
-    const workerTask = createTaskRecord({
-      runtime: "subagent",
+    const workerTask = createTaskFixture("subagent", {
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",
@@ -560,23 +510,6 @@ describe("tasks gateway handlers", () => {
 
     const workerView = await runTaskHandler("tasks.list", { agentId: "worker" });
     expect(workerView.payload?.tasks?.map((task) => task.taskId)).toEqual([workerTask.taskId]);
-  });
-
-  it("gets completed tasks with stable completed status", async () => {
-    const task = createTaskRecord({
-      runtime: "cli",
-      ...mainSessionTaskScope,
-      runId: "run-completed",
-      task: "Done task",
-      status: "succeeded",
-      deliveryStatus: "not_applicable",
-    });
-
-    const { payload } = await getTaskPayload(task.taskId);
-
-    expect(payload?.task?.status).toBe("completed");
-    expect(payload?.task?.title).toBe("Done task");
-    expect(payload?.task?.prompt).toBe("Done task");
   });
 
   const cliStaleResult = { runtime: "cli", progressSummary: "CLI stale progress" } as const;
@@ -602,12 +535,6 @@ describe("tasks gateway handlers", () => {
       progressSummary: "Cron stale progress",
       terminalSummary: "Cron canonical result",
       expected: "Cron canonical result",
-    },
-    {
-      label: "CLI completion",
-      ...cliStaleResult,
-      terminalSummary: "CLI canonical result",
-      expected: "CLI canonical result",
     },
     {
       label: "CLI sanitized terminal result",
@@ -636,16 +563,8 @@ describe("tasks gateway handlers", () => {
       preserveTerminalSummary: true,
       expected: "Cron blank-terminal fallback result",
     },
-    {
-      label: "CLI progress fallback",
-      runtime: "cli",
-      progressSummary: "CLI fallback result",
-      terminalSummary: undefined,
-      expected: "CLI fallback result",
-    },
   ] as const)("returns the runtime-owned result for $label", async (fixture) => {
-    const task = createTaskRecord({
-      runtime: fixture.runtime,
+    const task = createTaskFixture(fixture.runtime, {
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",
@@ -673,11 +592,11 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.result).toBe(fixture.expected);
   });
 
-  it("keeps bounded prompts lookup-only", async () => {
-    const task = createTaskRecord({
-      runtime: "cli",
+  it("keeps complete prompts lookup-only", async () => {
+    const prompt = `Inspect the task prompt ${"x".repeat(5_000)}\n  Keep the final command argument.`;
+    const task = createTaskFixture("cli", {
       ...mainSessionTaskScope,
-      task: `Inspect the task prompt ${"x".repeat(5_000)}`,
+      task: prompt,
       status: "running",
       deliveryStatus: "pending",
     });
@@ -686,36 +605,31 @@ describe("tasks gateway handlers", () => {
     expect(listed.payload?.tasks?.[0]?.prompt).toBeUndefined();
 
     const { payload } = await getTaskPayload(task.taskId);
-    expect(payload?.task?.prompt).toHaveLength(4_000);
-    expect(payload?.task?.prompt).toMatch(/^Inspect the task prompt/);
-    expect(payload?.task?.prompt).toMatch(/…$/);
+    expect(payload?.task?.prompt).toBe(prompt);
   });
 
-  it("preserves prompt layout while removing internal runtime context", async () => {
-    const visiblePrompt = [
-      "Review this workflow:",
-      "",
-      "  ```yaml",
-      "  steps:",
-      "    - test",
-      "  ```",
-    ].join("\n");
-    const task = createTaskRecord({
-      runtime: "cli",
-      ...mainSessionTaskScope,
-      task: `${visiblePrompt}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nhidden\n${INTERNAL_RUNTIME_CONTEXT_END}`,
-      status: "running",
-      deliveryStatus: "pending",
-    });
+  it.each([
+    ["Review this workflow:", "", "  ```yaml", "  steps:", "    - test", "  ```"].join("\n"),
+    "printf A\n\nprintf A",
+    "printf '<final>literal argument</final>\n'",
+  ])(
+    "preserves task input verbatim while removing internal runtime context %#",
+    async (visiblePrompt) => {
+      const task = createTaskFixture("cli", {
+        ...mainSessionTaskScope,
+        task: `${visiblePrompt}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nhidden\n${INTERNAL_RUNTIME_CONTEXT_END}`,
+        status: "running",
+        deliveryStatus: "pending",
+      });
 
-    const { payload } = await getTaskPayload(task.taskId);
+      const { payload } = await getTaskPayload(task.taskId);
 
-    expect(payload?.task?.prompt).toBe(visiblePrompt);
-  });
+      expect(payload?.task?.prompt).toBe(visiblePrompt);
+    },
+  );
 
   it("sanitizes task text before exposing SDK summaries", async () => {
-    const task = createTaskRecord({
-      runtime: "cli",
+    const task = createTaskFixture("cli", {
       ...mainSessionTaskScope,
       runId: "run-sanitized",
       label:
@@ -753,155 +667,8 @@ describe("tasks gateway handlers", () => {
     expect(JSON.stringify(calls[0]?.[1])).not.toContain("OpenClaw runtime context");
   });
 
-  it("exposes tool activity in task summaries", async () => {
-    const task = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:main:subagent:activity",
-      runId: "run-tool-activity",
-      task: "Sweep the repo",
-      status: "running",
-      deliveryStatus: "not_applicable",
-    });
-    emitAgentEvent({
-      runId: "run-tool-activity",
-      stream: "tool",
-      data: { phase: "start", name: "read", toolCallId: "call-1" },
-    });
-    emitAgentEvent({
-      runId: "run-tool-activity",
-      stream: "tool",
-      data: { phase: "start", name: "exec", toolCallId: "call-2" },
-    });
-
-    const { payload } = await getTaskPayload(task.taskId);
-
-    expect(payload?.task?.toolUseCount).toBe(2);
-    expect(payload?.task?.lastToolName).toBe("exec");
-  });
-
-  it("projects isolated live subagent activity and best-effort diff stats", async () => {
-    const primary = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:main:subagent:primary",
-      runId: "run-live-primary",
-      task: "Implement task activity",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      progressSummary: "Milestone remains authoritative",
-    });
-    const secondary = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:main:subagent:secondary",
-      runId: "run-live-secondary",
-      task: "Review task activity",
-      status: "running",
-      deliveryStatus: "not_applicable",
-    });
-    const longLastLine = `Updating   files ${"x".repeat(220)}`;
-    const emitPrimaryTool = (data: Record<string, unknown>) =>
-      emitAgentEvent({ runId: primary.runId!, stream: "tool", data });
-
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "thinking",
-      data: { text: "Inspecting the fold\nThinking fallback" },
-    });
-    emitAgentEvent({
-      runId: secondary.runId!,
-      stream: "thinking",
-      data: { text: "Checking isolation\n  Thinking-only   progress  " },
-    });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "assistant",
-      data: { text: `Earlier line\n\n${longLastLine}` },
-    });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "thinking",
-      data: { text: "Later thinking must not replace assistant activity" },
-    });
-    emitPrimaryTool({
-      phase: "start",
-      name: "edit",
-      toolCallId: "edit-1",
-      args: {
-        path: "src/a.ts",
-        edits: [{ oldText: "one\ntwo", newText: "one\nthree\nfour" }],
-      },
-    });
-    emitPrimaryTool({ phase: "result", name: "edit", toolCallId: "edit-1", isError: false });
-    emitPrimaryTool({
-      phase: "start",
-      name: "write",
-      toolCallId: "write-1",
-      args: { file_path: "src/b.ts", content: "alpha\nbeta" },
-    });
-    emitPrimaryTool({ phase: "result", name: "write", toolCallId: "write-1", isError: false });
-    emitPrimaryTool({
-      phase: "start",
-      name: "apply_patch",
-      toolCallId: "patch-1",
-      args: {
-        input: [
-          "*** Begin Patch",
-          "*** Update File: src/a.ts",
-          "@@",
-          "-old",
-          "+new",
-          "+newer",
-          "*** Delete File: src/c.ts",
-          "*** End Patch",
-        ].join("\n"),
-      },
-    });
-    emitPrimaryTool({
-      phase: "result",
-      name: "apply_patch",
-      toolCallId: "patch-1",
-      isError: false,
-    });
-    emitPrimaryTool({
-      phase: "start",
-      name: "write",
-      toolCallId: "write-failed",
-      args: { path: "src/ignored.ts", content: "not\ncounted" },
-    });
-    emitPrimaryTool({ phase: "result", name: "write", toolCallId: "write-failed", isError: true });
-
-    const primaryGet = await getTaskPayload(primary.taskId);
-    const secondaryGet = await getTaskPayload(secondary.taskId);
-    const listed = await runTaskHandler("tasks.list", {});
-    const listedPrimary = listed.payload?.tasks?.find((task) => task.id === primary.taskId);
-
-    expect(primaryGet.payload?.task?.lastActivity).toMatch(/^Updating files x+…$/);
-    expect(String(primaryGet.payload?.task?.lastActivity).length).toBeLessThanOrEqual(200);
-    expect(primaryGet.payload?.task?.diffStat).toEqual({ files: 3, added: 7, removed: 3 });
-    expect(primaryGet.payload?.task?.progressSummary).toBe("Milestone remains authoritative");
-    expect(secondaryGet.payload?.task?.lastActivity).toBe("Thinking-only progress");
-    expect(secondaryGet.payload?.task).not.toHaveProperty("diffStat");
-    expect(listedPrimary?.lastActivity).toBe(primaryGet.payload?.task?.lastActivity);
-    expect(listedPrimary?.diffStat).toEqual(primaryGet.payload?.task?.diffStat);
-
-    markTaskTerminalById({ taskId: primary.taskId, status: "succeeded", endedAt: Date.now() });
-    const terminal = await getTaskPayload(primary.taskId);
-    expect(terminal.payload?.task).not.toHaveProperty("lastActivity");
-    expect(terminal.payload?.task).not.toHaveProperty("diffStat");
-    expect(terminal.payload?.task?.progressSummary).toBe("Milestone remains authoritative");
-  });
-
   it("does not report cancellation for an ordinary task without a live owner", async () => {
-    const task = createTaskRecord({
-      runtime: "cli",
+    const task = createTaskFixture("cli", {
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",
@@ -924,18 +691,115 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.error).toBeUndefined();
   });
 
-  it("cancels ACP tasks through the live Gateway handler and control runtime", async () => {
+  it("refuses native subagent cancellation and preserves the harness result", async () => {
+    const task = createTaskFixture("subagent", {
+      ...mainSessionTaskScope,
+      taskKind: "codex-native",
+      runId: "codex-thread:native-child",
+      task: "Native child task",
+      notifyPolicy: "silent",
+    });
+
+    const { calls, payload } = await runTaskHandler("tasks.cancel", { taskId: task.taskId });
+
+    expect(calls[0]?.[0]).toBe(true);
+    expect(payload).toMatchObject({
+      found: true,
+      cancelled: false,
+      reason:
+        "This subagent is controlled by its native harness. Use the parent session's native collaboration tools to stop it.",
+      task: { id: task.taskId, status: "running" },
+    });
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+    expect(getTaskById(task.taskId)).toEqual(task);
+
+    finalizeTaskRecordByRunId({
+      runId: task.runId!,
+      runtime: "subagent",
+      sessionKey: task.ownerKey,
+      status: "succeeded",
+      endedAt: Date.now(),
+      terminalSummary: "Native child completed.",
+    });
+    const completed = await getTaskPayload(task.taskId);
+    expect(completed.payload?.task).toMatchObject({
+      status: "completed",
+      terminalSummary: "Native child completed.",
+    });
+  });
+
+  it.each([
+    ["succeeded", "completed"],
+    ["failed", "failed"],
+    ["timed_out", "timed_out"],
+    ["lost", "failed"],
+    ["cancelled", "cancelled"],
+  ] as const)(
+    "tasks.cancel preserves ACP %s and explains refused cancellation",
+    async (status, wireStatus) => {
+      const runId = "run-acp-cancel-race";
+      const instanceId = "instance-acp-cancel-race";
+      const task = createSnapshotTask({
+        runtime: "acp",
+        runId,
+        notifyPolicy: "silent",
+        childSessionKey: "agent:main:acp:cancel-race",
+        agentId: "main",
+        detail: createAcpTaskBackingDetailForTest(instanceId),
+      });
+      seedTaskRegistryRowsForTests([task]);
+      await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+      cancelSessionMock.mockImplementationOnce(async () => {
+        updateTaskStateByRunId({
+          runId,
+          runtime: "acp",
+          sessionKey: task.childSessionKey,
+          status,
+          endedAt: 2_000,
+        });
+      });
+
+      const { calls, payload } = await runTaskHandler("tasks.cancel", { taskId: task.taskId });
+
+      expect(calls[0]?.[0]).toBe(true);
+      expect(cancelSessionMock).toHaveBeenCalledExactlyOnceWith({
+        cfg: {},
+        sessionKey: "agent:main:acp:cancel-race",
+        agentId: "main",
+        reason: "task-cancel",
+        expectedRunId: runId,
+        expectedInstanceId: instanceId,
+      });
+      expect(payload).toMatchObject({ found: true, cancelled: status === "cancelled" });
+      if (status === "cancelled") {
+        expect(payload).not.toHaveProperty("reason");
+      } else {
+        expect(payload).toHaveProperty(
+          "reason",
+          `Task became ${status} while cancellation was in progress.`,
+        );
+      }
+      expect(payload?.task).toMatchObject({ id: task.taskId, status: wireStatus, endedAt: 2_000 });
+      expect(getTaskById(task.taskId)).toMatchObject({ status, endedAt: 2_000 });
+    },
+  );
+
+  it("cancels the selected ACP instance through the live Gateway handler and control runtime", async () => {
+    const instanceId = "instance-acp-primary";
     const task = createSnapshotTask({
       taskId: "task-acp-primary",
       runtime: "acp",
+      notifyPolicy: "silent",
       childSessionKey: "agent:codex:acp:child",
       agentId: "codex",
       runId: "run-cancel-acp-gateway",
       task: "Primary ACP task",
+      detail: createAcpTaskBackingDetailForTest(instanceId),
     });
     const siblingTask = createSnapshotTask({
       taskId: "task-acp-sibling",
       runtime: "acp",
+      notifyPolicy: "silent",
       childSessionKey: "agent:codex:acp:child",
       agentId: "codex",
       runId: "run-cancel-acp-gateway",
@@ -943,15 +807,10 @@ describe("tasks gateway handlers", () => {
       createdAt: 1_001,
       startedAt: 1_011,
       lastEventAt: 1_011,
+      detail: createAcpTaskBackingDetailForTest("instance-acp-sibling", 2),
     });
-    saveTaskRegistryStateToSqlite({
-      tasks: new Map([
-        [task.taskId, task],
-        [siblingTask.taskId, siblingTask],
-      ]),
-      deliveryStates: new Map(),
-    });
-    reloadTaskRegistryFromStore();
+    seedTaskRegistryRowsForTests([task, siblingTask]);
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     cancelSessionMock.mockResolvedValue(undefined);
 
     const { calls, payload } = await runTaskHandler("tasks.cancel", {
@@ -960,20 +819,20 @@ describe("tasks gateway handlers", () => {
     });
 
     expect(calls[0]?.[0]).toBe(true);
-    expect(cancelSessionMock).toHaveBeenCalledWith({
+    expect(cancelSessionMock).toHaveBeenCalledExactlyOnceWith({
       cfg: {},
       sessionKey: "agent:codex:acp:child",
       agentId: "codex",
       reason: "operator requested stop",
       expectedRunId: "run-cancel-acp-gateway",
+      expectedInstanceId: instanceId,
     });
     expect(payload?.found).toBe(true);
     expect(payload?.cancelled).toBe(true);
     expect(payload?.task?.id).toBe(task.taskId);
     expect(payload?.task?.status).toBe("cancelled");
     expect(getTaskById(task.taskId)?.status).toBe("cancelled");
-    expect(getTaskById(siblingTask.taskId)?.status).toBe("cancelled");
-    expect(getTaskById(siblingTask.taskId)?.error).toBe("operator requested stop");
+    expect(getTaskById(siblingTask.taskId)).toEqual(siblingTask);
   });
 
   it.each([

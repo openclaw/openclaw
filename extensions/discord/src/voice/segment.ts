@@ -1,18 +1,15 @@
 import { Readable } from "node:stream";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage, readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
-import { createDiscordOpusPlaybackStream } from "./audio.js";
 import { type DiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import type { DiscordVoiceSegmentOutcome } from "./recording-types.js";
-import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
-import { logVoiceVerbose, PLAYBACK_READY_TIMEOUT_MS, type VoiceSessionEntry } from "./session.js";
-import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
+import { logVoiceVerbose, type VoiceSessionEntry } from "./session.js";
 import { synthesizeVoiceReplyAudio, transcribeVoiceAudio } from "./tts.js";
 
 const logger = createSubsystemLogger("discord/voice");
@@ -24,9 +21,6 @@ type DiscordVoiceResponseParams = {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
-  admissionAllowFrom?: string[];
-  fetchGuildName: (guildId: string) => Promise<string | undefined>;
-  speakerContext: DiscordVoiceSpeakerContextResolver;
   enqueuePlayback: (entry: VoiceSessionEntry, task: () => Promise<void>) => void;
 };
 
@@ -143,20 +137,32 @@ export async function respondToDiscordVoiceTranscript(
 ): Promise<void> {
   const { entry, ingress, transcript, userId } = params;
   const conversationCurrent = () =>
-    !entry.captureOnly && entry.sessionLifecycle.status === "active";
+    !entry.captureOnly &&
+    entry.sessionLifecycle.status === "active" &&
+    ingress.isCurrent?.() !== false;
   if (!conversationCurrent()) {
     return;
   }
   let replyText: string;
   const control = await maybeControlDiscordVoiceAgentRun({
     entry,
+    accountId: params.accountId,
+    context: ingress,
+    isCurrent: conversationCurrent,
     text: transcript,
   }).catch((error: unknown) => {
+    if (readErrorName(error) === "AbortError") {
+      logger.warn(`discord voice: active-run control cancelled: ${formatErrorMessage(error)}`);
+      return null;
+    }
     logger.warn(
       `discord voice: active-run control failed; falling back to normal segment handling: ${formatErrorMessage(error)}`,
     );
     return undefined;
   });
+  if (control === null || !conversationCurrent()) {
+    return;
+  }
 
   if (control?.handled) {
     logger.info(
@@ -170,13 +176,9 @@ export async function respondToDiscordVoiceTranscript(
       accountId: params.accountId,
       userId,
       message: prompt,
-      cfg: params.cfg,
       discordConfig: params.discordConfig,
       runtime: params.runtime,
       context: ingress,
-      admissionAllowFrom: params.admissionAllowFrom,
-      fetchGuildName: params.fetchGuildName,
-      speakerContext: params.speakerContext,
     });
     if (!turn) {
       logVoiceVerbose(
@@ -187,6 +189,9 @@ export async function respondToDiscordVoiceTranscript(
     replyText = turn.text;
   }
 
+  if (!conversationCurrent()) {
+    return;
+  }
   if (!replyText) {
     logVoiceVerbose(
       `reply empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
@@ -234,18 +239,10 @@ export async function respondToDiscordVoiceTranscript(
     return;
   }
   params.enqueuePlayback(entry, async () => {
-    const voiceSdk = loadDiscordVoiceSdk();
-    const playbackLifecycle = new AbortController();
-    let playbackStarted = false;
-    const cancelStoppedPlayback = () =>
-      (!playbackStarted || entry.sessionLifecycle.status === "stopped") &&
-      playbackLifecycle.abort();
     try {
-      // Queued playback can outlive its session; a stopped player is reusable by the SDK.
       if (entry.sessionLifecycle.status === "stopped") {
         return;
       }
-      entry.player.on(voiceSdk.AudioPlayerStatus.Idle, cancelStoppedPlayback);
       const input =
         voiceReplyAudio.mode === "stream"
           ? Readable.fromWeb(
@@ -255,29 +252,13 @@ export async function respondToDiscordVoiceTranscript(
       logVoiceVerbose(
         `playback start: guild ${entry.guildId} channel ${entry.channelId} ${voiceReplyAudio.mode}`,
       );
-      const resource = voiceSdk.createAudioResource(createDiscordOpusPlaybackStream(input), {
-        inputType: voiceSdk.StreamType.Opus,
-      });
-      entry.player.play(resource);
-      await voiceSdk.entersState(
-        entry.player,
-        voiceSdk.AudioPlayerStatus.Playing,
-        AbortSignal.any([AbortSignal.timeout(PLAYBACK_READY_TIMEOUT_MS), playbackLifecycle.signal]),
-      );
-      playbackStarted = true;
-      // Playback has no duration cap; terminal stop emits Idle and cancels either lifecycle wait.
-      await voiceSdk.entersState(
-        entry.player,
-        voiceSdk.AudioPlayerStatus.Idle,
-        playbackLifecycle.signal,
-      );
-      logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
+      await entry.audio.play(input);
+      logVoiceVerbose("playback done: guild " + entry.guildId + " channel " + entry.channelId);
     } catch (error) {
       if (entry.sessionLifecycle.status !== "stopped") {
         throw error;
       }
     } finally {
-      entry.player.off(voiceSdk.AudioPlayerStatus.Idle, cancelStoppedPlayback);
       await releaseAudio?.();
     }
   });

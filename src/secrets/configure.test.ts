@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 
 const confirmMock = vi.hoisted(() => vi.fn());
 const selectMock = vi.hoisted(() => vi.fn());
@@ -78,9 +79,23 @@ describe("runSecretsConfigureInteractive", () => {
   });
 
   beforeEach(() => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: true,
+      configurable: true,
+    });
+
     confirmMock.mockReset();
     selectMock.mockReset();
     createSecretsConfigIOMock.mockReset();
+    createSecretsConfigIOMock.mockReturnValue({
+      readConfigFileSnapshotForWrite: async () => ({
+        snapshot: {
+          valid: true,
+          config: {},
+          resolved: {},
+        },
+      }),
+    });
     loadPersistedAuthProfileStoreMock.mockReset();
     logMock.mockReset();
     loadPluginManifestRegistryMock.mockReset();
@@ -97,21 +112,7 @@ describe("runSecretsConfigureInteractive", () => {
   });
 
   it("does not load auth-profiles when running providers-only", async () => {
-    Object.defineProperty(process.stdin, "isTTY", {
-      value: true,
-      configurable: true,
-    });
-
     selectMock.mockResolvedValue("continue");
-    createSecretsConfigIOMock.mockReturnValue({
-      readConfigFileSnapshotForWrite: async () => ({
-        snapshot: {
-          valid: true,
-          config: {},
-          resolved: {},
-        },
-      }),
-    });
     await expect(runSecretsConfigureInteractive({ providersOnly: true })).rejects.toThrow(
       "No secrets changes were selected.",
     );
@@ -119,11 +120,6 @@ describe("runSecretsConfigureInteractive", () => {
   });
 
   it("adds a plugin preset provider through providers-only configure", async () => {
-    Object.defineProperty(process.stdin, "isTTY", {
-      value: true,
-      configurable: true,
-    });
-
     const pluginRoot = makeTempDir();
     const resolverPath = path.join(pluginRoot, "vault-secret-ref-resolver.js");
     fs.writeFileSync(resolverPath, "process.stdin.resume();\n");
@@ -152,15 +148,6 @@ describe("runSecretsConfigureInteractive", () => {
           },
         },
       ],
-    });
-    createSecretsConfigIOMock.mockReturnValue({
-      readConfigFileSnapshotForWrite: async () => ({
-        snapshot: {
-          valid: true,
-          config: {},
-          resolved: {},
-        },
-      }),
     });
 
     const result = await runSecretsConfigureInteractive({
@@ -191,11 +178,6 @@ describe("runSecretsConfigureInteractive", () => {
   });
 
   it("warns when the shared auth-profile store carries plaintext credentials", async () => {
-    Object.defineProperty(process.stdin, "isTTY", {
-      value: true,
-      configurable: true,
-    });
-
     // Shared store carries plaintext `key` values. The first profile is pure
     // plaintext; the second carries `key` AND a sibling `keyRef`, which the
     // normalized loader drops — reading the raw row (as `secrets audit` does)
@@ -203,9 +185,9 @@ describe("runSecretsConfigureInteractive", () => {
     // the selected agent's local store, so neither is migratable here.
     const stateDir = makeTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
-    writeSharedAuthProfileStoreRaw(env, {
-      version: 1,
-      profiles: {
+    writeSharedAuthProfileStoreRaw(
+      env,
+      createAuthProfileStoreFixture({
         "openai:shared": {
           type: "api_key",
           provider: "openai",
@@ -217,23 +199,11 @@ describe("runSecretsConfigureInteractive", () => {
           key: "sk-leftover-plaintext", // pragma: allowlist secret
           keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         },
-      },
-    });
+      }),
+    );
     // Agent store empty + no config secret targets → no configurable candidates.
     // The shared-plaintext warning fires before the empty-candidate guard.
-    loadPersistedAuthProfileStoreMock.mockReturnValue({
-      version: 1,
-      profiles: {},
-    });
-    createSecretsConfigIOMock.mockReturnValue({
-      readConfigFileSnapshotForWrite: async () => ({
-        snapshot: {
-          valid: true,
-          config: {},
-          resolved: {},
-        },
-      }),
-    });
+    loadPersistedAuthProfileStoreMock.mockReturnValue(createAuthProfileStoreFixture({}));
 
     await expect(
       runSecretsConfigureInteractive({
@@ -251,20 +221,15 @@ describe("runSecretsConfigureInteractive", () => {
   });
 
   it("does not warn when shared profiles only carry SecretRef values", async () => {
-    Object.defineProperty(process.stdin, "isTTY", {
-      value: true,
-      configurable: true,
-    });
-
     // Shared store profiles are all references, not plaintext: an explicit
     // `keyRef` object, a `$ENV` shorthand, and a `${ENV}` template. The latter
     // two have no `keyRef`; without sharing audit's `coerceSecretRef` check the
     // counter would miscount them as plaintext.
     const stateDir = makeTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
-    writeSharedAuthProfileStoreRaw(env, {
-      version: 1,
-      profiles: {
+    writeSharedAuthProfileStoreRaw(
+      env,
+      createAuthProfileStoreFixture({
         "openai:ref": {
           type: "api_key",
           provider: "openai",
@@ -280,21 +245,9 @@ describe("runSecretsConfigureInteractive", () => {
           provider: "openai",
           key: "${OPENAI_API_KEY}", // pragma: allowlist secret
         },
-      },
-    });
-    loadPersistedAuthProfileStoreMock.mockReturnValue({
-      version: 1,
-      profiles: {},
-    });
-    createSecretsConfigIOMock.mockReturnValue({
-      readConfigFileSnapshotForWrite: async () => ({
-        snapshot: {
-          valid: true,
-          config: {},
-          resolved: {},
-        },
       }),
-    });
+    );
+    loadPersistedAuthProfileStoreMock.mockReturnValue(createAuthProfileStoreFixture({}));
 
     await expect(
       runSecretsConfigureInteractive({
@@ -308,27 +261,10 @@ describe("runSecretsConfigureInteractive", () => {
   });
 
   it("does not warn when the shared auth-profile store is missing", async () => {
-    Object.defineProperty(process.stdin, "isTTY", {
-      value: true,
-      configurable: true,
-    });
-
     // No shared store row committed → no plaintext to report.
     const stateDir = makeTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
-    loadPersistedAuthProfileStoreMock.mockReturnValue({
-      version: 1,
-      profiles: {},
-    });
-    createSecretsConfigIOMock.mockReturnValue({
-      readConfigFileSnapshotForWrite: async () => ({
-        snapshot: {
-          valid: true,
-          config: {},
-          resolved: {},
-        },
-      }),
-    });
+    loadPersistedAuthProfileStoreMock.mockReturnValue(createAuthProfileStoreFixture({}));
 
     await expect(
       runSecretsConfigureInteractive({

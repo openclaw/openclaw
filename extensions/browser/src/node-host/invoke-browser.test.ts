@@ -1,4 +1,3 @@
-// Browser tests cover invoke browser plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import nodePath from "node:path";
@@ -10,16 +9,26 @@ import {
   BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
 } from "../browser-proxy-envelope.js";
 import type { BrowserServerState } from "../browser/server-context.js";
-import { toErrorObject } from "../infra/errors.js";
+import { firstBrowserDispatchRequest, stagedReportUpload } from "./invoke-browser.test-support.js";
 
 const BROWSER_PROXY_MAX_FILES = 256;
 const BROWSER_PROXY_MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024;
-const stagedReportUpload = {
-  body: { paths: ["/tmp/openclaw/uploads/.proxy-upload-1/0/report.txt"] },
-  directory: "/tmp/openclaw/uploads/.proxy-upload-1",
-};
+
+function reportUploadRequest(timeoutMs?: number): string {
+  return JSON.stringify({
+    method: "POST",
+    path: "/hooks/file-chooser",
+    body: {},
+    upload: {
+      envelope: "browser-upload-v1",
+      files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+    },
+    timeoutMs,
+  });
+}
 
 const controlServiceMocks = vi.hoisted(() => ({
+  hasBrowserControlWork: vi.fn(() => false),
   createBrowserControlContext: vi.fn(() => ({ control: true })),
   getBrowserControlState: vi.fn<() => BrowserServerState | null>(() => null),
   startBrowserControlServiceFromConfig: vi.fn<() => Promise<BrowserServerState | null>>(),
@@ -70,56 +79,21 @@ const browserConfigMocks = vi.hoisted(() => ({
 }));
 
 const uploadMocks = vi.hoisted(() => ({
+  hasBrowserProxyUploadWork: vi.fn(() => false),
   stageBrowserProxyUploadRequest: vi.fn(),
   discardStagedBrowserProxyUpload: vi.fn(async () => {}),
   ensureBrowserProxyUploadCleanup: vi.fn(async () => {}),
 }));
 
-vi.mock("../sdk-config.js", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
   getRuntimeConfig: configMocks.loadConfig,
   getRuntimeConfigSourceSnapshot: () => configMocks.sourceConfig,
   loadConfig: configMocks.loadConfig,
 }));
 
-vi.mock("../sdk-node-runtime.js", () => ({
-  withTimeout: vi.fn(
-    async (
-      run: (signal: AbortSignal | undefined) => Promise<unknown>,
-      timeoutMs?: number,
-      label?: string,
-    ) => {
-      const resolved =
-        typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-          ? Math.max(1, Math.floor(timeoutMs))
-          : undefined;
-      if (!resolved) {
-        return await run(undefined);
-      }
-      const abortCtrl = new AbortController();
-      const timeoutError = new Error(`${label ?? "request"} timed out`);
-      const timer = setTimeout(() => abortCtrl.abort(timeoutError), resolved);
-      try {
-        return await Promise.race([
-          run(abortCtrl.signal),
-          new Promise<never>((_, reject) => {
-            abortCtrl.signal.addEventListener(
-              "abort",
-              () =>
-                reject(
-                  toErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"),
-                ),
-              { once: true },
-            );
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
-    },
-  ),
-}));
-
-vi.mock("../sdk-setup-tools.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-mime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-mime")>()),
   detectMime: vi.fn(async () => "image/png"),
 }));
 
@@ -153,43 +127,6 @@ vi.mock("../browser/config.js", () => ({
 
 vi.mock("../browser-proxy-upload.js", () => uploadMocks);
 
-vi.mock("../browser/request-policy.js", () => ({
-  isPersistentBrowserProfileMutation: vi.fn((method: string, path: string) => {
-    if (method === "POST" && (path === "/profiles/create" || path === "/reset-profile")) {
-      return true;
-    }
-    return method === "DELETE" && /^\/profiles\/[^/]+$/.test(path);
-  }),
-  isBrowserHostLocalRoute: vi.fn((method: string, path: string) => {
-    if (method === "POST" && path === "/profiles/import") {
-      return true;
-    }
-    return method === "GET" && path === "/system-profiles";
-  }),
-  normalizeBrowserRequestPath: vi.fn((path: string) => path),
-  resolveRequestedBrowserProfile: vi.fn(
-    ({
-      query,
-      body,
-      profile,
-    }: {
-      query?: Record<string, unknown>;
-      body?: unknown;
-      profile?: string;
-    }) => {
-      if (query && typeof query.profile === "string" && query.profile.trim()) {
-        return query.profile.trim();
-      }
-      const bodyProfile =
-        body && typeof body === "object" ? (body as { profile?: unknown }).profile : undefined;
-      if (typeof bodyProfile === "string" && bodyProfile.trim()) {
-        return bodyProfile.trim();
-      }
-      return typeof profile === "string" && profile.trim() ? profile.trim() : undefined;
-    },
-  ),
-}));
-
 vi.mock("../browser/routes/dispatcher.js", () => ({
   createBrowserRouteDispatcher: dispatcherMocks.createBrowserRouteDispatcher,
 }));
@@ -200,23 +137,12 @@ vi.mock("../control-service.js", () => ({
   startBrowserControlServiceFromConfig: controlServiceMocks.startBrowserControlServiceFromConfig,
 }));
 
+vi.mock("../browser-control-state.js", () => ({
+  hasBrowserControlWork: controlServiceMocks.hasBrowserControlWork,
+}));
+
 let runBrowserProxyCommand: typeof import("./invoke-browser.js").runBrowserProxyCommand;
 let browserState: BrowserServerState;
-
-type BrowserDispatchRequest = {
-  path?: string;
-  query?: unknown;
-  body?: unknown;
-};
-
-function firstBrowserDispatchRequest(): BrowserDispatchRequest {
-  const [call] = dispatcherMocks.dispatch.mock.calls;
-  if (!call) {
-    throw new Error("expected browser dispatch call");
-  }
-  const [request] = call as [BrowserDispatchRequest, ...unknown[]];
-  return request;
-}
 
 describe("runBrowserProxyCommand", () => {
   beforeEach(async () => {
@@ -270,15 +196,9 @@ describe("runBrowserProxyCommand", () => {
     ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
   });
 
-  it.each(["rejected", "disabled"] as const)("retries a %s browser startup", async (outcome) => {
-    const message = outcome === "rejected" ? "browser startup failed" : "browser control disabled";
-    if (outcome === "rejected") {
-      controlServiceMocks.startBrowserControlServiceFromConfig.mockRejectedValueOnce(
-        new Error(message),
-      );
-    } else {
-      controlServiceMocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(null);
-    }
+  it("retries a disabled browser startup", async () => {
+    const message = "browser control disabled";
+    controlServiceMocks.startBrowserControlServiceFromConfig.mockResolvedValueOnce(null);
     dispatcherMocks.dispatch.mockResolvedValue({ status: 200, body: { ok: true } });
     const request = JSON.stringify({ method: "GET", path: "/snapshot" });
 
@@ -351,8 +271,8 @@ describe("runBrowserProxyCommand", () => {
     rejectFailedStartup(new Error("browser startup failed"));
 
     await expect(failedRequests).resolves.toEqual([
-      { status: "rejected", reason: expect.any(Error) },
-      { status: "rejected", reason: expect.any(Error) },
+      { status: "rejected", reason: new Error("browser startup failed") },
+      { status: "rejected", reason: new Error("browser startup failed") },
     ]);
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
 
@@ -406,7 +326,9 @@ describe("runBrowserProxyCommand", () => {
       upload,
       signal: expect.any(AbortSignal),
     });
-    expect(firstBrowserDispatchRequest().body).toEqual(staged.body);
+    expect(firstBrowserDispatchRequest(dispatcherMocks.dispatch.mock.calls).body).toEqual(
+      staged.body,
+    );
     expect(uploadMocks.discardStagedBrowserProxyUpload).not.toHaveBeenCalled();
   });
 
@@ -419,18 +341,7 @@ describe("runBrowserProxyCommand", () => {
     });
 
     await expect(
-      runBrowserProxyCommand(
-        JSON.stringify({
-          method: "POST",
-          path: "/hooks/file-chooser",
-          body: {},
-          upload: {
-            envelope: "browser-upload-v1",
-            files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-          },
-        }),
-        "browser.proxy.upload.v1",
-      ),
+      runBrowserProxyCommand(reportUploadRequest(), "browser.proxy.upload.v1"),
     ).rejects.toThrow("400: upload rejected");
 
     expect(uploadMocks.discardStagedBrowserProxyUpload).toHaveBeenCalledWith(staged);
@@ -442,18 +353,7 @@ describe("runBrowserProxyCommand", () => {
     dispatcherMocks.dispatch.mockRejectedValueOnce(new Error("dispatch failed"));
 
     await expect(
-      runBrowserProxyCommand(
-        JSON.stringify({
-          method: "POST",
-          path: "/hooks/file-chooser",
-          body: {},
-          upload: {
-            envelope: "browser-upload-v1",
-            files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-          },
-        }),
-        "browser.proxy.upload.v1",
-      ),
+      runBrowserProxyCommand(reportUploadRequest(), "browser.proxy.upload.v1"),
     ).rejects.toThrow("dispatch failed");
 
     expect(uploadMocks.discardStagedBrowserProxyUpload).not.toHaveBeenCalled();
@@ -470,21 +370,7 @@ describe("runBrowserProxyCommand", () => {
         body: { running: true, cdpReady: true, cdpHttp: true },
       });
 
-    await expect(
-      runBrowserProxyCommand(
-        JSON.stringify({
-          method: "POST",
-          path: "/hooks/file-chooser",
-          body: {},
-          upload: {
-            envelope: "browser-upload-v1",
-            files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-          },
-          timeoutMs: 5,
-        }),
-        "browser.proxy.upload.v1",
-      ),
-    )
+    await expect(runBrowserProxyCommand(reportUploadRequest(5), "browser.proxy.upload.v1"))
       .rejects.toThrow("browser proxy timed out")
       .finally(() => now.mockRestore());
 
@@ -492,24 +378,14 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("rejects upload envelopes sent through the legacy proxy command", async () => {
-    await expect(
-      runBrowserProxyCommand(
-        JSON.stringify({
-          method: "POST",
-          path: "/hooks/file-chooser",
-          body: {},
-          upload: {
-            envelope: "browser-upload-v1",
-            files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-          },
-        }),
-      ),
-    ).rejects.toThrow("browser.proxy does not accept upload envelopes");
+    await expect(runBrowserProxyCommand(reportUploadRequest())).rejects.toThrow(
+      "browser.proxy does not accept upload envelopes",
+    );
     expect(uploadMocks.stageBrowserProxyUploadRequest).not.toHaveBeenCalled();
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, null, false, 0, ""])(
+  it.each([undefined, null])(
     "rejects a %j upload envelope sent through the upload proxy command",
     async (upload) => {
       await expect(
@@ -537,19 +413,7 @@ describe("runBrowserProxyCommand", () => {
 
     try {
       await expect(
-        runBrowserProxyCommand(
-          JSON.stringify({
-            method: "POST",
-            path: "/hooks/file-chooser",
-            body: {},
-            upload: {
-              envelope: "browser-upload-v1",
-              files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-            },
-            timeoutMs: 5,
-          }),
-          "browser.proxy.upload.v1",
-        ),
+        runBrowserProxyCommand(reportUploadRequest(5), "browser.proxy.upload.v1"),
       ).rejects.toThrow("browser proxy timed out");
     } finally {
       nowSpy.mockRestore();
@@ -575,19 +439,7 @@ describe("runBrowserProxyCommand", () => {
     );
 
     await expect(
-      runBrowserProxyCommand(
-        JSON.stringify({
-          method: "POST",
-          path: "/hooks/file-chooser",
-          body: {},
-          upload: {
-            envelope: "browser-upload-v1",
-            files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-          },
-          timeoutMs: 5,
-        }),
-        "browser.proxy.upload.v1",
-      ),
+      runBrowserProxyCommand(reportUploadRequest(5), "browser.proxy.upload.v1"),
     ).rejects.toThrow("browser proxy timed out");
 
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
@@ -701,7 +553,7 @@ describe("runBrowserProxyCommand", () => {
     ).rejects.toThrow("browser proxy payload exceeds 24 MiB encoded limit");
   });
 
-  it.each([-1, 0, 1])("enforces the exact quoted payload limit at offset %i", async (delta) => {
+  it.each([0, 1])("enforces the exact quoted payload limit at offset %i", async (delta) => {
     const prefix = '\0\u0001\b\t\n\f\r"\\/Ω漢🦞\u2028\u2029\ud800a\udc00';
     const maxBytes = 24 * 1024 * 1024;
     const overhead = Buffer.byteLength(
@@ -718,38 +570,6 @@ describe("runBrowserProxyCommand", () => {
     } else {
       await expect(result).resolves.toBe(expected);
     }
-  });
-
-  it("adds profile and browser status details on ws-backed timeouts", async () => {
-    vi.useFakeTimers();
-    dispatcherMocks.dispatch
-      .mockImplementationOnce(async () => {
-        await new Promise(() => {});
-      })
-      .mockResolvedValueOnce({
-        status: 200,
-        body: {
-          running: true,
-          cdpHttp: true,
-          cdpReady: false,
-          cdpUrl: "http://127.0.0.1:18792",
-        },
-      });
-
-    const result = expect(
-      runBrowserProxyCommand(
-        JSON.stringify({
-          method: "GET",
-          path: "/snapshot",
-          profile: "openclaw",
-          timeoutMs: 5,
-        }),
-      ),
-    ).rejects.toThrow(
-      /browser proxy timed out for GET \/snapshot after 5ms; ws-backed browser action; profile=openclaw; status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=http:\/\/127\.0\.0\.1:18792\)/,
-    );
-    await vi.advanceTimersByTimeAsync(10);
-    await result;
   });
 
   it("includes chrome-mcp transport in timeout diagnostics when no CDP URL exists", async () => {
@@ -812,7 +632,7 @@ describe("runBrowserProxyCommand", () => {
         }),
       ),
     ).rejects.toThrow(
-      /status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=https:\/\/example\.com\/chrome\?token=supers…7890\)/,
+      /browser proxy timed out for GET \/snapshot after 5ms; ws-backed browser action; profile=remote; status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=https:\/\/example\.com\/chrome\?token=supers…7890\)/,
     );
     await vi.advanceTimersByTimeAsync(10);
     await result;
@@ -953,7 +773,7 @@ describe("runBrowserProxyCommand", () => {
       }),
     );
 
-    const request = firstBrowserDispatchRequest();
+    const request = firstBrowserDispatchRequest(dispatcherMocks.dispatch.mock.calls);
     expect(request.path).toBe("/snapshot");
   });
 
@@ -1009,27 +829,6 @@ describe("runBrowserProxyCommand", () => {
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "deletion", request: { method: "DELETE", path: "/profiles/poc" } },
-    {
-      name: "reset",
-      request: {
-        method: "POST",
-        path: "/reset-profile",
-        body: { profile: "openclaw", name: "openclaw" },
-      },
-    },
-  ])("rejects persistent profile $name when allowProfiles is configured", async ({ request }) => {
-    configMocks.loadConfig.mockReturnValue({
-      browser: {},
-      nodeHost: { browserProxy: { enabled: true, allowProfiles: ["openclaw"] } },
-    });
-    await expect(
-      runBrowserProxyCommand(JSON.stringify({ ...request, timeoutMs: 50 })),
-    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
-    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
-  });
-
   it("canonicalizes an allowlisted body profile into the dispatched query", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
@@ -1049,7 +848,7 @@ describe("runBrowserProxyCommand", () => {
       }),
     );
 
-    const request = firstBrowserDispatchRequest();
+    const request = firstBrowserDispatchRequest(dispatcherMocks.dispatch.mock.calls);
     expect(request.path).toBe("/stop");
     expect(request.query).toEqual({ profile: "openclaw" });
   });

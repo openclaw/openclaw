@@ -88,6 +88,7 @@ export async function createCopilotSessionSetup(params: {
           return buildCopilotPromptGuidance({
             attempt: input,
             callableToolNames: promptPolicyResult.callableToolNames,
+            toolSchemaDirectoryPrompt: promptPolicyResult.toolSchemaDirectoryPrompt,
             requireExplicitMessageTarget: promptToolPolicy.requireExplicitMessageTarget,
             workspaceBootstrapInstructions: workspaceBootstrap.instructions,
           });
@@ -141,49 +142,31 @@ export async function createCopilotSessionSetup(params: {
         assertCopilotAttemptHostCapabilities(attemptInput);
         return createCopilotUserInputBridge({ paramsForRun: attemptInput, signal });
       })();
-  const sessionConfig = createSessionConfig(
-    attemptInput,
-    modelRef.id,
-    promptTools,
-    poolAcquire.auth,
-    sessionProvider,
-    finalDeveloperInstructions || undefined,
-    effectiveWorkspaceDir,
-    effectiveCwd,
-    userInputBridge?.onUserInputRequest,
-    {
-      hooksBridgeOptions: hasNativePromptHook
-        ? {
-            onUserPromptSubmitted: ({ additionalContext, prompt }) =>
-              emitLlmInput(prompt, additionalContext),
-          }
-        : undefined,
-      includeAskUser,
-      operation: operation ?? "attempt",
-    },
-  );
+  const buildSessionConfig = (provider: ResolvedCopilotProvider) =>
+    createSessionConfig(
+      attemptInput,
+      modelRef.id,
+      promptTools,
+      poolAcquire.auth,
+      provider,
+      finalDeveloperInstructions || undefined,
+      effectiveWorkspaceDir,
+      effectiveCwd,
+      userInputBridge?.onUserInputRequest,
+      {
+        hooksBridgeOptions: hasNativePromptHook
+          ? {
+              onUserPromptSubmitted: ({ additionalContext, prompt }) =>
+                emitLlmInput(prompt, additionalContext),
+            }
+          : undefined,
+        includeAskUser,
+        operation: operation ?? "attempt",
+      },
+    );
+  const sessionConfig = buildSessionConfig(sessionProvider);
   const compactionSessionConfig = byokProxy
-    ? createSessionConfig(
-        attemptInput,
-        modelRef.id,
-        promptTools,
-        poolAcquire.auth,
-        poolAcquire.provider,
-        finalDeveloperInstructions || undefined,
-        effectiveWorkspaceDir,
-        effectiveCwd,
-        userInputBridge?.onUserInputRequest,
-        {
-          hooksBridgeOptions: hasNativePromptHook
-            ? {
-                onUserPromptSubmitted: ({ additionalContext, prompt }) =>
-                  emitLlmInput(prompt, additionalContext),
-              }
-            : undefined,
-          includeAskUser,
-          operation: operation ?? "attempt",
-        },
-      )
+    ? buildSessionConfig(poolAcquire.provider)
     : sessionConfig;
   return {
     attemptInput,

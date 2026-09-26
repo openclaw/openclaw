@@ -5,8 +5,11 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -14,14 +17,6 @@ import type { TranscriptSourceProvider } from "../../transcripts/provider-types.
 import { TranscriptsStore } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
-
-const { getTranscriptSourceProviderMock } = vi.hoisted(() => ({
-  getTranscriptSourceProviderMock: vi.fn(),
-}));
-vi.mock("../../transcripts/provider-registry.js", () => ({
-  getTranscriptSourceProvider: getTranscriptSourceProviderMock,
-  listTranscriptSourceProviders: () => [],
-}));
 
 const tempDirs = createTempDirTracker();
 const pendingStops = new Map<ReturnType<typeof createTranscriptsTool>, Set<string>>();
@@ -41,14 +36,21 @@ function createHarness() {
   const importTranscript = vi.fn<NonNullable<TranscriptSourceProvider["importTranscript"]>>(
     async () => [{ text: note }],
   );
-  getTranscriptSourceProviderMock.mockReturnValue({
+  const provider: TranscriptSourceProvider = {
     id: "room-audio",
     name: "Room Audio",
     sourceKinds: ["live-audio", "posthoc-transcript"],
     start,
     stop,
     importTranscript,
-  } satisfies TranscriptSourceProvider);
+  };
+  const registry = createEmptyPluginRegistry();
+  registry.transcriptSourceProviders.push({
+    pluginId: provider.id,
+    provider,
+    source: import.meta.url,
+  });
+  setActivePluginRegistry(registry);
   const tool = createTranscriptsTool({ stateDir, caller: { kind: "operator", source: "local" } });
   const active = new Set<string>();
   pendingStops.set(tool, active);
@@ -96,8 +98,9 @@ afterEach(async () => {
     }
   } finally {
     pendingStops.clear();
-    getTranscriptSourceProviderMock.mockReset();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     vi.useRealTimers();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     tempDirs.cleanup();
   }
@@ -105,12 +108,11 @@ afterEach(async () => {
 
 describe("transcripts bounded export names", () => {
   const oversizedIds = [
-    { label: "256 safe bytes", sessionId: "notes-0-" + "x".repeat(248) },
-    { label: "908 safe bytes", sessionId: "notes-0-" + "x".repeat(900) },
-    { label: "2208 safe bytes", sessionId: "notes-0-" + "x".repeat(2200) },
-    { label: "258 encoded bytes", sessionId: "x".repeat(85) + "." },
-    { label: "overlong encoded device name", sessionId: "CON." + "x".repeat(100) },
-  ];
+    ["256 safe bytes", "notes-0-" + "x".repeat(248), "start", false],
+    ["256 safe bytes", "notes-0-" + "x".repeat(248), "import", true],
+    ["258 encoded bytes", "x".repeat(85) + ".", "import", false],
+    ["overlong encoded device name", "CON." + "x".repeat(100), "start", true],
+  ] as const;
   const ordinaryIds = [
     { label: "date-prefixed raw ID", sessionId: "2026-07-03/raw-id", slug: "2026-07-03-raw-id" },
     { label: "generated", sessionId: undefined, slug: undefined },
@@ -131,18 +133,14 @@ describe("transcripts bounded export names", () => {
       exportParentExists: false,
       shortened: false,
     },
-    ...oversizedIds.flatMap(({ label, sessionId }) =>
-      [false, true].flatMap((exportParentExists) =>
-        (["start", "import"] as const).map((action) => ({
-          label,
-          sessionId,
-          action,
-          exportParentExists,
-          shortened: true,
-          slug: undefined,
-        })),
-      ),
-    ),
+    ...oversizedIds.map(([label, sessionId, action, exportParentExists]) => ({
+      label,
+      sessionId,
+      action,
+      exportParentExists,
+      shortened: true,
+      slug: undefined,
+    })),
     ...ordinaryIds.map(({ label, sessionId, slug }) => ({
       label,
       sessionId,
@@ -178,6 +176,7 @@ describe("transcripts bounded export names", () => {
         expect(asOptionalRecord(stopped.details)?.summaryExportError).toBeUndefined();
         expect(stop.mock.calls[0]?.[0].sessionId === handle).toBe(true);
       }
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       const summarized = await tool.execute("summarize", {
         action: "summarize",
@@ -216,6 +215,7 @@ describe("transcripts bounded export names", () => {
     for (const sessionId of ids) {
       await capture(harness, "import", sessionId);
     }
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const entries = await harness.store.listSessionEntries();
     expect(new Set(entries.map((entry) => entry.selector)).size).toBe(2);
@@ -232,13 +232,24 @@ describe("transcripts bounded export names", () => {
   });
 
   it("keeps an older dated handle separate from an active next-day capture", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-07-01T10:00:00.000Z"));
     const harness = createHarness();
     const sessionId = "notes-" + "x".repeat(900);
-    await capture(harness, "import", sessionId);
+    const yesterday = new Date();
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    const historicalSession = {
+      sessionId,
+      startedAt: yesterday.toISOString(),
+      stoppedAt: yesterday.toISOString(),
+      source: { providerId: "room-audio" },
+    };
+    await harness.store.writeSession(historicalSession);
+    await harness.store.appendUtteranceForSession(historicalSession, { text: note, final: true });
+    const imported = await harness.tool.execute("historical-summary", {
+      action: "summarize",
+      sessionId,
+    });
+    expect(asOptionalRecord(imported.details)?.summaryExportError).toBeUndefined();
     const older = (await harness.store.listSessionEntries())[0]!;
-    vi.setSystemTime(new Date("2026-07-02T10:00:00.000Z"));
     await capture(harness, "start", sessionId);
     const current = (await harness.store.listSessionEntries())[0]!;
     await harness.tool.execute("old-stop", { action: "stop", sessionId: older.selector });
@@ -250,6 +261,7 @@ describe("transcripts bounded export names", () => {
     harness.active.delete(sessionId);
     expect(harness.stop.mock.calls[0]?.[0].sessionId === sessionId).toBe(true);
     expect(asOptionalRecord(result.details)?.summaryExportError).toBeUndefined();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     for (const entry of [older, current]) {
       expect((await harness.store.readSession(entry.selector))?.startedAt).toBe(
@@ -308,9 +320,11 @@ describe("transcripts bounded export names", () => {
         .set({ markdown })
         .where("session_id", "=", sessionId),
     );
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     await store.writeSession({ ...session, stoppedAt: "2026-07-01T11:00:00.000Z" });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const entry = await store.readSessionEntry(sessionId);
     expect(entry?.session.sessionId === sessionId).toBe(true);

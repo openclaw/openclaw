@@ -2,7 +2,32 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { z } from "zod";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { collectNestedErrorCandidates } from "./error-graph-internal.js";
+import { formatErrorMessage } from "./errors.js";
+import {
+  resolvePreferredOpenClawTmpDir,
+  type ResolvePreferredOpenClawTmpDirOptions,
+} from "./tmp-openclaw-dir.js";
+import type {
+  UpdateDatabaseGenerations,
+  UpdateDatabaseWriteReceipt,
+} from "./update-database-generations.js";
+import {
+  UpdateDoctorConfigChangeSchema,
+  UpdateDoctorConfigWriteRefusalSchema,
+} from "./update-doctor-config-schema.js";
+import type {
+  UpdateDoctorConfigChange,
+  UpdateDoctorConfigWriteRefusal,
+} from "./update-doctor-config.js";
+import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
+import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
 // IPC contract between package update parents and the post-install doctor child.
 export const UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV =
@@ -22,26 +47,249 @@ export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
     "Post-install doctor reported a recoverable update-time repair warning after the package install was verified; continuing with post-core plugin convergence.",
 };
 
-export type UpdatePostInstallDoctorResult = (
-  | { status: "ok" | "error" }
-  | {
-      status: "advisory";
-      advisory: PackageUpdateStepAdvisory & {
-        reason: "deferred-configured-plugin-repair";
-        details: string[];
-      };
-    }
-) & { configHash?: string; configInputHash?: string };
+const configHashSchema = z.string().regex(/^[0-9a-f]{64}$/u);
+const DoctorMaintenanceRefusalSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("deferred"),
+    reason: z.enum(["coordinator-contention", "agent-database-in-use", "admission-unavailable"]),
+  }),
+  z.object({
+    kind: z.literal("data-at-risk"),
+    reason: z.enum([
+      "active-mutation",
+      "unreadable-state",
+      "incomplete-migration",
+      "gateway-state-unverified",
+    ]),
+  }),
+]);
+export type DoctorMaintenanceRefusal = z.infer<typeof DoctorMaintenanceRefusalSchema>;
 
-type DoctorConfigCapture = { path: string; hash: string; inputHash?: string };
-const doctorConfigWrites = new AsyncLocalStorage<DoctorConfigCapture>();
+const doctorResultEvidence = {
+  configHash: z.union([z.literal("unchanged"), configHashSchema]).optional(),
+  configInputHash: configHashSchema.optional(),
+  warnings: z.array(z.string()).optional(),
+  maintenanceRefusal: DoctorMaintenanceRefusalSchema.optional(),
+  // Invalid optional diagnostics cannot change the child's classified outcome.
+  failureFacts: z.array(UpdateFailureFactSchema).catch([]).optional(),
+  configChanges: z.array(UpdateDoctorConfigChangeSchema).optional(),
+  configWriteRefusal: UpdateDoctorConfigWriteRefusalSchema.optional(),
+  databaseWrites: z
+    .object({ unchanged: z.boolean(), generations: z.record(z.string(), z.string().nullable()) })
+    .optional()
+    .catch(undefined),
+};
+const UpdatePostInstallDoctorResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.enum(["ok", "error"]), ...doctorResultEvidence }),
+  z.object({
+    status: z.literal("advisory"),
+    advisory: z.object({
+      kind: z.literal("package-post-install-doctor"),
+      reason: z.literal("deferred-configured-plugin-repair"),
+      message: z.string().transform(() => PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message),
+      details: z.array(z.string().refine((detail) => detail.trim().length > 0)).min(1),
+    }),
+    ...doctorResultEvidence,
+  }),
+]);
+export type UpdatePostInstallDoctorResult = z.infer<typeof UpdatePostInstallDoctorResultSchema>;
+
+export class UpdateDoctorError extends Error {
+  readonly exitCode: number | null | undefined;
+
+  constructor(
+    message: string,
+    readonly failureFacts: UpdateFailureFact[],
+    options?: ErrorOptions & { exitCode?: number | null },
+  ) {
+    super(message, options);
+    this.name = "UpdateDoctorError";
+    this.exitCode = options?.exitCode;
+  }
+}
+
+export class DoctorMaintenanceRefusalError extends UpdateDoctorError {
+  constructor(
+    message: string,
+    readonly refusal: DoctorMaintenanceRefusal,
+    options?: ErrorOptions & { failureFacts?: UpdateFailureFact[] },
+  ) {
+    super(message, options?.failureFacts ?? [], options);
+    this.name = "DoctorMaintenanceRefusalError";
+  }
+}
+
+export function collectUpdateDoctorFailureFacts(error: unknown): UpdateFailureFact[] {
+  return normalizeUpdateFailureFacts(
+    collectNestedErrorCandidates(error).flatMap((candidate) =>
+      candidate instanceof UpdateDoctorError ? candidate.failureFacts : [],
+    ),
+  );
+}
+
+/** Keep optional health diagnostics bounded across Doctor and its update parent. */
+export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly string[]): string[] {
+  const normalized: string[] = [];
+  for (const warning of warnings) {
+    const message = truncateUtf16Safe(warning.trim(), 500);
+    if (message) {
+      normalized.push(message);
+      if (normalized.length === 32) {
+        break;
+      }
+    }
+  }
+  return normalized;
+}
+
+export type DoctorConfigCapture = {
+  path: string;
+  hash: string;
+  inputHash?: string;
+  configChanges: UpdateDoctorConfigChange[];
+  configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
+};
+export type UpdateDoctorWriteAuthority = {
+  inputHash: string;
+  assertCurrent: () => void;
+  postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
+  databaseGenerations?: UpdateDatabaseGenerations;
+};
+
+/** Receipts describe the caller's existing maintenance interval without owning its lifecycle. */
+export function createUpdateDoctorDatabaseWriteCapture(
+  input: UpdateDatabaseGenerations | undefined,
+  options: {
+    env: NodeJS.ProcessEnv;
+    root?: string;
+    signal: AbortSignal;
+    assertCurrent?: () => void;
+    warn: (message: string) => void;
+  },
+) {
+  if (!input) {
+    return undefined;
+  }
+  let expectedGenerations: UpdateDatabaseGenerations | undefined = { ...input };
+  let unchanged = true;
+  let receipt: UpdateDatabaseWriteReceipt | undefined;
+  const read = async () => {
+    if (!expectedGenerations) {
+      return undefined;
+    }
+    let generations: UpdateDatabaseGenerations;
+    try {
+      const { readUpdateDatabaseGenerationsIsolated } = await import("./update-candidate-state.js");
+      generations = await readUpdateDatabaseGenerationsIsolated(
+        Object.keys(expectedGenerations),
+        options,
+      );
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
+      options.assertCurrent?.();
+      expectedGenerations = undefined;
+      receipt = undefined;
+      options.warn(
+        `Database write verification is unavailable; automatic database restoration cannot be confirmed: ${formatErrorMessage(error)}`,
+      );
+      return undefined;
+    }
+    options.assertCurrent?.();
+    return generations;
+  };
+  return {
+    get receipt() {
+      return receipt;
+    },
+    async admit() {
+      receipt = undefined;
+      const generations = await read();
+      if (generations && expectedGenerations) {
+        // Earlier receipts or another process's writes must never become our baseline.
+        unchanged &&= Object.entries(expectedGenerations).every(
+          ([pathname, generation]) => generations[pathname] === generation,
+        );
+      }
+    },
+    async settle() {
+      const generations = await read();
+      if (generations) {
+        receipt = { unchanged, generations };
+        expectedGenerations = generations;
+      }
+    },
+  };
+}
+
+const doctorConfigWrites = new AsyncLocalStorage<{
+  capture: DoctorConfigCapture;
+  authority?: UpdateDoctorWriteAuthority;
+}>();
 
 export function captureUpdateDoctorConfigWrites<T>(
   configPath: string,
   run: (capture: DoctorConfigCapture) => Promise<T>,
+  authority?: UpdateDoctorWriteAuthority,
 ): Promise<T> {
-  const capture = { path: path.resolve(configPath), hash: "unchanged" };
-  return doctorConfigWrites.run(capture, () => run(capture));
+  const capture: DoctorConfigCapture = {
+    path: path.resolve(configPath),
+    hash: "unchanged",
+    configChanges: [],
+  };
+  return doctorConfigWrites.run(
+    {
+      capture,
+      authority: authority
+        ? { inputHash: authority.inputHash, assertCurrent: authority.assertCurrent }
+        : undefined,
+    },
+    () => run(capture),
+  );
+}
+
+/** The same authority covers include writers; only the root has a captured input hash. */
+export function getUpdateDoctorConfigWriteAuthority(
+  configPath: string,
+): { assertCurrent: () => void; inputHash?: string } | undefined {
+  const context = doctorConfigWrites.getStore();
+  if (!context?.authority) {
+    return undefined;
+  }
+  const { capture, authority } = context;
+  return {
+    assertCurrent: authority.assertCurrent,
+    ...(capture.path === path.resolve(configPath)
+      ? { inputHash: capture.hash === "unchanged" ? authority.inputHash : capture.hash }
+      : {}),
+  };
+}
+
+export function assertUpdateDoctorConfigInputHash(configPath: string, inputHash: string): void {
+  const authority = getUpdateDoctorConfigWriteAuthority(configPath);
+  if (authority?.inputHash !== undefined && authority.inputHash !== inputHash) {
+    const message = "Config changed after update validation; Doctor did not promote its changes.";
+    recordUpdateDoctorConfigWriteRefusal({ reason: "config-input-changed", message, keys: [] });
+    throw new ConfigMutationConflictError(message, { retryable: false });
+  }
+}
+
+/** Include publication retains its legacy writer until fs-safe supports final-effect authority. */
+export async function runUpdateDoctorIncludeWrite<T>(
+  configPath: string,
+  inputHash: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const context = doctorConfigWrites.getStore();
+  if (!context?.authority) {
+    return await run();
+  }
+  context.authority.assertCurrent();
+  assertUpdateDoctorConfigInputHash(configPath, inputHash);
+  const result = await doctorConfigWrites.run({ capture: context.capture }, run);
+  context.authority.assertCurrent();
+  return result;
 }
 
 /** Pair the consumed snapshot with the serialized payload at publication, never a later read. */
@@ -49,8 +297,10 @@ export function recordUpdateDoctorConfigWrite(
   configPath: string,
   inputHash: string | null,
   hash: string,
+  inputConfig: unknown,
+  outputJson: string,
 ): void {
-  const capture = doctorConfigWrites.getStore();
+  const capture = doctorConfigWrites.getStore()?.capture;
   if (capture && capture.path === path.resolve(configPath)) {
     if (capture.hash === "unchanged") {
       capture.inputHash = inputHash ?? undefined;
@@ -59,18 +309,63 @@ export function recordUpdateDoctorConfigWrite(
       delete capture.inputHash;
     }
     capture.hash = hash;
+    const before = isRecord(inputConfig) ? inputConfig : {};
+    const after: unknown = JSON.parse(outputJson);
+    if (!isRecord(after)) {
+      throw new Error("Committed Doctor config is not an object.");
+    }
+    const keys = new Set(
+      capture.configChanges.flatMap((change) => (change.kind === "key" ? [change.key] : [])),
+    );
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (!isDeepStrictEqual(before[key], after[key])) {
+        keys.add(key);
+      }
+    }
+    capture.configChanges = [
+      ...[...keys].toSorted().map((key): UpdateDoctorConfigChange => ({ kind: "key", key })),
+      ...capture.configChanges.filter((change) => change.kind === "migration"),
+    ];
   }
 }
 
-export function createUpdatePostInstallDoctorResultPath(): string {
+/** Record migration notes only after their matching config write has committed. */
+export function recordUpdateDoctorConfigMigration(message: string): void {
+  const capture = doctorConfigWrites.getStore()?.capture;
+  if (
+    capture &&
+    message.trim() &&
+    !capture.configChanges.some(
+      (change) => change.kind === "migration" && change.message === message,
+    )
+  ) {
+    capture.configChanges.push({ kind: "migration", message });
+  }
+}
+
+export function recordUpdateDoctorConfigWriteRefusal(
+  refusal: UpdateDoctorConfigWriteRefusal,
+): void {
+  const capture = doctorConfigWrites.getStore()?.capture;
+  if (capture) {
+    capture.configWriteRefusal ??= { ...refusal, keys: [...new Set(refusal.keys)].toSorted() };
+  }
+}
+
+export function createUpdatePostInstallDoctorResultPath(
+  options?: Pick<ResolvePreferredOpenClawTmpDirOptions, "tmpdir">,
+): string {
   return path.join(
-    resolvePreferredOpenClawTmpDir(),
+    resolvePreferredOpenClawTmpDir(options),
     `openclaw-update-doctor-${process.pid}-${randomUUID()}.json`,
   );
 }
 
-function resolveSafeUpdatePostInstallDoctorResultPath(resultPath: string): string {
-  const tempRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+function resolveSafeUpdatePostInstallDoctorResultPath(
+  resultPath: string,
+  options?: Pick<ResolvePreferredOpenClawTmpDirOptions, "tmpdir">,
+): string {
+  const tempRoot = path.resolve(resolvePreferredOpenClawTmpDir(options));
   const resolvedPath = path.resolve(resultPath);
   if (
     path.dirname(resolvedPath) !== tempRoot ||
@@ -100,19 +395,24 @@ export async function writeUpdatePostInstallDoctorResult(params: {
 }): Promise<void> {
   const resultPath = resolveSafeUpdatePostInstallDoctorResultPath(params.resultPath);
   // Advisory details can contain config-derived IDs; pre-existing paths must fail closed.
-  await fs.writeFile(resultPath, `${JSON.stringify(params.result)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-    flag: "wx",
-  });
+  await fs.writeFile(
+    resultPath,
+    `${JSON.stringify(normalizeUpdatePostInstallDoctorResult(params.result))}\n`,
+    {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    },
+  );
 }
 
 export async function consumeUpdatePostInstallDoctorResult(
   resultPath: string,
+  options?: Pick<ResolvePreferredOpenClawTmpDirOptions, "tmpdir">,
 ): Promise<UpdatePostInstallDoctorResult | null> {
   let safeResultPath: string;
   try {
-    safeResultPath = resolveSafeUpdatePostInstallDoctorResultPath(resultPath);
+    safeResultPath = resolveSafeUpdatePostInstallDoctorResultPath(resultPath, options);
   } catch {
     return null;
   }
@@ -127,59 +427,20 @@ export async function consumeUpdatePostInstallDoctorResult(
 }
 
 function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDoctorResult | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const record = value as Record<string, unknown>;
-  const configHash = record.configHash;
-  if (
-    configHash !== undefined &&
-    (typeof configHash !== "string" ||
-      (configHash !== "unchanged" && !/^[0-9a-f]{64}$/u.test(configHash)))
-  ) {
-    return null;
-  }
-  const configInputHash = record.configInputHash;
-  if (
-    configInputHash !== undefined &&
-    (typeof configInputHash !== "string" || !/^[0-9a-f]{64}$/u.test(configInputHash))
-  ) {
-    return null;
-  }
-  const configWrite = {
-    ...(configHash === undefined ? {} : { configHash }),
-    ...(configInputHash === undefined ? {} : { configInputHash }),
-  };
-  if (record.status === "ok" || record.status === "error") {
-    return { status: record.status, ...configWrite };
-  }
-  if (record.status !== "advisory") {
-    return null;
-  }
-  const advisory = record.advisory;
-  if (!advisory || typeof advisory !== "object") {
-    return null;
-  }
-  const advisoryRecord = advisory as Record<string, unknown>;
-  const details = advisoryRecord.details;
-  if (
-    advisoryRecord.kind !== "package-post-install-doctor" ||
-    advisoryRecord.reason !== "deferred-configured-plugin-repair" ||
-    typeof advisoryRecord.message !== "string" ||
-    !Array.isArray(details) ||
-    details.length === 0 ||
-    !details.every((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-  ) {
-    return null;
-  }
+  const parsed = UpdatePostInstallDoctorResultSchema.safeParse(value);
+  return parsed.success ? normalizeUpdatePostInstallDoctorResult(parsed.data) : null;
+}
+
+function normalizeUpdatePostInstallDoctorResult({
+  warnings,
+  failureFacts,
+  ...result
+}: UpdatePostInstallDoctorResult): UpdatePostInstallDoctorResult {
+  const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
+  const facts = normalizeUpdateFailureFacts(failureFacts ?? []);
   return {
-    status: "advisory",
-    ...configWrite,
-    advisory: {
-      kind: "package-post-install-doctor",
-      reason: "deferred-configured-plugin-repair",
-      message: PACKAGE_POST_INSTALL_DOCTOR_ADVISORY.message,
-      details,
-    },
+    ...result,
+    ...(normalizedWarnings.length ? { warnings: normalizedWarnings } : {}),
+    ...(facts.length ? { failureFacts: facts } : {}),
   };
 }

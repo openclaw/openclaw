@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { ConversationIdentity } from "../config/sessions/conversation-identity.js";
 import { runGatewayConversationList } from "./conversation-list.js";
 
+function directoryAccountConfig(accountIds = ["default"]) {
+  return {
+    listAccountIds: () => accountIds,
+    resolveAccount: () => ({ enabled: true, configured: true }),
+    isEnabled: () => true,
+    isConfigured: () => true,
+  };
+}
+
 describe("runGatewayConversationList", () => {
   it("discovers only routes owned by the active agent", async () => {
     let discovered: ConversationIdentity[] = [];
@@ -10,7 +19,10 @@ describe("runGatewayConversationList", () => {
         id: "reef",
         config: {
           listAccountIds: () => ["personal", "finance"],
-          resolveAccount: () => ({ enabled: true, configured: true }),
+          resolveAccount: () => {
+            throw new Error("operational directory discovery must prepare its account");
+          },
+          resolveAccountAsync: async () => ({ enabled: true, configured: true }),
           isEnabled: () => true,
           isConfigured: () => true,
         },
@@ -118,7 +130,10 @@ describe("runGatewayConversationList", () => {
       } as never,
     );
 
-    expect(listConversations).toHaveBeenCalledWith({ agentId: "personal" }, {});
+    expect(listConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "personal" }),
+      {},
+    );
     expect(result.conversations).toEqual([
       expect.objectContaining({ accountId: "personal", target: "reef:personal-peer" }),
     ]);
@@ -140,12 +155,7 @@ describe("runGatewayConversationList", () => {
     const deps = {
       resolveOutboundChannelPlugin: vi.fn(() => ({
         id: "reef",
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => ({ enabled: true, configured: true }),
-          isEnabled: () => true,
-          isConfigured: () => true,
-        },
+        config: directoryAccountConfig(),
         directory: { listPeers, listGroups: async () => [] },
       })),
       resolveOutboundSessionRoute,
@@ -175,7 +185,10 @@ describe("runGatewayConversationList", () => {
     expect(listPeers).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: "default", query: "@molty", limit: 50 }),
     );
-    expect(deps.listConversations).toHaveBeenCalledWith({ agentId: "main" }, { channel: "reef" });
+    expect(deps.listConversations).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+      { channel: "reef" },
+    );
     expect(resolveOutboundSessionRoute).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "reef",
@@ -209,12 +222,7 @@ describe("runGatewayConversationList", () => {
     const deps = {
       resolveOutboundChannelPlugin: vi.fn(() => ({
         id: "discord",
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => ({ enabled: true, configured: true }),
-          isEnabled: () => true,
-          isConfigured: () => true,
-        },
+        config: directoryAccountConfig(),
         directory: {
           listPeers: async () => [
             { kind: "user" as const, id: "delivery-alias-456", name: "Canonical Peer" },
@@ -264,12 +272,7 @@ describe("runGatewayConversationList", () => {
     const deps = {
       resolveOutboundChannelPlugin: vi.fn(() => ({
         id: "reef",
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => ({ enabled: true, configured: true }),
-          isEnabled: () => true,
-          isConfigured: () => true,
-        },
+        config: directoryAccountConfig(),
         directory: {
           listPeers: async () => [],
           listGroups: async () => [
@@ -328,12 +331,7 @@ describe("runGatewayConversationList", () => {
     const deps = {
       resolveOutboundChannelPlugin: vi.fn(() => ({
         id: "discord",
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => ({ enabled: true, configured: true }),
-          isEnabled: () => true,
-          isConfigured: () => true,
-        },
+        config: directoryAccountConfig(),
         directory: { listPeers, listPeersLive, listGroups, listGroupsLive },
       })),
       resolveOutboundSessionRoute: vi.fn(async ({ target }: { target: string }) => {
@@ -388,12 +386,7 @@ describe("runGatewayConversationList", () => {
     const deps = {
       resolveOutboundChannelPlugin: vi.fn(() => ({
         id: "discord",
-        config: {
-          listAccountIds: () => ["default"],
-          resolveAccount: () => ({ enabled: true, configured: true }),
-          isEnabled: () => true,
-          isConfigured: () => true,
-        },
+        config: directoryAccountConfig(),
         directory: { listPeers, listPeersLive },
       })),
       resolveOutboundSessionRoute: vi.fn(async ({ target }: { target: string }) => {

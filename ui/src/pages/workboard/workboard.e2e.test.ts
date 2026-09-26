@@ -1,20 +1,22 @@
 // Control UI tests cover workboard behavior.
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import type {
   WorkboardBoardSummary,
   WorkboardCard,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { WORKBOARD_CHANGED_EVENT } from "../../../../packages/workboard-contract/src/index.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
+} from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
@@ -76,55 +78,41 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function workboardField(scope: Page | Locator, label: string) {
-  return scope.locator(".workboard-field").filter({
-    hasText: new RegExp(`^\\s*${escapeRegExp(label)}\\b`, "u"),
+async function openWorkboardFilters(page: Page): Promise<void> {
+  const trigger = page.locator(".workboard-filter-trigger");
+  const panel = page.locator(".workboard-filter-popover__panel");
+  if (!(await panel.isVisible())) {
+    await trigger.click();
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+  }
+  await panel.waitFor({ state: "visible" });
+}
+
+async function chooseWorkboardDisplayOption(page: Page, option: string) {
+  await openWorkboardFilters(page);
+  await page
+    .getByRole("group", { name: "Empty columns", exact: true })
+    .getByRole("button", { name: option, exact: true })
+    .click();
+}
+
+async function chooseWorkboardBoard(page: Page, boardId: string) {
+  await openWorkboardFilters(page);
+  const picker = page.locator("openclaw-select-picker").filter({
+    has: page.getByRole("button", { name: /^Filter by board:/u }),
   });
+  await picker.getByRole("button", { name: /^Filter by board:/u }).click();
+  await picker.locator(`[role="option"][data-value="${boardId}"]`).click();
 }
 
-async function waitForWorkboardSelectValue(control: Locator, value: string): Promise<void> {
-  await expect.poll(() => control.inputValue()).toBe(value);
-}
-
-async function chooseWorkboardSelectOption(
-  scope: Page | Locator,
-  label: string,
-  optionLabel: string,
-): Promise<void> {
-  const field = workboardField(scope, label);
-  expect(await field.count()).toBe(1);
-  await chooseWorkboardSelectFieldOption(field, optionLabel);
-}
-
-async function chooseWorkboardSelectFieldOption(
-  field: Locator,
-  optionLabel: string,
-  control = field.locator("select"),
-): Promise<void> {
-  const optionValue = await field.locator("option").evaluateAll((options, optionText) => {
-    const option = options.find((candidate) =>
-      candidate.textContent?.trim().startsWith(optionText),
-    );
-    return option?.getAttribute("value") ?? null;
-  }, optionLabel);
-  const value = expectDefined(optionValue, `Workboard option: ${optionLabel}`);
-  await control.selectOption(value);
-  await waitForWorkboardSelectValue(control, value);
-}
-
-async function expectWorkboardSelectTextFits(control: Locator): Promise<void> {
-  const geometry = await control.evaluate((select) => {
-    const bounds = select.getBoundingClientRect();
-    const parent = select.parentElement!.getBoundingClientRect();
-    return {
-      width: bounds.width,
-      available: parent.width,
-      overflow: select.scrollWidth - select.clientWidth,
-    };
-  });
-  expect(geometry.width).toBeGreaterThan(0);
-  expect(geometry.width).toBeLessThanOrEqual(geometry.available + 1);
-  expect(geometry.overflow).toBeLessThanOrEqual(1);
+async function closeWorkboardFilters(page: Page) {
+  const popover = page.locator(".workboard-filter-popover");
+  if (await page.locator(".workboard-filter-popover__panel").isVisible()) {
+    await popover.evaluate((element) => {
+      (element as HTMLElement).hidePopover();
+    });
+    await expect.poll(() => page.locator(".workboard-filter-popover__panel").isHidden()).toBe(true);
+  }
 }
 
 async function setWorkboardDraftField(
@@ -253,6 +241,12 @@ function cardInColumn(page: Page, status: string, title: string) {
   return statusColumn(page, status).locator(".workboard-card", { hasText: title }).first();
 }
 
+async function clickCardAction(cardLocator: Locator, name: string) {
+  await cardLocator.hover();
+  await cardLocator.locator(".workboard-card__menu-trigger").click();
+  await cardLocator.getByRole("button", { name, exact: true }).click();
+}
+
 async function newRecordedPage(
   artifacts: ProofArtifacts,
   label: string,
@@ -356,6 +350,7 @@ suite.define(() => {
     const liveRefreshedCard = card({
       ...reviewedCard,
       notes: "Acceptance: live Gateway invalidation refreshed this card",
+      title: "Workboard browser proof refreshed",
       updatedAt: baseTime + 5,
     });
 
@@ -373,31 +368,28 @@ suite.define(() => {
       });
       const response = await writable.page.goto(`${suite.server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
-      await statusColumn(writable.page, "Todo").waitFor({ state: "visible" });
+      await writable.page
+        .locator(".workboard-heading__actions")
+        .getByRole("button", { name: /New card/u })
+        .waitFor({ state: "visible" });
+      await writableGateway.waitForRequest("workboard.cards.list");
+      await expect.poll(() => writable.page.locator(".workboard-refresh").isEnabled()).toBe(true);
+      expect(await writable.page.locator(".workboard-card").count()).toBe(0);
       await captureScreenshot(writable.page, artifacts, "01-empty-board");
 
-      const prioritySelect = writable.page.getByRole("combobox", { name: "All priorities" });
-      const directRoutePickerStyles = await prioritySelect.evaluate((select) => {
-        const styles = getComputedStyle(select);
-        return {
-          minHeight: styles.minHeight,
-          paddingRight: styles.paddingRight,
-        };
-      });
-      expect(directRoutePickerStyles).toEqual({
-        minHeight: "36px",
-        paddingRight: "36px",
-      });
-      await prioritySelect.selectOption("urgent");
-      await waitForWorkboardSelectValue(prioritySelect, "urgent");
-      await prioritySelect.selectOption("high");
-      await waitForWorkboardSelectValue(prioritySelect, "high");
-      await prioritySelect.selectOption("all");
-      await waitForWorkboardSelectValue(prioritySelect, "all");
+      await openWorkboardFilters(writable.page);
+      const highPriority = writable.page
+        .getByRole("group", { name: "Priority", exact: true })
+        .getByRole("checkbox", { name: /High/u, disabled: false });
+      await highPriority.press("Space");
+      await expect.poll(() => highPriority.isChecked()).toBe(true);
+      await highPriority.uncheck();
+      await expect.poll(() => highPriority.isChecked()).toBe(false);
+      await closeWorkboardFilters(writable.page);
 
       await writableGateway.deferNext("workboard.cards.create");
       await writable.page
-        .locator(".workboard-toolbar__actions")
+        .locator(".workboard-heading__actions")
         .getByRole("button", { name: /New card/u })
         .click();
       const createDialog = writable.page.getByRole("dialog", { name: "New card" });
@@ -405,7 +397,10 @@ suite.define(() => {
       await expect.poll(() => createDialog.isVisible()).toBe(true);
       await setWorkboardDraftField(createForm, "Title", createdCard.title);
       await setWorkboardDraftField(createForm, "Notes", createdCard.notes ?? "");
-      await chooseWorkboardSelectOption(createForm, "Session", linkedSessionName);
+      await createForm.getByRole("button", { name: /^Session:/u }).click();
+      await createForm
+        .getByRole("option", { name: new RegExp(`^${escapeRegExp(linkedSessionName)}`, "u") })
+        .click();
       await setWorkboardDraftField(createForm, "Labels", "ui, proof");
       await captureScreenshot(writable.page, artifacts, "02-create-dialog", createDialog, [
         createForm.getByLabel("Title"),
@@ -428,13 +423,19 @@ suite.define(() => {
       expect(await createForm.getByLabel("Title").isDisabled()).toBe(true);
       expect(await createForm.getByLabel("Notes").isDisabled()).toBe(true);
       expect(await createForm.getByLabel("Labels").isDisabled()).toBe(true);
+      expect(await createForm.getByRole("button", { name: /^Session:/u }).isDisabled()).toBe(true);
       expect(
         await createForm
-          .getByRole("combobox")
-          .evaluateAll(
-            (inputs) => inputs.filter((input) => (input as HTMLInputElement).disabled).length,
-          ),
-      ).toBe(3);
+          .getByRole("group", { name: "Status", exact: true })
+          .getByRole("radio", { name: "Todo", exact: true })
+          .isDisabled(),
+      ).toBe(true);
+      expect(
+        await createForm
+          .getByRole("group", { name: "Priority", exact: true })
+          .getByRole("radio", { name: "Normal", exact: true })
+          .isDisabled(),
+      ).toBe(true);
       expect(
         await createForm.locator(".workboard-agent-select .agent-select__trigger").isDisabled(),
       ).toBe(true);
@@ -459,15 +460,15 @@ suite.define(() => {
       await captureScreenshot(writable.page, artifacts, "03-created-card");
 
       await writableGateway.deferNext("workboard.cards.update");
-      await cardInColumn(writable.page, "Todo", createdCard.title)
-        .locator('button[aria-label="Edit card"]')
-        .click();
+      await clickCardAction(cardInColumn(writable.page, "Todo", createdCard.title), "Edit card");
       const editDialog = writable.page.getByRole("dialog", { name: "Edit card" });
       const editForm = writable.page.locator(".workboard-draft");
       await expect.poll(() => editDialog.isVisible()).toBe(true);
       await setWorkboardDraftField(editForm, "Title", editedCard.title);
       await setWorkboardDraftField(editForm, "Notes", editedCard.notes ?? "");
-      await chooseWorkboardSelectOption(editForm, "Priority", "High");
+      const priority = editForm.getByRole("radio", { name: "High", exact: true, disabled: false });
+      await priority.press("Space");
+      expect(await priority.isChecked()).toBe(true);
       await setWorkboardDraftField(editForm, "Labels", "ui, proof, e2e");
       const updateBeforeEdit = (await writableGateway.getRequests("workboard.cards.update")).length;
       await editForm.getByRole("button", { name: /^Save$/u }).click();
@@ -500,7 +501,8 @@ suite.define(() => {
       await details.getByText("Acceptance: mocked Gateway browser proof").waitFor({
         state: "visible",
       });
-      await details.locator(".workboard-card__move-select").waitFor({ state: "visible" });
+      await details.getByRole("button", { name: /^Status:/u }).waitFor({ state: "visible" });
+      await details.locator("button[popovertarget=workboard-detail-actions]").click();
       expect(await details.getByRole("button", { name: "Open session" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Edit card" }).count()).toBe(1);
       expect(await details.getByRole("button", { name: "Archive card" }).count()).toBe(1);
@@ -513,7 +515,7 @@ suite.define(() => {
         writable.page.getByRole("dialog", { name: editedCard.title, exact: true }),
         [details.getByRole("button", { name: "Open session" })],
       );
-      await details.locator('button[aria-label="Cancel"]').click();
+      await details.locator('button[aria-label="Close"]').click();
 
       await writableGateway.deferNext("workboard.cards.move");
       const dragSource = cardInColumn(writable.page, "Todo", editedCard.title);
@@ -524,7 +526,14 @@ suite.define(() => {
       await expect
         .poll(() => dragSource.evaluate((element) => window.getComputedStyle(element).opacity))
         .toBe("0.45");
-      expect(await writable.page.locator(".workboard-column--drop").count()).toBe(9);
+      expect(await writable.page.locator(".workboard-column--drop-target").count()).toBe(0);
+      await statusColumn(writable.page, "Running").dispatchEvent("dragover");
+      await expect
+        .poll(() => writable.page.locator(".workboard-column--drop-target").count())
+        .toBe(1);
+      expect(await statusColumn(writable.page, "Running").getAttribute("class")).toContain(
+        "workboard-column--drop-target",
+      );
       await captureScreenshot(writable.page, artifacts, "06-drag-feedback");
       await dragSource.dispatchEvent("dragend");
       await expect
@@ -595,7 +604,8 @@ suite.define(() => {
       await writableGateway.resolveDeferred("workboard.cards.list");
       const reviewedCardSurface = cardInColumn(writable.page, "Review", editedCard.title);
       await reviewedCardSurface.waitFor({ state: "visible" });
-      await reviewedCardSurface.getByRole("button", { name: "View details", exact: true }).click();
+      await clickCardAction(reviewedCardSurface, "View details");
+      await writable.page.getByRole("tab", { name: "Activity", exact: true }).click();
       await writable.page.locator(".workboard-detail").getByText("Moved to Review").waitFor({
         state: "visible",
       });
@@ -606,12 +616,10 @@ suite.define(() => {
         writable.page.getByRole("dialog", { name: editedCard.title, exact: true }),
         [details.getByText("Moved to Review")],
       );
-      await details.locator('button[aria-label="Cancel"]').click();
+      await details.locator('button[aria-label="Close"]').click();
       await details.waitFor({ state: "hidden" });
 
-      await cardInColumn(writable.page, "Review", editedCard.title)
-        .locator('button[aria-label="Edit card"]')
-        .click();
+      await clickCardAction(cardInColumn(writable.page, "Review", editedCard.title), "Edit card");
       await expect.poll(() => editDialog.isVisible()).toBe(true);
       const unsavedNotes = "Keep these unfinished Workboard notes";
       await setWorkboardDraftField(editForm, "Notes", unsavedNotes);
@@ -636,10 +644,21 @@ suite.define(() => {
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
       await writableGateway.resolveDeferred("workboard.cards.list");
       await expect
-        .poll(() => writable.page.locator(".workboard-select--toolbar-board").textContent())
-        .toContain("Live metadata");
+        .poll(() =>
+          writable.page
+            .getByRole("option", { name: /Live metadata/u, includeHidden: true })
+            .count(),
+        )
+        .toBe(1);
       expect(await editForm.getByLabel("Notes").inputValue()).toBe(unsavedNotes);
-      expect(await reviewedCardSurface.textContent()).toContain(reviewedCard.notes);
+      expect(
+        await reviewedCardSurface.getByRole("heading", { includeHidden: true }).textContent(),
+      ).toBe(reviewedCard.title);
+      expect(
+        await writable.page
+          .getByRole("heading", { name: liveRefreshedCard.title, exact: true, includeHidden: true })
+          .count(),
+      ).toBe(0);
       expect(await writableGateway.getRequests("tasks.list")).toHaveLength(tasksBeforeLiveRefresh);
       const listBeforeDraftClose = (await writableGateway.getRequests("workboard.cards.list"))
         .length;
@@ -647,10 +666,14 @@ suite.define(() => {
         .locator(":scope > .workboard-modal__actions")
         .getByRole("button", { name: "Cancel", exact: true })
         .click();
-      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeDraftClose);
       await writable.page
-        .getByText("Acceptance: live Gateway invalidation refreshed this card")
-        .waitFor({ state: "visible" });
+        .locator(".workboard-discard")
+        .getByRole("button", { name: "Discard", exact: true })
+        .click();
+      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeDraftClose);
+      await cardInColumn(writable.page, "Review", liveRefreshedCard.title).waitFor({
+        state: "visible",
+      });
       const listAfterLiveRefresh = (await writableGateway.getRequests("workboard.cards.list"))
         .length;
       await writable.page.clock.fastForward(1_250);
@@ -661,15 +684,14 @@ suite.define(() => {
       await writableGateway.deferNext("workboard.cards.list");
       const listBeforeReload = (await writableGateway.getRequests("workboard.cards.list")).length;
       await writable.page
-        .locator(".workboard-toolbar__actions")
+        .locator(".workboard-heading__actions")
         .getByRole("button", { name: /^Refresh$/u })
         .click();
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeReload);
       await writableGateway.resolveDeferred("workboard.cards.list");
-      await cardInColumn(writable.page, "Review", editedCard.title).waitFor({ state: "visible" });
-      await writable.page
-        .getByText("Acceptance: live Gateway invalidation refreshed this card")
-        .waitFor({ state: "visible" });
+      await cardInColumn(writable.page, "Review", liveRefreshedCard.title).waitFor({
+        state: "visible",
+      });
       await captureScreenshot(writable.page, artifacts, "09-reloaded-review");
     } finally {
       await closeRecordedPage(writable, artifacts, "workboard-writable");
@@ -708,7 +730,7 @@ suite.define(() => {
         state: "visible",
       });
       const readOnlyDetail = readOnly.page.locator(".workboard-detail");
-      expect(await readOnlyDetail.locator(".workboard-card__move-select").count()).toBe(0);
+      expect(await readOnlyDetail.getByRole("button", { name: /^Status:/u }).count()).toBe(0);
       expect(await readOnlyDetail.getByRole("button", { name: "Edit card" }).count()).toBe(0);
       expect(await readOnlyDetail.getByRole("button", { name: "Archive card" }).count()).toBe(0);
       expect(await readOnlyDetail.getByRole("button", { name: "Delete card" }).count()).toBe(0);
@@ -813,15 +835,33 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await recorded.page.locator(".workboard-column--review .workboard-card").waitFor();
 
+      const reviewHeader = recorded.page.locator(
+        ".workboard-column--review .workboard-column__header",
+      );
+      const collapseButton = reviewHeader.getByRole("button", { name: "Collapse Review column" });
+      expect(await collapseButton.evaluate((button) => getComputedStyle(button).opacity)).toBe("0");
+      await collapseButton.focus();
+      await expect
+        .poll(() => collapseButton.evaluate((button) => getComputedStyle(button).opacity))
+        .toBe("1");
+      await collapseButton.blur();
+      await expect
+        .poll(() => collapseButton.evaluate((button) => getComputedStyle(button).opacity))
+        .toBe("0");
+      await reviewHeader.hover();
+      await expect
+        .poll(() => collapseButton.evaluate((button) => getComputedStyle(button).opacity))
+        .toBe("1");
+
       const collapsedColumns = recorded.page.locator(".workboard-column--collapsed");
       await expect.poll(() => collapsedColumns.count()).toBe(0);
-      const emptyColumns = recorded.page.locator(".workboard-select--empty-columns");
-      await expectWorkboardSelectTextFits(emptyColumns);
-      await chooseWorkboardSelectFieldOption(emptyColumns, "Hide empty", emptyColumns);
+      await openWorkboardFilters(recorded.page);
+      const emptyColumns = recorded.page.getByRole("group", { name: "Empty columns", exact: true });
+      await emptyColumns.getByRole("button", { name: "Hide empty", exact: true }).click();
       await expect.poll(() => recorded.page.locator(".workboard-column").count()).toBe(2);
-      await chooseWorkboardSelectFieldOption(emptyColumns, "Show all", emptyColumns);
+      await chooseWorkboardDisplayOption(recorded.page, "Show all");
       await expect.poll(() => recorded.page.locator(".workboard-column").count()).toBe(9);
-      await chooseWorkboardSelectFieldOption(emptyColumns, "Collapse empty", emptyColumns);
+      await chooseWorkboardDisplayOption(recorded.page, "Collapse empty");
       await expect.poll(() => collapsedColumns.count()).toBe(7);
       const collapsedWidth = await recorded.page
         .locator(".workboard-column--ready")
@@ -836,29 +876,8 @@ suite.define(() => {
       const readyRail = recorded.page.locator(".workboard-column--ready .workboard-column__rail");
       const collapsedRailStyle = await readyRail.evaluate((rail) => ({
         boxShadow: getComputedStyle(rail).boxShadow,
-        hasExpandIcons: rail.querySelectorAll('[class*="direction-icon--expand-"]').length === 2,
       }));
-      expect(collapsedRailStyle.boxShadow).not.toBe("none");
-      expect(collapsedRailStyle.hasExpandIcons).toBe(true);
-
-      const reviewHeader = recorded.page.locator(
-        ".workboard-column--review .workboard-column__header",
-      );
-      const collapseButton = reviewHeader.getByRole("button", { name: "Collapse Review column" });
-      expect(await collapseButton.evaluate((button) => getComputedStyle(button).opacity)).toBe("0");
-      expect(await collapseButton.locator('[class*="direction-icon--collapse-"]').count()).toBe(2);
-      await collapseButton.focus();
-      await expect
-        .poll(() => collapseButton.evaluate((button) => getComputedStyle(button).opacity))
-        .toBe("1");
-      await collapseButton.blur();
-      await expect
-        .poll(() => collapseButton.evaluate((button) => getComputedStyle(button).opacity))
-        .toBe("0");
-      await reviewHeader.hover();
-      await expect
-        .poll(() => collapseButton.evaluate((button) => getComputedStyle(button).opacity))
-        .toBe("1");
+      expect(collapsedRailStyle.boxShadow).toBe("none");
 
       await recorded.page.emulateMedia({ reducedMotion: "reduce" });
       const reducedMotionTransitions = await recorded.page.evaluate(() => ({
@@ -884,23 +903,28 @@ suite.define(() => {
       expect(expandedWidth).toBeGreaterThanOrEqual(262);
       await recorded.page.getByRole("button", { name: "Collapse Ready column" }).click();
 
-      const viewPreset = recorded.page.locator(".workboard-select--toolbar").first();
-      await chooseWorkboardSelectFieldOption(viewPreset, "Review", viewPreset);
+      await closeWorkboardFilters(recorded.page);
+      await recorded.page
+        .locator(".workboard-status-tabs")
+        .getByRole("button", { name: "Review", exact: true })
+        .click();
       const singleColumnBoard = recorded.page.locator(
         ".workboard-board--page.workboard-board--single-column",
       );
       const singleColumnGeometry = await singleColumnBoard.evaluate((board) => {
         const column = board.querySelector(".workboard-column") as HTMLElement;
         return {
-          boardWidth: board.getBoundingClientRect().width,
+          leftOffset: column.getBoundingClientRect().left - board.getBoundingClientRect().left,
           columnWidth: column.getBoundingClientRect().width,
         };
       });
-      expect(singleColumnGeometry.columnWidth).toBeGreaterThanOrEqual(
-        singleColumnGeometry.boardWidth * 0.45,
-      );
-      expect(singleColumnGeometry.columnWidth).toBeLessThanOrEqual(680);
-      await chooseWorkboardSelectFieldOption(viewPreset, "All cards", viewPreset);
+      expect(singleColumnGeometry.columnWidth).toBeCloseTo(reviewWidth, 0);
+      expect(singleColumnGeometry.leftOffset).toBeCloseTo(0, 0);
+      await recorded.page
+        .locator(".workboard-status-tabs")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
+      await closeWorkboardFilters(recorded.page);
 
       const moveCount = (await gateway.getRequests("workboard.cards.move")).length;
       await recorded.page
@@ -910,16 +934,25 @@ suite.define(() => {
       expect(requestParams(moveRequest)).toMatchObject({ id: reviewCard.id, status: "ready" });
 
       await recorded.page.setViewportSize({ height: 760, width: 700 });
-      await expectWorkboardSelectTextFits(emptyColumns);
-      const backlogRail = recorded.page.locator(".workboard-column--backlog");
-      const mobileLayout = await backlogRail.evaluate((column) => ({
-        railWritingMode: getComputedStyle(
-          column.querySelector(".workboard-column__rail") as HTMLElement,
-        ).writingMode,
-        width: column.getBoundingClientRect().width,
-      }));
-      expect(mobileLayout.railWritingMode).toBe("horizontal-tb");
-      expect(mobileLayout.width).toBeGreaterThan(250);
+      await openWorkboardFilters(recorded.page);
+      await expect.poll(() => emptyColumns.getByRole("button").count()).toBe(3);
+      await closeWorkboardFilters(recorded.page);
+      const backlogColumn = recorded.page.locator(".workboard-column--backlog");
+      const backlogRail = backlogColumn.getByRole("button", { name: "Expand Backlog column" });
+      await backlogRail.scrollIntoViewIfNeeded();
+      await backlogRail.focus();
+      await recorded.page.keyboard.press("Enter");
+      const collapseBacklog = backlogColumn.getByRole("button", {
+        name: "Collapse Backlog column",
+      });
+      await expect.poll(() => collapseBacklog.isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          backlogColumn.getByRole("button", { name: "New card in Backlog" }).last().isVisible(),
+        )
+        .toBe(true);
+      await collapseBacklog.click();
+      await expect.poll(() => backlogRail.isVisible()).toBe(true);
       await captureScreenshot(recorded.page, artifacts, "11-collapsed-columns-mobile");
     } finally {
       await closeRecordedPage(recorded, artifacts, "workboard-collapsed-columns");
@@ -945,6 +978,7 @@ suite.define(() => {
 
       const collapseButton = page.getByRole("button", { name: "Collapse Review column" });
       await collapseButton.waitFor({ state: "visible" });
+      await waitForControlUiProofSurface(collapseButton, []);
       const touchGeometry = await collapseButton.evaluate((button) => {
         const bounds = button.getBoundingClientRect();
         return {
@@ -1010,19 +1044,20 @@ suite.define(() => {
       expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
 
       const historyBeforeFilter = await recorded.page.evaluate(() => history.length);
-      const boardFilter = recorded.page.locator(".workboard-select--toolbar-board");
-      await chooseWorkboardSelectFieldOption(boardFilter, "All boards", boardFilter);
+      await chooseWorkboardBoard(recorded.page, "__all__");
       await cardInColumn(recorded.page, "Todo", defaultCard.title).waitFor({ state: "visible" });
       await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard");
       expect(new URL(recorded.page.url()).searchParams.has("board")).toBe(false);
       expect(new URL(recorded.page.url()).search).toBe("?agent=main");
 
-      await chooseWorkboardSelectFieldOption(boardFilter, "Operations (ops)", boardFilter);
+      await chooseWorkboardBoard(recorded.page, "ops");
       await expect.poll(() => new URL(recorded.page.url()).pathname).toBe("/workboard/ops");
       expect(new URL(recorded.page.url()).search).toBe("?agent=main");
       expect(await recorded.page.evaluate(() => history.length)).toBe(historyBeforeFilter);
       expect(await recorded.page.getByText(defaultCard.title).count()).toBe(0);
-      expect(await recorded.page.getByText("Old work (archive)").count()).toBeGreaterThan(0);
+      expect(
+        await recorded.page.getByRole("option", { name: /Old work/u, includeHidden: true }).count(),
+      ).toBeGreaterThan(0);
       await captureScreenshot(recorded.page, artifacts, "10-board-filter-ops");
     } finally {
       await closeRecordedPage(recorded, artifacts, "workboard-board-filter");

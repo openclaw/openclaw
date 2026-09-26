@@ -78,9 +78,14 @@ function createActivityChecker(params: {
     api,
     bindingStore,
     control: {
+      hasActiveWork: () => false,
+      disconnect: async () => {},
       forRequest: () => params.control,
-      homesForAgent: () => [],
-      forUpstream: () => params.control,
+      forNode: async () => {
+        throw new Error("Node source is outside this local activity fixture");
+      },
+      homesForAgent: async () => [],
+      forUpstream: async () => params.control,
     } satisfies CodexSessionCatalogControlFactory,
     getRuntimeConfig: () => undefined,
   });
@@ -115,10 +120,6 @@ describe("Codex upstream activity", () => {
         dedupeId: "turn-4:0",
       },
     ]);
-  });
-
-  it("keeps an existing thread linked when its turn page is empty", async () => {
-    await expect(checkTurns({ probe: probe(), turns: [] })).resolves.toEqual([]);
   });
 
   it("accepts an empty page for a thread with no materialized turn", async () => {
@@ -181,23 +182,34 @@ describe("Codex upstream activity", () => {
     expect(readThread).toHaveBeenCalledWith("thread-canonical", false);
   });
 
-  it("reports missing when thread/read rejects with the definitive not-found code", async () => {
-    const readThread = vi.fn(async () => {
-      throw new CodexAppServerRpcError(
-        { code: -32600, message: "thread not loaded: thread-1" },
-        "thread/read",
-      );
-    });
-    const control = createControl({
-      listTurnPage: async () => ({ data: [] }),
-      readThread,
-    });
+  it.each(["empty", "missing"] as const)(
+    "verifies missing threads after a %s turn-page response",
+    async (outcome) => {
+      const readThread = vi.fn(async () => {
+        throw new CodexAppServerRpcError(
+          { code: -32600, message: "thread not loaded: thread-1" },
+          "thread/read",
+        );
+      });
+      const control = createControl({
+        listTurnPage: async () => {
+          if (outcome === "missing") {
+            throw new CodexAppServerRpcError(
+              { code: -32600, message: "thread not loaded: thread-1" },
+              "thread/turns/list",
+            );
+          }
+          return { data: [] };
+        },
+        readThread,
+      });
 
-    await expect(createActivityChecker({ control })([probe()])).resolves.toEqual([
-      { kind: "missing", sessionKey: "agent:main:adopted:codex" },
-    ]);
-    expect(readThread).toHaveBeenCalledWith("thread-1", false);
-  });
+      await expect(createActivityChecker({ control })([probe()])).resolves.toEqual([
+        { kind: "missing", sessionKey: "agent:main:adopted:codex" },
+      ]);
+      expect(readThread).toHaveBeenCalledWith("thread-1", false);
+    },
+  );
 
   it.each([
     { code: -32603, message: "store hiccup", method: "thread/read" },
@@ -233,6 +245,7 @@ describe("Codex upstream activity", () => {
         probe({ marker: { turnId: null, userMessageCount: 0 } }),
       ]),
     ).resolves.toEqual([{ kind: "missing", sessionKey: "agent:main:adopted:codex" }]);
+    expect(readThread).toHaveBeenCalledWith("thread-1", false);
   });
 
   it("isolates a stale thread from healthy probes", async () => {
@@ -254,6 +267,33 @@ describe("Codex upstream activity", () => {
       ]),
     ).resolves.toEqual([expect.objectContaining({ sessionKey: "healthy" })]);
   });
+
+  it.each([
+    new Error("transport timeout"),
+    new CodexAppServerRpcError({ code: -32603, message: "store hiccup" }, "thread/turns/list"),
+  ])(
+    "keeps a failed turns read inconclusive without another request: $message",
+    async (failure) => {
+      const readThread = vi.fn();
+      const control = createControl({
+        listTurnPage: async ({ threadId }) => {
+          if (threadId === "thread-stale") {
+            throw failure;
+          }
+          return { data: [turn("turn-2", ["userMessage"], 200), turn("turn-1", [], 100)] };
+        },
+        readThread,
+      });
+
+      await expect(
+        createActivityChecker({ control })([
+          probe({ threadId: "thread-stale" }),
+          probe({ sessionKey: "healthy" }),
+        ]),
+      ).resolves.toEqual([expect.objectContaining({ sessionKey: "healthy" })]);
+      expect(readThread).not.toHaveBeenCalled();
+    },
+  );
 
   it("detects a steer-appended user message on the marker turn", async () => {
     await expect(

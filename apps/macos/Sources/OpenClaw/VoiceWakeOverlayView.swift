@@ -15,8 +15,6 @@ struct VoiceWakeOverlayView: View {
                             get: { self.controller.model.text },
                             set: { self.controller.updateText($0) }),
                         attributed: self.controller.model.attributed,
-                        isFinal: self.controller.model.isFinal,
-                        isOverflowing: self.controller.model.isOverflowing,
                         onBeginEditing: {
                             self.controller.userBeganEditing()
                         },
@@ -59,7 +57,7 @@ struct VoiceWakeOverlayView: View {
                                 .frame(width: width * max(0, min(1, level)), alignment: .leading)
                                 .animation(.easeOut(duration: 0.08), value: level)
                         }
-                        .frame(height: 28)
+                        .frame(height: 32)
 
                         ZStack {
                             Image(systemName: "paperplane.fill")
@@ -73,10 +71,13 @@ struct VoiceWakeOverlayView: View {
                         .imageScale(.small)
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .frame(width: 32, height: 28)
+                    .frame(width: 32, height: 32)
+                    .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .animation(.spring(response: 0.35, dampingFraction: 0.78), value: sending)
                 }
                 .buttonStyle(.plain)
+                .help("Send message")
+                .accessibilityLabel("Send message")
                 .disabled(!self.controller.model.forwardEnabled || self.controller.model.isSending)
                 .keyboardShortcut(.return, modifiers: [.command])
             }
@@ -148,16 +149,18 @@ struct CloseButtonOverlay: View {
                     Image(systemName: "xmark")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundColor(Color.white.opacity(0.9))
-                        .frame(width: 22, height: 22)
+                        .frame(width: 28, height: 28)
                         .background(Color.black.opacity(0.4))
                         .clipShape(Circle())
+                        .contentShape(Circle())
                         .shadow(color: Color.black.opacity(0.45), radius: 10, x: 0, y: 3)
                         .shadow(color: Color.black.opacity(0.2), radius: 2, x: 0, y: 0)
                 }
                 .buttonStyle(.plain)
+                .help("Cancel")
+                .accessibilityLabel("Cancel")
                 .focusable(false)
-                .contentShape(Circle())
-                .padding(6)
+                .padding(3)
                 .onHover { self.onHover($0) }
                 .offset(x: -9, y: -9)
                 .transition(.opacity)

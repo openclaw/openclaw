@@ -47,6 +47,30 @@ identity and revision rather than discovered by scanning every user's files.
 | 6           | Custodian skills       | shipped; configured Custodian agent only             |
 | 7 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills              |
 
+When a session uses a different execution workspace, OpenClaw also loads that
+workspace's `skills/` and `.agents/skills/` directories. These skills follow the
+entire agent catalog in precedence and prompt order; within the execution
+workspace, `skills/` wins over `.agents/skills/`. Both directories participate in
+snapshot refresh and sandbox synchronization. Sandboxed runs read the
+materialized copies, not the original host paths.
+
+Managed worktree sessions keep their recorded canonical workspace as the skill
+source. The configured agent workspace remains the primary skill source even when
+the session executes in a worktree; only selecting that worktree as the agent's
+workspace gives its skills primary precedence. A selected nested workspace stays
+nested: discovery does not walk up to its parent repository. Installing OpenClaw
+from a repository does not make that
+repository's `.agents/skills/` a global bundled skill source.
+
+Each discovery pass reports one summary per winning/losing discovery root and
+source kind, with the skill count and up to three example names. Workspace or
+project skills overriding bundled skills, and managed-worktree skills overriding
+project checkout skills, are warnings; other collisions are informational.
+Worktree provenance uses the configured `worktreeRoot` (the state directory's
+`worktrees/` by default), without probing Git. Identical content stays silent.
+Unchanged root-pair summaries are not repeated on refresh; changes to content,
+declared metadata, or collision membership update the summary. Precedence is unchanged.
+
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
 `SKILL.md` appears anywhere under a configured root (up to 6 levels deep):
 
@@ -86,7 +110,7 @@ the same captured file content.
 The skill entry includes the node locator. Its files, relative references, and
 binaries live on the node, so load and execute it with
 `exec host=node node=<node-id>`. Restart the node host after changing its skill
-files. See [Nodes](/nodes#node-hosted-skills) for pairing and off-switches.
+files. See [Nodes](/nodes/mcp-and-skills#node-hosted-skills) for pairing and off-switches.
 
 ## Per-agent vs shared skills
 
@@ -188,6 +212,8 @@ Do not edit those managed directories directly. Use the editor, the
 [Skills library CLI](/cli/skills#personal-skill-library), or the agent's
 authorized authoring tool. Runtime copies are separate from project files and
 must not be committed with a project.
+
+<a id="agent-skill-allowlists" />
 
 ## Agent allowlists
 
@@ -372,6 +398,8 @@ publish and sync.
     Managed `~/.openclaw/skills` and personal `~/.agents/skills` may contain
     symlinked skill folders, but every `SKILL.md` realpath must still stay
     inside its resolved skill directory.
+    Optional `skill-card.md` files must be regular files inside that directory
+    and no larger than 256 KiB, including when they grow during a read.
   </Accordion>
   <Accordion title="Operator install policy">
     Configure `security.installPolicy` to run a trusted local policy command
@@ -583,6 +611,7 @@ metadata:
       `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
       previous download behavior. Response bodies are capped at 256 MiB; larger
       transfers are aborted while streaming, and partial staging data is removed.
+      Archive extraction does not require a system `tar` command.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent
@@ -689,32 +718,43 @@ command identities. Other CLI backends use the prompt catalog only.
 ## Snapshots and refresh
 
 OpenClaw snapshots eligible skills **when a session starts** and reuses that
-list for all subsequent turns in the session. Changes to skills or config take
-effect on the next new session.
+list until a refresh trigger below applies.
 
 Managed library selections keep their exact revisions until an explicit
-attach or refresh. The file-watcher behavior below applies to ordinary
-file-backed skill roots, not immutable library revisions.
+attach or refresh, including across Gateway restarts. The refresh triggers
+below apply to ordinary file-backed skill roots.
 
 File-backed skills refresh mid-session when:
 
 - The skills watcher detects a `SKILL.md` change.
+- The Gateway restarts, including when `skills.load.watch` is `false`.
 - A new eligible remote node connects.
 - Native file-watch capacity is exhausted and the next agent turn starts.
+- A previously idle or evicted workspace resumes watching on its next agent turn.
 
-The refreshed list is picked up on the next agent turn. If the effective agent
-allowlist changes, OpenClaw refreshes the snapshot to keep visible skills
-aligned.
+The refreshed list is picked up on the next agent turn in the same session.
+If the effective agent allowlist changes, OpenClaw refreshes the snapshot to
+keep visible skills aligned.
 
 When native watch capacity is exhausted, OpenClaw logs one warning and stops
 the skills watchers. With watching enabled, later agent turns refresh file-backed
 skills through the existing snapshot preparation. Restart the Gateway after
 restoring watch capacity to enable native watching again.
 
+Watcher subscriptions are retained for the 128 most recently used combinations of
+agent, configured workspace, and execution workspace. Subscriptions idle for an
+hour are also retired when another workspace prepares its skills. Shared skill
+roots remain watched while a retained subscription needs them. The next watching
+turn reacquires retired roots and refreshes file-backed skills before using them;
+managed library revisions remain pinned. This bounds retained subscriptions, not
+the total number of operating-system file watches.
+
 <AccordionGroup>
   <Accordion title="Skills watcher">
     By default, OpenClaw watches skill folders and bumps the snapshot when
     `SKILL.md` files change, including skill roots first created after startup.
+    Removing and recreating a skill folder or its parent keeps discovery on the
+    configured path, including on Windows.
     Configure under `skills.load`:
 
     ```json5
@@ -729,7 +769,21 @@ restoring watch capacity to enable native watching again.
     }
     ```
 
-    Watcher events use a built-in 250 ms debounce. Use `allowSymlinkTargets`
+    Watcher events use a built-in 250 ms debounce. Unrelated file writes are
+    ignored by snapshot refresh. Supporting-file events still invalidate sandbox
+    copies without rescanning skills or notifying chat metadata consumers.
+    Directory changes, installed source-origin metadata changes, and watcher
+    reconciliation recheck the resolved skills; unchanged names, configuration
+    keys, sources, precedence winners, and `SKILL.md` content
+    keep the same snapshot version and do not notify chat metadata consumers.
+    Idle worktree watcher cleanup does not invalidate other workspaces.
+    Copies with identical `SKILL.md` content and declared metadata do not produce
+    precedence collision logs. Different content is summarized per ordered
+    winner/loser discovery root and source kind. During a Gateway process,
+    refreshes with the same aggregate digest stay silent; editing either copy or
+    changing the colliding skill names updates the summary. Precedence stays the same.
+
+    Use `allowSymlinkTargets`
     for intentional symlinked layouts where a skill
     root symlink points outside the configured root, for example
     `<workspace>/skills/manager -> ~/path/to/skills`.
@@ -744,6 +798,10 @@ restoring watch capacity to enable native watching again.
 
     Offline nodes do **not** make remote-only skills visible. If a node stops
     answering bin probes, OpenClaw clears its cached bin matches.
+
+    Connect-time bin probes wait briefly for the node's command handlers.
+    Gateway shutdown cancels this readiness wait and still joins probes that
+    have already started.
 
   </Accordion>
 </AccordionGroup>

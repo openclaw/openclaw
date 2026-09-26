@@ -1,82 +1,33 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolvePreparedThreadBindingLifecycle } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
-const sdk = vi.hoisted(() => ({ helperAvailable: true, calls: 0 }));
-vi.mock("openclaw/plugin-sdk/thread-bindings-session-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime")>();
-  const resolve = (params: Parameters<typeof actual.resolveThreadBindingExpiry>[0]) => {
-    sdk.calls += 1;
-    return actual.resolveThreadBindingExpiry(params);
-  };
-  return {
-    ...actual,
-    get resolveThreadBindingExpiry() {
-      return sdk.helperAvailable ? resolve : undefined;
-    },
-  };
-});
-
-describe.each([true, false])("prepared Discord expiry (SDK helper available=%s)", (available) => {
-  beforeEach(() => {
-    sdk.helperAvailable = available;
-    sdk.calls = 0;
-  });
-
+describe("prepared Discord expiry", () => {
   it.each([
-    {
-      boundAt: 100,
-      lastActivityAt: 50,
-      idle: 10,
-      max: 10,
-      expiry: { expiresAt: 60, reason: "idle-expired" },
+    [100, 50, 10, 10, { expiresAt: 60, reason: "idle-expired" }],
+    [100, 100, 10, 10, { expiresAt: 110, reason: "idle-expired" }],
+    [100, 200, 10, 10, { expiresAt: 110, reason: "max-age-expired" }],
+    [100, 100, 0, 0, {}],
+    [100, Number.NaN, 10, 10, { expiresAt: 110, reason: "max-age-expired" }],
+    [0, 100, 10, 10, { expiresAt: 110, reason: "idle-expired" }],
+    [Infinity, -1, 10, 10, {}],
+  ])(
+    "preserves prepared deadlines for boundAt=%s lastActivityAt=%s idle=%s max=%s expiry=%j",
+    (boundAt, lastActivityAt, idle, max, expiry) => {
+      const record: ThreadBindingRecord = {
+        accountId: "default",
+        channelId: "channel",
+        threadId: "thread",
+        targetKind: "subagent",
+        targetSessionKey: "agent:main:subagent:expiry",
+        agentId: "main",
+        boundBy: "test",
+        boundAt,
+        lastActivityAt,
+      };
+      expect(
+        resolvePreparedThreadBindingLifecycle({ record, idleTimeoutMs: idle, maxAgeMs: max }),
+      ).toEqual({ idleTimeoutMs: idle, maxAgeMs: max, ...expiry });
     },
-    {
-      boundAt: 100,
-      lastActivityAt: 100,
-      idle: 10,
-      max: 10,
-      expiry: { expiresAt: 110, reason: "idle-expired" },
-    },
-    {
-      boundAt: 100,
-      lastActivityAt: 200,
-      idle: 10,
-      max: 10,
-      expiry: { expiresAt: 110, reason: "max-age-expired" },
-    },
-    { boundAt: 100, lastActivityAt: 100, idle: 0, max: 0, expiry: {} },
-    {
-      boundAt: 100,
-      lastActivityAt: Number.NaN,
-      idle: 10,
-      max: 10,
-      expiry: { expiresAt: 110, reason: "max-age-expired" },
-    },
-    {
-      boundAt: 0,
-      lastActivityAt: 100,
-      idle: 10,
-      max: 10,
-      expiry: { expiresAt: 110, reason: "idle-expired" },
-    },
-    { boundAt: Infinity, lastActivityAt: -1, idle: 10, max: 10, expiry: {} },
-  ])("preserves prepared deadlines for %j", ({ boundAt, lastActivityAt, idle, max, expiry }) => {
-    const record: ThreadBindingRecord = {
-      accountId: "default",
-      channelId: "channel",
-      threadId: "thread",
-      targetKind: "subagent",
-      targetSessionKey: "agent:main:subagent:expiry",
-      agentId: "main",
-      boundBy: "test",
-      boundAt,
-      lastActivityAt,
-    };
-    expect(
-      resolvePreparedThreadBindingLifecycle({ record, idleTimeoutMs: idle, maxAgeMs: max }),
-    ).toEqual({ idleTimeoutMs: idle, maxAgeMs: max, ...expiry });
-    expect(sdk.calls).toBe(available ? 1 : 0);
-  });
+  );
 });

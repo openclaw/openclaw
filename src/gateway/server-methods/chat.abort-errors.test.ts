@@ -1,4 +1,7 @@
 /** Parent cancellation survives an unreadable descendant partition without hiding failure. */
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -32,16 +35,15 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabaseByPath,
-  listOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../tasks/detached-task-runtime-contract.js";
 import { cancelTaskById, findTaskByRunId, getTaskById } from "../../tasks/task-registry.js";
 import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import { handleSessionKillHttpRequest } from "../session-kill-http.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import { handleChatSend } from "./chat-send-handler.js";
-import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -97,7 +99,7 @@ it.each(
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: nested && runId !== "root" ? rootKey : sessionKey,
@@ -259,7 +261,7 @@ it.each(
         sessionKey: childSessionKey,
         defaultSessionId: `${runId}-session`,
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey,
@@ -454,7 +456,7 @@ it.each(["exact native new", "cascade native new", "RPC reset", "RPC delete"])(
       message: { role: "user", content: "old user turn", timestamp: Date.now() },
     });
     expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "child",
       childSessionKey: childKey,
       requesterSessionKey: sessionKey,

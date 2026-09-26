@@ -1,4 +1,6 @@
 // ACP manager task state helper resets task flow state for ACP tests.
+import { closeOpenClawStateDatabaseByPathAsync } from "../../src/state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
 import { findTaskByRunId } from "../../src/tasks/task-registry.js";
 import {
   configureTaskFlowRegistryRuntime,
@@ -8,6 +10,7 @@ import {
 import { withTestDir } from "../../src/test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../src/test-utils/env.js";
 import { installInMemoryTaskRegistryRuntime } from "../../src/test-utils/task-registry-runtime.js";
+import { createInMemoryTaskFlowRegistryStore } from "../../src/test-utils/task-registry-store.js";
 
 // Shared ACP manager task registry setup for tests.
 
@@ -25,23 +28,21 @@ export async function withAcpManagerTaskStateDir(
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", root);
     resetAcpManagerTaskStateForTests();
-    installInMemoryTaskRegistryRuntime();
     configureTaskFlowRegistryRuntime({
-      store: {
-        loadSnapshot: () => ({
-          flows: new Map(),
-        }),
-        saveSnapshot: () => {},
-        upsertFlow: () => {},
-        deleteFlow: () => {},
-        close: () => {},
-      },
+      store: createInMemoryTaskFlowRegistryStore(),
     });
+    installInMemoryTaskRegistryRuntime();
     try {
       await run(root);
     } finally {
-      resetAcpManagerTaskStateForTests();
-      envSnapshot.restore();
+      try {
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: root }),
+        );
+      } finally {
+        resetAcpManagerTaskStateForTests();
+        envSnapshot.restore();
+      }
     }
   });
 }

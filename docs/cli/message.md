@@ -25,6 +25,30 @@ openclaw message <subcommand> [flags]
 - Channel-prefixed targets (for example `discord:channel:123`) resolve the
   owning plugin without an explicit `--channel`.
 
+With an explicit channel, Gateway-owned actions such as `read --channel discord`
+validate config without running local state migrations. They require a reachable
+Gateway. Local actions, broadcasts, dry-runs, and commands that need local channel
+discovery retain local config and plugin preparation.
+
+## Agent ownership
+
+`openclaw message` uses the configured
+[System Agent](/gateway/config-agents/heartbeat-compaction-and-streaming#agents.defaults.systemagent)
+as its agent owner, falling back to a retained legacy owner or the sole configured
+agent when the System Agent is unset.
+
+In an explicit multi-agent configuration without an owner, the command stops
+before sending. Choose an existing agent ID from `openclaw agents list`, set it
+as the System Agent, then retry:
+
+```bash
+openclaw config set agents.defaults.systemAgent.agentId <id>
+```
+
+This setting also selects the owner for other ambient system work. The message
+command does not accept `--agent`; `--channel` and `--account` select the channel
+and channel account.
+
 ## Target formats (`-t, --target`)
 
 | Channel             | Format                                                                                                     |
@@ -49,6 +73,14 @@ directory lookup on a cache miss where the provider supports it.
 Every action accepts: `--channel <name>`, `--account <id>`, `--json`,
 `--dry-run`, `--verbose`. Actions that take a destination also accept
 `-t, --target <dest>`.
+
+An explicitly empty or whitespace-only `--account` value is rejected. Omit the
+option to use the existing default or bound account, including when a shell
+variable is empty. Nonblank account values keep their existing selection rules.
+
+An explicitly empty or whitespace-only `--channel` value is also rejected. Omit
+the option to select the sole configured channel, or use a channel-prefixed
+target when supported.
 
 Discord message bodies, captions, poll context, and component text retain
 leading indentation. Existing empty-message validation still applies.
@@ -86,11 +118,28 @@ unresolved SecretRef on the selected channel/account fails the action closed.
 | `pin` / `unpin` | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--message-id`, `--target`                                     | `unpin` also accepts `--pinned-message-id` (Microsoft Teams: the pin/list-pins resource id, not the chat message id).                                                                                                                                                                                  |
 | `pins` (list)   | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--target`                                                     | `--limit`.                                                                                                                                                                                                                                                                                             |
 | `permissions`   | Discord, Matrix                                                                                                 | `--target`                                                     | Matrix: available only when encryption is enabled and verification actions are allowed.                                                                                                                                                                                                                |
-| `search`        | Discord                                                                                                         | `--guild-id`, `--query`                                        | `--channel-id`, `--channel-ids` (repeat), `--author-id`, `--author-ids` (repeat), `--limit`.                                                                                                                                                                                                           |
-| `member info`   | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--user-id`                                                    | `--guild-id` (Discord).                                                                                                                                                                                                                                                                                |
+| `search`        | Discord, Microsoft Teams                                                                                        | `--query`                                                      | `--guild-id` (Discord; resolved from `--channel-id` when omitted), `--channel-id` (required for Microsoft Teams as Graph `<team-id>/<channel-id>`), `--channel-ids` (repeat), `--author-id`, `--author-ids` (repeat), `--limit`.                                                                       |
+| `member info`   | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--user-id`                                                    | `--channel-id` (required for Matrix and Microsoft Teams), `--guild-id` (Discord).                                                                                                                                                                                                                      |
+
+Reaction listings show labels, counts, and available users as plain terminal text.
+Use `--json` for the complete channel result.
 
 The legacy `message read --include-thread` spelling remains accepted for existing
 scripts but has no effect.
+
+### Member info
+
+Use `--channel-id` to select a Matrix room or a Microsoft Teams standard channel.
+Teams requires the Graph `<team-id>/<channel-id>` form because the CLI has no
+current conversation. Provider access and membership checks still apply.
+
+```bash
+openclaw message member info --channel matrix \
+  --channel-id '!room:example.org' --user-id '@member:example.org'
+
+openclaw message member info --channel msteams \
+  --channel-id '<team-id>/<channel-id>' --user-id '<aad-object-id>'
+```
 
 ### Send
 
@@ -100,7 +149,8 @@ openclaw message send --channel discord \
 ```
 
 - `--media <path-or-url>`: attach image/audio/video/document (local path or
-  URL).
+  URL). Repeat to send multiple files in order; Telegram groups consecutive
+  photos into [albums](/channels/telegram/media#photo-albums).
 - `--presentation <json>`: shared payload with `text`, `context`, `divider`,
   `chart`, `table`, `buttons`, and `select` blocks, rendered per channel
   capability. See [Message Presentation](/plugins/message-presentation).
@@ -158,6 +208,11 @@ openclaw message send --channel telegram --target 123456789 --message "Open app:
 ```bash
 openclaw message send --channel telegram --target @mychat \
   --media ./diagram.png --force-document
+```
+
+```bash
+openclaw message send --channel telegram --target @mychat \
+  --message "Trip photos" --media ./photo-1.jpg --media ./photo-2.jpg
 ```
 
 ```bash

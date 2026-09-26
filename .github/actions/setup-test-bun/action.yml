@@ -1,0 +1,37 @@
+name: Setup test Bun
+description: Install the checksum-pinned Linux x64 Bun fork used by test lanes.
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Bun test runtime
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "$RUNNER_OS/$RUNNER_ARCH" != "Linux/X64" ]]; then
+          echo "::error::The pinned Bun test runtime requires Linux/X64."
+          exit 1
+        fi
+
+        # Built from steipete/bun commit ddfce5d01f6a436203a8f41fc8bff074f9b09614.
+        # WebKit commit 4429d11361a5f1680a9e57884ebc1941c2cc7e48.
+        # Backports WebKit caa5d805b646edc59ca0d12b49a7a574f942dedb.
+        bun_dir="$(mktemp -d "$RUNNER_TEMP/openclaw-test-bun.XXXXXX")"
+        archive="$bun_dir/bun-linux-x64.gz"
+        curl --fail --location --no-progress-meter --show-error \
+          --connect-timeout 10 --max-time 300 \
+          --retry 3 --retry-max-time 300 \
+          --output "$archive" \
+          "https://github.com/steipete/bun/releases/download/openclaw-ci-ddfce5d0-webkit-4429d113/bun-linux-x64.gz" \
+          2> >(sed 's/^Warning: /::warning::/' >&2)
+        printf '%s  %s\n' \
+          '624c94b0adf2a663b71d2d4160206e02e89400eb289e8e07105278f45aaa646e' \
+          "$archive" | sha256sum --check -
+        gzip --decompress --stdout "$archive" > "$bun_dir/bun"
+        printf '%s  %s\n' \
+          '0c180694b6d352e2ea97264b749de344e814af7852cb7ea58b9b40023eb802cb' \
+          "$bun_dir/bun" | sha256sum --check -
+        chmod 755 "$bun_dir/bun"
+        "$bun_dir/bun" --version
+        "$bun_dir/bun" --revision
+        rm "$archive"
+        echo "$bun_dir" >> "$GITHUB_PATH"

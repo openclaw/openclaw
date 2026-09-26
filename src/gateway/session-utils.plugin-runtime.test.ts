@@ -29,6 +29,8 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => ({
 }));
 
 let sessionUtils: typeof import("./session-utils.js");
+let createSessionRowProjectionFixture: (typeof import("./session-row-projection.test-support.js"))["createSessionRowProjectionFixture"];
+let listProjectedSessions: (typeof import("./session-utils-list.js"))["listProjectedSessions"];
 
 describe("gateway session list plugin runtime normalization", () => {
   beforeAll(async () => {
@@ -37,6 +39,9 @@ describe("gateway session list plugin runtime normalization", () => {
       await import("../plugins/plugin-metadata.test-support.js");
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(createPluginMetadataSnapshotFixture());
     sessionUtils = await import("./session-utils.js");
+    ({ createSessionRowProjectionFixture } =
+      await import("./session-row-projection.test-support.js"));
+    ({ listProjectedSessions } = await import("./session-utils-list.js"));
   });
 
   beforeEach(() => {
@@ -44,7 +49,7 @@ describe("gateway session list plugin runtime normalization", () => {
     loadPluginManifestRegistryCoreMock.mockClear();
   });
 
-  it("skips provider runtime normalization for lightweight list rows", async () => {
+  it("does not normalize provider models while selecting prepared list rows", async () => {
     const cfg = {
       agents: {
         defaults: { model: { primary: "custom-provider/custom-legacy-model" } },
@@ -57,28 +62,117 @@ describe("gateway session list plugin runtime normalization", () => {
       ]),
     );
 
-    const listed = await sessionUtils.listSessionsFromStoreAsync({
-      cfg,
-      targetsBySessionKey: new Map(
-        Object.keys(store).map((key) => [
-          key,
-          { agentId: "main", storeTarget: { agentId: "main", storePath: "" } },
-        ]),
-      ),
-      storePath: "",
-      store,
-      opts: {},
-    });
-
-    expect(listed.sessions.map((session) => session.model)).toEqual([
-      "custom-legacy-model",
-      "custom-legacy-model",
-      "custom-legacy-model",
-    ]);
-    expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+    const projection = createSessionRowProjectionFixture({ cfg, store, agentId: "main" });
+    try {
+      normalizeProviderModelIdWithPluginMock.mockClear();
+      const listed = await listProjectedSessions({ projection, opts: {} });
+      expect(listed.sessions.map((session) => session.model)).toEqual([
+        "custom-legacy-model",
+        "custom-legacy-model",
+        "custom-legacy-model",
+      ]);
+      expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+    } finally {
+      projection.dispose();
+    }
   });
 
-  it("keeps provider runtime normalization for detail rows", async () => {
+  it.each([
+    { name: "direct", parentSessionKey: undefined },
+    { name: "inherited", parentSessionKey: "agent:main:parent" },
+  ])(
+    "skips provider runtime normalization for $name persisted overrides",
+    ({ parentSessionKey }) => {
+      normalizeProviderModelIdWithPluginMock.mockImplementation(
+        ({ provider, context }: { provider?: string; context?: { modelId?: string } }) =>
+          provider === "custom-provider" && context?.modelId === "custom-legacy-model"
+            ? "custom-modern-model"
+            : undefined,
+      );
+      const cfg = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      } as OpenClawConfig;
+      const selectedEntry: SessionEntry = {
+        sessionId: parentSessionKey ? "parent" : "child",
+        updatedAt: 1,
+        providerOverride: "custom-provider",
+        modelOverride: "custom-legacy-model",
+        modelOverrideSource: "user",
+      };
+      const childEntry: SessionEntry = {
+        sessionId: "child",
+        updatedAt: 2,
+        ...(parentSessionKey ? { parentSessionKey } : selectedEntry),
+      };
+      const store = parentSessionKey
+        ? { [parentSessionKey]: selectedEntry, "agent:main:child": childEntry }
+        : { "agent:main:child": childEntry };
+
+      const row = sessionUtils.buildGatewaySessionRow({
+        cfg,
+        agentId: "main",
+        storePath: "",
+        store,
+        key: "agent:main:child",
+        entry: childEntry,
+        lightweightListRow: true,
+      });
+
+      expect(row.modelProvider).toBe("custom-provider");
+      expect(row.model).toBe("custom-legacy-model");
+      expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: "direct", parentSessionKey: undefined },
+    { name: "inherited", parentSessionKey: "agent:main:parent" },
+  ])("does not re-normalize $name resolved overrides in detail rows", ({ parentSessionKey }) => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(
+      ({ provider, context }: { provider?: string; context?: { modelId?: string } }) =>
+        provider === "custom-provider" && context?.modelId === "custom-legacy-model"
+          ? "custom-modern-model"
+          : undefined,
+    );
+    const cfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+    } as OpenClawConfig;
+    const selectedEntry: SessionEntry = {
+      sessionId: parentSessionKey ? "parent" : "child",
+      updatedAt: 1,
+      providerOverride: "custom-provider",
+      modelOverride: "custom-legacy-model",
+      modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
+    };
+    const childEntry: SessionEntry = {
+      sessionId: "child",
+      updatedAt: 2,
+      ...(parentSessionKey ? { parentSessionKey } : selectedEntry),
+    };
+    const store = parentSessionKey
+      ? { [parentSessionKey]: selectedEntry, "agent:main:child": childEntry }
+      : { "agent:main:child": childEntry };
+
+    const row = sessionUtils.buildGatewaySessionRow({
+      cfg,
+      agentId: "main",
+      storePath: "",
+      store,
+      key: "agent:main:child",
+      entry: childEntry,
+    });
+
+    expect(row.modelProvider).toBe("custom-provider");
+    expect(row.model).toBe("custom-legacy-model");
+    expect(
+      normalizeProviderModelIdWithPluginMock.mock.calls.filter(
+        ([call]) => (call as { provider?: string }).provider === "custom-provider",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("keeps provider runtime normalization for raw detail rows", async () => {
     normalizeProviderModelIdWithPluginMock.mockImplementation(
       ({ provider, context }: { provider?: string; context?: { modelId?: string } }) => {
         if (provider === "custom-provider" && context?.modelId === "custom-legacy-model") {
@@ -106,7 +200,7 @@ describe("gateway session list plugin runtime normalization", () => {
     expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalled();
   });
 
-  it("keeps lifecycle event rows lightweight without changing explicit detail rows", async () => {
+  it("serves lifecycle and detail snapshots from the same prepared model facts", async () => {
     await withStateDirEnv("openclaw-lifecycle-row-plugin-runtime-", async () => {
       normalizeProviderModelIdWithPluginMock.mockImplementation(
         ({ provider, context }: { provider?: string; context?: { modelId?: string } }) =>
@@ -129,14 +223,25 @@ describe("gateway session list plugin runtime normalization", () => {
         updatedAt: 1,
       } satisfies SessionEntry);
 
-      const lifecycle = sessionUtils.loadGatewaySessionLifecycleSnapshot(sessionKey);
-
-      expect(lifecycle.row?.model).toBe("custom-legacy-model");
-      expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
-      expect(loadPluginManifestRegistryCoreMock).not.toHaveBeenCalled();
-
-      expect(sessionUtils.loadGatewaySessionRow(sessionKey)?.model).toBe("custom-modern-model");
-      expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalled();
+      const { createSessionRowProjection } = await import("./session-row-projection.js");
+      const projection = await createSessionRowProjection({ cfg });
+      try {
+        await projection.ensureMaterialized();
+        normalizeProviderModelIdWithPluginMock.mockClear();
+        loadPluginManifestRegistryCoreMock.mockClear();
+        const lifecycle = projection.snapshot({ key: sessionKey, agentId: "main" });
+        expect(lifecycle.row?.model).toBe("custom-modern-model");
+        expect(
+          projection.snapshot(
+            { key: sessionKey, agentId: "main" },
+            { now: lifecycle.row?.snapshotAt },
+          ).row,
+        ).toEqual(lifecycle.row);
+        expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+        expect(loadPluginManifestRegistryCoreMock).not.toHaveBeenCalled();
+      } finally {
+        projection.dispose();
+      }
       configRuntime.resetConfigRuntimeState();
     });
   });

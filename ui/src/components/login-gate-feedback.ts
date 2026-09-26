@@ -9,6 +9,7 @@ import {
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
+import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 
 function isPasswordModeErrorCode(code: string | null): boolean {
   return (
@@ -74,6 +75,7 @@ export type LoginFailureFeedback = {
 
 export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[0] & {
   gatewayUrl?: string;
+  secret?: string;
   reconnectPending?: boolean;
 };
 
@@ -236,7 +238,7 @@ export function resolveLoginFailureFeedback(
       kind: "origin-not-allowed",
       rawError,
       docsHref:
-        "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
+        "https://docs.openclaw.ai/web/control-ui/development#debugging%2Ftesting%3A-dev-server-%2B-remote-gateway",
       titleKey: "login.failure.origin.title",
       summaryKey: "login.failure.origin.summary",
       stepKeys: [
@@ -252,7 +254,7 @@ export function resolveLoginFailureFeedback(
       kind: "protocol-mismatch",
       rawError,
       docsHref:
-        "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
+        "https://docs.openclaw.ai/web/control-ui/development#debugging%2Ftesting%3A-dev-server-%2B-remote-gateway",
       titleKey: "login.failure.protocol.title",
       summaryKey: "login.failure.protocol.summary",
       refreshAction: { label: t("login.failure.protocol.refresh") },
@@ -318,7 +320,12 @@ export function resolveLoginFailureFeedback(
         : lastErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
           ? "login.failure.authRequired.title"
           : "login.failure.authFailed.title",
-      summaryKey: "login.failure.authFailed.summary",
+      summaryKey:
+        (lastErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH ||
+          lastErrorCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH) &&
+        classifyGatewaySecret(params.secret ?? "") === "setup-code"
+          ? "login.setupCodeHint"
+          : "login.failure.authFailed.summary",
       stepKeys: expectsPassword
         ? ["login.failure.authRequired.stepPassword", "login.failure.authRequired.stepConnect"]
         : [

@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import Observation
 import OpenClawProtocol
 import Testing
 import UIKit
@@ -427,6 +428,16 @@ private func pluginApprovalPresentation(
         alloweddecisions: [.allowOnce, .deny]))
 }
 
+private func systemAgentApprovalPresentation() -> ApprovalPresentation {
+    .systemAgent(SystemAgentApprovalPresentation(
+        kind: "system-agent",
+        title: "Review configuration change",
+        description: "Update the proposed setting.",
+        proposalhash: "synthetic-proposal",
+        agentid: AnyCodable("main"),
+        alloweddecisions: [AnyCodable("allow-once"), AnyCodable("deny")]))
+}
+
 private func makePendingApprovalJSON(
     id: String,
     presentation: ApprovalPresentation,
@@ -440,6 +451,23 @@ private func makePendingApprovalJSON(
         expiresatms: expiresAtMs,
         presentation: presentation,
         status: "pending"))))
+}
+
+private func makePendingApprovalListJSON(
+    id: String,
+    kind: ApprovalKind,
+    sessionKey: String,
+    createdAtMs: Double = 100,
+    expiresAtMs: Double = 4_000_000_000_000) throws -> String
+{
+    let payload: [[String: Any]] = [[
+        "id": id,
+        "approvalKind": kind.rawValue,
+        "request": ["sessionKey": sessionKey, "agentId": "worker"],
+        "createdAtMs": createdAtMs,
+        "expiresAtMs": expiresAtMs,
+    ]]
+    return try String(decoding: JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
 }
 
 private func makePendingExecApprovalJSON(
@@ -1181,6 +1209,59 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 }
 
 @Suite(.serialized) struct NodeAppModelInvokeTests {
+    @Test(arguments: [false, true]) @MainActor
+    func `chat account replacement retires pinned questions and preserves attachment cleanup`(
+        restoresOriginalAccount: Bool) throws
+    {
+        let appModel = NodeAppModel()
+        appModel.enterScreenshotFixtureMode()
+        let url = try #require(URL(string: "wss://attention.example.test"))
+        let (first, second) = try makeGatewayPair(
+            firstURL: url, firstStableID: "attention-fixture", firstToken: "synthetic-first",
+            secondURL: url, secondStableID: "attention-fixture", secondToken: "synthetic-second")
+        appModel.activeGatewayConnectConfig = first
+        let owner = appModel.chatPresentation
+        owner.sync(appModel: appModel)
+        let original = try #require(owner.viewModel)
+        defer { owner.viewModel?.detachTransport() }
+        let attachment = OpenClawPendingAttachment(
+            url: nil, data: Data("fixture".utf8), fileName: "fixture.txt", mimeType: "text/plain", preview: nil)
+        original.attachments = [attachment]
+        original.input = "Keep this draft with its attachment"
+        original.upsertQuestion(QuestionRecord(
+            id: "old-account-question",
+            questions: [Question(
+                questionid: "choice", header: "Choice", question: "Choose the deployment target",
+                options: [QuestionOption(label: "Staging")])],
+            createdatms: 1, expiresatms: Int.max, status: .pending))
+        appModel.activeGatewayConnectConfig = second
+        owner.sync(appModel: appModel)
+        #expect(owner.viewModel === original)
+        #expect(original.isQuestionAuthorityRetired)
+        #expect(original.questionCards.isEmpty)
+        #expect(original.attachments.map(\.id) == [attachment.id])
+        #expect(original.input == "Keep this draft with its attachment")
+        if restoresOriginalAccount {
+            appModel.activeGatewayConnectConfig = first
+            owner.sync(appModel: appModel)
+            #expect(owner.viewModel === original)
+            #expect(original.questionCards.isEmpty)
+            #expect(original.attachments.map(\.id) == [attachment.id])
+        }
+        original.removeAttachment(attachment.id)
+        owner.sync(appModel: appModel)
+        let replacement = try #require(owner.viewModel)
+        #expect(replacement !== original)
+        #expect(owner.isCurrent(appModel: appModel))
+        replacement.upsertQuestion(QuestionRecord(
+            id: "current-account-question",
+            questions: [Question(
+                questionid: "choice", header: "Choice", question: "Choose the current deployment target",
+                options: [QuestionOption(label: "Staging")])],
+            createdatms: 2, expiresatms: Int.max, status: .pending))
+        #expect(replacement.questionCards.map(\.id) == ["current-account-question"])
+    }
+
     @Test @MainActor func `throttled silent push reports no data while background refresh remains successful`() async {
         let lastSuccessKey = "gateway.backgroundAlive.lastSuccessAtMs"
         let previousSuccess = UserDefaults.standard.object(forKey: lastSuccessKey)
@@ -1551,6 +1632,174 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.pendingExecApprovalPrompt?.commandText == "echo tapped-b")
     }
 
+    @Test @MainActor func `approval inbox discovers inactive sessions across kinds without granting system actions`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let (watchService, appModel) = makeWatchModel(notificationCenter: MockBootstrapNotificationCenter())
+        appModel.connectedGatewayID = "test-gateway"
+        try appModel._test_setUnifiedExecApprovalGetResponses([
+            ("exec-inactive", makePendingExecApprovalJSON("exec-inactive", commandText: "echo canonical")),
+            ("plugin-inactive", makePendingApprovalJSON(
+                id: "plugin-inactive",
+                presentation: pluginApprovalPresentation(
+                    title: "Review plugin action",
+                    description: "Send the request."))),
+            ("system-inactive", makePendingApprovalJSON(
+                id: "system-inactive", presentation: systemAgentApprovalPresentation())),
+        ], listResponses: [
+            "exec.approval.list": makePendingApprovalListJSON(
+                id: "exec-inactive", kind: .exec, sessionKey: "agent:worker:inactive", createdAtMs: 51),
+            "plugin.approval.list": makePendingApprovalListJSON(
+                id: "plugin-inactive", kind: .plugin, sessionKey: "agent:worker:plugin", createdAtMs: 52),
+            "openclaw.approval.list": makePendingApprovalListJSON(
+                id: "system-inactive", kind: .systemAgent, sessionKey: "agent:worker:system", createdAtMs: 53),
+        ])
+
+        await appModel.refreshPendingApprovalInbox()
+
+        let requests = appModel.pendingApprovalAttentionRequests
+        #expect(requests.count == 3)
+        let exec = try #require(requests.first { $0.id == "exec-inactive" })
+        #expect(exec.sessionKey == "agent:worker:inactive")
+        #expect(exec.agentID == "worker")
+        #expect(exec.createdAtMs == 51)
+        #expect(exec.preview == "echo canonical")
+        #expect(exec.expiresAtMs == 4_000_000_000_000)
+        let system = try #require(appModel.pendingExecApprovalInboxItems.first { $0.prompt.id == "system-inactive" })
+        #expect(system.prompt.kind == "system-agent")
+        #expect(system.prompt.allowedDecisions.isEmpty)
+        appModel.presentPendingExecApprovalFromInbox(system.id)
+        await appModel.resolvePendingExecApprovalPrompt(decision: "deny")
+        #expect(appModel.pendingExecApprovalPromptOutcome == nil)
+        await Task.yield()
+        #expect(watchService.lastSentExecApprovalPrompt == nil)
+        let plugin = try #require(appModel.pendingExecApprovalInboxItems.first { $0.prompt.id == "plugin-inactive" })
+        #expect(plugin.prompt.allowedDecisions == ["allow-once", "deny"])
+
+        let persisted = try JSONDecoder().decode(
+            NodeAppModel.ExecApprovalPrompt.self,
+            from: JSONEncoder().encode(plugin.prompt))
+        #expect(persisted.attentionSource == nil)
+        #expect(persisted.createdAtMs == nil)
+        let (_, restoredModel) = makeWatchModel(notificationCenter: MockBootstrapNotificationCenter())
+        restoredModel.connectedGatewayID = "test-gateway"
+        #expect(restoredModel.pendingApprovalAttentionRequests.isEmpty)
+
+        appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON("exec-inactive"))
+        await appModel.presentExecApprovalGatewayEventPrompt(approvalId: "exec-inactive")
+        #expect(appModel.pendingApprovalAttentionRequests.first { $0.id == "exec-inactive" }?.createdAtMs == 51)
+    }
+
+    @Test(arguments: ["terminal", "gateway", "operator"])
+    @MainActor func `approval list cannot revive terminal or previous route attention`(
+        _ transition: String) async throws
+    {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let (_, appModel) = makeWatchModel(notificationCenter: MockBootstrapNotificationCenter())
+        let (firstConfig, secondConfig) = try makeGatewayPair(
+            firstURL: #require(URL(string: "wss://test.invalid")),
+            firstStableID: "test-gateway",
+            secondURL: #require(URL(string: "wss://test.invalid")),
+            secondStableID: transition == "operator" ? "test-gateway" : "other-gateway")
+        appModel.activeGatewayConnectConfig = firstConfig
+        appModel.connectedGatewayID = "test-gateway"
+        let gate = WatchSnapshotSendGate()
+        try appModel._test_setUnifiedExecApprovalGetResponses([
+            ("late-list", makePendingExecApprovalJSON("late-list")),
+        ], listResponses: [
+            "exec.approval.list": makePendingApprovalListJSON(
+                id: "late-list", kind: .exec, sessionKey: "agent:worker:inactive"),
+        ], beforeListResponse: { method in
+            if method == "exec.approval.list" { await gate.wait() }
+        })
+        let refresh = Task { @MainActor in await appModel.refreshPendingApprovalInbox() }
+        let deadline = ContinuousClock().now + .seconds(2)
+        while await !gate.hasStarted(), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        #expect(await gate.hasStarted())
+        if transition == "terminal" {
+            _ = await appModel._test_applyLegacyExecApprovalTerminal(approvalID: "late-list", decision: .deny)
+        } else {
+            appModel.activeGatewayConnectConfig = secondConfig
+            appModel.connectedGatewayID = secondConfig.effectiveStableID
+        }
+        await gate.resume()
+        await refresh.value
+        #expect(appModel.pendingApprovalAttentionRequests.isEmpty)
+        #expect(appModel.pendingExecApprovalInboxItems.isEmpty)
+    }
+
+    @Test @MainActor func `approval attention expires without another gateway event`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let (_, appModel) = makeWatchModel(notificationCenter: MockBootstrapNotificationCenter())
+        appModel.connectedGatewayID = "test-gateway"
+        let expiresAtMs = Int(Date().timeIntervalSince1970 * 1000) + 1000
+        try appModel._test_setUnifiedExecApprovalGetResponses([
+            ("expires", makePendingApprovalJSON(
+                id: "expires", presentation: execApprovalPresentation(commandText: "echo expiry"),
+                expiresAtMs: expiresAtMs)),
+        ], listResponses: [
+            "exec.approval.list": makePendingApprovalListJSON(
+                id: "expires", kind: .exec, sessionKey: "agent:worker:inactive", expiresAtMs: Double(expiresAtMs)),
+        ])
+        await appModel.refreshPendingApprovalInbox()
+        #expect(appModel.pendingApprovalAttentionRequests.count == 1)
+        let retired = WatchApprovalReadbackProbe()
+        withObservationTracking {
+            _ = appModel.pendingExecApprovalInboxItems
+        } onChange: {
+            Task { await retired.record("expired") }
+        }
+        let deadline = ContinuousClock().now + .seconds(2)
+        while await retired.snapshot().isEmpty, ContinuousClock().now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await retired.snapshot() == ["expired"])
+        #expect(appModel.pendingApprovalAttentionRequests.isEmpty)
+        #expect(appModel.pendingExecApprovalInboxItems.isEmpty)
+    }
+
+    @Test(arguments: [ApprovalKind.exec, .plugin, .systemAgent])
+    @MainActor func `requested approval events retain source session without changing native powers`(
+        _ kind: ApprovalKind) async throws
+    {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let (_, appModel) = makeWatchModel(notificationCenter: MockBootstrapNotificationCenter())
+        appModel.connectedGatewayID = "test-gateway"
+        let presentation: ApprovalPresentation = switch kind {
+        case .exec: execApprovalPresentation(commandText: "echo event")
+        case .plugin: pluginApprovalPresentation(title: "Review plugin action", description: "Send the request.")
+        case .systemAgent: systemAgentApprovalPresentation()
+        }
+        appModel._test_setUnifiedExecApprovalGetResponse(makePendingApprovalJSON(
+            id: "event-source", presentation: presentation))
+        let event = kind == .systemAgent ? "openclaw.approval.requested" : "\(kind.rawValue).approval.requested"
+        await appModel.handleOperatorGatewayServerEvent(EventFrame(
+            type: "event",
+            event: event,
+            payload: AnyCodable([
+                "id": "event-source",
+                "approvalKind": kind.rawValue,
+                "request": ["sessionKey": "agent:worker:inactive", "agentId": "worker"],
+                "createdAtMs": 75,
+                "expiresAtMs": 4_000_000_000_000,
+            ]),
+            seq: nil,
+            stateversion: nil))
+        let request = try #require(appModel.pendingApprovalAttentionRequests.first)
+        #expect(request.id == "event-source")
+        #expect(request.sessionKey == "agent:worker:inactive")
+        #expect(request.agentID == "worker")
+        #expect(request.createdAtMs == 75)
+        let prompt = try #require(appModel.pendingExecApprovalInboxItems.first?.prompt)
+        #expect(prompt.kind == kind.rawValue)
+        #expect(prompt.allowedDecisions == (kind == .systemAgent ? [] : ["allow-once", "deny"]))
+    }
+
     @Test @MainActor func `unified approval get accepts matching exec and plugin presentations`() throws {
         let execJSON = #"""
         {
@@ -1838,8 +2087,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(watchService.lastSentExecApprovalResolved?.outcomeText ==
             "This approval was already set to Always Allow.")
 
-        let ownWinnerService = MockWatchMessagingService()
-        let ownWinnerModel = NodeAppModel(watchMessagingService: ownWinnerService)
+        let (ownWinnerService, ownWinnerModel) = makeWatchModel(
+            notificationCenter: MockBootstrapNotificationCenter())
         try ownWinnerModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-race",
@@ -2088,7 +2337,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(firstModel._test_watchExecApprovalCacheIDs().isEmpty)
         #expect(firstModel._test_pendingPersistedExecApprovalReadbacks().map(\.approvalId) == [approvalID])
 
-        let restoredModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        let restoredModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
         restoredModel.connectedGatewayID = prompt.gatewayStableID
         #expect(restoredModel._test_watchExecApprovalCacheIDs().isEmpty)
         #expect(restoredModel._test_pendingPersistedExecApprovalReadbacks().map(\.approvalId) == [approvalID])
@@ -2104,7 +2355,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let approvalID = "approval-watch-uncertain-resume"
-        let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
         let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: approvalID,
             commandText: "echo watch",
@@ -2179,7 +2432,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `canonical terminal invalidates an in flight uncertain result`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
-        let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
         let approvalID = "approval-terminal-beats-uncertain"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
@@ -3366,21 +3621,69 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `chat dictation returns transcript and releases audio ownership`() async throws {
         let (talkMode, appModel) = makeTalkModel()
+        let preparation = TalkPreparationBarrier()
+        let reservation = TalkPreparationBarrier()
+        appModel.testTalkCapturePreparationHandler = { await preparation.suspendFirstPreparation() }
+        talkMode._test_setPTTReservedHandler { await reservation.suspendFirstPreparation() }
+        defer {
+            preparation.release()
+            reservation.release()
+            appModel.testTalkCapturePreparationHandler = nil
+            talkMode._test_setPTTReservedHandler(nil)
+            appModel.cancelChatDictation()
+        }
         let transcription = Task { @MainActor in
             try await appModel.transcribeChatDraft()
         }
-        await waitForTalkCondition { appModel.isChatDictationActive }
+        await preparation.waitUntilEntered()
+        #expect(appModel.chatDictationPhase == .starting)
+        #expect(appModel.chatDictationPartialTranscript.isEmpty)
+        #expect(appModel.chatDictationLevel == 0)
+        preparation.release()
+
+        await reservation.waitUntilEntered()
+        #expect(appModel.chatDictationPhase == .starting)
         let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds() == [captureId])
+        reservation.release()
+
+        await waitForTalkCondition { appModel.chatDictationPhase == .listening }
         await talkMode._test_handlePushToTalkTranscript(
             "draft from speech",
             isFinal: false,
             captureId: captureId)
+        talkMode.micLevel = 0.6
+        #expect(appModel.chatDictationPartialTranscript == "draft from speech")
+        #expect(appModel.chatDictationLevel == 0.6)
 
         appModel.finishChatDictation()
+        #expect(appModel.chatDictationPhase == .processing)
+        #expect(appModel.chatDictationLevel == 0)
         let transcript = try await transcription.value
         #expect(transcript == "draft from speech")
         #expect(!appModel.isChatDictationActive)
+        #expect(appModel.chatDictationPhase == .idle)
+        #expect(appModel.chatDictationPartialTranscript.isEmpty)
+        #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
+    }
+
+    @Test @MainActor func `finishing chat dictation without speech explains how to retry`() async throws {
+        let (talkMode, appModel) = makeTalkModel()
+        let transcription = Task { @MainActor in
+            try await appModel.transcribeChatDraft()
+        }
+        await waitForTalkCondition { appModel.chatDictationPhase == .listening }
+
+        appModel.finishChatDictation()
+
+        do {
+            _ = try await transcription.value
+            Issue.record("Empty dictation should explain how to retry")
+        } catch {
+            #expect(error.localizedDescription == "No speech heard. Try again and speak near the microphone.")
+        }
+        #expect(appModel.chatDictationPhase == .idle)
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }
 
@@ -3397,6 +3700,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             captureId: captureId)
 
         appModel.cancelChatDictation()
+        #expect(appModel.chatDictationPhase == .idle)
+        #expect(appModel.chatDictationPartialTranscript.isEmpty)
+        #expect(appModel.chatDictationLevel == 0)
 
         let transcript = try await transcription.value
         #expect(transcript == nil)
@@ -3448,10 +3754,19 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             transcriptionOnly: true)
         let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
 
+        await talkMode._test_handlePushToTalkTranscript(
+            "another capture's speech",
+            isFinal: false,
+            captureId: captureId)
+        talkMode.micLevel = 0.6
+
         let transcript = try await appModel.transcribeChatDraft()
 
         #expect(transcript == nil)
         #expect(!appModel.isChatDictationActive)
+        #expect(appModel.chatDictationPhase == .idle)
+        #expect(appModel.chatDictationPartialTranscript.isEmpty)
+        #expect(appModel.chatDictationLevel == 0)
         #expect(talkMode._test_activePushToTalkCaptureId() == captureId)
         _ = talkMode.cancelPushToTalk(captureId: captureId)
         _ = await talkMode.awaitPushToTalkOnce(existing)
@@ -3578,6 +3893,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await barrier.waitUntilEntered()
         #expect(appModel.isChatDictationPending)
         #expect(!appModel.isChatDictationActive)
+        #expect(appModel.chatDictationPhase == .starting)
 
         appModel.cancelChatDictation()
         #expect(appModel.isChatDictationPending)
@@ -3588,6 +3904,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         }
         #expect(!appModel.isChatDictationPending)
         #expect(!appModel.isChatDictationActive)
+        #expect(appModel.chatDictationPhase == .idle)
         #expect(talkMode._test_activePushToTalkCaptureId() == nil)
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }
@@ -4654,7 +4971,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `watch exec approval snapshot request publishes cached approvals in background`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
-        let (watchService, appModel) = makeWatchModel()
+        let (watchService, appModel) = makeWatchModel(
+            notificationCenter: MockBootstrapNotificationCenter())
         let (snapshotEvents, snapshotEventContinuation) = AsyncStream.makeStream(
             of: OpenClawWatchExecApprovalSnapshotMessage.self)
         defer { snapshotEventContinuation.finish() }
@@ -4691,7 +5009,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `foreground watch snapshot acknowledgment requires canonical readback`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
-        let (watchService, appModel) = makeWatchModel()
+        let (watchService, appModel) = makeWatchModel(
+            notificationCenter: MockBootstrapNotificationCenter())
         let futureExpiryMs = Int64(Date().timeIntervalSince1970 * 1000) + 60000
         try appModel._test_presentExecApprovalPrompt(
             #require(
@@ -4895,7 +5214,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(composedGatewayID == decomposedGatewayID)
         #expect(GatewayStableIdentifier.key(composedGatewayID) !=
             GatewayStableIdentifier.key(decomposedGatewayID))
-        let (watchService, appModel) = makeWatchModel()
+        let (watchService, appModel) = makeWatchModel(
+            notificationCenter: MockBootstrapNotificationCenter())
         appModel.connectedGatewayID = composedGatewayID
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
@@ -5098,7 +5418,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let fetchGate = WatchSnapshotSendGate()
-        let (watchService, appModel) = makeWatchModel()
+        let (watchService, appModel) = makeWatchModel(
+            notificationCenter: MockBootstrapNotificationCenter())
         appModel.connectedGatewayID = "test-gateway"
         let approvalID = "approval-terminal-interleave"
         try appModel._test_presentExecApprovalPrompt(#require(
@@ -5244,7 +5565,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `phone and watch decisions share one exact owner write lease`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
-        let (watchService, appModel) = makeWatchModel()
+        let (watchService, appModel) = makeWatchModel(
+            notificationCenter: MockBootstrapNotificationCenter())
         let approvalID = "approval-phone-watch-lease"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(

@@ -20,6 +20,14 @@ describe("TerminalSessionManager output ring", () => {
     fake.emitData("ijkl");
     // Cap exceeded: the oldest whole chunk goes; boundaries stay intact.
     expect(manager.snapshot(outcome.sessionId)).toBe("efghijkl");
+
+    for (let value = 0; value < 5_000; value += 1) {
+      fake.emitData(String(value).padStart(4, "0"));
+    }
+    expect(manager.snapshot(outcome.sessionId)).toBe("49984999");
+    expect(manager.attach("conn-2", outcome.sessionId)?.buffer).toBe("49984999");
+    fake.emitData("tail");
+    expect(manager.snapshot(outcome.sessionId)).toBe("4999tail");
   });
 
   it("keeps only the tail of a single oversized chunk", async () => {

@@ -170,7 +170,6 @@ async function inspectEligibleOrigin(localPath: string): Promise<OriginInspectio
 export function createNodeWorkerWorkspaceFallback(exec: NodeWorkerRepositoryExec) {
   const repository = createNodeWorkerRepositoryPreparation(exec);
   return {
-    captureManifest: repository.captureManifest,
     async trySyncWorkspace(
       request: WorkerLocalWorkspaceSyncRequest,
       expectedManifestRef: string,

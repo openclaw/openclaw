@@ -14,6 +14,7 @@ import {
 } from "../chrome.graphics.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
+import { listBrowserEngines, resolveBrowserEngine } from "../engines/registry.js";
 import { BrowserError, toBrowserErrorResponse } from "../errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
@@ -63,21 +64,25 @@ async function sendBasicJsonResponse(params: {
   }
 }
 
-async function withBasicProfileRoute(params: {
-  req: BrowserRequest;
-  res: BrowserResponse;
-  ctx: BrowserRouteContext;
-  run: (profileCtx: ProfileContext) => Promise<void>;
-}) {
-  const profileCtx = resolveProfileContext(params.req, params.res, params.ctx);
-  if (!profileCtx) {
-    return;
-  }
-  try {
-    await params.run(profileCtx);
-  } catch (err) {
-    return handleBrowserRouteError(params.res, err);
-  }
+async function withBasicRequestAdmission<T>(
+  req: BrowserRequest,
+  run: () => Promise<T>,
+  profile?: ProfileContext["profile"],
+): Promise<T> {
+  const assertRequesterCurrent = () => {
+    req.signal?.throwIfAborted();
+    req.requester?.signal.throwIfAborted();
+    if (req.requester?.isCurrent() === false) {
+      throw new BrowserError(
+        "The Gateway connection that requested the browser operation has ended.",
+        401,
+      );
+    }
+  };
+  assertRequesterCurrent();
+  await req.assertCurrent?.(profile);
+  assertRequesterCurrent();
+  return await run();
 }
 
 function registerBasicProfilePost(
@@ -91,27 +96,31 @@ function registerBasicProfilePost(
   }) => Promise<void>,
 ) {
   app.post(path, async (req, res) => {
-    await withBasicProfileRoute({
-      req,
-      res,
-      ctx,
-      run: async (profileCtx) => await run({ req, res, profileCtx }),
-    });
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) {
+      return;
+    }
+    try {
+      await withBasicRequestAdmission(req, () => run({ req, res, profileCtx }), profileCtx.profile);
+    } catch (err) {
+      return handleBrowserRouteError(res, err);
+    }
   });
 }
 
 async function withProfilesServiceMutation(params: {
+  req: BrowserRequest;
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   run: (service: ReturnType<typeof createBrowserProfilesService>) => Promise<unknown>;
 }) {
-  try {
-    const service = createBrowserProfilesService(params.ctx);
-    const result = await params.run(service);
-    params.res.json(result);
-  } catch (err) {
-    return handleBrowserRouteError(params.res, err);
-  }
+  await sendBasicJsonResponse({
+    res: params.res,
+    run: () =>
+      withBasicRequestAdmission(params.req, () =>
+        params.run(createBrowserProfilesService(params.ctx)),
+      ),
+  });
 }
 
 async function buildBrowserStatus(
@@ -128,6 +137,7 @@ async function buildBrowserStatus(
   }
 
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+  const { descriptor: engine } = resolveBrowserEngine(profileCtx.profile.engine);
   const [cdpHttp, cdpReady, pageReady] = capabilities.usesChromeMcp
     ? await (async () => {
         const statusStartedAtMs = Date.now();
@@ -205,6 +215,10 @@ async function buildBrowserStatus(
     enabled: current.resolved.enabled,
     profile: profileCtx.profile.name,
     driver: profileCtx.profile.driver,
+    engine: engine.id,
+    sessionScope: engine.sessionScope,
+    screenshotFidelity: engine.screenshotFidelity,
+    availableEngines: listBrowserEngines(),
     transport: capabilities.usesChromeMcp
       ? ("chrome-mcp" as const)
       : capabilities.mode === "local-extension"
@@ -288,16 +302,12 @@ async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSign
   }
 }
 
-function hasQueryKey(query: BrowserRequest["query"], key: string): boolean {
-  return Object.hasOwn(query ?? {}, key);
-}
-
 function parseHeadlessStartOverride(params: {
   req: BrowserRequest;
   res: BrowserResponse;
   profileCtx: ProfileContext;
 }): { ok: true; headless?: boolean } | { ok: false } {
-  if (!hasQueryKey(params.req.query, "headless")) {
+  if (!Object.hasOwn(params.req.query ?? {}, "headless")) {
     return { ok: true };
   }
 
@@ -357,18 +367,13 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     });
   });
 
-  // List all profiles with their status
   app.get("/profiles", async (_req, res) => {
-    try {
-      const service = createBrowserProfilesService(ctx);
-      const profiles = await service.listProfiles();
-      res.json({ profiles });
-    } catch (err) {
-      return handleBrowserRouteError(res, err);
-    }
+    await sendBasicJsonResponse({
+      res,
+      run: async () => ({ profiles: await createBrowserProfilesService(ctx).listProfiles() }),
+    });
   });
 
-  // Get status (profile-aware)
   app.get("/", async (req, res) => {
     const profileCtx = resolveProfileContext(req, res, ctx);
     if (!profileCtx) {
@@ -378,6 +383,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       const status = await runProfileRouteOperation({
         profileCtx,
         signal: req.signal,
+        assertCurrent: req.assertCurrent,
         run: async (signal) => await buildBrowserStatus(ctx, profileCtx, signal),
       });
       res.json(status);
@@ -395,6 +401,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       const report = await runProfileRouteOperation({
         profileCtx,
         signal: req.signal,
+        assertCurrent: req.assertCurrent,
         run: async (signal) => {
           const status = await buildBrowserStatus(ctx, profileCtx, signal);
           const relay = ctx.state().extensionRelays?.get(profileCtx.profile.name);
@@ -420,7 +427,6 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }
   });
 
-  // Start browser (profile-aware)
   registerBasicProfilePost(app, ctx, "/start", async ({ req, res, profileCtx }) => {
     const headlessOverride = parseHeadlessStartOverride({ req, res, profileCtx });
     if (!headlessOverride.ok) {
@@ -433,7 +439,6 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     res.json({ ok: true, profile: profileCtx.profile.name });
   });
 
-  // Stop browser (profile-aware)
   registerBasicProfilePost(app, ctx, "/stop", async ({ res, profileCtx }) => {
     const result = await profileCtx.stopRunningBrowser();
     res.json({
@@ -443,13 +448,11 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     });
   });
 
-  // Reset profile (profile-aware)
   registerBasicProfilePost(app, ctx, "/reset-profile", async ({ res, profileCtx }) => {
     const result = await profileCtx.resetProfile();
     res.json({ ok: true, profile: profileCtx.profile.name, ...result });
   });
 
-  // Create a new profile
   app.post("/profiles/create", async (req, res) => {
     const name = toStringOrEmpty((req.body as { name?: unknown })?.name);
     const color = toStringOrEmpty((req.body as { color?: unknown })?.color);
@@ -469,6 +472,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }
 
     await withProfilesServiceMutation({
+      req,
       res,
       ctx,
       run: async (service) =>
@@ -497,25 +501,24 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     } catch (err) {
       return jsonError(res, 400, err instanceof Error ? err.message : "invalid domains");
     }
-    try {
-      const service = createBrowserProfilesService(ctx);
-      const result = await service.importSystemProfile(
-        {
-          browser: toStringOrEmpty(body.browser) || undefined,
-          systemProfile: toStringOrEmpty(body.systemProfile) || undefined,
-          into: toStringOrEmpty(body.into) || undefined,
-          domains,
-          makeDefault: toBoolean(body.makeDefault) ?? false,
-        },
-        { signal: req.signal },
-      );
-      res.json(result);
-    } catch (err) {
-      return handleBrowserRouteError(res, err);
-    }
+    await withProfilesServiceMutation({
+      req,
+      res,
+      ctx,
+      run: async (service) =>
+        await service.importSystemProfile(
+          {
+            browser: toStringOrEmpty(body.browser) || undefined,
+            systemProfile: toStringOrEmpty(body.systemProfile) || undefined,
+            into: toStringOrEmpty(body.into) || undefined,
+            domains,
+            makeDefault: toBoolean(body.makeDefault) ?? false,
+          },
+          { signal: req.signal },
+        ),
+    });
   });
 
-  // Delete a profile
   app.delete("/profiles/:name", async (req, res) => {
     const name = toStringOrEmpty(req.params.name);
     if (!name) {
@@ -523,6 +526,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
     }
 
     await withProfilesServiceMutation({
+      req,
       res,
       ctx,
       run: async (service) => await service.deleteProfile(name),

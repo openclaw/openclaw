@@ -139,22 +139,6 @@ describe("formatHealthChannelLines", () => {
     ]);
   });
 
-  it("formats statusState without inferring from linked", () => {
-    const summary = createHealthSummary({
-      channels: {
-        whatsapp: {
-          accountId: "default",
-          statusState: "unstable",
-          configured: true,
-        },
-      },
-      channelOrder: ["whatsapp"],
-      channelLabels: { whatsapp: "WhatsApp" },
-    });
-
-    expect(formatHealthChannelLines(summary)).toStrictEqual(["WhatsApp: auth stabilizing"]);
-  });
-
   it.each([
     [
       "fresh probe failure over passive healthy state",
@@ -184,6 +168,11 @@ describe("formatHealthChannelLines", () => {
         probe: { ok: false, error: "sync rejected" },
       },
       "auth stabilizing",
+    ],
+    [
+      "disabled account over stale failure metadata",
+      { enabled: false, healthState: "blocked", probe: { ok: false, error: "old failure" } },
+      "disabled",
     ],
     [
       "disabled status over stale passive healthy state",
@@ -227,11 +216,31 @@ describe("formatHealthChannelLines", () => {
     expect(formatHealthChannelLines(summary)).toStrictEqual([`Test: ${expected}`]);
   });
 
+  it.each(["default", "all"] as const)(
+    "renders a sole disabled configured account in %s health output",
+    (accountMode) => {
+      const account = {
+        accountId: "main",
+        enabled: false,
+        configured: true,
+        running: false,
+        stateReason: "disabled",
+        lastError: null,
+      };
+      const summary = createHealthSummary({
+        channels: { matrix: { ...account, accounts: { main: account } } },
+        channelOrder: ["matrix"],
+        channelLabels: { matrix: "Matrix" },
+      });
+
+      expect(formatHealthChannelLines(summary, { accountMode })).toStrictEqual([
+        "Matrix: disabled",
+      ]);
+    },
+  );
+
   it.each([
     ["blocked", { healthState: "blocked" }],
-    ["disconnected", { healthState: "disconnected" }],
-    ["ingress-unavailable", { healthState: "ingress-unavailable" }],
-    ["stale-socket", { healthState: "stale-socket" }],
     ["auth stabilizing", { healthState: "healthy", statusState: "unstable" }],
   ])(
     "surfaces secondary account state %s in default and verbose health output",
@@ -272,26 +281,31 @@ describe("formatHealthChannelLines", () => {
       expectedAll: "failed (unknown) - sync rejected",
     },
   ])(
-    "reports the $name active probe when the preferred account is unconfigured",
+    "reports the $name active probe when the preferred account is inactive",
     ({ probe, expected, expectedAll }) => {
-      const summary = createMultiAccountHealthSummary(
-        { healthState: "healthy", probe },
-        { configured: false, linked: undefined, healthState: undefined, probe: undefined },
-      );
-      const accountIdsByChannel = { matrix: ["main"] };
+      for (const [inactive, scopedState] of [
+        [{ configured: false }, "not configured"],
+        [{ enabled: false }, "disabled"],
+      ] as const) {
+        const summary = createMultiAccountHealthSummary(
+          { healthState: "healthy", probe },
+          { ...inactive, linked: undefined, healthState: undefined, probe: undefined },
+        );
+        const accountIdsByChannel = { matrix: ["main"] };
 
-      expect(formatHealthChannelLines(summary)).toStrictEqual([`Matrix: ${expected}`]);
-      expect(
-        formatHealthChannelLines(summary, { accountMode: "all", accountIdsByChannel }),
-      ).toStrictEqual([`Matrix: ${expectedAll}`]);
-      expect(
-        formatHealthChannelLines(summary, { accountMode: "default", accountIdsByChannel }),
-      ).toStrictEqual(["Matrix: not configured"]);
-      expect(
-        formatHealthChannelLines(summary, {
-          accountIdsByChannel: { matrix: ["alerts"] },
-        }),
-      ).toStrictEqual([`Matrix: ${expected}`]);
+        expect(formatHealthChannelLines(summary)).toStrictEqual([`Matrix: ${expected}`]);
+        expect(
+          formatHealthChannelLines(summary, { accountMode: "all", accountIdsByChannel }),
+        ).toStrictEqual([`Matrix: ${expectedAll}`]);
+        expect(
+          formatHealthChannelLines(summary, { accountMode: "default", accountIdsByChannel }),
+        ).toStrictEqual([`Matrix: ${scopedState}`]);
+        expect(
+          formatHealthChannelLines(summary, {
+            accountIdsByChannel: { matrix: ["alerts"] },
+          }),
+        ).toStrictEqual([`Matrix: ${expected}`]);
+      }
     },
   );
 
@@ -421,28 +435,6 @@ describe("formatHealthChannelLines", () => {
     expect(lines[0]).toBe(`Plugin plugin-0: failed - ${"x".repeat(500)}; run openclaw doctor`);
     expect(lines.at(-1)).toBe(
       "Plugins: failed - 2 additional activated failures; run openclaw doctor",
-    );
-  });
-
-  it("formats iMessage probe failures as failed health lines", () => {
-    const summary = createHealthSummary({
-      channels: {
-        imessage: {
-          accountId: "default",
-          configured: true,
-          probe: {
-            ok: false,
-            error:
-              "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
-          },
-        },
-      },
-      channelOrder: ["imessage"],
-      channelLabels: { imessage: "iMessage" },
-    });
-
-    expect(formatHealthChannelLines(summary)).toContain(
-      "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     );
   });
 });

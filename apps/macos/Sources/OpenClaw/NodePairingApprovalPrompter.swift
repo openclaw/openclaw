@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Observation
-import OpenClawDiscovery
 import OpenClawIPC
 import OpenClawKit
 import OpenClawProtocol
@@ -309,8 +308,8 @@ final class NodePairingApprovalPrompter {
     }
 
     /// Auto-approve runs before the request surfaces in the panel: the app's
-    /// own local node pairs silently, and `silent` requests are approved after
-    /// an SSH trust probe. Only failed attempts fall through to the UI.
+    /// own local node pairs silently, and configured SSH routes can prove
+    /// ownership for `silent` requests. Other requests use the approval panel.
     private func beginAutoApproveIfEligible(_ req: PendingRequest, source: PairingPromptSupport.Source) {
         guard !self.autoApproveAttempts.contains(req.requestId) else { return }
         guard self.isAutoApproveCandidate(req) else { return }
@@ -482,14 +481,14 @@ final class NodePairingApprovalPrompter {
         guard req.silent == true else { return false }
         guard self.beginAutoApproveAttempt(requestId: req.requestId) else { return false }
 
-        guard let target = await self.resolveSSHTarget(source: source), self.owns(source) else {
-            self.logger.info("silent pairing skipped (no ssh target) requestId=\(req.requestId, privacy: .public)")
-            return false
-        }
-
         let user = NSUserName().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !user.isEmpty else {
             self.logger.info("silent pairing skipped (missing local user) requestId=\(req.requestId, privacy: .public)")
+            return false
+        }
+        guard let target = Self.silentPairingSSHTarget(settings: CommandResolver.connectionSettings(), user: user)
+        else {
+            self.logger.info("silent pairing skipped (no ssh target) requestId=\(req.requestId, privacy: .public)")
             return false
         }
 
@@ -551,69 +550,26 @@ final class NodePairingApprovalPrompter {
         connectionMode == .local && requestNodeId == localNodeId
     }
 
-    private func resolveSSHTarget(source: PairingPromptSupport.Source) async -> SSHTarget? {
-        let settings = CommandResolver.connectionSettings()
-        let gatewayURL = source.lease.route.url
-        let user = NSUserName().trimmingCharacters(in: .whitespacesAndNewlines)
-        if settings.mode == .remote, settings.transport == .ssh {
-            return Self.silentPairingSSHTarget(
-                settings: settings, gatewayURL: gatewayURL, gateways: [], preferredStableID: nil, user: user)
-        }
-
-        let model = GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName)
-        model.start()
-        defer { model.stop() }
-
-        let deadline = Date().addingTimeInterval(5.0)
-        while self.owns(source), Date() < deadline {
-            if let target = Self.silentPairingSSHTarget(
-                settings: settings,
-                gatewayURL: gatewayURL,
-                gateways: model.gateways,
-                preferredStableID: GatewayDiscoveryPreferences.preferredStableID(),
-                user: user)
-            {
-                return target
-            }
-            try? await Task.sleep(nanoseconds: 200_000_000)
-        }
-        return nil
-    }
-
     static func silentPairingSSHTarget(
         settings: CommandResolver.RemoteSettings,
-        gatewayURL: URL,
-        gateways: [GatewayDiscoveryModel.DiscoveredGateway],
-        preferredStableID: String?,
         user: String) -> SSHTarget?
     {
-        if settings.mode == .remote, settings.transport == .ssh {
-            guard let parsed = CommandResolver.parseSSHTarget(settings.target) else { return nil }
-            if let targetUser = parsed.user,
-               !targetUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               targetUser != user
-            {
-                return nil
-            }
-            let host = parsed.host.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !host.isEmpty else { return nil }
-            return SSHTarget(host: host, port: parsed.port > 0 ? parsed.port : 22)
-        }
-        // SSH proves ownership only of the server behind this captured route.
-        // Dormant SSH settings and unrelated Bonjour entries cannot authorize it.
-        guard let owner = try? MacGatewayProfileStore.canonicalURL(gatewayURL) else { return nil }
-        let matches = gateways.filter {
-            guard let raw = GatewayDiscoveryHelpers.directUrl(for: $0), let url = URL(string: raw) else { return false }
-            return (try? MacGatewayProfileStore.canonicalURL(url)) == owner
-        }
-        let gateway = matches.first { $0.stableID == preferredStableID } ?? matches.first
-        guard let gateway else { return nil }
-        guard let target = GatewayDiscoveryHelpers.sshTarget(for: gateway),
-              let parsed = CommandResolver.parseSSHTarget(target)
+        // A matching discovery URL or name cannot authorize SSH authentication
+        // to its advertised port. Only the configured SSH route supplies this proof.
+        guard settings.mode == .remote, settings.transport == .ssh,
+              let parsed = CommandResolver.parseSSHTarget(settings.target)
         else {
             return nil
         }
-        return SSHTarget(host: parsed.host, port: parsed.port)
+        if let targetUser = parsed.user,
+           !targetUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           targetUser != user
+        {
+            return nil
+        }
+        let host = parsed.host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return nil }
+        return SSHTarget(host: host, port: parsed.port > 0 ? parsed.port : 22)
     }
 
     private static func probeSSH(user: String, host: String, port: Int) async -> Bool {

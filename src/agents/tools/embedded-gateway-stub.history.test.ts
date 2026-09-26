@@ -1,15 +1,24 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
+  appendTranscriptEvent,
   appendTranscriptMessage,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as serverConstants from "../../gateway/server-constants.js";
 import { readChatHistoryMessageId } from "../../gateway/session-history-tail.js";
+import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB as AgentDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
+import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import {
+  bindEmbeddedSessionRowProjection,
+  createEmbeddedCallGateway,
+} from "./embedded-gateway-stub.js";
 import { createSessionsHistoryTool } from "./sessions-history-tool.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
@@ -44,9 +53,24 @@ async function history(params: Record<string, unknown>) {
 
 describe("embedded session history anchors", () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+  let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+  let unbindProjection: (() => void) | undefined;
+  let resetFailure: Error | undefined;
+
+  beforeAll(async () => {
+    state = await createOpenClawTestState({ prefix: "embedded-anchor-test-" });
+  });
+
+  afterAll(async () => {
+    await state?.cleanup();
+  });
 
   beforeEach(async () => {
-    state = await createOpenClawTestState({ prefix: "embedded-anchor-test-" });
+    if (resetFailure) {
+      throw resetFailure;
+    }
+    projection = undefined;
+    unbindProjection = undefined;
     setRuntimeConfigSnapshot(config);
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
     for (const [index, id] of ["old", "middle", "newest"].entries()) {
@@ -59,11 +83,38 @@ describe("embedded session history anchors", () => {
         },
       });
     }
+    projection = await createSessionRowProjection({ cfg: config });
+    unbindProjection = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
   });
 
   afterEach(async () => {
-    vi.restoreAllMocks();
-    await state.cleanup();
+    try {
+      if (resetFailure) {
+        return;
+      }
+      unbindProjection?.();
+      projection?.dispose();
+      await projection?.ensureMaterialized();
+      const cleanupScope = { stateDir: state.stateDir, rootPath: state.root };
+      await drainSessionStateForTest(cleanupScope);
+      for (const agentId of ["main", "work"]) {
+        runOpenClawAgentWriteTransaction(
+          ({ db }) => {
+            const kysely = getNodeSqliteKysely<AgentDatabase>(db);
+            // FTS identities lack a foreign key; their trigger clears search content.
+            executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_fts_rows"));
+            executeSqliteQuerySync(db, kysely.deleteFrom("session_nodes"));
+          },
+          { agentId },
+        );
+      }
+      await drainSessionStateForTest(cleanupScope);
+    } catch (error) {
+      resetFailure = new Error("Embedded history fixture cleanup failed", { cause: error });
+      throw resetFailure;
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it.each([false, true])(
@@ -94,6 +145,44 @@ describe("embedded session history anchors", () => {
     expect(await history({ ...selector, messageId: "missing", limit: 1 })).toMatchObject({
       messages: [],
     });
+  });
+
+  it("reopens a search hit after a reset of the same physical session", async () => {
+    await appendTranscriptMessage(scope, {
+      eventId: "old-tool",
+      message: { role: "toolResult", content: "synthetic scan result" },
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset",
+      parentId: "old-tool",
+      timestamp: "2026-09-07T16:00:00.000Z",
+      reason: "new",
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "fresh",
+      message: { role: "user", content: "fresh after reset", timestamp: 1_700_000_000_400 },
+    });
+
+    const current = await history({ sessionKey: scope.sessionKey, limit: 10 });
+    expect(current.messages.map(readChatHistoryMessageId)).toEqual(["reset", "fresh"]);
+    const search = await toolsFor().search.execute("find", { query: "quasar" });
+    expect((search.details as { results: Array<{ messageId?: string }> }).results).toEqual([
+      expect.objectContaining(selector),
+    ]);
+    const recalled = await history({
+      ...selector,
+      includeTools: true,
+      limit: 10,
+    });
+    expect(recalled.messages.map(readChatHistoryMessageId)).toEqual([
+      "old",
+      "middle",
+      "newest",
+      "old-tool",
+      "reset",
+    ]);
+    expect(recalled.messages.map(readChatHistoryMessageId)).not.toContain("fresh");
   });
 
   it.each(["missing", "wrong-key", "wrong-agent"])(

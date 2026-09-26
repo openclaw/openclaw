@@ -30,6 +30,10 @@ function parseArgs(argv) {
 }
 
 const fsSafeNativeContract = process.env.OPENCLAW_FS_SAFE_NATIVE_CONTRACT ?? "required";
+assert.ok(
+  ["required", "bundled", "not-applicable"].includes(fsSafeNativeContract),
+  `unknown fs-safe native contract: ${fsSafeNativeContract}`,
+);
 if (fsSafeNativeContract === "not-applicable") {
   console.log(
     "Skipping fs-safe native proof: selected source has the published pre-native contract.",
@@ -39,7 +43,10 @@ if (fsSafeNativeContract === "not-applicable") {
 
 const { mode, packageRoot } = parseArgs(process.argv.slice(2));
 const requireFromPackage = createRequire(path.join(packageRoot, "package.json"));
-const fsSafeManifestPath = requireFromPackage.resolve("@openclaw/fs-safe/package.json");
+// `package.json` is not a public fs-safe export. Its public root entry is,
+// and the manifest beside that resolved entry declares platform packages.
+const fsSafeEntryPath = requireFromPackage.resolve("@openclaw/fs-safe");
+const fsSafeManifestPath = path.resolve(fsSafeEntryPath, "..", "..", "package.json");
 const fsSafeManifest = JSON.parse(await fsPromises.readFile(fsSafeManifestPath, "utf8"));
 const requireFromFsSafe = createRequire(fsSafeManifestPath);
 const platformPackageNames = Object.keys(fsSafeManifest.optionalDependencies ?? {}).filter((name) =>
@@ -71,20 +78,36 @@ try {
     file.endsWith("fs-safe-native.node"),
   );
   if (mode === "require") {
-    assert.ok(
-      installedPlatformPackages.length > 0,
-      "expected at least one fs-safe platform package",
-    );
     assert.equal(
       loadedNativeModules.length,
       1,
       "expected exactly one loaded fs-safe native binding",
     );
     const loadedNativeRoot = fs.realpathSync(path.dirname(loadedNativeModules[0]));
-    assert.ok(
-      installedPlatformPackages.some(({ root }) => root === loadedNativeRoot),
-      "loaded fs-safe native binding did not come from an installed platform package",
-    );
+    if (fsSafeNativeContract === "bundled") {
+      assert.equal(
+        installedPlatformPackages.length,
+        0,
+        "bundled-native install unexpectedly contains a platform package",
+      );
+      const bundledNativeRoot = fs.realpathSync(
+        path.join(path.dirname(fsSafeManifestPath), "dist", "native"),
+      );
+      assert.ok(
+        loadedNativeRoot === bundledNativeRoot ||
+          loadedNativeRoot.startsWith(`${bundledNativeRoot}${path.sep}`),
+        "loaded fs-safe native binding did not come from the package's bundled native tree",
+      );
+    } else {
+      assert.ok(
+        installedPlatformPackages.length > 0,
+        "expected at least one fs-safe platform package",
+      );
+      assert.ok(
+        installedPlatformPackages.some(({ root }) => root === loadedNativeRoot),
+        "loaded fs-safe native binding did not come from an installed platform package",
+      );
+    }
   } else {
     assert.equal(
       installedPlatformPackages.length,

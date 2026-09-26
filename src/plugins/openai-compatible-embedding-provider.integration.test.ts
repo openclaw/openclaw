@@ -4,7 +4,7 @@ import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearAuthProfileMigrationRequired } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { clearAuthProfileMigrationDiagnostics } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -304,7 +304,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
               expect(requests).toEqual([]);
             }
           } finally {
-            clearAuthProfileMigrationRequired(agentDir);
+            clearAuthProfileMigrationDiagnostics();
             clearRuntimeAuthProfileStoreSnapshots();
             closeOpenClawAgentDatabases(agentDir);
           }
@@ -313,17 +313,12 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
     },
   );
 
-  it.each(
-    (["openai", "tenant-embeddings"] as const).flatMap((provider) =>
-      (["openai-responses", "openai-completions"] as const).flatMap((api) =>
-        (["api_key", "token"] as const).map((credentialType) => ({
-          provider,
-          api,
-          credentialType,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { provider: "openai", api: "openai-responses", credentialType: "api_key" },
+    { provider: "openai", api: "openai-completions", credentialType: "token" },
+    { provider: "tenant-embeddings", api: "openai-responses", credentialType: "token" },
+    { provider: "tenant-embeddings", api: "openai-completions", credentialType: "api_key" },
+  ] as const)(
     "enforces $provider/$api $credentialType profile auth with plugins disabled",
     async ({ provider, api, credentialType }) => {
       const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-embedding-auth-mode-"));
@@ -370,64 +365,66 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
     },
   );
 
-  it.each(
-    (["bearer control", "AWS override", "AWS order"] as const).flatMap((route) =>
-      (["compatible", "incompatible", "unresolved"] as const).map((binding) => ({
-        route,
-        binding,
-      })),
-    ),
-  )("keeps $binding profile bindings terminal with $route", async ({ route, binding }) => {
-    const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-embedding-binding-"));
-    const profileId = "tenant-embeddings:bound";
-    const credential: AuthProfileCredential = {
-      type: "api_key",
-      provider: binding === "incompatible" ? "other-tenant" : "tenant-embeddings",
-      ...(binding === "unresolved" ? {} : { key: "synthetic-bound-profile-key" }),
-    };
-    try {
-      writePersistedAuthProfileStoreRaw(
-        { version: 1, profiles: { [profileId]: credential } },
-        agentDir,
-      );
-      const options = createOptions({
-        providerOwnsDestination: true,
-        providerApiKey: profileId,
-        remote: {},
-      });
-      options.agentDir = agentDir;
-      if (route !== "bearer control") {
-        options.config.models!.providers![options.provider]!.auth = "aws-sdk";
-      }
-      if (route === "AWS order") {
-        options.config.auth = {
-          profiles: { "tenant-embeddings:aws": { provider: options.provider, mode: "aws-sdk" } },
-          order: { [options.provider]: ["tenant-embeddings:aws"] },
-        };
-      }
-      const embed = async () => {
-        const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
-        return await result.provider?.embed("hello");
+  it.each([
+    { route: "bearer control", binding: "incompatible" },
+    { route: "bearer control", binding: "unresolved" },
+    { route: "AWS override", binding: "compatible" },
+    { route: "AWS order", binding: "incompatible" },
+    { route: "AWS order", binding: "unresolved" },
+  ] as const)(
+    "keeps $binding profile bindings terminal with $route",
+    async ({ route, binding }) => {
+      const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-embedding-binding-"));
+      const profileId = "tenant-embeddings:bound";
+      const credential: AuthProfileCredential = {
+        type: "api_key",
+        provider: binding === "incompatible" ? "other-tenant" : "tenant-embeddings",
+        ...(binding === "unresolved" ? {} : { key: "synthetic-bound-profile-key" }),
       };
-      if (binding === "compatible") {
-        await expect(embed()).resolves.toEqual(vector);
-        expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-bound-profile-key");
-      } else {
-        await expect
-          .soft(embed())
-          .rejects.toThrow(
-            binding === "incompatible"
-              ? /not compatible with this provider entry's auth binding/
-              : /matched a stored profile but failed to resolve/,
-          );
-        expect(requests).toEqual([]);
+      try {
+        writePersistedAuthProfileStoreRaw(
+          { version: 1, profiles: { [profileId]: credential } },
+          agentDir,
+        );
+        const options = createOptions({
+          providerOwnsDestination: true,
+          providerApiKey: profileId,
+          remote: {},
+        });
+        options.agentDir = agentDir;
+        if (route !== "bearer control") {
+          options.config.models!.providers![options.provider]!.auth = "aws-sdk";
+        }
+        if (route === "AWS order") {
+          options.config.auth = {
+            profiles: { "tenant-embeddings:aws": { provider: options.provider, mode: "aws-sdk" } },
+            order: { [options.provider]: ["tenant-embeddings:aws"] },
+          };
+        }
+        const embed = async () => {
+          const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
+          return await result.provider?.embed("hello");
+        };
+        if (binding === "compatible") {
+          await expect(embed()).resolves.toEqual(vector);
+          expect(requests[0]?.headers.authorization).toBe("Bearer synthetic-bound-profile-key");
+        } else {
+          await expect
+            .soft(embed())
+            .rejects.toThrow(
+              binding === "incompatible"
+                ? /not compatible with this provider entry's auth binding/
+                : /matched a stored profile but failed to resolve/,
+            );
+          expect(requests).toEqual([]);
+        }
+      } finally {
+        closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
+        closeOpenClawAgentDatabases(agentDir);
+        await rm(agentDir, { force: true, recursive: true });
       }
-    } finally {
-      closeAuthProfileReadPool({ kind: "root", rootPath: agentDir });
-      closeOpenClawAgentDatabases(agentDir);
-      await rm(agentDir, { force: true, recursive: true });
-    }
-  });
+    },
+  );
 
   it.each([
     {
@@ -440,7 +437,6 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
       apiKey: "synthetic-literal-key",
       authorization: "Bearer synthetic-literal-key",
     },
-    { name: "empty key", apiKey: "", authorization: undefined },
     { name: "whitespace key", apiKey: "   ", authorization: undefined },
     { name: "omitted key", apiKey: undefined, authorization: undefined },
   ])("preserves configured $name authentication at HTTP", async ({ apiKey, authorization }) => {

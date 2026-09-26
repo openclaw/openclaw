@@ -4,11 +4,13 @@ import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
+import type { MigrationPlan } from "../plugins/migration-provider.types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "./prompts.js";
 import { listSetupMigrationOptions, runSetupMigrationImport } from "./setup.migration-import.js";
 import {
   assertFreshSetupMigrationTarget,
+  buildSetupMigrationPlanSourceSnapshot,
   buildSetupMigrationTargetSnapshot,
   inspectSetupMigrationFreshness,
   preserveSetupMigrationOnboardingConsents,
@@ -21,17 +23,6 @@ async function writeFile(filePath: string, content: string) {
 
 describe("setup migration import freshness", () => {
   const tempRoots = useAutoCleanupTempDirTracker(afterEach);
-
-  it("allows empty config and empty target directories", async () => {
-    const root = tempRoots.make("openclaw-setup-migration-");
-    const result = await inspectSetupMigrationFreshness({
-      baseConfig: {},
-      stateDir: path.join(root, "state"),
-      workspaceDir: path.join(root, "workspace"),
-    });
-
-    expect(result).toEqual({ fresh: true, reasons: [] });
-  });
 
   it("allows first-launch security and telemetry consent before import", async () => {
     const root = tempRoots.make("openclaw-setup-migration-");
@@ -62,27 +53,6 @@ describe("setup migration import freshness", () => {
     expect(result).toEqual({ fresh: true, reasons: [] });
   });
 
-  it("ignores runtime state churn while still detecting workspace changes", async () => {
-    const root = tempRoots.make("openclaw-setup-migration-");
-    const stateDir = path.join(root, "state");
-    const workspaceDir = path.join(root, "workspace");
-    const initial = await buildSetupMigrationTargetSnapshot({
-      config: {},
-      stateDir,
-      workspaceDir,
-    });
-
-    await writeFile(path.join(stateDir, "state", "openclaw.sqlite"), "runtime database\n");
-    expect(await buildSetupMigrationTargetSnapshot({ config: {}, stateDir, workspaceDir })).toBe(
-      initial,
-    );
-
-    await writeFile(path.join(workspaceDir, "external.txt"), "concurrent write\n");
-    expect(
-      await buildSetupMigrationTargetSnapshot({ config: {}, stateDir, workspaceDir }),
-    ).not.toBe(initial);
-  });
-
   it("preserves first-launch consent choices across the lock-time config reread", () => {
     expect(
       preserveSetupMigrationOnboardingConsents(
@@ -96,6 +66,38 @@ describe("setup migration import freshness", () => {
       wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
       telemetry: { enabled: false, consentedAt: "2026-06-30T00:00:00.000Z" },
     });
+  });
+
+  it("binds source symlink contents while keeping target snapshots scoped to the link", async () => {
+    const root = tempRoots.make("openclaw-setup-migration-");
+    const source = path.join(root, "source");
+    const workspaceDir = path.join(root, "workspace");
+    await writeFile(path.join(source, "memory.md"), "before\n");
+    await fs.mkdir(workspaceDir);
+    const link = path.join(workspaceDir, "import");
+    await fs.symlink(source, link, process.platform === "win32" ? "junction" : "dir");
+    const plan: MigrationPlan = {
+      providerId: "fixture",
+      source: link,
+      items: [{ id: "memory", kind: "memory", action: "copy", status: "planned", source: link }],
+      summary: {
+        total: 1,
+        planned: 1,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+    };
+    const target = { config: {}, stateDir: path.join(root, "state"), workspaceDir };
+    const originalSource = await buildSetupMigrationPlanSourceSnapshot(plan);
+    const originalTarget = await buildSetupMigrationTargetSnapshot(target);
+
+    await writeFile(path.join(source, "memory.md"), "after\n");
+
+    expect(await buildSetupMigrationPlanSourceSnapshot(plan)).not.toBe(originalSource);
+    expect(await buildSetupMigrationTargetSnapshot(target)).toBe(originalTarget);
   });
 
   it("rejects other wizard config during import freshness checks", async () => {

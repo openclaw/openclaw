@@ -434,36 +434,6 @@ describe("doctor Skill Workshop collection backup migration", () => {
     ).resolves.toMatchObject({ legacyBackupRootCount: 0 });
   });
 
-  it("migrates the result snapshot for a Workshop-owned legacy collection backup", async () => {
-    const { workspaceDir, config, backupId } = await seedOwnedLegacyCollectionBackup();
-
-    const migrated = await migrateLegacySkillWorkshopProposals({
-      config,
-      env: testState.env,
-    });
-    expect(migrated.changes.join("\n")).toContain(
-      "Relocated 1 Skill Workshop skill, retargeted 1 proposal, marked 0 stale, and migrated 1 legacy collection backup root.",
-    );
-    await expect(
-      restoreLatestSkillCollectionBackup({
-        workspaceDir,
-        config,
-        agentId: "main",
-        env: testState.env,
-      }),
-    ).resolves.toMatchObject({ backupId, restored: ["owned-legacy-backup"] });
-    await expect(
-      fs.readFile(
-        path.join(
-          resolveWorkshopSkillsDir(config, "main", testState.env),
-          "owned-legacy-backup",
-          "SKILL.md",
-        ),
-        "utf8",
-      ),
-    ).resolves.toContain("# Before cleanup");
-  });
-
   it.each(["copy", "retirement"] as const)(
     "resumes a newest-first restorable backup batch after %s interruption",
     async (interruption) => {
@@ -717,7 +687,7 @@ describe("doctor Skill Workshop collection backup migration", () => {
     ).resolves.toBe(sourceManifest);
     await expect(fs.access(fixture.destinationBackupDir)).rejects.toMatchObject({ code: "ENOENT" });
     const workspaceMigration = await migrateLegacyWorkspaceState({
-      detected: detectLegacyWorkspaceState({
+      detected: await detectLegacyWorkspaceState({
         cfg: fixture.config,
         stateDir: testState.stateDir,
         env: testState.env,

@@ -4,7 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -17,11 +17,12 @@ import { resolveUserPath } from "../../utils.js";
 import { listLegacyAuthProfileSources } from "./legacy-source-files.js";
 import {
   noteCommittedSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
   resolveSharedAuthStoreOwnership,
-  SHARED_AUTH_STORE_STATE_KEY,
   type SharedAuthStoreOwnership,
 } from "./path-resolve.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 
 const PRIMARY_ROW_KEY = "primary";
 const SHARED_AUTH_STORE_MIGRATION_KIND = "shared-auth-store-state-db";
@@ -29,6 +30,21 @@ const SHARED_AUTH_STORE_MIGRATION_KIND = "shared-auth-store-state-db";
 // Ownership objects are process-stable per state root. Doctor replaces the cached object
 // after relocation, so legacy inspection is memoized only for that ownership generation.
 const inspectedLegacySharedAuthOwnerships = new WeakSet<SharedAuthStoreOwnership>();
+
+type FreshSharedAuthStoreHandoff = {
+  previousSharedDatabasePath: string;
+  sharedDatabasePath: string;
+  env: NodeJS.ProcessEnv;
+};
+const freshSharedAuthStoreHandoffs = new Set<(handoff: FreshSharedAuthStoreHandoff) => void>();
+
+/** Runtime views follow only this producer's proven empty-store relocation. */
+export function registerFreshSharedAuthStoreHandoff(
+  handoff: (receipt: FreshSharedAuthStoreHandoff) => void,
+): () => void {
+  freshSharedAuthStoreHandoffs.add(handoff);
+  return () => freshSharedAuthStoreHandoffs.delete(handoff);
+}
 
 type SourceAuthDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -200,6 +216,14 @@ function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv): void {
   }
   writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
   noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, env);
+  const handoff = {
+    previousSharedDatabasePath: sourcePath,
+    sharedDatabasePath: resolveSharedAuthStorePath(env),
+    env,
+  };
+  for (const publish of freshSharedAuthStoreHandoffs) {
+    publish(handoff);
+  }
 }
 
 export function prepareFreshSharedAuthStoreWrite(params: {

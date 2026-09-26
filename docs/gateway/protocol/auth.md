@@ -13,9 +13,13 @@ How a client proves who it is: the handshake auth paths, device identity and pai
 
 ## Auth
 
-- Shared-secret gateway auth uses `connect.params.auth.token` or
-  `connect.params.auth.password`, depending on the configured
-  `gateway.auth.mode` (`"none" | "token" | "password" | "trusted-proxy"`).
+Owner page: [Gateway authentication](/gateway/authentication) — auth modes, token/password setup, and the operator-facing policy this wire contract enforces.
+
+- Shared-secret gateway auth accepts the configured secret in either
+  `connect.params.auth.token` or `connect.params.auth.password`.
+  `gateway.auth.mode: "token"` selects `gateway.auth.token`; `"password"`
+  selects `gateway.auth.password`. The mode selects the configured secret,
+  not the required wire field.
 - Identity-bearing modes such as Tailscale Serve (`gateway.auth.allowTailscale: true`)
   or non-loopback `gateway.auth.mode: "trusted-proxy"` satisfy the connect
   auth check from request headers instead of `connect.params.auth.*`.
@@ -38,7 +42,9 @@ How a client proves who it is: the handshake auth paths, device identity and pai
   implicit admin-only scope.
 - Client-side connect auth assembly (`selectConnectAuth` in
   `packages/gateway-client/src/client.ts`):
-  - `auth.password` is orthogonal and always forwarded when set.
+  - `auth.password` is always forwarded when set. Either shared-secret field
+    can carry the configured secret; when both are supplied, the Gateway
+    uses the field matching its auth mode.
   - `auth.token` is populated in priority order: explicit shared token first,
     then an explicit `deviceToken`, then a stored per-device token (keyed by
     `deviceId` + `role`).
@@ -101,11 +107,17 @@ How a client proves who it is: the handshake auth paths, device identity and pai
 
 ## Device identity and pairing
 
+Owner page: [Gateway pairing](/gateway/pairing) — the approval flow, device records, and CLI surfaces behind these fields.
+
 - Nodes should include a stable device identity (`device.id`) derived from a
   keypair fingerprint.
 - Gateways issue tokens per device + role.
 - Pairing approvals are required for new device IDs unless local
   auto-approval is enabled.
+- If approval overlaps a reconnect, the Gateway checks the current paired device
+  before completing the handshake. The approved key, role, scopes, and pinned
+  client metadata must authorize that connection; a consumed request alone does
+  not grant access.
 - Pairing auto-approval is centered on direct local loopback connects.
 - OpenClaw also has a narrow backend/container-local self-connect path for
   trusted shared-secret helper flows.
@@ -157,6 +169,8 @@ Migration target:
   metadata pinning still controls command policy on reconnect.
 
 ## TLS and pinning
+
+Owner page: [Remote access](/gateway/remote) — configuring `gateway.tls` and obtaining the fingerprint clients pin.
 
 - TLS is supported for WS connections (`gateway.tls` config).
 - Clients may optionally pin the gateway cert fingerprint via

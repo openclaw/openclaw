@@ -2,7 +2,9 @@ import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { crabboxState } from "./crabbox-state.test-support.js";
 import { operationLeaseId, operationSlug } from "./crabbox-worker-profile.js";
 import {
   listCrabboxWarmImages,
@@ -208,7 +210,7 @@ describe("Crabbox profile warm images", () => {
     // Capture phases ride a full crabbox run/snapshot round trip; 60s starves
     // them under coordinator latency (live-measured on AWS 2026-08-26).
     expect(scrub?.options.timeoutMs).toBe(180_000);
-    expect(calls[1]?.options.timeoutMs).toBe(180_000);
+    expect(calls[1]?.options.timeoutMs).toBe(48 * 60_000);
     expect(provider.resolveDestroyTimeoutMs?.(PROFILE)).toBeGreaterThanOrEqual(
       calls.reduce((total, call) => total + call.options.timeoutMs, 0),
     );
@@ -334,6 +336,8 @@ describe("Crabbox profile warm images", () => {
       "--mode",
       "native",
       "--wait",
+      "--wait-timeout",
+      "2700000ms",
       "--json",
     ]);
     calls.length = 0;
@@ -344,11 +348,22 @@ describe("Crabbox profile warm images", () => {
   });
 
   it.each([
-    { backend: "aws", kind: "aws-ebs-snapshot", nativeState: "completed" },
-    { backend: "machine0", kind: "machine0-image", nativeState: "ACTIVE" },
+    { backend: "aws", kind: "aws-ebs-snapshot", nativeState: "completed", sourceLifecycleMs: 0 },
+    {
+      backend: "daytona",
+      kind: "daytona-snapshot",
+      nativeState: "active",
+      sourceLifecycleMs: 3 * 60_000,
+    },
+    {
+      backend: "machine0",
+      kind: "machine0-image",
+      nativeState: "ACTIVE",
+      sourceLifecycleMs: 30 * 60_000,
+    },
   ])(
     "reuses waited $backend images without repeating readiness inspection",
-    async ({ backend, kind, nativeState }) => {
+    async ({ backend, kind, nativeState, sourceLifecycleMs }) => {
       const profile = { ...PROFILE, provider: backend };
       const { provider, calls } = createWarmProvider(({ argv }) => {
         if (argv[2] === "create") {
@@ -386,10 +401,14 @@ describe("Crabbox profile warm images", () => {
         "--mode",
         "native",
         "--wait",
+        "--wait-timeout",
+        "2700000ms",
         "--json",
+        ...(backend === "daytona" ? ["--no-reboot=false"] : []),
         ...(backend === "machine0" ? ["--strategy", "image"] : []),
       ]);
-      expect(create?.options.timeoutMs).toBe(backend === "machine0" ? 600_000 : 180_000);
+      // Native capture gets Crabbox's 45m plus command overhead and separate source recovery.
+      expect(create?.options.timeoutMs).toBe(48 * 60_000 + sourceLifecycleMs);
       const scrub = calls.find(({ options }) =>
         options.input?.toString().includes("CRABBOX_SCRUB_NODE_SCRIPT"),
       );
@@ -399,7 +418,7 @@ describe("Crabbox profile warm images", () => {
       expect(provider.resolveDestroyTimeoutMs?.(profile)).toBeGreaterThanOrEqual(
         teardownCalls.reduce((total, call) => total + call.options.timeoutMs, 0),
       );
-      expect(listCrabboxWarmImages()[0]?.state).toBe("available");
+      expect((await listCrabboxWarmImages(crabboxState))[0]?.state).toBe("available");
       calls.length = 0;
       await provisionWarmProfile(provider, profile, `provision:v2:${"2".repeat(64)}`);
       expect(calls.some(({ argv }) => argv[2] === "inspect")).toBe(false);
@@ -408,7 +427,12 @@ describe("Crabbox profile warm images", () => {
     },
   );
 
-  it.each([
+  it.each<{
+    action: "run" | "create";
+    name: string;
+    result: Partial<SpawnResult>;
+    captureUncertain?: boolean;
+  }>([
     { action: "run", name: "scrub fails", result: { code: 7, stderr: "scrub failed" } },
     {
       action: "run",
@@ -427,7 +451,25 @@ describe("Crabbox profile warm images", () => {
       result: { code: 2, stderr: "flag provided but not defined: -json" },
     },
     { action: "create", name: "capture returns malformed JSON", result: { stdout: "{" } },
-  ])("warns once and still stops the enrolled lease when $name", async ({ action, result }) => {
+    {
+      action: "create",
+      name: "capture was not submitted",
+      captureUncertain: false,
+      result: {
+        code: 7,
+        stdout: JSON.stringify({
+          schema: "crabbox.checkpoint.create.failure.v1",
+          outcome: "not_submitted",
+          provider: PROFILE.provider,
+          leaseId: LEASE_ID,
+          checkpointId: CHECKPOINT_ID,
+          localReservation: "removed",
+        }),
+        stderr: "image submission rejected; source rollback failed",
+      },
+    },
+  ])("warns once and still stops the enrolled lease when $name", async (testCase) => {
+    const { action, result, captureUncertain = action === "create" } = testCase;
     let tearingDown = false;
     const { provider, calls, warn } = createWarmProvider(({ argv }) => {
       if (tearingDown && (argv[1] === action || argv[2] === action)) {
@@ -444,14 +486,19 @@ describe("Crabbox profile warm images", () => {
 
     expect(warn).toHaveBeenCalledOnce();
     expect(calls.at(-1)?.argv[1]).toBe("stop");
+    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
 
     tearingDown = false;
     calls.length = 0;
-    if (action === "create") {
+    if (captureUncertain) {
       // Failed creation can retain a paid artifact; retry requires explicit cleanup acknowledgment.
-      const capture = listCrabboxWarmImages()[0]?.capture;
+      const capture = (await listCrabboxWarmImages(crabboxState))[0]?.capture;
       expect(capture).toBeDefined();
-      recoverCrabboxWarmImageCapture(capture!.selector, true);
+      expect(warn.mock.calls[0]?.[0]).toContain("--recover");
+      await recoverCrabboxWarmImageCapture(crabboxState, capture!.selector, true);
+    } else {
+      expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
+      expect(warn.mock.calls[0]?.[0]).not.toContain("--recover");
     }
     await captureWarmImage(provider);
     expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(true);
@@ -519,7 +566,7 @@ describe("Crabbox profile warm images", () => {
     { machineClass: "standard", warmImage: undefined },
     { machineClass: undefined, warmImage: undefined },
   ])(
-    "recovers the enrolled class after restart (configured=$machineClass, warmImage=$warmImage)",
+    "recovers enrolled class after restart (configured=$machineClass, warmImage=$warmImage)",
     async ({ machineClass, warmImage }) => {
       const initial = createWarmProvider();
       const profile = {
@@ -532,7 +579,10 @@ describe("Crabbox profile warm images", () => {
 
       const restarted = createWarmProvider(undefined, initial.stateDir);
       await restarted.provider.inspect({ leaseId: lease.leaseId, profile });
-      await restarted.provider.destroy({ leaseId: lease.leaseId, profile });
+      await restarted.provider.destroy({
+        leaseId: lease.leaseId,
+        profile,
+      });
 
       expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
 

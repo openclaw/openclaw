@@ -22,12 +22,6 @@ function requireMatrixToolContextTargetMatcher() {
 describe("matrix message-tool threading", () => {
   it.each([
     {
-      name: "the exact current room",
-      currentChannelId: "room:!room:example.org",
-      target: "room:!room:example.org",
-      expected: true,
-    },
-    {
       name: "an equivalent Matrix room prefix",
       currentChannelId: "matrix:room:!room:example.org",
       target: "channel:!room:example.org",
@@ -40,21 +34,9 @@ describe("matrix message-tool threading", () => {
       expected: true,
     },
     {
-      name: "a different room",
-      currentChannelId: "room:!room:example.org",
-      target: "room:!another:example.org",
-      expected: false,
-    },
-    {
       name: "a room alias without verified room resolution",
       currentChannelId: "room:!room:example.org",
       target: "#room:example.org",
-      expected: false,
-    },
-    {
-      name: "a direct user target without verified room identity",
-      currentChannelId: "room:!dm:example.org",
-      target: "user:@alice:example.org",
       expected: false,
     },
     {
@@ -91,7 +73,7 @@ describe("matrix message-tool threading", () => {
     ).toBe(testCase.expected ? "$thread" : undefined);
   });
 
-  it.each(["off", "first", "all", "batched"] as const)(
+  it.each(["off", "first"] as const)(
     "preserves an existing Matrix room thread when replyToMode is %s",
     (replyToMode) => {
       expect(

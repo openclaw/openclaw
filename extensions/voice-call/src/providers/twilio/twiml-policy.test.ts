@@ -14,7 +14,7 @@ function createContext(rawBody: string, query?: WebhookContext["query"]): Webhoo
 }
 
 describe("twiml policy", () => {
-  it("returns stored twiml decision for initial notify callback", () => {
+  it("returns stored twiml decision for an initial pre-connect callback", () => {
     const view = readTwimlRequestView(
       createContext("CallStatus=initiated&Direction=outbound-api&CallSid=CA123", {
         callId: "call-1",
@@ -24,12 +24,11 @@ describe("twiml policy", () => {
     const decision = decideTwimlResponse({
       ...view,
       hasStoredTwiml: true,
-      isNotifyCall: true,
       hasActiveStreams: false,
       canStream: true,
     });
 
-    expect(decision.kind).toBe("stored");
+    expect(decision).toBe("stored");
   });
 
   it("returns queue for inbound when another stream is active", () => {
@@ -40,15 +39,14 @@ describe("twiml policy", () => {
     const decision = decideTwimlResponse({
       ...view,
       hasStoredTwiml: false,
-      isNotifyCall: false,
       hasActiveStreams: true,
       canStream: true,
     });
 
-    expect(decision.kind).toBe("queue");
+    expect(decision).toBe("queue");
   });
 
-  it("returns stream + activation for inbound call when available", () => {
+  it("returns stream for inbound call when available", () => {
     const view = readTwimlRequestView(
       createContext("CallStatus=ringing&Direction=inbound&CallSid=CA789"),
     );
@@ -56,13 +54,11 @@ describe("twiml policy", () => {
     const decision = decideTwimlResponse({
       ...view,
       hasStoredTwiml: false,
-      isNotifyCall: false,
       hasActiveStreams: false,
       canStream: true,
     });
 
-    expect(decision.kind).toBe("stream");
-    expect(decision.activateStreamCallSid).toBe("CA789");
+    expect(decision).toBe("stream");
   });
 
   it("returns empty for status callbacks", () => {
@@ -75,11 +71,10 @@ describe("twiml policy", () => {
     const decision = decideTwimlResponse({
       ...view,
       hasStoredTwiml: false,
-      isNotifyCall: false,
       hasActiveStreams: false,
       canStream: true,
     });
 
-    expect(decision.kind).toBe("empty");
+    expect(decision).toBe("empty");
   });
 });

@@ -218,6 +218,7 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "XDG_DATA_HOME", value: process.env.XDG_DATA_HOME },
     { key: "XDG_STATE_HOME", value: process.env.XDG_STATE_HOME },
     { key: "XDG_CACHE_HOME", value: process.env.XDG_CACHE_HOME },
+    { key: "XDG_RUNTIME_DIR", value: process.env.XDG_RUNTIME_DIR },
     { key: "COREPACK_HOME", value: process.env.COREPACK_HOME },
     { key: "OPENCLAW_STATE_DIR", value: process.env.OPENCLAW_STATE_DIR },
     { key: "OPENCLAW_CONFIG_PATH", value: process.env.OPENCLAW_CONFIG_PATH },
@@ -283,6 +284,7 @@ function initializeIsolatedTestEnv(tempHome: string): void {
   setTestEnvValue("XDG_DATA_HOME", path.join(tempHome, ".local", "share"));
   setTestEnvValue("XDG_STATE_HOME", path.join(tempHome, ".local", "state"));
   setTestEnvValue("XDG_CACHE_HOME", path.join(tempHome, ".cache"));
+  setTestEnvValue("XDG_RUNTIME_DIR", path.join(tempHome, ".runtime"));
 }
 
 function ensureParentDir(targetPath: string): void {
@@ -390,7 +392,7 @@ function sanitizeLiveConfig(raw: string): string {
     }
 
     const { applyLegacyDoctorMigrations } = loadLegacyConfigCompatApi();
-    const migrated = applyLegacyDoctorMigrations(parsed);
+    const migrated = applyLegacyDoctorMigrations(parsed, { sourceConfigBeforeMigrations: parsed });
     if (!migrated.next) {
       return `${JSON.stringify(parsed, null, 2)}\n`;
     }

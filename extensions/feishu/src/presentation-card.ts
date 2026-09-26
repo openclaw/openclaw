@@ -1,4 +1,3 @@
-// Feishu plugin module implements presentation card behavior.
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
   legacyInteractiveReplyToPresentation,
@@ -139,38 +138,29 @@ export function assertFeishuCardWithinEnvelope(
 const FEISHU_CARD_TABLE_LIMIT = 5;
 
 function countMarkdownTables(text: string): number {
-  return text ? markdownToIRWithMeta(text, { tableMode: "block" }).tables.length : 0;
+  // GFM table headers require a literal pipe.
+  return text.includes("|") ? markdownToIRWithMeta(text, { tableMode: "block" }).tables.length : 0;
 }
 
 export function withinCardTableLimit(text: string): boolean {
   return countMarkdownTables(text) <= FEISHU_CARD_TABLE_LIMIT;
 }
 
-function collectFeishuCardMarkdownTexts(value: unknown, output: string[]): void {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectFeishuCardMarkdownTexts(item, output);
-    }
-    return;
-  }
-  if (!isRecord(value)) {
-    return;
-  }
-  if (value.tag === "markdown" && typeof value.content === "string") {
-    output.push(value.content);
-  }
-  for (const child of Object.values(value)) {
-    collectFeishuCardMarkdownTexts(child, output);
-  }
-}
-
 export function feishuCardWithinTableLimit(card: Record<string, unknown>): boolean {
-  const markdownTexts: string[] = [];
-  collectFeishuCardMarkdownTexts(card, markdownTexts);
-  return (
-    markdownTexts.reduce((total, text) => total + countMarkdownTables(text), 0) <=
-    FEISHU_CARD_TABLE_LIMIT
-  );
+  let remaining = FEISHU_CARD_TABLE_LIMIT;
+  const visit = (value: unknown): boolean => {
+    if (Array.isArray(value)) {
+      return value.every(visit);
+    }
+    if (!isRecord(value)) {
+      return true;
+    }
+    if (value.tag === "markdown" && typeof value.content === "string") {
+      remaining -= countMarkdownTables(value.content);
+    }
+    return remaining >= 0 && Object.values(value).every(visit);
+  };
+  return visit(card);
 }
 
 function resolveFeishuButtonUrl(button: MessagePresentationButton): string | undefined {
@@ -266,45 +256,32 @@ function buildFeishuPayloadButton(button: MessagePresentationButton): Record<str
 function buildFeishuCardElementsForBlock(
   block: MessagePresentationBlock,
 ): Record<string, unknown>[] {
-  if (block.type === "text") {
-    return [{ tag: "markdown", content: escapeFeishuCardMarkdownText(block.text) }];
-  }
-  if (block.type === "context") {
-    return [
-      {
-        tag: "markdown",
-        content: `<font color='grey'>${escapeFeishuCardMarkdownText(block.text)}</font>`,
-      },
-    ];
-  }
   if (block.type === "divider") {
     return [{ tag: "hr" }];
   }
   if (block.type === "buttons") {
     return block.buttons.map(buildFeishuPayloadButton);
   }
-  if (block.type === "chart") {
-    return [
-      {
-        tag: "markdown",
-        content: escapeFeishuCardMarkdownText(renderMessagePresentationChartFallbackText(block)),
-      },
-    ];
+  let text: string;
+  switch (block.type) {
+    case "text":
+    case "context":
+      text = block.text;
+      break;
+    case "chart":
+      text = renderMessagePresentationChartFallbackText(block);
+      break;
+    case "table":
+      text = renderMessagePresentationTableFallbackText(block);
+      break;
+    default:
+      text = renderMessagePresentationFallbackText({ presentation: { blocks: [block] } });
   }
-  if (block.type === "table") {
-    return [
-      {
-        tag: "markdown",
-        content: escapeFeishuCardMarkdownText(renderMessagePresentationTableFallbackText(block)),
-      },
-    ];
-  }
+  const content = escapeFeishuCardMarkdownText(text);
   return [
     {
       tag: "markdown",
-      content: escapeFeishuCardMarkdownText(
-        renderMessagePresentationFallbackText({ presentation: { blocks: [block] } }),
-      ),
+      content: block.type === "context" ? `<font color='grey'>${content}</font>` : content,
     },
   ];
 }
@@ -335,9 +312,7 @@ function buildFeishuPresentationCardElements(params: {
     });
   }
   for (const block of params.presentation.blocks) {
-    for (const element of buildFeishuCardElementsForBlock(block)) {
-      elements.push(element);
-    }
+    elements.push(...buildFeishuCardElementsForBlock(block));
   }
   if (elements.length > 0) {
     return elements;
@@ -507,27 +482,8 @@ export function renderFeishuPresentationPayload({
   const existingFeishuData = isRecord(payload.channelData?.feishu)
     ? payload.channelData.feishu
     : undefined;
-  if (!card) {
-    // Core strips presentation from this post-queue transport copy. Preserve its
-    // own visible contribution separately from prose already delivered by streaming.
-    return {
-      ...payload,
-      text: fallbackText,
-      channelData: {
-        ...payload.channelData,
-        feishu: {
-          ...existingFeishuData,
-          [FEISHU_PRESENTATION_FALLBACK_MARKER]: {
-            hasVisibleContent: Boolean(
-              renderFeishuPresentationFallbackText({ presentation: fallbackPresentation }).trim(),
-            ),
-          },
-          ...(fallbackHasCommand ? { fallbackHasCommand: true } : {}),
-        },
-      },
-    };
-  }
-  // Core consumes presentation before sendPayload; carry the fallback fact.
+  // Core consumes presentation before sendPayload. A fallback retains its own
+  // visible contribution separately from prose already delivered by streaming.
   return {
     ...payload,
     text: fallbackText,
@@ -535,7 +491,17 @@ export function renderFeishuPresentationPayload({
       ...payload.channelData,
       feishu: {
         ...existingFeishuData,
-        card,
+        ...(card
+          ? { card }
+          : {
+              [FEISHU_PRESENTATION_FALLBACK_MARKER]: {
+                hasVisibleContent: Boolean(
+                  renderFeishuPresentationFallbackText({
+                    presentation: fallbackPresentation,
+                  }).trim(),
+                ),
+              },
+            }),
         ...(fallbackHasCommand ? { fallbackHasCommand: true } : {}),
       },
     },

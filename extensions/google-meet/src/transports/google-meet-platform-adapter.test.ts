@@ -6,6 +6,101 @@ import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./google-meet-platform-adapter.js"
 
 const MEETING_URL = "https://meet.google.com/abc-defg-hij";
 
+describe("caption source wire metadata", () => {
+  const source = {
+    id: "caption-1",
+    epoch: "epoch-1",
+    revision: "2",
+    finalized: true,
+    ownEcho: false,
+  };
+
+  it("retains finalized and pending source revisions without changing transcript text", () => {
+    const completed = {
+      at: "2026-09-01T00:00:00.000Z",
+      speaker: "Alice",
+      text: "Original line",
+      source,
+    };
+    const pending = {
+      text: "Corrected line",
+      source: { ...source, revision: "3", finalized: false },
+    };
+    const parsed = GOOGLE_MEET_PLATFORM_ADAPTER.browser.captions.parseTranscript({
+      result: JSON.stringify({ epoch: "epoch-1", lines: [completed], pendingLines: [pending] }),
+    });
+    expect(parsed).toEqual({
+      droppedLines: 0,
+      epoch: "epoch-1",
+      lines: [
+        {
+          ...completed,
+          provenance: {
+            observer: "google-meet",
+            epoch: "epoch-1",
+            observedAt: completed.at,
+            speaker: "Alice",
+            self: "unknown",
+          },
+        },
+      ],
+      pendingLines: [
+        { ...pending, provenance: { observer: "google-meet", epoch: "epoch-1", self: "unknown" } },
+      ],
+    });
+  });
+
+  it.each([
+    { ...source, id: "" },
+    { ...source, epoch: "another-page" },
+    { ...source, revision: 2 },
+    { ...source, finalized: "true" },
+    { ...source, ownEcho: "false" },
+  ])("keeps caption text but rejects malformed source metadata: %j", (invalidSource) => {
+    const parsed = GOOGLE_MEET_PLATFORM_ADAPTER.browser.captions.parseTranscript({
+      result: JSON.stringify({
+        epoch: "epoch-1",
+        lines: [{ text: "Still a transcript line", source: invalidSource }],
+      }),
+    });
+    expect(parsed.lines).toEqual([
+      {
+        text: "Still a transcript line",
+        provenance: { observer: "google-meet", epoch: "epoch-1", self: "unknown" },
+      },
+    ]);
+  });
+
+  it("preserves compatibility for transcript providers without source metadata", () => {
+    const parsed = GOOGLE_MEET_PLATFORM_ADAPTER.browser.captions.parseTranscript({
+      result: JSON.stringify({ lines: [{ text: "Legacy line" }] }),
+    });
+    expect(parsed).toEqual({ droppedLines: 0, lines: [{ text: "Legacy line" }] });
+  });
+});
+
+it.each([true, false])(
+  "starts browser capture only for the current Meet session (owner=%s)",
+  async (owns) => {
+    const source = GOOGLE_MEET_PLATFORM_ADAPTER.browser.buildAudioCaptureScript?.({
+      action: "start",
+      captureId: "capture-1",
+      meetingSessionId: "session-1",
+      meetingUrl: MEETING_URL,
+    });
+    const result = runInNewContext(`(${source})()`, {
+      URL,
+      location: { href: MEETING_URL },
+      window: { __openclawMeetAudioSession: owns ? "session-1" : "session-2" },
+      document: { querySelectorAll: () => [pageNode("Leave call")] },
+      AudioContext: function AudioContext() {
+        throw new Error("capture admitted");
+      },
+    });
+    await expect(result).rejects.toThrow(owns ? "capture admitted" : "no longer owns");
+  },
+);
+
 function pageNode(label: string) {
   return {
     disabled: false,

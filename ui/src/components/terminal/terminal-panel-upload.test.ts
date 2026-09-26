@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import { terminalOpenResult } from "./terminal-panel.test-support.ts";
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -59,26 +61,6 @@ function terminalUploadFile(name: string, content: string): File {
   return file;
 }
 
-function terminalOpenResult(sessionId: string) {
-  return {
-    sessionId,
-    agentId: "ops",
-    shell: "/bin/zsh",
-    cwd: "/work/ops",
-    confined: false,
-  };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
-
 describe("OpenClawTerminalPanel upload lifecycle", () => {
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -94,57 +76,81 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     await i18n.setLocale("en");
   });
 
-  it("uploads dropped files and pastes shell-safe paths without executing", async () => {
-    const controller = createTerminalController();
-    createGhosttyTerminalMock.mockResolvedValue(controller);
-    const requests: Array<{ method: string; params: unknown }> = [];
-    const client: TerminalGatewayClient = {
-      forceReconnect: () => {},
-      request: async <T>(method: string, params?: unknown) => {
-        requests.push({ method, params });
-        if (method === "terminal.open") {
-          return terminalOpenResult("session-1") as T;
-        }
-        if (method === "terminal.upload") {
-          return { path: "/tmp/openclaw upload/scan final.pdf", size: 3 } as T;
-        }
-        return {} as T;
-      },
-      addEventListener: () => () => {},
-    };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.client = client;
-    panel.available = true;
-    document.body.append(panel);
-    panel.toggle();
-    await waitForFast(() => {
-      expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(false);
-    });
-    expect(panel.renderRoot.querySelector<HTMLInputElement>(".tp-file-input")?.multiple).toBe(true);
-
-    const file = new File(["pdf"], "scan final.pdf", { type: "application/pdf" });
-    Object.defineProperty(file, "arrayBuffer", {
-      value: async () => new TextEncoder().encode("pdf").buffer,
-    });
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, "dataTransfer", {
-      value: { types: ["Files"], files: [file], dropEffect: "none" },
-    });
-    panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
-
-    await waitForFast(() => {
-      expect(requests).toContainEqual({
-        method: "terminal.upload",
-        params: {
-          sessionId: "session-1",
-          name: "scan final.pdf",
-          contentBase64: "cGRm",
+  it.each([
+    {
+      receiver: "shell",
+      shell: "/bin/zsh",
+      uploadPathStyle: undefined,
+      expectedInput: "'/tmp/openclaw upload/scan final.pdf'",
+    },
+    {
+      receiver: "native CLI",
+      shell: "claude --resume 12345678…",
+      uploadPathStyle: "native",
+      expectedInput: '"/tmp/openclaw upload/scan final.pdf"',
+    },
+  ] as const)(
+    "uploads dropped files into a $receiver without executing input",
+    async ({ shell, uploadPathStyle, expectedInput }) => {
+      const controller = createTerminalController();
+      createGhosttyTerminalMock.mockResolvedValue(controller);
+      const requests: Array<{ method: string; params: unknown }> = [];
+      const client: TerminalGatewayClient = {
+        forceReconnect: () => {},
+        request: async <T>(method: string, params?: unknown) => {
+          requests.push({ method, params });
+          if (method === "terminal.open") {
+            return { ...terminalOpenResult("session-1"), shell } as T;
+          }
+          if (method === "terminal.upload") {
+            return {
+              path: "/tmp/openclaw upload/scan final.pdf",
+              size: 3,
+              ...(uploadPathStyle ? { uploadPathStyle } : {}),
+            } as T;
+          }
+          return {} as T;
         },
+        addEventListener: () => () => {},
+      };
+      const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      panel.client = client;
+      panel.available = true;
+      document.body.append(panel);
+      panel.toggle();
+      await waitForFast(() => {
+        expect(panel.renderRoot.querySelector<HTMLButtonElement>(".tp-upload")?.disabled).toBe(
+          false,
+        );
       });
-    });
-    expect(controller.terminal.paste).toHaveBeenCalledWith("'/tmp/openclaw upload/scan final.pdf'");
-    expect(controller.terminal.paste).not.toHaveBeenCalledWith(expect.stringContaining("\n"));
-  });
+      expect(panel.renderRoot.querySelector<HTMLInputElement>(".tp-file-input")?.multiple).toBe(
+        true,
+      );
+
+      const file = new File(["pdf"], "scan final.pdf", { type: "application/pdf" });
+      Object.defineProperty(file, "arrayBuffer", {
+        value: async () => new TextEncoder().encode("pdf").buffer,
+      });
+      const drop = new Event("drop", { bubbles: true, cancelable: true });
+      Object.defineProperty(drop, "dataTransfer", {
+        value: { types: ["Files"], files: [file], dropEffect: "none" },
+      });
+      panel.renderRoot.querySelector(".tp-viewport")?.dispatchEvent(drop);
+
+      await waitForFast(() => {
+        expect(requests).toContainEqual({
+          method: "terminal.upload",
+          params: {
+            sessionId: "session-1",
+            name: "scan final.pdf",
+            contentBase64: "cGRm",
+          },
+        });
+      });
+      expect(controller.terminal.paste).toHaveBeenCalledWith(expectedInput);
+      expect(controller.terminal.paste).not.toHaveBeenCalledWith(expect.stringContaining("\n"));
+    },
+  );
 
   it.each([
     "retry",
@@ -160,7 +166,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     const controller = createTerminalController();
     createGhosttyTerminalMock.mockResolvedValue(controller);
     const requests: Array<{ method: string; params: unknown; signal?: AbortSignal }> = [];
-    const failedUpload = deferred<{ path: string; size: number }>();
+    const failedUpload = createDeferred<{ path: string; size: number }>();
     let notesAttempts = 0;
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
@@ -300,7 +306,7 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
   it("cancels an active batch without pasting staged paths", async () => {
     const controller = createTerminalController();
     createGhosttyTerminalMock.mockResolvedValue(controller);
-    const pendingUpload = deferred<{ path: string; size: number }>();
+    const pendingUpload = createDeferred<{ path: string; size: number }>();
     let uploadSignal: AbortSignal | undefined;
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
@@ -355,19 +361,13 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
   it("cancels a pending upload when its terminal tab closes", async () => {
     const controller = createTerminalController();
     createGhosttyTerminalMock.mockResolvedValue(controller);
-    const pendingUpload = deferred<{ path: string; size: number }>();
+    const pendingUpload = createDeferred<{ path: string; size: number }>();
     let uploadSignal: AbortSignal | undefined;
     const client: TerminalGatewayClient = {
       forceReconnect: () => {},
       request: async <T>(method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
         if (method === "terminal.open") {
-          return {
-            sessionId: "session-1",
-            agentId: "ops",
-            shell: "/bin/zsh",
-            cwd: "/work/ops",
-            confined: false,
-          } as T;
+          return terminalOpenResult("session-1") as T;
         }
         if (method === "terminal.upload") {
           uploadSignal = options?.signal;

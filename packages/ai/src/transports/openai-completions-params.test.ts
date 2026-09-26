@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { getAiTransportHost } from "../host.js";
+import { FAILED_ASSISTANT_REPLAY_TEXT } from "../replay-turn-classification.js";
 import type { Model } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
@@ -230,7 +232,11 @@ describe("openai completions params", () => {
       undefined,
     );
 
-    const estimatedInputTokens = Math.ceil((userText.length / 4) * 1.25);
+    // The aborted turn replays as a short marker, so its 20,000 characters stay out of
+    // the estimate while the turn itself stays visible to the model.
+    const estimatedInputTokens = Math.ceil(
+      ((userText.length + FAILED_ASSISTANT_REPLAY_TEXT.length) / 4) * 1.25,
+    );
     expect(params.max_completion_tokens).toBe(10_000 - estimatedInputTokens - 1);
   });
 
@@ -254,6 +260,89 @@ describe("openai completions params", () => {
     );
 
     expect(params.max_completion_tokens).toBe(4_096 - 2 - 1);
+  });
+
+  it.each([0, 1, 15])(
+    "rejects a reasoning proxy request with only %i output tokens left",
+    (remaining) => {
+      const model = makeCompletionsModel({
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: true,
+        contextWindow: 1000,
+        maxTokens: 1000,
+      });
+      // 3,200 ASCII characters estimate to 1,000 input tokens.
+      expect(() =>
+        buildOpenAICompletionsParams(
+          { ...model, contextTokens: 1001 + remaining },
+          emptyContext("x".repeat(3200)),
+          undefined,
+        ),
+      ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
+    },
+  );
+
+  it("preserves non-reasoning short budgets and the exhausted-budget fallback", () => {
+    const model = makeCompletionsModel({
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      contextWindow: 1016,
+      maxTokens: 1000,
+    });
+    const context = emptyContext("x".repeat(3200));
+    for (const [remaining, expected] of [
+      [-1, 1],
+      [0, 1],
+      [1, 1],
+      [15, 15],
+    ] as const) {
+      expect(
+        buildOpenAICompletionsParams(
+          { ...model, contextTokens: 1001 + remaining },
+          context,
+          undefined,
+        ).max_completion_tokens,
+      ).toBe(expected);
+    }
+  });
+
+  it.each([false, true])(
+    "warns when a short non-thinking request proceeds (reasoning=%s)",
+    (reasoning) => {
+      const model = makeCompletionsModel({
+        baseUrl: "http://localhost:8000/v1",
+        reasoning,
+        contextWindow: 1000,
+        maxTokens: 1000,
+      });
+      const warning = vi.spyOn(getAiTransportHost(), "logWarn");
+      try {
+        const params = buildOpenAICompletionsParams(model, emptyContext("x".repeat(3200)), {
+          reasoning: "off",
+        });
+        expect(params.max_completion_tokens).toBe(1);
+        expect(warning).toHaveBeenCalledWith(
+          "openai-transport",
+          expect.stringContaining("insufficient_output_budget"),
+          undefined,
+        );
+      } finally {
+        warning.mockRestore();
+      }
+    },
+  );
+
+  it("preserves useful clamping and intentionally short completions", () => {
+    const model = makeCompletionsModel({
+      baseUrl: "http://localhost:8000/v1",
+      contextWindow: 1017,
+      maxTokens: 1000,
+    });
+    const context = emptyContext("x".repeat(3200));
+    expect(buildOpenAICompletionsParams(model, context, undefined).max_completion_tokens).toBe(16);
+    expect(
+      buildOpenAICompletionsParams(model, context, { maxTokens: 1 }).max_completion_tokens,
+    ).toBe(1);
   });
 
   it("clamps max_completion_tokens for proxy-like endpoints when configured maxTokens >= contextWindow and prompt is small", () => {

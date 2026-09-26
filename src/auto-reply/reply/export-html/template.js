@@ -2,9 +2,7 @@
 (function () {
   "use strict";
 
-  // ============================================================
   // DATA LOADING
-  // ============================================================
 
   const base64 = document.getElementById("session-data").textContent;
   const binary = atob(base64);
@@ -20,13 +18,10 @@
     hasLeafControl = false,
     systemPrompt,
     tools,
-    renderedTools,
     warning,
   } = data;
 
-  // ============================================================
   // URL PARAMETER HANDLING
-  // ============================================================
 
   // Parse URL parameters for deep linking: leafId and targetId
   // Check for injected params (when loaded in iframe via srcdoc) or use window.location
@@ -40,11 +35,8 @@
   // Use URL leafId if provided, otherwise fall back to session default
   const leafId = urlLeafId || defaultLeafId;
 
-  // ============================================================
   // DATA STRUCTURES
-  // ============================================================
 
-  // Entry lookup by ID
   const byId = new Map();
   for (const entry of entries) {
     byId.set(entry.id, entry);
@@ -74,9 +66,7 @@
     }
   }
 
-  // ============================================================
   // TREE DATA PREPARATION (no DOM, pure data)
-  // ============================================================
 
   /**
    * Build tree structure from flat entries.
@@ -86,7 +76,6 @@
     const nodeMap = new Map();
     const roots = [];
 
-    // Create nodes
     for (const entry of entries) {
       nodeMap.set(entry.id, {
         entry,
@@ -95,7 +84,6 @@
       });
     }
 
-    // Build parent-child relationships
     for (const entry of entries) {
       const node = nodeMap.get(entry.id);
       if (entry.parentId === null || entry.parentId === undefined || entry.parentId === entry.id) {
@@ -110,7 +98,6 @@
       }
     }
 
-    // Sort children by timestamp
     function sortChildren(node) {
       node.children.sort(
         (a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime(),
@@ -123,37 +110,20 @@
   }
 
   /**
-   * Build set of entry IDs on path from root to target.
-   */
-  function buildActivePathIds(targetId) {
-    const ids = new Set();
-    let current = byId.get(targetId);
-    while (current) {
-      ids.add(current.id);
-      // Stop if no parent or self-referencing (root)
-      if (!current.parentId || current.parentId === current.id) {
-        break;
-      }
-      current = byId.get(current.parentId);
-    }
-    return ids;
-  }
-
-  /**
    * Get array of entries from root to target (the conversation path).
    */
   function getPath(targetId) {
     const path = [];
     let current = byId.get(targetId);
     while (current) {
-      path.unshift(current);
+      path.push(current);
       // Stop if no parent or self-referencing (root)
       if (!current.parentId || current.parentId === current.id) {
         break;
       }
       current = byId.get(current.parentId);
     }
-    return path;
+    return path.reverse();
   }
 
   // Tree node lookup for finding leaves
@@ -165,7 +135,6 @@
    * Children are sorted by timestamp, so the newest is always last.
    */
   function findNewestLeaf(nodeId) {
-    // Build tree node map lazily
     if (!treeNodeMap) {
       treeNodeMap = new Map();
       const tree = buildTree();
@@ -189,40 +158,15 @@
     return current.entry.id;
   }
 
-  /**
-   * Flatten tree into list with indentation and connector info.
-   * Returns array of { node, indent, showConnector, isLast, gutters, isVirtualRootChild, multipleRoots }.
-   * Matches tree-selector.ts logic exactly.
-   */
-  function flattenTree(roots, activePathIds) {
-    const result = [];
+  /** Lay out ordered children into caller-owned records without replacing their node identity. */
+  function layoutTree(roots, getChildren, getLayoutTarget) {
     const multipleRoots = roots.length > 1;
-
-    // Mark which subtrees contain the active leaf
-    const containsActive = new Map();
-    function markActive(node) {
-      let has = activePathIds.has(node.entry.id);
-      for (const child of node.children) {
-        if (markActive(child)) {
-          has = true;
-        }
-      }
-      containsActive.set(node, has);
-      return has;
-    }
-    roots.forEach(markActive);
-
     // Stack: [node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild]
     const stack = [];
-
-    // Add roots (prioritize branch containing active leaf)
-    const orderedRoots = [...roots].toSorted(
-      (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a)),
-    );
-    for (let i = orderedRoots.length - 1; i >= 0; i--) {
-      const isLast = i === orderedRoots.length - 1;
+    for (let i = roots.length - 1; i >= 0; i--) {
+      const isLast = i === roots.length - 1;
       stack.push([
-        orderedRoots[i],
+        roots[i],
         multipleRoots ? 1 : 0,
         multipleRoots,
         multipleRoots,
@@ -236,25 +180,19 @@
       const [node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] =
         stack.pop();
 
-      result.push({
-        node,
-        indent,
-        showConnector,
-        isLast,
-        gutters,
-        isVirtualRootChild,
-        multipleRoots,
-      });
+      const target = getLayoutTarget(node);
+      if (!target) {
+        continue;
+      }
+      target.indent = indent;
+      target.showConnector = showConnector;
+      target.isLast = isLast;
+      target.gutters = gutters;
+      target.isVirtualRootChild = isVirtualRootChild;
+      target.multipleRoots = multipleRoots;
 
-      const children = node.children;
+      const children = getChildren(node);
       const multipleChildren = children.length > 1;
-
-      // Order children (active branch first)
-      const orderedChildren = [...children].toSorted(
-        (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a)),
-      );
-
-      // Calculate child indent (matches tree-selector.ts)
       let childIndent;
       if (multipleChildren) {
         // Parent branches: children get +1
@@ -275,11 +213,10 @@
         ? [...gutters, { position: connectorPosition, show: !isLast }]
         : gutters;
 
-      // Add children in reverse order for stack
-      for (let i = orderedChildren.length - 1; i >= 0; i--) {
-        const childIsLast = i === orderedChildren.length - 1;
+      for (let i = children.length - 1; i >= 0; i--) {
+        const childIsLast = i === children.length - 1;
         stack.push([
-          orderedChildren[i],
+          children[i],
           childIndent,
           multipleChildren,
           multipleChildren,
@@ -289,7 +226,34 @@
         ]);
       }
     }
+  }
 
+  /** Flatten the full tree with the active branch first at each level. */
+  function flattenTree(roots, activePathIds) {
+    const result = [];
+    const containsActive = new Map();
+    function markActive(node) {
+      let has = activePathIds.has(node.entry.id);
+      for (const child of node.children) {
+        if (markActive(child)) {
+          has = true;
+        }
+      }
+      containsActive.set(node, has);
+      return has;
+    }
+    roots.forEach(markActive);
+
+    const activeFirst = (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a));
+    layoutTree(
+      [...roots].toSorted(activeFirst),
+      (node) => [...node.children].toSorted(activeFirst),
+      (node) => {
+        const target = { node };
+        result.push(target);
+        return target;
+      },
+    );
     return result;
   }
 
@@ -326,9 +290,7 @@
     return prefixChars.join("");
   }
 
-  // ============================================================
   // FILTERING (pure data)
-  // ============================================================
 
   let filterMode = "default";
   let searchQuery = "";
@@ -433,7 +395,6 @@
         return false;
       }
 
-      // Always show current leaf
       if (isCurrentLeaf) {
         return true;
       }
@@ -449,7 +410,6 @@
         }
       }
 
-      // Apply filter mode
       const isSettingsEntry = ["label", "custom", "model_change", "thinking_level_change"].includes(
         entry.type,
       );
@@ -478,7 +438,6 @@
         return false;
       }
 
-      // Apply search filter
       if (searchTokens.length > 0) {
         const nodeText = getSearchableText(entry, label);
         if (!searchTokens.every((t) => nodeText.includes(t))) {
@@ -499,7 +458,7 @@
    * Recompute indentation/connectors for the filtered view
    *
    * Filtering can hide intermediate entries; descendants attach to the nearest visible ancestor.
-   * Keep indentation semantics aligned with flattenTree() so single-child chains don't drift right.
+   * Reuse the shared layout without rewriting the original tree or filtered record identities.
    */
   function recalculateVisualStructure(filteredNodes, allFlatNodes) {
     if (filteredNodes.length === 0) {
@@ -508,13 +467,11 @@
 
     const visibleIds = new Set(filteredNodes.map((n) => n.node.entry.id));
 
-    // Build entry map for parent lookup (using full tree)
     const entryMap = new Map();
     for (const flatNode of allFlatNodes) {
       entryMap.set(flatNode.node.entry.id, flatNode);
     }
 
-    // Find nearest visible ancestor for a node
     function findVisibleAncestor(nodeId) {
       let currentId = entryMap.get(nodeId)?.node.entry.parentId;
       while (currentId != null) {
@@ -527,15 +484,12 @@
       return null;
     }
 
-    // Build visible tree structure
-    const visibleParent = new Map();
     const visibleChildren = new Map();
     visibleChildren.set(null, []); // root-level nodes
 
     for (const flatNode of filteredNodes) {
       const nodeId = flatNode.node.entry.id;
       const ancestorId = findVisibleAncestor(nodeId);
-      visibleParent.set(nodeId, ancestorId);
 
       if (!visibleChildren.has(ancestorId)) {
         visibleChildren.set(ancestorId, []);
@@ -543,113 +497,28 @@
       visibleChildren.get(ancestorId).push(nodeId);
     }
 
-    // Update multipleRoots based on visible roots
     const visibleRootIds = visibleChildren.get(null);
-    const multipleRoots = visibleRootIds.length > 1;
 
-    // Build a map for quick lookup: nodeId → FlatNode
     const filteredNodeMap = new Map();
     for (const flatNode of filteredNodes) {
       filteredNodeMap.set(flatNode.node.entry.id, flatNode);
     }
 
-    // DFS traversal of visible tree, applying same indentation rules as flattenTree()
-    // Stack items: [nodeId, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild]
-    const stack = [];
-
-    // Add visible roots in reverse order (to process in forward order via stack)
-    for (let i = visibleRootIds.length - 1; i >= 0; i--) {
-      const isLast = i === visibleRootIds.length - 1;
-      stack.push([
-        visibleRootIds[i],
-        multipleRoots ? 1 : 0,
-        multipleRoots,
-        multipleRoots,
-        isLast,
-        [],
-        multipleRoots,
-      ]);
-    }
-
-    while (stack.length > 0) {
-      const [nodeId, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild] =
-        stack.pop();
-
-      const flatNode = filteredNodeMap.get(nodeId);
-      if (!flatNode) {
-        continue;
-      }
-
-      // Update this node's visual properties
-      flatNode.indent = indent;
-      flatNode.showConnector = showConnector;
-      flatNode.isLast = isLast;
-      flatNode.gutters = gutters;
-      flatNode.isVirtualRootChild = isVirtualRootChild;
-      flatNode.multipleRoots = multipleRoots;
-
-      // Get visible children of this node
-      const children = visibleChildren.get(nodeId) || [];
-      const multipleChildren = children.length > 1;
-
-      // Calculate child indent using same rules as flattenTree():
-      // - Parent branches (multiple children): children get +1
-      // - Just branched and indent > 0: children get +1 for visual grouping
-      // - Single-child chain: stay flat
-      let childIndent;
-      if (multipleChildren) {
-        childIndent = indent + 1;
-      } else if (justBranched && indent > 0) {
-        childIndent = indent + 1;
-      } else {
-        childIndent = indent;
-      }
-
-      // Build gutters for children (same logic as flattenTree)
-      const connectorDisplayed = showConnector && !isVirtualRootChild;
-      const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
-      const connectorPosition = Math.max(0, currentDisplayIndent - 1);
-      const childGutters = connectorDisplayed
-        ? [...gutters, { position: connectorPosition, show: !isLast }]
-        : gutters;
-
-      // Add children in reverse order (to process in forward order via stack)
-      for (let i = children.length - 1; i >= 0; i--) {
-        const childIsLast = i === children.length - 1;
-        stack.push([
-          children[i],
-          childIndent,
-          multipleChildren,
-          multipleChildren,
-          childIsLast,
-          childGutters,
-          false,
-        ]);
-      }
-    }
+    // Filtering preserves the full traversal's order; update the original last-ID records.
+    layoutTree(
+      visibleRootIds,
+      (nodeId) => visibleChildren.get(nodeId) || [],
+      (nodeId) => filteredNodeMap.get(nodeId),
+    );
   }
 
-  // ============================================================
   // TREE DISPLAY TEXT (pure data -> string)
-  // ============================================================
 
   function shortenPath(p) {
     if (typeof p !== "string") {
       return "";
     }
-    if (p.startsWith("/Users/")) {
-      const parts = p.split("/");
-      if (parts.length > 2) {
-        return "~" + p.slice(("/Users/" + parts[2]).length);
-      }
-    }
-    if (p.startsWith("/home/")) {
-      const parts = p.split("/");
-      if (parts.length > 2) {
-        return "~" + p.slice(("/home/" + parts[2]).length);
-      }
-    }
-    return p;
+    return p.replace(/^\/(?:Users|home)\/[^/]*/, "~");
   }
 
   function truncateUtf16Safe(s, maxLen) {
@@ -844,9 +713,7 @@
     }
   }
 
-  // ============================================================
   // TREE RENDERING (DOM manipulation)
-  // ============================================================
 
   let currentLeafId = leafId;
   let currentTargetId = urlTargetId || leafId;
@@ -854,7 +721,7 @@
 
   function renderTree() {
     const tree = buildTree();
-    const activePathIds = buildActivePathIds(currentLeafId);
+    const activePathIds = new Set(getPath(currentLeafId).map((entry) => entry.id));
     const flatNodes = flattenTree(tree, activePathIds);
     const filtered = filterNodes(flatNodes, currentLeafId);
     const container = document.getElementById("tree-container");
@@ -905,7 +772,6 @@
 
       treeRendered = true;
     } else {
-      // Just update markers and classes
       const nodes = container.querySelectorAll(".tree-node");
       for (const node of nodes) {
         const id = node.dataset.id;
@@ -939,9 +805,7 @@
     renderTree();
   }
 
-  // ============================================================
   // MESSAGE RENDERING
-  // ============================================================
 
   function formatTokens(count) {
     if (count < 1000) {
@@ -1029,6 +893,19 @@
     return null;
   }
 
+  function formatOutputLines(lines, lang) {
+    if (lang) {
+      const code = lines.join("\n");
+      try {
+        return hljs.highlight(code, { language: lang }).value;
+      } catch {
+        return escapeHtml(code);
+      }
+    }
+
+    return lines.map((line) => `<div>${escapeHtml(replaceTabs(line))}</div>`).join("");
+  }
+
   function formatExpandableOutput(text, maxLines, lang) {
     text = replaceTabs(text);
     const lines = text.split("\n");
@@ -1036,21 +913,10 @@
     const remaining = lines.length - maxLines;
 
     if (lang) {
-      let highlighted;
-      try {
-        highlighted = hljs.highlight(text, { language: lang }).value;
-      } catch {
-        highlighted = escapeHtml(text);
-      }
+      const highlighted = formatOutputLines(lines, lang);
 
       if (remaining > 0) {
-        const previewCode = displayLines.join("\n");
-        let previewHighlighted;
-        try {
-          previewHighlighted = hljs.highlight(previewCode, { language: lang }).value;
-        } catch {
-          previewHighlighted = escapeHtml(previewCode);
-        }
+        const previewHighlighted = formatOutputLines(displayLines, lang);
 
         return `<div class="tool-output expandable" onclick="this.classList.toggle('expanded')">
               <div class="output-preview"><pre><code class="hljs">${previewHighlighted}</code></pre>
@@ -1061,29 +927,19 @@
       return `<div class="tool-output"><pre><code class="hljs">${highlighted}</code></pre></div>`;
     }
 
-    // Plain text output
     if (remaining > 0) {
       let out =
         '<div class="tool-output expandable" onclick="this.classList.toggle(\'expanded\')">';
       out += '<div class="output-preview">';
-      for (const line of displayLines) {
-        out += `<div>${escapeHtml(replaceTabs(line))}</div>`;
-      }
+      out += formatOutputLines(displayLines);
       out += `<div class="expand-hint">... (${remaining} more lines)</div></div>`;
       out += '<div class="output-full">';
-      for (const line of lines) {
-        out += `<div>${escapeHtml(replaceTabs(line))}</div>`;
-      }
+      out += formatOutputLines(lines);
       out += "</div></div>";
       return out;
     }
 
-    let out = '<div class="tool-output">';
-    for (const line of displayLines) {
-      out += `<div>${escapeHtml(replaceTabs(line))}</div>`;
-    }
-    out += "</div>";
-    return out;
+    return `<div class="tool-output">${formatOutputLines(displayLines)}</div>`;
   }
 
   function renderToolCall(call) {
@@ -1099,15 +955,8 @@
       return textBlocks.map((c) => c.text).join("\n");
     };
 
-    const getResultImages = () => {
-      if (!result) {
-        return [];
-      }
-      return renderableContentBlocks(result.content).filter((c) => c.type === "image");
-    };
-
     const renderResultImages = () => {
-      const images = getResultImages();
+      const images = renderableContentBlocks(result?.content).filter((c) => c.type === "image");
       if (images.length === 0) {
         return "";
       }
@@ -1212,44 +1061,12 @@
         break;
       }
       default: {
-        // Check for pre-rendered custom tool HTML
-        const rendered = renderedTools?.[call.id];
-        if (rendered?.callHtml || rendered?.resultHtml) {
-          // Custom tool with pre-rendered HTML from TUI renderer
-          if (rendered.callHtml) {
-            html += `<div class="tool-header ansi-rendered">${rendered.callHtml}</div>`;
-          } else {
-            html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
-          }
-
-          if (rendered.resultHtml) {
-            // Apply same truncation as built-in tools (10 lines)
-            const lines = rendered.resultHtml.split("\n");
-            if (lines.length > 10) {
-              const preview = lines.slice(0, 10).join("\n");
-              html += `<div class="tool-output expandable ansi-rendered" onclick="this.classList.toggle('expanded')">
-                    <div class="output-preview">${preview}<div class="expand-hint">... (${lines.length - 10} more lines)</div></div>
-                    <div class="output-full">${rendered.resultHtml}</div>
-                  </div>`;
-            } else {
-              html += `<div class="tool-output ansi-rendered">${rendered.resultHtml}</div>`;
-            }
-          } else if (result) {
-            // Fallback to JSON for result if no pre-rendered HTML
-            const output = getResultText();
-            if (output) {
-              html += formatExpandableOutput(output, 10);
-            }
-          }
-        } else {
-          // Fallback to JSON display (existing behavior)
-          html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
-          html += `<div class="tool-output"><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></div>`;
-          if (result) {
-            const output = getResultText();
-            if (output) {
-              html += formatExpandableOutput(output, 10);
-            }
+        html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
+        html += `<div class="tool-output"><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></div>`;
+        if (result) {
+          const output = getResultText();
+          if (output) {
+            html += formatExpandableOutput(output, 10);
           }
         }
       }
@@ -1264,7 +1081,6 @@
    * Reconstructs the original format: header line + entry lines.
    */
   window.downloadSessionJson = function () {
-    // Build JSONL content: header first, then all entries
     const lines = [];
     if (header) {
       lines.push(JSON.stringify({ type: "header", ...header }));
@@ -1274,7 +1090,6 @@
     }
     const jsonlContent = lines.join("\n");
 
-    // Create download
     const blob = new Blob([jsonlContent], { type: "application/x-ndjson" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1299,7 +1114,6 @@
     // Find the gist ID (first query param without value, e.g., ?abc123)
     const gistId = Array.from(url.searchParams.keys()).find((k) => !url.searchParams.get(k));
 
-    // Build the share URL
     const params = new URLSearchParams();
     params.set("leafId", currentLeafId);
     params.set("targetId", entryId);
@@ -1405,7 +1219,7 @@
                     .join("\n")
                 : "";
         if (text.trim()) {
-          html += `<div class="markdown-content">${safeMarkedParse(text)}</div>`;
+          html += `<div class="markdown-content">${marked.parse(text)}</div>`;
         }
         html += "</div>";
         return html;
@@ -1417,7 +1231,7 @@
 
         for (const block of contentBlocks) {
           if (block.type === "text" && block.text.trim()) {
-            html += `<div class="assistant-text markdown-content">${safeMarkedParse(block.text)}</div>`;
+            html += `<div class="assistant-text markdown-content">${marked.parse(block.text)}</div>`;
           } else if (block.type === "thinking" && block.thinking.trim()) {
             html += `<div class="thinking-block">
                   <div class="thinking-text">${escapeHtml(block.thinking)}</div>
@@ -1478,23 +1292,21 @@
     if (entry.type === "branch_summary") {
       return `<div class="branch-summary" id="${entryId}">${tsHtml}
             <div class="branch-summary-header">Branch Summary</div>
-            <div class="markdown-content">${safeMarkedParse(entry.summary)}</div>
+            <div class="markdown-content">${marked.parse(entry.summary)}</div>
           </div>`;
     }
 
     if (entry.type === "custom_message") {
       return `<div class="hook-message" id="${entryId}">${tsHtml}
             <div class="hook-type">[${escapeHtml(entry.customType)}]</div>
-            <div class="markdown-content">${safeMarkedParse(typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content))}</div>
+            <div class="markdown-content">${marked.parse(typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content))}</div>
           </div>`;
     }
 
     return "";
   }
 
-  // ============================================================
   // HEADER / STATS
-  // ============================================================
 
   function computeStats(entryList) {
     let userMessages = 0,
@@ -1568,39 +1380,22 @@
       globalStats.cost.cacheRead +
       globalStats.cost.cacheWrite;
 
-    const tokenParts = [];
-    if (globalStats.tokens.input) {
-      tokenParts.push(`↑${formatTokens(globalStats.tokens.input)}`);
-    }
-    if (globalStats.tokens.output) {
-      tokenParts.push(`↓${formatTokens(globalStats.tokens.output)}`);
-    }
-    if (globalStats.tokens.cacheRead) {
-      tokenParts.push(`R${formatTokens(globalStats.tokens.cacheRead)}`);
-    }
-    if (globalStats.tokens.cacheWrite) {
-      tokenParts.push(`W${formatTokens(globalStats.tokens.cacheWrite)}`);
-    }
-
-    const msgParts = [];
-    if (globalStats.userMessages) {
-      msgParts.push(`${globalStats.userMessages} user`);
-    }
-    if (globalStats.assistantMessages) {
-      msgParts.push(`${globalStats.assistantMessages} assistant`);
-    }
-    if (globalStats.toolResults) {
-      msgParts.push(`${globalStats.toolResults} tool results`);
-    }
-    if (globalStats.customMessages) {
-      msgParts.push(`${globalStats.customMessages} custom`);
-    }
-    if (globalStats.compactions) {
-      msgParts.push(`${globalStats.compactions} compactions`);
-    }
-    if (globalStats.branchSummaries) {
-      msgParts.push(`${globalStats.branchSummaries} branch summaries`);
-    }
+    const tokenParts = [
+      ["input", "↑"],
+      ["output", "↓"],
+      ["cacheRead", "R"],
+      ["cacheWrite", "W"],
+    ].flatMap(([key, prefix]) =>
+      globalStats.tokens[key] ? [`${prefix}${formatTokens(globalStats.tokens[key])}`] : [],
+    );
+    const msgParts = [
+      ["userMessages", "user"],
+      ["assistantMessages", "assistant"],
+      ["toolResults", "tool results"],
+      ["customMessages", "custom"],
+      ["compactions", "compactions"],
+      ["branchSummaries", "branch summaries"],
+    ].flatMap(([key, label]) => globalStats[key] ? [`${globalStats[key]} ${label}`] : []);
 
     let html = "";
     if (warning) {
@@ -1684,20 +1479,16 @@
     return html;
   }
 
-  // ============================================================
   // NAVIGATION
-  // ============================================================
 
   // Cache for rendered entry DOM nodes
   const entryCache = new Map();
 
   function renderEntryToNode(entry) {
-    // Check cache first
     if (entryCache.has(entry.id)) {
       return entryCache.get(entry.id).cloneNode(true);
     }
 
-    // Render to HTML string, then parse to node
     const html = renderEntry(entry);
     if (!html) {
       return null;
@@ -1707,7 +1498,6 @@
     template.innerHTML = html;
     const node = template.content.firstElementChild;
 
-    // Cache the node
     if (node) {
       entryCache.set(entry.id, node.cloneNode(true));
     }
@@ -1723,7 +1513,6 @@
 
     document.getElementById("header-container").innerHTML = renderHeader();
 
-    // Build messages using cached DOM nodes
     const messagesEl = document.getElementById("messages");
     const fragment = document.createDocumentFragment();
 
@@ -1737,7 +1526,6 @@
     messagesEl.innerHTML = "";
     messagesEl.appendChild(fragment);
 
-    // Attach click handlers for copy-link buttons
     messagesEl.querySelectorAll(".copy-link-btn").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1753,12 +1541,10 @@
       if (scrollMode === "bottom") {
         content.scrollTop = content.scrollHeight;
       } else if (scrollMode === "target") {
-        // If scrollToEntryId is provided, scroll to that specific entry
         const scrollTargetId = scrollToEntryId || targetId;
         const targetEl = document.getElementById(`entry-${scrollTargetId}`);
         if (targetEl) {
           targetEl.scrollIntoView?.({ block: "center" });
-          // Briefly highlight the target message
           if (scrollToEntryId) {
             targetEl.classList.add("highlight");
             setTimeout(() => targetEl.classList.remove("highlight"), 2000);
@@ -1768,9 +1554,7 @@
     }, 0);
   }
 
-  // ============================================================
   // INITIALIZATION
-  // ============================================================
 
   // Escape HTML tags in text (but not code blocks)
   function escapeHtmlTags(text) {
@@ -1898,28 +1682,17 @@
       html(token) {
         return escapeHtml(token.text);
       },
-      image(token) {
-        return renderMarkdownImage(token);
-      },
-      link(token) {
-        return renderMarkdownLink.call(this, token);
-      },
+      image: renderMarkdownImage,
+      link: renderMarkdownLink,
     },
   });
 
-  // Simple marked parse (escaping handled in renderers)
-  function safeMarkedParse(text) {
-    return marked.parse(text);
-  }
-
-  // Search input
   const searchInput = document.getElementById("tree-search");
   searchInput.addEventListener("input", (e) => {
     searchQuery = e.target.value;
     forceTreeRerender();
   });
 
-  // Filter buttons
   document.querySelectorAll(".filter-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".filter-btn").forEach((b) => b.classList.remove("active"));
@@ -1929,7 +1702,6 @@
     });
   });
 
-  // Sidebar toggle
   const sidebar = document.getElementById("sidebar");
   const overlay = document.getElementById("sidebar-overlay");
   const hamburger = document.getElementById("hamburger");
@@ -1949,7 +1721,6 @@
   overlay.addEventListener("click", closeSidebar);
   document.getElementById("sidebar-close").addEventListener("click", closeSidebar);
 
-  // Toggle states
   let thinkingExpanded = true;
   let toolOutputsExpanded = false;
 
@@ -1973,7 +1744,6 @@
     });
   };
 
-  // Keyboard shortcuts
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       searchInput.value = "";
@@ -1990,11 +1760,9 @@
     }
   });
 
-  // Initial render
   // If URL has targetId, scroll to that specific message; otherwise stay at top
   if (leafId) {
     if (urlTargetId && byId.has(urlTargetId)) {
-      // Deep link: navigate to leaf and scroll to target message
       navigateTo(leafId, "target", urlTargetId);
     } else {
       navigateTo(leafId, "none");
@@ -2003,7 +1771,6 @@
     // A null leaf selected by a control record is an intentional empty branch.
     navigateTo(null, "none");
   } else if (entries.length > 0) {
-    // Fallback: use last entry if no leafId
     navigateTo(entries[entries.length - 1].id, "none");
   }
 })();

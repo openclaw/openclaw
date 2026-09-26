@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { enqueueFollowupRun } from "./enqueue.js";
 import {
   clearFollowupQueue,
+  clearRemovedQueuedAuthProfiles,
   getFollowupQueue,
   hasPendingFollowupQueueWork,
   refreshQueuedFollowupSession,
@@ -33,6 +34,72 @@ function makeRun(): FollowupRun["run"] {
     blockReplyBreak: "message_end",
   };
 }
+
+describe("clearRemovedQueuedAuthProfiles", () => {
+  it("releases removed accounts in every queued source without replacing newer choices", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    const lastRun = makeRun();
+    const queued = makeRun();
+    const summarized = makeRun();
+    const elided = makeRun();
+    const newer = { ...makeRun(), authProfileId: "profile-b" };
+    const otherAgent = { ...makeRun(), agentId: "other" };
+    const retainedConfig = otherAgent.config;
+    const source = (run: FollowupRun["run"]): FollowupRun => ({
+      prompt: "pending message",
+      enqueuedAt: 1,
+      run,
+    });
+    queued.autoFallbackPrimaryProbe = {
+      provider: "anthropic",
+      model: "primary",
+      fallbackProvider: "anthropic",
+      fallbackModel: queued.model,
+      fallbackAuthProfileId: "profile-a",
+      fallbackAuthProfileIdSource: "auto",
+    };
+    newer.autoFallbackPrimaryProbe = {
+      ...queued.autoFallbackPrimaryProbe,
+      fallbackAuthProfileId: "profile-b",
+    };
+    queue.lastRun = lastRun;
+    queue.items.push(source(queued), source(newer), source(otherAgent));
+    queue.summarySources.push(source(summarized));
+    queue.summaryElisions.push({
+      contextKey: "context",
+      count: 1,
+      sources: [source(elided)],
+      summaryLines: ["pending summary"],
+      sourceRefs: new WeakMap(),
+    });
+    const rewrittenConfig = { agents: { entries: { main: { model: "anthropic/model" } } } };
+
+    clearRemovedQueuedAuthProfiles({
+      removedByAgent: new Map([["main", new Set(["profile-a"])]]),
+      rewriteConfig: () => rewrittenConfig,
+    });
+
+    for (const run of [lastRun, queued, summarized, elided]) {
+      expect(run.authProfileId).toBeUndefined();
+      expect(run.authProfileIdSource).toBeUndefined();
+      expect(run.config).toBe(rewrittenConfig);
+      expect(run.model).toBe("claude-opus-4-6");
+    }
+    expect(queued.autoFallbackPrimaryProbe).toEqual({
+      provider: "anthropic",
+      model: "primary",
+      fallbackProvider: "anthropic",
+      fallbackModel: queued.model,
+    });
+    expect(newer.authProfileId).toBe("profile-b");
+    expect(newer.authProfileIdSource).toBe("user");
+    expect(newer.autoFallbackPrimaryProbe.fallbackAuthProfileId).toBe("profile-b");
+    expect(newer.config).toBe(rewrittenConfig);
+    expect(otherAgent.authProfileId).toBe("profile-a");
+    expect(otherAgent.config).toBe(retainedConfig);
+    expect(queue.items).toHaveLength(3);
+  });
+});
 
 describe("refreshQueuedFollowupSession", () => {
   it("retargets queued runs to the persisted selection", () => {
@@ -74,34 +141,17 @@ describe("refreshQueuedFollowupSession", () => {
       nextAuthProfileIdSource: undefined,
     });
 
-    expect(queue.lastRun).toEqual({
+    const expectedRun = {
       ...makeRun(),
       provider: "openai",
       model: "gpt-4o",
       authProfileId: undefined,
       authProfileIdSource: undefined,
-    });
-    expect(queue.items[0]?.run).toEqual({
-      ...makeRun(),
-      provider: "openai",
-      model: "gpt-4o",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
-    expect(queue.summarySources[0]?.run).toEqual({
-      ...makeRun(),
-      provider: "openai",
-      model: "gpt-4o",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
-    expect(queue.summaryElisions[0]?.sources[0]?.run).toEqual({
-      ...makeRun(),
-      provider: "openai",
-      model: "gpt-4o",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
+    };
+    expect(queue.lastRun).toEqual(expectedRun);
+    expect(queue.items[0]?.run).toEqual(expectedRun);
+    expect(queue.summarySources[0]?.run).toEqual(expectedRun);
+    expect(queue.summaryElisions[0]?.sources[0]?.run).toEqual(expectedRun);
   });
 
   it("retargets queued runs with user model override source", () => {
@@ -156,7 +206,7 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
-  it("clamps queued Sol Ultra work to Codex Luna Max", () => {
+  it("preserves queued Sol Ultra work when switching to Codex Luna", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
       prompt: "queued message",
@@ -184,12 +234,12 @@ describe("refreshQueuedFollowupSession", () => {
     expect(queue.items[0]?.run).toMatchObject({
       provider: "openai",
       model: "gpt-5.6-luna",
-      thinkLevel: "max",
+      thinkLevel: "ultra",
       thinkingCatalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna", reasoning: true }],
     });
   });
 
-  it("uses the highest supported non-max level when retargeting queued work", () => {
+  it("preserves harness-only Ultra when retargeting queued work", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
       prompt: "queued message",
@@ -205,61 +255,19 @@ describe("refreshQueuedFollowupSession", () => {
       nextThinking: { level: "ultra", agentRuntime: "openclaw" },
     });
 
-    expect(queue.items[0]?.run.thinkLevel).toBe("high");
+    expect(queue.items[0]?.run.thinkLevel).toBe("ultra");
   });
 
   it.each([
-    {
-      source: "turn",
-      current: "high",
-      stored: "off",
-      model: "gpt-5.6-sol",
-      reasoning: true,
-      expected: "high",
-    },
-    {
-      source: "turn",
-      current: "off",
-      stored: "high",
-      model: "gpt-5.6-sol",
-      reasoning: true,
-      expected: "off",
-    },
-    {
-      source: "default",
-      current: "high",
-      stored: "high",
-      model: "gpt-5.6-sol",
-      reasoning: true,
-      expected: "medium",
-    },
-    {
-      source: undefined,
-      current: "high",
-      stored: "low",
-      model: "gpt-5.6-sol",
-      reasoning: true,
-      expected: "low",
-    },
-    {
-      source: "turn",
-      current: "ultra",
-      stored: "off",
-      model: "gpt-5.6-luna",
-      reasoning: true,
-      expected: "max",
-    },
-    {
-      source: "turn",
-      current: "high",
-      stored: "off",
-      model: "non-reasoner",
-      reasoning: false,
-      expected: "off",
-    },
+    ["turn", "high", "off", "gpt-5.6-sol", true, "high"],
+    ["turn", "off", "high", "gpt-5.6-sol", true, "low"],
+    ["default", "high", "high", "gpt-5.6-sol", true, "medium"],
+    [undefined, "high", "low", "gpt-5.6-sol", true, "low"],
+    ["turn", "ultra", "off", "gpt-5.6-luna", true, "ultra"],
+    ["turn", "high", "off", "non-reasoner", false, "off"],
   ] as const)(
-    "retargets $source thinking $current with stored $stored to $model as $expected",
-    ({ source, current, stored, model, reasoning, expected }) => {
+    "retargets %s thinking %s with stored %s to %s (reasoning %s) as %s",
+    (source, current, stored, model, reasoning, expected) => {
       const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
       const runs = Array.from({ length: 4 }, () => ({
         ...makeRun(),
@@ -300,7 +308,7 @@ describe("refreshQueuedFollowupSession", () => {
 
   it.each([
     { requested: "high", stored: "low", expected: ["high", "off", "high"] },
-    { requested: "off", stored: "high", expected: ["off", "off", "off"] },
+    { requested: "off", stored: "high", expected: ["low", "off", "low"] },
     { requested: "default", stored: "off", expected: ["high", "off", "low"] },
     { requested: undefined, stored: "low", expected: ["low", "off", "low"] },
   ] as const)(
@@ -349,6 +357,22 @@ describe("refreshQueuedFollowupSession", () => {
             entries: { main: { thinkingDefault: "low" } },
             defaults: {
               thinkingDefault: "off",
+              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
+            },
+          },
+        },
+        expected: "low",
+      },
+      {
+        name: "agent model",
+        config: {
+          agents: {
+            entries: {
+              main: {
+                models: { "openai/gpt-5.6-sol": { params: { thinking: "low" } } },
+              },
+            },
+            defaults: {
               models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
             },
           },

@@ -13,7 +13,6 @@ import {
   type PreparedMessageToolCatalog,
 } from "../../plugins/prepared-message-tool-catalog.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { ChatType } from "../chat-type.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getChannelPlugin, getLoadedChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -39,20 +38,12 @@ export const listMessageActionDiscoveryChannels = (
 /**
  * Input used to discover channel message actions for agent tool schemas.
  */
-export type ChannelMessageActionDiscoveryInput = {
+export type ChannelMessageActionDiscoveryInput = Omit<
+  ChannelMessageActionDiscoveryContext,
+  "cfg"
+> & {
   cfg?: OpenClawConfig;
   channel?: string | null;
-  chatType?: ChatType | null;
-  currentChannelProvider?: string | null;
-  currentChannelId?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
-  accountId?: string | null;
-  sessionKey?: string | null;
-  sessionId?: string | null;
-  agentId?: string | null;
-  requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
 };
 
 type ChannelMessageActionDiscoveryParams = ChannelMessageActionDiscoveryInput & {
@@ -347,21 +338,45 @@ function mergeToolSchemaProperties(
  * Resolves extra message-tool schema properties from channel discovery hooks.
  */
 export function resolveChannelMessageToolSchemaProperties(
-  params: ChannelMessageActionDiscoveryParams,
+  params: ChannelMessageActionDiscoveryParams & {
+    /** Internal caller-owned account selection after the usual provider scoping. */
+    resolveAccountIdForChannel?: (
+      channel: string,
+      contextualAccountId: ChannelMessageActionDiscoveryInput["accountId"],
+    ) => ChannelMessageActionDiscoveryInput["accountId"];
+  },
 ): Record<string, TSchema> {
   const properties: Record<string, TSchema> = {};
   const currentChannel = resolveMessageActionDiscoveryChannelId(params.channel);
   const discoveryBase = createMessageActionDiscoveryContext(params);
   // Account IDs belong to the current provider. Other plugins must discover
   // schemas from their configured-account union, not a foreign account name.
-  const contextForPlugin = (pluginId: string) => ({
-    ...discoveryBase,
-    accountId:
+  const contextForPlugin = (pluginId: string) => {
+    const contextualAccountId =
       !currentChannel || resolveMessageActionDiscoveryChannelId(pluginId) === currentChannel
         ? params.accountId
-        : undefined,
-  });
+        : undefined;
+    return {
+      ...discoveryBase,
+      accountId: params.resolveAccountIdForChannel
+        ? params.resolveAccountIdForChannel(pluginId, contextualAccountId)
+        : contextualAccountId,
+    };
+  };
   const seenPluginIds = new Set<string>();
+  const mergePluginSchema = (pluginId: string, actions: ChannelMessageToolDiscoveryAdapter) => {
+    for (const contribution of resolveMessageActionDiscoveryForPlugin({
+      pluginId,
+      actions,
+      context: contextForPlugin(pluginId),
+      includeSchema: true,
+    }).schemaContributions) {
+      const visibility = contribution.visibility ?? "current-channel";
+      if (!currentChannel || visibility === "all-configured" || pluginId === currentChannel) {
+        mergeToolSchemaProperties(properties, contribution.properties);
+      }
+    }
+  };
 
   const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
   for (const plugin of channels) {
@@ -369,21 +384,7 @@ export function resolveChannelMessageToolSchemaProperties(
       continue;
     }
     seenPluginIds.add(plugin.id);
-    for (const contribution of resolveMessageActionDiscoveryForPlugin({
-      pluginId: plugin.id,
-      actions: plugin.actions,
-      context: contextForPlugin(plugin.id),
-      includeSchema: true,
-    }).schemaContributions) {
-      const visibility = contribution.visibility ?? "current-channel";
-      if (currentChannel) {
-        if (visibility === "all-configured" || plugin.id === currentChannel) {
-          mergeToolSchemaProperties(properties, contribution.properties);
-        }
-        continue;
-      }
-      mergeToolSchemaProperties(properties, contribution.properties);
-    }
+    mergePluginSchema(plugin.id, plugin.actions);
   }
   if (currentChannel && !seenPluginIds.has(currentChannel)) {
     // The active channel may be bundled but not configured/registered yet; use
@@ -393,17 +394,7 @@ export function resolveChannelMessageToolSchemaProperties(
       params.preparedMessageToolCatalog,
     );
     if (currentActions?.actions) {
-      for (const contribution of resolveMessageActionDiscoveryForPlugin({
-        pluginId: currentActions.pluginId,
-        actions: currentActions.actions,
-        context: contextForPlugin(currentActions.pluginId),
-        includeSchema: true,
-      }).schemaContributions) {
-        const visibility = contribution.visibility ?? "current-channel";
-        if (visibility === "all-configured" || currentActions.pluginId === currentChannel) {
-          mergeToolSchemaProperties(properties, contribution.properties);
-        }
-      }
+      mergePluginSchema(currentActions.pluginId, currentActions.actions);
     }
   }
 

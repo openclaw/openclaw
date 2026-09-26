@@ -1,5 +1,6 @@
-// Child-process entrypoint for one hard-cancellable sqlite-vec KNN query.
+// Serial sqlite-vec queries stay OS-killable even while native SQLite is busy.
 import {
+  ensureSqliteLibrarySelected,
   loadSqliteVecExtension,
   openNodeSqliteDatabase,
   supportsNodeSqliteExtensionLoading,
@@ -15,12 +16,14 @@ const MAX_STDIN_BYTES = 1024 * 1024;
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
 
 export type VectorKnnChildInput = {
+  id: number;
   databasePath: string;
   extensionPath?: string;
+  sqliteLibraryPath?: string;
   request: VectorKnnRequest;
 };
 
-export type VectorKnnChildResult =
+type VectorKnnChildResult =
   | { status: "ok"; value: VectorKnnResponse }
   | { status: "failed"; error: string };
 
@@ -31,18 +34,19 @@ function isChildInput(value: unknown): value is VectorKnnChildInput {
   // SAFETY: the object guard above permits explicit validation of every field read below.
   const input = value as Partial<VectorKnnChildInput>;
   return (
+    Number.isSafeInteger(input.id) &&
     typeof input.databasePath === "string" &&
     input.databasePath.length > 0 &&
+    (input.sqliteLibraryPath === undefined ||
+      (typeof input.sqliteLibraryPath === "string" && input.sqliteLibraryPath.trim().length > 0)) &&
     Boolean(input.request) &&
     typeof input.request === "object"
   );
 }
 
-async function run(input: unknown): Promise<VectorKnnChildResult> {
-  if (!isChildInput(input)) {
-    return { status: "failed", error: "invalid memory vector KNN child input" };
-  }
+async function run(input: VectorKnnChildInput): Promise<VectorKnnChildResult> {
   validateVectorKnnRequest(input.request);
+  ensureSqliteLibrarySelected({ explicitPath: input.sqliteLibraryPath });
   const extensionLoadingSupported = supportsNodeSqliteExtensionLoading();
   const db = openNodeSqliteDatabase(input.databasePath, {
     allowExtension: extensionLoadingSupported,
@@ -58,7 +62,7 @@ async function run(input: unknown): Promise<VectorKnnChildResult> {
       extensionPath: input.extensionPath,
     });
     if (!loaded.ok) {
-      throw new Error(loaded.error ?? "sqlite-vec unavailable in memory search child");
+      return { status: "ok", value: { rows: [], fallbackScanRequired: true } };
     }
     return { status: "ok", value: runVectorKnnQuery(db, input.request) };
   } catch (error) {
@@ -68,46 +72,50 @@ async function run(input: unknown): Promise<VectorKnnChildResult> {
   }
 }
 
-function writeResult(result: VectorKnnChildResult): void {
-  let payload = Buffer.from(JSON.stringify(result), "utf8");
+function writeResult(id: number, result: VectorKnnChildResult): void {
+  let payload = Buffer.from(JSON.stringify({ ...result, id }), "utf8");
   if (payload.byteLength > MAX_STDOUT_BYTES) {
     payload = Buffer.from(
-      JSON.stringify({ status: "failed", error: "memory vector KNN child result is too large" }),
+      JSON.stringify({
+        id,
+        status: "failed",
+        error: "memory vector KNN child result is too large",
+      }),
       "utf8",
     );
   }
-  process.stdout.write(payload);
+  process.stdout.write(Buffer.concat([payload, Buffer.from("\n")]));
 }
 
 const chunks: Buffer[] = [];
 let inputBytes = 0;
-let inputTooLarge = false;
-process.stdin.on("data", (chunk: Buffer) => {
+for await (const chunk of process.stdin) {
   inputBytes += chunk.byteLength;
-  if (inputBytes > MAX_STDIN_BYTES) {
-    inputTooLarge = true;
-    chunks.length = 0;
-    return;
+  const newline = chunk.indexOf(10);
+  if (inputBytes > MAX_STDIN_BYTES + (newline >= 0 ? 1 : 0)) {
+    throw new Error("memory vector KNN child input is too large");
   }
   chunks.push(chunk);
-});
-process.stdin.once("end", () => {
-  if (inputTooLarge) {
-    writeResult({ status: "failed", error: "memory vector KNN child input is too large" });
-    return;
+  if (newline < 0) {
+    continue;
   }
-  let input: unknown;
+  // The parent sends one request at a time; coalesced frames violate that contract.
+  if (newline !== chunk.length - 1) {
+    throw new Error("invalid memory vector KNN child framing");
+  }
+  const input: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  chunks.length = 0;
+  inputBytes = 0;
+  if (!isChildInput(input)) {
+    throw new Error("invalid memory vector KNN child input");
+  }
   try {
-    input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    writeResult({ status: "failed", error: "invalid memory vector KNN child JSON" });
-    return;
-  }
-  void run(input).then(writeResult, (error: unknown) => {
-    writeResult({
+    // Reopen for each query so publication and path replacement stay visible.
+    writeResult(input.id, await run(input));
+  } catch (error) {
+    writeResult(input.id, {
       status: "failed",
       error: error instanceof Error ? error.message : String(error),
     });
-  });
-});
-process.stdin.resume();
+  }
+}

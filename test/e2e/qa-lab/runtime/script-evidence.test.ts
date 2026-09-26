@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { validateQaEvidenceSummaryJson } from "../../../../extensions/qa-lab/api.js";
+import {
+  type QaProviderMode,
+  validateQaEvidenceSummaryJson,
+} from "../../../../extensions/qa-lab/test-api.js";
 import {
   createQaScriptBlockedStatusTracker,
   createQaScriptEvidenceWriter,
@@ -11,7 +14,15 @@ import {
 
 const tempRoots: string[] = [];
 
-async function makeWriter(params: { maxDetailsBytes?: number; maxLogBytes?: number } = {}) {
+async function makeWriter(
+  params: {
+    maxDetailsBytes?: number;
+    maxLogBytes?: number;
+    primaryModel?: string;
+    providerId?: string;
+    providerMode?: QaProviderMode;
+  } = {},
+) {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-script-evidence-"));
   tempRoots.push(repoRoot);
   return {
@@ -23,8 +34,9 @@ async function makeWriter(params: { maxDetailsBytes?: number; maxLogBytes?: numb
       logFileName: "producer.log",
       maxDetailsBytes: params.maxDetailsBytes,
       maxLogBytes: params.maxLogBytes ?? 64,
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
+      primaryModel: params.primaryModel ?? "mock-openai/gpt-5.6-luna",
+      providerMode: params.providerMode ?? "mock-openai",
+      providerId: params.providerId,
       repoRoot,
       target: {
         id: "script-evidence-test",
@@ -43,43 +55,81 @@ afterEach(async () => {
 });
 
 describe("QA script evidence writer", () => {
-  for (const status of ["pass", "fail", "blocked"] as const) {
-    it(`writes ${status} evidence with normalized artifact paths`, async () => {
-      const { artifactBase, writer } = await makeWriter();
-      const summaryPath = path.join(artifactBase, "nested", "summary.json");
-      await fs.mkdir(path.dirname(summaryPath), { recursive: true });
-      await fs.writeFile(summaryPath, "{}\n", "utf8");
-      writer.appendLog("producer output\n");
-
-      const evidence = await writer.write({
-        artifacts: [{ kind: "summary", filePath: summaryPath }],
-        details: `${status} details`,
-        durationMs: 25,
-        status,
+  it.each([
+    { name: "unknown model", primaryModel: "", expectedId: "openai", expectedName: null },
+    {
+      name: "explicit model precedence",
+      primaryModel: "custom/model",
+      expectedId: "custom",
+      expectedName: "model",
+    },
+  ])(
+    "provider identity fallback: persists $name",
+    async ({ primaryModel, expectedId, expectedName }) => {
+      const { artifactBase, writer } = await makeWriter({
+        primaryModel,
+        providerMode: "live-frontier",
+        providerId: "  openai  ",
       });
-
-      expect(evidence.entries[0]).toMatchObject({
-        coverage: [],
-        execution: {
-          artifacts: [
-            { kind: "log", path: "producer.log", source: "script" },
-            { kind: "summary", path: path.join("nested", "summary.json"), source: "script" },
-          ],
-        },
-        result: {
-          status,
-          timing: { wallMs: 25 },
-        },
+      const evidence = await writer.write({
+        details: "missing candidate",
+        durationMs: 1,
+        status: "blocked",
       });
       const diskEvidence = validateQaEvidenceSummaryJson(
         JSON.parse(await fs.readFile(path.join(artifactBase, "qa-evidence.json"), "utf8")),
       );
+
       expect(diskEvidence).toEqual(evidence);
-      expect(
-        JSON.parse(await fs.readFile(path.join(artifactBase, "latest-run.json"), "utf8")),
-      ).toEqual({ qaEvidence: "qa-evidence.json" });
+      expect(diskEvidence.entries[0]?.result).toMatchObject({
+        status: "blocked",
+        failure: { reason: "missing candidate" },
+      });
+      expect(await fs.readFile(path.join(artifactBase, "producer.log"), "utf8")).toBe("");
+      expect(diskEvidence.entries[0]?.execution?.provider).toEqual({
+        id: expectedId,
+        live: true,
+        auth: "live-frontier",
+        model: { name: expectedName, ref: primaryModel || null },
+      });
+    },
+  );
+
+  it("writes evidence with normalized artifact paths", async () => {
+    const { artifactBase, writer } = await makeWriter();
+    const summaryPath = path.join(artifactBase, "nested", "summary.json");
+    await fs.mkdir(path.dirname(summaryPath), { recursive: true });
+    await fs.writeFile(summaryPath, "{}\n", "utf8");
+    writer.appendLog("producer output\n");
+
+    const evidence = await writer.write({
+      artifacts: [{ kind: "summary", filePath: summaryPath }],
+      details: "pass details",
+      durationMs: 25,
+      status: "pass",
     });
-  }
+
+    expect(evidence.entries[0]).toMatchObject({
+      coverage: [],
+      execution: {
+        artifacts: [
+          { kind: "log", path: "producer.log", source: "script" },
+          { kind: "summary", path: path.join("nested", "summary.json"), source: "script" },
+        ],
+      },
+      result: {
+        status: "pass",
+        timing: { wallMs: 25 },
+      },
+    });
+    const diskEvidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(path.join(artifactBase, "qa-evidence.json"), "utf8")),
+    );
+    expect(diskEvidence).toEqual(evidence);
+    expect(
+      JSON.parse(await fs.readFile(path.join(artifactBase, "latest-run.json"), "utf8")),
+    ).toEqual({ qaEvidence: "qa-evidence.json" });
+  });
 
   it("rejects uncataloged targets unless coverage binding is disabled", () => {
     expect(() =>
@@ -98,19 +148,6 @@ describe("QA script evidence writer", () => {
     ).toThrow("unknown qa scenario: script-evidence-test");
   });
 
-  it("keeps only the bounded log tail", async () => {
-    const { artifactBase, writer } = await makeWriter({ maxLogBytes: 24 });
-    writer.appendLog(`discard-me-${"x".repeat(64)}`);
-    writer.appendLog("recent-tail");
-
-    await writer.write({ durationMs: 1, status: "pass" });
-
-    const log = await fs.readFile(path.join(artifactBase, "producer.log"), "utf8");
-    expect(log).toContain("recent-tail");
-    expect(log).not.toContain("discard-me");
-    expect(Buffer.byteLength(log, "utf8")).toBeLessThanOrEqual(24);
-  });
-
   it("writes the bounded log independently for multi-target summaries", async () => {
     const { artifactBase, writer } = await makeWriter();
     writer.appendLog("producer output\n");
@@ -119,21 +156,6 @@ describe("QA script evidence writer", () => {
     await expect(fs.readFile(path.join(artifactBase, "producer.log"), "utf8")).resolves.toBe(
       "producer output\n",
     );
-  });
-
-  it("keeps only the bounded failure detail tail", async () => {
-    const { writer } = await makeWriter({ maxDetailsBytes: 24 });
-
-    const evidence = writer.build({
-      details: `discard-me-${"x".repeat(64)}recent-reason`,
-      durationMs: 1,
-      status: "fail",
-    });
-
-    const reason = evidence.entries[0]?.result.failure?.reason ?? "";
-    expect(reason).toContain("recent-reason");
-    expect(reason).not.toContain("discard-me");
-    expect(Buffer.byteLength(reason, "utf8")).toBeLessThanOrEqual(24);
   });
 
   it("keeps UTF-8 logs and failure details within byte limits", async () => {

@@ -6,8 +6,13 @@ import {
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../lib/toast.ts";
+import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
 import { PendingSessionPlacementRecoveryState } from "../pages/new-session/session-placement-recovery-state.ts";
+import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
+import { canReloadControlUiDocument } from "./document-reload-guard.ts";
+import createApplicationPlacementStartupRuntime from "./session-placement-startup.runtime.ts";
 import {
+  blockStorageWrites,
   createPlacementStartupHarness,
   flushStartupMicrotasks,
 } from "./session-placement-startup.test-support.ts";
@@ -85,18 +90,7 @@ it.each(["Incognito", "failed pause write"])(
       startup.start(memoryInput);
       await flushStartupMicrotasks();
       if (cause === "failed pause write") {
-        const storage = sessionStorage;
-        vi.stubGlobal("sessionStorage", {
-          get length() {
-            return storage.length;
-          },
-          key: storage.key.bind(storage),
-          getItem: storage.getItem.bind(storage),
-          removeItem: storage.removeItem.bind(storage),
-          setItem: () => {
-            throw new Error("quota");
-          },
-        });
+        const storage = blockStorageWrites();
         startup.pause(privateKey, "Stopped before startup", {
           readSessionPlacementRecovery,
           pauseSessionPlacementRecovery,
@@ -147,7 +141,7 @@ it.each(["Incognito", "failed pause write"])(
   },
 );
 
-it.each(["current", "start", "credentials", "scope", "gateway", "dispose"])(
+it.each(["current", "private draft", "start", "credentials", "scope", "gateway", "dispose"])(
   "binds explicit discard to the captured startup owner: %s",
   async (change) => {
     const reload = vi.spyOn(chunkRecovery, "reloadControlUiDocument").mockImplementation(() => {});
@@ -157,12 +151,25 @@ it.each(["current", "start", "credentials", "scope", "gateway", "dispose"])(
     const { startup, input, gateway, client } = createPlacementStartupHarness(vi.fn(), {
       loadRuntime,
     });
+    const handoff = createChatAttachmentHandoff(gateway);
+    const show = vi.spyOn(toast, "showToast").mockReturnValue(false);
     try {
       startup.start({ ...input, persistRecovery: false });
       await flushStartupMicrotasks();
       const discard = startup.get(input.recovery.sessionKey)?.discardAndReload;
       expect(discard).toBeTypeOf("function");
-      if (change === "start") {
+      if (change === "private draft") {
+        handoff.prepare({
+          owner: gateway.snapshot.client,
+          paneId: "private-pane",
+          scopeKey: "private-draft",
+          incognito: true,
+          message: "Keep this separate private draft",
+          attachments: [],
+          fallbacks: {},
+          reviewPrivateDraft: reviewPrivateComposerDraft,
+        });
+      } else if (change === "start") {
         startup.start({
           ...input,
           persistRecovery: false,
@@ -179,14 +186,51 @@ it.each(["current", "start", "credentials", "scope", "gateway", "dispose"])(
       }
       discard?.();
       expect(reload).toHaveBeenCalledTimes(change === "current" ? 1 : 0);
-      if (change === "current") {
-        expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
+      if (change === "current" || change === "private draft") {
+        expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
+      }
+      if (change === "private draft") {
+        expect(show.mock.lastCall?.[0].actionLabel).toBe("Review private draft");
+        expect(
+          handoff.consume({
+            owner: gateway.snapshot.client,
+            paneId: "private-pane",
+            scopeKey: "private-draft",
+          })?.message,
+        ).toBe("Keep this separate private draft");
       }
     } finally {
+      handoff.dispose();
       startup.dispose();
     }
   },
 );
+
+it("cannot dispatch a discarded unsaved start when its lazy runtime later settles", async () => {
+  const show = vi.spyOn(toast, "showToast").mockReturnValue(false);
+  const reload = vi.spyOn(chunkRecovery, "reloadControlUiDocument").mockImplementation(() => {});
+  const loading = createDeferred<{ default: typeof createApplicationPlacementStartupRuntime }>();
+  const request = vi.fn();
+  const { startup, input } = createPlacementStartupHarness(request, {
+    loadRuntime: () => loading.promise,
+  });
+  sessionStorage.clear();
+  try {
+    startup.start({ ...input, persistRecovery: false });
+    expect(canReloadControlUiDocument(true)).toBe(false);
+    const discard = show.mock.lastCall?.[0].onAction;
+    expect(discard).toBeTypeOf("function");
+    discard?.();
+    expect(reload).toHaveBeenCalledOnce();
+    expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
+    loading.resolve({ default: createApplicationPlacementStartupRuntime });
+    await flushStartupMicrotasks();
+    expect(request).not.toHaveBeenCalled();
+    expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
+  } finally {
+    startup.dispose();
+  }
+});
 
 it("rejects a retained toast action when another unsaved start joins the same pending import", async () => {
   const show = vi.spyOn(toast, "showToast").mockReturnValue(false);

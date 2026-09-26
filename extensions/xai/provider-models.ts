@@ -8,11 +8,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveXaiCatalogEntry, XAI_BASE_URL } from "./model-definitions.js";
-import { normalizeXaiModelId, resolveXaiOAuthAutoModelId } from "./model-id.js";
+import { resolveXaiForwardCompatDefinition, XAI_BASE_URL } from "./model-definitions.js";
+import { normalizeXaiModelId } from "./model-id.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
 const XAI_MODERN_MODEL_PREFIXES = [
+  "grok-4.7",
   "grok-4.6",
   "grok-4.5",
   "grok-build-0.1",
@@ -33,7 +34,7 @@ export function resolveXaiForwardCompatModel(params: {
   providerId: string;
   ctx: ProviderResolveDynamicModelContext;
 }) {
-  const definition = resolveXaiCatalogEntry(params.ctx.modelId);
+  const definition = resolveXaiForwardCompatDefinition(params.ctx.modelId);
   if (!definition) {
     return undefined;
   }
@@ -55,7 +56,5 @@ export function resolveXaiForwardCompatModel(params: {
 }
 
 export function normalizeXaiResolvedModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  const resolvedModelId = resolveXaiOAuthAutoModelId(model.id, model.params);
-  const resolved = resolvedModelId === model.id ? model : { ...model, id: resolvedModelId };
-  return { ...applyXaiRuntimeModelCompat(resolved), id: model.id };
+  return applyXaiRuntimeModelCompat(model);
 }

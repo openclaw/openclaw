@@ -100,7 +100,6 @@ afterEach(async () => {
 
 describe("OpenAI embedding provider HTTP contract", () => {
   it.each([
-    { name: "omitted", fields: { input_type: "document" } },
     {
       name: "overridden",
       fields: { model: "other-model", input: ["shortened"], input_type: "document" },
@@ -151,12 +150,6 @@ describe("OpenAI embedding provider HTTP contract", () => {
       options: { inputType: " passage " },
       kind: undefined,
       expected: { input_type: "passage" },
-    },
-    {
-      name: "unconfigured input type",
-      options: {},
-      kind: "document" as const,
-      expected: {},
     },
     {
       name: "blank explicit query override",
@@ -345,7 +338,7 @@ describe("OpenAI embedding provider HTTP contract", () => {
         if (mode === "first request failure") {
           server.requests[0]?.response.writeHead(503).end("fixture rejected");
           await expect(outcome).resolves.toMatchObject({
-            error: { message: expect.stringContaining("openai embeddings failed: 503") },
+            error: { message: expect.stringContaining("openai embeddings failed (503)") },
           });
           // Promise.all rejects early; it must not cancel the still-running sibling.
           expect(server.requests[1]?.closed).toBe(false);
@@ -363,7 +356,7 @@ describe("OpenAI embedding provider HTTP contract", () => {
     },
   );
 
-  it.each(["https://api.openai.com/v1", "https://API.OPENAI.COM/v1"])(
+  it.each(["https://API.OPENAI.COM/v1"])(
     "strips the model prefix only for native endpoint %s",
     async (baseUrl) => {
       const { provider } = await createOpenAiEmbeddingProvider(

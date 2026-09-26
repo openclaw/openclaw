@@ -7,11 +7,15 @@ extension OpenClawChatViewModel {
         let session = self.currentSessionSnapshot()
         let target = self.progressCardTarget(for: session)
         let canonical = target?.sessionKey ?? session.key
-        guard Self.matchesCurrentSessionKey(
+        let owner = target?.agentID ?? session.deliveryAgentID
+        let matchesGlobalCardID = canonical == "global" && owner.map {
+            event.sessionkey == "agent:\($0):global"
+        } == true
+        guard matchesGlobalCardID || Self.matchesCurrentSessionKey(
             incoming: event.sessionkey,
             current: canonical,
             mainSessionKey: self.resolvedMainSessionKey,
-            activeAgentId: target?.agentID ?? session.deliveryAgentID)
+            activeAgentId: owner)
         else { return }
 
         // Global and ordinary rows can share a wire key. Events invalidate; only the

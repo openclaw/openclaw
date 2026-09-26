@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   filterOpenClawChildExecArgv,
@@ -42,7 +43,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
         argv1: repoSourceEntry,
         cwd: repoRoot,
         execArgv: [...runtimeArgs, ...tsxArgs],
-        execPath: process.execPath,
+        execPath: resolveTestNodeExecPath(),
       });
       expect(invocation.args).toEqual([
         ...runtimeArgs,

@@ -10,13 +10,13 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
+import { listTaskRecords } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { isCronJobActive, markCronJobActive } from "../active-jobs.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { createCronExecutionId } from "../run-id.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove } from "./ops-mutations.js";
@@ -69,9 +69,7 @@ function startBatch(
 }
 
 function findCronTask(jobId: string) {
-  return listTaskRecordsUnsorted().find(
-    (task) => task.runtime === "cron" && task.sourceId === jobId,
-  );
+  return listTaskRecords().find((task) => task.runtime === "cron" && task.sourceId === jobId);
 }
 
 function authorOutcome(
@@ -223,12 +221,12 @@ describe("cron batch outcome finalization", () => {
 
         expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
         expect(
-          listTaskRecordsUnsorted().filter(
+          listTaskRecords().filter(
             (record) => record.runtime === "cron" && record.sourceId === job.id,
           ),
         ).toEqual([expect.objectContaining({ runId: task?.runId, status: "succeeded" })]);
         expect(
-          readCronTaskRunHistoryPage({
+          readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(store.storePath),
             jobId: job.id,
           }).entries,

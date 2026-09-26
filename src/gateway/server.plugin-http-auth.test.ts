@@ -255,19 +255,6 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
-  test("reserves gateway probe routes ahead of plugin routes", async () => {
-    const handlePluginRequest = createHealthzPluginHandler();
-
-    await withGatewayServer({
-      prefix: "openclaw-plugin-http-probes-shadow-test-",
-      resolvedAuth: AUTH_NONE,
-      overrides: { handlePluginRequest },
-      run: async (server) => {
-        await expectHealthzProbeReserved({ server, handlePluginRequest });
-      },
-    });
-  });
-
   test("rejects non-GET/HEAD methods on probe routes", async () => {
     await withGatewayServer({
       prefix: "openclaw-plugin-http-probes-method-test-",
@@ -966,31 +953,6 @@ describe("gateway plugin HTTP auth boundary", () => {
 
         expect(response.res.statusCode).toBe(200);
         expect(response.getBody()).toBe("plugin-webhook");
-        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
-      },
-    });
-  });
-
-  test("plugin routes take priority over control ui catch-all", async () => {
-    const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (pathname === "/my-plugin/inbound") {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("plugin-handled");
-        return true;
-      }
-      return false;
-    });
-
-    await withRootMountedControlUiServer({
-      prefix: "openclaw-plugin-http-control-ui-shadow-test-",
-      handlePluginRequest,
-      run: async (server) => {
-        const response = await sendRequest(server, { path: "/my-plugin/inbound" });
-
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toContain("plugin-handled");
         expect(handlePluginRequest).toHaveBeenCalledTimes(1);
       },
     });

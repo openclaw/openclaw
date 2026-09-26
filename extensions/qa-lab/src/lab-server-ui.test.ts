@@ -1,10 +1,10 @@
-// Qa Lab tests cover lab server ui plugin behavior.
 import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import net, { type NetConnectOpts, type Server, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
+import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   detectContentType,
@@ -46,6 +46,9 @@ describe("qa-lab server ui helpers", () => {
       "<!doctype html><html><head><title>QA Lab</title></head><body><div id='app'></div></body></html>",
       "utf8",
     );
+    const chunkPath = path.join(uiDistDir, "assets", "nested", "chunk.js");
+    await mkdir(path.dirname(chunkPath), { recursive: true });
+    await writeFile(chunkPath, "export const value = 1;", "utf8");
 
     const version1 = resolveUiAssetVersion(uiDistDir);
     expect(version1).toMatch(/^[0-9a-f]{12}$/);
@@ -59,6 +62,11 @@ describe("qa-lab server ui helpers", () => {
     const version2 = resolveUiAssetVersion(uiDistDir);
     expect(version2).toMatch(/^[0-9a-f]{12}$/);
     expect(version2).not.toBe(version1);
+
+    await writeFile(chunkPath, "export const value = 2;", "utf8");
+    const version3 = resolveUiAssetVersion(uiDistDir);
+    expect(version3).toMatch(/^[0-9a-f]{12}$/);
+    expect(version3).not.toBe(version2);
   });
 
   it("never resolves sibling files outside the UI dist root", async () => {
@@ -101,7 +109,8 @@ const BAD_GATEWAY_RESPONSE = "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\
 const GATEWAY_TIMEOUT_RESPONSE = "HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n";
 
 const TEST_TLS_OPTIONS = {
-  ciphers: "aNULL:@SECLEVEL=0",
+  cert: PROXY_FIXTURE_CERTIFICATE,
+  key: PROXY_FIXTURE_KEY,
   minVersion: "TLSv1.2",
   maxVersion: "TLSv1.2",
 } as const;
@@ -396,12 +405,12 @@ describe("proxyUpgradeRequest loopback transport", () => {
   });
 
   it("returns a flushed 502 when the upstream connection is refused", async () => {
+    const { browser, proxySocket } = await openBrowserPair();
     const refusedServer = net.createServer();
     const refusedPort = await listenLoopback(refusedServer);
     await new Promise<void>((resolve) => {
       refusedServer.close(() => resolve());
     });
-    const { browser, proxySocket } = await openBrowserPair();
     const endSpy = vi.spyOn(proxySocket, "end");
     const responsePromise = readToEnd(browser);
 

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements inbound context behavior.
 import {
   filterChannelInboundQuoteContext,
   formatMediaPlaceholderText,
@@ -6,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { HistoryMediaEntry } from "openclaw/plugin-sdk/reply-history";
 import { filterSupplementalContextItems } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   getComparableIdentityValues,
   getReplyContext,
@@ -15,7 +15,6 @@ import {
 } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
-import { normalizeE164 } from "../../text-runtime.js";
 
 export type GroupHistoryEntry = {
   sender: string;

@@ -14,15 +14,18 @@ generic policy: DM/group allowlists, pairing-store DM entries, route gates,
 command gates, event auth, mention activation, redacted diagnostics, and
 admission.
 
-Use `openclaw/plugin-sdk/channel-ingress-runtime` for receive paths.
+Use `runtime.channel.inbound.ingress` for receive paths. Import identity and
+policy utilities from `openclaw/plugin-sdk/channel-ingress-runtime`.
 
 ## Runtime resolver
 
+In this example, `cfg` is the root OpenClaw configuration and `config` is the
+resolved channel-account configuration. Supply `runtime`, `normalizePlatformUserId`,
+`route`, `agentRoute`, `readStoreAllowFrom`, and the message facts from your
+plugin's receive path.
+
 ```ts
-import {
-  defineStableChannelIngressIdentity,
-  resolveChannelMessageIngress,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { defineStableChannelIngressIdentity } from "openclaw/plugin-sdk/channel-ingress-runtime";
 
 const identity = defineStableChannelIngressIdentity({
   key: "platform-user-id",
@@ -30,7 +33,7 @@ const identity = defineStableChannelIngressIdentity({
   sensitivity: "pii",
 });
 
-const result = await resolveChannelMessageIngress({
+const result = await runtime.channel.inbound.ingress.resolve({
   channelId: "my-channel",
   accountId,
   identity,
@@ -68,10 +71,29 @@ Do not precompute effective allowlists, command owners, or command groups.
 The resolver derives them from raw allowlists, store callbacks, route
 descriptors, access groups, policy, and conversation kind.
 
+The runtime exposes `createResolver`, `resolve`, and `resolveStable` with the
+same inputs as the standalone SDK helpers. Its resolver and `buildContext`
+share one host instance and plugin lifetime. Use both from the same runtime;
+another Gateway or a replacement plugin cannot redeem the result.
+
+The standalone `resolveChannelMessageIngress`,
+`resolveStableChannelMessageIngress`, and `createChannelIngressResolver`
+helpers retain the receive-path contract documented in OpenClaw 2026.9.5.
+In a host-managed callback of a trusted,
+active channel plugin, they delegate to that exact plugin instance's registered
+runtime, preserving participant attribution when the result enters its
+`buildContext`. A factory created during registration retains its creating
+instance; calling it from another plugin does not borrow that plugin's authority.
+Unqualified calls remain policy-only. Retired instances and stale or mismatched
+handoffs cannot attach trusted identity. New receive paths should use the
+explicit runtime methods above; existing standalone callers remain supported.
+
 For a result that will enter a host context, resolve after the channel's route
 owner has selected the final agent and session. `contextBinding` freezes those
-facts with the stable transport message id (when present) and final inbound
-event kind. Decision-only checks may omit it, but such a result is not valid
+facts with the final host-context message id (after any reply-ID mapping) and
+inbound event kind. Set `contextBinding.nativeChannelId` to the host context's
+`reply.nativeChannelId ?? conversation.nativeChannelId`, even when it equals
+the conversation's `id`. Decision-only checks may omit the binding, but such a result is not valid
 execution provenance and must not be passed as `channelIngress`. When a channel
 batches several admitted messages, pass their exact results in source order;
 the finalized context message id identifies the last source result.
@@ -143,7 +165,7 @@ The audit states are distinct:
   yield a present invoker and enforced or attribution-only coverage.
 - **unknown**: a supported handoff was missing, stale, fake, reused, mixed, or
   otherwise failed host validation. Unknown never means allowed.
-- **unsupported**: a named path has no Phase 0 authoritative integration and
+- **unsupported**: a named path has no authoritative ingress-resolver integration and
   explicitly passes `channelIngress: "unsupported"`. Unsupported never means
   allowed and is not a shortcut for incomplete wiring.
 
@@ -296,3 +318,9 @@ diagnostic ids.
 pnpm test src/channels/message-access/message-access.test.ts src/plugin-sdk/channel-ingress-runtime.test.ts
 pnpm plugin-sdk:api:diff --base "$(git merge-base origin/main HEAD)" --head HEAD
 ```
+
+## Related
+
+- [Channel inbound API](/plugins/sdk-channel-inbound) — the receive path that consumes this resolver result as `channelIngress`
+- [Channel outbound API](/plugins/sdk-channel-outbound) — the send side of the same channel plugin
+- [Building channel plugins](/plugins/sdk-channel-plugins) — the full channel plugin walkthrough

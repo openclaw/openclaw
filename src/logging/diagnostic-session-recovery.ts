@@ -1,4 +1,3 @@
-// Diagnostic session recovery types describe session recovery diagnostic payloads.
 import type {
   DiagnosticSessionActiveWorkKind,
   DiagnosticSessionState,
@@ -24,6 +23,8 @@ export type StuckSessionRecoveryRequest = {
   ageMs: number;
   queueDepth?: number;
   allowActiveAbort?: boolean;
+  /** Revalidate semantic no-progress evidence after deferred recovery dispatch. */
+  repeatedRequestNoProgressAbortMs?: number;
   expectedState?: DiagnosticSessionState;
   stateGeneration?: number;
   /**

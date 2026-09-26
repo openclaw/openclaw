@@ -1,12 +1,42 @@
 // Memory Core tests cover hybrid plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  bm25RankToScore,
   buildFtsQuery,
   mergeHybridResults,
   scoreExactPathTieForTemporalDecay,
   selectHybridSearchResults,
 } from "./hybrid.js";
+import { bm25RankToScore } from "./keyword-query.js";
+
+type HybridInputs = Parameters<typeof mergeHybridResults>[0];
+type VectorHit = HybridInputs["vector"][number];
+type KeywordHit = HybridInputs["keyword"][number];
+
+function vectorHit(id: string, vectorScore: number, details: Partial<VectorHit> = {}): VectorHit {
+  return {
+    id,
+    path: `memory/${id}.md`,
+    startLine: 1,
+    endLine: 2,
+    source: "memory",
+    snippet: id,
+    vectorScore,
+    ...details,
+  };
+}
+
+function keywordHit(id: string, textScore: number, details: Partial<KeywordHit> = {}): KeywordHit {
+  return {
+    id,
+    path: `memory/${id}.md`,
+    startLine: 1,
+    endLine: 2,
+    source: "memory",
+    snippet: id,
+    textScore,
+    ...details,
+  };
+}
 
 describe("memory hybrid helpers", () => {
   it("buildFtsQuery tokenizes and AND-joins", () => {
@@ -42,115 +72,19 @@ describe("memory hybrid helpers", () => {
     expect(scoreExactPathTieForTemporalDecay(2)).toBe(1);
   });
 
-  it("mergeHybridResults unions by id and combines weighted scores", async () => {
-    const merged = await mergeHybridResults({
-      vectorWeight: 0.7,
-      textWeight: 0.3,
-      vector: [
-        {
-          id: "a",
-          path: "memory/a.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "vec-a",
-          vectorScore: 0.9,
-        },
-      ],
-      keyword: [
-        {
-          id: "b",
-          path: "memory/b.md",
-          startLine: 3,
-          endLine: 4,
-          source: "memory",
-          snippet: "kw-b",
-          textScore: 1,
-        },
-      ],
-    });
-
-    expect(merged).toHaveLength(2);
-    const a = merged.find((r) => r.path === "memory/a.md");
-    const b = merged.find((r) => r.path === "memory/b.md");
-    expect(a?.score).toBeCloseTo(0.7 * 0.9);
-    expect(a?.vectorScore).toBeCloseTo(0.9);
-    expect(a?.textScore).toBe(0);
-    expect(b?.score).toBeCloseTo(0.3 * 1);
-    expect(b?.vectorScore).toBe(0);
-    expect(b?.textScore).toBeCloseTo(1);
-  });
-
-  it("uses spare result capacity for below-threshold keyword-only hits", async () => {
-    const keyword = {
-      id: "keyword",
-      path: "memory/keyword.md",
-      startLine: 3,
-      endLine: 4,
-      source: "memory",
-      snippet: "keyword-only match",
-      textScore: 1,
-    };
-    const merged = await mergeHybridResults({
-      vectorWeight: 0.7,
-      textWeight: 0.3,
-      vector: [
-        {
-          id: "strict",
-          path: "memory/strict.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "strict vector match",
-          vectorScore: 0.9,
-        },
-      ],
-      keyword: [keyword],
-    });
-
-    const selected = selectHybridSearchResults({
-      merged,
-      keyword: [keyword],
-      maxResults: 2,
-      minScore: 0.35,
-    });
-
-    expect(selected.map((entry) => entry.path)).toEqual(["memory/strict.md", "memory/keyword.md"]);
-  });
-
   it("does not let MMR-ranked keyword-only hits displace strict results", async () => {
-    const keyword = {
-      id: "keyword",
+    const keyword = keywordHit("keyword", 1, {
       path: "memory/keyword-first.md",
-      startLine: 1,
       endLine: 1,
-      source: "memory",
       snippet: "unrelated lexical topic",
-      textScore: 1,
-    };
+    });
     const merged = await mergeHybridResults({
       vectorWeight: 0.7,
       textWeight: 0.3,
       mmr: { enabled: true, lambda: 0.2 },
       vector: [
-        {
-          id: "strict-first",
-          path: "memory/strict-first.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
-          snippet: "shared semantic topic",
-          vectorScore: 1,
-        },
-        {
-          id: "strict-later",
-          path: "memory/strict-later.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
-          snippet: "shared semantic topic",
-          vectorScore: 0.9,
-        },
+        vectorHit("strict-first", 1, { endLine: 1, snippet: "shared semantic topic" }),
+        vectorHit("strict-later", 0.9, { endLine: 1, snippet: "shared semantic topic" }),
       ],
       keyword: [keyword],
     });
@@ -196,15 +130,7 @@ describe("memory hybrid helpers", () => {
   });
 
   it("keeps null importance neutral and deterministically boosts important entries", async () => {
-    const baseEntry = {
-      id: "neutral",
-      path: "MEMORY.md",
-      startLine: 1,
-      endLine: 1,
-      source: "memory" as const,
-      snippet: "neutral",
-      vectorScore: 0.8,
-    };
+    const baseEntry = vectorHit("neutral", 0.8, { path: "MEMORY.md", endLine: 1 });
     const base = {
       vectorWeight: 1,
       textWeight: 0,
@@ -233,35 +159,18 @@ describe("memory hybrid helpers", () => {
       activeProjectKeys: ["github.com/openclaw/openclaw"],
       keyword: [],
       vector: [
-        {
-          id: "same",
+        vectorHit("same", 0.8, {
           path: "MEMORY.md",
-          startLine: 1,
           endLine: 1,
-          source: "memory",
-          snippet: "same",
-          vectorScore: 0.8,
           projectKey: "github.com/openclaw/openclaw",
-        },
-        {
-          id: "global",
-          path: "MEMORY.md",
-          startLine: 2,
-          endLine: 2,
-          source: "memory",
-          snippet: "global",
-          vectorScore: 0.8,
-        },
-        {
-          id: "foreign",
+        }),
+        vectorHit("global", 0.8, { path: "MEMORY.md", startLine: 2 }),
+        vectorHit("foreign", 0.8, {
           path: "MEMORY.md",
           startLine: 3,
           endLine: 3,
-          source: "memory",
-          snippet: "foreign",
-          vectorScore: 0.8,
           projectKey: "github.com/example/other",
-        },
+        }),
       ],
     });
     expect(merged.map((entry) => [entry.snippet, entry.score])).toEqual([
@@ -290,43 +199,14 @@ describe("memory hybrid helpers", () => {
       activeProjectKeys,
       keyword: [],
       vector: [
-        {
-          id: "primary",
-          path: "memory/primary.md",
-          startLine: 1,
+        vectorHit("primary", 0.9, { endLine: 1, snippet: "alpha beta gamma" }),
+        vectorHit("duplicate", 0.8, {
           endLine: 1,
-          source: "memory",
-          snippet: "alpha beta gamma",
-          vectorScore: 0.9,
-        },
-        {
-          id: "duplicate",
-          path: "memory/duplicate.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
           snippet: "alpha beta gamma delta",
-          vectorScore: 0.8,
           projectKey: "active-project",
-        },
-        {
-          id: "diverse",
-          path: "memory/diverse.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
-          snippet: "whiskey tango",
-          vectorScore: 0.75,
-        },
-        {
-          id: "floor",
-          path: "memory/floor.md",
-          startLine: 1,
-          endLine: 1,
-          source: "memory",
-          snippet: "alpha",
-          vectorScore: 0.2,
-        },
+        }),
+        vectorHit("diverse", 0.75, { endLine: 1, snippet: "whiskey tango" }),
+        vectorHit("floor", 0.2, { endLine: 1, snippet: "alpha" }),
       ],
     });
 
@@ -339,16 +219,11 @@ describe("memory hybrid helpers", () => {
       textWeight: 0.3,
       vector: [],
       keyword: [
-        {
-          id: "partial-path",
+        keywordHit("partial-path", 0, {
           path: "memory/project-lantern-notes.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "unrelated body",
-          textScore: 0,
           pathScore: 0.8,
-        },
+        }),
       ],
     });
 
@@ -364,40 +239,25 @@ describe("memory hybrid helpers", () => {
       nowMs: Date.UTC(2026, 6, 11),
       temporalDecay: { enabled: true, halfLifeDays: 30 },
       vector: [
-        {
-          id: "stale",
+        vectorHit("stale", 1, {
           path: "memory/2020-01-01.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "stale content-backed body",
-          vectorScore: 1,
           exactPathSpecificity: 1,
-        },
+        }),
       ],
       keyword: [
-        {
-          id: "stale",
+        keywordHit("stale", 0, {
           path: "memory/2020-01-01.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "unrelated stale body",
-          textScore: 0,
           pathScore: 1,
           exactPathSpecificity: 1,
-        },
-        {
-          id: "fresh",
+        }),
+        keywordHit("fresh", 0, {
           path: "memory/2026-07-10.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "unrelated fresh body",
-          textScore: 0,
           pathScore: 0.01,
           exactPathSpecificity: 1,
-        },
+        }),
       ],
     });
 
@@ -413,40 +273,10 @@ describe("memory hybrid helpers", () => {
     const merged = await mergeHybridResults({
       vectorWeight: 1,
       textWeight: 0,
-      vector: [
-        {
-          id: "vector",
-          path: "memory/z/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "vector",
-          vectorScore: -1,
-          exactPathSpecificity: 2,
-        },
-      ],
+      vector: [vectorHit("vector", -1, { path: "memory/z/foo.md", exactPathSpecificity: 2 })],
       keyword: [
-        {
-          id: "body",
-          path: "memory/y/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "body",
-          textScore: 1,
-          exactPathSpecificity: 2,
-        },
-        {
-          id: "path",
-          path: "memory/a/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "path",
-          textScore: 0,
-          pathScore: 1,
-          exactPathSpecificity: 2,
-        },
+        keywordHit("body", 1, { path: "memory/y/foo.md", exactPathSpecificity: 2 }),
+        keywordHit("path", 0, { path: "memory/a/foo.md", pathScore: 1, exactPathSpecificity: 2 }),
       ],
     });
 
@@ -462,39 +292,24 @@ describe("memory hybrid helpers", () => {
       vectorWeight: 1,
       textWeight: 1,
       vector: [
-        {
-          id: "cancelled",
+        vectorHit("cancelled", -1, {
           path: "memory/z/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "negative vector",
-          vectorScore: -1,
           exactPathSpecificity: 2,
-        },
+        }),
       ],
       keyword: [
-        {
-          id: "cancelled",
+        keywordHit("cancelled", 0.5, {
           path: "memory/z/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "weak body",
-          textScore: 0.5,
           exactPathSpecificity: 2,
-        },
-        {
-          id: "path",
+        }),
+        keywordHit("path", 0, {
           path: "memory/a/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "path only",
-          textScore: 0,
           pathScore: 1,
           exactPathSpecificity: 2,
-        },
+        }),
       ],
     });
 
@@ -508,37 +323,22 @@ describe("memory hybrid helpers", () => {
       mmr: { enabled: true, lambda: 0.5 },
       vector: [],
       keyword: [
-        {
-          id: "body",
+        keywordHit("body", 0.1, {
           path: "memory/z/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "body-backed result",
-          textScore: 0.1,
           exactPathSpecificity: 2,
-        },
-        {
-          id: "body-secondary",
+        }),
+        keywordHit("body-secondary", 0.05, {
           path: "memory/y/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "body-backed result",
-          textScore: 0.05,
           exactPathSpecificity: 2,
-        },
-        {
-          id: "path",
+        }),
+        keywordHit("path", 0, {
           path: "memory/a/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "path-only result",
-          textScore: 0,
           pathScore: 1,
           exactPathSpecificity: 2,
-        },
+        }),
       ],
     });
 
@@ -549,68 +349,17 @@ describe("memory hybrid helpers", () => {
     ]);
   });
 
-  it("keeps exact path identifiers ahead of weighted semantic matches", async () => {
-    const merged = await mergeHybridResults({
-      vectorWeight: 0.7,
-      textWeight: 0.3,
-      vector: [
-        {
-          id: "semantic",
-          path: "memory/semantic.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "semantic",
-          vectorScore: 0.99,
-        },
-      ],
-      keyword: [
-        {
-          id: "exact-path",
-          path: "memory/project-lantern.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "path",
-          textScore: 0.01,
-          exactPathSpecificity: 1,
-        },
-      ],
-    });
-
-    expect(merged.map((entry) => entry.path)).toEqual([
-      "memory/project-lantern.md",
-      "memory/semantic.md",
-    ]);
-    expect(merged[0]?.score).toBe(1);
-    expect(merged[0]?.textScore).toBe(0.01);
-    expect(merged[1]?.score).toBeCloseTo(0.7 * 0.99);
-  });
-
   it("keeps vector-only exact path candidates ahead of stronger semantic matches", async () => {
     const merged = await mergeHybridResults({
       vectorWeight: 1,
       textWeight: 1,
       vector: [
-        {
-          id: "semantic",
-          path: "memory/semantic.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "semantic",
-          vectorScore: 0.99,
-        },
-        {
-          id: "exact-vector",
+        vectorHit("semantic", 0.99),
+        vectorHit("exact-vector", 0.2, {
           path: "memory/deep/README.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "exact vector",
-          vectorScore: 0.2,
           exactPathSpecificity: 2,
-        },
+        }),
       ],
       keyword: [],
     });
@@ -628,97 +377,32 @@ describe("memory hybrid helpers", () => {
       vectorWeight: 0.5,
       textWeight: 0.5,
       vector: [
-        {
-          id: "full",
-          path: "memory/full.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "full",
-          vectorScore: 0,
-        },
-        {
-          id: "basename-weak",
-          path: "memory/a/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "basename weak",
-          vectorScore: 0.2,
-        },
-        {
-          id: "basename-strong",
-          path: "memory/z/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "basename strong",
-          vectorScore: 0.9,
-        },
-        {
-          id: "stem",
-          path: "memory/foo.md.bak",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "stem",
-          vectorScore: 1,
-        },
+        vectorHit("full", 0),
+        vectorHit("basename-weak", 0.2, { path: "memory/a/foo.md", snippet: "basename weak" }),
+        vectorHit("basename-strong", 0.9, { path: "memory/z/foo.md", snippet: "basename strong" }),
+        vectorHit("stem", 1, { path: "memory/foo.md.bak" }),
       ],
       keyword: [
-        {
-          id: "full",
-          path: "memory/full.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "full",
-          textScore: 0,
-          exactPathSpecificity: 3,
-        },
-        {
-          id: "basename-weak",
+        keywordHit("full", 0, { exactPathSpecificity: 3 }),
+        keywordHit("basename-weak", 0.1, {
           path: "memory/a/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "basename weak",
-          textScore: 0.1,
           pathScore: 1,
           exactPathSpecificity: 2,
-        },
-        {
-          id: "basename-path-only",
+        }),
+        keywordHit("basename-path-only", 0, {
           path: "memory/0/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "basename path only",
-          textScore: 0,
           pathScore: 1,
           exactPathSpecificity: 2,
-        },
-        {
-          id: "basename-strong",
+        }),
+        keywordHit("basename-strong", 0.8, {
           path: "memory/z/foo.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "basename strong",
-          textScore: 0.8,
           pathScore: 0.01,
           exactPathSpecificity: 2,
-        },
-        {
-          id: "stem",
-          path: "memory/foo.md.bak",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "stem",
-          textScore: 1,
-          exactPathSpecificity: 1,
-        },
+        }),
+        keywordHit("stem", 1, { path: "memory/foo.md.bak", exactPathSpecificity: 1 }),
       ],
     });
 
@@ -739,37 +423,14 @@ describe("memory hybrid helpers", () => {
       nowMs: Date.UTC(2026, 6, 11),
       temporalDecay: { enabled: true, halfLifeDays: 1 },
       mmr: { enabled: true, lambda: 0.5 },
-      vector: [
-        {
-          id: "semantic",
-          path: "memory/semantic.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "semantic neighbor",
-          vectorScore: 1,
-        },
-      ],
+      vector: [vectorHit("semantic", 1, { snippet: "semantic neighbor" })],
       keyword: [
-        {
-          id: "semantic",
-          path: "memory/semantic.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "semantic neighbor",
-          textScore: 1,
-        },
-        {
-          id: "exact-path",
+        keywordHit("semantic", 1, { snippet: "semantic neighbor" }),
+        keywordHit("exact-path", 0.01, {
           path: "memory/2020-01-01.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
           snippet: "dated exact path",
-          textScore: 0.01,
           exactPathSpecificity: 1,
-        },
+        }),
       ],
     });
 
@@ -785,28 +446,8 @@ describe("memory hybrid helpers", () => {
     const merged = await mergeHybridResults({
       vectorWeight: 0.5,
       textWeight: 0.5,
-      vector: [
-        {
-          id: "a",
-          path: "memory/a.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "vec-a",
-          vectorScore: 0.2,
-        },
-      ],
-      keyword: [
-        {
-          id: "a",
-          path: "memory/a.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "kw-a",
-          textScore: 1,
-        },
-      ],
+      vector: [vectorHit("a", 0.2, { snippet: "vec-a" })],
+      keyword: [keywordHit("a", 1, { snippet: "kw-a" })],
     });
 
     expect(merged).toHaveLength(1);
@@ -917,43 +558,27 @@ describe("memory hybrid helpers", () => {
     expect(byPath.get(paths.bothText)?.score).toBeCloseTo(0.7 * 0.6 + 0.3 * 0.9);
   });
 
-  it.each([
-    {
-      name: "keeps media keyword scoring when vector weight is zero",
+  it("keeps media keyword scoring when vector weight is zero", async () => {
+    const merged = await mergeHybridResults({
       vectorWeight: 0,
       textWeight: 1,
-      path: "memory/photo.png",
+      isNonTextMediaPath: (candidatePath) => candidatePath.endsWith(".png"),
       vector: [vectorResult("candidate", "memory/photo.png", 0.95)],
       keyword: [keywordResult("candidate", "memory/photo.png", 0.8)],
-      expected: 0.8,
-    },
-    {
-      name: "keeps vector-only text scoring when weights total two",
-      vectorWeight: 1,
-      textWeight: 1,
-      path: "memory/notes.md",
-      vector: [vectorResult("candidate", "memory/notes.md", 0.6)],
-      keyword: [],
-      expected: 0.6,
-    },
-    {
-      name: "keeps both-signal text scoring when weights total two",
-      vectorWeight: 1,
-      textWeight: 1,
-      path: "memory/notes.md",
-      vector: [vectorResult("candidate", "memory/notes.md", 0.6)],
-      keyword: [keywordResult("candidate", "memory/notes.md", 0.9)],
-      expected: 1.5,
-    },
-  ])("$name", async ({ vectorWeight, textWeight, path, vector, keyword, expected }) => {
-    const merged = await mergeHybridResults({
-      vectorWeight,
-      textWeight,
-      isNonTextMediaPath: (candidatePath) => candidatePath.endsWith(".png"),
-      vector,
-      keyword,
     });
 
-    expect(merged.find((entry) => entry.path === path)?.score).toBeCloseTo(expected);
+    expect(merged.find((entry) => entry.path === "memory/photo.png")?.score).toBeCloseTo(0.8);
+  });
+
+  it("keeps vector-only text scoring when weights total two", async () => {
+    const merged = await mergeHybridResults({
+      vectorWeight: 1,
+      textWeight: 1,
+      isNonTextMediaPath: (candidatePath) => candidatePath.endsWith(".png"),
+      vector: [vectorResult("candidate", "memory/notes.md", 0.6)],
+      keyword: [],
+    });
+
+    expect(merged.find((entry) => entry.path === "memory/notes.md")?.score).toBeCloseTo(0.6);
   });
 });

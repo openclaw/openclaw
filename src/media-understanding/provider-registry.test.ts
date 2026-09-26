@@ -1,7 +1,6 @@
 // Provider registry tests cover runtime provider loading, normalization aliases,
-// manifest-only hook hydration, and config-derived image providers.
+// manifest-only image capability, and config-derived image providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -47,8 +46,7 @@ describe("media-understanding provider registry", () => {
     const registry = buildMediaUnderstandingRegistry();
 
     expect(requireMediaProvider(registry, "groq").id).toBe("groq");
-    expect(typeof requireMediaProvider(registry, "groq").describeImage).toBe("function");
-    expect(typeof requireMediaProvider(registry, "groq").describeImages).toBe("function");
+    expect(requireMediaProvider(registry, "groq").capabilities).toContain("image");
     expect(requireMediaProvider(registry, "deepgram").id).toBe("deepgram");
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
       key: "mediaUnderstandingProviders",
@@ -56,7 +54,7 @@ describe("media-understanding provider registry", () => {
     });
   });
 
-  it("hydrates manifest-only image providers with model-backed image hooks", () => {
+  it("keeps manifest-only image providers available for model-backed dispatch", () => {
     resolvePluginCapabilityProvidersMock.mockReturnValue([
       createMediaProvider({
         id: "zai",
@@ -69,11 +67,11 @@ describe("media-understanding provider registry", () => {
     const provider = requireMediaProvider(registry, "zai");
 
     expect(provider.defaultModels?.image).toBe("glm-4.6v");
-    expect(provider.describeImage).toBe(describeImageWithModel);
-    expect(provider.describeImages).toBe(describeImagesWithModel);
+    expect(provider.describeImage).toBeUndefined();
+    expect(provider.describeImages).toBeUndefined();
   });
 
-  it("resets earlier custom hooks when a prepared owner explicitly requests generic hooks", () => {
+  it("resets earlier custom hooks when a prepared owner requests model-backed dispatch", () => {
     const customImage = vi.fn(async () => ({ text: "custom image" }));
     const customImages = vi.fn(async () => ({ text: "custom images" }));
     const registry = buildMediaUnderstandingRegistry(undefined, undefined, [
@@ -94,11 +92,11 @@ describe("media-understanding provider registry", () => {
 
     const provider = requireMediaProvider(registry, "zai");
     expect(provider.defaultModels?.image).toBe("glm-4.6v");
-    expect(provider.describeImage).toBe(describeImageWithModel);
-    expect(provider.describeImages).toBe(describeImagesWithModel);
+    expect(provider.describeImage).toBeUndefined();
+    expect(provider.describeImages).toBeUndefined();
   });
 
-  it("keeps partial explicit overrides ahead of hydrated prepared hooks", () => {
+  it("preserves partial native overrides for dispatch", () => {
     const overrideImage = vi.fn(async () => ({ text: "override image" }));
     const registry = buildMediaUnderstandingRegistry(
       {
@@ -114,7 +112,7 @@ describe("media-understanding provider registry", () => {
 
     const provider = requireMediaProvider(registry, "zai");
     expect(provider.describeImage).toBe(overrideImage);
-    expect(provider.describeImages).toBe(describeImagesWithModel);
+    expect(provider.describeImages).toBeUndefined();
   });
 
   it("keeps provider id normalization behavior for capability providers", () => {
@@ -146,8 +144,8 @@ describe("media-understanding provider registry", () => {
 
     expect(glmProvider.id).toBe("glm");
     expect(glmProvider.capabilities).toEqual(["image"]);
-    expect(typeof glmProvider.describeImage).toBe("function");
-    expect(typeof glmProvider.describeImages).toBe("function");
+    expect(glmProvider.describeImage).toBeUndefined();
+    expect(glmProvider.describeImages).toBeUndefined();
     expect(textOnlyProvider).toBeUndefined();
   });
 

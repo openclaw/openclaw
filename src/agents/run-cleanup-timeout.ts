@@ -8,8 +8,9 @@ import {
   parseStrictPositiveInteger,
   resolveOptionalIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 // Cleanup failures follow the originating run across nested async cleanup.
@@ -69,14 +70,11 @@ function resolveCleanupTimeoutDetails(
 }
 
 function truncateCleanupTimeoutDetails(value: string): string {
-  if (value.length <= CLEANUP_TIMEOUT_DETAILS_MAX_CHARS) {
-    return value;
-  }
-  const prefixLength = Math.max(
-    0,
-    CLEANUP_TIMEOUT_DETAILS_MAX_CHARS - CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX.length,
-  );
-  return `${truncateUtf16Safe(value, prefixLength)}${CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX}`;
+  return truncateWithMarker(value, CLEANUP_TIMEOUT_DETAILS_MAX_CHARS, {
+    marker: CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX,
+    reserve: CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX.length,
+    trimEnd: false,
+  });
 }
 
 function resolveAgentCleanupStepTimeoutMs(params: {
@@ -177,6 +175,7 @@ async function settleAgentCleanupStep(
       );
       return { error };
     });
+  void trackAsyncWork(() => observedCleanupPromise).catch(() => {});
   const timeoutPromise = new Promise<"timeout">((resolve) => {
     timeoutHandle = setTimeout(() => {
       timedOut = true;

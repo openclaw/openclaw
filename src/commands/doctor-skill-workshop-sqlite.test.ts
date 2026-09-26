@@ -89,7 +89,11 @@ describe("doctor Skill Workshop SQLite migration", () => {
     };
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(skillFile, skillContent, "utf8");
-    importLegacySkillProposal({
+    await testState.writeText(
+      `skill-workshop/proposals/${record.id}/${record.draftFile}`,
+      skillContent,
+    );
+    await importLegacySkillProposal({
       record,
       ownerAgentId: "main",
       store: { env: testState.env },
@@ -99,6 +103,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
       inspectLegacySkillWorkshopMigration({ config: {}, env: testState.env }),
     ).resolves.toEqual({
       externalProposalCount: 1,
+      externalProposalDetails: [expect.stringContaining(proposalId)],
       externalProposalCountsByAgent: { main: 1 },
       legacyBackupRootCount: 0,
       preservedLegacyBackupRootCount: 0,
@@ -125,7 +130,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
     });
     await expect(
       migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
-    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+    ).resolves.toEqual({ changes: [], warnings: [], detected: 1, migrated: 0 });
   });
 
   it.each([

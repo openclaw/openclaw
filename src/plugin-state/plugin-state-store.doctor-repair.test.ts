@@ -106,7 +106,7 @@ describe("plugin state Doctor repair", () => {
     }
   });
 
-  it("pages past malformed rows and compares siblings' original JSON bytes", () => {
+  it("pages past malformed rows and compares siblings' original JSON bytes", async () => {
     const namespace = "raw-doctor-bindings";
     seedPluginStateEntriesForTests([
       { pluginId: "codex", namespace, key: "binding:a", value: { corrupt: true } },
@@ -132,7 +132,7 @@ describe("plugin state Doctor repair", () => {
       expect.objectContaining({ key: "binding:a", valueJson: "{malformed", expiresAt: null }),
     ]);
     expect(first[0]).not.toHaveProperty("value");
-    expect(() =>
+    await expect(
       pluginStateEntriesInKeyRange({
         pluginId: "codex",
         namespace,
@@ -140,7 +140,7 @@ describe("plugin state Doctor repair", () => {
         keyEndExclusive: "binding;",
         limit: 1,
       }),
-    ).toThrow(/corrupt JSON/);
+    ).rejects.toThrow(/corrupt JSON/);
 
     const siblings = pluginStateDoctorEntriesInKeyRange({
       pluginId: "codex",

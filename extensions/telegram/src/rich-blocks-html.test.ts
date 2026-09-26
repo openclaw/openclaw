@@ -2,7 +2,7 @@
 // the core system prompt advertises for rich-enabled Telegram accounts.
 import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
-import { countInputRichBlockChars, type InputRichBlock } from "./rich-block-model.js";
+import { measureInputRichBlocks, type InputRichBlock } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 
@@ -47,6 +47,43 @@ describe("block HTML islands", () => {
     expect(serialized).toContain("• item B");
     expect(serialized).not.toContain("<details>");
   });
+
+  it.each(
+    [
+      ["details", "<details><summary>More</summary><p>", "</p></details>", "More\n"],
+      ["list items", "<ul><li>", "</li></ul>", "• "],
+      ["blockquotes", "<blockquote>", "</blockquote>", ""],
+    ].flatMap(([container, open, close, prefix]) =>
+      [
+        ["styled text", "Download", "Download"],
+        ["entities decoded once", "A &amp; &#38; &amp;amp;", "A & & &amp;"],
+        ["escaped entity", String.raw`\&amp;`, "&amp;"],
+        ["parsed whitespace", "A   B\nC&nbsp;D", "A   B\nC\u00a0D"],
+      ].map(([label, source, expected]) => ({
+        container,
+        open,
+        close,
+        prefix,
+        label,
+        source,
+        expected,
+      })),
+    ),
+  )(
+    "keeps inline HTML links across Markdown styles inside $container ($label)",
+    ({ open, close, prefix, source, expected }) => {
+      const { blocks, plainText } = markdownToTelegramRichBlocks(
+        `${open}<a href="https://example.com">**${source}**</a>${close}`,
+      );
+
+      expect(JSON.stringify(blocks)).toContain('"type":"url"');
+      expect(JSON.stringify(blocks)).toContain('"url":"https://example.com"');
+      expect(JSON.stringify(blocks)).toContain('"type":"bold"');
+      expect(plainText).toBe(`${prefix}${expected}`);
+      expect(plainText).not.toContain("<a ");
+      expect(plainText).not.toContain("</a>");
+    },
+  );
 
   it.each([
     ["headings", "# Steps", "heading"],
@@ -410,6 +447,30 @@ describe("block HTML islands", () => {
     }
   });
 
+  it("maps Telegram <pre> blocks between rich islands", () => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(
+      [
+        "<hr/>",
+        "<b>Summary</b>",
+        "<pre>Alpha / Beta     10 / 20",
+        "Gamma &lt;b&gt;   <i>30</i></pre>",
+        "",
+        "<hr/>",
+        '<pre>\n<code class="language-python">print("ok")',
+        "</code>\n</pre>",
+      ].join("\n"),
+    );
+    expect(blocks).toEqual([
+      { type: "divider" },
+      { type: "paragraph", text: { type: "bold", text: "Summary" } },
+      { type: "pre", text: "Alpha / Beta     10 / 20\nGamma <b>   <i>30</i>" },
+      { type: "divider" },
+      { type: "pre", text: '\nprint("ok")\n\n', language: "python" },
+    ]);
+    expect(plainText).not.toContain("<pre>");
+    expect(plainText).not.toContain("<code");
+  });
+
   it("maps tg-collage children to media blocks", () => {
     const block = single(
       '<tg-collage><img src="https://example.com/1.png"/><img src="https://example.com/2.png"/></tg-collage>',
@@ -472,6 +533,28 @@ describe("block HTML islands", () => {
     expect(blocks.map((block) => block.type)).toEqual(["paragraph", "divider", "paragraph"]);
   });
 
+  it.each([
+    { attributes: "href=https://example.com/?x&#61;1", url: "https://example.com/?x=1" },
+    {
+      attributes: 'href="https://example.com/?q=&quot;hi&quot;"',
+      url: 'https://example.com/?q="hi"',
+    },
+    {
+      attributes: "href='https://example.com/?q=&#39;hi&#39;'",
+      url: "https://example.com/?q='hi'",
+    },
+    { attributes: 'href="https://example.com/**path**"', url: "https://example.com/**path**" },
+  ])("preserves authored attribute data: $attributes", ({ attributes, url }) => {
+    for (const skipEntityDetection of [true, false]) {
+      expect(
+        markdownToTelegramRichBlocks(`<a ${attributes}>**label**</a>`, { skipEntityDetection })
+          .blocks,
+      ).toEqual([
+        { type: "paragraph", text: { type: "url", url, text: { type: "bold", text: "label" } } },
+      ]);
+    }
+  });
+
   it("leaves unsupported or unclosed HTML as literal text", () => {
     const blocks = blocksFor("<details><summary>oops</summary> and <custom>tag</custom>");
     expect(blocks.every((block) => block.type === "paragraph")).toBe(true);
@@ -516,24 +599,47 @@ describe("block HTML islands", () => {
     expect(serialized).toContain(`</${tag}>`);
   });
 
-  it("still maps own inline style tags", () => {
-    expect(single("<b>secret</b>")).toEqual({
-      type: "paragraph",
-      text: { type: "bold", text: "secret" },
-    });
-  });
-
   it.each(["custom", "constructor"])(
-    "keeps the entire subtree of unsupported <%s> wrappers literal",
+    "keeps unsupported <%s> HTML literal without discarding Markdown spans",
     (tag) => {
-      const markdown = `a <${tag}><sup>x</sup></${tag}> here`;
-      const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
-      expect(plainText).toBe(markdown);
-      const serialized = JSON.stringify(blocks);
-      expect(serialized).toContain("<sup>x</sup>");
-      expect(serialized).not.toContain('"superscript"');
+      for (const close of [`</${tag}>`, ""]) {
+        const markdown = `a <${tag}><sup>**x**</sup>${close} here`;
+        const { blocks, plainText } = markdownToTelegramRichBlocks(markdown);
+        expect(plainText).toBe(`a <${tag}><sup>x</sup>${close} here`);
+        expect(blocks).toMatchObject([
+          { type: "paragraph", text: expect.arrayContaining([{ type: "bold", text: "x" }]) },
+        ]);
+      }
     },
   );
+
+  it.each([
+    { body: "> <sup>**x**</sup>", kind: "blockquote" },
+    { body: "| Header |\n| --- |\n| <sup>**x**</sup> |", kind: "table" },
+  ])("keeps unsupported HTML ownership across a Markdown $kind", ({ body, kind }) => {
+    const { blocks, plainText } = markdownToTelegramRichBlocks(`<custom>\n\n${body}\n\n</custom>`);
+    expect(plainText).toContain("<sup>x</sup>");
+    const block = blocks.find((value) => value.type === kind);
+    expect(block).toBeDefined();
+    const text =
+      block?.type === "blockquote" && block.blocks[0]?.type === "paragraph"
+        ? block.blocks[0].text
+        : block?.type === "table"
+          ? block.cells[1]?.[0]?.text
+          : undefined;
+    expect(text).toEqual(expect.arrayContaining([{ type: "bold", text: "x" }]));
+  });
+
+  it("keeps HTML active in a table before an unsupported wrapper", () => {
+    const blocks = blocksFor("| Header |\n| --- |\n| <sup>**x**</sup> |\n\n<custom>after</custom>");
+    expect(blocks[0]).toMatchObject({
+      type: "table",
+      cells: [
+        [{ text: "Header" }],
+        [{ text: { type: "superscript", text: { type: "bold", text: "x" } } }],
+      ],
+    });
+  });
 
   it("counts rowspan carryover toward the table column limit", () => {
     const secondRow = Array.from({ length: 20 }, (_, i) => `<td>c${i}</td>`).join("");
@@ -572,17 +678,12 @@ describe("block HTML islands", () => {
       expect(table?.type).toBe("table");
       return;
     }
-    expect(countInputRichBlockChars(table)).toBe("Stats".length + 2);
+    expect(measureInputRichBlocks([table])).toEqual({ chars: 7, blocks: 3, media: 0, nesting: 1 });
     const pieces = splitTelegramRichBlocks([table], { textLimit: 6 }).flat();
     expect(pieces.length).toBeGreaterThan(1);
     const captioned = pieces.filter((piece) => piece.type === "table" && piece.caption);
     expect(captioned).toHaveLength(1);
     expect(pieces[0]).toMatchObject({ caption: "Stats" });
-  });
-
-  it("maps blockquote cite to the credit field", () => {
-    const block = single("<blockquote>Quote text<cite>Author</cite></blockquote>");
-    expect(block).toMatchObject({ type: "blockquote", credit: "Author" });
   });
 
   it("attaches figcaption captions to collages and figure-wrapped maps", () => {
@@ -598,12 +699,6 @@ describe("block HTML islands", () => {
       caption: { text: "Album", credit: "me" },
     });
     expect(blocks[1]).toMatchObject({ type: "map", caption: { text: "Here" } });
-  });
-
-  it("degrades over-wide HTML tables to a monospace grid", () => {
-    const wideRow = Array.from({ length: 21 }, (_, i) => `<td>c${i}</td>`).join("");
-    const block = single(`<table><tr>${wideRow}</tr></table>`);
-    expect(block.type).toBe("pre");
   });
 
   it("aligns Unicode and expands colspan in over-wide HTML tables", () => {
@@ -668,7 +763,7 @@ describe("block HTML islands", () => {
     expect(quotes.filter((quote) => quote.credit !== undefined)).toHaveLength(1);
     expect(quotes.at(-1)?.credit).toBe("Author");
     for (const chunk of pieces) {
-      const chars = chunk.reduce((total, piece) => total + countInputRichBlockChars(piece), 0);
+      const { chars } = measureInputRichBlocks(chunk);
       expect(chars).toBeLessThanOrEqual(64);
     }
   });

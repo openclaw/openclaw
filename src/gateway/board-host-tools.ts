@@ -24,8 +24,10 @@ import { isGatewaySubordinateWorkAdmissionClosed } from "../process/gateway-work
 import {
   BoardGatewayUnavailableError,
   type BoardViewTicketAuthorityInput,
+  verifyBoardViewTicket,
+  requireBoardViewTicketAuthority,
 } from "./board-view-ticket.js";
-import { resolveAuthorizedBoardWidgetView } from "./board-widget-view.js";
+import { withAuthorizedBoardWidgetView } from "./board-widget-view.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { cronHandlers } from "./server-methods/cron.js";
 import { healthHandlers } from "./server-methods/health.js";
@@ -46,7 +48,21 @@ export type BoardRequestAuthority = {
 
 export type BoardCapabilityAuthority = BoardRequestAuthority & {
   boardSession: Required<BoardSessionTarget>;
+  /** Validate the stored grant and start work together; assertActive only checks request liveness. */
+  useCurrent: <T>(start: () => T) => Promise<Awaited<T>>;
 };
+
+export function assertBoardCapabilityParamsSize(
+  params: Record<string, unknown>,
+  capability: "action" | "data binding",
+): void {
+  if (Buffer.byteLength(JSON.stringify(params), "utf8") > 8 * 1024) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board widget ${capability} params exceed 8192 UTF-8 bytes`,
+    );
+  }
+}
 
 export function boardDataBindingCapability(
   bindingId: string,
@@ -65,50 +81,61 @@ export function captureBoardCapabilityAuthority(
   capability: string,
 ): BoardCapabilityAuthority {
   const authority = captureBoardRequestAuthority(invocation);
-  const resolveSession = () => {
+  const claims = verifyBoardViewTicket(ticket);
+  if (!claims) {
+    throw new BoardValidationError("invalid_operation", "board widget view ticket is invalid");
+  }
+  requireBoardViewTicketAuthority(claims, invocation.context);
+  const resolveSession = (target: BoardSessionTarget) => {
     authority.assertActive();
-    const view = resolveAuthorizedBoardWidgetView(store, ticket, {
-      gatewayContext: invocation.context,
-    });
     const cfg = invocation.context.getRuntimeConfig();
-    const selected = resolveRequestedSessionAgentId(cfg, view.sessionKey, view.agentId);
+    const selected = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
     if (
       !selected.ok ||
       resolveSessionStoreKey({
         cfg,
-        sessionKey: view.sessionKey,
+        sessionKey: target.sessionKey,
         storeAgentId: selected.agentId,
-      }) !== view.sessionKey
+      }) !== target.sessionKey
     ) {
       throw new BoardValidationError(
         "invalid_operation",
         "board widget session identity changed; reload the dashboard",
       );
     }
-    if (!boardWidgetHasGrantedTool(view.document.declared, view.document.grantState, capability)) {
-      throw new BoardValidationError(
-        "invalid_operation",
-        `board widget tool is not granted: ${capability}`,
-      );
-    }
-    return { sessionKey: view.sessionKey, agentId: selected.agentId };
+    return { sessionKey: target.sessionKey, agentId: selected.agentId };
   };
-  const boardSession = resolveSession();
+  const boardSession = resolveSession(claims);
   return {
     ...authority,
     boardSession,
-    assertActive: () => {
-      const current = resolveSession();
-      if (
-        current.agentId !== boardSession.agentId ||
-        current.sessionKey !== boardSession.sessionKey
-      ) {
-        throw new BoardValidationError(
-          "invalid_operation",
-          "board widget session identity changed; reload the dashboard",
-        );
-      }
-    },
+    useCurrent: async <T>(start: () => T): Promise<Awaited<T>> =>
+      await withAuthorizedBoardWidgetView(
+        store,
+        ticket,
+        (view) => {
+          const current = resolveSession(view);
+          if (
+            current.agentId !== boardSession.agentId ||
+            current.sessionKey !== boardSession.sessionKey
+          ) {
+            throw new BoardValidationError(
+              "invalid_operation",
+              "board widget session identity changed; reload the dashboard",
+            );
+          }
+          if (
+            !boardWidgetHasGrantedTool(view.document.declared, view.document.grantState, capability)
+          ) {
+            throw new BoardValidationError(
+              "invalid_operation",
+              `board widget tool is not granted: ${capability}`,
+            );
+          }
+          return start();
+        },
+        { gatewayContext: invocation.context },
+      ),
   };
 }
 
@@ -197,41 +224,46 @@ async function invokeGatewayHandler(
   method: string,
   params: Record<string, unknown>,
   invocation: GatewayHandlerInvocation,
-  authority: BoardRequestAuthority,
-): Promise<unknown> {
-  let didRespond = false;
-  let succeeded = false;
-  let payload: unknown;
-  let responseError: ErrorShape | undefined;
-  authority.assertActive();
-  await handler({
-    ...invocation,
-    req: { ...invocation.req, method, params },
-    params,
-    respond: (ok, value, error) => {
-      if (didRespond) {
-        return;
-      }
-      didRespond = true;
-      if (ok) {
-        succeeded = true;
-        payload = value;
-      } else {
-        responseError = error;
-      }
-    },
+  authority: BoardCapabilityAuthority,
+  publish: GatewayHandlerInvocation["respond"],
+): Promise<void> {
+  let outcome:
+    | { kind: "reply"; ok: boolean; payload: unknown; error: ErrorShape | undefined }
+    | { kind: "thrown"; error: unknown }
+    | undefined;
+  await authority.useCurrent(async () => {
+    try {
+      await handler({
+        ...invocation,
+        req: { ...invocation.req, method, params },
+        params,
+        respond: (ok, payload, error) => {
+          outcome ??= { kind: "reply", ok, payload, error };
+        },
+      });
+    } catch (error) {
+      outcome = { kind: "thrown", error };
+    }
   });
-  authority.assertActive();
-  if (!didRespond) {
-    throw new BoardValidationError("invalid_operation", `${method} did not return a result`);
-  }
-  if (!succeeded) {
-    throw new BoardValidationError(
-      "invalid_operation",
-      responseError?.message || `${method} failed`,
-    );
-  }
-  return payload;
+  await authority.useCurrent(() => {
+    if (!outcome) {
+      publish(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `${method} did not return a result`),
+      );
+    } else if (outcome.kind === "thrown") {
+      respondBoardError(outcome.error, publish);
+    } else if (!outcome.ok) {
+      publish(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, outcome.error?.message || `${method} failed`),
+      );
+    } else {
+      publish(true, outcome.payload);
+    }
+  });
 }
 
 export async function readBoardDataBinding(
@@ -239,11 +271,11 @@ export async function readBoardDataBinding(
   params: Record<string, unknown>,
   invocation: GatewayHandlerInvocation,
   authority: BoardCapabilityAuthority,
-): Promise<unknown> {
+  publish: GatewayHandlerInvocation["respond"],
+): Promise<void> {
   if (bindingId === GITHUB_ACTIONS_BINDING_ID) {
     const { readBoardGitHubActions } = await import("./github-actions-read.js");
-    authority.assertActive();
-    return await readBoardGitHubActions(params, invocation.context, authority);
+    return await readBoardGitHubActions(params, invocation.context, authority, publish);
   }
   if (isBoardDataBindingId(bindingId)) {
     return await invokeGatewayHandler(
@@ -252,6 +284,7 @@ export async function readBoardDataBinding(
       params,
       invocation,
       authority,
+      publish,
     );
   }
   const registration = authority.pluginRegistry?.dashboardDataBindings.get(bindingId);
@@ -267,6 +300,7 @@ export async function readBoardDataBinding(
     params,
     invocation,
     authority,
+    publish,
   );
 }
 
@@ -275,7 +309,8 @@ export async function runBoardActionVerb(
   params: Record<string, unknown>,
   invocation: GatewayHandlerInvocation,
   authority: BoardCapabilityAuthority,
-): Promise<unknown> {
+  publish: GatewayHandlerInvocation["respond"],
+): Promise<void> {
   const registration = authority.pluginRegistry?.dashboardActionVerbs.get(actionId);
   if (!registration) {
     throw new BoardValidationError(
@@ -302,6 +337,7 @@ export async function runBoardActionVerb(
     params,
     invocation,
     authority,
+    publish,
   );
 }
 
@@ -309,12 +345,14 @@ export async function triggerBoardCronJob(
   jobId: string,
   invocation: GatewayHandlerInvocation,
   authority: BoardCapabilityAuthority,
-): Promise<unknown> {
+  publish: GatewayHandlerInvocation["respond"],
+): Promise<void> {
   return await invokeGatewayHandler(
     cronHandlers["cron.run"]!,
     "cron.run",
     { id: jobId, mode: "force" },
     invocation,
     authority,
+    publish,
   );
 }

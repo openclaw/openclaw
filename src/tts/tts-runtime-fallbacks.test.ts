@@ -657,6 +657,24 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
     }
   });
 
+  it.each(["```printf```", "> ```\n> x"])("keeps auto-TTS prose after %s", async (prefix) => {
+    const prose = "This explanation is ordinary prose and should be spoken in full.";
+    const text = `${prefix}\n\n${prose}`;
+    const result = await maybeApplyTtsToPayloadCore(
+      {
+        payload: { text },
+        cfg: createTtsConfig("fenced-prose"),
+        channel: "telegram",
+        kind: "final",
+      },
+      async () => "/synthetic-speech.mp3",
+    );
+
+    expect(synthesizeMock).toHaveBeenCalledOnce();
+    expect(requireFirstSynthesisRequest("prose speech").text).toContain(prose);
+    expect(result).toEqual(expect.objectContaining({ text, mediaUrl: "/synthetic-speech.mp3" }));
+  });
+
   it("skips channel auto-TTS audio for code-heavy replies", async () => {
     const text = "```ts\nexport function answer() {\n  return 42;\n}\n```";
     const result = await maybeApplyTtsToPayload({

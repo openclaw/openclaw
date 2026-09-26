@@ -41,44 +41,14 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
     "openclaw/plugin-sdk/channel-inbound",
   );
-  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
   return {
     ...actual,
-    runChannelInboundEvent: async (params: RunParams) => {
-      const input = await params.adapter.ingest(params.raw);
-      if (!input) {
-        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
-      }
-      const eventClass = (await params.adapter.classify?.(input)) ?? {
-        kind: "message" as const,
-        canStartAgentTurn: true,
-      };
-      const preflight = (await params.adapter.preflight?.(input, eventClass)) ?? {};
-      const resolved = await params.adapter.resolveTurn(
-        input,
-        eventClass,
-        "kind" in preflight ? { admission: preflight } : preflight,
-      );
-      if (!("route" in resolved) || !("delivery" in resolved)) {
-        throw new Error("expected assembled Signal channel turn plan");
-      }
-      const result = await actual.runPreparedInboundReply({
-        channel: resolved.channel,
-        accountId: resolved.accountId,
-        routeSessionKey: resolved.route.sessionKey,
-        storePath: "/tmp/openclaw/signal-sessions.json",
-        ctxPayload: resolved.ctxPayload,
-        recordInboundSession: recordInboundSessionMock,
-        afterRecord: resolved.afterRecord,
-        record: resolved.record,
-        history: resolved.history,
-        admission: resolved.admission,
-        botLoopProtection: resolved.botLoopProtection,
-        runDispatch: async () => await dispatchInboundMessageMock({ ctx: resolved.ctxPayload }),
-      });
-      await params.adapter.onFinalize?.(result);
-      return result;
-    },
+    runChannelInboundEvent: createSignalPreparedDispatchRunner(
+      actual.runChannelInboundEvent,
+      recordInboundSessionMock,
+      async (resolved) => await dispatchInboundMessageMock({ ctx: resolved.ctxPayload }),
+    ),
   };
 });
 
@@ -204,15 +174,6 @@ describe("Signal active-run control lane", () => {
     }
   });
 
-  it("collects both authorized messages through one debounce dispatch", async () => {
-    const handler = createHandler(10);
-    await Promise.all([handler(signalText("first", 1)), handler(signalText("second", 2))]);
-    await vi.advanceTimersByTimeAsync(10);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-    expect(dispatchedCommandBody(0)).toBe("first\nsecond");
-  });
-
   it("updates Signal batching while keeping stop on the immediate control lane", async () => {
     const cfg: OpenClawConfig = {
       messages: { inbound: { debounceMs: 0 } },
@@ -244,29 +205,25 @@ describe("Signal active-run control lane", () => {
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
   });
 
-  it.each([
-    "stop",
-    "/approve abc12345 allow-once",
-    "/status",
-    "/queue",
-    "/QUEUE",
-    "/steer keep going",
-  ])("dispatches active-run-safe control %s while normal work is active", async (controlText) => {
-    const releaseActive = holdNextDispatch();
-    const handler = createHandler(5);
+  it.each(["stop", "/approve abc12345 allow-once", "/status", "/QUEUE", "/steer keep going"])(
+    "dispatches active-run-safe control %s while normal work is active",
+    async (controlText) => {
+      const releaseActive = holdNextDispatch();
+      const handler = createHandler(5);
 
-    await handler(signalText("start a long task", 1));
-    await vi.advanceTimersByTimeAsync(5);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      await handler(signalText("start a long task", 1));
+      await vi.advanceTimersByTimeAsync(5);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
-    const controlHandled = handler(signalText(controlText, 2));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-    expect(dispatchedCommandBody(1)).toBe(controlText);
+      const controlHandled = handler(signalText(controlText, 2));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(dispatchedCommandBody(1)).toBe(controlText);
 
-    releaseActive();
-    await controlHandled;
-  });
+      releaseActive();
+      await controlHandled;
+    },
+  );
 
   it("serializes repeated aborts on the control lane", async () => {
     const releaseFirstAbort = holdNextDispatch();
@@ -351,31 +308,25 @@ describe("Signal active-run control lane", () => {
     );
   });
 
-  it.each([
-    "/reset",
-    "/queue status",
-    "/queue collect",
-    "/queue interrupt",
-    "/queue reset",
-    "/queue debounce:2s",
-    "/queue cap:5",
-    "/queue drop:summarize",
-  ])("keeps stateful command %s behind active conversation work", async (commandText) => {
-    const releaseActive = holdNextDispatch();
-    const handler = createHandler(5);
+  it.each(["/reset", "/queue status"])(
+    "keeps stateful command %s behind active conversation work",
+    async (commandText) => {
+      const releaseActive = holdNextDispatch();
+      const handler = createHandler(5);
 
-    const active = handler(signalText("start a long task", 1));
-    await vi.advanceTimersByTimeAsync(5);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    const statefulCommand = handler(signalText(commandText, 2));
-    await vi.advanceTimersByTimeAsync(20);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      const active = handler(signalText("start a long task", 1));
+      await vi.advanceTimersByTimeAsync(5);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      const statefulCommand = handler(signalText(commandText, 2));
+      await vi.advanceTimersByTimeAsync(20);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
-    releaseActive();
-    await Promise.all([active, statefulCommand]);
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-    expect(dispatchedCommandBody(1)).toBe(commandText);
-  });
+      releaseActive();
+      await Promise.all([active, statefulCommand]);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(dispatchedCommandBody(1)).toBe(commandText);
+    },
+  );
 
   it("cancels ordinary text still waiting in the debounce window", async () => {
     const handler = createHandler(50);

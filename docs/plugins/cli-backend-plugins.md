@@ -213,14 +213,19 @@ Omit `reliability.watchdog` to inherit the standard profiles, including the
 longer resumed-run budget for cron and explicit timeouts. Set it only when a
 backend intentionally needs its own watchdog policy.
 
+Recovery retries stay inside the operator-configured `timeoutMs`: elapsed time
+is measured monotonically, so an NTP correction or manual clock change can
+neither shorten a retry that still has budget nor let a hung CLI outlive its
+timeout.
+
 `freshSessionRecovery` is a backend-owned compatibility contract:
 
 - Leave it undefined or set it to `"replace-binding"` to preserve the legacy
   clear-and-reseed behavior. OpenClaw clears the persisted binding and retries
   with a fresh session when the failure is eligible for recovery.
 - Set it to `"invalidated-only"` to suppress fresh replacement unless the
-  canonical invalidation predicate proves the old session is dead. Currently,
-  only `session_expired` does so.
+  canonical invalidation predicate proves the old session is dead. Only
+  `session_expired` does so.
 
 Choose the value from the CLI or SDK session contract, not from a provider id
 or broad error class. The bundled Anthropic backend uses `"invalidated-only"`;
@@ -264,6 +269,13 @@ effective `ctx.thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`,
 applied through launch environment or staged configuration; the same field is
 available to `resolveExecutionArgs(ctx)` for native CLI flags.
 
+`resolveExecutionArgs(ctx)` also receives optional `ctx.fastMode`, the effective
+boolean for this invocation. Core resolves automatic mode after CLI and process
+scope admission and backend preparation, so elapsed waits count toward its cutoff. Explicit on
+and off remain unchanged. The field follows the session, agent, and model fast-mode
+settings; backends may map it to their native arguments or ignore it. A spawned
+process keeps that decision for the invocation; it does not receive raw `"auto"`.
+
 `prepareExecution(ctx)` may also return an optional `execute` transport when a
 backend owns the installed CLI's protocol or SDK integration. The transport
 receives the exact prepared command, arguments, optional `argv0`, environment,
@@ -271,7 +283,9 @@ prompt, session, and tool availability; it yields the backend's existing structu
 stream records. Preserve the prepared command, `argv0`, and interpreter or script
 prefix in `args` when constructing the CLI invocation. `argv0` preserves
 the invocation name of a PATH shim. Optional `promptContext.prependContext` and `promptContext.appendContext`
-are private prompt-build additions, separate from the ordinary `prompt`. Transport
+are private prompt-build additions and bounded saved session notes, separate from
+the ordinary `prompt`. Saved notes are quoted reference data and may repeat on
+resumed turns; they do not assert that a native turn previously consumed them. Transport
 them through the native runtime's private context mechanism; never record them as
 operator-authored input. OpenClaw's policy and observation hooks still receive the
 complete logical prompt. Native tool actions must use the provided, run-bound
@@ -299,6 +313,10 @@ launchers outside the declared package, required external dependency
 declarations, oversized trees, and unknown scripts. Declare this only when that
 tree contains the complete inference implementation; optional tool integrations
 do not make an external implementation graph safe.
+
+On Windows, supported JavaScript entrypoints run through the verified Node
+executable selected from `PATH`. Explicit script paths do not require their
+suffix in `PATHEXT`; bare command lookup still follows `PATH` and `PATHEXT`.
 
 If the same backend also ships a self-contained native executable, list its
 canonical basenames in `nativeExecutableNames`. Other native commands remain
@@ -498,7 +516,7 @@ provider model's `agentRuntime.id`. Adapter mechanics remain in the plugin:
   agents: {
     defaults: {
       model: {
-        primary: "openai/gpt-5.6-sol",
+        primary: "openai/gpt-6-astra",
         fallbacks: ["acme-cli/large"],
       },
     },

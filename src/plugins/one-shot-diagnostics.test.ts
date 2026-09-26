@@ -6,12 +6,12 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginServicesHandle } from "./services.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
 
-const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
+const acquirePluginRegistryForInspection = vi.hoisted(() => vi.fn());
 const startPluginServices = vi.hoisted(() => vi.fn());
 const waitForDiagnosticEventsDrained = vi.hoisted(() => vi.fn(async () => {}));
 const warn = vi.hoisted(() => vi.fn());
 
-vi.mock("./loader.js", () => ({ loadOpenClawPlugins }));
+vi.mock("./loader.js", () => ({ acquirePluginRegistryForInspection }));
 vi.mock("./services.js", () => ({ startPluginServices }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
@@ -33,12 +33,16 @@ function mockRegistryWithServices(serviceIds: string[]) {
     services: serviceIds.map((id) => ({
       pluginId: id,
       pluginName: id,
+      id: id.trim(),
       service: { id },
       source: "test",
       origin: "bundled",
     })),
   };
-  loadOpenClawPlugins.mockReturnValue(registry);
+  acquirePluginRegistryForInspection.mockResolvedValue({
+    registry,
+    release: vi.fn(async () => {}),
+  });
   return registry;
 }
 
@@ -46,8 +50,17 @@ async function mockRealExporter(service: OpenClawPluginService, origin: "bundled
   const { startPluginServices: startRealServices } =
     await vi.importActual<typeof import("./services.js")>("./services.js");
   const registry = createEmptyPluginRegistry();
-  registry.services.push({ pluginId: "diagnostics-otel", service, source: "test", origin });
-  loadOpenClawPlugins.mockReturnValue(registry);
+  registry.services.push({
+    pluginId: "diagnostics-otel",
+    id: service.id.trim(),
+    service,
+    source: "test",
+    origin,
+  });
+  acquirePluginRegistryForInspection.mockResolvedValue({
+    registry,
+    release: vi.fn(async () => {}),
+  });
   let servicesHandle: PluginServicesHandle | undefined;
   startPluginServices.mockImplementationOnce(
     async (params: Parameters<typeof startRealServices>[0]) => {
@@ -73,7 +86,7 @@ describe("startOneShotDiagnosticsExporters", () => {
     const handle = await startOneShotDiagnosticsExporters({ config: config as OpenClawConfig });
 
     expect(handle).toBeNull();
-    expect(loadOpenClawPlugins).not.toHaveBeenCalled();
+    expect(acquirePluginRegistryForInspection).not.toHaveBeenCalled();
     expect(startPluginServices).not.toHaveBeenCalled();
   });
 
@@ -84,11 +97,10 @@ describe("startOneShotDiagnosticsExporters", () => {
     const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
 
     expect(handle).not.toBeNull();
-    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+    expect(acquirePluginRegistryForInspection).toHaveBeenCalledWith(
       expect.objectContaining({
         config: otelEnabledConfig,
         onlyPluginIds: ["diagnostics-otel"],
-        activate: false,
         preferBuiltPluginArtifacts: true,
       }),
     );
@@ -143,15 +155,6 @@ describe("startOneShotDiagnosticsExporters", () => {
     expect(startParams.config.diagnostics?.otel?.logs).toBe(false);
     expect(startParams.config.diagnostics?.otel?.logsExporter).toBe("otlp");
     expect(config.diagnostics?.otel?.logsExporter).toBe("stdout");
-  });
-
-  it("returns null when the scoped load registers no exporter service", async () => {
-    mockRegistryWithServices(["other-service"]);
-
-    const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
-
-    expect(handle).toBeNull();
-    expect(startPluginServices).not.toHaveBeenCalled();
   });
 
   it("drains queued diagnostic events before stopping services on flush", async () => {

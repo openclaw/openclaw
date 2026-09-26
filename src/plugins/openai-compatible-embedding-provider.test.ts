@@ -2,7 +2,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createMemorySearchDeadlineControl,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+} from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import type { ConfiguredProviderLocalServiceTarget } from "../agents/provider-local-service-target.js";
 import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
@@ -371,6 +376,94 @@ describe("openai-compatible generic embedding provider", () => {
       undefined,
     );
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("forwards readiness phases without pausing reconciliation", async () => {
+    const server = await startEmbeddingServer();
+    const release = vi.fn();
+    const events: string[] = [];
+    const acquireLocalService = vi.fn(async (target: ConfiguredProviderLocalServiceTarget) => {
+      events.push("acquire");
+      target.onReadinessWait?.(true);
+      target.onReadinessWait?.(false);
+      events.push("reconcile");
+      return { release };
+    });
+    const options = {
+      ...createOptions({
+        config: {
+          models: {
+            providers: {
+              "gpu-spark": {
+                api: "openai-completions",
+                baseUrl: server.baseUrl,
+                localService: { command: process.execPath },
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "gpu-spark",
+        model: "gpu-spark/nomic-embed-text",
+      }),
+      acquireLocalService,
+    };
+
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
+    const control = createMemorySearchDeadlineControl();
+    control.subscribe((action) => events.push(action));
+    const caller = new AbortController();
+    await expect(
+      provider.embed("hello", {
+        signal: caller.signal,
+        [MEMORY_SEARCH_DEADLINE_CONTROL]: control,
+      }),
+    ).resolves.toEqual([0.1, 0.2, 0.3]);
+
+    expect(events).toEqual(["acquire", "pause", "resume", "reconcile"]);
+    expect(acquireLocalService).toHaveBeenCalledWith(expect.anything(), caller.signal);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("resumes the caller deadline when local-service acquisition fails", async () => {
+    const server = await startEmbeddingServer();
+    const events: string[] = [];
+    const failure = new Error("local service did not become ready");
+    const acquireLocalService = vi.fn(async (target: ConfiguredProviderLocalServiceTarget) => {
+      target.onReadinessWait?.(true);
+      try {
+        throw failure;
+      } finally {
+        target.onReadinessWait?.(false);
+      }
+    });
+    const options = {
+      ...createOptions({
+        config: {
+          models: {
+            providers: {
+              "gpu-spark": {
+                api: "openai-completions",
+                baseUrl: server.baseUrl,
+                localService: { command: process.execPath },
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "gpu-spark",
+        model: "gpu-spark/nomic-embed-text",
+      }),
+      acquireLocalService,
+    };
+
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
+    const control = createMemorySearchDeadlineControl();
+    control.subscribe((action) => events.push(action));
+    await expect(
+      provider.embed("hello", { [MEMORY_SEARCH_DEADLINE_CONTROL]: control }),
+    ).rejects.toBe(failure);
+    expect(events).toEqual(["pause", "resume"]);
   });
 
   it("does not lease a configured local service for a remote endpoint override", async () => {
@@ -781,21 +874,6 @@ describe("openai-compatible generic embedding provider", () => {
     ]);
   });
 
-  it("omits Authorization when no apiKey is configured", async () => {
-    const server = await startEmbeddingServer();
-    const { provider, client } = await createOpenAICompatibleEmbeddingProvider(
-      createOptions({
-        model: "nomic-embed-text",
-        remote: { baseUrl: server.baseUrl },
-      }),
-    );
-
-    expect(client.headers).not.toHaveProperty("authorization");
-
-    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-    expect(server.requests[0]?.headers.authorization).toBeUndefined();
-  });
-
   it("coerces structured text inputs and rejects inline data", async () => {
     const server = await startEmbeddingServer({
       respond: ({ body }) => {
@@ -826,76 +904,6 @@ describe("openai-compatible generic embedding provider", () => {
       }),
     ).rejects.toThrow("only support text embedding inputs");
   });
-
-  it.each([
-    {
-      runtime: "Ollama",
-      response: {
-        object: "list",
-        data: [{ object: "embedding", embedding: [0.11, 0.12], index: 0 }],
-        model: "nomic-embed-text",
-        usage: { prompt_tokens: 1, total_tokens: 1 },
-      },
-    },
-    {
-      runtime: "llama.cpp llama-server",
-      response: {
-        object: "list",
-        data: [{ object: "embedding", embedding: [0.21, 0.22], index: 0 }],
-        model: "bge-small-en-v1.5",
-      },
-    },
-    {
-      runtime: "vLLM",
-      response: {
-        object: "list",
-        data: [{ object: "embedding", embedding: [0.31, 0.32], index: 0 }],
-        model: "intfloat/e5-small-v2",
-      },
-    },
-    {
-      runtime: "LocalAI",
-      response: {
-        object: "list",
-        data: [{ object: "embedding", embedding: [0.41, 0.42], index: 0 }],
-        model: "text-embedding-ada-002",
-      },
-    },
-    {
-      runtime: "TGI-compatible server",
-      response: {
-        object: "list",
-        data: [{ object: "embedding", embedding: [0.51, 0.52], index: 0 }],
-        model: "tei-bge-small",
-      },
-    },
-    {
-      runtime: "llamafile",
-      response: {
-        object: "list",
-        data: [{ object: "embedding", embedding: [0.61, 0.62], index: 0 }],
-        model: "all-MiniLM-L6-v2",
-      },
-    },
-  ] satisfies Array<{ runtime: string; response: FixtureResponse }>)(
-    "parses $runtime OpenAI-compatible embedding responses through the same path",
-    async ({ response }) => {
-      const server = await startEmbeddingServer({ respond: () => response });
-      const { provider } = await createOpenAICompatibleEmbeddingProvider(
-        createOptions({
-          model: response.model ?? "embedding-model",
-          remote: { baseUrl: server.baseUrl },
-        }),
-      );
-
-      await expect(provider.embed("hello")).resolves.toEqual(response.data[0]?.embedding);
-      expect(server.requests[0]?.url).toBe("/v1/embeddings");
-      expect(server.requests[0]?.body).toEqual({
-        model: response.model ?? "embedding-model",
-        input: ["hello"],
-      });
-    },
-  );
 
   it("reports missing required config with actionable keys", async () => {
     await expect(

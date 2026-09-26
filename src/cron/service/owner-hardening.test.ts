@@ -28,18 +28,18 @@ import { upsertCronJobRow } from "../store/row-codec.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
-  inspectActiveCronRunReceipt,
   isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
+import * as runReceiptStore from "../store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 import { listForeignReceipts } from "./foreign-receipt-monitor.js";
 import type { CronServiceState } from "./state.js";
 import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 
 const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
-const stateDatabaseUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase);
 
 const children = new Set<ChildProcess>();
 let scriptRoot = "";
@@ -69,11 +69,14 @@ beforeEach(async () => {
     `
       import fs from "node:fs";
       import { CronService } from ${JSON.stringify(serviceUrl.href)};
-      import { openOpenClawStateDatabase } from ${JSON.stringify(stateDatabaseUrl.href)};
+      import { deserialize } from "node:v8";
+      import { MessagePort } from "node:worker_threads";
       const [storePath, jobId, mode, releasePath, outputPath] = process.argv.slice(2);
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
+      let activationClock = Date.now();
       const cron = new CronService({
+        ...(mode === "crash-activation" ? { nowMs: () => ++activationClock } : {}),
         storePath,
         cronEnabled: true,
         log: logger,
@@ -94,7 +97,6 @@ beforeEach(async () => {
           fs.appendFileSync(outputPath, job.agentId + ":" + process.pid + "\\n");
           process.stdout.write("started\\n");
           if (mode === "block" || mode === "barrier-block") await new Promise(() => {});
-          if (mode === "hold") while (!fs.existsSync(releasePath)) await sleep(10);
           await sleep(150);
           return { status: "ok", summary: "done" };
         },
@@ -106,24 +108,25 @@ beforeEach(async () => {
         await cron.run(jobId, "force");
       }
       if (mode === "crash-activation") {
-        const database = openOpenClawStateDatabase().db;
-        database.function("crash_activation", () => {
-          process.kill(process.pid, "SIGKILL");
-          return 0;
-        });
-        database.exec(\`
-          CREATE TEMP TRIGGER crash_cron_activation
-          BEFORE UPDATE OF state_json ON cron_jobs
-          WHEN json_extract(OLD.state_json, '$.runningAtMs') IS NULL
-            AND json_extract(NEW.state_json, '$.runningAtMs') IS NOT NULL
-          BEGIN
-            SELECT crash_activation();
-          END;
-        \`);
+        const originalOn = MessagePort.prototype.on;
+        MessagePort.prototype.on = function (event, listener) {
+          if (event !== "message") return originalOn.call(this, event, listener);
+          return originalOn.call(this, event, function (message) {
+            // The worker has changed both receipt and job rows, and is waiting
+            // for the real owner to admit COMMIT. Death here must roll both back.
+            if (message?.stage === "commit" && message.facts?.bytes instanceof Uint8Array) {
+              const outcome = deserialize(message.facts.bytes);
+              if (outcome?.activation?.job?.id === jobId) {
+                process.kill(process.pid, "SIGKILL");
+              }
+            }
+            return Reflect.apply(listener, this, [message]);
+          });
+        };
         await cron.run(jobId, "force");
       }
       if (mode === "manual-postcommit-crash") await cron.run(jobId, "due");
-      if (mode === "block" || mode === "hold" || mode === "hold-alive") {
+      if (mode === "block" || mode === "hold-alive") {
         await cron.run(jobId, "force");
       }
       if (mode === "hold-alive") {
@@ -159,7 +162,6 @@ function spawnRunner(params: {
   mode:
     | "barrier-block"
     | "block"
-    | "hold"
     | "hold-alive"
     | "trigger"
     | "due"
@@ -333,22 +335,20 @@ describe("cron durable run ownership", () => {
     const job = makeCommandJob("receipt-required", now + 60_000);
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     inspectActiveCronRunReceipt({ storePath, jobId: job.id });
-    const database = openOpenClawStateDatabase().db;
-    database.exec(`
-      CREATE TRIGGER reject_cron_run_receipt
-      BEFORE INSERT ON cron_run_receipts
-      BEGIN
-        SELECT RAISE(ABORT, 'receipt unavailable');
-      END;
-    `);
+    const claim = vi
+      .spyOn(runReceiptStore, "claimCronRunReceiptInDatabase")
+      .mockImplementation(() => {
+        throw new Error("receipt unavailable");
+      });
     const runner = vi.fn(async () => ({ status: "ok" as const }));
     const cron = makeParentService(storePath, runner);
     try {
       await expect(cron.run(job.id, "force")).rejects.toThrow("receipt unavailable");
+      expect(claim).toHaveBeenCalledOnce();
       expect(runner).not.toHaveBeenCalled();
     } finally {
       cron.stop();
-      database.exec("DROP TRIGGER IF EXISTS reject_cron_run_receipt");
+      claim.mockRestore();
     }
   });
 
@@ -370,6 +370,12 @@ describe("cron durable run ownership", () => {
     await waitForExit(child);
     expect(child.signalCode).toBe("SIGKILL");
     expect(fs.existsSync(outputPath)).toBe(false);
+    const rolledBack = (await loadCronStore(storePath)).jobs[0];
+    expect(rolledBack?.state.queuedAtMs).toEqual(expect.any(Number));
+    expect(rolledBack?.state.runningAtMs).toBeUndefined();
+    expect(receipts(storePath, job.id)).toMatchObject([
+      { status: "running", startedAtMs: rolledBack?.state.queuedAtMs },
+    ]);
 
     const recovered = makeParentService(storePath);
     try {

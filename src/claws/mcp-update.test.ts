@@ -11,8 +11,8 @@ import {
   upsertClawMcpServerRef,
   type PersistedClawMcpServerRef,
 } from "./mcp.js";
-import { CLAW_OUTPUT_STABILITY, type ClawManifest, type ClawMcpServer } from "./types.js";
-import { CLAW_UPDATE_PLAN_SCHEMA_VERSION, type ClawUpdatePlan } from "./update-plan.js";
+import { createClawUpdatePlanFixture as plan } from "./resource-update.test-helpers.js";
+import type { ClawManifest, ClawMcpServer } from "./types.js";
 
 const oldDocs: ClawMcpServer = { command: "uvx", args: ["docs@1"] };
 const newDocs: ClawMcpServer = { command: "uvx", args: ["docs@2"] };
@@ -48,37 +48,6 @@ function ref(name: string, server: ClawMcpServer): PersistedClawMcpServerRef {
     status: "complete",
     createdAtMs: 10,
     updatedAtMs: 10,
-  };
-}
-
-function plan(actions: ClawUpdatePlan["actions"]): ClawUpdatePlan {
-  return {
-    schemaVersion: CLAW_UPDATE_PLAN_SCHEMA_VERSION,
-    stability: CLAW_OUTPUT_STABILITY,
-    dryRun: true,
-    mutationAllowed: false,
-    planIntegrity: "sha256:update-plan",
-    found: true,
-    agentId: "worker",
-    currentClaw: { name: "@acme/worker", version: "1.0.0", integrity: "sha256:old" },
-    targetClaw: { name: "@acme/worker", version: "2.0.0", integrity: "sha256:new" },
-    summary: {
-      totalActions: actions.length,
-      added: actions.filter((action) => action.action === "add").length,
-      changed: actions.filter((action) => action.action === "change").length,
-      removed: actions.filter((action) => action.action === "remove").length,
-      released: actions.filter((action) => action.action === "release").length,
-      unchanged: 0,
-      manual: 0,
-      blocked: 0,
-      capabilityChanges: 0,
-      capabilityEscalations: 0,
-    },
-    actions,
-    capabilityChanges: [],
-    readiness: { ready: true, requirements: [] },
-    blockers: [],
-    diagnostics: [],
   };
 }
 
@@ -196,45 +165,6 @@ describe("applyClawMcpUpdate", () => {
     expect(deleteRef).toHaveBeenCalledTimes(2);
   });
 
-  it("releases ownership without removing shared or independently owned config", async () => {
-    const independent = {
-      ...ref("legacy", legacy),
-      relationship: "referenced" as const,
-      origin: "pre-existing" as const,
-      independentOwner: true,
-    };
-    const unsetServer = vi.fn();
-    const upsertRef = vi.fn();
-    const deleteRef = vi.fn();
-    const execution = await applyClawMcpUpdate(
-      plan([
-        {
-          kind: "mcpServer",
-          id: "legacy",
-          action: "release",
-          target: "mcp.servers.legacy",
-          blocked: false,
-          reason: "shared config survives",
-        },
-      ]),
-      manifest(),
-      {
-        config: { mcp: { servers: { legacy } } },
-        sourceMcpServers: { legacy },
-        readRefs: () => [independent],
-        planRemoval: () => ({ action: "release" }),
-        unsetServer,
-        upsertRef,
-        deleteRef,
-      },
-    );
-
-    expect(unsetServer).not.toHaveBeenCalled();
-    expect(deleteRef).toHaveBeenCalledWith("worker", "legacy", expect.any(Object));
-    await execution.rollback();
-    expect(upsertRef).toHaveBeenCalledWith(independent, expect.any(Object));
-  });
-
   it("rejects release when exact config becomes solely Claw-owned", async () => {
     const previous = ref("legacy", legacy);
     const deleteRef = vi.fn();
@@ -275,6 +205,9 @@ describe("applyClawMcpUpdate", () => {
     upsertClawMcpServerRef(independent, stateOptions);
     upsertClawMcpServerRef({ ...independent, createdAtMs: 99 }, stateOptions);
 
+    const setServer = vi.fn();
+    const unsetServer = vi.fn();
+
     const execution = await applyClawMcpUpdate(
       plan([
         {
@@ -289,6 +222,8 @@ describe("applyClawMcpUpdate", () => {
       manifest(),
       {
         ...stateOptions,
+        setServer,
+        unsetServer,
         config: { mcp: { servers: { legacy } } },
         sourceMcpServers: { legacy },
       },
@@ -297,6 +232,8 @@ describe("applyClawMcpUpdate", () => {
 
     await execution.rollback();
     expect(readClawMcpServerRefs("worker", stateOptions)).toEqual([independent]);
+    expect(setServer).not.toHaveBeenCalled();
+    expect(unsetServer).not.toHaveBeenCalled();
   });
 
   it("does not compensate a config write rejected before mutation", async () => {

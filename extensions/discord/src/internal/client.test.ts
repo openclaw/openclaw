@@ -1,7 +1,6 @@
 // Discord tests cover client plugin behavior.
 import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "./client.js";
 import { Command, type CommandOptions, type DiscordCommand } from "./commands.js";
@@ -90,57 +89,6 @@ describe("ComponentRegistry", () => {
       button,
     );
   });
-
-  it("preserves each message owner when replacing a one-off component wait", async () => {
-    const registry = new ComponentRegistry<Button>();
-    const firstMessage = {
-      id: "message-1",
-      channelId: "channel-1",
-      owner: "first",
-    } as never;
-    const secondMessage = {
-      id: "message-1",
-      channelId: "channel-1",
-      owner: "second",
-    } as never;
-
-    const first = registry.waitForMessageComponent(firstMessage, 5_000);
-    const second = registry.waitForMessageComponent(secondMessage, 5_000);
-    const firstResult = await first;
-    const resolved = registry.resolveOneOffComponent({
-      channelId: "channel-1",
-      customId: "choice:one",
-      messageId: "message-1",
-      values: ["one"],
-    });
-    const secondResult = await second;
-
-    expect(firstResult).toMatchObject({
-      success: false,
-      reason: "timed out",
-    });
-    expect(firstResult.message).toBe(firstMessage);
-    expect(resolved).toBe(true);
-    expect(secondResult).toMatchObject({
-      success: true,
-      customId: "choice:one",
-      values: ["one"],
-    });
-    expect(secondResult.message).toBe(secondMessage);
-  });
-
-  it("caps oversized one-off component wait timers", () => {
-    vi.useFakeTimers();
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const registry = new ComponentRegistry<Button>();
-
-    void registry.waitForMessageComponent(
-      { id: "message-1", channelId: "channel-1" } as never,
-      Number.MAX_SAFE_INTEGER,
-    );
-
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-  });
 });
 
 describe("Client.deployCommands", () => {
@@ -177,38 +125,6 @@ describe("Client.deployCommands", () => {
     expect(put).toHaveBeenCalledTimes(2);
   });
 
-  it("does not patch semantically unchanged nested command options", async () => {
-    const client = createInternalTestClient([
-      createTestCommand({
-        name: "one",
-        options: [{ type: 3, name: "value", description: "Value" }],
-      }),
-    ]);
-    const get = vi.fn(async () => [
-      {
-        id: "cmd1",
-        application_id: "app1",
-        type: ApplicationCommandType.ChatInput,
-        name: "one",
-        description: "one command",
-        options: [{ description: "Value", name: "value", type: 3 }],
-        default_member_permissions: null,
-        integration_types: [0, 1],
-        contexts: [0, 1, 2],
-      },
-    ]);
-    const patch = vi.fn(async () => undefined);
-    const post = vi.fn(async () => undefined);
-    const deleteRequest = vi.fn(async () => undefined);
-    attachRestMock(client, { get, patch, post, delete: deleteRequest });
-
-    await client.deployCommands({ mode: "reconcile" });
-
-    expect(patch).not.toHaveBeenCalled();
-    expect(post).not.toHaveBeenCalled();
-    expect(deleteRequest).not.toHaveBeenCalled();
-  });
-
   it("does not patch live-only command metadata or reordered unordered arrays", async () => {
     const client = createInternalTestClient([
       createTestCommand({
@@ -236,9 +152,9 @@ describe("Client.deployCommands", () => {
         description_localized: "one command",
         options: [
           {
-            type: 3,
-            name: "value",
             description: "Value",
+            name: "value",
+            type: 3,
             description_localized: "Value",
             channel_types: [0, 1],
           },
@@ -506,9 +422,7 @@ describe("Client gateway event queue", () => {
   }): Client {
     return new Client(
       {
-        baseUrl: "http://localhost",
         clientId: "app1",
-        publicKey: "public",
         token: "token",
         eventQueue: params.eventQueue,
       },

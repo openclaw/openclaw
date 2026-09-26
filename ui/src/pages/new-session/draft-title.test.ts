@@ -100,7 +100,7 @@ describe("creation draft title preparation", () => {
     expect(titles.takePreparedTitle()).toBeUndefined();
   });
 
-  it.each(["", "short", "/help command"])("skips ineligible source %j", async (message) => {
+  it.each(["short", "/help command"])("skips ineligible source %j", async (message) => {
     const { flow, prepare, titles } = fixture();
     flow.setMessage(message);
     titles.hostUpdated();

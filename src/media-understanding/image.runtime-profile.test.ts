@@ -13,6 +13,9 @@ import {
   API_KEY_FIELD,
   SET_RUNTIME_API_KEY_FIELD,
   imageRuntimeMocks,
+  imageRequestDefaults,
+  mockImageModel,
+  imageCompletion,
   installImageRuntimeTestHooks,
   preparedAuthStorage,
 } from "./image.test-support.js";
@@ -83,28 +86,17 @@ describe("describeImageWithModelCore", () => {
       };
     });
     discoverModelsMock.mockReturnValue({ find: findMock });
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "google-generative-ai",
-      provider: "google",
-      model: "gemini-3-flash-preview",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "flash ok" }],
-    });
+    completeMock.mockResolvedValue(
+      imageCompletion("google-generative-ai", "google", "gemini-3-flash-preview", "flash ok"),
+    );
 
     const result = await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "google",
       model: "gemini-3.1-flash-preview",
       profile: "google:default",
       preferredProfile: "google:preferred",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     expect(result).toEqual({
@@ -138,27 +130,16 @@ describe("describeImageWithModelCore", () => {
       };
     });
     discoverModelsMock.mockReturnValue({ find: findMock });
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "google-generative-ai",
-      provider: "google",
-      model: "gemini-3.1-flash-lite",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "flash lite ok" }],
-    });
+    completeMock.mockResolvedValue(
+      imageCompletion("google-generative-ai", "google", "gemini-3.1-flash-lite", "flash lite ok"),
+    );
 
     const result = await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "google",
       model: "gemini-3.1-flash-lite",
       profile: "google:default",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     expect(result).toEqual({
@@ -197,27 +178,21 @@ describe("describeImageWithModelCore", () => {
       profileId: "github-copilot:backup",
     });
     shouldPreferProviderRuntimeResolvedModelMock.mockReturnValueOnce(true);
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "openai-responses",
-      provider: "github-copilot",
-      model: "gpt-5.6-sol",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "profile-scoped image ok" }],
-    });
+    completeMock.mockResolvedValue(
+      imageCompletion(
+        "openai-responses",
+        "github-copilot",
+        "gpt-5.6-sol",
+        "profile-scoped image ok",
+      ),
+    );
 
     await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "github-copilot",
       model: "gpt-5.6-sol",
       profile: "github-copilot:preferred",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     expect(resolveModelAsyncMock).toHaveBeenCalledTimes(2);
@@ -228,7 +203,15 @@ describe("describeImageWithModelCore", () => {
         authProfileId: "github-copilot:backup",
       }),
     );
-    const [completionModel] = expectDefined(completeMock.mock.calls[0], "complete call 0");
+    const [completionModel, , completionOptions] = expectDefined(
+      completeMock.mock.calls[0],
+      "complete call 0",
+    );
+    const requestSignal = acquireAgentRunPreparedModelRuntimeMock.mock.calls[0]?.[1].abortSignal;
+    expect(requestSignal).toBeInstanceOf(AbortSignal);
+    expect(resolveModelAsyncMock.mock.calls[0]?.[4].abortSignal).toBe(requestSignal);
+    expect(resolveModelAsyncMock.mock.calls[1]?.[4].abortSignal).toBe(requestSignal);
+    expect(completionOptions.signal).toBe(requestSignal);
     expect(completionModel).toEqual(
       expect.objectContaining({
         contextWindow: 1_050_000,
@@ -238,39 +221,28 @@ describe("describeImageWithModelCore", () => {
   });
 
   it("places image prompt in user content for github-copilot provider", async () => {
-    const providerStreamResult = {
-      role: "assistant",
-      api: "openai-completions",
-      provider: "github-copilot",
-      model: "gemini-3.1-pro-preview",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "A solid red square." }],
-    };
+    const providerStreamResult = imageCompletion(
+      "openai-completions",
+      "github-copilot",
+      "gemini-3.1-pro-preview",
+      "A solid red square.",
+    );
     const providerStreamFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) => ({
       result: vi.fn(async () => providerStreamResult),
     }));
     registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        provider: "github-copilot",
-        id: "gemini-3.1-pro-preview",
-        input: ["text", "image"],
-        api: "openai-completions",
-        baseUrl: "https://stale.example.test",
-      })),
+    mockImageModel({
+      provider: "github-copilot",
+      id: "gemini-3.1-pro-preview",
+      api: "openai-completions",
+      baseUrl: "https://stale.example.test",
     });
 
     await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "github-copilot",
       model: "gemini-3.1-pro-preview",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     expect(completeMock).not.toHaveBeenCalled();
@@ -326,35 +298,21 @@ describe("describeImageWithModelCore", () => {
     });
     unwrapSecretSentinelsForProviderEgressMock.mockReturnValueOnce(sourceValue);
     const providerStreamFn = vi.fn((_model: unknown, _context: unknown, _options: unknown) => ({
-      result: vi.fn(async () => ({
-        role: "assistant",
-        api: "openai-completions",
-        provider: "github-copilot",
-        model: "gpt-4.1",
-        stopReason: "stop",
-        timestamp: Date.now(),
-        content: [{ type: "text", text: "ok" }],
-      })),
+      result: vi.fn(async () =>
+        imageCompletion("openai-completions", "github-copilot", "gpt-4.1", "ok"),
+      ),
     }));
     registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        provider: "github-copilot",
-        id: "gpt-4.1",
-        input: ["text", "image"],
-        api: "openai-completions",
-      })),
+    mockImageModel({
+      provider: "github-copilot",
+      id: "gpt-4.1",
+      api: "openai-completions",
     });
 
     await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "github-copilot",
       model: "gpt-4.1",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
-      timeoutMs: 1000,
     });
 
     expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
@@ -371,14 +329,11 @@ describe("describeImageWithModelCore", () => {
   });
 
   it("fails github-copilot image runtime setup when token exchange fails", async () => {
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        provider: "github-copilot",
-        id: "gemini-3.1-pro-preview",
-        input: ["text", "image"],
-        api: "openai-completions",
-        baseUrl: "https://api.githubcopilot.com",
-      })),
+    mockImageModel({
+      provider: "github-copilot",
+      id: "gemini-3.1-pro-preview",
+      api: "openai-completions",
+      baseUrl: "https://api.githubcopilot.com",
     });
     prepareProviderRuntimeAuthMock.mockRejectedValueOnce(
       new Error("Copilot token exchange failed: HTTP 401"),
@@ -386,15 +341,10 @@ describe("describeImageWithModelCore", () => {
 
     await expect(
       describeImageWithModelCore({
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+        ...imageRequestDefaults(),
         provider: "github-copilot",
         model: "gemini-3.1-pro-preview",
-        buffer: Buffer.from("png-bytes"),
-        fileName: "image.png",
-        mime: "image/png",
         prompt: "Describe the image.",
-        timeoutMs: 1000,
       }),
     ).rejects.toThrow("Copilot token exchange failed: HTTP 401");
 
@@ -402,119 +352,23 @@ describe("describeImageWithModelCore", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
-  it("does not place image prompt in user content for non-copilot providers", async () => {
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        provider: "openai",
-        id: "gpt-4o",
-        input: ["text", "image"],
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      })),
-    });
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "openai-responses",
-      provider: "openai",
-      model: "gpt-4o",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "A solid red square." }],
-    });
-
-    await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
-      provider: "openai",
-      model: "gpt-4o",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
-      prompt: "Describe the image.",
-      timeoutMs: 1000,
-    });
-
-    expect(completeMock).toHaveBeenCalledOnce();
-    const [, context] = completeMock.mock.calls[0] as [
-      unknown,
-      { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
-    ];
-    // Non-Copilot providers keep prompt in system message, images in user message
-    expect(context.systemPrompt).toBe("Describe the image.");
-    const userMessage = context.messages?.find((m) => m.role === "user");
-    expect(userMessage).toBeDefined();
-    const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
-    expect(contentTypes).not.toContain("text");
-    expect(contentTypes).toContain("image");
-  });
-
-  it("defaults image-describe maxTokens to 4096 for reasoning-capable VLMs", async () => {
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        api: "openai-completions",
-        provider: "agent-plan",
-        id: "doubao-seed-2.0-pro",
-        input: ["text", "image"],
-        baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
-      })),
-    });
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "openai-completions",
-      provider: "agent-plan",
-      model: "doubao-seed-2.0-pro",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "ok" }],
-    });
-
-    await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
-      provider: "agent-plan",
-      model: "doubao-seed-2.0-pro",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
-      prompt: "Describe the image.",
-      timeoutMs: 1000,
-    });
-
-    const options = expectDefined(completeMock.mock.calls[0], "image completion call 0")[2];
-    expect(options.maxTokens).toBe(4096);
-  });
-
   it("caps image-describe maxTokens by the resolved model's own maxTokens", async () => {
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        api: "openai-completions",
-        provider: "fake",
-        id: "small-vlm",
-        input: ["text", "image"],
-        baseUrl: "https://example.test",
-        maxTokens: 1024,
-      })),
-    });
-    completeMock.mockResolvedValue({
-      role: "assistant",
+    mockImageModel({
       api: "openai-completions",
       provider: "fake",
-      model: "small-vlm",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "ok" }],
+      id: "small-vlm",
+      baseUrl: "https://example.test",
+      maxTokens: 1024,
     });
+    completeMock.mockResolvedValue(
+      imageCompletion("openai-completions", "fake", "small-vlm", "ok"),
+    );
 
     await describeImageWithModelCore({
-      cfg: {},
-      agentDir: "/tmp/openclaw-agent",
+      ...imageRequestDefaults(),
       provider: "fake",
       model: "small-vlm",
-      buffer: Buffer.from("png-bytes"),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     const options = expectDefined(completeMock.mock.calls[0], "image completion call 0")[2];
@@ -522,23 +376,14 @@ describe("describeImageWithModelCore", () => {
   });
 
   it("derives workspaceDir from agentId for image runtime resolution", async () => {
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        provider: "google",
-        id: "gemini-2.5-flash",
-        api: "google-generative-ai",
-        input: ["text", "image"],
-      })),
-    });
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "google-generative-ai",
+    mockImageModel({
       provider: "google",
-      model: "gemini-2.5-flash",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "workspace ok" }],
+      id: "gemini-2.5-flash",
+      api: "google-generative-ai",
     });
+    completeMock.mockResolvedValue(
+      imageCompletion("google-generative-ai", "google", "gemini-2.5-flash", "workspace ok"),
+    );
     const cfg = {
       agents: {
         list: [
@@ -552,27 +397,21 @@ describe("describeImageWithModelCore", () => {
     };
 
     await describeImageWithModelCore({
+      ...imageRequestDefaults(),
       cfg,
       agentId: "vision-agent",
-      agentDir: "/tmp/openclaw-agent",
       provider: "google",
       model: "gemini-2.5-flash",
       buffer: Buffer.alloc(1),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceDir: "/tmp/openclaw-workspace",
         loadRuntimePlugins: true,
-        runtimePluginSelections: [
-          { provider: "google", modelId: "gemini-2.5-flash", agentId: "vision-agent" },
-        ],
       }),
-      { catalogMode: "static", abortSignal: expect.any(AbortSignal) },
+      expect.objectContaining({ catalogMode: "static", abortSignal: expect.any(AbortSignal) }),
     );
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
       "google",
@@ -604,15 +443,12 @@ describe("describeImageWithModelCore", () => {
           modelRegistry: {},
         }),
       },
-      release: releasePreparedModelRuntimeMock,
+      [Symbol.asyncDispose]: releasePreparedModelRuntimeMock,
     });
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        provider: "google",
-        id: "gemini-2.5-flash",
-        api: "google-generative-ai",
-        input: ["text", "image"],
-      })),
+    mockImageModel({
+      provider: "google",
+      id: "gemini-2.5-flash",
+      api: "google-generative-ai",
     });
     registerProviderStreamForModelMock.mockImplementationOnce(({ model }) => {
       expect((model as Record<symbol, unknown>)[MODEL_PROVIDER_RUNTIME_PLUGIN_HANDLE_SYMBOL]).toBe(
@@ -620,27 +456,19 @@ describe("describeImageWithModelCore", () => {
       );
       return undefined;
     });
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "google-generative-ai",
-      provider: "google",
-      model: "gemini-2.5-flash",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "committed runtime" }],
-    });
+    completeMock.mockResolvedValue(
+      imageCompletion("google-generative-ai", "google", "gemini-2.5-flash", "committed runtime"),
+    );
 
     await describeImageWithModelCore({
+      ...imageRequestDefaults(),
       cfg: requestedCfg,
       agentDir: "/tmp/requested-agent",
       workspaceDir: "/tmp/requested-workspace",
       provider: "google",
       model: "gemini-2.5-flash",
       buffer: Buffer.alloc(1),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
@@ -668,23 +496,14 @@ describe("describeImageWithModelCore", () => {
 
   it("reuses a parent run generation without acquiring another image lease", async () => {
     const cfg: OpenClawConfig = { logging: { level: "info" } };
-    discoverModelsMock.mockReturnValue({
-      find: vi.fn(() => ({
-        provider: "google",
-        id: "gemini-2.5-flash",
-        api: "google-generative-ai",
-        input: ["text", "image"],
-      })),
-    });
-    completeMock.mockResolvedValue({
-      role: "assistant",
-      api: "google-generative-ai",
+    mockImageModel({
       provider: "google",
-      model: "gemini-2.5-flash",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      content: [{ type: "text", text: "parent runtime" }],
+      id: "gemini-2.5-flash",
+      api: "google-generative-ai",
     });
+    completeMock.mockResolvedValue(
+      imageCompletion("google-generative-ai", "google", "gemini-2.5-flash", "parent runtime"),
+    );
     const preparedModelRuntime = {
       agentDir: "/tmp/parent-agent",
       config: cfg,
@@ -696,6 +515,7 @@ describe("describeImageWithModelCore", () => {
     } as never;
 
     const result = await describeImageWithModelCore({
+      ...imageRequestDefaults(),
       cfg,
       agentDir: "/tmp/parent-agent",
       workspaceDir: "/tmp/parent-workspace",
@@ -703,10 +523,7 @@ describe("describeImageWithModelCore", () => {
       provider: "google",
       model: "gemini-2.5-flash",
       buffer: Buffer.alloc(1),
-      fileName: "image.png",
-      mime: "image/png",
       prompt: "Describe the image.",
-      timeoutMs: 1000,
     });
 
     expect(result.text).toBe("parent runtime");

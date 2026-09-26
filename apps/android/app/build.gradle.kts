@@ -1,28 +1,73 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
 import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.PathSensitivity
+import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Properties
+import java.util.zip.ZipFile
+
+abstract class ExtractCloudflareSodium : DefaultTask() {
+  @get:InputFile
+  @get:PathSensitive(PathSensitivity.NONE)
+  abstract val archive: RegularFileProperty
+
+  @get:Input
+  abstract val entries: MapProperty<String, String>
+
+  @get:OutputDirectory
+  abstract val outputDirectory: DirectoryProperty
+
+  @TaskAction
+  fun extract() {
+    val source = archive.get().asFile
+    val digest = MessageDigest.getInstance("SHA-256")
+    source.inputStream().use { input ->
+      val buffer = ByteArray(8192)
+      while (true) {
+        val size = input.read(buffer)
+        if (size == -1) break
+        digest.update(buffer, 0, size)
+      }
+    }
+    val checksum = digest.digest().joinToString("") { "%02x".format(it) }
+    check(checksum == "f66eac31ea413c1d5d068b46ade11d3295c86ec9d6cd29ff158ba58ef51db51a") {
+      "The pinned libsodium 1.0.22 archive checksum does not match."
+    }
+    ZipFile(source).use { zip ->
+      val files =
+        entries.get().map { (entry, destination) ->
+          (zip.getEntry(entry)?.takeUnless { it.isDirectory } ?: error("Missing libsodium native entry: $entry")) to destination
+        }
+      val output = outputDirectory.get().asFile
+      // Only this task's generated output is replaced, after every required ABI is validated.
+      if (output.exists()) check(output.deleteRecursively())
+      check(output.mkdirs())
+      files.forEach { (entry, destination) ->
+        val target = output.resolve(destination)
+        check(target.parentFile.isDirectory || target.parentFile.mkdirs())
+        zip.getInputStream(entry).use { input -> target.outputStream().use(input::copyTo) }
+      }
+    }
+  }
+}
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidApplicationId = "ai.openclaw.app"
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
-val openClawMobileCutterInstruction =
-  "Run scripts/mobile-release-version.ts --prepare, capture the iOS release plan, then run --finalize."
 val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
 val openClawAndroidVersionProperties =
   Properties().apply {
     if (!openClawAndroidVersionFile.isFile) {
-      error("Missing Android version properties. $openClawMobileCutterInstruction")
+      error("Missing Android version properties. Run `pnpm android:version:sync`.")
     }
     openClawAndroidVersionFile.inputStream().use(::load)
   }
 
 fun requireOpenClawAndroidVersionProperty(name: String): String =
-  openClawAndroidVersionProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
-    ?: error("Missing $name in Config/Version.properties. $openClawMobileCutterInstruction")
+  (providers.gradleProperty(name).orNull ?: openClawAndroidVersionProperties.getProperty(name))?.trim()?.takeIf { it.isNotEmpty() }
+    ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
 
 val openClawAndroidVersionName = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_NAME")
 val openClawAndroidVersionCode =
@@ -106,6 +151,67 @@ plugins {
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.ksp)
+}
+
+// NuGet is used only as an upstream native artifact container, never as a managed/runtime dependency.
+val cloudflareSodiumArchive =
+  configurations.create("cloudflareSodiumArchive") {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    isTransitive = false
+  }
+dependencies { add(cloudflareSodiumArchive.name, "nuget:libsodium:1.0.22@nupkg") }
+val extractCloudflareSodium =
+  tasks.register<ExtractCloudflareSodium>("extractCloudflareSodium") {
+    archive.set(layout.file(cloudflareSodiumArchive.elements.map { it.single().asFile }))
+    entries.set(
+      mapOf(
+        "runtimes/android-arm/native/libsodium.so" to "armeabi-v7a/libsodium.so",
+        "runtimes/android-arm64/native/libsodium.so" to "arm64-v8a/libsodium.so",
+        "runtimes/android-x86/native/libsodium.so" to "x86/libsodium.so",
+        "runtimes/android-x64/native/libsodium.so" to "x86_64/libsodium.so",
+      ),
+    )
+    outputDirectory.set(layout.buildDirectory.dir("generated/cloudflare-sodium/jniLibs"))
+  }
+// Select the JVM architecture, including translated JVMs. These files never enter APK sources.
+val sodiumTestHost =
+  when (System.getProperty("os.name") to System.getProperty("os.arch")) {
+    "Linux" to "amd64", "Linux" to "x86_64" -> {
+      "linux-x64" to "libsodium.so"
+    }
+
+    "Mac OS X" to "aarch64", "Mac OS X" to "arm64" -> {
+      "osx-arm64" to "libsodium.dylib"
+    }
+
+    "Mac OS X" to "amd64", "Mac OS X" to "x86_64" -> {
+      "osx-x64" to "libsodium.dylib"
+    }
+
+    else -> {
+      if (System.getProperty("os.name").startsWith("Windows")) {
+        when (System.getProperty("os.arch")) {
+          "amd64", "x86_64" -> "win-x64" to "sodium.dll"
+          "aarch64", "arm64" -> "win-arm64" to "sodium.dll"
+          "x86", "i386" -> "win-x86" to "sodium.dll"
+          else -> null
+        }
+      } else {
+        null
+      }
+    }
+  }
+val extractCloudflareSodiumTest =
+  tasks.register<ExtractCloudflareSodium>("extractCloudflareSodiumTest") {
+    archive.set(layout.file(cloudflareSodiumArchive.elements.map { it.single().asFile }))
+    val (runtime, filename) = checkNotNull(sodiumTestHost) { "No pinned libsodium test library for this JVM host." }
+    val upstreamFilename = if (filename == "sodium.dll") "libsodium.dll" else filename
+    entries.set(mapOf("runtimes/$runtime/native/$upstreamFilename" to filename))
+    outputDirectory.set(layout.buildDirectory.dir("generated/cloudflare-sodium/test-$runtime"))
+  }
+androidComponents.onVariants { variant ->
+  variant.sources.jniLibs?.addGeneratedSourceDirectory(extractCloudflareSodium, ExtractCloudflareSodium::outputDirectory)
 }
 
 ksp {
@@ -245,9 +351,9 @@ android {
           "/META-INF/LICENSE*.txt",
           "DebugProbesKt.bin",
           "kotlin-tooling-metadata.json",
-          "org/bouncycastle/pqc/crypto/picnic/lowmcL1.bin.properties",
-          "org/bouncycastle/pqc/crypto/picnic/lowmcL3.bin.properties",
-          "org/bouncycastle/pqc/crypto/picnic/lowmcL5.bin.properties",
+          "org/bouncycastle/pqc/legacy/picnic/lowmcL1.bin.properties",
+          "org/bouncycastle/pqc/legacy/picnic/lowmcL3.bin.properties",
+          "org/bouncycastle/pqc/legacy/picnic/lowmcL5.bin.properties",
           "org/bouncycastle/x509/CertPathReviewerMessages*.properties",
         )
     }
@@ -358,6 +464,7 @@ dependencies {
   implementation(libs.media3.session)
   implementation(libs.media3.ui)
   implementation(libs.bcprov)
+  implementation("${libs.jna.get()}@aar")
   implementation(libs.coil.compose)
   implementation(libs.coil.svg)
   implementation(libs.commonmark)
@@ -379,12 +486,13 @@ dependencies {
 
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
-  testImplementation(libs.kotest.runner.junit5)
-  testImplementation(libs.kotest.assertions.core)
   testImplementation(libs.mockwebserver)
   testImplementation(libs.robolectric)
   testImplementation(libs.androidx.compose.ui.test.junit4)
+  testRuntimeOnly(libs.junit.platform.launcher)
   testRuntimeOnly(libs.junit.vintage.engine)
+  // The Android AAR has bionic dispatch; JVM vectors need the same-version host dispatch JAR.
+  testRuntimeOnly("${libs.jna.get()}@jar")
 
   androidTestImplementation(libs.androidx.test.ext.junit)
   androidTestImplementation(libs.androidx.test.runner)
@@ -393,6 +501,19 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
   useJUnitPlatform()
+  if (sodiumTestHost != null) {
+    dependsOn(extractCloudflareSodiumTest)
+    val nativeDirectory = extractCloudflareSodiumTest.flatMap { it.outputDirectory }
+    inputs.dir(nativeDirectory)
+    systemProperty("jna.library.path", nativeDirectory.get().asFile.absolutePath)
+    systemProperty(
+      "openclaw.sodium.test.library",
+      nativeDirectory
+        .get()
+        .file(sodiumTestHost.second)
+        .asFile.absolutePath,
+    )
+  }
   testLogging {
     events("failed")
     exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL

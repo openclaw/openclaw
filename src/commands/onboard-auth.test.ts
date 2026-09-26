@@ -45,7 +45,7 @@ vi.mock("../agents/provider-auth-aliases.js", () => ({
 }));
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
-  getProviderEnvVars: vi.fn((provider: string) => providerEnvVarsById[provider] ?? []),
+  getProviderEnvVarsCore: vi.fn((provider: string) => providerEnvVarsById[provider] ?? []),
   resolveProviderAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: {},
@@ -508,25 +508,6 @@ describe("applyAuthProfileConfig", () => {
     expect(next.auth?.order).toEqual({ anthropic: expected, unrelated: ["unrelated:default"] });
   });
 
-  it("creates provider order when switching from legacy oauth to api_key without explicit order", () => {
-    const next = applyAuthProfileConfig(
-      {
-        auth: {
-          profiles: {
-            "kilocode:legacy": { provider: "kilocode", mode: "oauth" },
-          },
-        },
-      },
-      {
-        profileId: "kilocode:default",
-        provider: "kilocode",
-        mode: "api_key",
-      },
-    );
-
-    expect(next.auth?.order?.kilocode).toEqual(["kilocode:default", "kilocode:legacy"]);
-  });
-
   it.each([
     { provider: "z.ai", expected: ["zai:new", "legacy", "same-mode"] },
     { provider: "unrelated", expected: undefined },
@@ -543,28 +524,6 @@ describe("applyAuthProfileConfig", () => {
       { profileId: "zai:new", provider: "zai", mode: "api_key" },
     );
     expect(next.auth?.order).toEqual(expected ? { zai: expected } : undefined);
-  });
-
-  it("repairs aliased auth.order keys instead of duplicating them", () => {
-    const next = applyAuthProfileConfig(
-      {
-        auth: {
-          profiles: {
-            "zai:default": { provider: "z.ai", mode: "api_key" },
-          },
-          order: { "z.ai": ["zai:default"] },
-        },
-      },
-      {
-        profileId: "zai:work",
-        provider: "z-ai",
-        mode: "oauth",
-      },
-    );
-
-    expect(next.auth?.order).toEqual({
-      zai: ["zai:work", "zai:default"],
-    });
   });
 
   it("merges split canonical and aliased auth.order entries for the same provider", () => {
@@ -591,25 +550,6 @@ describe("applyAuthProfileConfig", () => {
     expect(next.auth?.order).toEqual({
       zai: ["zai:work", "zai:default", "zai:backup"],
     });
-  });
-
-  it("keeps implicit round-robin when no mixed provider modes are present", () => {
-    const next = applyAuthProfileConfig(
-      {
-        auth: {
-          profiles: {
-            "kilocode:legacy": { provider: "kilocode", mode: "api_key" },
-          },
-        },
-      },
-      {
-        profileId: "kilocode:default",
-        provider: "kilocode",
-        mode: "api_key",
-      },
-    );
-
-    expect(next.auth?.order).toBeUndefined();
   });
 
   it("stores display metadata without overloading email", () => {

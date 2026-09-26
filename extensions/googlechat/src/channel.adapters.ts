@@ -1,19 +1,21 @@
-// Googlechat plugin module implements channel.adapters behavior.
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelThreadingContext,
   ChannelThreadingToolContext,
 } from "openclaw/plugin-sdk/channel-contract";
+import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
-  type MessageReceiptPartKind,
+  type ChannelMessageSendTextContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAllowlistProviderOpenWarningCollector,
   createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createChannelDirectoryAdapter,
   listResolvedDirectoryGroupEntriesFromMapKeys,
@@ -22,18 +24,9 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupPayload } from "./approval-card-actions.js";
 import { formatGoogleChatAllowFromEntry } from "./channel-base.js";
-import {
-  type ResolvedGoogleChatAccount,
-  isGoogleChatUserTarget,
-  missingTargetError,
-  normalizeGoogleChatTarget,
-  PAIRING_APPROVED_MESSAGE,
-  resolveGoogleChatAccount,
-  resolveGoogleChatOutboundSpace,
-  type OpenClawConfig,
-} from "./channel.deps.runtime.js";
 import {
   formatGoogleChatTextChunks,
   GOOGLE_CHAT_FORMAT_PROFILE,
@@ -41,34 +34,28 @@ import {
 } from "./format.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import { googleChatIngressIdentity } from "./ingress-identity.js";
+import {
+  isGoogleChatUserTarget,
+  normalizeGoogleChatTarget,
+  resolveGoogleChatOutboundSpace,
+} from "./targets.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
   "googleChatChannelRuntime",
 );
 
-function createGoogleChatSendReceipt(params: {
-  messageId?: string;
-  chatId: string;
-  threadId?: string;
-  kind: MessageReceiptPartKind;
-}) {
-  const messageId = params.messageId?.trim();
-  return createMessageReceiptFromOutboundResults({
-    results: messageId
-      ? [
-          {
-            channel: "googlechat",
-            messageId,
-            chatId: params.chatId,
-            conversationId: params.chatId,
-          },
-        ]
-      : [],
-    threadId: params.threadId,
-    kind: params.kind,
-  });
-}
+type GoogleChatTextSendContext = Pick<
+  ChannelMessageSendTextContext,
+  | "cfg"
+  | "to"
+  | "text"
+  | "accountId"
+  | "replyToId"
+  | "threadId"
+  | "assertDirectAdapterHandoff"
+  | "onPlatformSendDispatch"
+>;
 
 const collectGoogleChatGroupPolicyWarnings =
   createAllowlistProviderOpenWarningCollector<ResolvedGoogleChatAccount>({
@@ -84,7 +71,7 @@ const collectGoogleChatGroupPolicyWarnings =
 const collectGoogleChatOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectGoogleChatGroupPolicyWarnings,
   checkId: "channels.googlechat.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Google Chat security warning",
 });
 
@@ -206,23 +193,13 @@ export const googlechatOutboundAdapter = {
     normalizePayload: ({ payload }: { payload: ReplyPayload }) =>
       shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload) ? null : payload,
     resolveTarget: ({ to }: { to?: string }) => {
-      const trimmed = normalizeOptionalString(to) ?? "";
-
-      if (trimmed) {
-        const normalized = normalizeGoogleChatTarget(trimmed);
-        if (!normalized) {
-          return {
+      const normalized = normalizeGoogleChatTarget(normalizeOptionalString(to));
+      return normalized
+        ? { ok: true as const, to: normalized }
+        : {
             ok: false as const,
             error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
           };
-        }
-        return { ok: true as const, to: normalized };
-      }
-
-      return {
-        ok: false as const,
-        error: missingTargetError("Google Chat", "<spaces/{space}|users/{user}>"),
-      };
     },
   },
   attachedResults: {
@@ -234,19 +211,18 @@ export const googlechatOutboundAdapter = {
       accountId,
       replyToId,
       threadId,
-    }: {
-      cfg: OpenClawConfig;
-      to: string;
-      text: string;
-      accountId?: string | null;
-      replyToId?: string | null;
-      threadId?: string | number | null;
-    }) => {
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+    }: GoogleChatTextSendContext) => {
       const account = resolveGoogleChatAccount({
         cfg,
         accountId,
       });
-      const space = await resolveGoogleChatOutboundSpace({ account, target: to });
+      const space = await resolveGoogleChatOutboundSpace({
+        account,
+        target: to,
+        assertDirectAdapterHandoff,
+      });
       const thread =
         typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
       const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
@@ -255,14 +231,25 @@ export const googlechatOutboundAdapter = {
         space,
         text,
         thread,
+        assertDirectAdapterHandoff,
+        onPlatformSendDispatch,
       });
       const messageId = result?.messageName ?? "";
+      const receiptMessageId = messageId.trim();
       return {
         messageId,
         chatId: space,
-        receipt: createGoogleChatSendReceipt({
-          messageId,
-          chatId: space,
+        receipt: createMessageReceiptFromOutboundResults({
+          results: receiptMessageId
+            ? [
+                {
+                  channel: "googlechat",
+                  messageId: receiptMessageId,
+                  chatId: space,
+                  conversationId: space,
+                },
+              ]
+            : [],
           threadId: result?.threadName ?? thread,
           kind: "text",
         }),

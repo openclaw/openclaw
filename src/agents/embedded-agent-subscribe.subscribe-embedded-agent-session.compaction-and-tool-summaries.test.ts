@@ -11,6 +11,8 @@ import {
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
+import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 type SessionEventHandler = (evt: unknown) => void;
@@ -54,8 +56,8 @@ describe("synchronous context accounting", () => {
         completedCompactionEnd(false, 18_000, 8_000),
       ],
       expected: [
-        { kind: "model", contextTokens: 90_000 },
-        { kind: "model", contextTokens: 18_000 },
+        { kind: "model", contextTokens: 90_000, successful: false },
+        { kind: "model", contextTokens: 18_000, successful: false },
       ],
     },
     {
@@ -72,7 +74,7 @@ describe("synchronous context accounting", () => {
           },
         }),
       ],
-      expected: [{ kind: "model", contextTokens: undefined }],
+      expected: [{ kind: "model", contextTokens: undefined, successful: false }],
     },
     {
       name: "failed zero-usage retry without old assistant backfill",
@@ -82,8 +84,8 @@ describe("synchronous context accounting", () => {
         accountingAssistant(0, "error"),
       ],
       expected: [
-        { kind: "model", contextTokens: 90_000 },
-        { kind: "model", contextTokens: undefined },
+        { kind: "model", contextTokens: 90_000, successful: false },
+        { kind: "model", contextTokens: undefined, successful: false },
       ],
     },
   ])("records $name in producer order", ({ events, expected }) => {
@@ -141,8 +143,8 @@ describe("synchronous context accounting", () => {
       },
     });
     const expected: EmbeddedContextAccountingEvent[] = [
-      { kind: "model", contextTokens: 90_000 },
-      { kind: "model", contextTokens: 20_000 },
+      { kind: "model", contextTokens: 90_000, successful: false },
+      { kind: "model", contextTokens: 20_000, successful: false },
     ];
     try {
       const before = accountingAssistant(90_000);
@@ -196,59 +198,52 @@ describe("synchronous context accounting", () => {
 });
 
 describe("fenced output and compaction retries", () => {
-  it("waits for auto-compaction retry and clears buffered text", async () => {
-    // A retrying compaction invalidates any assistant text buffered from the
-    // failed attempt; waiters resolve only after the retry path reaches agent_end.
-    const listeners: SessionEventHandler[] = [];
-    const session = {
-      subscribe: (listener: SessionEventHandler) => {
-        listeners.push(listener);
-        return () => {
-          const index = listeners.indexOf(listener);
-          if (index !== -1) {
-            listeners.splice(index, 1);
-          }
-        };
-      },
-    } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-1",
+  it("preserves an accepted heartbeat response and private scratch through compaction retry", async () => {
+    const onHeartbeatToolResponse = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-heartbeat-compaction",
+      sessionPersistence: "detached",
+      onHeartbeatToolResponse,
     });
-
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "oops" }],
-    } as AssistantMessage;
-
-    for (const listener of listeners) {
-      listener({ type: "message_end", message: assistantMessage });
-    }
-
-    expect(subscription.assistantTexts.length).toBe(1);
-
-    for (const listener of listeners) {
-      listener(completedCompactionEnd());
-    }
-
-    expect(subscription.isCompacting()).toBe(true);
-    expect(subscription.assistantTexts.length).toBe(0);
-
-    let resolved = false;
-    const waitPromise = subscription.waitForCompactionRetry().then(() => {
-      resolved = true;
+    const tool = createHeartbeatResponseTool();
+    const response = {
+      outcome: "done" as const,
+      notify: true,
+      summary: "The monitored task completed.",
+      notificationText: "Your report is ready.",
+      scratch: "Private monitor notes: report completion confirmed.",
+    };
+    const toolCallId = "heartbeat-before-compaction";
+    emit({
+      type: "tool_execution_start",
+      toolName: tool.name,
+      toolCallId,
+      args: response,
     });
+    const result = await tool.execute(toolCallId, response);
+    emit({
+      type: "tool_execution_end",
+      toolName: tool.name,
+      toolCallId,
+      isError: false,
+      result,
+    });
+    await subscription.waitForPendingEvents();
+    expect(subscription.getHeartbeatToolResponse()).toEqual(response);
 
-    await Promise.resolve();
-    expect(resolved).toBe(false);
+    emit(completedCompactionEnd());
+    const assistant = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "Internal retry fallback." }],
+    });
+    emit({ type: "message_start", message: assistant });
+    emit({ type: "message_end", message: assistant });
+    emit({ type: "agent_end", messages: [assistant] });
+    await subscription.waitForPendingEvents();
+    await subscription.waitForCompactionRetry();
 
-    for (const listener of listeners) {
-      listener({ type: "agent_end" });
-    }
-
-    await waitPromise;
-    expect(resolved).toBe(true);
+    expect(subscription.getHeartbeatToolResponse()).toEqual(response);
+    expect(onHeartbeatToolResponse).toHaveBeenCalledExactlyOnceWith(response);
+    expect(subscription.getCompactionCount()).toBe(1);
   });
 
   it("clears the exact usage snapshot when compaction starts a new attempt", () => {
@@ -524,10 +519,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-compaction-assistant",
     });
-    const assistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "Reply before compaction" }],
-    } as AssistantMessage;
+    const assistant = textAssistant("Reply before compaction") as AssistantMessage;
 
     emit({ type: "message_end", message: assistant });
     expect(subscription.getCurrentAttemptAssistant()).toEqual(assistant);

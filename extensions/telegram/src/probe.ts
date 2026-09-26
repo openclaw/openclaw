@@ -1,7 +1,7 @@
-// Telegram plugin module implements probe behavior.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithTimeout, runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -11,7 +11,6 @@ import {
   resolveTelegramTransport,
   type TelegramTransport,
 } from "./fetch.js";
-import { makeProxyFetch } from "./proxy.js";
 
 export type TelegramProbe = BaseProbeResult & {
   status?: number | null;

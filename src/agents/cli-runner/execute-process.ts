@@ -5,21 +5,24 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
+import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { createModelCallStreamProgressReporter } from "../../logging/diagnostic-model-stream-progress.js";
 import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
+import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
+import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
 import type { FailoverError } from "../failover-error.js";
-import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
 import { appendCliOutputTail } from "./execute-output-buffer.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
+import { attachCliReplyBackend } from "./execution-target.js";
 import {
   createCliExitFailoverError,
   createCliFailoverError,
@@ -36,30 +39,6 @@ import { createCliOutputFailoverError } from "./output-error.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
-
-function appendCliOutputParseBuffer(buffer: Buffer, chunk: string) {
-  if (!chunk) {
-    return { buffer, exceeded: false };
-  }
-  const chunkBuffer = Buffer.from(chunk);
-  if (buffer.byteLength + chunkBuffer.byteLength <= CLI_RUNNER_OUTPUT_PARSE_BYTES) {
-    return {
-      buffer: Buffer.concat([buffer, chunkBuffer], buffer.byteLength + chunkBuffer.byteLength),
-      exceeded: false,
-    };
-  }
-  const remainingBytes = CLI_RUNNER_OUTPUT_PARSE_BYTES - buffer.byteLength;
-  return {
-    buffer:
-      remainingBytes <= 0
-        ? buffer
-        : Buffer.concat(
-            [buffer, chunkBuffer.subarray(0, remainingBytes)],
-            CLI_RUNNER_OUTPUT_PARSE_BYTES,
-          ),
-    exceeded: true,
-  };
-}
 
 type ExecuteCliProcessOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
@@ -85,7 +64,7 @@ export async function executeCliProcess(params: {
   executionCommand: string;
   executionArgv0?: string;
   executionLeadingArgv: readonly string[];
-  executionArgs: string[];
+  resolveExecutionArgs: () => string[];
   env: Record<string, string>;
   prompt: string;
   promptContext?: PreparedCliRunContext["promptContext"];
@@ -119,6 +98,7 @@ export async function executeCliProcess(params: {
         parseJsonlEvent: context.backendResolved.parseJsonlEvent,
         parseJsonlLifecycleEvent: context.backendResolved.parseJsonlLifecycleEvent,
         onAssistantDelta: params.events.emitCliAssistantDelta,
+        onCompletedReply: params.events.emitCliCompletedReply,
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
         onCompaction: params.events.emitCliCompaction,
@@ -137,20 +117,18 @@ export async function executeCliProcess(params: {
       })
     : null;
   let stdoutTail = "";
-  let stdoutParseBuffer: Buffer = Buffer.alloc(0);
+  const stdoutCapture = createCapturedOutputBuffers();
   let stdoutBytes = 0;
   const stdoutHash = crypto.createHash("sha256");
-  let stdoutParseExceeded = false;
   let stderrTail = "";
-  let stderrParseBuffer: Buffer = Buffer.alloc(0);
+  const stderrCapture = createCapturedOutputBuffers();
   let stderrBytes = 0;
   const stderrHash = crypto.createHash("sha256");
-  let stderrParseExceeded = false;
   // Only the core lifecycle owner may publish recovery facts. Plugin records
   // carry output, never the authority or deadline used to protect its execution.
-  const reportStreamProgress = createModelCallStreamProgressReporter(
-    () => backendActivity?.observeOutput(true) ?? false,
-  );
+  const reportStreamProgress = createModelCallStreamProgressReporter({
+    recordProgress: () => backendActivity?.observeOutput(true) ?? false,
+  });
   const streamProgressTarget = {
     runId: runParams.runId,
     ...(runParams.sessionKey ? { sessionKey: runParams.sessionKey } : {}),
@@ -171,10 +149,8 @@ export async function executeCliProcess(params: {
     stdoutBytes += chunkBytes;
     stdoutHash.update(chunk);
     stdoutTail = appendCliOutputTail(stdoutTail, chunk);
-    if (!stdoutParseExceeded) {
-      const next = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
-      stdoutParseBuffer = next.buffer;
-      stdoutParseExceeded = next.exceeded;
+    if (chunk && stdoutCapture.truncatedBytes === 0) {
+      appendCapturedOutput(stdoutCapture, chunk, CLI_RUNNER_OUTPUT_PARSE_BYTES, "head");
     }
     streamingParser?.push(chunk);
   };
@@ -183,10 +159,8 @@ export async function executeCliProcess(params: {
     stderrBytes += Buffer.byteLength(chunk);
     stderrHash.update(chunk);
     stderrTail = appendCliOutputTail(stderrTail, chunk);
-    if (!stderrParseExceeded) {
-      const next = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
-      stderrParseBuffer = next.buffer;
-      stderrParseExceeded = next.exceeded;
+    if (chunk && stderrCapture.truncatedBytes === 0) {
+      appendCapturedOutput(stderrCapture, chunk, CLI_RUNNER_OUTPUT_PARSE_BYTES, "head");
     }
   };
 
@@ -217,7 +191,7 @@ export async function executeCliProcess(params: {
       const nodeRun = await executeNodeClaudeRun({
         context,
         nodePlacement: params.nodePlacement,
-        executionArgs: params.executionArgs,
+        executionArgs: params.resolveExecutionArgs(),
         stdinPayload: params.stdin ?? "",
         ...(params.nodeSystemPrompt !== undefined
           ? { nodeSystemPrompt: params.nodeSystemPrompt }
@@ -236,9 +210,10 @@ export async function executeCliProcess(params: {
       result = await executePluginOwnedProcess({
         context,
         execute: context.executionTarget.execute,
+        watchdogClock: params.deps.watchdogClock,
         executionCommand: params.executionCommand,
         executionArgv0: params.executionArgv0,
-        executionArgs: [...params.executionLeadingArgv, ...params.executionArgs],
+        executionArgs: [...params.executionLeadingArgv, ...params.resolveExecutionArgs()],
         env: params.env,
         prompt: params.prompt,
         ...(params.promptContext ? { promptContext: params.promptContext } : {}),
@@ -269,11 +244,13 @@ export async function executeCliProcess(params: {
           terminalInterruption = { reason };
           return true;
         },
+        mcpCapture: {
+          captureKey: params.initialGatewayCaptureKey,
+          beginCapture: params.toolTracking.beginGatewayCapture,
+        },
         ...(params.useManagedClaudeLiveSession
           ? {
               liveSession: {
-                captureKey: params.initialGatewayCaptureKey,
-                beginCapture: params.toolTracking.beginGatewayCapture,
                 requiredGeneration: params.cliSessionIdToUse
                   ? context.requiredClaudeLiveSessionGeneration
                   : undefined,
@@ -299,19 +276,37 @@ export async function executeCliProcess(params: {
       }
       // Startup can wait behind another scoped run. Reserve cancellation under
       // the caller's run id before awaiting the child or replacement fence.
-      const abortManagedRun = () => supervisor.cancel(runParams.runId, "manual-cancel");
+      let processCancelled = false;
+      const assertProcessCurrent = () => {
+        params.assertCurrent();
+        if (processCancelled) {
+          throw new Error("CLI process authority is no longer active");
+        }
+      };
+      const abortManagedRun = () => {
+        processCancelled = true;
+        supervisor.cancel(runParams.runId, "manual-cancel");
+      };
       runParams.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
       try {
+        params.toolTracking.beginGatewayCapture(
+          params.initialGatewayCaptureKey,
+          assertProcessCurrent,
+        );
         const managedRun = await supervisor.spawn({
           assertCurrent: params.assertCurrent,
           runId: runParams.runId,
           scopeKey,
           replaceExistingScope: Boolean(params.useResume && scopeKey),
           mode: "child",
-          argv: [params.executionCommand, ...params.executionLeadingArgv, ...params.executionArgs],
+          argv: [params.executionCommand, ...params.executionLeadingArgv],
+          resolveArgs: params.resolveExecutionArgs,
           argv0: params.executionArgv0,
           timeoutMs: runParams.timeoutMs,
           noOutputTimeoutMs: params.noOutputTimeoutMs,
+          onCancel: () => {
+            processCancelled = true;
+          },
           cwd: context.cwd ?? context.workspaceDir,
           env: params.env,
           input: params.stdin ?? "",
@@ -321,23 +316,15 @@ export async function executeCliProcess(params: {
           onStderr: consumeStderr,
         });
         managedRunPid = managedRun.pid;
-        const replyBackendHandle = runParams.replyOperation
-          ? {
-              kind: "cli" as const,
-              runId: runParams.runId,
-              toolAuthorityFingerprint: runParams.toolAuthorityFingerprint,
-              cancel: () => managedRun.cancel("manual-cancel"),
-            }
-          : undefined;
-        if (replyBackendHandle) {
-          runParams.replyOperation?.attachBackend(replyBackendHandle);
-        }
+        const detachReplyBackend = attachCliReplyBackend(runParams, () => {
+          processCancelled = true;
+          managedRun.cancel("manual-cancel");
+        });
         try {
           result = await managedRun.wait();
+          processCancelled ||= result.reason !== "exit";
         } finally {
-          if (replyBackendHandle) {
-            runParams.replyOperation?.detachBackend(replyBackendHandle);
-          }
+          detachReplyBackend?.();
         }
       } finally {
         runParams.abortSignal?.removeEventListener("abort", abortManagedRun);
@@ -376,7 +363,9 @@ export async function executeCliProcess(params: {
   }
 
   let stdout: string | undefined;
-  const readStdout = () => (stdout ??= stdoutParseBuffer.toString("utf8").trim());
+  // Preserve replacement characters when the byte limit clips a UTF-8 sequence.
+  const readStdout = () =>
+    (stdout ??= Buffer.concat(stdoutCapture.chunks, stdoutCapture.bytes).toString("utf8").trim());
   const stdoutDiagnostic = stdoutTail.trim();
   const stderrDiagnostic = stderrTail.trim();
   const processDiagnostics = {
@@ -412,7 +401,7 @@ export async function executeCliProcess(params: {
     params.outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
   const parsedStructuredOutput =
     streamedJsonlOutput ??
-    (params.outputMode === "json" && !stdoutParseExceeded
+    (params.outputMode === "json" && stdoutCapture.truncatedBytes === 0
       ? parseCliOutput({
           raw: readStdout(),
           backend: params.backend,
@@ -465,7 +454,7 @@ export async function executeCliProcess(params: {
         Boolean(params.resolvedSessionId) &&
         Boolean(context.openClawHistoryPrompt) &&
         Boolean(runParams.sessionKey) &&
-        runParams.timeoutMs - (Date.now() - context.started) > 0;
+        runParams.timeoutMs - (performance.now() - context.startedMonotonicMs) > 0;
       if (runParams.sessionKey && params.events.emitLiveEvents && !deferNotice) {
         const stallNotice = [
           `CLI agent (${runParams.provider}) produced no output for ${timeoutSeconds}s and was terminated.`,
@@ -479,7 +468,10 @@ export async function executeCliProcess(params: {
           accountId: runParams.agentAccountId,
         });
         params.deps.enqueueSystemEvent(stallNotice, {
-          sessionKey: resolveEventSessionKeyForPolicy(runParams.sessionKey, routing),
+          sessionKey: resolveSystemEventQueueKey(
+            resolveEventSessionKeyForPolicy(runParams.sessionKey, routing),
+            runParams.agentId,
+          ),
         });
         params.deps.requestHeartbeat(
           scopedHeartbeatWakeOptionsForPolicy(
@@ -506,7 +498,7 @@ export async function executeCliProcess(params: {
       );
     }
     const retryEmptyFailure = result.reason === "exit" && !params.events.hasObservedCliActivity();
-    const stderr = stderrParseBuffer.toString("utf8").trim();
+    const stderr = Buffer.concat(stderrCapture.chunks, stderrCapture.bytes).toString("utf8").trim();
     throw createCliExitFailoverError({
       context: failoverContext,
       candidates: [stderr, readStdout(), stderrDiagnostic, stdoutDiagnostic],
@@ -516,7 +508,7 @@ export async function executeCliProcess(params: {
     });
   }
 
-  if (stdoutParseExceeded && !streamedJsonlOutput) {
+  if (stdoutCapture.truncatedBytes > 0 && !streamedJsonlOutput) {
     throw createCliFailoverError(
       `CLI stdout exceeded ${CLI_RUNNER_OUTPUT_PARSE_BYTES} bytes; refusing to parse truncated output.`,
       "format",
@@ -562,11 +554,9 @@ export async function executeCliProcess(params: {
     `cli turn: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - params.cliTurnStartedAt} ${formatCliBackendOutputDigest(rawText)}`,
   );
   return {
-    ...parsed,
+    ...transformCliResultText(parsed, context.backendResolved.textTransforms?.output),
     ...(terminalInterruption ? { terminalInterruption } : {}),
     diagnostics: { ...parsed.diagnostics, process: processDiagnostics },
-    rawText,
     finalPromptText: params.prompt,
-    text: applyPluginTextReplacements(rawText, context.backendResolved.textTransforms?.output),
   };
 }

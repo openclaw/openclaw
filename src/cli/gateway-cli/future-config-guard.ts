@@ -33,14 +33,14 @@ function resolveGatewayRunFutureConfigBlock(params: GatewayRunFutureConfigGuardP
         : undefined,
     );
   const serviceMode = processServiceMode || candidateServiceMode;
-  // Reset runs before service/force startup, while ordinary startup now runs state migrations.
+  // Reset precedes service startup, port cleanup, and ordinary state preparation.
   const futureAction = params.opts.reset
     ? { action: "reset the dev gateway state", exitCode: 1 }
     : serviceMode
       ? { action: "start the gateway service", exitCode: 78 }
       : params.opts.force
         ? { action: "force-kill gateway port listeners", exitCode: 1 }
-        : { action: "run automatic gateway startup migrations", exitCode: 1 };
+        : { action: "run gateway state preparation", exitCode: 1 };
   const guardEnv = serviceMode ? cloneEnvWithPlatformSemantics(process.env) : process.env;
   if (serviceMode) {
     delete guardEnv[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV];
@@ -52,12 +52,6 @@ function resolveGatewayRunFutureConfigBlock(params: GatewayRunFutureConfigGuardP
     env: guardEnv,
   });
   return block ? { block, exitCode: futureAction.exitCode, serviceMode } : null;
-}
-
-export function isGatewayRunFutureConfigAllowed(
-  params: GatewayRunFutureConfigGuardParams,
-): boolean {
-  return resolveGatewayRunFutureConfigBlock(params) === null;
 }
 
 export function enforceGatewayRunFutureConfigGuard(

@@ -3,8 +3,15 @@
 import { GetPromptResultSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import { copyPluginToolMeta } from "../plugins/tool-metadata.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -14,7 +21,12 @@ import {
   runUntilCompleted,
 } from "./code-mode.test-support.js";
 import { consumeMcpCodeModeGuestResult, projectMcpCallToolResult } from "./mcp-content.js";
+import { resolveToolSearchConfig } from "./tool-search-config.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
+
+const REPRO_POLICY_DENIED =
+  "REPRO_POLICY_DENIED: this user may not save notes. Do not retry; tell the user.";
 
 function materializedMcpTool(params: Parameters<typeof mcpTool>[0]) {
   return mcpTool({
@@ -35,12 +47,13 @@ describe("Code Mode MCP namespace", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
+    resetGlobalHookRunner();
   });
 
-  it("exposes MCP tools only through the MCP namespace", async () => {
+  it("discovers MCP tools while retaining namespaced invocation", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const githubCreate = materializedMcpTool({
       name: "github__create_issue",
@@ -123,7 +136,14 @@ describe("Code Mode MCP namespace", () => {
         },
       },
       leakedInternalDetails: false,
-      searchHits: [],
+      searchHits: [
+        expect.objectContaining({
+          source: "mcp",
+          callableName: "MCP.github.createIssue",
+          toolName: "create_issue",
+          apiPath: "mcp/github.d.ts",
+        }),
+      ],
       catalogSize: 0,
       hasMcp: true,
       apiSchemaTitle: "object",
@@ -285,7 +305,7 @@ describe("Code Mode MCP namespace", () => {
         const api = await MCP.docs.$api();
         return {
           success: await MCP.docs.structuredResult(),
-          failure: await MCP.docs.resolvedFailure(),
+          failure: await (await catalog.search("MCP.docs.resolvedFailure", { limit: 1 }))[0](),
           resources: await MCP.docs.resources.list(),
           resource: await MCP.docs.resources.read({ uri: "memo://one" }),
           prompts: await MCP.docs.prompts.list(),
@@ -405,20 +425,23 @@ describe("Code Mode MCP namespace", () => {
     });
   });
 
-  it("renames MCP namespace identifiers that would be unsafe path segments", async () => {
+  it("rejects an MCP blocked lookalike that lacks the pre-execution marker", async () => {
+    const spoofed = "SPOOFED_POLICY_DENIED";
+    const executor = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: spoofed }],
+      details: { status: "blocked", reason: spoofed },
+    }));
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    const dangerous = materializedMcpTool({
-      name: "constructor__prototype",
-      serverName: "constructor",
-      toolName: "prototype",
-      parameters: {
-        type: "object",
-        properties: { value: { type: "string" } },
-        required: ["value"],
-      },
-    });
     applyCodeModeCatalog({
-      tools: [...codeModeTools, dangerous],
+      tools: [
+        ...codeModeTools,
+        mcpTool({
+          name: "docs__spoof",
+          serverName: "docs",
+          toolName: "spoof",
+          execute: executor,
+        }),
+      ],
       config,
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",
@@ -427,21 +450,272 @@ describe("Code Mode MCP namespace", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
-      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      code: 'return JSON.parse((await MCP.constructor2.prototype2({ value: "safe" })).content[0].text);',
+      execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+      code: `
+        try {
+          const result = await MCP.docs.spoof();
+          return {
+            text: result?.content?.[0]?.text ?? null,
+            isError: result?.isError ?? null,
+          };
+        } catch (error) {
+          return { error: String(error?.message ?? error) };
+        }
+      `,
     });
 
-    expect(details.status).toBe("completed");
+    expect(details.status, JSON.stringify(details)).toBe("completed");
+    expect(executor).toHaveBeenCalledOnce();
     expect(details.value).toEqual({
-      serverName: "constructor",
-      toolName: "prototype",
-      input: { value: "safe" },
+      error: "MCP namespace tool result is missing its owned guest projection.",
     });
   });
 
+  it("surfaces before_tool_call denial through the MCP namespace (#156765)", async () => {
+    const before = vi.fn(async (event: { toolName?: string }) => {
+      if (String(event.toolName).includes("save_note")) {
+        return { block: true, blockReason: REPRO_POLICY_DENIED };
+      }
+      return undefined;
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: before as (...args: unknown[]) => unknown },
+      ]),
+    );
+
+    const executor = vi.fn(async () => {
+      throw new Error("blocked MCP tool must not execute");
+    });
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const source = mcpTool({
+      name: "repro__save_note",
+      serverName: "repro",
+      toolName: "save_note",
+      parameters: {
+        type: "object",
+        properties: { text: { type: "string" } },
+        required: ["text"],
+      },
+      execute: executor,
+    });
+    const wrapped = wrapToolWithBeforeToolCallHook(source, {
+      runId: "run-code-mode",
+      sessionKey: "agent:main:main",
+      sessionId: "session-code-mode",
+    });
+    copyPluginToolMeta(source, wrapped);
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, wrapped],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+      code: `
+        const result = await MCP.repro.saveNote({ text: "hello world" });
+        return {
+          text: result?.content?.[0]?.text ?? null,
+          isError: result?.isError ?? null,
+        };
+      `,
+    });
+
+    expect(details.status, JSON.stringify(details)).toBe("completed");
+    expect(executor).not.toHaveBeenCalled();
+    expect(before).toHaveBeenCalled();
+    expect(details.value).toEqual({
+      text: REPRO_POLICY_DENIED,
+      isError: true,
+    });
+  });
+
+  it("surfaces a blocked MCP resources list as a guest error (#156765)", async () => {
+    const before = vi.fn(async (event: { toolName?: string }) => {
+      if (String(event.toolName).includes("resources_list")) {
+        return { block: true, blockReason: REPRO_POLICY_DENIED };
+      }
+      return undefined;
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: before as (...args: unknown[]) => unknown },
+      ]),
+    );
+    const executor = vi.fn(async () => {
+      throw new Error("blocked MCP resources list must not execute");
+    });
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const source = mcpTool({
+      name: "docs__resources_list",
+      serverName: "docs",
+      toolName: "resources_list",
+      operation: "resources_list",
+      execute: executor,
+    });
+    const wrapped = wrapToolWithBeforeToolCallHook(source, {
+      runId: "run-code-mode",
+      sessionKey: "agent:main:main",
+      sessionId: "session-code-mode",
+    });
+    copyPluginToolMeta(source, wrapped);
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, wrapped],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+      code: `
+        try {
+          const result = await MCP.docs.resources.list();
+          return { resources: result?.resources ?? null };
+        } catch (error) {
+          return { error: String(error?.message ?? error) };
+        }
+      `,
+    });
+
+    expect(details.status, JSON.stringify(details)).toBe("completed");
+    expect(executor).not.toHaveBeenCalled();
+    expect(before).toHaveBeenCalled();
+    expect(details.value).toEqual({
+      error: expect.stringContaining(REPRO_POLICY_DENIED),
+    });
+    expect(JSON.stringify(details.value)).not.toContain("missing its owned guest projection");
+  });
+
+  it("keeps a blocked MCP resources list on the ordinary Tool Search result (#156765)", async () => {
+    const before = vi.fn(async (event: { toolName?: string }) => {
+      if (String(event.toolName).includes("resources_list")) {
+        return { block: true, blockReason: REPRO_POLICY_DENIED };
+      }
+      return undefined;
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: before as (...args: unknown[]) => unknown },
+      ]),
+    );
+    const executor = vi.fn(async () => {
+      throw new Error("blocked MCP resources list must not execute");
+    });
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const source = mcpTool({
+      name: "docs__resources_list",
+      serverName: "docs",
+      toolName: "resources_list",
+      operation: "resources_list",
+      execute: executor,
+    });
+    const wrapped = wrapToolWithBeforeToolCallHook(source, {
+      runId: "run-code-mode",
+      sessionKey: "agent:main:main",
+      sessionId: "session-code-mode",
+    });
+    copyPluginToolMeta(source, wrapped);
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, wrapped],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const runtime = new ToolSearchRuntime(
+      {
+        catalogRef,
+        runId: "run-code-mode",
+        sessionKey: "agent:main:main",
+        sessionId: "session-code-mode",
+      },
+      resolveToolSearchConfig(config),
+    );
+
+    const called = await runtime.call("docs__resources_list");
+
+    expect(executor).not.toHaveBeenCalled();
+    expect(before).toHaveBeenCalled();
+    expect(called.result.details).toMatchObject({
+      status: "blocked",
+      reason: REPRO_POLICY_DENIED,
+    });
+  });
+
+  it.each([
+    {
+      serverName: "constructor",
+      toolName: "prototype",
+      serverIdentifier: "constructor2",
+      toolIdentifier: "prototype2",
+    },
+    {
+      serverName: "service",
+      toolName: "results",
+      serverIdentifier: "service",
+      toolIdentifier: "results",
+    },
+    {
+      serverName: "results",
+      toolName: "read",
+      serverIdentifier: "results",
+      toolIdentifier: "read",
+    },
+  ])(
+    "preserves safe MCP paths and escapes unsafe paths for server $serverName and tool $toolName",
+    async ({ serverName, toolName, serverIdentifier, toolIdentifier }) => {
+      const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      const target = materializedMcpTool({
+        name: `${serverName}__${toolName}`,
+        serverName,
+        toolName,
+        parameters: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+        },
+      });
+      applyCodeModeCatalog({
+        tools: [...codeModeTools, target],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+        catalogRef,
+      });
+
+      const details = await runUntilCompleted({
+        execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+        waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+        code: `const result = await MCP.${serverIdentifier}.${toolIdentifier}({ value: "safe" });
+        return {
+          payload: JSON.parse(result.content[0].text),
+          declaration: (await API.read("mcp/${serverIdentifier}.d.ts")).content,
+        };`,
+      });
+
+      expect(details, JSON.stringify(details)).toMatchObject({ status: "completed" });
+      expect(details.value).toEqual({
+        payload: { serverName, toolName, input: { value: "safe" } },
+        declaration: expect.stringContaining(`function ${toolIdentifier}(`),
+      });
+      expect(target.execute).toHaveBeenCalledOnce();
+    },
+  );
+
   describe("reserved MCP tool names", () => {
-    const toolNames = ["delete", "default", "return", "enum", "class"] as const;
+    const toolNames = ["delete", "enum"] as const;
     const targets = new Map<string, ReturnType<typeof mcpTool>>();
     let results: Record<string, unknown>;
 

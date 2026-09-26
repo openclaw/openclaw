@@ -22,8 +22,9 @@ Checking the streaming behavior and running the focused tests.
 ```
 
 The default draft shows a status headline, authored plan steps, and approval
-or failure lines. Set `streaming.progress.toolProgress: true` to add a rolling
-tool log, with rows such as `🛠️ Bash: run tests`.
+requests. Intermediate tool failures and nonzero command exits stay out of the
+draft. Set `streaming.progress.toolProgress: true` to add a rolling tool log,
+including tool failures, with rows such as `🛠️ Bash: run tests`.
 
 <Note>
   Discord defaults preview streaming to `off`; set `streaming.mode: "progress"`
@@ -59,12 +60,12 @@ migration, see [Streaming and chunking](/concepts/streaming).
 
 ## What users see
 
-| Part            | Purpose                                                                       |
-| --------------- | ----------------------------------------------------------------------------- |
-| Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler.   |
-| Label           | Optional starter/status line such as `Working`.                               |
-| Progress lines  | Plan milestones, enabled commentary/reasoning, and approval or failure lines. |
-| Tool log        | Optional tool rows using the same icons and detail formatter as `/verbose`.   |
+| Part            | Purpose                                                                     |
+| --------------- | --------------------------------------------------------------------------- |
+| Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler. |
+| Label           | Optional starter/status line such as `Working`.                             |
+| Progress lines  | Plan milestones, enabled commentary/reasoning, and approval requests.       |
+| Tool log        | Optional tool rows using the same icons and detail formatter as `/verbose`. |
 
 The status headline sits above the progress lines. With
 `progress.toolProgress: true`, tool rows remain visible underneath it.
@@ -169,8 +170,12 @@ plans, approvals, command output, patch summaries, and similar agent activity.
 `progress.toolProgress` decides whether ordinary tool calls become rolling
 rows underneath the status headline. It defaults to `false` on every channel,
 which keeps the draft quiet: the headline, enabled commentary and reasoning,
-plan milestones, and any approval request or failed command still appear. Set
-it to `true` for the full rolling tool log.
+plan milestones, and approval requests still appear. Intermediate tool failures
+and nonzero command exits are hidden along with other tool rows; failures that
+prevent the turn from completing still appear through normal error delivery.
+Set it to `true` for the rolling tool log. Successful background-process polls
+and internal waits do not add routine rows. Failed calls still follow the
+selected tool-progress policy; `/verbose` retains their diagnostic summaries.
 
 Native subagent spawn and activity events follow the same policy. They start
 the quiet work indicator; with the tool log enabled, lifecycle updates reuse a
@@ -358,6 +363,15 @@ Limit how many lines stay visible (default 8):
 }
 ```
 
+With `toolProgress: true`, command exit rows and failed item rows from any named
+tool use ordinary tool-log capacity. This includes built-in, plugin, and custom
+tools without maintaining a name list. One rolling activity slot remains visible
+alongside a plan, so a failed row appears when it occurs, then scrolls out as
+newer activity arrives.
+Approval requests, blocked/error states, and unnamed failures still take
+priority. With the tool log hidden, tool failures and nonzero exits are hidden
+too; approval requests remain visible.
+
 Progress lines are compacted automatically to reduce chat-bubble reflow while
 the draft is edited, and OpenClaw truncates long lines so repeated draft edits
 do not wrap differently on every update. The default per-line budget is 120
@@ -404,7 +418,8 @@ Add the rolling tool log to the single progress draft:
 
 With the default `toolProgress: false`, OpenClaw still suppresses the older
 standalone tool-progress messages for that turn; the draft shows the headline,
-authored text, plan milestones, and attention lines only.
+authored text, plan milestones, and approval requests only. Tool diagnostics
+remain available in the session transcript.
 
 ## Channel behavior
 
@@ -425,10 +440,15 @@ full runtime-behavior breakdown per channel.
 
 When the final answer is ready, OpenClaw tries to keep the chat clean:
 
-- In `progress` mode on Discord, the final answer is sent as a fresh message
-  and the status draft is deleted once that answer is delivered. Busy channels
-  keep no orphaned tool log above the reply; error finals keep the draft as the
-  visible record of the failed turn.
+- A Discord or Telegram progress card handed off to accepted subagents stays visible across
+  parent yield. Core updates that same card while delegated work continues;
+  the eventual final answer is separate. See
+  [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
+
+- Otherwise, in `progress` mode on Discord, the final answer is sent as a fresh
+  message and the status draft is deleted once that answer is delivered. Busy
+  channels keep no orphaned tool log above the reply; error finals keep the draft
+  as the visible record of the failed turn.
 - If the draft can safely become the final answer (`partial`/`block` modes),
   OpenClaw edits it in place.
 - Slack's compact progress style posts the final answer as a new message and

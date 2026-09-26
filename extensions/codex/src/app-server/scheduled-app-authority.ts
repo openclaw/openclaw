@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexAppServerRequestTimeoutError, type CodexAppServerClient } from "./client.js";
+import { stringifyCodexPolicy } from "./config-policy-json.js";
 import type { CodexPluginDestructiveApprovalMode } from "./config.js";
 import { readCodexMcpToolConnectorId } from "./mcp-tool-metadata.js";
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
@@ -15,13 +16,20 @@ import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildPluginAppPolicyContext,
   disableUnlistedCodexApps,
-  stringifyCodexPluginPolicy,
   type CodexAppPolicyContextEntry,
   type CodexPluginThreadConfig,
   type PluginAppPolicyContext,
 } from "./plugin-thread-config.js";
 import { isJsonObject, type v2 } from "./protocol.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
+import {
+  appToolHintsAllowed,
+  intersectToolApprovalMode,
+  normalizeAppToolApprovalMode,
+  readCurrentToolPolicy,
+  type CodexAppToolApprovalMode,
+  type CodexScheduledAppTool,
+} from "./scheduled-app-tool-policy.js";
 import { readCodexManagedRequirementsFingerprint } from "./thread-requests.js";
 import { withAbortableTimeout } from "./timeout.js";
 
@@ -33,12 +41,6 @@ const CODEX_APP_AUTHORITY_CAPTURE_TIMEOUT_MS = 60_000;
 const CODEX_APP_AUTHORITY_CAPTURE_MIN_TIMEOUT_MS = 100;
 
 type CronRuntimeAuthority = NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]>;
-type CodexAppToolApprovalMode = "auto" | "prompt" | "writes" | "approve";
-type CodexScheduledAppTool = {
-  title?: string;
-  destructiveHint?: boolean;
-  openWorldHint?: boolean;
-};
 export type CurrentCodexScheduledAppPolicy = {
   config: Record<string, unknown>;
   toolsByApp: ReadonlyMap<string, ReadonlyMap<string, CodexScheduledAppTool>>;
@@ -130,12 +132,6 @@ type ScheduledCodexAppAuthorityPayload = {
 
 function normalizeApprovalMode(value: unknown): CodexPluginDestructiveApprovalMode | undefined {
   return value === "allow" || value === "deny" || value === "auto" || value === "ask"
-    ? value
-    : undefined;
-}
-
-function normalizeAppToolApprovalMode(value: unknown): CodexAppToolApprovalMode | undefined {
-  return value === "auto" || value === "prompt" || value === "writes" || value === "approve"
     ? value
     : undefined;
 }
@@ -252,9 +248,16 @@ async function readCodexScheduledAppToolsByApp(params: {
         if (connectorId) {
           const tools = toolsByApp.get(connectorId) ?? new Map<string, CodexScheduledAppTool>();
           const metadata = asOptionalRecord(tool);
+          const appMetadata = asOptionalRecord(metadata?._meta);
           const annotations = asOptionalRecord(metadata?.annotations);
           tools.set(toolName, {
             title: typeof metadata?.title === "string" ? metadata.title : undefined,
+            linkId:
+              typeof appMetadata?.link_id === "string" && appMetadata.link_id.trim()
+                ? appMetadata.link_id
+                : undefined,
+            requiresExplicitLinkId:
+              asOptionalRecord(appMetadata?.["_codex_apps"])?.requires_explicit_link_id === true,
             destructiveHint: annotations?.destructiveHint === false ? false : undefined,
             openWorldHint: annotations?.openWorldHint === false ? false : undefined,
           });
@@ -301,55 +304,6 @@ export async function readCurrentCodexScheduledAppPolicy(params: {
     config: isJsonObject(configResponse.config) ? configResponse.config : {},
     toolsByApp,
   };
-}
-
-function readCurrentToolPolicy(
-  config: Record<string, unknown>,
-  appId: string,
-  toolName: string,
-  metadata: CodexScheduledAppTool | undefined,
-  fallbackApprovalMode: CodexAppToolApprovalMode = "auto",
-): { enabled: boolean; approvalMode: CodexAppToolApprovalMode } {
-  const apps = asOptionalRecord(config.apps);
-  const app = asOptionalRecord(apps?.[appId]);
-  const defaults = asOptionalRecord(apps?.["_default"]);
-  const tools = asOptionalRecord(app?.tools);
-  // Codex selects the full-name entry before the title entry, not each field
-  // independently. Preserve that precedence for both enablement and approval.
-  const tool = asOptionalRecord(
-    tools?.[toolName] ?? (metadata?.title !== undefined ? tools?.[metadata.title] : undefined),
-  );
-  const defaultToolsEnabled = app?.default_tools_enabled;
-  return {
-    enabled:
-      (app ? app.enabled !== false : defaults?.enabled !== false) &&
-      (typeof tool?.enabled === "boolean"
-        ? tool.enabled
-        : typeof defaultToolsEnabled === "boolean"
-          ? defaultToolsEnabled
-          : appToolHintsAllowed(metadata, {
-              allowDestructiveActions:
-                (app?.destructive_enabled ?? defaults?.destructive_enabled) !== false,
-              allowOpenWorld: (app?.open_world_enabled ?? defaults?.open_world_enabled) !== false,
-            })),
-    approvalMode:
-      normalizeAppToolApprovalMode(tool?.approval_mode) ??
-      normalizeAppToolApprovalMode(app?.default_tools_approval_mode) ??
-      normalizeAppToolApprovalMode(defaults?.default_tools_approval_mode) ??
-      fallbackApprovalMode,
-  };
-}
-
-function appToolHintsAllowed(
-  tool: CodexScheduledAppTool | undefined,
-  policy: Pick<CodexAppPolicyContextEntry, "allowDestructiveActions" | "allowOpenWorld">,
-): boolean {
-  // Codex treats missing annotations as destructive/open-world. Explicit tool
-  // enablement bypasses its app flags, so enforce the stored cap before projecting it.
-  return (
-    (policy.allowDestructiveActions || tool?.destructiveHint === false) &&
-    (policy.allowOpenWorld !== false || tool?.openWorldHint === false)
-  );
 }
 
 /** Captures only apps callable on the exact active Codex client/thread. */
@@ -492,26 +446,6 @@ function stricterApprovalMode(
   return APPROVAL_RANK[left] <= APPROVAL_RANK[right] ? left : right;
 }
 
-function intersectToolApprovalMode(
-  captured: CodexAppToolApprovalMode,
-  current: CodexAppToolApprovalMode,
-): CodexAppToolApprovalMode {
-  if (captured === current) {
-    return captured;
-  }
-  if (captured === "prompt" || current === "prompt") {
-    return "prompt";
-  }
-  if (captured === "approve") {
-    return current;
-  }
-  if (current === "approve") {
-    return captured;
-  }
-  // `auto` and `writes` are annotation-dependent and not totally ordered.
-  return "prompt";
-}
-
 function appApprovalCeiling(mode: CodexPluginDestructiveApprovalMode): CodexAppToolApprovalMode {
   if (mode === "allow") {
     return "approve";
@@ -628,7 +562,7 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   const fingerprint = crypto
     .createHash("sha256")
     .update(
-      stringifyCodexPluginPolicy({
+      stringifyCodexPolicy({
         version: 1,
         namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
         authority: scheduled,
@@ -729,7 +663,7 @@ export function buildScheduledCodexAppAuthorityInputFingerprint(
   return crypto
     .createHash("sha256")
     .update(
-      stringifyCodexPluginPolicy({
+      stringifyCodexPolicy({
         version: 1,
         namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
         baseFingerprint,

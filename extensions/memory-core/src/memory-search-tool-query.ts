@@ -1,10 +1,12 @@
 // Memory Core plugin module owns ranked search-window filtering and diagnostics.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  formatMemoryIndexRebuildGuidance,
   resolveMemoryIndexIdentityDiagnostic,
+  resolveMemoryIndexSearchDiagnostic,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryIndexIdentityDiagnostic,
   type MemoryProviderStatus,
+  type MemorySearchDeadlineControl,
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySearchResult,
@@ -12,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
 
@@ -21,19 +24,18 @@ export function buildPausedMemoryIndexUnavailableResult(
   diagnostic: MemoryIndexIdentityDiagnostic,
   params: {
     agentId: string;
-    status: Pick<MemoryProviderStatus, "provider" | "requestedProvider">;
+    status: Pick<
+      MemoryProviderStatus,
+      "provider" | "requestedProvider" | "lastSyncError" | "custom"
+    >;
   },
 ) {
-  const cause =
-    diagnostic.owner === "configuration"
-      ? `the current memory configuration no longer matches the index (${diagnostic.reason})`
-      : diagnostic.code === "metadata_missing"
-        ? `the memory index metadata is missing (${diagnostic.reason}); no configuration change is needed`
-        : `this OpenClaw version changed the memory index format (${diagnostic.reason}); no configuration change is needed`;
-  return buildMemorySearchUnavailableResult(diagnostic.reason, {
-    warning: `Tell the user: memory search is paused because ${cause}.`,
-    action: `Tell the user to run: ${formatMemoryIndexRebuildGuidance(params.status, params.agentId)}`,
-  });
+  const { error, warning, action } = resolveMemoryIndexSearchDiagnostic(
+    diagnostic,
+    params.status,
+    params.agentId,
+  );
+  return buildMemorySearchUnavailableResult(error, { warning, action });
 }
 
 type ManagerState = { manager: MemorySearchManager; managerMs?: number };
@@ -63,7 +65,7 @@ function isClosedMemoryStoreError(error: unknown): boolean {
     message.includes("database is not open") ||
     message.includes("database connection is not open") ||
     message.includes("database handle is closed") ||
-    message.includes("memory search manager is closed")
+    message.includes("memory index manager is closed")
   );
 }
 
@@ -73,6 +75,8 @@ export async function executeMemorySearchToolQuery(params: {
   query: MemorySearchToolQuery;
   visibility: MemorySearchToolVisibility;
   signal: AbortSignal;
+  deadlineControl?: MemorySearchDeadlineControl;
+  onRebuildNotice?: (readWarning: () => string | undefined) => void;
   onPartialResults?: (
     result: Awaited<ReturnType<typeof finalizeMemorySearchToolQuery>> | null,
   ) => void;
@@ -93,8 +97,15 @@ export async function executeMemorySearchToolQuery(params: {
           ? query.indexedSources
           : query.defaultSources
         : undefined);
+  const queryContext = {
+    query,
+    visibility,
+    searchSources,
+    startedAt,
+  };
 
   const searchOnce = async () => {
+    params.onRebuildNotice?.(captureMemoryRebuildNotice(active.manager.status()));
     const allowedSources = searchSources ? new Set(searchSources) : undefined;
     const searchesSessions = searchSources?.includes("sessions") === true;
     const indexedCandidateCount = searchesSessions
@@ -115,6 +126,9 @@ export async function executeMemorySearchToolQuery(params: {
       sessionKey: query.sessionKey,
       activeProjectKeys: query.activeProjectKeys ? [...query.activeProjectKeys] : undefined,
       signal,
+      ...(params.deadlineControl
+        ? { [MEMORY_SEARCH_DEADLINE_CONTROL]: params.deadlineControl }
+        : {}),
       onDebug: (debug) => runtimeDebug.push(debug),
       onPartialResults: params.onPartialResults
         ? (partialCandidates) => {
@@ -132,11 +146,8 @@ export async function executeMemorySearchToolQuery(params: {
             void finalizeMemorySearchToolQuery({
               active,
               searched: { candidates: memoryCandidates, searchWindow },
-              query,
-              visibility,
-              searchSources,
+              ...queryContext,
               runtimeDebug: [...runtimeDebug],
-              startedAt,
               effectiveMode: "keyword-only",
             }).then(
               (result) => {
@@ -150,7 +161,7 @@ export async function executeMemorySearchToolQuery(params: {
         : undefined,
       ...(searchSources ? { sources: searchSources } : {}),
     });
-    return { candidates, searchWindow };
+    return { searched: { candidates, searchWindow }, status: active.manager.status() };
   };
 
   let searched: Awaited<ReturnType<typeof searchOnce>>;
@@ -174,17 +185,15 @@ export async function executeMemorySearchToolQuery(params: {
 
   return await finalizeMemorySearchToolQuery({
     active,
-    searched,
-    query,
-    visibility,
-    searchSources,
+    ...searched,
+    ...queryContext,
     runtimeDebug,
-    startedAt,
   });
 }
 
 async function finalizeMemorySearchToolQuery(params: {
   active: ManagerState;
+  status?: MemoryProviderStatus;
   searched: { candidates: MemorySearchResult[]; searchWindow: number };
   query: MemorySearchToolQuery;
   visibility: MemorySearchToolVisibility;
@@ -194,9 +203,21 @@ async function finalizeMemorySearchToolQuery(params: {
   effectiveMode?: string;
 }) {
   const { active, searched, query, visibility, searchSources, runtimeDebug, startedAt } = params;
-  const status = active.manager.status();
+  const status = params.status ?? active.manager.status();
   const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
-  if (pausedIndexIdentity) {
+  // A pending chunking upgrade on an otherwise matching index degrades to
+  // keyword-only results instead of pausing memory search; every other
+  // mismatch still withholds all candidates. Keyword results still need a
+  // usable FTS index — the manager's fallback requires the same, so without
+  // it there is no retrieval path and the tool must keep the paused
+  // diagnostic instead of reporting a successful empty search.
+  const chunkingUpgradeKeywordOnly =
+    pausedIndexIdentity?.status === "mismatched" &&
+    pausedIndexIdentity.owner === "openclaw" &&
+    pausedIndexIdentity.code === "chunking_version" &&
+    pausedIndexIdentity.chunkingVersionOnly === true &&
+    Boolean(status.fts?.enabled && status.fts?.available);
+  if (pausedIndexIdentity && !chunkingUpgradeKeywordOnly) {
     return {
       searchStartedAt: startedAt,
       status,
@@ -225,7 +246,6 @@ async function finalizeMemorySearchToolQuery(params: {
     filtered = filtered.filter((hit) => hit.source === "memory");
   }
 
-  const postFilterHits = filtered.length;
   const rawResults = filtered.slice(0, query.resultLimit);
   const latestDebug = runtimeDebug.at(-1);
   return {
@@ -245,7 +265,7 @@ async function finalizeMemorySearchToolQuery(params: {
         ?.embeddingBootstrap,
       hits: rawResults.length,
       candidateHits: searched.candidates.length,
-      withheldHits: Math.max(0, searched.candidates.length - postFilterHits),
+      withheldHits: Math.max(0, searched.candidates.length - filtered.length),
       searchWindow: searched.searchWindow,
     },
   };

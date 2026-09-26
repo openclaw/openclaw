@@ -1,29 +1,33 @@
 // Xai plugin module implements model id behavior.
-export const XAI_OAUTH_AUTO_MODEL_ID = "auto";
 
-export function isXaiGrok46ModelId(id: string): boolean {
-  const normalized = normalizeXaiModelId(id.trim().toLowerCase());
-  return normalized === "grok-4.6";
+// A Grok release id: plain, `-latest`, or a dated snapshot (grok-4.7, grok-5, grok-4.8-0115).
+// Other suffixes (fast, mini, reasoning variants) name models with their own contracts.
+const XAI_GROK_RELEASE_ID = /^grok-(\d+)(?:\.(\d+))?(?:-(?:latest|\d{4}))?$/u;
+
+/**
+ * xAI documents reasoning effort from Grok 4.5 and xhigh "on grok-4.6 and later", so
+ * compare release numbers: new Grok releases work before the manifest lists them.
+ */
+export function isXaiGrokReleaseAtLeast(id: string, minimum: readonly [number, number]): boolean {
+  const match = XAI_GROK_RELEASE_ID.exec(normalizeXaiModelId(id.trim().toLowerCase()));
+  if (!match) {
+    return false;
+  }
+  const major = Number(match[1]);
+  const minor = Number(match[2] ?? 0);
+  // Grok 4.20 predates Grok 4.3 despite its number and has no reasoning effort control.
+  if (major === 4 && minor === 20) {
+    return false;
+  }
+  return major > minimum[0] || (major === minimum[0] && minor >= minimum[1]);
+}
+
+export function isXaiXhighModelId(id: string): boolean {
+  return isXaiGrokReleaseAtLeast(id, [4, 6]);
 }
 
 export function isXaiFrontierModelId(id: string): boolean {
-  const normalized = normalizeXaiModelId(id.trim().toLowerCase());
-  return (
-    normalized === "grok-4.6" || normalized === "grok-4.5" || normalized.startsWith("grok-4.5-")
-  );
-}
-
-export function resolveXaiOAuthAutoModelId(
-  id: string,
-  params?: Record<string, unknown> | null,
-): string {
-  if (id.trim().toLowerCase() !== XAI_OAUTH_AUTO_MODEL_ID) {
-    return id;
-  }
-  const canonicalModelId = params?.canonicalModelId;
-  return typeof canonicalModelId === "string" && canonicalModelId.trim()
-    ? canonicalModelId.trim()
-    : id;
+  return isXaiGrokReleaseAtLeast(id, [4, 5]);
 }
 
 export function normalizeXaiModelId(id: string): string {
@@ -32,6 +36,9 @@ export function normalizeXaiModelId(id: string): string {
   }
   if (id === "grok-4.5-latest") {
     return "grok-4.5";
+  }
+  if (id === "grok-4.7-latest") {
+    return "grok-4.7";
   }
   if (id === "grok-build-latest") {
     return "grok-4.5";

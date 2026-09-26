@@ -243,6 +243,21 @@ export function resolveChannelDefaultBindingPlacement(
   return pluginPlacement ?? resolveBundledChannelThreadBindingDefaultPlacement(channel);
 }
 
+/** Explicit spawn discovery is separate from automatic command placement. */
+export function supportsThreadBindingSpawn(rawChannel: string): boolean {
+  const channel = resolveChannelId(rawChannel);
+  if (!channel) {
+    return false;
+  }
+  const placement = resolveChannelDefaultBindingPlacement(channel);
+  return (
+    placement === "child" ||
+    (placement === "current" &&
+      getLoadedChannelPluginForRead(channel)?.conversationBindings
+        ?.supportsCurrentConversationBinding === true)
+  );
+}
+
 /**
  * Resolves command context into a canonical channel/account/conversation tuple.
  */

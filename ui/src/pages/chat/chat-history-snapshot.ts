@@ -1,22 +1,31 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
+  ChatHistoryActivity,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types.ts";
-import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-store.ts";
+import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
-import type { ChatState } from "./chat-state-contract.ts";
-import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
+import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  readChatHistoryCursor,
+  setChatHistoryCursor,
+} from "./session-message-cache.ts";
+import type { AgentEventPayload } from "./tool-stream-contract.ts";
 
 export type ChatHistoryResult = {
+  activity?: ChatHistoryActivity[];
   pendingInputs?: ChatPendingInputsPage;
   inputReceipts?: ChatInputReceipts;
-  sourceCanonicalListRevision?: number;
   deltaCursor?: string;
   messages?: Array<unknown>;
   offset?: number;
@@ -35,20 +44,13 @@ export type ChatHistoryResult = {
     text?: string;
     startedAt?: number;
     sessionAbortable?: boolean;
-    events?: Array<{
-      runId: string;
-      seq: number;
-      stream: string;
-      ts: number;
-      sessionKey?: string;
-      agentId?: string;
-      data: Record<string, unknown>;
-    }>;
+    events?: AgentEventPayload[];
     plan?: { steps: Array<{ step: string; status: string }>; explanation?: string };
   };
 };
 
 export type ChatHistoryDeltaResult = {
+  activity?: ChatHistoryActivity[];
   pendingInputs?: ChatPendingInputsPage;
   inputReceipts?: ChatInputReceipts;
   kind: "delta";
@@ -65,6 +67,20 @@ export type ChatHistoryResponse =
   | ChatHistoryResult
   | ChatHistoryDeltaResult
   | ChatHistoryResetResult;
+
+export type ChatHistoryObservation = {
+  owner: ChatHistorySessions;
+  reconcile: ReturnType<ChatHistorySessions["captureReconcile"]>;
+  run?: ChatHistoryRunObservation;
+};
+
+export type ObservedChatHistoryResult = ChatHistoryResult & {
+  observation: ChatHistoryObservation;
+};
+
+export type ObservedChatHistoryResponse = ChatHistoryResponse & {
+  observation: ChatHistoryObservation;
+};
 
 export function isHistoryCursor(
   result: ChatHistoryResponse,
@@ -101,12 +117,10 @@ export function resolveChatHistoryPagination(
 }
 
 export function historySessionId(result: ChatHistoryResult): string | null {
-  if (typeof result.sessionInfo?.sessionId === "string" && result.sessionInfo.sessionId.trim()) {
-    return result.sessionInfo.sessionId.trim();
-  }
-  return typeof result.sessionId === "string" && result.sessionId.trim()
-    ? result.sessionId.trim()
-    : null;
+  return (
+    normalizeNullableString(result.sessionInfo?.sessionId) ??
+    normalizeNullableString(result.sessionId)
+  );
 }
 
 function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {
@@ -174,6 +188,10 @@ export function commitCurrentChatHistorySnapshot(
   state: ChatState,
   deltaCursor?: string | null,
 ): void {
+  if (deltaCursor !== undefined) {
+    setChatHistoryCursor(state, deltaCursor ?? undefined);
+  }
+  const cachedDeltaCursor = readChatHistoryCursor(state);
   if (!state.chatMessagesBySession) {
     return;
   }
@@ -181,13 +199,6 @@ export function commitCurrentChatHistorySnapshot(
   const agentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
-  const cachedDeltaCursor =
-    deltaCursor === undefined
-      ? readChatSessionSnapshot(state.chatMessagesBySession, state, {
-          sessionKey,
-          agentId,
-        })?.deltaCursor
-      : (deltaCursor ?? undefined);
   cacheChatSessionSnapshot(
     state.chatMessagesBySession,
     state,
@@ -205,6 +216,7 @@ export function commitCurrentChatHistorySnapshot(
 }
 
 export function clearHistoryCursor(state: ChatState, sessionKey: string, agentId?: string): void {
+  delete state.chatHistoryCursor;
   if (!state.chatMessagesBySession) {
     return;
   }

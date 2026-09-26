@@ -2,15 +2,21 @@ import type {
   SessionPlacement,
   SessionPlacementDiskSpace,
   SessionPlacementMove,
+  SessionPlacementMachine,
   SessionPlacementRunner,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export type WorkerSessionPlacementReader = {
   getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord>;
+  getWorkspaceResultReconcilingSessionIds?(sessionIds: readonly string[]): ReadonlySet<string>;
+  listPendingWorkspaceResults?(
+    sessionId?: string,
+  ): import("./placement-workspace-result.js").WorkerWorkspacePendingResult[];
   /** Runtime consumers may cancel work when the exact captured turn claim closes. */
   registerTurnClaimClosedHandler?: (
     handler: (claim: import("./placement-record.js").WorkerSessionTurnClaim) => void,
@@ -24,15 +30,33 @@ export type WorkerPlacementDiskSpaceReader = {
 };
 
 export type WorkerPlacementRunnerAvailabilityReader = {
-  read(record: WorkerSessionPlacementRecord): SessionPlacementRunner | undefined;
+  read(
+    record: WorkerSessionPlacementRecord,
+    environment?: Pick<
+      WorkerEnvironmentPlacementFacts,
+      "providerId" | "state" | "ownerEpoch" | "attachedSessionIds" | "nodeDeviceId"
+    > | null,
+  ): SessionPlacementRunner | undefined;
   version(): number;
+};
+
+type WorkerPlacementIdentity = {
+  providerId: string;
+  profileId: string;
+  machine?: SessionPlacementMachine;
 };
 
 export function readWorkerPlacementIdentity(
   record: WorkerSessionPlacementRecord,
-  environments: Pick<WorkerEnvironmentServiceContract, "get"> | undefined,
-): { providerId: string; profileId: string } | undefined {
-  const environment = record.environmentId ? environments?.get(record.environmentId) : undefined;
+  environments: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape"> | undefined,
+  preparedEnvironment?: WorkerEnvironmentPlacementFacts | null,
+): WorkerPlacementIdentity | undefined {
+  const environment =
+    preparedEnvironment === undefined
+      ? record.environmentId
+        ? environments?.get(record.environmentId)
+        : undefined
+      : preparedEnvironment;
   if (!environment) {
     return undefined;
   }
@@ -45,9 +69,18 @@ export function readWorkerPlacementIdentity(
       : record.state === "provisioning" ||
         record.state === "syncing" ||
         record.state === "starting";
-  return correlated
-    ? { providerId: environment.providerId, profileId: environment.profileId }
-    : undefined;
+  if (!correlated) {
+    return undefined;
+  }
+  const machine = environments?.readMachineShape(
+    environment.environmentId,
+    preparedEnvironment ?? undefined,
+  );
+  return {
+    providerId: environment.providerId,
+    profileId: environment.profileId,
+    ...(machine && Object.keys(machine).length ? { machine } : {}),
+  };
 }
 
 export function createWorkerPlacementRunnerAvailabilityReader(params: {
@@ -55,11 +88,14 @@ export function createWorkerPlacementRunnerAvailabilityReader(params: {
   hasCurrentDeviceRunner: (deviceId: string) => boolean;
 }): WorkerPlacementRunnerAvailabilityReader & { markChanged(): void } {
   let version = 0;
-  const read: WorkerPlacementRunnerAvailabilityReader["read"] = (record) => {
+  const read: WorkerPlacementRunnerAvailabilityReader["read"] = (record, preparedEnvironment) => {
     if (record.state !== "active") {
       return undefined;
     }
-    const environment = params.environments.get(record.environmentId);
+    const environment =
+      preparedEnvironment === undefined
+        ? params.environments.get(record.environmentId)
+        : preparedEnvironment;
     if (
       environment?.providerId !== DEVICE_WORKER_PROVIDER_ID ||
       environment.state !== "attached" ||
@@ -100,8 +136,10 @@ export function projectWorkerSessionPlacement(
   record: WorkerSessionPlacementRecord,
   diskSpace?: SessionPlacementDiskSpace,
   runner?: SessionPlacementRunner,
-  identity?: { providerId: string; profileId: string },
+  identity?: WorkerPlacementIdentity,
   failedRecoveryAction?: "restart" | "stop-first",
+  workspaceResultReconciling = false,
+  retryOnSend = false,
 ): SessionPlacement {
   const timing = {
     generation: record.generation,
@@ -166,6 +204,9 @@ export function projectWorkerSessionPlacement(
           : {}),
         ...(record.state === "active" && diskSpace ? { diskSpace } : {}),
         ...(record.state === "active" && runner ? { runner } : {}),
+        ...(workspaceResultReconciling && record.state !== "reconciling"
+          ? { workspaceResultReconciling: true as const }
+          : {}),
         ...conflict,
       };
     case "reclaimed":
@@ -194,6 +235,7 @@ export function projectWorkerSessionPlacement(
             ...retained,
             recoveryError: record.recoveryError,
             ...(failedRecoveryAction ? { recoveryAction: failedRecoveryAction } : {}),
+            ...(retryOnSend ? { retryOnSend: true as const } : {}),
             ...terminal,
           }
         : { state: "reclaimed", ...retained, ...terminal };

@@ -1,42 +1,22 @@
 // Defines cron scheduling configuration types.
+
+import type { z } from "zod";
 import type { SecretInput } from "./types.secrets.js";
 import type { SsrFPolicyConfig } from "./types.ssrf.js";
+import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 
-export type CronFailureAlertConfig = {
-  enabled?: boolean;
-  after?: number;
-  cooldownMs?: number;
-  includeSkipped?: boolean;
-  mode?: "announce" | "webhook";
-  accountId?: string;
-  channel?: string;
-  to?: string;
-};
+type CronSchemaInput = NonNullable<z.input<typeof OpenClawSchemaShape.cron>>;
 
-export type CronFailureDestinationConfig = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  mode?: "announce" | "webhook";
-};
+export type CronFailureAlertConfig = NonNullable<CronSchemaInput["failureAlert"]>;
 
-export type CronConfig = {
-  enabled?: boolean;
-  /** Skip missed recurring slots at startup; one-shot catch-up is unchanged. Default: false. */
-  skipMissedJobs?: boolean;
-  triggers?: {
-    enabled?: boolean;
-  };
+export type CronFailureDestinationConfig = Pick<
+  CronFailureAlertConfig,
+  "channel" | "to" | "accountId" | "mode"
+>;
+
+export type CronConfig = Omit<CronSchemaInput, "webhookToken" | "webhookSsrfPolicy"> & {
   /** Bearer token for cron webhook POST delivery. */
   webhookToken?: SecretInput;
   /** SSRF policy for all outbound cron webhook deliveries. */
   webhookSsrfPolicy?: SsrFPolicyConfig;
-  /**
-   * How long to retain completed cron run sessions before automatic pruning.
-   * Accepts a duration string (e.g. "24h", "7d", "1h30m") or `false` to disable pruning.
-   * A zero duration (e.g. "0h") also disables pruning; negative durations are invalid.
-   * Default: "24h".
-   */
-  sessionRetention?: string | false;
-  failureAlert?: CronFailureAlertConfig;
 };

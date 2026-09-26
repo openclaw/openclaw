@@ -23,8 +23,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
@@ -220,26 +218,10 @@ internal fun SkillWorkshopSettingsScreen(
             onInspect = {
               viewModel.inspectSkillWorkshopProposal(proposalId = proposal.id, agentId = selectedAgentParam)
             },
-            onApply = {
+            onAction = { action ->
               pendingAction =
                 SkillWorkshopPendingAction(
-                  action = SkillWorkshopProposalAction.Apply,
-                  proposalId = proposal.id,
-                  title = proposal.title,
-                )
-            },
-            onReject = {
-              pendingAction =
-                SkillWorkshopPendingAction(
-                  action = SkillWorkshopProposalAction.Reject,
-                  proposalId = proposal.id,
-                  title = proposal.title,
-                )
-            },
-            onQuarantine = {
-              pendingAction =
-                SkillWorkshopPendingAction(
-                  action = SkillWorkshopProposalAction.Quarantine,
+                  action = action,
                   proposalId = proposal.id,
                   title = proposal.title,
                 )
@@ -291,7 +273,7 @@ private fun SkillWorkshopActionConfirmDialog(
         nativeString("This will quarantine \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
       }
     }
-  AlertDialog(
+  AppAlertDialog(
     onDismissRequest = onDismiss,
     title = { Text(dialogTitle) },
     text = {
@@ -384,7 +366,7 @@ private fun SkillWorkshopAgentMenu(
       modifier = Modifier.fillMaxWidth(),
       enabled = selectableAgents.isNotEmpty(),
     )
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+    AppDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
       DropdownMenuItem(
         text = { Text(nativeString("Default agent")) },
         onClick = {
@@ -487,10 +469,15 @@ private fun SkillWorkshopProposalDetail(
   isConnected: Boolean,
   operatorAdminScopeAvailable: Boolean,
   onInspect: () -> Unit,
-  onApply: () -> Unit,
-  onReject: () -> Unit,
-  onQuarantine: () -> Unit,
+  onAction: (SkillWorkshopProposalAction) -> Unit,
 ) {
+  val actionEnabled =
+    skillWorkshopProposalActionEnabled(
+      isConnected = isConnected,
+      operatorAdminScopeAvailable = operatorAdminScopeAvailable,
+      busy = inspecting || mutating,
+      status = proposal.status,
+    )
   ClawPanel {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       Row(
@@ -569,14 +556,8 @@ private fun SkillWorkshopProposalDetail(
         )
         ClawPrimaryButton(
           text = if (mutating) nativeString("Working") else nativeString("Apply"),
-          onClick = onApply,
-          enabled =
-            skillWorkshopProposalActionEnabled(
-              isConnected = isConnected,
-              operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-              busy = inspecting || mutating,
-              status = proposal.status,
-            ),
+          onClick = { onAction(SkillWorkshopProposalAction.Apply) },
+          enabled = actionEnabled,
           modifier = Modifier.weight(1f),
         )
       }
@@ -589,26 +570,14 @@ private fun SkillWorkshopProposalDetail(
       ) {
         ClawSecondaryButton(
           text = nativeString("Reject"),
-          onClick = onReject,
-          enabled =
-            skillWorkshopProposalActionEnabled(
-              isConnected = isConnected,
-              operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-              busy = inspecting || mutating,
-              status = proposal.status,
-            ),
+          onClick = { onAction(SkillWorkshopProposalAction.Reject) },
+          enabled = actionEnabled,
           modifier = Modifier.weight(1f),
         )
         ClawSecondaryButton(
           text = nativeString("Quarantine"),
-          onClick = onQuarantine,
-          enabled =
-            skillWorkshopProposalActionEnabled(
-              isConnected = isConnected,
-              operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-              busy = inspecting || mutating,
-              status = proposal.status,
-            ),
+          onClick = { onAction(SkillWorkshopProposalAction.Quarantine) },
+          enabled = actionEnabled,
           modifier = Modifier.weight(1f),
         )
       }

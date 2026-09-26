@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
-// Minimax provider module implements model/runtime integration.
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -140,16 +139,10 @@ function readMinimaxProviderConfig(
   config: SpeechProviderConfig,
   cfg?: OpenClawConfig,
 ): MinimaxTtsProviderConfig {
-  const normalized = normalizeMinimaxProviderConfig({}, cfg);
-  return {
-    apiKey: trimToUndefined(config.apiKey) ?? normalized.apiKey,
-    baseUrl: normalizeMinimaxTtsBaseUrl(trimToUndefined(config.baseUrl) ?? normalized.baseUrl),
-    model: trimToUndefined(config.model) ?? normalized.model,
-    voiceId: trimToUndefined(config.voiceId) ?? normalized.voiceId,
-    speed: normalizeMinimaxSpeed(config.speed) ?? normalized.speed,
-    vol: normalizeMinimaxVolume(config.vol) ?? normalized.vol,
-    pitch: normalizeMinimaxPitch(config.pitch) ?? normalized.pitch,
-  };
+  return normalizeMinimaxProviderConfig(
+    { minimax: { ...config, apiKey: trimToUndefined(config.apiKey) } },
+    cfg,
+  );
 }
 
 function readMinimaxOverrides(

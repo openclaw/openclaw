@@ -1,39 +1,17 @@
-import { promoteToPopoverTopLayer } from "../components/menu-surface.ts";
-import type {
-  NativeLinkMenu,
-  NativeLinkMenuAction,
-} from "../components/native-link-menu.runtime.ts";
+import type { NativeLinkMenu } from "../components/native-link-menu.runtime.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../components/panel-toggle-contract.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
 import {
   anchorFromNavigationEvent,
   externalHttpLinkFromEvent,
   shouldHandleNavigationClick,
 } from "../lib/navigation-click.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
+import { webKitHostWindow, type WebKitHostMessages } from "./native-webkit-bridge.ts";
 
-type NativeLinkTarget = "external";
-
-type NativeLinkMessage = {
-  type: "open-link";
-  url: string;
-  target: NativeLinkTarget;
-};
-
-type WebKitMessageHandler = {
-  postMessage(message: NativeLinkMessage): void;
-};
-
-type NativeUpdateMessage = {
-  type: "start-update";
-};
-
-type WebKitUpdateMessageHandler = {
-  postMessage(message: NativeUpdateMessage): void;
-};
+type NativeLinkPoster = (message: WebKitHostMessages["openclawLink"]) => void;
 
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 export const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT =
@@ -51,22 +29,14 @@ type NativeLinkRoutingOptions = {
   canPresentBrowserPanel?: () => boolean;
 };
 
-function getNativeLinkPoster(): WebKitMessageHandler["postMessage"] | undefined {
+function getNativeLinkPoster(): NativeLinkPoster | undefined {
   // Native hosts install this handler before navigation; its absence preserves browser behavior.
-  const handler = (
-    window as unknown as {
-      webkit?: { messageHandlers?: { openclawLink?: WebKitMessageHandler } };
-    }
-  ).webkit?.messageHandlers?.openclawLink;
+  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawLink;
   return handler?.postMessage.bind(handler);
 }
 
-function getNativeUpdateHandler(): WebKitUpdateMessageHandler | undefined {
-  return (
-    window as unknown as {
-      webkit?: { messageHandlers?: { openclawUpdate?: WebKitUpdateMessageHandler } };
-    }
-  ).webkit?.messageHandlers?.openclawUpdate;
+function getNativeUpdateHandler() {
+  return webKitHostWindow()?.webkit?.messageHandlers?.openclawUpdate;
 }
 
 export function hasNativeUpdateBridge(): boolean {
@@ -102,30 +72,9 @@ function trustedExternalAppUrl(event: MouseEvent): { anchor: HTMLAnchorElement; 
   }
 }
 
-function menuContainer(event: Event): HTMLElement {
-  const path = event.composedPath();
-  const modalHost = path.find(
-    (target) => target instanceof HTMLElement && target.localName === "openclaw-modal-dialog",
-  );
-  if (modalHost instanceof HTMLElement) {
-    // Keep the menu in the modal's light-DOM slot so global menu styles still apply.
-    return modalHost;
-  }
-  for (const target of path) {
-    if (target instanceof HTMLDialogElement && target.open && target.getRootNode() === document) {
-      return target;
-    }
-  }
-  return document.body;
-}
-
-function postNativeLink(
-  postMessage: WebKitMessageHandler["postMessage"],
-  url: URL,
-  target: NativeLinkTarget,
-): boolean {
+function postNativeLink(postMessage: NativeLinkPoster, url: URL): boolean {
   try {
-    postMessage({ type: "open-link", url: url.href, target });
+    postMessage({ type: "open-link", url: url.href, target: "external" });
     return true;
   } catch {
     return false;
@@ -138,7 +87,7 @@ export function postNativeExternalLink(url: string): boolean {
     return false;
   }
   try {
-    return postNativeLink(poster, new URL(url), "external");
+    return postNativeLink(poster, new URL(url));
   } catch {
     return false;
   }
@@ -176,7 +125,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     return { dispose() {} };
   }
   let menu: NativeLinkMenu | null = null;
-  let menuModule: Promise<unknown> | undefined;
+  let menuModule: Promise<typeof import("../components/native-link-menu.runtime.ts")> | undefined;
   let menuRequest = 0;
   let disposed = false;
   let nativeUpdatePending = false;
@@ -198,54 +147,50 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     menu?.remove();
     menu = null;
   };
-  const showMenu = async (
-    nativePostMessage: WebKitMessageHandler["postMessage"],
-    anchor: HTMLAnchorElement,
-    url: URL,
-    x: number,
-    y: number,
-    container: HTMLElement,
-  ) => {
+  const openInline = (url: URL) => {
+    if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
+      if (postMessage) {
+        postNativeLink(postMessage, url);
+      }
+    } else {
+      openBrowserPanel(url);
+    }
+  };
+  const showMenu = async (event: MouseEvent, anchor: HTMLAnchorElement, url: URL) => {
     closeMenu();
     const request = menuRequest;
-    await (menuModule ??= import("../components/native-link-menu.runtime.ts"));
-    // A later click, shutdown, or removed trigger invalidates this pending menu.
-    if (
-      disposed ||
-      options.signal?.aborted ||
-      request !== menuRequest ||
-      !anchor.isConnected ||
-      !container.isConnected
-    ) {
+    const path = event.composedPath();
+    const { mountNativeLinkMenu } = await (menuModule ??=
+      import("../components/native-link-menu.runtime.ts"));
+    if (disposed || options.signal?.aborted || request !== menuRequest || !anchor.isConnected) {
       return;
     }
-    const nextMenu = document.createElement("openclaw-native-link-menu") as NativeLinkMenu;
-    nextMenu.x = x;
-    nextMenu.y = y;
-    nextMenu.trigger = anchor;
-    nextMenu.onClose = () => closeMenu(nextMenu);
-    nextMenu.onAction = (action: NativeLinkMenuAction) => {
-      if (action === "copy") {
-        void copyToClipboard(url.href);
-        return;
-      }
-      if (action === "inline") {
-        if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
-          postNativeLink(nativePostMessage, url, "external");
-        } else {
-          openBrowserPanel(url);
-        }
-        return;
-      }
-      postNativeLink(nativePostMessage, url, action);
-    };
-    menu = nextMenu;
-    container.append(nextMenu);
-    promoteToPopoverTopLayer(nextMenu);
+    menu = mountNativeLinkMenu({
+      path,
+      anchor,
+      url,
+      x: event.clientX,
+      y: event.clientY,
+      close: closeMenu,
+      openExternal: () => postMessage && postNativeLink(postMessage, url),
+      openInline: () => openInline(url),
+    });
   };
 
   const handleClick = (event: MouseEvent) => {
     const webLink = externalHttpLinkFromEvent(event);
+    // The reader's escape hatch must bypass both native and preferred in-app browsers.
+    if (webLink?.anchor.hasAttribute("data-link-reader-external")) {
+      if (
+        postMessage &&
+        shouldHandleNavigationClick(event) &&
+        postNativeLink(postMessage, webLink.url)
+      ) {
+        closeMenu();
+        event.preventDefault();
+      }
+      return;
+    }
     if (
       webLink &&
       (hasNativeBrowserBridge()
@@ -253,13 +198,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
         : shouldHandleControlUiBrowserActivation(event)) &&
       (hasNativeBrowserBridge() || options.shouldOpenInControlUiBrowser?.())
     ) {
-      if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
-        if (postMessage) {
-          postNativeLink(postMessage, webLink.url, "external");
-        }
-      } else {
-        openBrowserPanel(webLink.url);
-      }
+      openInline(webLink.url);
       closeMenu();
       event.preventDefault();
       return;
@@ -268,7 +207,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
       return;
     }
     const appLink = trustedExternalAppUrl(event);
-    if (!appLink || !postNativeLink(postMessage, appLink.url, "external")) {
+    if (!appLink || !postNativeLink(postMessage, appLink.url)) {
       return;
     }
     closeMenu();
@@ -284,14 +223,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     }
     event.preventDefault();
     event.stopPropagation();
-    void showMenu(
-      postMessage,
-      link.anchor,
-      link.url,
-      event.clientX,
-      event.clientY,
-      menuContainer(event),
-    ).catch((error: unknown) => {
+    void showMenu(event, link.anchor, link.url).catch((error: unknown) => {
       menuModule = undefined;
       if (!disposed) {
         console.error("[openclaw] native link menu failed to load; right-click to retry", error);

@@ -239,5 +239,5 @@ try {
   await new Promise<void>((resolve) => {
     bridge.close(() => resolve());
   });
-  await transport.cleanup();
+  await transport.cleanupAfterGatewayStop();
 }

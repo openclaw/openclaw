@@ -1,4 +1,3 @@
-// Msteams plugin module implements setup surface behavior.
 import {
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicy,
@@ -13,6 +12,7 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
+import { saveMSTeamsDelegatedTokens } from "./delegated-state.js";
 import { formatUnknownError } from "./errors.js";
 import {
   parseMSTeamsTeamEntry,
@@ -20,7 +20,7 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { createMSTeamsSetupWizardBase } from "./setup-core.js";
-import { resolveMSTeamsCredentials, saveDelegatedTokens } from "./token.js";
+import { resolveMSTeamsCredentials } from "./token.js";
 
 const t = createSetupTranslator();
 
@@ -258,16 +258,11 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
         initialValue: false,
       });
       if (enableDelegated) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            msteams: {
-              ...next.channels?.msteams,
-              delegatedAuth: { enabled: true },
-            },
-          },
-        };
+        next = patchTopLevelChannelConfigSection({
+          cfg: next,
+          channel,
+          patch: { delegatedAuth: { enabled: true } },
+        });
         const noteDelegatedAuthFailure = async (err: unknown) => {
           await params.prompter.note(
             `Delegated auth setup failed: ${formatUnknownError(err)}\n` +
@@ -316,7 +311,7 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
           progress.stop();
           throw err;
         }
-        saveDelegatedTokens(tokens);
+        await saveMSTeamsDelegatedTokens(tokens);
         progress.stop(t("wizard.msteams.delegatedAuthConfigured"));
       }
     }

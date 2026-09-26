@@ -1,9 +1,33 @@
 // Vitest unit path tests validate unit test include and exclude paths.
-import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isUnitConfigTestFile } from "./vitest/vitest.unit-paths.mjs";
+import { bundledPluginFile } from "../scripts/lib/bundled-plugin-paths.mjs";
+import { filterUnitConfigTestFiles, isUnitConfigTestFile } from "./vitest/vitest.unit-paths.mjs";
 
 describe("isUnitConfigTestFile", () => {
+  it("retains the runtime's hidden-file ownership in bulk and singleton discovery", () => {
+    const file = "src/.hidden-fixture.test.ts";
+    const included = path.matchesGlob(file, "src/**/*.test.ts");
+    expect(filterUnitConfigTestFiles([file])).toEqual(included ? [file] : []);
+    expect(isUnitConfigTestFile(file)).toBe(included);
+  });
+
+  it("keeps bulk unit discovery ordered with shared exclusions", () => {
+    const packageFile = "packages/plugin-package-contract/src/index.test.ts";
+    const sourceFile = "src/unowned-fixture.test.ts";
+    expect(
+      filterUnitConfigTestFiles([
+        packageFile,
+        "src/state/openclaw-database-verify.process.test.ts",
+        sourceFile,
+        "src/unowned-fixture.live.test.ts",
+        "src/unowned-fixture.e2e.test.ts",
+        "src/vendor/unowned-fixture.test.ts",
+        packageFile,
+      ]),
+    ).toEqual([packageFile, sourceFile, packageFile]);
+  });
+
   it("accepts unit-config package tests", () => {
     expect(isUnitConfigTestFile("packages/plugin-package-contract/src/index.test.ts")).toBe(true);
   });
@@ -30,6 +54,7 @@ describe("isUnitConfigTestFile", () => {
     expect(isUnitConfigTestFile("src/plugin-sdk/facade-runtime.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/plugins/loader.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/infra/stable-node-path.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("src/state/openclaw-database-verify.process.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("test/format-error.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("test/extension-test-boundary.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/agents/embedded-agent-runner.test.ts")).toBe(false);

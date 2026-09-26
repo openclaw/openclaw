@@ -1,7 +1,11 @@
+import type { ProgressCardStep } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { styleMap } from "lit/directives/style-map.js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import {
+  browserRouteKey,
   browserTabKey,
   type BrowserTabSelection,
 } from "../../../components/browser/browser-target.ts";
@@ -26,6 +30,7 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
+import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
 import { renderDiffStatChips } from "./chat-diff-render.ts";
 import {
@@ -33,13 +38,8 @@ import {
   toolWorkspacePath,
   type ToolRenderOptions,
 } from "./chat-tool-content.ts";
+import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
 import { renderToolPreview } from "./widget-card.ts";
-
-export {
-  renderToolPreview,
-  WIDGET_PROMPT_EVENT,
-  type WidgetPromptEventDetail,
-} from "./widget-card.ts";
 
 export function renderBrowserTabPreviews(
   groups: readonly MessageGroup[],
@@ -48,30 +48,47 @@ export function renderBrowserTabPreviews(
   const cards = groups.flatMap((group) =>
     group.messages.flatMap((item) => extractToolCardsCached(item.message)),
   );
-  // One card per tab per rendered group: open/navigate/screenshot in a single
-  // turn all describe the same tab, and stacked near-identical cards are noise.
-  const lastCardForTab = new Map<string, (typeof cards)[number]>();
-  for (const card of cards) {
-    if (
-      card.preview?.kind === "browser-tab" &&
-      resolveToolCardOutcome(card, false) === "succeeded"
-    ) {
-      lastCardForTab.set(browserTabKey(card.preview), card);
-    }
-  }
-  return [...lastCardForTab.values()].map((card) => {
-    const preview = card.preview;
-    if (preview?.kind !== "browser-tab") {
-      return nothing;
-    }
-    const revision = browserTabCardRevision(card);
-    return renderToolPreview(preview, "chat_tool", {
-      browserTabRevision: revision ? JSON.stringify([options.sessionKey, revision]) : undefined,
-      browserTabLatest: Boolean(
-        revision && options.latestBrowserTabs?.get(browserTabKey(preview))?.revision === revision,
-      ),
-    });
-  });
+  // Select each tab's final state before collapsing reopened pages. A newer
+  // blank/non-web result must still retire that tab's older web preview.
+  const seenTabs = new Set<string>();
+  const seenPages = new Set<string>();
+  return cards
+    .toReversed()
+    .flatMap((card) => {
+      if (!card.browserTab || resolveToolCardOutcome(card, false) !== "succeeded") {
+        return [];
+      }
+      const tabKey = browserTabKey(card.browserTab);
+      if (seenTabs.has(tabKey)) {
+        return [];
+      }
+      seenTabs.add(tabKey);
+      const preview = card.preview;
+      if (preview?.kind !== "browser-tab") {
+        return [];
+      }
+      // Browser/history descriptors cap URLs at 2,048 UTF-16 units, or 2,047
+      // when a surrogate pair straddles the cut. Keep ambiguous prefixes per tab.
+      const pageKey =
+        preview.url.length < 2_047
+          ? JSON.stringify([browserRouteKey(preview), preview.url])
+          : tabKey;
+      if (seenPages.has(pageKey)) {
+        return [];
+      }
+      seenPages.add(pageKey);
+      const revision = browserTabCardRevision(card);
+      return [
+        renderToolPreview(preview, "chat_tool", {
+          browserTabRevision: revision ? JSON.stringify([options.sessionKey, revision]) : undefined,
+          browserTabLatest: Boolean(
+            revision &&
+            options.latestBrowserTabs?.get(browserTabKey(preview))?.revision === revision,
+          ),
+        }),
+      ];
+    })
+    .toReversed();
 }
 
 export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
@@ -88,7 +105,20 @@ export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
   );
 }
 
-function renderToolIcon(name: string) {
+export function renderToolIcon(
+  name: string,
+  tool?: { toolName: string; pluginToolIcons?: PluginToolIcons },
+) {
+  const activityIcon = tool?.pluginToolIcons?.get(tool.toolName);
+  if (activityIcon) {
+    return html`<span
+      class="chat-tool-activity-icon"
+      aria-hidden="true"
+      style=${styleMap({ maskImage: `url("${activityIcon.url}")` })}
+    >
+      <img hidden src=${activityIcon.url} alt="" @error=${activityIcon.onError} />
+    </span>`;
+  }
   // SAFETY: Unknown display icon names produce undefined and use the fallback.
   return icons[name as IconName] ?? icons.puzzle;
 }
@@ -102,31 +132,31 @@ const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
 };
 
 const MUTATION_VERB_KEYS = {
-  update: {
-    running: "chat.toolCards.verbs.editing",
-    succeeded: "chat.toolCards.verbs.edited",
-    fallback: "chat.toolCards.verbs.edit",
-  },
-  add: {
-    running: "chat.toolCards.verbs.creating",
-    succeeded: "chat.toolCards.verbs.created",
-    fallback: "chat.toolCards.verbs.create",
-  },
-  delete: {
-    running: "chat.toolCards.verbs.deleting",
-    succeeded: "chat.toolCards.verbs.deleted",
-    fallback: "chat.toolCards.verbs.delete",
-  },
-  mixed: {
-    running: "chat.toolCards.verbs.changing",
-    succeeded: "chat.toolCards.verbs.changed",
-    fallback: "chat.toolCards.verbs.change",
-  },
-  write: {
-    running: "chat.toolCards.verbs.writing",
-    succeeded: "chat.toolCards.verbs.wrote",
-    fallback: "chat.toolCards.verbs.write",
-  },
+  update: [
+    "chat.toolCards.verbs.editing",
+    "chat.toolCards.verbs.edited",
+    "chat.toolCards.verbs.edit",
+  ],
+  add: [
+    "chat.toolCards.verbs.creating",
+    "chat.toolCards.verbs.created",
+    "chat.toolCards.verbs.create",
+  ],
+  delete: [
+    "chat.toolCards.verbs.deleting",
+    "chat.toolCards.verbs.deleted",
+    "chat.toolCards.verbs.delete",
+  ],
+  mixed: [
+    "chat.toolCards.verbs.changing",
+    "chat.toolCards.verbs.changed",
+    "chat.toolCards.verbs.change",
+  ],
+  write: [
+    "chat.toolCards.verbs.writing",
+    "chat.toolCards.verbs.wrote",
+    "chat.toolCards.verbs.write",
+  ],
 } as const;
 
 function resolveMutationVerbKind(view: ToolCallView): keyof typeof MUTATION_VERB_KEYS | undefined {
@@ -143,14 +173,8 @@ function resolveMutationVerbKind(view: ToolCallView): keyof typeof MUTATION_VERB
 function resolveToolRowVerb(view: ToolCallView, outcome: ToolCardOutcome): string | undefined {
   const mutation = resolveMutationVerbKind(view);
   if (mutation) {
-    const keys = MUTATION_VERB_KEYS[mutation];
-    const key =
-      outcome === "running"
-        ? keys.running
-        : outcome === "succeeded"
-          ? keys.succeeded
-          : keys.fallback;
-    return t(key);
+    const [running, succeeded, fallback] = MUTATION_VERB_KEYS[mutation];
+    return t(outcome === "running" ? running : outcome === "succeeded" ? succeeded : fallback);
   }
   const key = TOOL_ROW_VERB_KEYS[view.kind];
   return key ? t(key) : undefined;
@@ -165,8 +189,11 @@ const TOOL_ROW_ICONS: Partial<Record<ToolCallView["kind"], string>> = {
   fetch: "globe",
 };
 
-function firstCommandLine(command: string): string {
-  return (stripShellPreamble(command).command || command).split("\n")[0]?.trim() ?? "";
+function commandPreview(command: string): string {
+  return truncateUtf16Safe(
+    (stripShellPreamble(command).command || command).replace(/\s+/gu, " ").trim(),
+    200,
+  );
 }
 
 function compactToolTarget(target: string, kind: ToolCallView["kind"]): string {
@@ -200,10 +227,11 @@ function renderToolRowContent(
   }
 
   if (view.kind === "command" && view.command) {
-    const commandPreview = firstCommandLine(view.command);
     return html`
       <span class="chat-tool-row__prompt" aria-hidden="true">$</span>
-      <code class="chat-tool-row__cmd">${renderHighlightedCommand(commandPreview)}</code>
+      <code class="chat-tool-row__cmd"
+        >${renderHighlightedCommand(commandPreview(view.command))}</code
+      >
     `;
   }
 
@@ -250,8 +278,7 @@ function renderToolRowContent(
     displayDetail: display.detail,
   });
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
-  const argumentPreview = toolArgumentPreview(card.args);
-  const displayName = distinctSummaryText(argumentPreview ?? summary.name, displayLabel);
+  const displayName = distinctSummaryText(summary.name, displayLabel);
   return html`
     <span class="chat-tool-msg-summary__label">${displayLabel}</span>
     ${
@@ -260,12 +287,7 @@ function renderToolRowContent(
   `;
 }
 
-type ProgressReceiptStep = {
-  step: string;
-  status: "pending" | "in_progress" | "completed";
-};
-
-function progressReceiptSteps(value: unknown): ProgressReceiptStep[] {
+function progressReceiptSteps(value: unknown): ProgressCardStep[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -294,19 +316,21 @@ function renderProgressCardReceipt(card: ToolCard, outcome: ToolCardOutcome) {
     steps.find((step) => step.status === "pending") ??
     steps.findLast((step) => step.status === "completed");
   const label =
-    outcome === "failed"
-      ? t("sessionProgressCard.receipt.failed")
-      : outcome === "running"
-        ? t("sessionProgressCard.receipt.updating")
-        : steps.length > 0
-          ? t("sessionProgressCard.receipt.updated", {
-              completed: String(completed),
-              current: current?.step ?? "",
-              total: String(steps.length),
-            })
-          : markdown
-            ? t("sessionProgressCard.receipt.noteUpdated")
-            : t("sessionProgressCard.receipt.cleared");
+    outcome === "skipped"
+      ? t("sessionProgressCard.receipt.skipped")
+      : outcome === "failed"
+        ? t("sessionProgressCard.receipt.failed")
+        : outcome === "running"
+          ? t("sessionProgressCard.receipt.updating")
+          : steps.length > 0
+            ? t("sessionProgressCard.receipt.updated", {
+                completed: String(completed),
+                current: current?.step ?? "",
+                total: String(steps.length),
+              })
+            : markdown
+              ? t("sessionProgressCard.receipt.noteUpdated")
+              : t("sessionProgressCard.receipt.cleared");
   // The label already names the running/failed state, so the row stays neutral
   // like every other transcript activity row instead of adding its own chrome.
   return html`<div class="chat-tool-msg-collapse chat-progress-card-receipt">
@@ -335,6 +359,14 @@ function resolveCollapsedToolSummaryParts(params: {
   displayDetail: string | undefined;
 }): { label: string; name?: string } {
   const displayDetail = params.displayDetail?.trim();
+  // Message captions belong to the canonical publication, not the original tool input.
+  if (params.card.name.trim().toLowerCase() === "message") {
+    return { label: params.displayLabel, name: displayDetail || undefined };
+  }
+  const argumentPreview = toolArgumentPreview(params.card.args);
+  if (argumentPreview) {
+    return { label: params.displayLabel, name: argumentPreview };
+  }
   if (displayDetail) {
     return { label: params.displayLabel, name: displayDetail };
   }
@@ -347,27 +379,24 @@ function resolveCollapsedToolSummaryParts(params: {
   };
 }
 
-export function isRunningToolCard(card: ToolCard, runActive: boolean | undefined): boolean {
-  // Only live tool-stream cards can be running; historical transcript calls
-  // without results (aborted runs) must stay inert during later runs. The
-  // result event ends the running state — partial streamed output does not.
-  return resolveToolCardOutcome(card, runActive) === "running";
-}
-
-export function resolveToolRowText(card: ToolCard, runActive?: boolean): string {
-  const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
+function resolveToolRowText(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome): string {
   if (view.title) {
     return view.title;
   }
   if (view.kind === "command" && view.command) {
-    return `$ ${firstCommandLine(view.command)}`;
+    return `$ ${commandPreview(view.command)}`;
   }
-  const verb = resolveToolRowVerb(view, resolveToolCardOutcome(card, runActive));
+  const verb = resolveToolRowVerb(view, outcome);
   if (verb && view.target) {
     return `${verb} ${view.target}`;
   }
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  return [display.label, toolArgumentPreview(card.args)].filter(Boolean).join(" ");
+  const summary = resolveCollapsedToolSummaryParts({
+    card,
+    displayLabel: display.label,
+    displayDetail: display.detail,
+  });
+  return [summary.label, summary.name].filter(Boolean).join(" ");
 }
 
 function toolReviewLabel(review: ToolApprovalReview): string {
@@ -433,22 +462,29 @@ export function renderToolCard(
     expanded: boolean;
     onToggleExpanded: (id: string) => void;
     showApprovalReviews?: boolean;
+    children?: unknown;
+    activityCards?: readonly ToolCard[];
   },
 ) {
   const outcome = resolveToolCardOutcome(card, opts.runActive);
   const progressReceipt = renderProgressCardReceipt(card, outcome);
-  if (progressReceipt) {
+  if (progressReceipt && !opts.children) {
     return renderPluginToolResult(card, opts, progressReceipt);
   }
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const isRunning = outcome === "running";
+  const activityCards = opts.activityCards ?? [card];
+  const isRunning = activityCards.some(
+    (item) => resolveToolCardOutcome(item, opts.runActive) === "running",
+  );
   const expanded = opts.expanded;
   const icon = TOOL_ROW_ICONS[view.kind] ?? display.icon;
   const workspaceFilePath = toolWorkspacePath(card, view);
   const isFileRow = Boolean(workspaceFilePath);
   const rowContent = html`
-    <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
+    <span class="chat-tool-msg-summary__icon"
+      >${renderToolIcon(icon, { toolName: display.name, pluginToolIcons: opts.pluginToolIcons })}</span
+    >
     <span class="chat-tool-disclosure__content"
       >${renderToolRowContent(
         card,
@@ -458,6 +494,7 @@ export function renderToolCard(
         opts.onOpenWorkspaceFile,
       )}</span
     >
+    ${expanded ? nothing : renderToolOutcomeSummary(activityCards, Boolean(opts.children))}
     <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
   `;
 
@@ -481,7 +518,7 @@ export function renderToolCard(
                   class="chat-tool-row__toggle"
                   type="button"
                   aria-expanded=${String(expanded)}
-                  aria-label=${resolveToolRowText(card, opts.runActive)}
+                  aria-label=${resolveToolRowText(card, view, outcome)}
                   @click=${() => opts.onToggleExpanded(card.id)}
                 ></button>
                 ${rowContent}
@@ -505,9 +542,19 @@ export function renderToolCard(
         }
         ${
           expanded
-            ? html`
-                <div class="chat-tool-msg-body">${renderExpandedToolCardContent(card, opts)}</div>
-              `
+            ? opts.children
+              ? html`<div class="chat-tool-children">
+                  ${opts.children}
+                  <details class="chat-tool-wrapper-details">
+                    <summary>${t("chat.toolCards.toolInput")}</summary>
+                    <div class="chat-tool-msg-body">
+                      ${renderExpandedToolCardContent(card, opts)}
+                    </div>
+                  </details>
+                </div>`
+              : html`<div class="chat-tool-msg-body">
+                  ${renderExpandedToolCardContent(card, opts)}
+                </div>`
             : nothing
         }
         ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}

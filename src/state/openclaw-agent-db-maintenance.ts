@@ -1,14 +1,26 @@
 import type { DatabaseSync } from "node:sqlite";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
+import {
+  clearNodeSqliteKyselyCacheForDatabase,
+  enableNodeSqliteKyselyStatementCache,
+} from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
+import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
 } from "../infra/sqlite-user-version.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
-import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-lease.js";
+import {
+  AGENT_MEDIA_SCHEMA_VERSION,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "./openclaw-agent-db-contract.js";
+import {
+  assertAgentDatabaseMaintenanceAuthority,
+  invalidateOpenClawAgentDatabaseIntegrityBeforeMutation,
+} from "./openclaw-agent-db-lease.js";
 import {
   assertExistingAgentSchemaOwner,
   assertOpenClawAgentSchemaContains,
@@ -19,6 +31,8 @@ import { ensureOpenClawAgentDatabaseSchemaSteps } from "./openclaw-agent-db-sche
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+
+const agentDbLog = createSubsystemLogger("state/agent-db");
 
 /** Require exact agent ownership without requiring the latest schema. */
 export function assertOpenClawAgentDatabaseOwner(
@@ -44,7 +58,7 @@ export function assertOpenClawAgentDatabaseOwner(
 /** Require the exact agent owner and schema before offline file maintenance. */
 export function assertOpenClawAgentDatabaseForMaintenance(
   database: DatabaseSync,
-  options: { agentId: string; pathname: string },
+  options: { agentId: string; pathname: string; allowStartupIndexRepair?: boolean },
 ): void {
   const metadata = assertOpenClawAgentDatabaseOwner(database, options);
 
@@ -67,7 +81,13 @@ export function assertOpenClawAgentDatabaseForMaintenance(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
     );
   }
-  assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
+  assertOpenClawAgentSchemaContains(
+    database,
+    options.pathname,
+    OPENCLAW_AGENT_SCHEMA_SQL,
+    "current",
+    options.allowStartupIndexRepair,
+  );
 }
 
 /** Upgrade or repair a supported owned schema before strict offline maintenance. */
@@ -83,8 +103,11 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
     assertAgentDatabaseMaintenanceAuthority(maintenance);
   };
   assertOwned();
+  invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname, env);
   const database = openNodeSqliteDatabase(pathname);
   try {
+    configureSqliteMaintenanceCache(database);
+    enableNodeSqliteKyselyStatementCache(database);
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     const metadata = readExistingAgentSchemaMeta(database);
     if (!metadata) {
@@ -107,6 +130,25 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
     if (!hasCurrentVersion && !hasSupportedOlderVersion) {
       return;
     }
+    const repairIndexes = () => {
+      const changes = repairDoctorSqliteIndexCorruption(database, pathname, {
+        label: `agent ${agentId}`,
+        assertCurrent: () => {
+          assertOwned();
+          assertOpenClawAgentDatabaseOwner(database, { agentId, pathname });
+          assertSupportedAgentSchemaVersion(database, pathname);
+        },
+      });
+      for (const change of changes) {
+        agentDbLog.warn(change);
+      }
+      return changes.length > 0;
+    };
+    if (userVersion === AGENT_MEDIA_SCHEMA_VERSION) {
+      // v17 checks integrity inside its additive-schema transaction; repair only
+      // physical indexes here so rejected migrations still roll schema changes back.
+      repairIndexes();
+    }
     const operation = ensureOpenClawAgentDatabaseSchemaSteps(database, {
       agentId,
       path: pathname,
@@ -117,7 +159,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
       while (!step.done) {
         assertOwned();
         try {
-          // The maintenance fence and connection survive until native Worker exit.
+          // The maintenance fence and connection survive until the native integrity reader closes.
           // Revalidate before either resume path can repair indexes or mutate schema.
           await assertSqliteIntegrityInWorker(
             step.value.databaseLabel,
@@ -128,7 +170,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
           assertOwned();
           assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(database), agentId, pathname);
           assertSupportedAgentSchemaVersion(database, pathname);
-          step = operation.throw(error);
+          step = repairIndexes() ? operation.next() : operation.throw(error);
           continue;
         }
         assertOwned();

@@ -8,6 +8,7 @@ import {
   createWorkerPlacementRunnerAvailabilityReader,
   projectWorkerPlacementMove,
   projectWorkerSessionPlacement,
+  readWorkerPlacementIdentity,
 } from "./placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
 
@@ -33,17 +34,81 @@ const RECORD_BASE = {
   stateChangedAtMs: 150,
 };
 
+function activePlacement(environmentId = "environment-1") {
+  return {
+    ...RECORD_BASE,
+    state: "active",
+    environmentId,
+    activeOwnerEpoch: 7,
+    workspaceBaseManifestRef: "manifest-1",
+    remoteWorkspaceDir: "/workspace",
+    workerBundleHash: BUNDLE_HASH,
+  } satisfies WorkerSessionPlacementRecord;
+}
+
 describe("worker placement projection", () => {
-  it("adds an exact active disk-space sample only when supplied", () => {
-    const active = {
+  it.each(["local", "requested", "provisioning", "failed", "reclaimed"] as const)(
+    "retains machine identity only for worker placement states (%s)",
+    (state) => {
+      const machine = { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 };
+      const identity = { providerId: "crabbox", profileId: "aws", machine };
+      const worker = {
+        ...RECORD_BASE,
+        environmentId: "environment-1",
+        activeOwnerEpoch: 7,
+        workspaceBaseManifestRef: "manifest-1",
+        remoteWorkspaceDir: "/workspace",
+        workerBundleHash: BUNDLE_HASH,
+      };
+      const record: WorkerSessionPlacementRecord =
+        state === "local" || state === "requested"
+          ? { ...RECORD_BASE, state, environmentId: null, activeOwnerEpoch: null }
+          : state === "provisioning"
+            ? { ...RECORD_BASE, state, environmentId: "environment-1", activeOwnerEpoch: null }
+            : state === "failed"
+              ? { ...worker, state, recoveryError: "worker unavailable" }
+              : { ...worker, state };
+      const projected = projectWorkerSessionPlacement(record, undefined, undefined, identity);
+      if (state === "local" || state === "requested") {
+        expect(projected).not.toHaveProperty("machine");
+      } else {
+        expect(projected).toMatchObject({ machine });
+      }
+      expect(Value.Check(SessionPlacementSchema, projected)).toBe(true);
+    },
+  );
+
+  it("omits an empty machine result from correlated placement identity", () => {
+    const record = {
       ...RECORD_BASE,
-      state: "active",
+      state: "provisioning" as const,
       environmentId: "environment-1",
-      activeOwnerEpoch: 7,
-      workspaceBaseManifestRef: "manifest-1",
-      remoteWorkspaceDir: "/workspace",
-      workerBundleHash: BUNDLE_HASH,
-    } satisfies WorkerSessionPlacementRecord;
+      activeOwnerEpoch: null,
+    };
+    const identity = readWorkerPlacementIdentity(record, {
+      get: () => ({
+        environmentId: "environment-1",
+        providerId: "crabbox",
+        profileId: "aws",
+        ownerEpoch: 1,
+        state: "requested",
+        leaseId: null,
+        sharedHost: null,
+        createdAtMs: 1,
+        idleSinceAtMs: null,
+        destroyRequestedAtMs: null,
+        attachedSessionIds: [],
+        desktopAvailable: false,
+        desktopApps: [],
+        tunnelStatus: "stopped",
+      }),
+      readMachineShape: () => ({}),
+    });
+    expect(identity).toEqual({ providerId: "crabbox", profileId: "aws" });
+  });
+
+  it("adds an exact active disk-space sample only when supplied", () => {
+    const active = activePlacement();
     const diskSpace = {
       status: "critical" as const,
       availableBytes: 50,
@@ -55,16 +120,43 @@ describe("worker placement projection", () => {
     expect(projectWorkerSessionPlacement(active)).not.toHaveProperty("diskSpace");
   });
 
-  it("projects device availability from the exact active environment and current runner proof", () => {
-    const active = {
-      ...RECORD_BASE,
-      state: "active",
-      environmentId: "environment-device",
-      activeOwnerEpoch: 7,
-      workspaceBaseManifestRef: "manifest-1",
-      remoteWorkspaceDir: "/workspace",
-      workerBundleHash: BUNDLE_HASH,
+  it.each(["active", "draining"] as const)(
+    "projects active post-turn workspace reconciliation for %s placements",
+    (state) => {
+      const placement = {
+        ...activePlacement(),
+        state,
+      } satisfies WorkerSessionPlacementRecord;
+
+      expect(projectWorkerSessionPlacement(placement)).not.toHaveProperty(
+        "workspaceResultReconciling",
+      );
+      const projected = projectWorkerSessionPlacement(
+        placement,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+      expect(projected).toMatchObject({ workspaceResultReconciling: true });
+      expect(Value.Check(SessionPlacementSchema, projected)).toBe(true);
+    },
+  );
+
+  it("does not project result reconciliation for the move-only reconciling state", () => {
+    const placement = {
+      ...activePlacement(),
+      state: "reconciling",
     } satisfies WorkerSessionPlacementRecord;
+
+    expect(
+      projectWorkerSessionPlacement(placement, undefined, undefined, undefined, undefined, true),
+    ).not.toHaveProperty("workspaceResultReconciling");
+  });
+
+  it("projects device availability from the exact active environment and current runner proof", () => {
+    const active = activePlacement("environment-device");
     let connected = false;
     const reader = createWorkerPlacementRunnerAvailabilityReader({
       environments: {
@@ -79,6 +171,7 @@ describe("worker placement projection", () => {
           ownerEpoch: active.activeOwnerEpoch,
           createdAtMs: 1,
           idleSinceAtMs: null,
+          destroyRequestedAtMs: null,
           attachedSessionIds: [active.sessionId],
           desktopAvailable: false,
           desktopApps: [],
@@ -103,15 +196,7 @@ describe("worker placement projection", () => {
   });
 
   it("omits runner availability for non-device and inexact environment owners", () => {
-    const active = {
-      ...RECORD_BASE,
-      state: "active",
-      environmentId: "environment-cloud",
-      activeOwnerEpoch: 7,
-      workspaceBaseManifestRef: "manifest-1",
-      remoteWorkspaceDir: "/workspace",
-      workerBundleHash: BUNDLE_HASH,
-    } satisfies WorkerSessionPlacementRecord;
+    const active = activePlacement("environment-cloud");
     const environment: ReturnType<
       Parameters<typeof createWorkerPlacementRunnerAvailabilityReader>[0]["environments"]["get"]
     > = {
@@ -125,6 +210,7 @@ describe("worker placement projection", () => {
       ownerEpoch: active.activeOwnerEpoch,
       createdAtMs: 1,
       idleSinceAtMs: null,
+      destroyRequestedAtMs: null,
       attachedSessionIds: [active.sessionId],
       desktopAvailable: false,
       desktopApps: [],

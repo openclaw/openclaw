@@ -711,57 +711,6 @@ done
     );
   });
 
-  it.each(["watchos-direct-node", "mobile-pairing-reconnect"])(
-    "skips generic plugin fixture phases for the %s companion survivor",
-    (scenario) => {
-      const source = readFileSync(RUNNER_PATH, "utf8");
-      const helpers = source.slice(
-        source.indexOf("companion_survivor_scenario()"),
-        source.indexOf("\npackage_root()"),
-      );
-      const result = execFileSync(
-        "bash",
-        [
-          "-c",
-          `set -eu
-SCENARIO="$1"
-${helpers}
-phase() { printf '%s\\n' "$1"; }
-run_plugin_fixture_phase fixture-phase true
-`,
-          "companion-plugin-phase",
-          scenario,
-        ],
-        { encoding: "utf8" },
-      );
-
-      expect(result).toBe("");
-    },
-  );
-
-  it("keeps generic plugin fixtures in non-companion upgrade survivor scenarios", () => {
-    const source = readFileSync(RUNNER_PATH, "utf8");
-    const helpers = source.slice(
-      source.indexOf("companion_survivor_scenario()"),
-      source.indexOf("\npackage_root()"),
-    );
-    const result = execFileSync(
-      "bash",
-      [
-        "-c",
-        `set -eu
-SCENARIO=base
-${helpers}
-phase() { printf '%s\\n' "$1"; }
-run_plugin_fixture_phase fixture-phase true
-`,
-      ],
-      { encoding: "utf8" },
-    );
-
-    expect(result).toBe("fixture-phase\n");
-  });
-
   it("routes every generic plugin fixture phase through the companion guard", () => {
     const source = readFileSync(RUNNER_PATH, "utf8");
     const orchestration = source.slice(source.indexOf("phase storage-preflight"));
@@ -791,7 +740,10 @@ run_plugin_fixture_phase fixture-phase true
       orchestration.indexOf("if companion_survivor_scenario"),
       orchestration.indexOf("\nphase prepare-update-restart-probe"),
     );
-    const recoveryStart = orchestration.indexOf("run_plugin_fixture_phase fixture-plugin-consent");
+    const recoveryStart = orchestration.indexOf(
+      "\n",
+      orchestration.indexOf("phase assert-survival assert_survival"),
+    );
     const fixtureRecovery = orchestration.slice(
       recoveryStart,
       orchestration.indexOf('if [ "$SCENARIO" = "recovery-cleanup" ]; then', recoveryStart),

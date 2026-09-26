@@ -1,6 +1,8 @@
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import {
   renderAttachmentFileIcon,
@@ -8,6 +10,8 @@ import {
   type AttachmentFileVisualMode,
 } from "./chat-attachment-file-icon.ts";
 import type { AttachmentItem } from "./chat-message-media.ts";
+
+registerChatMessageMetadataEnglish();
 
 type AttachmentCardKind = Extract<
   AttachmentItem["attachment"]["kind"],
@@ -20,19 +24,41 @@ export type AttachmentCardHeaderOptions = {
   mimeType?: string;
   sizeBytes?: number;
   downloadHref?: string;
+  downloadPending?: boolean;
+  downloadPendingFocusable?: boolean;
+  onDownload?: () => void;
+  loading?: boolean;
   expandLabel?: string;
   onExpand?: () => void;
   visualMode?: AttachmentFileVisualMode;
   voiceNote?: boolean;
 };
 
-export function renderCompactAttachmentCard(options: AttachmentCardHeaderOptions): TemplateResult {
+export function renderCompactAttachmentCard(
+  options: AttachmentCardHeaderOptions,
+  elementRef?: (element: Element | undefined) => void,
+  onFocus?: () => void,
+): TemplateResult {
   return html`<div
+    ${elementRef ? ref(elementRef) : nothing}
     class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
     ?data-openable=${Boolean(options.onExpand)}
+    @focusin=${onFocus ?? nothing}
     @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, options.onExpand)}
   >
     ${renderAttachmentCardHeader({ ...options, visualMode: "large-placeholder" })}
+  </div>`;
+}
+
+export function renderAttachmentPreviewSkeleton() {
+  return html`<div
+    class="sidebar-attachment-preview__loading"
+    role="status"
+    aria-label=${t("common.loading")}
+  >
+    <div class="skeleton skeleton-line" aria-hidden="true"></div>
+    <div class="skeleton skeleton-line skeleton-line--long" aria-hidden="true"></div>
+    <div class="skeleton skeleton-line skeleton-line--medium" aria-hidden="true"></div>
   </div>`;
 }
 
@@ -46,11 +72,13 @@ export function openAttachmentCardFromClick(
   if (!onOpen || event.defaultPrevented) {
     return;
   }
-  const target = event.target;
-  const card = event.currentTarget;
-  if (target instanceof Element && card instanceof Element) {
-    const interactive = target.closest(attachmentCardInteractiveSelector);
-    if (interactive && card.contains(interactive)) {
+  // A control can replace its SVG during this event (for example mute/unmute).
+  // The dispatch path retains the original button even after its icon detaches.
+  for (const target of event.composedPath()) {
+    if (target === event.currentTarget) {
+      break;
+    }
+    if (target instanceof Element && target.matches(attachmentCardInteractiveSelector)) {
       return;
     }
   }
@@ -74,21 +102,8 @@ function attachmentTypeLabel(
   return resolveAttachmentFileIcon(label, mimeType).extensionLabel;
 }
 
-export function renderAttachmentCardIcon(options: {
-  label: string;
-  mimeType?: string;
-  visualMode?: AttachmentFileVisualMode;
-  unavailable?: boolean;
-}) {
-  return renderAttachmentFileIcon({
-    filename: options.label,
-    mimeType: options.mimeType,
-    mode: options.visualMode ?? "large-placeholder",
-    unavailable: options.unavailable,
-  });
-}
-
 export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions): TemplateResult {
+  const skeleton = options.loading ? "skeleton" : "";
   const compactPreview = options.visualMode === "preview-with-favicon";
   const formattedSize =
     options.sizeBytes === undefined ? undefined : formatBytes(options.sizeBytes);
@@ -108,17 +123,18 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
       }"
     >
       <div class="chat-assistant-attachment-card__identity">
-        ${renderAttachmentCardIcon({
-          label: options.label,
+        ${renderAttachmentFileIcon({
+          filename: options.label,
           mimeType: options.mimeType,
-          visualMode: options.visualMode,
+          mode: options.visualMode ?? "large-placeholder",
+          loading: options.loading,
         })}
         <span
           class="chat-assistant-attachment-card__details ${
             compactPreview ? "chat-assistant-attachment-card__details--preview" : ""
           }"
         >
-          <span class="chat-assistant-attachment-card__title" title=${options.label}
+          <span class="chat-assistant-attachment-card__title ${skeleton}" title=${options.label}
             >${options.label}</span
           >
           ${
@@ -126,7 +142,9 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
               ? formattedSize
                 ? html`<span class="chat-assistant-attachment-card__separator" aria-hidden="true"
                       >·</span
-                    ><span class="chat-assistant-attachment-card__meta">${formattedSize}</span>`
+                    ><span class="chat-assistant-attachment-card__meta ${skeleton}"
+                      >${formattedSize}</span
+                    >`
                 : null
               : html`<span class="chat-assistant-attachment-card__meta">${metadata}</span>`
           }
@@ -141,18 +159,32 @@ export function renderAttachmentCardHeader(options: AttachmentCardHeaderOptions)
             : null
         }
         ${
-          options.downloadHref
-            ? html`<a
-                class=${downloadClass}
-                href=${options.downloadHref}
-                download=${options.label}
-                target="_blank"
-                rel="noreferrer"
+          options.onDownload
+            ? html`<button
+                type="button"
+                class=${`${downloadClass} ${skeleton}`}
+                ?disabled=${options.downloadPending}
                 aria-label=${downloadTitle}
                 title=${downloadTitle}
-                >${icons.download}</a
-              >`
-            : null
+                @click=${options.onDownload}
+              >
+                ${icons.download}
+              </button>`
+            : options.downloadHref || options.downloadPending
+              ? html`<a
+                  class=${`${downloadClass} ${skeleton}`}
+                  href=${options.downloadPending ? nothing : options.downloadHref}
+                  aria-disabled=${options.downloadPending ? "true" : nothing}
+                  tabindex=${options.downloadPending && options.downloadPendingFocusable ? 0 : nothing}
+                  role="link"
+                  download=${options.label}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label=${downloadTitle}
+                  title=${downloadTitle}
+                  >${icons.download}</a
+                >`
+              : null
         }
         ${
           hasOpenAction

@@ -399,12 +399,7 @@ describe("buildMinimaxSpeechProvider", () => {
     it("requests non-streaming hex audio and decodes the hex response", async () => {
       const hexAudio = Buffer.from("fake-audio-data").toString("hex");
       const mockFetch = vi.mocked(globalThis.fetch);
-      mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { audio: hexAudio } }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
+      mockFetch.mockResolvedValueOnce(Response.json({ data: { audio: hexAudio } }));
 
       const result = await provider.synthesize({
         text: "Hello world",
@@ -436,12 +431,7 @@ describe("buildMinimaxSpeechProvider", () => {
     it("transcodes MiniMax MP3 to Opus for voice-note targets", async () => {
       const hexAudio = Buffer.from("fake-mp3-data").toString("hex");
       const mockFetch = vi.mocked(globalThis.fetch);
-      mockFetch.mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { audio: hexAudio } }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
+      mockFetch.mockResolvedValueOnce(Response.json({ data: { audio: hexAudio } }));
       transcodeAudioBufferToOpusMock.mockResolvedValueOnce(Buffer.from("fake-opus-data"));
 
       const result = await provider.synthesize({

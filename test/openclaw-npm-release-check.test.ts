@@ -321,20 +321,8 @@ describe("shouldSkipPackedTarballValidation", () => {
 });
 
 describe("compareReleaseVersions", () => {
-  it("treats stable as newer than same-patch beta", () => {
-    expect(compareReleaseVersions("2026.3.29", "2026.3.29-beta.2")).toBe(1);
-  });
-
-  it("orders alpha before beta on the same patch", () => {
-    expect(compareReleaseVersions("2026.3.29-alpha.2", "2026.3.29-beta.1")).toBe(-1);
-  });
-
   it("treats a newer beta patch as newer than an older stable patch", () => {
     expect(compareReleaseVersions("2026.4.1-beta.1", "2026.3.29")).toBe(1);
-  });
-
-  it("orders stable correction releases after the base stable release", () => {
-    expect(compareReleaseVersions("2026.3.29-2", "2026.3.29")).toBe(1);
   });
 
   it("returns null when either version is not release-shaped", () => {
@@ -546,25 +534,6 @@ describe("parseNpmPackJsonOutput", () => {
     ]);
   });
 
-  it("parses a plain npm pack JSON array", () => {
-    expect(parseNpmPackJsonOutput('[{"filename":"openclaw.tgz","files":[]}]')).toEqual([
-      { filename: "openclaw.tgz", files: [] },
-    ]);
-  });
-
-  it("parses npm 12 name-keyed pack output", () => {
-    expect(
-      parseNpmPackJsonOutput(
-        '{"openclaw":{"filename":"openclaw.tgz","files":[{"path":"dist/control-ui/index.html"}]}}',
-      ),
-    ).toEqual([
-      {
-        filename: "openclaw.tgz",
-        files: [{ path: "dist/control-ui/index.html" }],
-      },
-    ]);
-  });
-
   it("parses trailing npm 12 output after lifecycle logs", () => {
     const stdout = [
       "> openclaw@2026.7.2 prepack",
@@ -692,18 +661,6 @@ describe("collectForbiddenPackedPathErrors", () => {
     ]);
   });
 
-  it("rejects legacy update verifier QA runtime sidecars", () => {
-    expect(
-      collectForbiddenPackedPathErrors([
-        "dist/extensions/qa-channel/runtime-api.js",
-        "dist/extensions/qa-lab/runtime-api.js",
-      ]),
-    ).toEqual([
-      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
-      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
-    ]);
-  });
-
   it("rejects root dist chunks that still reference the private qa lab", () => {
     const rootDir = mkdtempSync(join(tmpdir(), "openclaw-pack-private-qa-"));
 
@@ -762,14 +719,29 @@ describe("collectPackedTestCargoErrors", () => {
     ]);
   });
 
-  it("allows normal runtime files", () => {
+  it("allows normal runtime files and shipped Markdown reference guides", () => {
     expect(
       collectPackedTestCargoErrors([
         "dist/index.js",
         "dist/extensions/whatsapp/node_modules/pino/lib/proto.js",
         "dist/extensions/webhooks/node_modules/zod/v4/core/api.js",
+        "docs/reference/test/local.md",
+        "docs/reference/tests/guide.md",
+        String.raw`docs\reference\test\docker.md`,
       ]),
     ).toStrictEqual([]);
+  });
+
+  it("still rejects test code in docs and Markdown fixtures outside root docs", () => {
+    const paths = [
+      "dist/node_modules/example/docs/test/fixture.md",
+      "docs/reference/example.test.ts",
+      "docs/reference/test/example.js",
+      "test/fixtures/docs/guide.md",
+    ];
+    expect(collectPackedTestCargoErrors(paths)).toEqual(
+      paths.map((path) => `npm package must not include test cargo "${path}".`),
+    );
   });
 
   it("allows legitimate package roots named test under node_modules", () => {

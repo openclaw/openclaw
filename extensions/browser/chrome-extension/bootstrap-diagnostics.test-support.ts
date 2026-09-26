@@ -292,18 +292,6 @@ export function createBootstrapDiagnostic() {
       restores.push(stop);
       return stop;
     },
-    peer(info: { name: string; version: string } | undefined) {
-      // Actual cached MCP peer's handshake metadata, not an npx/latest version guess.
-      const version =
-        info?.name === "chrome_devtools" && /^(\d{1,6})\.(\d{1,6})\.(\d{1,6})$/.exec(info.version);
-      append({
-        phase: "mcp.peer",
-        known: Boolean(version),
-        major: version ? Number(version[1]) : 0,
-        minor: version ? Number(version[2]) : 0,
-        patch: version ? Number(version[3]) : 0,
-      });
-    },
     flush() {
       if (++flushes > 2) {
         return;

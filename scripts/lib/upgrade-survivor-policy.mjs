@@ -1,31 +1,38 @@
-const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
-  "base",
-  "legacy-operator-state",
-  "mobile-pairing-reconnect",
-  "acpx-openclaw-tools-bridge",
-  "feishu-channel",
-  "bootstrap-persona",
-  "channel-post-core-restore",
-  "plugin-deps-cleanup",
-  "configured-plugin-installs",
-  "stale-source-plugin-shadow",
-  "prerelease-plugin-registry",
-  "tilde-log-path",
-  "meeting-transcripts-sqlite",
-  "versioned-runtime-deps",
-  "cron-scheduled-authority",
-  "sqlite-volume",
-  "recovery-cleanup",
-  "auth-profile-v2026-7-2-beta-5",
-  "watchos-direct-node",
+import { compareReleaseVersions, parseReleaseVersion } from "./release-version.mjs";
+import catalog from "./upgrade-survivor-scenarios.json" with { type: "json" };
+
+const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze(catalog.scenarios);
+// Frozen Codex allowlist recipes retain their assertion-only scenario.
+export const UPGRADE_SURVIVOR_ASSERTION_SCENARIOS = Object.freeze([
+  ...UPGRADE_SURVIVOR_SCENARIOS,
+  ...catalog.assertionOnlyScenarios,
 ]);
 
 // Oldest release line supported by the operator-state upgrade regression gate.
 export const OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE = "2026.6.34";
+export const MINIMUM_UPGRADE_SURVIVOR_BASELINE = "2026.6.1";
+export const CUSTOM_PLUGIN_SIBLINGS_BASELINE = "openclaw@2026.9.4";
+
+const scenarioMinimumBaselines = new Map([
+  ["custom-plugin-siblings", CUSTOM_PLUGIN_SIBLINGS_BASELINE],
+  ["legacy-operator-state", `openclaw@${OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE}`],
+  ["mobile-pairing-reconnect", "openclaw@2026.7.1"],
+  ["watchos-direct-node", "openclaw@2026.8.1"],
+]);
 
 // These black-box scenarios are implemented entirely by the current trusted
 // release harness and treat the selected tree only as the package under test.
-const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set(["mobile-pairing-reconnect"]);
+const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
+  "mobile-pairing-reconnect",
+  "abandoned-update",
+  "projects-doctor",
+  "channel-owner-policy",
+  "projects-startup-migration",
+  "taskflow-restoration",
+  "workshop-doctor-recovery",
+  "update-report-recovery",
+  "dreaming-cron-doctor",
+]);
 
 export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
   return TRUSTED_HARNESS_OWNED_SCENARIOS.has(scenario);
@@ -37,6 +44,16 @@ export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
 // qualification until their runtime cost justifies aggregate release coverage.
 const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
+    scenario !== "abandoned-update" &&
+    scenario !== "missing-configured-plugin-migration" &&
+    scenario !== "missing-load-path" &&
+    scenario !== "projects-doctor" &&
+    scenario !== "channel-owner-policy" &&
+    scenario !== "projects-startup-migration" &&
+    scenario !== "taskflow-restoration" &&
+    scenario !== "workshop-doctor-recovery" &&
+    scenario !== "update-report-recovery" &&
+    scenario !== "dreaming-cron-doctor" &&
     scenario !== "mobile-pairing-reconnect" &&
     scenario !== "watchos-direct-node" &&
     scenario !== "prerelease-plugin-registry" &&
@@ -80,6 +97,22 @@ export function parseUpgradeSurvivorBaselineSpecs(raw) {
         .filter((spec) => spec !== undefined),
     ),
   ];
+}
+
+// Historical receipts retain syntax-only parsing; active harnesses enforce the floor.
+export function assertSupportedUpgradeSurvivorBaselineSpec(spec) {
+  if (!spec || /^openclaw@(alpha|beta|latest)$/u.test(spec)) {
+    return;
+  }
+  const version = parseReleaseVersion(spec.replace(/^openclaw@/u, ""));
+  if (!version) {
+    throw new Error(`invalid published upgrade survivor baseline: ${spec}`);
+  }
+  if (compareReleaseVersions(version.baseVersion, MINIMUM_UPGRADE_SURVIVOR_BASELINE) === -1) {
+    throw new Error(
+      `Published upgrade survivor baselines must be ${MINIMUM_UPGRADE_SURVIVOR_BASELINE} or newer; got ${spec}. Upgrade pre-June installs through OpenClaw 2026.9.5 and run Doctor first.`,
+    );
+  }
 }
 
 function normalizeUpgradeSurvivorScenario(raw) {
@@ -130,68 +163,35 @@ function comparePublishedReleaseVersion(a, b) {
   return a.year - b.year || a.month - b.month || a.patch - b.patch;
 }
 
-function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec) {
-  if (!baselineSpec) {
-    return true;
-  }
-  const version = parsePublishedReleaseVersion(baselineSpec);
-  if (!version) {
-    return true;
-  }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 23 }) >= 0;
-}
-
-function supportsUpgradeSurvivorAcpToolsBridge(baselineSpec) {
-  if (!baselineSpec) {
-    return true;
-  }
-  const version = parsePublishedReleaseVersion(baselineSpec);
-  if (!version) {
-    return true;
-  }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 22 }) >= 0;
-}
-
-function supportsUpgradeSurvivorWatchDirectNode(baselineSpec) {
-  if (!baselineSpec) {
-    return true;
-  }
-  const version = parsePublishedReleaseVersion(baselineSpec);
-  if (!version) {
-    return true;
-  }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 8, patch: 1 }) >= 0;
-}
-
-function supportsUpgradeSurvivorMobilePairingReconnect(baselineSpec) {
-  if (!baselineSpec) {
-    return true;
-  }
-  const version = parsePublishedReleaseVersion(baselineSpec);
-  if (!version) {
-    return true;
-  }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 7, patch: 1 }) >= 0;
-}
-
-function supportsUpgradeSurvivorLegacyOperatorState(baselineSpec) {
-  const version = parsePublishedReleaseVersion(baselineSpec);
-  const floor = parsePublishedReleaseVersion(
-    `openclaw@${OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE}`,
-  );
-  return !version || comparePublishedReleaseVersion(version, floor) >= 0;
-}
-
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
+  const version = parsePublishedReleaseVersion(baselineSpec);
+  if (scenario === "dreaming-cron-doctor") {
+    return baselineSpec === "openclaw@2026.9.6";
+  }
+  if (
+    scenario === "projects-doctor" ||
+    scenario === "channel-owner-policy" ||
+    scenario === "projects-startup-migration" ||
+    scenario === "taskflow-restoration"
+  ) {
+    return baselineSpec === "openclaw@2026.9.4";
+  }
+  if (scenario === "abandoned-update") {
+    return baselineSpec === "openclaw@2026.9.4" || baselineSpec === "openclaw@2026.9.3";
+  }
+  if (scenario === "missing-configured-plugin-migration") {
+    return baselineSpec === "openclaw@2026.9.2";
+  }
+  if (scenario === "workshop-doctor-recovery") {
+    return baselineSpec === "openclaw@2026.9.4";
+  }
+  if (scenario === "update-report-recovery") {
+    return baselineSpec === "openclaw@2026.9.6";
+  }
+  const minimumBaseline = scenarioMinimumBaselines.get(scenario);
   return (
-    (scenario !== "legacy-operator-state" ||
-      supportsUpgradeSurvivorLegacyOperatorState(baselineSpec)) &&
-    (scenario !== "plugin-deps-cleanup" ||
-      supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
-    (scenario !== "acpx-openclaw-tools-bridge" ||
-      supportsUpgradeSurvivorAcpToolsBridge(baselineSpec)) &&
-    (scenario !== "mobile-pairing-reconnect" ||
-      supportsUpgradeSurvivorMobilePairingReconnect(baselineSpec)) &&
-    (scenario !== "watchos-direct-node" || supportsUpgradeSurvivorWatchDirectNode(baselineSpec))
+    !minimumBaseline ||
+    !version ||
+    comparePublishedReleaseVersion(version, parsePublishedReleaseVersion(minimumBaseline)) >= 0
   );
 }

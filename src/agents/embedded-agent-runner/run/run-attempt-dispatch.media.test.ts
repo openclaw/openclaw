@@ -133,8 +133,10 @@ describe("plugin harness prompt media", () => {
       expect(result.images ?? []).toHaveLength(testCase.expectedImages);
       if (testCase.expectedImages > 0) {
         expect(result.images?.[0]?.mimeType).toBe("image/png");
+        expect(result.media).toBeUndefined();
+      } else {
+        expect(result.media).toMatchObject(media);
       }
-      expect(result.media).toBeUndefined();
     } finally {
       envSnapshot.restore();
       await fs.rm(stateDir, { recursive: true, force: true });
@@ -198,7 +200,7 @@ describe("plugin harness prompt media", () => {
       ]);
       expect(readRuntimePromptImageFactIndexes(result.images ?? [])).toEqual([0]);
       expect(result.imageOrder).toEqual(["inline"]);
-      expect(result.media).toBeUndefined();
+      expect(result.media).toMatchObject([documentFact]);
       expect(JSON.stringify(result)).not.toContain(imagePath);
       expect(structuredClone(result).images).toEqual(result.images);
     } finally {

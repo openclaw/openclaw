@@ -1,16 +1,26 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
-import { isPresenceViewerIdle, projectPresenceViewers } from "../lib/presence-users.ts";
+import { renderHoverMarquee } from "../lib/hover-marquee.ts";
+import {
+  isPresenceViewerIdle,
+  presenceViewerLabel,
+  projectPresenceViewers,
+} from "../lib/presence-users.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
-import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
+import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
+import {
+  renderPersonalSessionEmpty,
+  renderSessionListToolbar,
+  renderSessionMutationError,
+} from "./app-sidebar-session-filter-summary.ts";
+import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import {
   renderChildSessionLoadError,
   renderRecentSession,
@@ -27,21 +37,29 @@ import {
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
+import { areSessionCatalogsSettled } from "./session-data-controller-catalog.ts";
+import type { SessionDataController } from "./session-data-controller.ts";
 
-type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
-  totalRowCount: number;
-  visibleRowCount: number;
-  visibleLimit: number;
-  collapsedVisibleRowCount: number;
-  renderHeader: boolean;
-};
+type RenderableSessionSection = SidebarVisibleSections["sections"][number];
 
 type SidebarSessionListHost = SessionListHost & {
-  loadMoreSidebarSessions(): Promise<void>;
+  readonly sidebarAgentsMode: "chip" | "roster";
+  readonly sessionInvolvingMeFilterActive: boolean;
+  readonly sessionData: SessionListHost["sessionData"] &
+    Pick<
+      SessionDataController,
+      | "context"
+      | "sessionsLoading"
+      | "sessionsResult"
+      | "sessionCatalogs"
+      | "sessionCatalogLive"
+      | "loadingMoreSessionCatalogIds"
+    >;
+  projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
 };
 
 type SessionCatalogRenderSnapshot = {
-  catalogs: readonly SessionCatalog[];
+  catalogs: readonly SidebarSessionCatalog[];
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
@@ -50,7 +68,6 @@ type SessionCatalogRenderSnapshot = {
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
   toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
-  ownerId: string | null;
   catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;
 };
@@ -60,7 +77,7 @@ type PersonHeaders = {
   selfProfileId?: string;
 };
 
-function renderSessionSection(params: {
+export function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
   personHeaders: PersonHeaders | undefined;
@@ -90,7 +107,9 @@ function renderSessionSection(params: {
   // section owns collapse UI or sits directly below the global toolbar.
   const collapsed = section.renderHeader && host.collapsedSessionSections.has(section.id);
   const label = personOwner
-    ? personOwner.label || personOwner.id
+    ? personIdentity?.type === "profile"
+      ? presenceViewerLabel({ id: personIdentity.id, name: personOwner.label || personOwner.id })
+      : personOwner.label || personOwner.id
     : section.project
       ? section.project.name
       : section.groups
@@ -111,6 +130,11 @@ function renderSessionSection(params: {
           : group
             ? "category"
             : "threads";
+  const personFilterActive =
+    host.sessionOwnerFilterActive && host.sessionOwnerFilterId === personOwner?.id;
+  const personFilterLabel = personFilterActive
+    ? t("chat.sidebar.showEveryone")
+    : t("chat.sidebar.showOnlyPerson", { name: label });
   // Collapsed Coding still signals live runs so background work stays visible.
   const collapsedRunningDot =
     collapsed &&
@@ -124,9 +148,9 @@ function renderSessionSection(params: {
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
-  // Person/project sections are derived, not stored: dropping a session on
+  // Person/project/agent sections are derived, not stored: dropping a session on
   // them cannot persist anything, so they take no drags at all.
-  const derivedSection = Boolean(personOwner || section.project);
+  const derivedSection = Boolean(personOwner || section.project || section.id.startsWith("agent:"));
   const sectionDropEnabled = groupWriteAccess.allowed && !derivedSection;
   const sectionClass = [
     "sidebar-recent-sessions__group",
@@ -177,32 +201,34 @@ function renderSessionSection(params: {
         }
       </span>`
     : nothing;
-  const labelText = html`<span class="sidebar-recent-sessions__label-text hover-marquee"
-    >${label}</span
-  >`;
-  const headerStatus = html`${
-    collapsed && totalRowCount > 0
-      ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
-      : nothing
-  }${
-    collapsedRunningDot
-      ? html`<span
-          class="session-run-spinner sidebar-session-group-running"
-          role="img"
-          aria-label=${t("sessionsView.activeRun")}
-          title=${t("sessionsView.activeRun")}
-        ></span>`
-      : nothing
-  }${
-    collapsedAttentionDot
-      ? html`<span
-          class="sidebar-session-group-attention"
-          role="img"
-          aria-label=${t("sessionsView.attentionRequired")}
-          title=${t("sessionsView.attentionRequired")}
-        ></span>`
-      : nothing
-  }`;
+  const labelText = renderHoverMarquee(label, "sidebar-recent-sessions__label-text");
+  const showCount = collapsed && totalRowCount > 0;
+  const headerStatus =
+    showCount || collapsedRunningDot || collapsedAttentionDot
+      ? html`${
+          showCount
+            ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
+            : nothing
+        }${
+          collapsedRunningDot
+            ? html`<span
+                class="session-run-spinner sidebar-session-group-running"
+                role="img"
+                aria-label=${t("sessionsView.activeRun")}
+                title=${t("sessionsView.activeRun")}
+              ></span>`
+            : nothing
+        }${
+          collapsedAttentionDot
+            ? html`<span
+                class="sidebar-session-group-attention"
+                role="img"
+                aria-label=${t("sessionsView.attentionRequired")}
+                title=${t("sessionsView.attentionRequired")}
+              ></span>`
+            : nothing
+        }`
+      : undefined;
   return html`
     <div
       class=${sectionClass}
@@ -210,17 +236,17 @@ function renderSessionSection(params: {
       data-zone=${zone}
       @dragover=${
         sectionDropEnabled
-          ? (event: DragEvent) => host.sectionDragOver(event, section.id, group)
+          ? (event: DragEvent) => host.sessionOrganizer.sectionDragOver(event, section.id, group)
           : nothing
       }
       @dragleave=${
         sectionDropEnabled
-          ? (event: DragEvent) => host.sectionDragLeave(event, section.id, group)
+          ? (event: DragEvent) => host.sessionOrganizer.sectionDragLeave(event, section.id, group)
           : nothing
       }
       @drop=${
         sectionDropEnabled
-          ? (event: DragEvent) => host.sectionDrop(event, section.id, group)
+          ? (event: DragEvent) => host.sessionOrganizer.sectionDrop(event, section.id, group)
           : nothing
       }
     >
@@ -228,10 +254,23 @@ function renderSessionSection(params: {
         section.renderHeader
           ? renderSidebarSessionSectionHeader({
               sectionId: section.id,
+              status: headerStatus
+                ? {
+                    content: headerStatus,
+                    label,
+                    expanded: !collapsed,
+                    onToggle: () => host.toggleSection(section.id),
+                  }
+                : undefined,
               draggable: !derivedSection,
               disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
-              onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
-              onFinishDrag: () => host.finishSidebarSectionDrag(),
+              onStartDrag: (sectionId) => host.sessionOrganizer.startSidebarSectionDrag(sectionId),
+              onFinishDrag: () => host.sessionOrganizer.finishSidebarSectionDrag(),
+              reorder: {
+                label,
+                onMove: (target, position) =>
+                  host.sessionOrganizer.reorderSidebarSection(section.id, target, position),
+              },
               onContextMenu: group
                 ? (event: MouseEvent) => {
                     event.preventDefault();
@@ -266,8 +305,7 @@ function renderSessionSection(params: {
                           aria-describedby=${presenceId ?? nothing}
                         >
                           ${ownerAvatar}${labelText}
-                        </button>
-                        ${headerStatus}`
+                        </button> `
                     : html`<button
                         type="button"
                         class="sidebar-session-group-toggle"
@@ -276,23 +314,48 @@ function renderSessionSection(params: {
                         title=${section.project?.path ?? nothing}
                         @click=${() => host.toggleSection(section.id)}
                       >
-                        ${chevron}${ownerAvatar}${labelText}${headerStatus}
+                        ${chevron}${ownerAvatar}${labelText}
                       </button>`
+                }
+                ${
+                  personOwner &&
+                  host.sessionOwnershipVisibility.filters &&
+                  host.sessionOwnerOptions.some((owner) => owner.id === personOwner.id)
+                    ? html`<button
+                        type="button"
+                        class="sidebar-session-group-actions sidebar-session-person-filter ${
+                          personFilterActive ? "sidebar-session-sort--filtered" : ""
+                        }"
+                        aria-pressed=${personFilterActive}
+                        title=${personFilterLabel}
+                        aria-label=${personFilterLabel}
+                        @click=${(event: MouseEvent) => {
+                          event.stopPropagation();
+                          host.setSessionOwnerFilter(personFilterActive ? null : personOwner.id);
+                        }}
+                      >
+                        ${icons.listFilter}
+                      </button>`
+                    : nothing
+                }
+                ${
+                  group || section.id === "ungrouped"
+                    ? renderNewSessionLink({
+                        basePath: host.basePath,
+                        agentId: host.expandedAgentId(),
+                        target: { group: group ?? "" },
+                        className: "sidebar-session-group-actions sidebar-new-session",
+                        label: t("sessionsView.newSessionInGroup", { group: label }),
+                        disabledReason: newSessionAccess.allowed
+                          ? undefined
+                          : newSessionAccess.reason,
+                        onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+                      })
+                    : nothing
                 }
                 ${
                   group
                     ? html`
-                        ${renderNewSessionLink({
-                          basePath: host.basePath,
-                          agentId: host.expandedAgentId(),
-                          target: { group },
-                          className: "sidebar-session-group-actions sidebar-new-session",
-                          label: t("sessionsView.newSessionInGroup", { group }),
-                          disabledReason: newSessionAccess.allowed
-                            ? undefined
-                            : newSessionAccess.reason,
-                          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-                        })}
                         <button
                           type="button"
                           class="sidebar-session-group-actions"
@@ -350,6 +413,7 @@ function renderRosterLoadMore(
   host: SidebarSessionListHost,
   sections: RenderableSessionSection[],
   hasMore: boolean | undefined,
+  loading: boolean,
 ) {
   if (!hasMore) {
     return nothing;
@@ -359,9 +423,16 @@ function renderRosterLoadMore(
       <button
         type="button"
         class="sidebar-session-pagination__button"
-        aria-label=${t("chat.selectors.loadMoreRosterSessions")}
+        aria-label=${loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
+        ?disabled=${loading}
+        aria-busy=${String(loading)}
         @click=${() => {
-          void host.loadMoreSidebarSessions().then(() => {
+          // The request owner changes before Lit commits the disabled attribute.
+          // A repeated activation must not reveal local rows during that read.
+          if (host.sessionData.sessionsLoading) {
+            return;
+          }
+          void host.sessionData.loadMoreSidebarSessions().then(() => {
             for (const section of sections) {
               host.setVisibleSessionLimit(
                 section.id,
@@ -371,7 +442,8 @@ function renderRosterLoadMore(
           });
         }}
       >
-        ${t("chat.selectors.loadMoreRosterSessions")}
+        ${loading ? html`<span class="session-run-spinner" aria-hidden="true"></span>` : nothing}
+        ${loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
       </button>
     </div>
   `;
@@ -433,7 +505,7 @@ function renderSessionPagination(params: {
 function renderSessionCatalog(params: {
   host: SessionListHost;
   snapshot: SessionCatalogRenderSnapshot;
-  catalog: SessionCatalog;
+  catalog: SidebarSessionCatalog;
   renderer: SessionCatalogGroupsRenderer;
 }) {
   const { host, snapshot, catalog, renderer } = params;
@@ -455,7 +527,6 @@ function renderSessionCatalog(params: {
       visibleSessionLimits: host.sessionData.visibleSessionLimits,
       projectGrouping: snapshot.projectGrouping,
       liveRows: snapshot.liveRows,
-      ownerId: snapshot.ownerId,
       renderLiveRow: (row, display) =>
         renderRecentSession({
           host,
@@ -465,11 +536,15 @@ function renderSessionCatalog(params: {
       onToggleSection: (sectionId) => host.toggleSection(sectionId),
       draggingSectionId: host.sessionOrganizer.draggingSidebarSection,
       sectionDropTarget: host.sessionOrganizer.sidebarSectionDropTarget,
-      onSectionDragOver: (event, sectionId) => host.sectionDragOver(event, sectionId),
-      onSectionDragLeave: (event, sectionId) => host.sectionDragLeave(event, sectionId),
-      onSectionDrop: (event, sectionId) => host.sectionDrop(event, sectionId),
-      onStartSectionDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
-      onFinishSectionDrag: () => host.finishSidebarSectionDrag(),
+      onSectionDragOver: (event, sectionId) =>
+        host.sessionOrganizer.sectionDragOver(event, sectionId),
+      onSectionDragLeave: (event, sectionId) =>
+        host.sessionOrganizer.sectionDragLeave(event, sectionId),
+      onSectionDrop: (event, sectionId) => host.sessionOrganizer.sectionDrop(event, sectionId),
+      onStartSectionDrag: (sectionId) => host.sessionOrganizer.startSidebarSectionDrag(sectionId),
+      onFinishSectionDrag: () => host.sessionOrganizer.finishSidebarSectionDrag(),
+      onReorderSection: (source, target, position) =>
+        host.sessionOrganizer.reorderSidebarSection(source, target, position),
       viewMenuOpenCatalogId: host.sidebarMenus.catalogViewMenuPosition?.catalogId ?? null,
       ownerFilterActive: host.sessionOwnerFilterActive,
       onOpenViewMenu: (catalogId, trigger, position) => {
@@ -487,9 +562,11 @@ function renderSessionCatalog(params: {
       onNavigate: host.onNavigate,
       catalogOpenTarget: snapshot.catalogOpenTarget,
       terminalAvailable: snapshot.terminalAvailable,
-      onOpenTerminal: openCatalogSessionInTerminal,
-      onOpenMenu: (request, x, y, trigger) => host.openCatalogMenu(request, x, y, trigger),
-      onCatalogMenuTriggerRendered: (key, element) => host.retargetCatalogMenuTrigger(key, element),
+      onOpenTerminal: (key, agentId) => openCatalogSessionInTerminal(host, key, agentId),
+      onOpenMenu: (request, x, y, trigger) =>
+        host.sidebarMenus.catalogMenu.open(request, x, y, trigger),
+      onCatalogMenuTriggerRendered: (key, element) =>
+        host.sidebarMenus.catalogMenu.retargetTrigger(key, element),
       isMenuOpen: (key) => host.sidebarMenus.catalogMenu.isOpenFor(key),
     })}
   `;
@@ -544,18 +621,16 @@ function renderSessionListBody(params: {
               })
             : nothing;
         }
-        if (section.id === "work") {
-          if (section.totalRowCount === 0) {
-            return nothing;
-          }
-          return renderSessionSection({ host, section, personHeaders });
+        if (section.id === "work" && section.totalRowCount === 0) {
+          return nothing;
         }
-        // Empty Other remains useful only as a collaborator or drag destination.
+        // Personal filters already omit empty sections in the projection.
+        // Otherwise preserve the collaborator and drag destination behavior.
         if (
           section.id === "ungrouped" &&
           section.totalRowCount === 0 &&
           !params.nativeSessionsHaveMore &&
-          !host.sessionOwnershipVisible &&
+          !host.sessionOwnershipVisibility.filters &&
           host.sessionsStatusFilter === "active" &&
           host.sessionOrganizer.draggingSessionKey === null
         ) {
@@ -567,91 +642,33 @@ function renderSessionListBody(params: {
   `;
 }
 
-function renderSessionListToolbar(host: SidebarSessionListHost) {
-  const newSessionAccess = host.readNewSessionAccess();
-  const filtered = host.sessionOwnerFilterActive || host.sessionsStatusFilter !== "active";
-  return html`
-    <div class="sidebar-session-toolbar">
-      <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
-      <button
-        type="button"
-        class="sidebar-session-toolbar__button sidebar-session-sort ${
-          filtered ? "sidebar-session-sort--filtered" : ""
-        }"
-        title=${t("chat.sidebar.sortSessions")}
-        aria-label=${t("chat.sidebar.sortSessions")}
-        aria-haspopup="menu"
-        aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
-        @click=${(event: MouseEvent) =>
-          host.sidebarMenus.toggleSessionSortMenu(event.currentTarget as HTMLElement)}
-      >
-        ${icons.listFilter}
-      </button>
-      ${renderNewSessionLink({
-        basePath: host.basePath,
-        agentId: host.expandedAgentId(),
-        className: "sidebar-session-toolbar__button sidebar-new-session",
-        label: t("chat.runControls.newSession"),
-        disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-        onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-      })}
-    </div>
-  `;
-}
-
 export function renderSessionList(params: {
   host: SidebarSessionListHost;
   empty: boolean;
   sections: RenderableSessionSection[];
   nativeSessionsHaveMore: boolean;
+  nativeSessionsLoading: boolean;
   catalogs: SessionCatalogRenderSnapshot;
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
-  const hiddenMainSessionKey = host.mainSessionRow()?.key;
-  return html`
-    <section
-      class="sidebar-sessions ${
-        host.sessionOrganizer.sessionListRemovalDrop ? "sidebar-sessions--removal-drop" : ""
-      }"
-      @dragover=${(event: DragEvent) => host.handleSessionListDragOver(event)}
-      @dragleave=${(event: DragEvent) => host.handleSessionListDragLeave(event)}
-      @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
-    >
-      ${renderSessionListToolbar(host)}
-      ${hiddenMainSessionKey ? renderChildSessionLoadError(host, hiddenMainSessionKey) : nothing}
-      ${
-        host.sessionData.sessionMutationError
-          ? html`
-              <div
-                class="sidebar-session-error callout danger callout--dismissible"
-                role="alert"
-                data-sidebar-session-error
-              >
-                <span class="callout__content">${host.sessionData.sessionMutationError}</span>
-                <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
-                  <button
-                    class="callout__dismiss"
-                    type="button"
-                    @click=${() => host.dismissSessionMutationError()}
-                    aria-label=${t("chat.actions.dismissError")}
-                  >
-                    ${icons.x}
-                  </button>
-                </openclaw-tooltip>
-              </div>
-            `
-          : nothing
-      }
+  return renderSessionListFrame(
+    host,
+    html`
       <div class="sidebar-recent-sessions">
-        ${renderSessionListBody({
+        ${renderSessionListBody(params)}
+        ${renderRosterLoadMore(host, params.sections, params.nativeSessionsHaveMore, params.nativeSessionsLoading)}
+        ${renderPersonalSessionEmpty(
           host,
-          sections: params.sections,
-          nativeSessionsHaveMore: params.nativeSessionsHaveMore,
-          catalogs: params.catalogs,
-          catalogRenderer: params.catalogRenderer,
-        })}
-        ${renderRosterLoadMore(host, params.sections, params.nativeSessionsHaveMore)}
+          params.empty && params.sections.every((section) => section.totalRowCount === 0),
+          host.connected &&
+            host.sessionData.sessionsResult !== null &&
+            !host.sessionData.sessionsLoading &&
+            !host.sessionData.sessionMutationError &&
+            !params.nativeSessionsHaveMore &&
+            params.catalogs.catalogs.length === 0 &&
+            areSessionCatalogsSettled(host.sessionData),
+        )}
         ${
           host.sessionsStatusFilter === "archived" && params.empty
             ? html`<span class="sidebar-session-empty-hint"
@@ -660,6 +677,28 @@ export function renderSessionList(params: {
             : nothing
         }
       </div>
+    `,
+  );
+}
+
+export function renderSessionListFrame(host: SidebarSessionListHost, body: unknown) {
+  const home = host.sidebarAgentsMode === "roster" ? null : host.mainSessionRow();
+  const loadKeys = home
+    ? host.projectHomeSession(home, host.expandedAgentId()).childLoadParentKeys
+    : [];
+  const homeLoadKeys = loadKeys?.length ? loadKeys : home ? [home.key] : [];
+  return html`
+    <section
+      class="sidebar-sessions ${
+        host.sessionOrganizer.sessionListRemovalDrop ? "sidebar-sessions--removal-drop" : ""
+      }"
+      @dragover=${(event: DragEvent) => host.sessionOrganizer.handleSessionListDragOver(event)}
+      @dragleave=${(event: DragEvent) => host.sessionOrganizer.handleSessionListDragLeave(event)}
+      @drop=${(event: DragEvent) => host.sessionOrganizer.handleSessionListDrop(event)}
+    >
+      ${host.sidebarAgentsMode === "roster" ? nothing : renderSessionListToolbar(host)}
+      ${homeLoadKeys.map((key) => renderChildSessionLoadError(host, key))}
+      ${renderSessionMutationError(host)} ${body}
     </section>
   `;
 }

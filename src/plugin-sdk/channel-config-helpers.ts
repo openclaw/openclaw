@@ -23,6 +23,7 @@ import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelSecurityDmPolicy } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
 export { clearAccountFieldsFromConfigSection } from "../channels/plugins/config-helpers.js";
@@ -97,6 +98,7 @@ type MultiAccountChannelConfigAdapterParams<
   Config extends OpenClawConfig = OpenClawConfig,
 > = {
   sectionKey: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   listAccountIds: (cfg: Config) => string[];
   resolveAccount: (cfg: Config, accountId?: string | null) => ResolvedAccount;
   resolveAccessorAccount?: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount;
@@ -113,6 +115,7 @@ type NamedAccountChannelConfigBaseParams<
   Config extends OpenClawConfig = OpenClawConfig,
 > = {
   sectionKey: string;
+  accountKeyPolicy?: ChannelAccountKeyPolicy;
   listAccountIds: (cfg: Config) => string[];
   resolveAccount: (cfg: Config, accountId?: string | null) => ResolvedAccount;
   defaultAccountId: (cfg: Config) => string;
@@ -279,6 +282,7 @@ export function createScopedChannelConfigBase<
       return setAccountEnabledInConfigSectionInSection({
         cfg,
         sectionKey: params.sectionKey,
+        accountKeyPolicy: params.accountKeyPolicy,
         accountId,
         enabled,
         allowTopLevel: params.allowTopLevel ?? true,
@@ -288,6 +292,7 @@ export function createScopedChannelConfigBase<
       return deleteAccountFromConfigSectionInSection({
         cfg,
         sectionKey: params.sectionKey,
+        accountKeyPolicy: params.accountKeyPolicy,
         accountId,
         clearBaseFields: params.clearBaseFields,
       });
@@ -308,6 +313,7 @@ export function createScopedChannelConfigAdapter<
   return createChannelConfigAdapterFromBase<ResolvedAccount, AccessorAccount, Config>({
     base: createScopedChannelConfigBase<ResolvedAccount, Config>({
       sectionKey: params.sectionKey,
+      accountKeyPolicy: params.accountKeyPolicy,
       listAccountIds: params.listAccountIds,
       resolveAccount: params.resolveAccount,
       inspectAccount: params.inspectAccount,
@@ -441,6 +447,7 @@ export function createHybridChannelConfigBase<
       return setAccountEnabledInConfigSectionInSection({
         cfg,
         sectionKey: params.sectionKey,
+        accountKeyPolicy: params.accountKeyPolicy,
         accountId,
         enabled,
       });
@@ -461,6 +468,7 @@ export function createHybridChannelConfigBase<
       return deleteAccountFromConfigSectionInSection({
         cfg,
         sectionKey: params.sectionKey,
+        accountKeyPolicy: params.accountKeyPolicy,
         accountId,
         clearBaseFields: params.clearBaseFields,
       });
@@ -481,6 +489,7 @@ export function createHybridChannelConfigAdapter<
   return createChannelConfigAdapterFromBase<ResolvedAccount, AccessorAccount, Config>({
     base: createHybridChannelConfigBase<ResolvedAccount, Config>({
       sectionKey: params.sectionKey,
+      accountKeyPolicy: params.accountKeyPolicy,
       listAccountIds: params.listAccountIds,
       resolveAccount: params.resolveAccount,
       inspectAccount: params.inspectAccount,

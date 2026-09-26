@@ -1,7 +1,8 @@
-// Leaf contract for the parsed OpenClaw operation shape. Kept import-free so
+// Leaf contract for the parsed OpenClaw operation shape. Uses only type imports so
 // gateway server types can reference it without pulling the system-agent
 // runtime graph (operations-parse -> overview -> config -> gateway) into a
 // type-only import cycle.
+import type { AgentRoleId } from "../agents/agent-roles.js";
 
 /** Parsed OpenClaw operation before approval/execution. */
 export type SystemAgentOperation =
@@ -14,6 +15,7 @@ export type SystemAgentOperation =
   | { kind: "config-validate" }
   | { kind: "config-get"; path: string }
   | { kind: "config-schema"; path?: string }
+  | { kind: "config-unset"; path: string }
   | { kind: "config-set"; path: string; value: string }
   | {
       kind: "config-set-ref";
@@ -21,6 +23,8 @@ export type SystemAgentOperation =
       source: "env" | "file" | "exec" | "store";
       id: string;
       provider?: string;
+      /** Value the owner supplied; stored as secret-store entry `id` before the ref is written. */
+      secret?: string;
     }
   | { kind: "setup"; workspace?: string; model?: string; agentName?: string }
   | SystemAgentNavigationOperation
@@ -41,10 +45,14 @@ export type SystemAgentOperation =
   | {
       kind: "create-agent";
       agentId: string;
+      name?: string;
+      purpose?: string;
+      role?: AgentRoleId;
       workspace?: string;
       model?: string;
       requesterAgentId?: string;
     }
+  | { kind: "create-team"; coordinatorId?: string; prefix?: string; workspaceRoot?: string }
   | { kind: "set-default-model"; model: string; agentId?: string };
 
 /** Interactive actions owned by the host chat, never by delegated model turns. */

@@ -2,9 +2,11 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const testNodeExecPath = resolveTestNodeExecPath();
 const script = readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8");
 const setupStart = "read -r -d '' LIVE_TEST_CMD <<'EOF' || true\n";
 const setupEnd = 'tmp_dir="$(mktemp -d)"';
@@ -103,7 +105,7 @@ it.each([
       encoding: "utf8",
       env: {
         HOME: home,
-        PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        PATH: `${bin}:${path.dirname(testNodeExecPath)}:/usr/bin:/bin`,
         NPM_CONFIG_PREFIX: prefix,
         OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR: path.resolve("scripts"),
         OPENCLAW_DOCKER_AUTH_PRESTAGED: "1",

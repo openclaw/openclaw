@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import type { IncomingHttpHeaders } from "node:http";
+import { CANCEL_SYMBOL } from "@clack/prompts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import type {
@@ -9,7 +10,6 @@ import type {
   UsersListModelAccountsResult,
   UsersSelfResult,
 } from "../../../packages/gateway-protocol/src/schema/users.js";
-import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildMinimalGatewayHelloOkPayload,
@@ -22,7 +22,7 @@ import { ExitError } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { DEVICE_CODE_PHISHING_WARNING } from "../../wizard/prompts.js";
-import { WizardSession } from "../../wizard/session.js";
+import { sanitizeWizardStepForClient, WizardSession } from "../../wizard/session.js";
 import {
   modelsAccountsClearDefaultCommand,
   modelsAccountsLoginCommand,
@@ -31,14 +31,12 @@ import {
 } from "./accounts.js";
 
 const mocks = vi.hoisted(() => ({
-  cancellation: Symbol("clack:cancel"),
   password: vi.fn<typeof import("@clack/prompts").password>(),
   autocomplete: vi.fn<typeof import("@clack/prompts").autocomplete>(),
   openUrl: vi.fn(async () => false),
 }));
 vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
-  isCancel: (value: unknown) => value === mocks.cancellation,
   password: mocks.password,
   autocomplete: mocks.autocomplete,
 }));
@@ -211,9 +209,9 @@ function waitForPromptAbort(): void {
     ({ signal }) =>
       new Promise((resolve) => {
         if (signal?.aborted) {
-          resolve(mocks.cancellation);
+          resolve(CANCEL_SYMBOL);
         } else {
-          signal?.addEventListener("abort", () => resolve(mocks.cancellation), { once: true });
+          signal?.addEventListener("abort", () => resolve(CANCEL_SYMBOL), { once: true });
         }
       }),
   );
@@ -533,15 +531,18 @@ describe("personal model account CLI over an identified Gateway connection", () 
     },
   );
 
-  it("renders a real device-code note before exact ACK, polls progress, and keeps the protected answer on one socket", async () => {
+  it("renders the latest device progress snapshot and opens each destination once without acknowledging the code", async () => {
     const redirectInput =
       "http://localhost:1455/auth/callback?code=synthetic-private-code&state=synthetic-state";
     mocks.password.mockResolvedValue(redirectInput);
     const output = runtime();
     const verificationUrl = "https://auth.example/device";
     const code = "ABCD-1234";
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const progressUpdated = createDeferredCore();
+    const continueToInput = createDeferredCore();
+    const inputReady = createDeferredCore();
     const session = new WizardSession(async (prompter) => {
+      const progress = prompter.progress("Starting provider sign-in");
       await prompter.openUrl?.(verificationUrl);
       await prompter.deviceCode?.({
         title: "Provider device sign-in",
@@ -549,44 +550,55 @@ describe("personal model account CLI over an identified Gateway connection", () 
         expiresInMinutes: 15,
         message: "Enter this one-time code on the provider's sign-in page.",
       });
+      progress.update("Waiting for the initial provider poll");
+      progress.update("Waiting for provider approval");
+      progressUpdated.resolve();
+      await continueToInput.promise;
+      await prompter.openUrl?.(inputStep.externalUrl);
+      const input = prompter.text({ message: inputStep.message, sensitive: true });
+      inputReady.resolve();
+      await input;
     });
-    let noteAcknowledged = false;
-    let renderedAtAck = "";
+    let polls = 0;
+    let renderedProgress = "";
+    let inputStepId: string | undefined;
     try {
-      const deviceStep = (await session.next()).step;
-      if (!deviceStep) {
-        throw new Error("Expected the WizardSession device-code step.");
-      }
       await withGateway(
         async ({ method, params }) => {
           if (method === "users.authConnect.start") {
             return startResult();
           }
           if (method === "users.authConnect.status") {
-            return {
-              status: "pending",
-              step: noteAcknowledged ? inputStep : deviceStep,
-            };
+            await progressUpdated.promise;
+            polls += 1;
+            if (polls === 3) {
+              renderedProgress = output.error.mock.calls.map((args) => args.join(" ")).join("\n");
+              continueToInput.resolve();
+              await inputReady.promise;
+            }
+            const step = session.getCurrentStep();
+            if (!step) {
+              throw new Error("Expected the current WizardSession step.");
+            }
+            if (step.type === "text") {
+              inputStepId = step.id;
+            }
+            return { status: "pending", step: sanitizeWizardStepForClient(step) };
           }
           if (method === "users.authConnect.answer") {
-            if (params.stepId === deviceStep.id) {
-              renderedAtAck = stripAnsi(
-                stderr.mock.calls.map(([chunk]) => String(chunk)).join(""),
-              ).replace(/[│\s]+/gu, " ");
-              await session.answer(deviceStep.id, undefined);
-              await session.whenSettled();
-              noteAcknowledged = true;
-              return {
-                status: "pending",
-                step: { id: "preparing", type: "progress", message: "Preparing browser sign-in" },
-              };
+            if (typeof params.stepId !== "string") {
+              throw new Error("Expected an exact wizard step ID.");
             }
+            await session.answer(params.stepId, params.value);
+            await session.whenSettled();
             return connected;
           }
           return undefined;
         },
         async ({ port, requests, connections }) => {
           await modelsAccountsLoginCommand({ port, provider: "openai", json: true }, output);
+          expect(session.getStatus()).toBe("done");
+          expect(inputStepId).toEqual(expect.any(String));
           expect(connections).toHaveLength(1);
           expect(new Set(requests.map(({ socket }) => socket)).size).toBe(1);
           expect(
@@ -594,23 +606,25 @@ describe("personal model account CLI over an identified Gateway connection", () 
               .filter(({ method }) => method === "users.authConnect.answer")
               .map(({ params }) => params),
           ).toEqual([
-            { profileId: PROFILE_ID, connectId: "operation-one", stepId: deviceStep.id },
             {
               profileId: PROFILE_ID,
               connectId: "operation-one",
-              stepId: inputStep.id,
+              stepId: inputStepId,
               value: redirectInput,
             },
           ]);
           expect(mocks.openUrl).toHaveBeenCalledTimes(2);
           expect(mocks.openUrl).toHaveBeenNthCalledWith(1, verificationUrl);
           expect(mocks.openUrl).toHaveBeenNthCalledWith(2, inputStep.externalUrl);
-          expect(renderedAtAck).toContain(`Code: ${code}`);
-          expect(renderedAtAck).toContain("Code expires in 15 minutes.");
-          expect(renderedAtAck).toContain(
+          expect(renderedProgress).toContain(verificationUrl);
+          expect(renderedProgress).toContain(`Code: ${code}`);
+          expect(renderedProgress).toContain("Code expires in 15 minutes.");
+          expect(renderedProgress).toContain(
             "Enter this one-time code on the provider's sign-in page.",
           );
-          expect(renderedAtAck).toContain(DEVICE_CODE_PHISHING_WARNING);
+          expect(renderedProgress).toContain(DEVICE_CODE_PHISHING_WARNING);
+          expect(renderedProgress).toContain("Waiting for provider approval");
+          expect(renderedProgress).not.toContain("Waiting for the initial provider poll");
           expect(requests.some(({ method }) => method === "users.authConnect.cancel")).toBe(false);
           expectJsonOutput(output, {
             profileId: PROFILE_ID,
@@ -628,6 +642,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
       );
     } finally {
       session.cancel();
+      continueToInput.resolve();
       await session.whenSettled();
     }
   });
@@ -681,7 +696,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
   );
 
   it("waits for exact cancellation acknowledgment before closing the initiating socket", async () => {
-    mocks.password.mockResolvedValue(mocks.cancellation);
+    mocks.password.mockResolvedValue(CANCEL_SYMBOL);
     const received = createDeferredCore<Request>();
     const acknowledged = createDeferredCore<UsersAuthConnectStatusResult>();
     const output = runtime();

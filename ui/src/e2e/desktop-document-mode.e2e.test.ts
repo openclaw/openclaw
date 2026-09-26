@@ -5,6 +5,7 @@ import type { DesktopClient } from "../components/desktop/desktop-client.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
@@ -17,6 +18,7 @@ import {
   openChatSidePanelType,
 } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createRfbRawFrame, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "desktop document mode",
@@ -45,7 +47,7 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
     ).desktopClientFactory = () => ({
       async connect(options) {
         element.dataset.viewOnly = String(options.viewOnly);
-        element.dataset.scaleViewport = String(options.scaleViewport ?? true);
+        element.dataset.scaleViewport = String(options.sizingMode !== "actual");
         const remote = document.createElement("div");
         remote.dataset.testRemoteDesktop = "true";
         remote.textContent = "Remote desktop";
@@ -54,6 +56,9 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
         options.target.replaceChildren(remote);
         options.onConnect?.();
         return {
+          setPresented() {
+            return true;
+          },
           disableInput() {
             element.dataset.viewOnly = "true";
           },
@@ -69,8 +74,8 @@ async function installDesktopClientFake(panel: import("playwright").Locator) {
           sendBackspace() {
             element.dataset.lastKeyboardText = "Backspace";
           },
-          setScaleViewport(enabled) {
-            element.dataset.scaleViewport = String(enabled);
+          setSizingMode(mode) {
+            element.dataset.scaleViewport = String(mode !== "actual");
           },
         };
       },
@@ -88,11 +93,19 @@ async function startDesktopDocument(
     control: false,
   },
   describedSession?: unknown,
+  inventoryMethod: "environments.list" | "environments.status" = route === "focus/desktop"
+    ? "environments.list"
+    : "environments.status",
 ) {
   await page.setViewportSize({ width: 390, height: 844 });
   const gateway = await installMockGateway(page, {
-    deferredMethods: ["environments.list"],
-    featureMethods: ["desktop.observe", "environments.list", "openclaw.setup.detect"],
+    deferredMethods: [inventoryMethod],
+    featureMethods: [
+      "desktop.observe",
+      "environments.list",
+      "environments.status",
+      "openclaw.setup.detect",
+    ],
     methodResponses: {
       "desktop.observe": desktopObserve,
       ...(describedSession === undefined
@@ -109,31 +122,169 @@ async function startDesktopDocument(
   await page.goto(`${suite.server.baseUrl}${route}`);
   const panel = page.locator("openclaw-desktop-panel");
   await panel.waitFor({ state: "attached" });
-  await gateway.waitForRequest("environments.list");
+  const inventoryRequest = await gateway.waitForRequest(inventoryMethod);
   await installDesktopClientFake(panel);
-  return { gateway, panel };
+  return { gateway, panel, inventoryMethod, inventoryRequest };
 }
 
 async function openDesktopDocument(
   page: import("playwright").Page,
   route: string,
-  environments: unknown[],
+  environments: Array<{ id: string } & Record<string, unknown>>,
   desktopObserve?: unknown,
   describedSession?: unknown,
+  inventoryMethod?: "environments.list" | "environments.status",
 ) {
-  const document = await startDesktopDocument(page, route, desktopObserve, describedSession);
-  await document.gateway.resolveDeferred("environments.list", { environments });
+  const document = await startDesktopDocument(
+    page,
+    route,
+    desktopObserve,
+    describedSession,
+    inventoryMethod,
+  );
+  await document.gateway.setMethodResponse("environments.list", { environments });
+  if (document.inventoryMethod === "environments.status") {
+    const params = document.inventoryRequest.params;
+    if (
+      !params ||
+      typeof params !== "object" ||
+      !("environmentId" in params) ||
+      typeof params.environmentId !== "string"
+    ) {
+      throw new Error("Expected a targeted environment status request");
+    }
+    const environmentId = params.environmentId;
+    const environment = environments.find((entry) => entry.id === environmentId);
+    if (environment) {
+      await document.gateway.setMethodResponse("environments.status", environment);
+      await document.gateway.resolveDeferred("environments.status", environment);
+    } else {
+      await document.gateway.rejectDeferred("environments.status", {
+        code: "INVALID_REQUEST",
+        message: "unknown environmentId",
+      });
+    }
+  } else {
+    await document.gateway.resolveDeferred("environments.list", { environments });
+  }
   return document;
 }
 
 suite.define(() => {
+  it("paints the session desktop without waiting for global inventory", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:main:targeted-desktop";
+      const environment = {
+        id: "worker-targeted",
+        type: "worker",
+        status: "available",
+        desktop: true,
+      };
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        deferredMethods: ["environments.list", "environments.status"],
+        featureMethods: ["desktop.observe", "environments.list", "environments.status"],
+        methodResponses: {
+          "sessions.describe": {
+            session: {
+              key: sessionKey,
+              kind: "direct",
+              updatedAt: 1,
+              placement: { state: "active", environmentId: environment.id },
+            },
+          },
+          "desktop.observe": {
+            transport: "rfb",
+            wsPath: "/desktop/observe?token=targeted",
+            expiresAtMs: 60_000,
+            control: false,
+          },
+        },
+      });
+      await page.goto(
+        `${suite.server.baseUrl}focus/desktop/session/${encodeURIComponent(sessionKey)}`,
+      );
+      const panel = page.locator("openclaw-desktop-panel");
+      await panel.waitFor({ state: "attached" });
+      const rfb = await installScriptedRfbServer(page);
+      const status = await gateway.waitForRequest("environments.status");
+      expect(status.params).toEqual({ environmentId: environment.id });
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(1);
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+      await gateway.resolveDeferred("environments.status", environment);
+      await expect.poll(rfb.events).toEqual(["authenticated:1"]);
+      await rfb.send([createRfbRawFrame()]);
+      await expect
+        .poll(() =>
+          panel.evaluate((element) => {
+            const canvas = element.shadowRoot?.querySelector<HTMLCanvasElement>("canvas");
+            return [...(canvas?.getContext("2d")?.getImageData(0, 0, 1, 1).data ?? [])].join(",");
+          }),
+        )
+        .toBe("24,180,160,255");
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+      await page.screenshot({
+        path: path.join(artifactDirectory, "session-first-frame-without-global-inventory.png"),
+      });
+
+      for (let index = 0; index < 32; index += 1) {
+        await gateway.emitGatewayEvent("sessions.changed", { sessionKey, phase: "message" });
+      }
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(1);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+      expect(await rfb.events()).toEqual(["authenticated:1"]);
+
+      const replacement = { ...environment, id: "worker-replacement" };
+      await gateway.setMethodResponse("environments.status", replacement);
+      await gateway.deferNext("sessions.describe");
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "placement" });
+      await gateway.waitForRequest("sessions.describe", { after: 1 });
+      for (let index = 0; index < 32; index += 1) {
+        await gateway.emitGatewayEvent("sessions.changed", { sessionKey, phase: "message" });
+      }
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(2);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+      await gateway.resolveDeferred("sessions.describe", {
+        session: { key: sessionKey, placement: { state: "active", environmentId: replacement.id } },
+      });
+      expect((await gateway.waitForRequest("desktop.observe", { after: 1 })).params).toEqual({
+        source: { kind: "environment", environmentId: replacement.id },
+        control: false,
+      });
+      await expect.poll(async () => (await rfb.events()).includes("authenticated:2")).toBe(true);
+      await gateway.setMethodResponse("environments.status", environment);
+      await gateway.emitGatewayEvent("sessions.changed", { sessionKey, phase: "start" });
+      expect((await gateway.waitForRequest("desktop.observe", { after: 2 })).params).toEqual({
+        source: { kind: "environment", environmentId: environment.id },
+        control: false,
+      });
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+    });
+  });
+
   it.each(["active", "starting", "offline"])(
     "opens the %s chat session desktop and follows an explicit pop-out selection",
     async (initialState) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
         const sessionKey = "agent:main:cloud-desktop";
+        // This test exercises an explicit manual open, not automatic discovery.
+        await page.addInitScript(
+          ({ key, sessionKey: scopedSessionKey }) => {
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                sessionKey: scopedSessionKey,
+                sidebarSessionLayouts: {
+                  [scopedSessionKey]: { columns: [], resourceAutoOpenDismissed: true },
+                },
+              }),
+            );
+          },
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), sessionKey },
+        );
         const session = {
           key: sessionKey,
+          sessionId: "cloud-desktop-session",
           kind: "direct",
           label: "Cloud desktop session",
           updatedAt: 1,
@@ -147,8 +298,8 @@ suite.define(() => {
         };
         const gateway = await installMockGateway(page, {
           sessionKey,
-          deferredMethods: ["environments.list"],
-          featureMethods: ["desktop.observe", "environments.list"],
+          deferredMethods: ["environments.status"],
+          featureMethods: ["desktop.observe", "environments.list", "environments.status"],
           methodResponses: {
             "sessions.list": chatSessionListResponse([session]),
             "desktop.observe": {
@@ -168,27 +319,35 @@ suite.define(() => {
         }
         const panel = page.locator("openclaw-desktop-panel");
         await panel.waitFor({ state: "attached" });
-        await gateway.waitForRequest("environments.list");
         await installDesktopClientFake(panel);
+        const sessionEnvironment = {
+          id: initialState === "offline" ? "node:workstation" : "worker-cloud",
+          type: initialState === "offline" ? "node" : "worker",
+          status: "available",
+          desktop: true,
+        };
         const inventory = {
           environments: [
             gatewayEnvironment,
-            {
-              id: initialState === "offline" ? "node:workstation" : "worker-cloud",
-              type: initialState === "offline" ? "node" : "worker",
-              status: "available",
-              desktop: true,
-            },
+            sessionEnvironment,
             { id: "node:maintenance", type: "node", status: "available", desktop: true },
           ],
         };
-        await gateway.resolveDeferred(
-          "environments.list",
-          initialState === "active" ? inventory : { environments: [gatewayEnvironment] },
-        );
         await gateway.setMethodResponse("environments.list", inventory);
+        await gateway.setMethodResponse("environments.status", {
+          cases: inventory.environments.map((environment) => ({
+            match: { environmentId: environment.id },
+            response: environment,
+          })),
+        });
         if (initialState !== "active") {
-          await panel.getByText("Desktop sources", { exact: true }).waitFor();
+          await panel
+            .getByText("The requested desktop is unavailable. Retry when the machine is ready.", {
+              exact: true,
+            })
+            .waitFor();
+          await panel.getByRole("button", { name: "Retry", exact: true }).waitFor();
+          expect(await gateway.getRequests("environments.status")).toHaveLength(0);
           expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
           await gateway.setSessionsListResponse(
             chatSessionListResponse([
@@ -207,6 +366,11 @@ suite.define(() => {
           await gateway.emitGatewayEvent("sessions.changed", { sessionKey });
         }
 
+        const target = await gateway.waitForRequest("environments.status");
+        expect(target.params).toEqual({ environmentId: sessionEnvironment.id });
+        expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+        expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
+        await gateway.resolveDeferred("environments.status", sessionEnvironment);
         const observed = await gateway.waitForRequest("desktop.observe");
         expect(observed.params).toEqual({
           source:
@@ -224,12 +388,13 @@ suite.define(() => {
           path: path.join(artifactDirectory, `chat-session-${initialState}-connected.png`),
         });
 
-        await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
-        await panel
-          .locator(".desktop-environment")
-          .filter({ hasText: "node:maintenance" })
-          .getByRole("button", { name: "Connect", exact: true })
-          .click();
+        await page.evaluate(() => {
+          window.dispatchEvent(
+            new CustomEvent("openclaw:desktop-toggle", {
+              detail: { open: true, environmentId: "node:maintenance" },
+            }),
+          );
+        });
         expect((await gateway.waitForRequest("desktop.observe", { after: 1 })).params).toEqual({
           source: { kind: "node", nodeId: "maintenance" },
           control: false,
@@ -302,8 +467,8 @@ suite.define(() => {
 
         const popupScenario = {
           sessionKey,
-          deferredMethods: ["environments.list"],
-          featureMethods: ["desktop.observe", "environments.list"],
+          deferredMethods: ["environments.status"],
+          featureMethods: ["desktop.observe", "environments.list", "environments.status"],
           methodResponses: { "desktop.observe": controlResponse },
         };
         await context.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
@@ -322,14 +487,14 @@ suite.define(() => {
             () =>
               (
                 window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
-              ).openclawControlUiE2eGateway?.findRequests("environments.list").length,
+              ).openclawControlUiE2eGateway?.findRequests("environments.status").length,
           );
           await installDesktopClientFake(focusedPanel);
-          await popup.evaluate((environments) => {
+          await popup.evaluate((environment) => {
             (
               window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
-            ).openclawControlUiE2eGateway?.resolveDeferred("environments.list", environments);
-          }, inventory);
+            ).openclawControlUiE2eGateway?.resolveDeferred("environments.status", environment);
+          }, inventory.environments[2]);
           await focusedPanel.locator("[data-test-remote-desktop='true']").waitFor();
           expect(
             await popup.evaluate(() =>
@@ -403,7 +568,7 @@ suite.define(() => {
       );
 
       await panel
-        .getByText("The requested desktop source is unavailable. Choose another source.", {
+        .getByText("The requested desktop is unavailable. Retry when the machine is ready.", {
           exact: true,
         })
         .waitFor();
@@ -539,10 +704,11 @@ suite.define(() => {
         [gatewayEnvironment],
         undefined,
         session,
+        "environments.list",
       );
 
       await panel
-        .getByText("The requested desktop source is unavailable. Choose another source.", {
+        .getByText("The requested desktop is unavailable. Retry when the machine is ready.", {
           exact: true,
         })
         .waitFor();
@@ -558,7 +724,7 @@ suite.define(() => {
   it("renders inventory failure recovery and retries the preselected source", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const { gateway, panel } = await startDesktopDocument(page, "focus/desktop/source/gateway");
-      await gateway.rejectDeferred("environments.list", {
+      await gateway.rejectDeferred("environments.status", {
         code: "UNAVAILABLE",
         message: "desktop inventory is temporarily unavailable",
       });
@@ -568,9 +734,7 @@ suite.define(() => {
       await retry.waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
 
-      await gateway.setMethodResponse("environments.list", {
-        environments: [gatewayEnvironment],
-      });
+      await gateway.setMethodResponse("environments.status", gatewayEnvironment);
       await retry.click();
       const observeRequest = await gateway.waitForRequest("desktop.observe");
       expect(observeRequest.params).toEqual({ source: { kind: "host" }, control: false });
@@ -593,20 +757,17 @@ suite.define(() => {
         undefined,
         { key: sessionKey, kind: "direct", updatedAt: 1, execNode: "workstation" },
       );
-      await gateway.rejectDeferred("environments.list", {
+      await gateway.rejectDeferred("environments.status", {
         code: "UNAVAILABLE",
         message: "desktop inventory is temporarily unavailable",
       });
 
-      // A session key only names a machine once the inventory loads, so recovery here has no
-      // preselected environment to reconnect to and must retry the inventory instead.
+      // Resolution succeeded; retry still follows this session's current target.
       const retry = panel.getByRole("button", { name: "Retry", exact: true });
       await retry.waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
 
-      await gateway.setMethodResponse("environments.list", {
-        environments: [gatewayEnvironment, nodeEnvironment],
-      });
+      await gateway.setMethodResponse("environments.status", nodeEnvironment);
       await retry.click();
       const observeRequest = await gateway.waitForRequest("desktop.observe");
       expect(observeRequest.params).toEqual({
@@ -617,7 +778,7 @@ suite.define(() => {
     });
   });
 
-  it("auto-connects view-only and provides four working touch actions", async () => {
+  it("keeps all six touch controls reachable at 320px, phone, and desktop widths", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const { gateway, panel } = await openDesktopDocument(
         page,
@@ -644,11 +805,77 @@ suite.define(() => {
       const viewRequest = await gateway.waitForRequest("desktop.observe");
       expect(viewRequest.params).toEqual({ source: { kind: "host" }, control: false });
       await expect.poll(() => panel.getAttribute("data-view-only")).toBe("true");
-      const touchActions = panel.locator(".desktop-touch-action");
-      await expect.poll(() => touchActions.count()).toBe(4);
+      const touchActions = panel.locator(".desktop-touch-action, .desktop-sizing");
+      await expect.poll(() => touchActions.count()).toBe(6);
+      await expect
+        .poll(() =>
+          panel.getByRole("button", { name: "Audio unavailable", exact: true }).isDisabled(),
+        )
+        .toBe(true);
+      await panel
+        .getByRole("button", { name: "Open desktop in Picture-in-Picture", exact: true })
+        .waitFor();
       await panel.getByRole("button", { name: "Back", exact: true }).waitFor();
 
-      await panel.getByRole("button", { name: "Take control", exact: true }).click();
+      for (const width of [320, 390, 1280]) {
+        await page.setViewportSize({ width, height: 844 });
+        await page.screenshot({
+          path: path.join(artifactDirectory, "connected-toolbar-" + width + "x844.png"),
+          fullPage: false,
+        });
+        const actions = await touchActions.evaluateAll((elements) =>
+          elements.map((element) => {
+            const rect = element.getBoundingClientRect();
+            const root = element.getRootNode() as ShadowRoot;
+            const icon = element.querySelector("svg")?.getBoundingClientRect();
+            const reachable = [
+              [rect.left + 2, rect.top + rect.height / 2],
+              [rect.right - 2, rect.top + rect.height / 2],
+              [rect.left + rect.width / 2, rect.top + 2],
+              [rect.left + rect.width / 2, rect.bottom - 2],
+              [rect.left + rect.width / 2, rect.top + rect.height / 2],
+            ].every(([x, y]) => element.contains(root.elementFromPoint(x!, y!)));
+            return {
+              label: element.getAttribute("aria-label"),
+              width: rect.width,
+              height: rect.height,
+              left: rect.left,
+              right: rect.right,
+              reachable,
+              iconContained:
+                !icon ||
+                (icon.left >= rect.left &&
+                  icon.right <= rect.right &&
+                  icon.top >= rect.top &&
+                  icon.bottom <= rect.bottom),
+            };
+          }),
+        );
+        for (const action of actions) {
+          expect(action.width, action.label ?? "touch control").toBeGreaterThanOrEqual(44);
+          expect(action.height).toBeGreaterThanOrEqual(44);
+          expect(action.left).toBeGreaterThanOrEqual(12);
+          expect(action.right).toBeLessThanOrEqual(width - 12);
+          expect(action.reachable, action.label ?? "touch control").toBe(true);
+          expect(action.iconContained, action.label ?? "touch control").toBe(true);
+        }
+      }
+      await page.setViewportSize({ width: 320, height: 844 });
+      await panel.getByRole("combobox", { name: "Desktop size", exact: true }).focus();
+      await page.keyboard.press("Tab");
+      expect(
+        await panel.evaluate((element) =>
+          element.shadowRoot?.activeElement?.getAttribute("aria-label"),
+        ),
+      ).toBe("Back");
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Shift+Tab");
+      expect(
+        await panel.evaluate((element) =>
+          element.shadowRoot?.activeElement?.getAttribute("aria-label"),
+        ),
+      ).toBe("Take control");
+      await page.keyboard.press("Enter");
       await expect.poll(async () => (await gateway.getRequests("desktop.observe")).length).toBe(2);
       expect((await gateway.getRequests("desktop.observe"))[1]?.params).toEqual({
         source: { kind: "host" },
@@ -656,7 +883,9 @@ suite.define(() => {
       });
       await expect.poll(() => panel.getAttribute("data-view-only")).toBe("false");
 
-      await panel.getByRole("button", { name: "Use actual size", exact: true }).click();
+      await panel
+        .getByRole("combobox", { name: "Desktop size", exact: true })
+        .selectOption("actual");
       await expect.poll(() => panel.getAttribute("data-scale-viewport")).toBe("false");
 
       await panel.getByRole("button", { name: "Keyboard", exact: true }).click();
@@ -677,7 +906,7 @@ suite.define(() => {
       await expect.poll(() => panel.getAttribute("data-last-keyboard-text")).toBe("m");
 
       await page.screenshot({
-        path: path.join(artifactDirectory, "connected-toolbar-390x844.png"),
+        path: path.join(artifactDirectory, "controlled-toolbar-320x844.png"),
         fullPage: false,
       });
     });

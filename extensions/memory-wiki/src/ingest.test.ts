@@ -3,19 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { describe, expect, it, vi } from "vitest";
+import { deferred } from "./deferred.test-helpers.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 describe("ingestMemoryWikiSource", () => {
   it("copies a local text file into sources markdown", async () => {
@@ -95,12 +88,15 @@ hello from source
     const ingestQueued = deferred();
     const originalEnqueue = Object.getOwnPropertyDescriptor(KeyedAsyncQueue.prototype, "enqueue")
       ?.value as KeyedAsyncQueue["enqueue"];
-    const enqueueSpy = vi
-      .spyOn(KeyedAsyncQueue.prototype, "enqueue")
-      .mockImplementation(function (this: KeyedAsyncQueue, key, task, hooks) {
-        ingestQueued.resolve();
-        return originalEnqueue.call(this, key, task, hooks);
-      });
+    const enqueueSpy = vi.spyOn(KeyedAsyncQueue.prototype, "enqueue").mockImplementation(function (
+      this: KeyedAsyncQueue,
+      key,
+      task,
+      hooks,
+    ) {
+      ingestQueued.resolve();
+      return originalEnqueue.call(this, key, task, hooks);
+    });
     let ingest: ReturnType<typeof ingestMemoryWikiSource> | undefined;
     try {
       ingest = ingestMemoryWikiSource({

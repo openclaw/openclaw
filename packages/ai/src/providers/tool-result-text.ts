@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getAiTransportHost } from "../host.js";
+import { hasMediaPayload } from "../media-payload.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
 const STRUCTURED_TOOL_RESULT_MAX_CHARS = 8000;
@@ -109,18 +110,6 @@ function truncateStructuredToolText(text: string): string {
   return `${truncateUtf16Safe(text, STRUCTURED_TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
 }
 
-/** Media metadata alone is not an attachment; provider emitters need inline bytes. */
-export function hasMediaPayload(
-  block: unknown,
-): block is Record<string, unknown> & { data: string } {
-  return isRecord(block) && typeof block.data === "string" && block.data.trim().length > 0;
-}
-
-/** Image metadata alone is not an attachment; provider emitters need inline bytes. */
-export function isImageWithMediaPayload<T>(block: T): block is T & { type: "image"; data: string } {
-  return isRecord(block) && block.type === "image" && hasMediaPayload(block);
-}
-
 function classifyToolResultMedia(blocks: readonly unknown[]): {
   hasImage: boolean;
   hasAudio: boolean;
@@ -175,22 +164,33 @@ export function extractToolResultText(
   options?: { includeStructured?: boolean },
 ): string {
   const explicitTexts: string[] = [];
-  const structuredTexts: string[] = [];
+  const structuredBlocks: object[] = [];
   for (const block of blocks) {
-    const text = extractToolResultBlockText(block);
-    if (!text) {
+    if (!block || typeof block !== "object") {
       continue;
     }
-    const record = block as Record<string, unknown>;
-    if (record.type === "text") {
-      explicitTexts.push(text);
+    if ((block as Record<string, unknown>).type === "text") {
+      const text = extractToolResultBlockText(block);
+      if (text) {
+        explicitTexts.push(text);
+      }
     } else {
+      structuredBlocks.push(block);
+    }
+  }
+  if (explicitTexts.length > 0 && !options?.includeStructured) {
+    return explicitTexts.join("\n");
+  }
+  const structuredTexts: string[] = [];
+  for (const block of structuredBlocks) {
+    const text = extractToolResultBlockText(block);
+    if (text) {
       structuredTexts.push(text);
     }
   }
   if (explicitTexts.length > 0) {
     // Text budgets belong to the caller; clipping here can remove continuation instructions.
-    if (options?.includeStructured && structuredTexts.length > 0) {
+    if (structuredTexts.length > 0) {
       explicitTexts.push(truncateStructuredToolText(structuredTexts.join("\n")));
     }
     return explicitTexts.join("\n");

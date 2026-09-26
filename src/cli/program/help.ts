@@ -7,18 +7,17 @@ import { formatConsoleDiagnosticBlock } from "../../logging/json-console-line.js
 import { escapeRegExp } from "../../utils.js";
 import { isRootVersionInvocation } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
-import { replaceCliName, resolveCliName } from "../cli-name.js";
+import { CLI_NAME } from "../cli-name.js";
+import { formatHelpExamples } from "../help-format.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
 import {
   getCommanderErrorCommandNames,
   getCommanderErrorCommandPath,
 } from "./commander-parse-facts.js";
-import type { ProgramContext } from "./context.js";
 import { getCoreCliCommandsWithSubcommands } from "./core-command-descriptors.js";
 import { formatCliParseErrorOutput } from "./error-output.js";
 import { getSubCliCommandsWithSubcommands } from "./subcli-descriptors.js";
 
-const CLI_NAME = resolveCliName();
 const CLI_NAME_PATTERN = escapeRegExp(CLI_NAME);
 const ROOT_COMMANDS_WITH_SUBCOMMANDS = new Set([
   ...getCoreCliCommandsWithSubcommands(),
@@ -68,7 +67,7 @@ export function formatProgramHelpOutput(str: string): string {
 
 export function configureProgramHelp(
   program: Command,
-  ctx: ProgramContext,
+  ctx: { programVersion: string },
   options?: { commandsWithSubcommands?: ReadonlySet<string> },
 ) {
   const commandsWithSubcommands = new Set([
@@ -103,7 +102,6 @@ export function configureProgramHelp(
   program.helpCommand("help [command]", "Display help for command");
 
   program.configureHelp({
-    // sort options and subcommands alphabetically
     sortSubcommands: true,
     sortOptions: true,
     optionTerm: (option) => theme.option(option.flags),
@@ -150,9 +148,7 @@ export function configureProgramHelp(
     return `\n${line}\n`;
   });
 
-  const fmtExamples = EXAMPLES.map(
-    ([cmd, desc]) => `  ${theme.command(replaceCliName(cmd, CLI_NAME))}\n    ${theme.muted(desc)}`,
-  ).join("\n");
+  const fmtExamples = formatHelpExamples(EXAMPLES);
 
   program.addHelpText("afterAll", ({ command }) => {
     if (command !== program) {

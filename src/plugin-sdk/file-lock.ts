@@ -1,5 +1,4 @@
 // File lock helpers serialize plugin writes that share a filesystem-backed state file.
-import "../infra/fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import {
   acquireFileLock as acquireFsSafeFileLock,
@@ -8,6 +7,7 @@ import {
 } from "@openclaw/fs-safe/file-lock";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  inspectStaleLockOwner,
   isLockOwnerDefinitelyStale,
   shouldRemoveDeadOwnerOrExpiredLock,
 } from "../infra/stale-lock-file.js";
@@ -25,13 +25,17 @@ export type FileLockOptions = {
   };
   /** Milliseconds used to classify contended sidecars as stale. */
   stale: number;
-  /** Fail closed for security-sensitive state; generic locks retain shipped stale recovery. */
-  staleRecovery?: "fail-closed" | "remove-if-unchanged";
+  /** Fail closed for security-sensitive state; generic locks retain shipped stale recovery.
+   * Definite-only recovery additionally refuses ownerless/invalid-age payloads. */
+  staleRecovery?: "fail-closed" | "remove-if-unchanged" | "remove-if-definitely-stale";
   /**
    * Logical operation identity for intentional nested acquisition.
    * Reuse one key only within that call chain; omit it for ordinary contention.
    */
   reentrantOwner?: string;
+  /** Restrictive host guard, checked again at stale removal and release. It can
+   * only refuse, never authorize reclamation that the provider would reject. */
+  assertResourceUnborrowed?: (targetPath: string) => void;
 };
 
 /** Live file-lock handle returned after successful acquisition. */
@@ -86,10 +90,6 @@ function createCurrentProcessLockPayload(): Record<string, unknown> {
   return payload;
 }
 
-function asLockPayload(payload: unknown): Record<string, unknown> | null {
-  return asNullableRecord(payload);
-}
-
 function sameStatValue(left: number | bigint, right: number | bigint): boolean {
   return typeof left === typeof right ? left === right : BigInt(left) === BigInt(right);
 }
@@ -123,7 +123,10 @@ async function isSameRegularFile(
   }
 }
 
-function normalizeLockError(err: unknown): never {
+function normalizeLockError(
+  err: unknown,
+  staleOwner: ReturnType<typeof inspectStaleLockOwner> = null,
+): never {
   if ((err as { code?: unknown }).code === FILE_LOCK_TIMEOUT_ERROR_CODE) {
     throw Object.assign(new Error((err as Error).message), {
       code: FILE_LOCK_TIMEOUT_ERROR_CODE,
@@ -131,7 +134,10 @@ function normalizeLockError(err: unknown): never {
     }) as FileLockTimeoutError;
   }
   if ((err as { code?: unknown }).code === FILE_LOCK_STALE_ERROR_CODE) {
-    throw Object.assign(new Error((err as Error).message), {
+    const detail = staleOwner
+      ? ` [${staleOwner.reason} pid=${staleOwner.pid} recorded-start=${staleOwner.recordedStarttime ?? "unknown"} observed-start=${staleOwner.observedStarttime ?? "unknown"}]`
+      : "";
+    throw Object.assign(new Error(`${(err as Error).message}${detail}`), {
       code: FILE_LOCK_STALE_ERROR_CODE,
       lockPath: (err as { lockPath?: string }).lockPath ?? "",
     }) as FileLockStaleError;
@@ -154,36 +160,65 @@ export async function acquireFileLock(
   filePath: string,
   options: FileLockOptions,
 ): Promise<FileLockHandle> {
+  options.assertResourceUnborrowed?.(filePath);
   const staleRecovery = options.staleRecovery ?? "remove-if-unchanged";
+  let staleOwner: ReturnType<typeof inspectStaleLockOwner> = null;
   try {
     const lock = await acquireFsSafeFileLock(filePath, {
       managerKey: FILE_LOCK_MANAGER_KEY,
       staleMs: options.stale,
       retry: options.retries,
-      staleRecovery,
+      staleRecovery:
+        staleRecovery === "remove-if-definitely-stale" ? "remove-if-unchanged" : staleRecovery,
       reentrantOwner: options.reentrantOwner,
-      payload: createCurrentProcessLockPayload,
-      shouldReclaim: (params) =>
-        staleRecovery === "fail-closed"
-          ? isLockOwnerDefinitelyStale({ payload: asLockPayload(params.payload) })
-          : shouldRemoveDeadOwnerOrExpiredLock({
-              payload: asLockPayload(params.payload),
-              staleMs: params.staleMs,
-              nowMs: params.nowMs,
-            }),
-      ...(staleRecovery === "remove-if-unchanged"
+      payload: () => {
+        options.assertResourceUnborrowed?.(filePath);
+        return createCurrentProcessLockPayload();
+      },
+      shouldReclaim: (params) => {
+        if (staleRecovery === "fail-closed") {
+          staleOwner = inspectStaleLockOwner({ payload: asNullableRecord(params.payload) });
+          return staleOwner !== null;
+        }
+        if (staleRecovery === "remove-if-definitely-stale") {
+          return isLockOwnerDefinitelyStale({ payload: asNullableRecord(params.payload) });
+        }
+        return shouldRemoveDeadOwnerOrExpiredLock({
+          payload: asNullableRecord(params.payload),
+          staleMs: params.staleMs,
+          nowMs: params.nowMs,
+        });
+      },
+      ...(staleRecovery === "remove-if-unchanged" || staleRecovery === "remove-if-definitely-stale"
         ? {
-            shouldRemoveStaleLock: (snapshot: { payload: unknown }) =>
-              shouldRemoveDeadOwnerOrExpiredLock({
-                payload: asLockPayload(snapshot.payload),
+            shouldRemoveStaleLock: (snapshot: {
+              payload: unknown;
+              normalizedTargetPath: string;
+            }) => {
+              options.assertResourceUnborrowed?.(snapshot.normalizedTargetPath);
+              if (staleRecovery === "remove-if-definitely-stale") {
+                return isLockOwnerDefinitelyStale({ payload: asNullableRecord(snapshot.payload) });
+              }
+              return shouldRemoveDeadOwnerOrExpiredLock({
+                payload: asNullableRecord(snapshot.payload),
                 staleMs: options.stale,
-              }),
+              });
+            },
           }
         : {}),
     });
-    return { lockPath: lock.lockPath, release: lock.release };
+    // Pin the release guard to the provider-owned target, not a mutable alias.
+    const targetPath = lock.lockPath.slice(0, -".lock".length);
+    options.assertResourceUnborrowed?.(targetPath);
+    return {
+      lockPath: lock.lockPath,
+      release: async () => {
+        options.assertResourceUnborrowed?.(targetPath);
+        await lock.release();
+      },
+    };
   } catch (err) {
-    return normalizeLockError(err);
+    return normalizeLockError(err, staleOwner);
   }
 }
 
@@ -211,7 +246,7 @@ export async function reclaimDefinitelyStaleFileLock(
   // rechecks that identity and raw payload immediately before path removal.
   const ownerIsDefinitelyStale = async (payload: unknown) =>
     (await isSameRegularFile(lockPath, observed)) &&
-    isLockOwnerDefinitelyStale({ payload: asLockPayload(payload) });
+    isLockOwnerDefinitelyStale({ payload: asNullableRecord(payload) });
   const targetPath = lockPath.endsWith(".lock") ? lockPath.slice(0, -".lock".length) : lockPath;
   try {
     const reclaimed = await acquireFsSafeFileLock(targetPath, {
@@ -242,9 +277,26 @@ export async function withFileLock<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const lock = await acquireFileLock(filePath, options);
+  let outcome: { value: T } | { error: unknown };
   try {
-    return await fn();
-  } finally {
-    await lock.release();
+    outcome = { value: await fn() };
+  } catch (error) {
+    outcome = { error };
   }
+  try {
+    await lock.release();
+  } catch (error) {
+    if ("error" in outcome) {
+      throw new AggregateError(
+        [outcome.error, error],
+        "File operation failed and lock release is unresolved",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.value;
 }

@@ -9,7 +9,7 @@ import type { BrowserPanelControllerHost } from "./browser-panel-operation-owner
 interface BrowserPanelNativePresentationHost {
   readonly host: Pick<
     BrowserPanelControllerHost,
-    "isConnected" | "browserPanelIsOpen" | "renderRoot"
+    "isConnected" | "browserPanelIsOpen" | "renderRoot" | "sessionKey"
   >;
   readonly native: { readonly activeTab: NativeBrowserTab | undefined };
   readonly activeTargetId: string | null;
@@ -33,23 +33,33 @@ export class BrowserPanelNativePresentation {
   private intersecting = true;
   private occluded = false;
   private frame: number | null = null;
-  private lastPayload = "";
+  private lastPresentation: { key: string } | null = null;
   private connected = false;
 
   constructor(private readonly controller: BrowserPanelNativePresentationHost) {}
+
+  private get hostElement(): Element | null {
+    const root = this.controller.host.renderRoot;
+    return root instanceof ShadowRoot ? root.host : root instanceof Element ? root : null;
+  }
 
   connect(): void {
     if (this.connected) {
       return;
     }
     this.connected = true;
-    this.unsubscribeOcclusion = subscribeNativeOverlayOcclusion((occluded) => {
-      this.occluded = occluded;
-      if (occluded) {
-        this.hide();
-      }
-      this.schedule();
-    });
+    // Native responder focus can route back to this panel without DOM events.
+    this.hostElement?.setAttribute("data-native-browser-scope", this.scope);
+    this.unsubscribeOcclusion = subscribeNativeOverlayOcclusion(
+      (occluded) => {
+        this.occluded = occluded;
+        if (occluded) {
+          this.hide();
+        }
+        this.schedule();
+      },
+      () => this.stage?.getBoundingClientRect() ?? null,
+    );
     document.addEventListener("scroll", this.schedule, true);
     window.addEventListener("resize", this.schedule);
     this.update();
@@ -57,6 +67,7 @@ export class BrowserPanelNativePresentation {
 
   disconnect(): void {
     this.hide();
+    this.hostElement?.removeAttribute("data-native-browser-scope");
     this.connected = false;
     if (this.frame !== null) {
       cancelAnimationFrame(this.frame);
@@ -69,7 +80,7 @@ export class BrowserPanelNativePresentation {
     this.unsubscribeOcclusion = undefined;
     document.removeEventListener("scroll", this.schedule, true);
     window.removeEventListener("resize", this.schedule);
-    this.lastPayload = "";
+    this.lastPresentation = null;
     void postNativeBrowserMessage({ type: "release-scope", scope: this.scope });
   }
 
@@ -118,7 +129,7 @@ export class BrowserPanelNativePresentation {
 
   renew(): void {
     // Explicit selection reclaims a tab that another panel scope may now own.
-    this.lastPayload = "";
+    this.lastPresentation = null;
     this.schedule();
   }
 
@@ -147,8 +158,7 @@ export class BrowserPanelNativePresentation {
       return;
     }
     const rect = stage.getBoundingClientRect();
-    const root = this.controller.host.renderRoot;
-    const host = root instanceof ShadowRoot ? root.host : root;
+    const host = this.hostElement;
     let hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
     // document hit-testing stops at shadow hosts. Descend to distinguish this
     // panel from a dialog or another panel within the same application root.
@@ -189,11 +199,12 @@ export class BrowserPanelNativePresentation {
       rect,
       visible: Boolean(tabId),
     };
-    const serialized = JSON.stringify(payload);
-    if (serialized === this.lastPayload) {
+    const presentation = { key: JSON.stringify(payload) };
+    if (presentation.key === this.lastPresentation?.key) {
       return;
     }
-    this.lastPayload = serialized;
+    this.lastPresentation = presentation;
+    const sessionKey = this.controller.host.sessionKey;
     this.presentedTabId = tabId;
     if (tabId) {
       // Native resolves duplicate presentations of one tab in favor of the
@@ -201,7 +212,13 @@ export class BrowserPanelNativePresentation {
       this.lastPresented = ++presentationOrder;
     }
     void postNativeBrowserMessage(payload).then((reply) => {
-      if (reply && !reply.ok && this.connected) {
+      if (
+        reply &&
+        !reply.ok &&
+        this.connected &&
+        this.controller.host.sessionKey === sessionKey &&
+        this.lastPresentation === presentation
+      ) {
         this.controller.reportError(reply.error);
       }
     });

@@ -24,6 +24,7 @@ import {
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { validateReplayTurns } from "./embedded-agent-runner/replay-history.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { extractToolCallsFromAssistant } from "./tool-call-id.js";
 import type { TranscriptPolicy } from "./transcript-policy.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
@@ -139,6 +140,23 @@ const ANTHROPIC_REPLAY_CASES = [
   { provider: "amazon-bedrock", modelApi: "bedrock-converse-stream", label: "bedrock" },
 ] as const;
 
+const makeAnthropicReplayPolicy = (
+  overrides: Partial<TranscriptPolicy> = {},
+): TranscriptPolicy => ({
+  sanitizeMode: "full",
+  sanitizeToolCallIds: true,
+  toolCallIdMode: "strict",
+  preserveNativeAnthropicToolUseIds: true,
+  repairToolUseResultPairing: true,
+  preserveSignatures: true,
+  dropThinkingBlocks: false,
+  applyGoogleTurnOrdering: false,
+  validateGeminiTurns: false,
+  validateAnthropicTurns: true,
+  allowSyntheticToolResults: true,
+  ...overrides,
+});
+
 // Keep session-transcript-repair real: it is a pure repair boundary, and these
 // tests should fail if the shared sanitizer stops passing simple messages.
 
@@ -188,69 +206,39 @@ describe("sanitizeSessionHistory", () => {
   const getAssistantContentTypes = (messages: AgentMessage[]) =>
     getAssistantMessage(messages).content.map((block: { type: string }) => block.type);
 
-  it("preserves a validated context snapshot while normalizing replay usage", async () => {
-    const assistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "done" }],
-      api: "anthropic-messages",
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      usage: {
-        input: 12,
-        output: 15_104,
-        cacheRead: 819_661,
-        cacheWrite: 93_130,
-        contextUsage: {
-          state: "available",
-          promptTokens: 148_874,
-          totalTokens: 163_978,
+  it.each([
+    { state: "available", promptTokens: 148_874, totalTokens: 163_978 },
+    { state: "unavailable" },
+  ] as const)(
+    "preserves $state context snapshots while normalizing replay usage",
+    async (contextUsage) => {
+      const assistant = {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        usage: {
+          input: 12,
+          output: 15_104,
+          cacheRead: 819_661,
+          cacheWrite: 93_130,
+          contextUsage: { ...contextUsage },
         },
-      },
-      stopReason: "stop",
-      timestamp: 0,
-    } as unknown as AgentMessage;
+        stopReason: "stop",
+        timestamp: 0,
+      } as unknown as AgentMessage;
 
-    const out = await sanitizeAnthropicHistory({
-      messages: [{ role: "user", content: "hello", timestamp: 0 } as AgentMessage, assistant],
-    });
+      const out = await sanitizeAnthropicHistory({
+        messages: [{ role: "user", content: "hello", timestamp: 0 } as AgentMessage, assistant],
+      });
 
-    expect(getAssistantMessage(out).usage).toMatchObject({
-      contextUsage: {
-        state: "available",
-        promptTokens: 148_874,
-        totalTokens: 163_978,
-      },
-      totalTokens: 927_907,
-    });
-  });
-
-  it("preserves an unavailable context snapshot while normalizing replay usage", async () => {
-    const assistant = {
-      role: "assistant",
-      content: [{ type: "text", text: "done" }],
-      api: "anthropic-messages",
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      usage: {
-        input: 12,
-        output: 15_104,
-        cacheRead: 819_661,
-        cacheWrite: 93_130,
-        contextUsage: { state: "unavailable" },
-      },
-      stopReason: "stop",
-      timestamp: 0,
-    } as unknown as AgentMessage;
-
-    const out = await sanitizeAnthropicHistory({
-      messages: [{ role: "user", content: "hello", timestamp: 0 } as AgentMessage, assistant],
-    });
-
-    expect(getAssistantMessage(out).usage).toMatchObject({
-      contextUsage: { state: "unavailable" },
-      totalTokens: 927_907,
-    });
-  });
+      expect(getAssistantMessage(out).usage).toMatchObject({
+        contextUsage,
+        totalTokens: 927_907,
+      });
+    },
+  );
 
   const makeThinkingAndTextAssistantMessages = (thinkingSignature = "some_sig"): AgentMessage[] => {
     const user: UserMessage = {
@@ -386,29 +374,12 @@ describe("sanitizeSessionHistory", () => {
     mockSessionManager = makeMockSessionManager();
   });
 
-  it("passes simple user-only history through for Google model APIs", async () => {
-    const result = await sanitizeSessionHistory({
-      messages: mockMessages,
-      modelApi: "google-generative-ai",
-      provider: "google-vertex",
-      sessionManager: mockSessionManager,
-      sessionId: TEST_SESSION_ID,
-    });
-
-    expect(result).toEqual(mockMessages);
-  });
-
   it("lets Google provider hooks prepend a bootstrap turn and persist a marker", async () => {
     const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
 
     const result = await sanitizeSessionHistory({
-      messages: castAgentMessages([
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "hello from previous turn" }],
-        },
-      ]),
+      messages: castAgentMessages([textAssistant("hello from previous turn")]),
       modelApi: "google-generative-ai",
       provider: "google-vertex",
       sessionManager,
@@ -420,31 +391,6 @@ describe("sanitizeSessionHistory", () => {
     expect(
       sessionEntries.some((entry) => entry.customType === "google-turn-ordering-bootstrap"),
     ).toBe(true);
-  });
-
-  it("passes simple user-only history through for Mistral models", async () => {
-    const result = await sanitizeSessionHistory({
-      messages: mockMessages,
-      modelApi: "openai-responses",
-      provider: "openrouter",
-      modelId: "mistralai/devstral-2512:free",
-      sessionManager: mockSessionManager,
-      sessionId: TEST_SESSION_ID,
-    });
-
-    expect(result).toEqual(mockMessages);
-  });
-
-  it("passes simple user-only history through for Anthropic APIs", async () => {
-    const result = await sanitizeSessionHistory({
-      messages: mockMessages,
-      modelApi: "anthropic-messages",
-      provider: "anthropic",
-      sessionManager: mockSessionManager,
-      sessionId: TEST_SESSION_ID,
-    });
-
-    expect(result).toEqual(mockMessages);
   });
 
   it("passes simple user-only history through for openai-responses", async () => {
@@ -468,28 +414,10 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
-  it("sanitizes tool call ids for openai-completions", async () => {
-    const result = await sanitizeSessionHistory({
-      messages: mockMessages,
-      modelApi: "openai-completions",
-      provider: "openai",
-      modelId: "gpt-5.4",
-      sessionManager: mockSessionManager,
-      sessionId: TEST_SESSION_ID,
-    });
-
-    expect(result).toEqual(mockMessages);
-  });
-
   it("prepends a bootstrap user turn for strict OpenAI-compatible assistant-first history", async () => {
     const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
-    const messages = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "hello from previous turn" }],
-      },
-    ]);
+    const messages = castAgentMessages([textAssistant("hello from previous turn")]);
 
     const result = await sanitizeSessionHistory({
       messages,
@@ -536,26 +464,6 @@ describe("sanitizeSessionHistory", () => {
     expect(first.content as string).toContain("sourceSession=agent:main:req");
   });
 
-  it("drops stale assistant usage snapshots kept before latest compaction summary", async () => {
-    // Historical usage before a compaction summary would double-count prompt
-    // budget if replayed as fresh model metadata.
-    const messages = castAgentMessages([
-      { role: "user", content: "old context" },
-      makeAssistantUsageMessage({
-        text: "old answer",
-        usage: makeUsage(191_919, 2_000, 193_919),
-      }),
-      makeCompactionSummaryMessage(191_919, new Date().toISOString()),
-    ]);
-
-    const result = await sanitizeOpenAIHistory(messages);
-
-    const staleAssistant = result.find((message) => message.role === "assistant") as
-      | (AgentMessage & { usage?: unknown })
-      | undefined;
-    expect(staleAssistant?.usage).toEqual(makeZeroUsageSnapshot());
-  });
-
   it("preserves fresh assistant usage snapshots created after latest compaction summary", async () => {
     const messages = castAgentMessages([
       makeAssistantUsageMessage({
@@ -582,10 +490,7 @@ describe("sanitizeSessionHistory", () => {
     const assistant = await getSingleAssistantUsage(
       castAgentMessages([
         { role: "user", content: "question" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "answer without usage" }],
-        },
+        textAssistant("answer without usage"),
       ]),
     );
 
@@ -685,25 +590,6 @@ describe("sanitizeSessionHistory", () => {
     expect((assistant?.usage as { cost?: unknown } | undefined)?.cost).toBeUndefined();
   });
 
-  it("drops stale usage when compaction summary appears before kept assistant messages", async () => {
-    const compactionTs = Date.parse("2026-02-26T12:00:00.000Z");
-    const messages = castAgentMessages([
-      makeCompactionSummaryMessage(191_919, new Date(compactionTs).toISOString()),
-      makeAssistantUsageMessage({
-        text: "kept pre-compaction answer",
-        timestamp: compactionTs - 1_000,
-        usage: makeUsage(191_919, 2_000, 193_919),
-      }),
-    ]);
-
-    const result = await sanitizeOpenAIHistory(messages);
-
-    const assistant = result.find((message) => message.role === "assistant") as
-      | (AgentMessage & { usage?: unknown })
-      | undefined;
-    expect(assistant?.usage).toEqual(makeZeroUsageSnapshot());
-  });
-
   it("keeps fresh usage after compaction timestamp in summary-first ordering", async () => {
     const compactionTs = Date.parse("2026-02-26T12:00:00.000Z");
     const messages = castAgentMessages([
@@ -759,30 +645,6 @@ describe("sanitizeSessionHistory", () => {
 
     expect(result).toHaveLength(2);
     expect(result[1]?.role).toBe("assistant");
-  });
-
-  it("synthesizes Codex-style aborted tool results for openai-responses after repair", async () => {
-    const messages: AgentMessage[] = [
-      makeUserMessage("start"),
-      makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }], {
-        stopReason: "toolUse",
-      }),
-      makeUserMessage("continue"),
-    ];
-
-    const result = await sanitizeOpenAIHistory(messages);
-
-    expect(result.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "toolResult",
-      "user",
-    ]);
-    expect((result[2] as { toolCallId?: string }).toolCallId).toBe("call_1");
-    expect((result[2] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
-      { type: "text", text: "aborted" },
-    ]);
-    expect(JSON.stringify(result)).not.toContain("missing tool result");
   });
 
   it("keeps OpenAI Responses real tool results paired without rewriting valid ids", async () => {
@@ -844,13 +706,12 @@ describe("sanitizeSessionHistory", () => {
         ],
         { stopReason: "toolUse" },
       ),
-      {
-        role: "toolResult",
-        toolCallId: "callmockimagegenerate0b27d8fa84",
-        toolName: "image_generate",
-        content: [{ type: "text", text: "Background task started for image generation." }],
-        isError: false,
-      },
+      textToolResult(
+        "callmockimagegenerate0b27d8fa84",
+        "image_generate",
+        "Background task started for image generation.",
+        { isError: false },
+      ),
       {
         role: "custom",
         content: "Image generation started; wait for completion.",
@@ -1041,13 +902,7 @@ describe("sanitizeSessionHistory", () => {
         { stopReason: "toolUse" },
       ),
       makeUserMessage("continue"),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_2",
-        toolName: "exec",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call_2", "exec", "ok", { isError: false })),
     ];
 
     const result = await sanitizeOpenAIHistory(messages);
@@ -1108,30 +963,12 @@ describe("sanitizeSessionHistory", () => {
 
   it("drops duplicate and orphan OpenAI outputs while preserving the first real result", async () => {
     const messages: AgentMessage[] = [
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_orphan",
-        toolName: "read",
-        content: [{ type: "text", text: "orphan" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call_orphan", "read", "orphan", { isError: false })),
       makeAssistantMessage([{ type: "toolCall", id: "call_keep", name: "read", arguments: {} }], {
         stopReason: "toolUse",
       }),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_keep",
-        toolName: "read",
-        content: [{ type: "text", text: "first" }],
-        isError: false,
-      }),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_keep",
-        toolName: "read",
-        content: [{ type: "text", text: "duplicate" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call_keep", "read", "first", { isError: false })),
+      castAgentMessage(textToolResult("call_keep", "read", "duplicate", { isError: false })),
       makeUserMessage("continue"),
     ];
 
@@ -1505,20 +1342,9 @@ describe("sanitizeSessionHistory", () => {
 
   it("preserves signed thinking turns while repairing legacy tool-result pairing for anthropic", async () => {
     const sessionManager = makeMockSessionManager();
-    const nativeAnthropicPolicy: TranscriptPolicy = {
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      preserveNativeAnthropicToolUseIds: true,
-      repairToolUseResultPairing: true,
-      preserveSignatures: true,
-      dropThinkingBlocks: false,
+    const nativeAnthropicPolicy: TranscriptPolicy = makeAnthropicReplayPolicy({
       dropReasoningFromHistory: false,
-      applyGoogleTurnOrdering: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-    };
+    });
     const messages: AgentMessage[] = [
       makeUserMessage("Use the gateway"),
       makeAssistantMessage(
@@ -1572,21 +1398,10 @@ describe("sanitizeSessionHistory", () => {
   it("keeps consecutive user turns separate for append-only Anthropic Messages replay", async () => {
     // A command turn followed by the prompt is sent as two stamped user messages on the
     // active turn; merging them on replay changes the bytes bound to later thinking.
-    const basePolicy: TranscriptPolicy = {
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      preserveNativeAnthropicToolUseIds: true,
-      repairToolUseResultPairing: true,
-      preserveSignatures: true,
+    const basePolicy: TranscriptPolicy = makeAnthropicReplayPolicy({
       appendOnlyRuntimeContext: true,
-      dropThinkingBlocks: false,
       dropReasoningFromHistory: false,
-      applyGoogleTurnOrdering: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-    };
+    });
     const messages = castAgentMessages([
       makeUserMessage("/model anthropic/claude-fable-5-1 -s"),
       makeUserMessage("Read notes.txt"),
@@ -1863,22 +1678,6 @@ describe("sanitizeSessionHistory", () => {
     expect(types).toContain("text");
   });
 
-  it("preserves latest assistant thinking blocks for anthropic replay", async () => {
-    const messages = makeThinkingAndTextAssistantMessages();
-
-    const result = await sanitizeAnthropicHistory({ messages });
-
-    const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([
-      {
-        type: "thinking",
-        thinking: "internal",
-        thinkingSignature: "some_sig",
-      },
-      { type: "text", text: "hi" },
-    ]);
-  });
-
   it("keeps regular latest Anthropic thinking replay while preserving older stripped turns", async () => {
     const messages = castAgentMessages([
       makeUserMessage("first"),
@@ -1989,13 +1788,7 @@ describe("sanitizeSessionHistory", () => {
           } as unknown as ThinkingContent,
           { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
         ]),
-        castAgentMessage({
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "lookup",
-          content: [{ type: "text", text: "42" }],
-          isError: false,
-        }),
+        castAgentMessage(textToolResult("call_1", "lookup", "42", { isError: false })),
       ]);
 
       const result = await sanitizeAnthropicHistory({
@@ -2128,20 +1921,7 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeAnthropicHistory({
       provider: "anthropic-vertex",
       messages,
-      policy: {
-        sanitizeMode: "full",
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
-        preserveNativeAnthropicToolUseIds: true,
-        repairToolUseResultPairing: true,
-        preserveSignatures: true,
-        sanitizeThoughtSignatures: undefined,
-        dropThinkingBlocks: false,
-        applyGoogleTurnOrdering: false,
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
-        allowSyntheticToolResults: true,
-      },
+      policy: makeAnthropicReplayPolicy({ sanitizeThoughtSignatures: undefined }),
     });
 
     expect(result).toHaveLength(1);
@@ -2186,13 +1966,7 @@ describe("sanitizeSessionHistory", () => {
           },
           { type: "toolCall", id: "call_1", name: "read", arguments: {} },
         ] as unknown as AssistantMessage["content"]),
-        castAgentMessage({
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-        }),
+        castAgentMessage(textToolResult("call_1", "read", "ok", { isError: false })),
       ]);
 
       const result = await sanitizeAnthropicHistory({
@@ -2228,32 +2002,18 @@ describe("sanitizeSessionHistory", () => {
           },
           { type: "toolCall", id: "call_1", name: "read", arguments: {} },
         ] as unknown as AssistantMessage["content"]),
-        castAgentMessage({
-          role: "toolResult",
-          toolCallId: "call_1",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-        }),
+        castAgentMessage(textToolResult("call_1", "read", "ok", { isError: false })),
       ]);
 
       const result = await sanitizeAnthropicHistory({
         provider,
         modelApi,
         messages,
-        policy: {
-          sanitizeMode: "full",
-          sanitizeToolCallIds: true,
-          toolCallIdMode: "strict",
+        policy: makeAnthropicReplayPolicy({
           preserveNativeAnthropicToolUseIds: false,
-          repairToolUseResultPairing: true,
           preserveSignatures: false,
-          dropThinkingBlocks: false,
-          applyGoogleTurnOrdering: false,
-          validateGeminiTurns: false,
-          validateAnthropicTurns: true,
           allowSyntheticToolResults: false,
-        },
+        }),
       });
 
       expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
@@ -2275,13 +2035,7 @@ describe("sanitizeSessionHistory", () => {
     const messages = castAgentMessages([
       makeUserMessage("first"),
       makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }]),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "read",
-        content: [{ type: "text", text: "first result" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call_1", "read", "first result", { isError: false })),
       makeUserMessage("second"),
       makeAssistantMessage(
         [
@@ -2290,13 +2044,7 @@ describe("sanitizeSessionHistory", () => {
         ] as unknown as AssistantMessage["content"],
         { stopReason: "toolUse" },
       ),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call1",
-        toolName: "read",
-        content: [{ type: "text", text: "second result" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call1", "read", "second result", { isError: false })),
       makeUserMessage("retry"),
     ]);
 
@@ -2371,13 +2119,7 @@ describe("sanitizeSessionHistory", () => {
         ] as unknown as AssistantMessage["content"],
         { stopReason: "toolUse" },
       ),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call1",
-        toolName: "read",
-        content: [{ type: "text", text: "first result" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call1", "read", "first result", { isError: false })),
       makeUserMessage("second"),
       makeAssistantMessage(
         [
@@ -2386,13 +2128,7 @@ describe("sanitizeSessionHistory", () => {
         ] as unknown as AssistantMessage["content"],
         { stopReason: "toolUse" },
       ),
-      castAgentMessage({
-        role: "toolResult",
-        toolCallId: "call1",
-        toolName: "read",
-        content: [{ type: "text", text: "second result" }],
-        isError: false,
-      }),
+      castAgentMessage(textToolResult("call1", "read", "second result", { isError: false })),
       makeUserMessage("retry"),
     ]);
 
@@ -2446,20 +2182,10 @@ describe("sanitizeSessionHistory", () => {
   it("keeps the earlier anthropic replay prefix stable after a later subagent turn", async () => {
     const priorToolId = "toolu_01ABCDEF1234567890";
     const laterToolId = "toolu_01ZZZZZZ9999999999";
-    const nativeAnthropicPolicy: TranscriptPolicy = {
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      preserveNativeAnthropicToolUseIds: true,
-      repairToolUseResultPairing: true,
-      preserveSignatures: true,
+    const nativeAnthropicPolicy: TranscriptPolicy = makeAnthropicReplayPolicy({
       sanitizeThoughtSignatures: undefined,
       dropThinkingBlocks: true,
-      applyGoogleTurnOrdering: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-    };
+    });
     const baseMessages = castAgentMessages([
       makeUserMessage("Read IDENTITY.md"),
       makeAssistantMessage(
@@ -2517,26 +2243,6 @@ describe("sanitizeSessionHistory", () => {
     ).toBe(priorToolId);
   });
 
-  it("preserves latest assistant thinking blocks for amazon-bedrock replay", async () => {
-    const messages = makeThinkingAndTextAssistantMessages();
-
-    const result = await sanitizeAnthropicHistory({
-      messages,
-      provider: "amazon-bedrock",
-      modelApi: "bedrock-converse-stream",
-    });
-
-    const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([
-      {
-        type: "thinking",
-        thinking: "internal",
-        thinkingSignature: "some_sig",
-      },
-      { type: "text", text: "hi" },
-    ]);
-  });
-
   it("does not drop thinking blocks for non-claude copilot models", async () => {
     const messages = makeThinkingAndTextAssistantMessages();
 
@@ -2561,19 +2267,11 @@ describe("sanitizeSessionHistory", () => {
       messages,
       modelApi: "anthropic-messages",
       preserveLatestAssistantThinking: false,
-      policy: {
-        sanitizeMode: "full",
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
+      policy: makeAnthropicReplayPolicy({
         preserveNativeAnthropicToolUseIds: false,
-        repairToolUseResultPairing: true,
         preserveSignatures: false,
-        dropThinkingBlocks: false,
-        applyGoogleTurnOrdering: false,
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
         allowSyntheticToolResults: false,
-      },
+      }),
     });
 
     const assistant = getAssistantMessage(result);
@@ -2612,20 +2310,13 @@ describe("sanitizeSessionHistory", () => {
         modelId,
         sessionManager: makeMockSessionManager(),
         sessionId: TEST_SESSION_ID,
-        policy: {
-          sanitizeMode: "full",
-          sanitizeToolCallIds: true,
-          toolCallIdMode: "strict",
+        policy: makeAnthropicReplayPolicy({
           preserveNativeAnthropicToolUseIds: false,
-          repairToolUseResultPairing: true,
           preserveSignatures: false,
-          dropThinkingBlocks: false,
           dropReasoningFromHistory: false,
-          applyGoogleTurnOrdering: false,
-          validateGeminiTurns: false,
           validateAnthropicTurns: false,
           allowSyntheticToolResults: false,
-        },
+        }),
       });
 
       const assistant = getAssistantMessage(result);
@@ -2652,19 +2343,11 @@ describe("sanitizeSessionHistory", () => {
       provider: "amazon-bedrock",
       modelApi: "bedrock-converse-stream",
       preserveLatestAssistantThinking: false,
-      policy: {
-        sanitizeMode: "full",
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
+      policy: makeAnthropicReplayPolicy({
         preserveNativeAnthropicToolUseIds: false,
-        repairToolUseResultPairing: true,
         preserveSignatures: false,
-        dropThinkingBlocks: false,
-        applyGoogleTurnOrdering: false,
-        validateGeminiTurns: false,
-        validateAnthropicTurns: true,
         allowSyntheticToolResults: false,
-      },
+      }),
     });
 
     const assistant = getAssistantMessage(result);

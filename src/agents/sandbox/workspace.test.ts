@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../workspace-bootstrap-read.js";
 import { DEFAULT_AGENTS_FILENAME, DEFAULT_SOUL_FILENAME } from "../workspace.js";
@@ -116,35 +117,39 @@ describe("ensureSandboxWorkspace", () => {
     await fs.mkdir(sandbox, { recursive: true });
     await fs.writeFile(path.join(seed, DEFAULT_AGENTS_FILENAME), "seeded-agents", "utf-8");
     const resolvedSandbox = await fs.realpath(sandbox);
-    const realWriteFile = fs.writeFile.bind(fs);
-    let injected = true;
-    const spy = vi.spyOn(fs, "writeFile").mockImplementation(async (filePath, data, options) => {
-      const rawPath = nodeFilePath(filePath);
-      if (!rawPath) {
-        return await realWriteFile(filePath, data, options);
+    const realOpen = fs.open.bind(fs);
+    let injected = false;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const rawPath = nodeFilePath(args[0]);
+      const exclusiveCreate =
+        typeof args[1] === "number" &&
+        (args[1] & syncFs.constants.O_CREAT) !== 0 &&
+        (args[1] & syncFs.constants.O_EXCL) !== 0;
+      if (
+        !injected &&
+        rawPath &&
+        path.dirname(path.resolve(rawPath)) === resolvedSandbox &&
+        exclusiveCreate
+      ) {
+        vi.spyOn(handle, "write").mockImplementationOnce(async () => {
+          injected = true;
+          await handle.writeFile("# PARTIAL\n");
+          throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+        });
       }
-      const target = path.resolve(rawPath);
-      const parent = path.dirname(target);
-      const isFinalTarget = target === path.join(resolvedSandbox, DEFAULT_AGENTS_FILENAME);
-      const isStagedTarget =
-        path.dirname(parent) === resolvedSandbox &&
-        path.basename(parent).startsWith("openclaw-bootstrap-") &&
-        path.basename(target) === DEFAULT_AGENTS_FILENAME;
-      if (injected && (isFinalTarget || isStagedTarget)) {
-        injected = false;
-        await realWriteFile(filePath, "# PARTIAL\n", options);
-        const err = new Error("ENOSPC") as NodeJS.ErrnoException;
-        err.code = "ENOSPC";
-        throw err;
-      }
-      return await realWriteFile(filePath, data, options);
+      return handle;
     });
 
     try {
-      await expect(ensureSandboxWorkspace(sandbox, seed, true)).rejects.toMatchObject({
-        code: "ENOSPC",
-      });
+      await expect(
+        withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () =>
+          ensureSandboxWorkspace(sandbox, seed, true),
+        ),
+      ).rejects.toMatchObject({ cause: { code: "ENOSPC" } });
+      expect(injected).toBe(true);
       await expect(fs.readFile(agentsPath, "utf-8")).rejects.toThrow("no such file");
+      expect(await fs.readdir(sandbox)).toEqual([]);
     } finally {
       spy.mockRestore();
     }
@@ -165,9 +170,11 @@ describe("ensureSandboxWorkspace", () => {
     });
 
     try {
-      await expect(ensureSandboxWorkspace(sandbox, seed, true)).rejects.toThrow(
-        /filesystem does not support atomic bootstrap publication/u,
-      );
+      await expect(
+        withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () =>
+          ensureSandboxWorkspace(sandbox, seed, true),
+        ),
+      ).rejects.toThrow(/filesystem does not support atomic bootstrap publication/u);
       await expect(fs.readFile(agentsPath, "utf8")).rejects.toThrow("no such file");
     } finally {
       linkSpy.mockRestore();

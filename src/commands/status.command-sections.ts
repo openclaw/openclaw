@@ -1,6 +1,3 @@
-// Section-level value and row builders for the standard status report.
-// These helpers own compact operator text for agents, tasks, memory, health, sessions, and footers.
-
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   buildPairingConnectRecoveryTitle,
@@ -12,11 +9,13 @@ import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.j
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
-import type { SessionStatus, StatusSummary } from "../status/types.js";
+import type { MemoryPluginStatus } from "../status/memory-plugin.js";
+import type { StatusSummary } from "../status/summary.js";
 import { formatDeliveryQueueHealthLine } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
+import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
-import type { MemoryStatusSnapshot, MemoryPluginStatus } from "./status.scan.shared.js";
+import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
 type AgentStatusLike = {
   defaultId?: string | null;
@@ -27,7 +26,7 @@ type AgentStatusLike = {
 
 type SummaryLike = Pick<StatusSummary, "tasks" | "taskAudit" | "heartbeat" | "sessions">;
 type MemoryLike = MemoryStatusSnapshot | null;
-type SessionsRecentLike = SessionStatus;
+type SessionsRecentLike = StatusSummary["sessions"]["recent"][number];
 type EventLoopHealthLike = NonNullable<HealthSummary["eventLoop"]>;
 
 export type StatusMemoryStateResolvers = {
@@ -61,7 +60,6 @@ export const statusHealthColumns: TableColumn[] = [
   { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
 ];
 
-/** Formats the agents overview row value, including default-agent recent activity. */
 export function buildStatusAgentsValue(params: {
   agentStatus: AgentStatusLike;
   formatTimeAgo: (ageMs: number) => string;
@@ -77,7 +75,6 @@ export function buildStatusAgentsValue(params: {
   return `${params.agentStatus.agents.length} · ${pending} · sessions ${params.agentStatus.totalSessions}${defSuffix}`;
 }
 
-/** Formats task counters and audit state for the overview table. */
 export function buildStatusTasksValue(params: {
   summary: Pick<SummaryLike, "tasks" | "taskAudit">;
   warn: (value: string) => string;
@@ -106,26 +103,23 @@ export function buildStatusTasksValue(params: {
   ].join(" · ");
 }
 
-/** Formats configured heartbeat intervals by agent. */
 export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "heartbeat"> }) {
-  const parts = params.summary.heartbeat.agents
-    .map((agent) => {
-      if (!agent.enabled || !agent.everyMs) {
-        return `disabled (${agent.agentId})`;
-      }
-      if (agent.waitingForRoute) {
-        return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom or channel allowFrom, or heartbeat.target)`;
-      }
-      return `${agent.every} (${agent.agentId})`;
-    })
-    .filter(Boolean);
+  const parts = params.summary.heartbeat.agents.map((agent) => {
+    if (!agent.enabled || !agent.everyMs) {
+      return `disabled (${agent.agentId})`;
+    }
+    if (agent.waitingForRoute) {
+      return `${agent.every} (${agent.agentId}; waiting for delivery route — set commands.ownerAllowFrom=["telegram:123456789"] or channel allowFrom; explicit delivery: heartbeat.target="telegram" with heartbeat.to="123456789")`;
+    }
+    return `${agent.every} (${agent.agentId})`;
+  });
   return parts.length > 0 ? parts.join(", ") : "disabled";
 }
 
-/** Formats the last observed heartbeat when deep status queried the gateway. */
 export function buildStatusLastHeartbeatValue(params: {
   deep?: boolean;
   gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
   lastHeartbeat: HeartbeatEventPayload | null;
   warn: (value: string) => string;
   muted: (value: string) => string;
@@ -134,6 +128,11 @@ export function buildStatusLastHeartbeatValue(params: {
   if (!params.deep) {
     // Fast status omits the row entirely instead of implying heartbeat is missing.
     return null;
+  }
+  if (params.gatewayStartupPhase) {
+    return params.muted(
+      `not checked (gateway still starting; phase ${params.gatewayStartupPhase})`,
+    );
   }
   if (!params.gatewayReachable) {
     return params.warn("unavailable");
@@ -150,7 +149,6 @@ export function buildStatusLastHeartbeatValue(params: {
     .join(" · ");
 }
 
-/** Formats memory plugin/index/cache state for the overview table. */
 export function buildStatusMemoryValue(
   params: {
     memory: MemoryLike;
@@ -203,7 +201,6 @@ export function buildStatusMemoryValue(
   return parts.join(" · ");
 }
 
-/** Builds the security audit text section for status output. */
 export function buildStatusSecurityAuditLines(params: {
   securityAudit: {
     summary: { critical: number; warn: number; info: number };
@@ -244,7 +241,7 @@ export function buildStatusSecurityAuditLines(params: {
           : params.theme.muted("INFO");
     const sevRank = (sev: "critical" | "warn" | "info") =>
       sev === "critical" ? 0 : sev === "warn" ? 1 : 2;
-    const shown = [...importantFindings]
+    const shown = importantFindings
       // Always show critical findings before warnings, regardless of audit insertion order.
       .toSorted((a, b) => sevRank(a.severity) - sevRank(b.severity))
       .slice(0, 6);
@@ -268,9 +265,9 @@ export function buildStatusSecurityAuditLines(params: {
   return lines;
 }
 
-/** Builds gateway, channel, and delivery queue health table rows. */
 export function buildStatusHealthRows(params: {
   health: HealthSummary;
+  sqliteWal?: StatusSummary["sqliteWal"];
   formatHealthChannelLines: (summary: HealthSummary, opts: { accountMode: "all" }) => string[];
   ok: (value: string) => string;
   warn: (value: string) => string;
@@ -283,6 +280,10 @@ export function buildStatusHealthRows(params: {
       Detail: `${params.health.durationMs}ms`,
     },
   ];
+  const sqliteWalWarning = formatSqliteWalHealthWarning(params.sqliteWal);
+  if (sqliteWalWarning) {
+    rows.push({ Item: "SQLite WAL", Status: params.warn("WARN"), Detail: sqliteWalWarning });
+  }
   if (params.health.eventLoop) {
     rows.push({
       Item: "Event loop",
@@ -307,7 +308,7 @@ export function buildStatusHealthRows(params: {
     const status =
       normalized === "healthy" || normalized.startsWith("ok") || normalized.startsWith("configured")
         ? params.ok("OK")
-        : normalized.startsWith("not configured")
+        : normalized.startsWith("not configured") || normalized.startsWith("disabled")
           ? params.muted("OFF")
           : normalized.startsWith("linked")
             ? params.ok("LINKED")
@@ -319,7 +320,6 @@ export function buildStatusHealthRows(params: {
   return rows;
 }
 
-/** Formats event-loop latency/utilization health into one table detail string. */
 function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
   const parts = [
     eventLoop.degraded && eventLoop.degradedSinceMs != null
@@ -334,7 +334,6 @@ function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
   return parts.filter((part): part is string => part !== null).join(" · ");
 }
 
-/** Builds recent session table rows, optionally including prompt-cache data. */
 export function buildStatusSessionsRows(params: {
   recent: SessionsRecentLike[];
   verbose?: boolean;
@@ -344,9 +343,6 @@ export function buildStatusSessionsRows(params: {
   formatPromptCacheCompact: (value: SessionsRecentLike) => string | null;
   muted: (value: string) => string;
 }) {
-  if (params.recent.length === 0) {
-    return [];
-  }
   return params.recent.map((sess) => ({
     Key: params.shortenText(sess.key, 32),
     Kind: sess.kind,
@@ -402,7 +398,7 @@ export function buildStatusModelSelectionLines(params: {
       `  Session selected: ${selected}`,
       reasonLine,
       clearLine,
-      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-strictness",
     );
   }
   if (mismatches.length > limit) {
@@ -411,13 +407,13 @@ export function buildStatusModelSelectionLines(params: {
   return lines;
 }
 
-/** Builds footer links and next-step commands for the current gateway state. */
 export function buildStatusFooterLines(params: {
   updateHint: string | null;
   warn: (value: string) => string;
   formatCliCommand: (value: string) => string;
   nodeOnlyGateway: unknown;
   gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
 }) {
   return [
     "FAQ: https://docs.openclaw.ai/faq",
@@ -428,13 +424,14 @@ export function buildStatusFooterLines(params: {
     `  Need to debug live? ${params.formatCliCommand("openclaw logs --follow")}`,
     params.nodeOnlyGateway
       ? `  Need node service?  ${params.formatCliCommand("openclaw node status")}`
-      : params.gatewayReachable
-        ? `  Need to test channels? ${params.formatCliCommand("openclaw status --deep")}`
-        : `  Fix reachability first: ${params.formatCliCommand("openclaw gateway probe")}`,
+      : params.gatewayStartupPhase
+        ? `  Retry after startup: ${params.formatCliCommand("openclaw status --deep")}`
+        : params.gatewayReachable
+          ? `  Need to test channels? ${params.formatCliCommand("openclaw status --deep")}`
+          : `  Fix reachability first: ${params.formatCliCommand("openclaw gateway probe")}`,
   ];
 }
 
-/** Builds plugin compatibility lines, capped to keep status output readable. */
 export function buildStatusPluginCompatibilityLines<
   TNotice extends PluginCompatibilityNoticeLike,
 >(params: {
@@ -459,7 +456,6 @@ export function buildStatusPluginCompatibilityLines<
   ];
 }
 
-/** Builds recovery guidance when the gateway reports device pairing is required. */
 export function buildStatusPairingRecoveryLines(params: {
   pairingRecovery: PairingRecoveryLike | null;
   warn: (value: string) => string;
@@ -493,7 +489,6 @@ export function buildStatusPairingRecoveryLines(params: {
   ];
 }
 
-/** Builds the queued system-events table rows. */
 export function buildStatusSystemEventsRows(params: {
   queuedSystemEvents: string[];
   limit?: number;
@@ -505,7 +500,6 @@ export function buildStatusSystemEventsRows(params: {
   return params.queuedSystemEvents.slice(0, limit).map((event) => ({ Event: event }));
 }
 
-/** Builds the overflow trailer for queued system events. */
 export function buildStatusSystemEventsTrailer(params: {
   queuedSystemEvents: string[];
   limit?: number;

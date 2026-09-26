@@ -180,21 +180,21 @@ it.each([
         ).toBe(lease.snapshot);
         const repeated = await acquireAgentRunPreparedModelRuntime(input, admissionOptions);
         expect(repeated.snapshot).toBe(lease.snapshot);
-        repeated.release();
+        await repeated[Symbol.asyncDispose]();
         expect(
           previous.snapshot.pluginRegistry?.providers.map(({ provider }) => provider.id),
         ).toEqual(["caller-provider", "requested-extra", "summary-old"]);
       } finally {
-        lease.release();
+        await lease[Symbol.asyncDispose]();
       }
     } finally {
       resumePublication.resolve();
       await publishing;
       await pending.then(
-        (lease) => lease.release(),
+        (lease) => lease[Symbol.asyncDispose](),
         () => {},
       );
-      previous.release();
+      await previous[Symbol.asyncDispose]();
     }
   },
 );

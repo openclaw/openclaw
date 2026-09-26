@@ -1,4 +1,3 @@
-// Google plugin module implements transport stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   getEnvApiKey,
@@ -57,10 +56,8 @@ import {
   type GoogleThinkingInputLevel,
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
-import {
-  isGoogleVertexCredentialsMarker,
-  resolveGoogleVertexAuthorizedUserHeaders,
-} from "./vertex-adc.js";
+import { isGoogleVertexCredentialsMarker } from "./vertex-adc-config.js";
+import { resolveGoogleVertexAuthorizedUserHeaders } from "./vertex-adc.js";
 
 type CanonicalGoogleTransportApi = "google-generative-ai" | "google-vertex";
 type GoogleTransportApi = CanonicalGoogleTransportApi | "openclaw-google-generative-ai-transport";
@@ -660,16 +657,6 @@ function shouldRetryGoogleGemini3FirstResponse(params: {
   return isGoogleGemini3ProModel(params.model.id) || isGoogleGemini3FlashModel(params.model.id);
 }
 
-function resolveGoogleGemini3RetryThinkingLevel(modelId: string): GoogleThinkingLevel | undefined {
-  if (isGoogleGemini3ProModel(modelId)) {
-    return "LOW";
-  }
-  if (isGoogleGemini3FlashModel(modelId)) {
-    return "MINIMAL";
-  }
-  return undefined;
-}
-
 function cloneGoogleGenerateContentRequest(
   params: GoogleGenerateContentRequest,
 ): GoogleGenerateContentRequest {
@@ -681,7 +668,10 @@ function buildGoogleGemini3FirstResponseRetryParams(params: {
   model: GoogleTransportModel;
   request: GoogleGenerateContentRequest;
 }): GoogleGenerateContentRequest | undefined {
-  const thinkingLevel = resolveGoogleGemini3RetryThinkingLevel(params.model.id);
+  const thinkingLevel = resolveGoogleGemini3ThinkingLevel({
+    modelId: params.model.id,
+    thinkingLevel: "off",
+  });
   if (!thinkingLevel) {
     return undefined;
   }
@@ -870,29 +860,9 @@ async function openGoogleSseChunks(params: {
     params.kind === "google-vertex"
       ? "Google Vertex AI API error"
       : "Google Generative AI API error";
-  if (!shouldRetryGoogleGemini3FirstResponse({ kind: params.kind, model: params.model })) {
-    const response = await params.guardedFetch(params.url, {
-      method: "POST",
-      headers: params.headers,
-      body: serializeGoogleRequest(params.request, params.videoSlots),
-      signal: params.options?.signal,
-    });
-    await notifyGoogleTransportHttpResponse(
-      params.model,
-      params.options,
-      response,
-      params.options?.signal,
-    );
-    if (!response.ok) {
-      throw await createProviderHttpError(response, errorPrefix);
-    }
-    return {
-      type: "ready",
-      chunks: parseGoogleSseChunks(response, params.options?.signal),
-    };
-  }
-
-  const retryMs = resolveGoogleGemini3FirstResponseRetryMs();
+  const retryMs = shouldRetryGoogleGemini3FirstResponse(params)
+    ? resolveGoogleGemini3FirstResponseRetryMs()
+    : 0;
   if (retryMs <= 0) {
     const response = await params.guardedFetch(params.url, {
       method: "POST",

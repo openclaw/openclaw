@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
+import { icons } from "./icons.ts";
 
 type FilePreviewModalElement = HTMLElement & {
   files: typeof files;
@@ -58,6 +60,17 @@ function shadowText(modal: FilePreviewModalElement): string {
   return modal.shadowRoot?.textContent ?? "";
 }
 
+function pressArrowDown(target: EventTarget | null | undefined) {
+  const event = new KeyboardEvent("keydown", {
+    key: "ArrowDown",
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+  });
+  target?.dispatchEvent(event);
+  return event;
+}
+
 describe("openclaw-file-preview-modal", () => {
   beforeEach(() => {
     container = document.createElement("div");
@@ -80,6 +93,23 @@ describe("openclaw-file-preview-modal", () => {
     expect(shadowText(modal)).toContain("filters/auto-senders.txt");
     expect(shadowText(modal)).not.toContain("templates/digest.md");
     expect(shadowText(modal)).toContain("noreply@example.com");
+  });
+
+  it("uses the composer skill glyph for skill files but keeps ordinary Markdown icons", async () => {
+    const modal = await renderPreview({
+      activePath: "SKILL.md",
+      previewFiles: [
+        { path: "SKILL.md", size: "1 KB", contents: "Skill instructions" },
+        { path: "README.md", size: "1 KB", contents: "Documentation" },
+      ],
+    });
+    const reference = document.createElement("div");
+    render(icons.pencilSparkles, reference);
+    const expectedIcon = reference.querySelector("svg")?.outerHTML;
+    const skillIcon = modal.shadowRoot?.querySelector('[data-path="SKILL.md"] .item-icon svg');
+    const markdownIcon = modal.shadowRoot?.querySelector('[data-path="README.md"] .item-icon svg');
+    expect(skillIcon?.outerHTML).toBe(expectedIcon);
+    expect(markdownIcon?.outerHTML).not.toBe(expectedIcon);
   });
 
   it("shows the Escape shortcut only on the close button", async () => {
@@ -131,13 +161,7 @@ describe("openclaw-file-preview-modal", () => {
     expect(input).toBeInstanceOf(HTMLInputElement);
     expect(modal.shadowRoot?.activeElement).toBe(input);
 
-    const arrowDown = new KeyboardEvent("keydown", {
-      key: "ArrowDown",
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-    });
-    input!.dispatchEvent(arrowDown);
+    const arrowDown = pressArrowDown(input);
 
     expect(arrowDown.defaultPrevented).toBe(true);
     expect(onDocumentKeydown).not.toHaveBeenCalled();
@@ -150,13 +174,7 @@ describe("openclaw-file-preview-modal", () => {
     modal.addEventListener("file-preview-select", onSelect);
 
     const dialog = modal.shadowRoot?.querySelector<HTMLElement>("openclaw-modal-dialog");
-    const arrowDown = new KeyboardEvent("keydown", {
-      key: "ArrowDown",
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-    });
-    dialog?.dispatchEvent(arrowDown);
+    const arrowDown = pressArrowDown(dialog);
 
     expect(arrowDown.defaultPrevented).toBe(true);
     expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
@@ -188,13 +206,7 @@ describe("openclaw-file-preview-modal", () => {
     document.addEventListener("keydown", onDocumentKeydown);
 
     const input = modal.shadowRoot?.querySelector<HTMLInputElement>(".search");
-    const arrowDown = new KeyboardEvent("keydown", {
-      key: "ArrowDown",
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-    });
-    input!.dispatchEvent(arrowDown);
+    const arrowDown = pressArrowDown(input);
 
     expect(arrowDown.defaultPrevented).toBe(true);
     expect(onDocumentKeydown).not.toHaveBeenCalled();
@@ -215,11 +227,13 @@ describe("openclaw-file-preview-modal", () => {
     expect(firstChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(firstContents);
 
     body!.scrollTop = 2200;
+    expect(body!.scrollTop).toBe(2200);
 
-    const updatedModal = await renderPreview({ activePath: "second.ts", previewFiles });
-    const updatedBody = updatedModal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
+    modal.activePath = "second.ts";
+    await modal.updateComplete;
+    const updatedBody = modal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
     const secondChunks = [
-      ...(updatedModal.shadowRoot?.querySelectorAll<HTMLElement>(".code-chunk") ?? []),
+      ...(modal.shadowRoot?.querySelectorAll<HTMLElement>(".code-chunk") ?? []),
     ];
 
     expect(updatedBody?.scrollTop).toBe(0);
@@ -260,21 +274,8 @@ describe("openclaw-file-preview-modal", () => {
         common: { close: "Fechar", copied: "Copiado!", copyFailed: "Falha ao copiar" },
         filePreview: {
           label: "Arquivos de suporte",
-          listLabel: "Arquivos",
-          searchPlaceholder: "Buscar arquivos…",
-          readOnly: "somente leitura",
-          emptyTitle: "Nenhum arquivo corresponde",
-          emptySubtitle: "Tente outro nome ou conteúdo.",
           copyFile: "Copiar arquivo",
           fileCount: "{count} arquivos",
-          filteredFileCount: "{count}/{total} arquivos",
-          noMatches: "Nenhum arquivo corresponde.",
-          navigate: "navegar",
-          kind: {
-            text: "Texto",
-            shell: "Shell",
-            file: "Arquivo",
-          },
         },
       });
 
@@ -311,6 +312,18 @@ describe("openclaw-file-preview-modal", () => {
       expect(feedback.hidden).toBe(true);
     },
   );
+
+  it.each([
+    ["references/notes.constructor", "CONSTRUCTOR"],
+    ["references/notes.__proto__", "__PROTO__"],
+  ])("renders the fallback file-kind label for %s", async (path, label) => {
+    const modal = await renderPreview({
+      activePath: path,
+      previewFiles: [{ path, size: "12 B", contents: "Example file" }],
+    });
+
+    expect(modal.shadowRoot?.querySelector(".chip.accent")?.textContent).toBe(label);
+  });
 
   it("localizes generic file-kind chips", async () => {
     i18n.registerTranslation("pt-BR", {

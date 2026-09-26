@@ -1,12 +1,16 @@
 import { execFile } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { link, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
+} from "./runtime-worker-url.js";
 
 const requireFromHere = createRequire(import.meta.url);
 
@@ -50,6 +54,51 @@ describe("resolveRuntimeWorkerUrl", () => {
       ).toBe(path.join(candidateRoot, "dist/agents/code-mode.worker.js"));
     }
   });
+
+  it("selects plugin package paths with hardlinked manifests, renamed directories, and chunks", async () => {
+    await withTempDir("openclaw-renamed-worker-package-", async (root) => {
+      const entry = {
+        sourceWorkerName: "store.worker",
+        distWorkerPath: "extensions/store/store.worker.js",
+        package: { name: "@openclaw/store", distWorkerPath: "src/store.worker.js" },
+      };
+      await writeFile(path.join(root, "package-store.json"), "{}");
+      await link(path.join(root, "package-store.json"), path.join(root, "package.json"));
+      for (const packageName of ["openclaw", "@openclaw/store"]) {
+        await writeFile(path.join(root, "package.json"), JSON.stringify({ name: packageName }));
+        for (const modulePath of ["dist/index.js", "dist/.setup/shared-abc.mjs"]) {
+          const currentModuleUrl = pathToFileURL(path.join(root, modulePath)).href;
+          expect(fileURLToPath(resolveRuntimeWorkerUrl({ ...entry, currentModuleUrl }))).toBe(
+            path.join(
+              root,
+              "dist",
+              packageName === entry.package.name
+                ? entry.package.distWorkerPath
+                : entry.distWorkerPath,
+            ),
+          );
+          expect(fileURLToPath(resolveRuntimeWorkerUrl({ ...entry, currentModuleUrl, root }))).toBe(
+            path.join(root, "dist", entry.distWorkerPath),
+          );
+        }
+      }
+      await writeFile(path.join(root, "package.json"), "invalid-json");
+      expect(() =>
+        resolveRuntimeWorkerUrl({
+          ...entry,
+          currentModuleUrl: pathToFileURL(path.join(root, "dist/index.js")).href,
+        }),
+      ).toThrow("Cannot resolve runtime worker package");
+      expect(
+        fileURLToPath(
+          resolveRuntimeWorkerUrl({
+            ...entry,
+            currentModuleUrl: pathToFileURL(path.join(root, "src/entry.ts")).href,
+          }),
+        ),
+      ).toBe(path.join(root, "src/store.worker.ts"));
+    });
+  });
 });
 
 describe("resolveRuntimeWorkerArgv", () => {
@@ -64,7 +113,18 @@ describe("resolveRuntimeWorkerArgv", () => {
       const tsxUrl = pathToFileURL(requireFromHere.resolve("tsx")).href;
       const loader = typescriptLoader && extension.endsWith("ts") ? ["--import", tsxUrl] : [];
       expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([...loader, fileURLToPath(url)]);
+      expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
+        typescriptLoader && extension.endsWith("ts")
+          ? ["--import", import.meta.resolve("tsx/esm")]
+          : [],
+      );
     }
+  });
+
+  it("does not preload a file loader for non-file Worker URLs", () => {
+    expect(
+      resolveRuntimeWorkerThreadExecArgv(new URL("data:text/javascript,postMessage(1)")),
+    ).toEqual([]);
   });
 
   it.each(["ts", "mts", "cts"])(

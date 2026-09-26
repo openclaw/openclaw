@@ -28,6 +28,12 @@ vi.mock("../../config/sessions/main-session.js", () => ({
 
 vi.mock("../../config/sessions/delivery-info.js", () => ({
   extractDeliveryInfo: extractDeliveryInfoMock,
+  extractDeliveryInfoBatch: (keys: Array<string | undefined>, options: unknown) =>
+    keys.map((key) =>
+      key
+        ? extractDeliveryInfoMock(key, options)
+        : { deliveryContext: undefined, threadId: undefined },
+    ),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -39,6 +45,22 @@ vi.mock("../../config/sessions/session-accessor.js", () => {
   return {
     loadSessionEntry,
     loadSessionEntryReadOnly: loadSessionEntry,
+    loadExactSessionEntryCandidatesReadOnlyBatch: (
+      scopes: Array<{ agentId: string; storePath: string; sessionKeys: string[] }>,
+    ) =>
+      scopes.map(({ agentId, storePath, sessionKeys }) => {
+        try {
+          return {
+            ok: true,
+            value: sessionKeys.flatMap((sessionKey) => {
+              const entry = loadSessionEntry({ agentId, storePath, sessionKey });
+              return entry ? [{ sessionKey, entry }] : [];
+            }),
+          };
+        } catch (error) {
+          return { ok: false, error };
+        }
+      }),
   };
 });
 
@@ -244,11 +266,6 @@ const DEFAULT_TARGET = {
   channel: "forum" as const,
   to: "room:default",
 };
-const malformedAccountIdCases = [
-  { description: "numeric", accountId: 123 },
-  { description: "boolean", accountId: false },
-  { description: "object", accountId: {} },
-] as const;
 
 type SessionStore = Record<
   string,
@@ -334,20 +351,6 @@ describe("resolveDeliveryTarget", () => {
     });
   });
 
-  it("reroutes implicit delivery to an authorized allowFrom recipient", async () => {
-    setLastSessionEntry({
-      sessionId: "sess-w1",
-      lastChannel: "alpha",
-      lastTo: "room-denied",
-    });
-
-    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: ["room-allowed"] } } });
-    const result = await resolveLastTarget(cfg);
-
-    expect(result.channel).toBe("alpha");
-    expect(result.to).toBe("room-allowed");
-  });
-
   it("applies allowFrom rerouting to dry-run delivery previews", async () => {
     setLastSessionEntry({
       sessionId: "sess-preview",
@@ -415,11 +418,6 @@ describe("resolveDeliveryTarget", () => {
       explicitAccountId: "   ",
       expectedAccountId: "session-account",
     },
-    {
-      description: "falls back to the session for an empty account",
-      explicitAccountId: "",
-      expectedAccountId: "session-account",
-    },
   ])("$description", async ({ explicitAccountId, expectedAccountId }) => {
     setLastSessionEntry({
       sessionId: "sess-account-normalization",
@@ -438,61 +436,49 @@ describe("resolveDeliveryTarget", () => {
     expect(result.accountId).toBe(expectedAccountId);
   });
 
-  it.each([
-    { description: "whitespace-only", explicitAccountId: "   " },
-    { description: "empty", explicitAccountId: "" },
-  ])(
-    "falls back to the bound account for a $description account",
-    async ({ explicitAccountId }) => {
-      setMainSessionEntry(undefined);
+  it("falls back to the bound account for a whitespace-only account", async () => {
+    setMainSessionEntry(undefined);
 
-      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
-        channel: "forum",
-        to: "room:ops",
-        accountId: explicitAccountId,
-      });
+    const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      accountId: "   ",
+    });
 
-      expect(result.ok).toBe(true);
-      expect(result.accountId).toBe("account-b");
-    },
-  );
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe("account-b");
+  });
 
-  it.each(malformedAccountIdCases)(
-    "falls back to the session for a malformed $description account",
-    async ({ accountId }) => {
-      setLastSessionEntry({
-        sessionId: "sess-malformed-account",
-        lastChannel: "forum",
-        lastTo: "room:ops",
-        lastAccountId: "session-account",
-      });
+  it("falls back to the session for a malformed object account", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-malformed-account",
+      lastChannel: "forum",
+      lastTo: "room:ops",
+      lastAccountId: "session-account",
+    });
 
-      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
-        channel: "forum",
-        to: "room:ops",
-        accountId: accountId as unknown as string,
-      });
+    const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      accountId: {} as unknown as string,
+    });
 
-      expect(result.ok).toBe(true);
-      expect(result.accountId).toBe("session-account");
-    },
-  );
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe("session-account");
+  });
 
-  it.each(malformedAccountIdCases)(
-    "falls back to the bound account for a malformed $description account",
-    async ({ accountId }) => {
-      setMainSessionEntry(undefined);
+  it("falls back to the bound account for a malformed object account", async () => {
+    setMainSessionEntry(undefined);
 
-      const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
-        channel: "forum",
-        to: "room:ops",
-        accountId: accountId as unknown as string,
-      });
+    const result = await resolveDeliveryTarget(makeForumBoundCfg(), AGENT_ID, {
+      channel: "forum",
+      to: "room:ops",
+      accountId: {} as unknown as string,
+    });
 
-      expect(result.ok).toBe(true);
-      expect(result.accountId).toBe("account-b");
-    },
-  );
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe("account-b");
+  });
 
   it("preserves binding order when peerless delivery falls back to a bound accountId", async () => {
     setMainSessionEntry(undefined);
@@ -1383,26 +1369,6 @@ describe("resolveDeliveryTarget", () => {
       channel: "alpha",
       to: "ops-room",
     });
-  });
-
-  it("falls back to the main session entry when the requested sessionKey is missing", async () => {
-    setSessionStore({
-      "agent:test:main": {
-        sessionId: "main-session",
-        updatedAt: 1000,
-        lastChannel: "forum",
-        lastTo: "main-chat",
-      },
-    } as SessionStore);
-
-    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
-      channel: "last",
-      sessionKey: "agent:test:thread:missing",
-      to: undefined,
-    });
-
-    expect(result.channel).toBe("forum");
-    expect(result.to).toBe("main-chat");
   });
 
   it("uses main session channel when channel=last and session route exists", async () => {

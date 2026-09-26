@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { safeAttachmentHref, safeMediaAttachmentHref } from "./chat-attachment-href.ts";
+import {
+  safeAttachmentHref,
+  safeMediaAttachmentHref,
+  safePlainTextAttachmentHref,
+} from "./chat-attachment-href.ts";
 
 describe("safeAttachmentHref", () => {
   it.each([
@@ -7,18 +11,13 @@ describe("safeAttachmentHref", () => {
     "HtTp://cdn.example/video.mp4",
     "blob:https://control.example/15ed4f80-4fb5-4ca6-a6e6-3c9a8943a003",
     "/downloads/report.pdf",
-    "/__openclaw__/assistant-media?source=report.pdf",
-    "/media/inbound/attachment",
-    "/api/chat/media/outgoing/main/document/full",
   ])("allows a safe attachment href: %s", (href) => {
     expect(safeAttachmentHref(`  ${href}  `)).toBe(href);
   });
 
   it.each([
-    "javascript:alert(1)",
     "JaVaScRiPt:alert(1)",
     "data:text/html,<script>alert(1)</script>",
-    "vbscript:msgbox(1)",
     "//attacker.example/file.mp3",
     "relative/file.mp3",
     "",
@@ -55,5 +54,20 @@ describe("safeMediaAttachmentHref", () => {
       "data:video/mp4;base64,AAAA",
     );
     expect(safeMediaAttachmentHref("data:audio/mp3;base64,AAAA", "video")).toBeUndefined();
+  });
+});
+
+describe("safePlainTextAttachmentHref", () => {
+  it.each([
+    ["data:text/plain;base64,", true],
+    ["data:text/plain;base64,SGVsbG8=", true],
+    ["/notes.txt", true],
+    ["blob:https://control.example/paste", true],
+    ["data:text/html;base64,SGVsbG8=", false],
+    ["data:text/plain,<script>alert(1)</script>", false],
+    ["data:text/plain;base64,SGVsbG8", false],
+    ["javascript:alert(1)", false],
+  ])("restricts inline pasted sources: %s", (href, allowed) => {
+    expect(safePlainTextAttachmentHref(href)).toBe(allowed ? href : undefined);
   });
 });

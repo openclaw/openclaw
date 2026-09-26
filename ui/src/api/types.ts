@@ -1,42 +1,35 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
+  ArtifactSummary as ProtocolArtifactSummary,
   CronJob as ProtocolCronJob,
   CronListParams,
   CronRunLogEntry as ProtocolCronRunLogEntry,
   CronRunsParams,
+  ErrorShape,
   SessionsFilesListResult as ProtocolSessionsFilesListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type {
-  AgentsListResult as ProtocolAgentsListResult,
-  ModelChoice as ProtocolModelChoice,
-} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
-import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type {
   SessionEntryArchiveReason,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.js";
 import type {
-  SessionCompactionCheckpoint as ProtocolSessionCompactionCheckpoint,
-  SessionObserverDigest,
-  SessionsCompactionBranchResult as ProtocolSessionsCompactionBranchResult,
-  SessionsCompactionListResult as ProtocolSessionsCompactionListResult,
-  SessionsCompactionRestoreResult as ProtocolSessionsCompactionRestoreResult,
-} from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import type { SessionGoal } from "../../../src/config/sessions/types.js";
-import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
-import type { FastModeSource } from "../../../src/shared/fast-mode.js";
+  GatewaySessionRow as GatewayWireSessionRow,
+  GatewaySessionsDefaults as GatewayWireSessionsDefaults,
+  SessionsPatchResult as GatewayWireSessionsPatchResult,
+} from "../../../src/gateway/session-utils.types.js";
 import type {
-  GatewayAgentRuntime,
-  GatewayAgentRow as SharedGatewayAgentRow,
   GatewayContextWindowOption,
   GatewayThinkingLevelOption,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
 export type {
+  AgentIdentityResult,
+  ArtifactsDownloadResult as ArtifactDownloadResult,
+  ConfigSchemaResponse,
+  ModelsListResult as ModelCatalogResult,
   AgentsFileEntry as AgentFileEntry,
   AgentsFilesListResult,
   AgentsFilesGetResult,
@@ -50,22 +43,41 @@ export type {
   UpdateHoldResult,
   UpdateReportResult,
   UpdateScheduleState,
+  ChannelsPairingAccount,
+  ChannelsPairingApproveResult,
+  ChannelsPairingListResult,
+  ChannelsPairingRequest,
+  SessionVisibility,
+  SessionMembersListEvidenceResult,
+  SessionsRewindResult,
+  SessionsForkResult,
+  SessionBranch,
+  SessionsBranchesListResult,
+  SessionsBranchesSwitchResult,
+  CronCompactJob,
+  ToolCatalogProfile,
+  ToolsCatalogResult,
+  ToolsGitHubStatusResult,
+  ToolsGitHubAuthorizeStartResult,
+  ToolsGitHubAuthorizePollResult,
+  ToolsEffectiveEntry,
+  ToolsEffectiveResult,
+  ModelsProbeResult,
+  SystemAgentSetupActivateParams,
+  SystemAgentSetupActivateResult,
+  SystemAgentSetupDetectResult,
+  SystemAgentSetupVerifyResult,
+  WizardNextResult,
+  WizardStep,
 } from "../../../packages/gateway-protocol/src/index.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
 export type { FastMode } from "@openclaw/normalization-core/string-coerce";
-export type ChannelsPairingAccount =
-  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingAccount;
-export type ChannelsPairingApproveResult =
-  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingApproveResult;
-export type ChannelsPairingListResult =
-  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingListResult;
-export type ChannelsPairingRequest =
-  import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingRequest;
-export type SessionVisibility =
-  import("../../../packages/gateway-protocol/src/index.js").SessionVisibility;
-export type SessionMembersListEvidenceResult =
-  import("../../../packages/gateway-protocol/src/index.js").SessionMembersListEvidenceResult;
+export type {
+  AgentsListResult,
+  ModelChoice as ModelCatalogEntry,
+  ModelCatalogProviderOutcome,
+} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 export type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 export type ChannelsStatusSnapshot = ChannelsStatusResult;
 export type ChannelUiMetaEntry = NonNullable<ChannelsStatusResult["channelMeta"]>[number];
@@ -189,6 +201,7 @@ export type NostrStatus = {
 type ConfigSnapshotIssue = { path: string; message: string };
 
 export type ConfigSnapshot = {
+  writeError?: ErrorShape;
   path?: string | null;
   exists?: boolean | null;
   raw?: string | null;
@@ -204,177 +217,51 @@ export type ConfigSnapshot = {
   issues?: ConfigSnapshotIssue[] | null;
 };
 
-export type ConfigSchemaResponse = {
-  schema: unknown;
-  uiHints: ConfigUiHints;
-  version: string;
-  generatedAt: string;
-};
-
-export type PresenceEntry = ProtocolPresenceEntry;
-
-export type GatewaySessionsDefaults = {
-  modelProvider: string | null;
-  model: string | null;
-  contextTokens: number | null;
-  contextWindow?: string;
-  contextWindows?: GatewayContextWindowOption[];
-  contextWindowDefault?: string;
-  agentRuntime?: GatewayAgentRuntime;
-  thinkingLevels?: GatewayThinkingLevelOption[];
-  thinkingOptions?: string[];
-  thinkingDefault?: string;
-  modelSelectionTarget?: "session" | "agent" | "global";
-};
-
-export type GatewayAgentRow = SharedGatewayAgentRow;
+export type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
+export type { GatewayWireSessionsDefaults as GatewaySessionsDefaults };
+export type { GatewayAgentRow } from "../../../src/shared/session-types.js";
 export type { GatewayContextWindowOption, GatewayThinkingLevelOption };
-
-export type AgentsListResult = ProtocolAgentsListResult;
-
-export type AgentIdentityResult = {
-  agentId: string;
-  name: string;
-  nameSource?: "config" | "agent" | "workspace" | "default";
-  avatar: string;
-  avatarSource?: string | null;
-  avatarStatus?: "none" | "local" | "remote" | "data" | null;
-  avatarReason?: string | null;
-  emoji?: string;
-};
-
-type SessionWorkspaceArtifactEntry = {
-  id: string;
-  type: string;
-  title: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  source?: string;
-  download: {
-    mode: "bytes" | "url" | "unsupported";
-  };
-};
 
 // The workspace view joins file results with separately fetched artifacts.
 export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
-  artifacts?: SessionWorkspaceArtifactEntry[];
+  artifacts?: ProtocolArtifactSummary[];
 };
 
-export type ArtifactDownloadResult = {
-  artifact: SessionWorkspaceArtifactEntry;
-  encoding?: "base64";
-  data?: string;
-  url?: string;
-  expiresAt?: string;
-};
+export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "updatedAt"> &
+  Pick<SessionRow, "archivedBy" | "updatedAt"> & {
+    /** Transient UI-owned Swarm note overlays, not persisted session fields. */
+    swarmPhase?: string;
+    swarmPhaseRank?: number;
+    swarmLog?: string;
+    icon?: string;
+    channelAvatarUrl?: string;
+    surface?: string;
+    room?: string;
+    /** UI-local timestamp for the runtimeMs sample; absent on raw Gateway rows. */
+    runtimeSampledAt?: number;
+  };
 
-type SubagentRunState = "active" | "interrupted" | "historical";
-
-export type SessionCompactionCheckpoint = Omit<
-  ProtocolSessionCompactionCheckpoint,
-  "tokensVersion"
+export type SessionsListResult = SessionsListResultBase<
+  GatewayWireSessionsDefaults,
+  GatewaySessionRow
 >;
-
-type SessionCompactionCheckpointPreview = Pick<
-  SessionCompactionCheckpoint,
-  "checkpointId" | "createdAt" | "reason"
->;
-
-export type GatewaySessionRow = SessionRow & {
-  /** Transient UI-owned Swarm note overlays, not persisted session fields. */
-  swarmPhase?: string;
-  swarmPhaseRank?: number;
-  swarmLog?: string;
-  placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
-  placementMove?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacementMove;
-  icon?: string;
-  channelAvatarUrl?: string;
-  /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
-  category?: string;
-  surface?: string;
-  subject?: string;
-  room?: string;
-  space?: string;
-  agentStatus?: SessionAgentStatus;
-  observerDigest?: Pick<
-    SessionObserverDigest,
-    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
-  >;
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
-  thinkingLevel?: string;
-  contextWindow?: string;
-  contextWindows?: GatewayContextWindowOption[];
-  contextWindowDefault?: string;
-  thinkingLevels?: GatewayThinkingLevelOption[];
-  thinkingOptions?: string[];
-  thinkingDefault?: string;
-  fastMode?: FastMode;
-  effectiveFastMode?: FastMode;
-  effectiveFastModeSource?: FastModeSource;
-  fastAutoOnSeconds?: number;
-  verboseLevel?: string;
-  reasoningLevel?: string;
-  elevatedLevel?: string;
-  hasActiveRun?: boolean;
-  activeRunIds?: string[];
-  /** An enabled cron job is bound to this session (runs in it or delivers to it). */
-  hasAutomation?: boolean;
-  subagentRunState?: SubagentRunState;
-  hasActiveSubagentRun?: boolean;
-  startedAt?: number;
-  endedAt?: number;
-  runtimeMs?: number;
-  /** UI-local timestamp for the runtimeMs sample; absent on raw Gateway rows. */
-  runtimeSampledAt?: number;
-  modelSelectionLocked?: boolean;
-  effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
-  queueMode?: QueueMode;
-  effectiveQueueMode?: QueueMode;
-  agentRuntime?: GatewayAgentRuntime;
-  compactionCheckpointCount?: number;
-  latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
-  goal?: SessionGoal;
-};
-
-export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
-
-export type SessionsCompactionListResult = Omit<
-  ProtocolSessionsCompactionListResult,
-  "checkpoints"
-> & {
-  checkpoints: SessionCompactionCheckpoint[];
-};
-
-type SessionCompactionMutationResult<T> = Omit<T, "checkpoint" | "entry"> & {
-  checkpoint: SessionCompactionCheckpoint;
-  entry: {
-    sessionId: string;
-    updatedAt: number;
-  } & Record<string, unknown>;
-};
-
-export type SessionsCompactionBranchResult =
-  SessionCompactionMutationResult<ProtocolSessionsCompactionBranchResult>;
-
-export type SessionsCompactionRestoreResult =
-  SessionCompactionMutationResult<ProtocolSessionsCompactionRestoreResult>;
-
-export type SessionsRewindResult =
-  import("../../../packages/gateway-protocol/src/index.js").SessionsRewindResult;
-export type SessionsForkResult =
-  import("../../../packages/gateway-protocol/src/index.js").SessionsForkResult;
-export type SessionBranch = import("../../../packages/gateway-protocol/src/index.js").SessionBranch;
-export type SessionsBranchesListResult =
-  import("../../../packages/gateway-protocol/src/index.js").SessionsBranchesListResult;
-export type SessionsBranchesSwitchResult =
-  import("../../../packages/gateway-protocol/src/index.js").SessionsBranchesSwitchResult;
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
+  category?: GatewaySessionRow["category"];
   updatedAt?: number;
+  createdAt?: number;
+  pinnedAt?: number;
+  lastReadAt?: number;
+  lastActivityAt?: number;
+  lastInteractionAt?: number;
   permissionMode?: GatewaySessionRow["permissionMode"];
+  nativeRuntimeConsent?: string;
+  modelOverrideSource?: GatewayWireSessionsPatchResult["entry"]["modelOverrideSource"];
+  boardFace?: GatewaySessionRow["boardFace"];
+  boardPresentation?: GatewaySessionRow["boardPresentation"];
   archivedAt?: number;
+  archivedBy?: GatewaySessionRow["archivedBy"];
   archiveReason?: SessionEntryArchiveReason;
   /** Present only while an explicit mark-unread marker owns the row. */
   markedUnreadAt?: number;
@@ -384,17 +271,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
-}> & {
-  resolved?: {
-    modelProvider?: string;
-    model?: string;
-    agentRuntime?: GatewayAgentRuntime;
-    contextWindow?: string;
-    contextWindows?: GatewayContextWindowOption[];
-    thinkingLevel?: string;
-    thinkingLevels?: GatewayThinkingLevelOption[];
-  };
-};
+}> &
+  Pick<GatewayWireSessionsPatchResult, "resolved">;
 
 export type { CostUsageSummary, SessionsUsageResult } from "../pages/usage/data-types.ts";
 
@@ -432,8 +310,8 @@ export type CronRunResult =
     }
   | { ok: false };
 
-export type CronJobsListResult = {
-  jobs: ProtocolCronJob[];
+export type CronJobsListResult<Row = ProtocolCronJob> = {
+  jobs: Row[];
   snapshotRevision: string;
   total: number;
   limit: number;
@@ -455,55 +333,17 @@ export type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../../src/skills/discovery/status.types.js";
-export type { ClawHubSkillStatusLink as SkillClawHubLink } from "../../../src/skills/lifecycle/clawhub-status.js";
+export type { ClawHubSkillStatusLink as SkillClawHubLink } from "../../../src/skills/lifecycle/workspace-types.js";
 
 export type StatusSummary = Record<string, unknown>;
 
 export type HealthSnapshot = Record<string, unknown>;
 
-/** A model entry returned by the gateway model-catalog endpoint. */
-export type ModelCatalogEntry = Omit<ProtocolModelChoice, "input"> & {
-  input?: Array<"text" | "image" | "document">;
-};
-
-export type ModelCatalogProviderOutcome =
-  import("../../../packages/gateway-protocol/src/schema/agents-models-skills.js").ModelCatalogProviderOutcome;
-export type ModelCatalogResult = {
-  models: ModelCatalogEntry[];
-  providerOutcomes?: ModelCatalogProviderOutcome[];
-};
-
-export type ToolCatalogProfile =
-  import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;
-export type ToolsCatalogResult =
-  import("../../../packages/gateway-protocol/src/schema.js").ToolsCatalogResult;
-export type ToolsGitHubStatusResult =
-  import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubStatusResult;
-export type ToolsGitHubAuthorizeStartResult =
-  import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubAuthorizeStartResult;
-export type ToolsGitHubAuthorizePollResult =
-  import("../../../packages/gateway-protocol/src/schema.js").ToolsGitHubAuthorizePollResult;
-export type ToolsEffectiveEntry =
-  import("../../../packages/gateway-protocol/src/schema.js").ToolsEffectiveEntry;
-export type ToolsEffectiveResult =
-  import("../../../packages/gateway-protocol/src/schema.js").ToolsEffectiveResult;
-
-export type ModelAuthStatusProvider =
-  import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProvider;
-export type ModelAuthStatusProfile =
-  import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProfile;
-export type ModelAuthStatusResult =
-  import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
-export type ModelsProbeResult =
-  import("../../../packages/gateway-protocol/src/schema.js").ModelsProbeResult;
-export type SystemAgentSetupActivateParams =
-  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupActivateParams;
-export type SystemAgentSetupActivateResult =
-  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupActivateResult;
-export type SystemAgentSetupDetectResult =
-  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupDetectResult;
-export type SystemAgentSetupVerifyResult =
-  import("../../../packages/gateway-protocol/src/schema.js").SystemAgentSetupVerifyResult;
-export type WizardNextResult =
-  import("../../../packages/gateway-protocol/src/schema.js").WizardNextResult;
-export type WizardStep = import("../../../packages/gateway-protocol/src/schema.js").WizardStep;
+export type {
+  ModelAuthStatusProvider,
+  ModelAuthStatusProfile,
+  ModelAuthStatusResult,
+} from "../../../src/gateway/server-methods/models-auth-status.js";
+export type ProviderLoginOption = NonNullable<
+  NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["loginOptions"]
+>[number];

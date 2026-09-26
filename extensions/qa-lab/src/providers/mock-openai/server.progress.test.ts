@@ -115,7 +115,7 @@ async function requestProgress(
   }
 }
 
-describe.each(["responses", "messages"])("%s background command progress", (route) => {
+describe.each(["responses", "messages"])("%s command progress wire", (route) => {
   it.each([
     { exitCode: 1, expected: "PROGRESS_OK" },
     { exitCode: 0, expected: "BUG-TOOL-DID-NOT-FAIL" },
@@ -128,7 +128,16 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
     const call = (route === "responses" ? plan.output : plan.content)[0];
     expect(call.name).toBe("exec");
     const args = route === "responses" ? JSON.parse(call.arguments) : call.input;
-    const results: ProgressResult[] = [{ tool: "exec", args, output: RUNNING_OUTPUT }];
+    expect(args.command).toBe(
+      "while [ ! -d 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release' ]; do sleep 1; done; rmdir 'matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.release'; false",
+    );
+    const results: ProgressResult[] = [
+      {
+        tool: "exec",
+        args,
+        output: exitCode === 1 ? RUNNING_OUTPUT : [{ type: "text", text: RUNNING_OUTPUT }],
+      },
+    ];
     const pending = await requestProgress(route, prompt, results);
     expect(route === "responses" ? pending.output : pending.content).toMatchObject([
       { name: "process" },
@@ -144,7 +153,32 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
         : { content: [{ text: expected }] },
     );
   });
+  it.each([
+    { label: "missing", callId: null },
+    { label: "empty", callId: "" },
+  ])("rejects $label call IDs even when command failure is allowed", async ({ callId }) => {
+    const response = await requestProgress(
+      route,
+      EXEC_PROMPT.replace("command completes,", "command completes or fails,"),
+      [
+        { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT, callId },
+        {
+          tool: "process",
+          args: { action: "poll", sessionId: "lucky-slug" },
+          output: "\n\nProcess exited with code 0.",
+          callId,
+        },
+      ],
+    );
+    expect(response).toMatchObject(
+      route === "responses"
+        ? { output: [{ content: [{ text: "BUG-TOOL-PROGRESS-CALL-MISMATCH" }] }] }
+        : { content: [{ text: "BUG-TOOL-PROGRESS-CALL-MISMATCH" }] },
+    );
+  });
+});
 
+describe("background command progress", () => {
   it.each([
     { label: "plain text", output: RUNNING_OUTPUT },
     { label: "warning-prefixed text", output: `Task warning\n\n${RUNNING_OUTPUT}` },
@@ -159,39 +193,33 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
         output,
       },
     ];
-    const expectPoll = (response: {
-      output?: Record<string, unknown>[];
-      content?: Record<string, unknown>[];
-    }) => {
-      const content = (route === "responses" ? response.output : response.content)!;
+    const expectPoll = (response: { output: Record<string, unknown>[] }) => {
+      const content = response.output;
       expect(content).toMatchObject([{ name: "process" }]);
-      const args =
-        route === "responses" ? JSON.parse(String(content[0]?.arguments)) : content[0]?.input;
+      const args = JSON.parse(String(content[0]?.arguments));
       expect(args).toMatchObject({ action: "poll", sessionId });
     };
-    expectPoll(await requestProgress(route, EXEC_PROMPT, results));
+    expectPoll(await requestProgress("responses", EXEC_PROMPT, results));
     results.push({
       tool: "process",
       args: { action: "poll", sessionId },
       output: "Process exited with code 7.\n\nProcess still running.",
     });
-    expectPoll(await requestProgress(route, EXEC_PROMPT, results));
+    expectPoll(await requestProgress("responses", EXEC_PROMPT, results));
     results.push({
       tool: "process",
       args: { action: "poll", sessionId },
       output: INPUT_WAIT_OUTPUT,
     });
-    expectPoll(await requestProgress(route, EXEC_PROMPT, results));
+    expectPoll(await requestProgress("responses", EXEC_PROMPT, results));
     results.push({
       tool: "process",
       args: { action: "poll", sessionId },
       output: `${TIMED_OUT_OUTPUT}\n${RUNNING_OUTPUT.replace("lucky-slug", "other-session")}\n\nProcess exited with code 0.`,
     });
-    expect(await requestProgress(route, EXEC_PROMPT, results)).toMatchObject(
-      route === "responses"
-        ? { output: [{ type: "message", content: [{ text: "PROGRESS_OK" }] }] }
-        : { content: [{ type: "text", text: "PROGRESS_OK" }] },
-    );
+    expect(await requestProgress("responses", EXEC_PROMPT, results)).toMatchObject({
+      output: [{ type: "message", content: [{ text: "PROGRESS_OK" }] }],
+    });
   });
 
   it.each([
@@ -232,15 +260,11 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
       marker: "BUG-TOOL-PROGRESS-CALL-MISMATCH",
     },
   ])("does not report success for $label", async ({ args, output, marker }) => {
-    const response = await requestProgress(route, EXEC_PROMPT, [
+    const response = await requestProgress("responses", EXEC_PROMPT, [
       { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT },
       { tool: "process", args, output },
     ]);
-    expect(response).toMatchObject(
-      route === "responses"
-        ? { output: [{ content: [{ text: marker }] }] }
-        : { content: [{ text: marker }] },
-    );
+    expect(response).toMatchObject({ output: [{ content: [{ text: marker }] }] });
   });
 
   it.each([
@@ -253,7 +277,7 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
     },
   ])("allows terminal command failure for $label", async ({ output, isError }) => {
     const response = await requestProgress(
-      route,
+      "responses",
       EXEC_PROMPT.replace("command completes,", "command completes or fails,"),
       [
         { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT },
@@ -265,11 +289,7 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
         },
       ],
     );
-    expect(response).toMatchObject(
-      route === "responses"
-        ? { output: [{ content: [{ text: "PROGRESS_OK" }] }] }
-        : { content: [{ text: "PROGRESS_OK" }] },
-    );
+    expect(response).toMatchObject({ output: [{ content: [{ text: "PROGRESS_OK" }] }] });
   });
 
   it.each([
@@ -281,7 +301,7 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
       const prompt = allowsFailure
         ? EXEC_PROMPT.replace("command completes,", "command completes or fails,")
         : EXEC_PROMPT;
-      const response = await requestProgress(route, prompt, [
+      const response = await requestProgress("responses", prompt, [
         {
           tool: "exec",
           args: { command: "true" },
@@ -290,11 +310,7 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
         },
       ]);
       const marker = allowsFailure ? "PROGRESS_OK" : "BUG-TOOL-FAILED";
-      expect(response).toMatchObject(
-        route === "responses"
-          ? { output: [{ content: [{ text: marker }] }] }
-          : { content: [{ text: marker }] },
-      );
+      expect(response).toMatchObject({ output: [{ content: [{ text: marker }] }] });
     }
   });
 
@@ -342,19 +358,6 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
       label,
       results: [{ tool: "exec", args: { command: "true" }, output, isError: false }],
       marker: "BUG-TOOL-DID-NOT-COMPLETE",
-    })),
-    ...[null, ""].map((callId) => ({
-      label: callId === null ? "missing call IDs" : "empty call IDs",
-      results: [
-        { tool: "exec", args: { command: "true" }, output: RUNNING_OUTPUT, callId },
-        {
-          tool: "process",
-          args: { action: "poll", sessionId: "lucky-slug" },
-          output: "\n\nProcess exited with code 0.",
-          callId,
-        },
-      ],
-      marker: "BUG-TOOL-PROGRESS-CALL-MISMATCH",
     })),
     {
       label: "foreign poll before exec",
@@ -424,15 +427,11 @@ describe.each(["responses", "messages"])("%s background command progress", (rout
     },
   ])("does not accept $label even when command failure is allowed", async ({ results, marker }) => {
     const response = await requestProgress(
-      route,
+      "responses",
       EXEC_PROMPT.replace("command completes,", "command completes or fails,"),
       results,
     );
-    expect(response).toMatchObject(
-      route === "responses"
-        ? { output: [{ content: [{ text: marker }] }] }
-        : { content: [{ text: marker }] },
-    );
+    expect(response).toMatchObject({ output: [{ content: [{ text: marker }] }] });
   });
 });
 
@@ -465,7 +464,6 @@ it("keeps Slack commentary progress open while its exec is running", async () =>
 });
 
 async function completeProgress(params: {
-  route: string;
   prompt: string;
   tool: string;
   args: Record<string, unknown>;
@@ -473,15 +471,11 @@ async function completeProgress(params: {
   isError?: boolean;
   context?: string;
 }) {
-  const plan = await requestProgress(params.route, params.prompt, [], params.context);
-  const call = params.route === "responses" ? plan.output[0] : plan.content[0];
-  expect(call).toMatchObject(
-    params.route === "responses"
-      ? { type: "function_call", name: params.tool, arguments: JSON.stringify(params.args) }
-      : { type: "tool_use", name: params.tool, input: params.args },
-  );
+  const plan = await requestProgress("messages", params.prompt, [], params.context);
+  const call = plan.content[0];
+  expect(call).toMatchObject({ type: "tool_use", name: params.tool, input: params.args });
   return requestProgress(
-    params.route,
+    "messages",
     params.prompt,
     [
       {
@@ -489,14 +483,14 @@ async function completeProgress(params: {
         args: params.args,
         output: params.output,
         isError: params.isError,
-        callId: params.route === "responses" ? call.call_id : call.id,
+        callId: call.id,
       },
     ],
     params.context,
   );
 }
 
-describe.each(["responses", "messages"])("%s tool progress", (route) => {
+describe("tool progress stdout", () => {
   const target = "repo/資料🙂/missing.txt";
   const prompt = [
     "Conversation info:",
@@ -599,15 +593,13 @@ describe.each(["responses", "messages"])("%s tool progress", (route) => {
     },
   ])("finishes after $label", async (fixture) => {
     const response = await completeProgress({
-      route,
       args: fixture.tool === "exec" ? { command: "true" } : { path: "empty.txt" },
       ...fixture,
     });
-    expect(response).toMatchObject(
-      route === "responses"
-        ? { output: [{ type: "message", content: [{ type: "output_text", text: "PROGRESS_OK" }] }] }
-        : { stop_reason: "end_turn", content: [{ type: "text", text: "PROGRESS_OK" }] },
-    );
+    expect(response).toMatchObject({
+      stop_reason: "end_turn",
+      content: [{ type: "text", text: "PROGRESS_OK" }],
+    });
   });
 });
 
@@ -634,7 +626,6 @@ it.each([
   },
 ])("uses $label for error-progress completion", async ({ expected, ...fixture }) => {
   const response = await completeProgress({
-    route: "messages",
     prompt: ERROR_PROMPT,
     tool: "read",
     args: { path: "denied.txt" },

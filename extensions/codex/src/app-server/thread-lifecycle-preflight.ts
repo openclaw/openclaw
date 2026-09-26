@@ -1,4 +1,5 @@
 import {
+  AgentHarnessPreflightError,
   embeddedAgentLog,
   formatErrorMessage,
   isHostScopedAgentToolActive,
@@ -6,6 +7,7 @@ import {
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { buildCodexUserMcpServersThreadConfigPatchForRun } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { normalizeCodexAppServerBindingModelProvider } from "./auth-profile.js";
 import { getCodexAppServerClientInstanceId } from "./client.js";
 import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
@@ -16,12 +18,27 @@ import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
 } from "./dynamic-tool-profile.js";
-import { assertCodexNativeHookRelayAllowed } from "./native-hook-relay.js";
+import {
+  assertCodexInferenceRouteConfig,
+  bindCodexInferenceThread,
+  getCodexInferenceThread,
+  prepareCodexInferenceThreadConfig,
+} from "./inference-routing.js";
+import {
+  assertCodexNativeHookRelayAllowed,
+  CodexManagedHooksOnlyError,
+} from "./native-hook-relay.js";
+import { resolveCodexNativeModelInputTools } from "./native-model-input-tools.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
+import { mergeCodexNativeProjectDocThreadConfig } from "./project-doc-thread-config.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import { readScheduledCodexAppManagedRequirementsFingerprint } from "./scheduled-app-authority.js";
-import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
+import {
+  hashCodexAppServerBindingFingerprint,
+  type CodexAppServerBindingIdentity,
+  type CodexAppServerThreadBinding,
+} from "./session-binding.js";
 import { buildContextEngineBinding } from "./thread-context-engine.js";
 import {
   codexLegacyDynamicToolsFingerprint as legacyFingerprintDynamicTools,
@@ -31,14 +48,156 @@ import {
   legacyFingerprintUserMcpServersConfigPatch,
 } from "./thread-fingerprints.js";
 import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
-import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js";
+import type {
+  CodexAppServerThreadLifecycleBinding,
+  CodexStartOrResumeThreadParams,
+  CodexThreadRequestContext,
+} from "./thread-lifecycle-types.js";
+import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   buildCodexRingZeroThreadConfigPatch,
   CODEX_RING_ZERO_BASE_INSTRUCTIONS,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
+import { mergeCodexNativeShellEnvironment } from "./thread-shell-environment.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
+
+function assertCodexThreadInferenceAuthority(
+  params: CodexStartOrResumeThreadParams,
+  modelPolicyEnforced: boolean,
+): void {
+  if (params.inferenceRoute && modelPolicyEnforced) {
+    return;
+  }
+  const host = params.params.hostCapabilities;
+  const unavailable = () =>
+    new AgentHarnessPreflightError(
+      "This Codex connection cannot enforce your operator role's model policy. Use an OpenClaw-managed connection with an owned inference route; no turn was sent.",
+    );
+  if (!host.retainSourceAuthority) {
+    throw unavailable();
+  }
+  const source = host.retainSourceAuthority();
+  if (source === undefined) {
+    return;
+  }
+  try {
+    source.assertCurrent();
+    if (source.modelPolicyRequired !== false) {
+      throw unavailable();
+    }
+  } finally {
+    source.release();
+  }
+}
+
+/** Preserve the selected provider when only its physical thread must be replaced. */
+export async function prepareCodexThreadRequestContext(
+  params: CodexStartOrResumeThreadParams,
+  options: {
+    binding: CodexAppServerThreadBinding | undefined;
+    selectionBinding: CodexAppServerThreadBinding | undefined;
+    bindingIdentity: CodexAppServerBindingIdentity;
+    clientId: string;
+    config: CodexStartOrResumeThreadParams["config"];
+    preflight: Awaited<ReturnType<typeof prepareCodexThreadLifecyclePreflight>>;
+    assertCurrent: () => void;
+    throwIfAborted: () => void;
+  },
+): Promise<CodexThreadRequestContext> {
+  const startModelSelection = resolveCodexAppServerThreadModelSelection({
+    homeScope: params.appServer.start.homeScope,
+    provider: params.params.provider,
+    model: params.runtimeModelId ?? params.params.modelId,
+    binding: options.selectionBinding,
+    authProfileId: params.params.authProfileId,
+    authProfileStore: params.params.authProfileStore,
+    agentDir: params.params.agentDir,
+    config: params.params.config,
+  });
+  const source = params.params.hostCapabilities.retainSourceAuthority?.();
+  const modelPolicyEnforced =
+    params.nativeModelAdmission === undefined ||
+    options.preflight.nativeModelInputTools !== undefined;
+  let inference: Awaited<ReturnType<typeof prepareCodexInferenceThreadConfig>>;
+  try {
+    source?.assertCurrent();
+    inference = await prepareCodexInferenceThreadConfig({
+      ...params,
+      config: options.config,
+      binding: options.binding,
+      clientId: options.clientId,
+      operatorBacked: source !== undefined,
+      modelPolicyEnforced,
+      modelProvider:
+        options.binding?.preserveNativeModel || options.binding?.connectionScope === "supervision"
+          ? options.binding.modelProvider
+          : startModelSelection.modelProvider,
+      effectiveConfig: options.preflight.effectiveConfig,
+      assertCurrent: () => {
+        options.assertCurrent();
+        source?.assertCurrent();
+      },
+    });
+  } finally {
+    source?.release();
+  }
+  // Each retry starts from caller configuration, never a previously injected private URL.
+  params.config = inference?.config ?? options.config;
+  params.inferenceRoute = inference?.route;
+  params.inferenceProviderRoutes = inference?.providers;
+  params.assertCurrent = () => {
+    options.throwIfAborted();
+    options.assertCurrent();
+    assertCodexThreadInferenceAuthority(params, modelPolicyEnforced);
+  };
+  params.assertCurrent();
+  return {
+    ...options.preflight,
+    bindingIdentity: options.bindingIdentity,
+    startModelSelection,
+    startModelProvider: startModelSelection.modelProvider,
+    normalizeBindingModelProvider: (authProfileId, modelProvider) =>
+      normalizeCodexAppServerBindingModelProvider({
+        authProfileId,
+        modelProvider,
+        authProfileStore: params.params.authProfileStore,
+        agentDir: params.params.agentDir,
+        config: params.params.config,
+      }),
+    throwIfAborted: options.throwIfAborted,
+  };
+}
+
+export function publishCodexThreadInferenceBinding(
+  params: CodexStartOrResumeThreadParams,
+  binding: CodexAppServerThreadLifecycleBinding,
+  reusedConfiguration = false,
+): CodexAppServerThreadLifecycleBinding {
+  params.assertCurrent?.();
+  params.signal?.throwIfAborted();
+  assertCodexInferenceRouteConfig(
+    params.client,
+    params.inferenceRoute,
+    params.config,
+    binding.modelProvider,
+    params.inferenceProviderRoutes,
+  );
+  if (reusedConfiguration) {
+    if (getCodexInferenceThread(params.client, binding.threadId) !== params.inferenceRoute) {
+      throw new Error("Codex inference thread configuration changed before reuse");
+    }
+  } else {
+    bindCodexInferenceThread(
+      params.client,
+      binding.threadId,
+      params.inferenceRoute,
+      params.inferenceProviderRoutes,
+    );
+  }
+  return binding;
+}
 
 export function resolveCodexThreadAgentDir(params: CodexStartOrResumeThreadParams): string {
   const agentId = resolveSessionAgentIdsStrict({
@@ -60,8 +219,20 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     cwd: params.cwd,
     signal: params.signal,
   });
-  if (params.nativeHookRelayRequired) {
-    await assertCodexNativeHookRelayAllowed(params.client, params.signal);
+  const nativeHooksRequired =
+    params.nativeHookRelayRequired || params.nativeModelAdmission === "required";
+  let modelAdmissionAvailable =
+    params.nativeModelAdmission !== undefined &&
+    (params.nativeModelAdmission !== "disabled" || nativeHooksRequired);
+  if (nativeHooksRequired || modelAdmissionAvailable) {
+    try {
+      await assertCodexNativeHookRelayAllowed(params.client, params.signal);
+    } catch (error) {
+      if (nativeHooksRequired || !(error instanceof CodexManagedHooksOnlyError)) {
+        throw error;
+      }
+      modelAdmissionAvailable = false;
+    }
   }
   // Slow resumes must be diagnosable without enabling a profiler beforehand.
   const lifecycleTiming = createCodexThreadLifecycleTimingTracker({
@@ -110,7 +281,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const nativeSkillIsolation = await lifecycleTiming.measure("native-skill-isolation", () =>
     resolveCodexNativeSkillIsolation({
       client: params.client,
-      codexHome: params.appServer.start.env?.CODEX_HOME,
+      codexHome: params.appServer.start.codexHome ?? params.appServer.start.env?.CODEX_HOME,
       cwd: params.cwd,
       home: params.appServer.start.env?.HOME,
       signal: params.signal,
@@ -148,9 +319,16 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
     throw new Error("Codex restricted tool surfaces require native code mode to be disabled");
   }
-  if ((restrictedToolSurface || params.nativeCodeModeEnabled !== false) && !effectiveConfig) {
-    effectiveConfig = await lifecycleTiming.measure("tool-policy-config-read", () =>
-      readCodexEffectiveConfig(params.client, params.cwd, params.signal),
+  if (!effectiveConfig) {
+    effectiveConfig = await lifecycleTiming.measure("effective-config-read", () =>
+      readCodexEffectiveConfig(params.client, params.cwd, { signal: params.signal }),
+    );
+  }
+  params.config = mergeCodexNativeProjectDocThreadConfig(params.config, effectiveConfig);
+  if (params.shellEnvironment) {
+    params.config = mergeCodexNativeShellEnvironment(
+      params.config,
+      effectiveConfig.config.shell_environment_policy,
     );
   }
   const restrictedToolSurfaceInheritedMcpServerNames = restrictedToolSurface
@@ -208,6 +386,11 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     ? getCodexAppServerClientInstanceId(params.client)
     : undefined;
   return {
+    nativeModelInputTools:
+      nativeHooksRequired || modelAdmissionAvailable
+        ? resolveCodexNativeModelInputTools(effectiveConfig.config)
+        : undefined,
+    effectiveConfig,
     contextEngineBinding,
     dynamicToolsContainDeferred,
     dynamicToolsFingerprint,

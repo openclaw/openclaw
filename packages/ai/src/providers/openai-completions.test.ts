@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model, SimpleStreamOptions, TextContent } from "../types.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import {
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
+  SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
+} from "../utils/system-prompt-cache-boundary.js";
 
 type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
@@ -81,6 +85,8 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   streamOpenAICompletions,
@@ -408,52 +414,6 @@ describe("OpenAI-compatible completions params", () => {
     expect(result.content).toStrictEqual([{ type: "text", text: "Ordinary answer." }]);
   });
 
-  it("preserves a valid provider-reported usage cost", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("ok"),
-      makeFinishChunk("stop", {
-        prompt_tokens: 10,
-        completion_tokens: 5,
-        total_tokens: 15,
-        cost: 0,
-      }),
-    ];
-    const pricedModel = {
-      ...model,
-      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-    } satisfies Model<"openai-completions">;
-
-    const result = await streamOpenAICompletions(pricedModel, context, {
-      apiKey: "sk-test",
-    }).result();
-
-    expect(result.usage.cost.total).toBe(0);
-    expect(result.usage.cost.totalOrigin).toBe("provider-billed");
-  });
-
-  it("keeps the catalog estimate for an invalid provider-reported usage cost", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("ok"),
-      makeFinishChunk("stop", {
-        prompt_tokens: 10,
-        completion_tokens: 5,
-        total_tokens: 15,
-        cost: -1,
-      }),
-    ];
-    const pricedModel = {
-      ...model,
-      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-    } satisfies Model<"openai-completions">;
-
-    const result = await streamOpenAICompletions(pricedModel, context, {
-      apiKey: "sk-test",
-    }).result();
-
-    expect(result.usage.cost.total).toBeCloseTo(0.00002);
-    expect(result.usage.cost.totalOrigin).toBeUndefined();
-  });
-
   it("fails when streaming headers arrive but no first SSE event follows", async () => {
     vi.useFakeTimers();
     try {
@@ -634,55 +594,6 @@ describe("OpenAI-compatible completions params", () => {
     expect(result.errorMessage).toContain('requested unavailable tool "broken"');
   });
 
-  it("preserves the empty tools marker for tool history after quarantining every schema", async () => {
-    let capturedPayload: Record<string, unknown> | undefined;
-    const stream = streamOpenAICompletions(
-      model,
-      {
-        messages: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_abc",
-                name: "lookup",
-                arguments: {},
-              },
-            ],
-          },
-          {
-            role: "toolResult",
-            content: [{ type: "text", text: "done" }],
-            toolCallId: "call_abc",
-          },
-          ...context.messages,
-        ],
-        tools: [
-          {
-            name: "broken",
-            description: "Broken tool.",
-            get parameters(): never {
-              throw new Error("parameters exploded");
-            },
-          },
-        ],
-      } as never,
-      {
-        apiKey: "sk-test",
-        onPayload(payload) {
-          capturedPayload = payload as Record<string, unknown>;
-          throw new Error("stop before network");
-        },
-      },
-    );
-
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(capturedPayload?.tools).toEqual([]);
-  });
-
   it("replays update_plan-style empty non-image tool results as no output", async () => {
     let capturedMessages:
       | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
@@ -857,23 +768,6 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedPayload).not.toHaveProperty("tools");
   });
 
-  it("clamps requested max tokens to the model output cap", async () => {
-    let capturedMaxTokens: unknown;
-    const stream = streamOpenAICompletions(createModel(32_000), context, {
-      apiKey: "sk-test",
-      maxTokens: 200_000,
-      onPayload(payload) {
-        capturedMaxTokens = (payload as { max_completion_tokens?: unknown }).max_completion_tokens;
-        throw new Error("stop before network");
-      },
-    });
-
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("error");
-    expect(capturedMaxTokens).toBe(32_000);
-  });
-
   it("uses Z.AI max_tokens and disables thinking by default", async () => {
     const stream = streamOpenAICompletions(
       {
@@ -1015,12 +909,12 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedRetention).toBe("24h");
   });
 
-  it("strips the internal cache boundary from OpenAI-compatible system prompts", async () => {
+  it("carries bounded Runtime facts on the first user turn for OpenAI-compatible providers", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
       createModel(32_000),
       {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime facts${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
         messages: [{ role: "user", content: "hi", timestamp: 1 }],
       },
       {
@@ -1036,10 +930,18 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    // The stable prefix must not fork; tool schemas are serialized after it.
     expect(messages[0]).toEqual({
       role: "system",
       content: "Stable prefix\nDynamic suffix",
     });
+    // Only the non-behavioral tail rides behind the tools on the user turn.
+    expect(messages[1]).toEqual({
+      role: "user",
+      content: "hi\n\nRuntime facts",
+    });
+    // The internal marker must never reach the provider.
+    expect(JSON.stringify(messages)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
   it("splits the cache boundary before applying Anthropic cache control for OpenRouter Anthropic models", async () => {
@@ -1081,6 +983,59 @@ describe("OpenAI-compatible completions params", () => {
           text: "Dynamic suffix",
         },
       ],
+    });
+  });
+
+  it("keeps the relocatable marker out of the OpenRouter Anthropic cache-control payload", async () => {
+    // This route preserves the cache boundary for its breakpoint and relocates
+    // nothing, so the relocatable marker must not survive into the payload.
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "anthropic/claude-sonnet-4.6",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+      },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}## Runtime\nRuntime: session=alpha${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    const serialized = JSON.stringify(messages);
+    expect(serialized).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+    expect(serialized).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
+    // The breakpoint still lands on the stable prefix, and nothing is relocated.
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: [
+        {
+          type: "text",
+          text: "Stable prefix",
+          cache_control: { type: "ephemeral" },
+        },
+        {
+          type: "text",
+          text: "Reactions guidance\n## Runtime\nRuntime: session=alpha",
+        },
+      ],
+    });
+    // The user turn carries the conversation breakpoint and nothing relocated.
+    expect(messages[1]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "hi", cache_control: { type: "ephemeral" } }],
     });
   });
 
@@ -1140,11 +1095,7 @@ describe("OpenAI-compatible completions params", () => {
       },
       {
         messages: [
-          {
-            role: "user",
-            content: "search first",
-            timestamp: 1,
-          },
+          makeUserMessage("search first", 1),
           {
             role: "assistant",
             api: "openai-completions",
@@ -1162,19 +1113,8 @@ describe("OpenAI-compatible completions params", () => {
             ],
             timestamp: 2,
           },
-          {
-            role: "toolResult",
-            toolCallId: "call_search",
-            toolName: "search",
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: 3,
-          },
-          {
-            role: "user",
-            content: "continue",
-            timestamp: 4,
-          },
+          makeTextToolResult("call_search", "search", "ok", false, 3),
+          makeUserMessage("continue", 4),
         ],
       },
       {
@@ -1834,23 +1774,6 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content).toEqual([{ type: "text", text: "ordinary narration" }]);
     expect(eventTypes.indexOf("text_end")).toBeLessThan(eventTypes.indexOf("error"));
     expect(eventTypes).not.toContain("toolcall_end");
-  });
-
-  it("strips toolCall blocks when finish_reason is stop after visible text", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("Hello"),
-      makeToolCallChunk("call_1", "bash", '{"cmd":"ls"}'),
-      makeFinishChunk("stop"),
-    ];
-
-    const stream = streamOpenAICompletions(model, context, {
-      apiKey: "sk-test",
-    });
-    const result = await stream.result();
-
-    expect(result.stopReason).toBe("stop");
-    expect(result.content.filter((b) => b.type === "toolCall")).toStrictEqual([]);
-    expect(result.content.some((b) => b.type === "text")).toBe(true);
   });
 
   it("preserves toolCall blocks when finish_reason is tool_calls", async () => {

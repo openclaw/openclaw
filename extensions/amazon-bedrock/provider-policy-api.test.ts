@@ -105,7 +105,12 @@ describe("amazon-bedrock provider-policy-api", () => {
   it.each([
     {
       canonicalModelId: "claude-fable-5",
-      defaultLevel: "high",
+      defaultLevel: "medium",
+      preservesCatalogOptOut: true,
+    },
+    {
+      canonicalModelId: "claude-fable-5-1",
+      defaultLevel: "medium",
       preservesCatalogOptOut: true,
     },
     {

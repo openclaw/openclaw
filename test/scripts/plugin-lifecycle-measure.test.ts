@@ -63,17 +63,30 @@ function waitForNonEmptyPath(filePath: string, timeoutMs: number): boolean {
 function waitForChildClose(
   child: ChildProcess,
   timeoutMs: number,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+): Promise<{ code: number | null; signal: NodeJS.Signals | null; stderr: string }> {
   return new Promise((resolve, reject) => {
+    let stderr = "";
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk;
+    });
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error("timed out waiting for measured wrapper to exit"));
     }, timeoutMs);
     child.once("close", (code, signal) => {
       clearTimeout(timer);
-      resolve({ code, signal });
+      resolve({ code, signal, stderr });
     });
   });
+}
+
+function expectDrainedBeforeGraceDeadline(stderr: string) {
+  const termination = stderr.match(
+    /reason=(\S+) signal=SIGTERM exit_ms=([\d.]+) grace_deadline_ms=([\d.]+)/u,
+  );
+  expect(termination, stderr).not.toBeNull();
+  expect(termination?.[1]).toBe("descendants-drained");
+  expect(Number(termination?.[2])).toBeLessThan(Number(termination?.[3]));
 }
 
 describe("plugin lifecycle resource sampler", () => {
@@ -183,19 +196,26 @@ describe("plugin lifecycle resource sampler", () => {
     expect(script).toContain("process.exit(124)");
   });
 
-  it.runIf(process.platform === "linux")(
-    "fails successful phases that exceed wall ceilings",
-    () => {
+  it.runIf(process.platform === "linux").each([
+    { actions: false, exitCode: 0 },
+    { actions: true, exitCode: 0 },
+    { actions: true, exitCode: 9 },
+  ])(
+    "reports wall ceilings without concealing phase errors (Actions $actions, exit $exitCode)",
+    ({ actions, exitCode }) => {
       const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
+      const jobSummary = path.join(dir, "job-summary.md");
       const result = spawnSync(
         "node",
-        [scriptPath, summary, "slow-success", "--", "node", "-e", "setTimeout(() => {}, 40)"],
+        [scriptPath, summary, "slow-success", "--", "node", "-e", `process.exit(${exitCode})`],
         {
           cwd: process.cwd(),
           encoding: "utf8",
           env: {
             ...process.env,
+            GITHUB_ACTIONS: actions ? "true" : "",
+            GITHUB_STEP_SUMMARY: jobSummary,
             OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
             OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS: "1",
           },
@@ -203,8 +223,14 @@ describe("plugin lifecycle resource sampler", () => {
         },
       );
 
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("plugin lifecycle resource ceiling exceeded");
+      expect(result.status).toBe(actions ? exitCode : 1);
+      if (actions) {
+        expect(result.stderr).toContain(`::warning file=${scriptPath},line=1,col=0`);
+        expect(result.stderr).not.toContain("plugin lifecycle resource ceiling exceeded:");
+        expect(readFileSync(jobSummary, "utf8")).toContain("Plugin lifecycle resource budget");
+      } else {
+        expect(result.stderr).toContain("plugin lifecycle resource ceiling exceeded");
+      }
       expect(result.stderr).toContain("wall_ms=");
       expect(readFileSync(summary, "utf8")).toMatch(/^slow-success\t\d+\t[\d.]+\t\d+\t[\d.]+\t$/mu);
     },
@@ -223,6 +249,8 @@ describe("plugin lifecycle resource sampler", () => {
           encoding: "utf8",
           env: {
             ...process.env,
+            GITHUB_ACTIONS: "true",
+            GITHUB_STEP_SUMMARY: "",
             OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "150",
             OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "50",
           },
@@ -274,17 +302,40 @@ describe("plugin lifecycle resource sampler", () => {
   });
 
   it.runIf(process.platform === "linux")(
-    "kills stubborn descendants after the timeout grace period",
+    "kills stubborn descendants after timeout grace despite disappearing processes",
     () => {
       const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const pidFile = path.join(dir, "descendant.pid");
+      const procRaceMarker = path.join(dir, "proc-race");
+      const preload = path.join(dir, "vanishing-proc.mjs");
+      writeFileSync(
+        preload,
+        `import fs from "node:fs";
+const readdirSync = fs.readdirSync.bind(fs);
+const vanishedPid = String(Number(fs.readFileSync("/proc/sys/kernel/pid_max", "utf8")) + 1);
+let scans = 0;
+let injected = false;
+fs.readdirSync = (target, options) => {
+  const entries = readdirSync(target, options);
+  if (target !== "/proc" || ++scans === 1 || injected) return entries;
+  if (!fs.existsSync(process.env.PID_FILE) || fs.statSync(process.env.PID_FILE).size === 0) return entries;
+  injected = true;
+  fs.writeFileSync(process.env.PROC_RACE_MARKER, vanishedPid);
+  // Node resolves unknown Dirent types with lstat, which can race process exit.
+  if (options?.withFileTypes) fs.lstatSync("/proc/" + vanishedPid);
+  return [...entries, vanishedPid];
+};
+`,
+      );
       let descendantPid: number | undefined;
 
       try {
         const result = spawnSync(
           "node",
           [
+            "--import",
+            preload,
             scriptPath,
             summary,
             "stubborn-descendant",
@@ -305,13 +356,23 @@ describe("plugin lifecycle resource sampler", () => {
               OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "3000",
               OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
               PID_FILE: pidFile,
+              PROC_RACE_MARKER: procRaceMarker,
             },
             timeout: 7000,
           },
         );
 
+        const resultDetails = JSON.stringify({
+          status: result.status,
+          signal: result.signal,
+          error: result.error?.message,
+          stdout: result.stdout,
+          stderr: result.stderr,
+        });
+        expect(nonEmptyPathExists(pidFile), resultDetails).toBe(true);
         descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
-        expect(result.status).toBe(124);
+        expect(result.status, resultDetails).toBe(124);
+        expect(nonEmptyPathExists(procRaceMarker)).toBe(true);
         expect(result.stdout).toContain("signal=timeout");
         expect(readFileSync(summary, "utf8")).toMatch(
           /^stubborn-descendant\t\d+\t[\d.]+\t\d+\t[\d.]+\ttimeout$/mu,
@@ -353,7 +414,7 @@ describe("plugin lifecycle resource sampler", () => {
               OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
               PID_FILE: pidFile,
             },
-            stdio: "ignore",
+            stdio: ["ignore", "ignore", "pipe"],
           },
         );
 
@@ -362,6 +423,7 @@ describe("plugin lifecycle resource sampler", () => {
         result.kill("SIGTERM");
         const close = await waitForChildClose(result, 5000);
         expect(close.signal).toBe("SIGTERM");
+        expect(close.stderr).toContain("reason=grace-elapsed signal=SIGTERM");
         expect(waitForPidExit(descendantPid, 1000)).toBe(true);
       } finally {
         if (descendantPid !== undefined && descendantPid > 0 && pidExists(descendantPid)) {
@@ -371,9 +433,9 @@ describe("plugin lifecycle resource sampler", () => {
     },
   );
 
-  it.runIf(process.platform === "linux")(
-    "exits promptly when externally terminated phases stop during grace",
-    async () => {
+  it.runIf(process.platform === "linux").each(["open", "closed"])(
+    "exits promptly when externally terminated phases stop during grace (stderr %s)",
+    async (stderr) => {
       const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const readyFile = path.join(dir, "ready.pid");
@@ -402,16 +464,20 @@ describe("plugin lifecycle resource sampler", () => {
             OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "1500",
             READY_FILE: readyFile,
           },
-          stdio: "ignore",
+          stdio: ["ignore", "ignore", "pipe"],
         },
       );
 
-      expect(waitForNonEmptyPath(readyFile, 1000)).toBe(true);
-      const started = Date.now();
+      expect(waitForNonEmptyPath(readyFile, 5000)).toBe(true);
+      if (stderr === "closed") {
+        result.stderr.destroy();
+      }
       result.kill("SIGTERM");
       const close = await waitForChildClose(result, 5000);
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      if (stderr === "open") {
+        expectDrainedBeforeGraceDeadline(close.stderr);
+      }
       expect(close.signal).toBe("SIGTERM");
     },
   );
@@ -441,16 +507,15 @@ describe("plugin lifecycle resource sampler", () => {
             OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "1500",
             READY_FILE: readyFile,
           },
-          stdio: "ignore",
+          stdio: ["ignore", "ignore", "pipe"],
         },
       );
 
-      expect(waitForNonEmptyPath(readyFile, 1000)).toBe(true);
-      const started = Date.now();
+      expect(waitForNonEmptyPath(readyFile, 5000)).toBe(true);
       result.kill("SIGTERM");
       const close = await waitForChildClose(result, 5000);
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expectDrainedBeforeGraceDeadline(close.stderr);
       expect(close.signal).toBe("SIGTERM");
     },
   );

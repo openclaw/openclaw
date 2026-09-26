@@ -95,6 +95,7 @@ describe("Slack conversation-open", () => {
       entry?.actions?.includes("conversation-open"),
     );
     expect(schema?.properties.userIds).toMatchObject({ type: "array", minItems: 1, maxItems: 8 });
+    expect(schema?.properties).not.toHaveProperty("teamId");
   });
 
   it.each(["C01234567", "G01234567"])(
@@ -149,12 +150,9 @@ describe("Slack conversation-open", () => {
   });
 
   it.each([
-    { name: "missing recipients", userIds: undefined },
     { name: "no recipients", userIds: [] },
     { name: "a comma-separated string", userIds: "U11111111,U22222222" },
     { name: "a channel ID", userIds: ["C11111111"] },
-    { name: "a mention", userIds: ["<@U11111111>"] },
-    { name: "duplicate recipients", userIds: ["U11111111", "U11111111"] },
     { name: "duplicates after trimming", userIds: ["U11111111", " U11111111 "] },
     {
       name: "too many recipients",

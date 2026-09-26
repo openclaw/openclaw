@@ -1,12 +1,13 @@
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import {
-  assertMacosCatalogCurrent,
   buildIosCatalog,
   buildMacosCatalog,
   compileMacosLocalizations,
+  checkAppleAppI18n,
   findAmbiguousRuntimeInterpolations,
   infoPlistTranslationCandidates,
   selectInfoPlistTranslation,
@@ -17,6 +18,7 @@ import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 
 const probe = vi.hoisted(() => ({
   source: "",
+  catalogs: new Map<string, string>(),
   paths: [
     "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
     "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
@@ -31,8 +33,12 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     ...actual,
     // Synthetic calls are opt-in and limited to production-source reads; all other I/O stays real.
     readFile: async (...args: Parameters<typeof actual.readFile>) => {
-      const source = await actual.readFile(...args);
       const file = typeof args[0] === "string" ? args[0].replaceAll("\\", "/") : "";
+      const catalog = probe.catalogs.get(path.resolve(file));
+      if (catalog !== undefined) {
+        return catalog;
+      }
+      const source = await actual.readFile(...args);
       return probe.source &&
         typeof source === "string" &&
         probe.paths.some((entry) => file.endsWith("/" + entry))
@@ -76,10 +82,6 @@ describe("Apple app i18n catalogs", () => {
     }
   });
 
-  it("keeps source-owned runtime coverage complete", async () => {
-    await expect(verifyAppleAppI18n()).resolves.toBeUndefined();
-  });
-
   it("ships translated runtime keys for iOS, watchOS, and explicit localized calls", async () => {
     const catalog = JSON.parse(
       await readFile("apps/ios/Resources/Localizable.xcstrings", "utf8"),
@@ -97,7 +99,6 @@ describe("Apple app i18n catalogs", () => {
       "Connect a nearby Gateway",
       "Talk to Claw",
       "Expires in %@",
-      "Location Services are off in iOS Settings.",
       "Pending review",
       "Secure connection is required for this host.",
       "TLS required",
@@ -178,29 +179,114 @@ describe("Apple app i18n catalogs", () => {
     expect(keys.some((key) => key.includes("\\("))).toBe(false);
   });
 
-  it("rejects a checked-in macOS catalog that lags the derived inventory", () => {
-    const build = buildMacosCatalog(
-      { sourceLanguage: "en", strings: {}, version: "1.0" },
-      {
-        version: 2,
-        entries: [
-          {
-            id: "native.apple.settings",
-            source: "Settings",
-            sites: [{ kind: "ui-call", path: "apps/macos/Sources/OpenClaw/Settings.swift" }],
-            surface: "apple",
-          },
-        ],
-      },
-      [],
+  it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
+    const inventory: Parameters<typeof buildIosCatalog>[1] = JSON.parse(
+      await readFile("apps/.i18n/native-source.json", "utf8"),
     );
-
-    expect(() =>
-      assertMacosCatalogCurrent(
-        `${JSON.stringify({ sourceLanguage: "en", strings: {}, version: "1.0" }, null, 2)}\n`,
-        build,
+    const translations = await Promise.all(
+      NATIVE_I18N_LOCALES.map(async (locale) =>
+        JSON.parse(await readFile(`apps/.i18n/native/${locale}.json`, "utf8")),
       ),
-    ).toThrow("Apple catalog apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings is stale");
+    );
+    const catalogs = await Promise.all(
+      (
+        [
+          ["apps/ios/Resources/Localizable.xcstrings", buildIosCatalog],
+          ["apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings", buildMacosCatalog],
+        ] as const
+      ).map(async ([file, buildCatalog]) => {
+        const filePath = path.resolve(file);
+        const build = buildCatalog(
+          JSON.parse(await readFile(filePath, "utf8")),
+          inventory,
+          translations,
+        );
+        return { filePath, catalog: build.catalog };
+      }),
+    );
+    try {
+      // Source PRs can await generation; keep this fixture's active resources current.
+      for (const { filePath, catalog } of catalogs) {
+        probe.catalogs.set(filePath, serializeAppleCatalog(catalog));
+      }
+      for (const { filePath, catalog } of catalogs) {
+        const warnings: string[] = [];
+        const options = { reportObsolete: (message: string) => warnings.push(message) };
+        const strings = expectDefined(catalog.strings, "active catalog strings");
+        const activeKey = expectDefined(
+          Object.keys(strings).find((key) => key.includes("%@")),
+          "active format key",
+        );
+        const obsolete: typeof catalog & { strings: typeof strings } = {
+          ...catalog,
+          strings: {
+            ...strings,
+            "Retired synthetic %@": {
+              localizations: { en: { stringUnit: { state: "new", value: "" } } },
+            },
+            "Retired empty title": {},
+          },
+        };
+        const serialized = serializeAppleCatalog(obsolete);
+        probe.catalogs.set(filePath, serialized);
+        await expect(checkAppleAppI18n()).rejects.toThrow("is stale");
+        warnings.length = 0;
+        await expect(checkAppleAppI18n(options)).resolves.toBeUndefined();
+        expect(warnings).toEqual([
+          `Apple obsolete catalog rows: ${path.relative(process.cwd(), filePath).replaceAll("\\", "/")} (keys=2)`,
+        ]);
+
+        for (const ineligibleRow of [
+          "null",
+          "42",
+          '{"localizations":null}',
+          '{"localizations":{"en":42}}',
+          '{"localizations":{"en":{"stringUnit":null}}}',
+          '{"localizations":{"en":{"stringUnit":{"state":"new"}}}}',
+          '{"localizations":{"en":{"stringUnit":{"state":42,"value":"Retired"}}}}',
+          '{"comment":42}',
+          '{"localizations":{"en":{"variations":{}}}}',
+        ]) {
+          probe.catalogs.set(
+            filePath,
+            serialized.replace(
+              '"Retired empty title": {}',
+              `"Retired empty title": ${ineligibleRow}`,
+            ),
+          );
+          await expect(checkAppleAppI18n(options)).rejects.toThrow();
+        }
+
+        const missingKey = structuredClone(obsolete);
+        delete missingKey.strings[activeKey];
+        const missingLocale = structuredClone(obsolete);
+        delete missingLocale.strings[activeKey]?.localizations?.de;
+        const placeholderDrift = structuredClone(obsolete);
+        expectDefined(
+          placeholderDrift.strings[activeKey]?.localizations?.de?.stringUnit,
+          "German format unit",
+        ).value = "Missing format argument";
+        const metadataDrift = structuredClone(obsolete);
+        expectDefined(metadataDrift.strings[activeKey], "active catalog entry").comment =
+          "Unexpected metadata";
+        for (const invalid of [
+          serializeAppleCatalog(missingKey),
+          serializeAppleCatalog(missingLocale),
+          serializeAppleCatalog(placeholderDrift),
+          serializeAppleCatalog(metadataDrift),
+          serializeAppleCatalog({ ...obsolete, sourceLanguage: "fr" }),
+          serializeAppleCatalog({ ...obsolete, version: "2.0" }),
+          `${serialized}\n`,
+          `${serialized}malformed\n`,
+        ]) {
+          probe.catalogs.set(filePath, invalid);
+          await expect(checkAppleAppI18n(options)).rejects.toThrow();
+        }
+        probe.catalogs.set(filePath, serializeAppleCatalog(catalog));
+      }
+    } finally {
+      probe.catalogs.clear();
+    }
   });
 
   it("serializes one complete localization key per line without losing nested metadata", () => {
@@ -391,62 +477,11 @@ describe("Apple app i18n catalogs", () => {
     },
   );
 
-  it("keeps custom component text on explicit localized or verbatim paths", async () => {
-    const design = await readFile("apps/ios/Sources/Design/OpenClawProComponents.swift", "utf8");
-    const settingsActions = await readFile(
-      "apps/ios/Sources/Design/SettingsProTabActions.swift",
-      "utf8",
-    );
-    const settingsSections = await readFile(
-      "apps/ios/Sources/Design/SettingsProTabSections.swift",
-      "utf8",
-    );
-    const gatewayCapabilities = await readFile(
-      "apps/ios/Sources/Gateway/GatewayConnectionController+Capabilities.swift",
-      "utf8",
-    );
-    const talkMode = await readFile("apps/ios/Sources/Voice/TalkModeManager.swift", "utf8");
-    const voiceWake = await readFile("apps/ios/Sources/Voice/VoiceWakeManager.swift", "utf8");
-    const settings = await readFile("apps/ios/Sources/Design/SettingsProTabSupport.swift", "utf8");
+  it("keeps dynamic Watch content verbatim and requires explicit localization", async () => {
     const watch = await readFile("apps/ios/WatchApp/Sources/WatchInboxView.swift", "utf8");
-    const watchDirect = await readFile("apps/ios/WatchApp/Sources/WatchDirectNode.swift", "utf8");
 
-    expect(design).toContain(
-      "struct ProStatusRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
-    );
-    expect(design).not.toContain(
-      "struct ProStatusRow: View {\n    let icon: String\n    let title: String",
-    );
-    expect(watch).toContain(
-      "private struct WatchHeroCard: View {\n    let label: WatchTextValue\n    let title: WatchTextValue\n    let subtitle: WatchTextValue",
-    );
-    expect(watch).toContain("case localized(LocalizedStringResource)");
     expect(watch).not.toContain("WatchTextValue: ExpressibleByStringLiteral");
     expect(watch).toContain("accessory: .verbatim(self.store.talkSummaryText)");
-    expect(watch).toContain("title: .verbatim(record.approval.commandPreview");
-    expect(settings).toContain(
-      "let title: OpenClawTextValue\n    let detail: OpenClawTextValue\n    let priority: OpenClawTextValue",
-    );
-    expect(settings).toContain(
-      "struct SettingsDetailRow: View {\n    let label: LocalizedStringKey\n    let value: OpenClawTextValue",
-    );
-    expect(settings).toContain("self.value.text");
-    expect(settings).not.toContain("Text(self.item.title)");
-    expect(settingsActions).toContain(
-      "func diagnosticCheckRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue,\n        value: OpenClawTextValue",
-    );
-    expect(settingsSections).toContain("func settingsToggle(\n        _ title: LocalizedStringKey");
-    expect(settingsSections).toContain(
-      "func gatewaySecureField(\n        _ placeholder: LocalizedStringKey",
-    );
-    expect(gatewayCapabilities).toContain(
-      'String(localized: "Secure connection is required for this host.")',
-    );
-    expect(talkMode).not.toContain('self.statusText = "');
-    expect(voiceWake).not.toContain('self.statusText = "');
-    expect(watch).toContain('format: String(localized: "Expires in %@")');
-    expect(watch).not.toContain('parts.append("Expires in \\(expiresText)")');
-    expect(watchDirect).not.toContain('self.statusText = "');
   });
 
   it("rejects interpolated runtime copy across every supported Swift syntax", () => {

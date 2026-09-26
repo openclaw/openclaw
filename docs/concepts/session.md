@@ -122,11 +122,13 @@ context, and replies to the source room remain unchanged.
 
 ## Incognito sessions
 
-Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread disappears when the Gateway restarts, does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
+Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
+
+Agent RPC runs and delegated tasks keep content-free task records for lifecycle, cancellation, and completion tracking. Their prompts, labels, progress summaries, results, and free-form errors are not saved in those records. Live task activity and completion delivery remain available.
 
 The `incognito-` segment is reserved for dashboard, subagent, and hidden internal session keys; `openclaw doctor --fix` renames any colliding legacy durable keys.
 
-Incognito does not restrict the agent's normal tools. An explicit request to save information, or any tool-driven file write, can still persist data outside the incognito session store. Your configured model provider still processes the messages you send, diagnostic logging remains unchanged, and OpenClaw still records content-free audit metadata such as HMAC references.
+Incognito does not restrict the agent's normal tools. An explicit request to save information, or any tool-driven file write, can still persist data outside the incognito session store. Your configured model provider still processes the messages you send. Incognito content is excluded from ordinary Gateway output, delivery and response diagnostics, WebSocket event previews, raw-stream, cache-trace, and Anthropic payload logs. Live replies remain available, and OpenClaw still records operational diagnostics and content-free audit metadata such as HMAC references.
 
 On multi-user gateways, incognito threads are visible only to admin-scope connections and never appear through another session's agent session tools or transcript search. This protects them from storage and other gateway-mediated users, not from the gateway owner or process operator, who can always observe live sessions.
 
@@ -208,6 +210,15 @@ Accepting, queueing, or preparing a resume request alone does not refresh it.
 CLI backends that do not report turn acceptance refresh the budget only after
 observed assistant output or tool activity; silent startup does not refresh it.
 
+When replaying an interrupted turn, recovery preserves its recorded tool calls
+and results, including nested tool activity, and reuses the original user message.
+A completed reply or a later user message closes that turn to replay.
+
+Messages sent while restart recovery is waiting to start stay pending. Once
+recovery starts, they follow the session's normal message queue policy. You do
+not need to resend a message just because recovery is waiting for capacity.
+Stopping or replacing the session still cancels pending work.
+
 If automatic recovery is exhausted, the transcript remains available. Use
 **Resume in new session** in WebChat, or `/new` or `/reset` in other channels,
 to start a replacement session.
@@ -264,6 +275,20 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
+Ordinary entry writes also arm background maintenance at the next age boundary,
+with a periodic recheck every 30 minutes while the store remains open. This lets
+eligible sessions age out without further traffic. Writes that cannot change
+age or count maintenance outcomes skip candidate scans. Automatic planning reads
+only retention and protection metadata before entering the foreground write queue;
+cap selection retains only the required oldest eligible entries. The writer checks
+the prepared store revision before applying changes, so concurrent updates are
+reconsidered instead of overwritten.
+If writes invalidate an automatic maintenance plan, its replacement waits for
+a quiet window after the last write (one second, then two seconds). Three
+consecutive invalidations pause automatic retries and log the cause; a new
+entry write can schedule another attempt. `warn` mode captures the maintenance
+age fact without constructing or dispatching automatic reclamation.
+
 `maxEntries` defaults to 5000 unarchived session rows. Archived rows do not consume
 the cap. Existing explicit limits remain unchanged.
 When pressure exceeds the cap, cleanup archives the oldest eligible ordinary
@@ -273,9 +298,11 @@ removed. Pinned root sessions, active or admitted work, model-locked sessions, a
 durable external conversation pointers are protected; the unarchived total can
 therefore remain above the cap when protected rows alone exceed it.
 
-Only root sessions can be pinned; child/subagent sessions live in their parent's
-tree and reject pin requests. Existing child pins disappear and no longer protect
-the session from maintenance.
+Root sessions and sessions auto-parented to the agent's Home root can be pinned;
+genuine child sessions and subagent runs reject pin requests. Persistent child
+sessions retain their sidebar nesting; subagent runs appear in transcript activity
+and Tasks views. Existing child pins disappear and no longer protect the session
+from maintenance.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
@@ -309,6 +336,42 @@ until physical usage exceeds `maxDiskBytes`; disk-budget cleanup may then delete
 the oldest cap archives after cheaper artifacts and unreferenced history are
 exhausted. Sessions without a recorded archive reason remain protected.
 
+After skipping a history generation or archived session, disk-budget cleanup
+rechecks physical usage before considering another deletion. A measurement
+failure stops the sweep.
+
+Background disk-budget checks run at most every 30 minutes on entry writes.
+Delete and reset operations can request a check sooner, but repeated requests
+coalesce to at most one forced check per minute per store. If cleanup exhausts
+eligible history and the store remains over budget, automatic checks back off
+for 30 minutes and log one warning until the pressure clears or the budget changes.
+The warning recommends raising `session.maintenance.maxDiskBytes` or exporting
+and deleting unneeded sessions. Checks resume on subsequent activity;
+`openclaw sessions cleanup --enforce` remains available immediately.
+
+Cleanup first tries to truncate the WAL without waiting for readers. If readers
+prevent truncation, a complete PASSIVE checkpoint is sufficient: every observed
+frame must have reached the main database, even if the WAL file remains allocated.
+Retained WAL bytes still count toward the physical budget. Successful cleanup
+logs one outcome with the before/after bytes and removal counts.
+
+An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
+archives and history instead of deleting more data behind the blocked checkpoint.
+The result records `deferredReason: "checkpoint-incomplete"`, WAL bytes before and
+after, and the checkpoint outcome. Automatic and manual budget passes remain
+deferred until the checkpoint owner observes a completed checkpoint; elapsed time
+or a budget change alone does not retry pruning. Normal periodic checkpointing
+continues, and subsequent activity can resume cleanup after recovery, including
+after a system clock correction.
+
+Look for `session history disk budget deferred until a completed WAL checkpoint is observed`
+in the Gateway log. Its checkpoint fields include bounded operation names for
+explicitly tracked readers, connection and thread IDs, and open-transaction flags.
+Collecting these facts does not keep connections open or change worker retirement.
+They do not prove which connection holds the blocking SQLite read mark. Raw native
+statements outside explicit reader tracking, other workers, and other processes
+can remain unidentified. No transcript contents, SQL text, or bound values are included.
+
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with
 `openclaw sessions cleanup --dry-run --fix-dm-scope`. Applying the same flag
@@ -326,7 +389,9 @@ Preview any maintenance run with `openclaw sessions cleanup --dry-run`.
 | `/status` in chat          | Context usage, model, and toggles               |
 | `/context list`            | What is in the system prompt                    |
 
-## Further reading
+<a id="further-reading" />
+
+## Related
 
 - [Session search](/concepts/session-search) - full-text recall across past transcripts
 - [Session Pruning](/concepts/session-pruning) - trimming tool results
@@ -335,11 +400,8 @@ Preview any maintenance run with `openclaw sessions cleanup --dry-run`.
 - [Session Management Deep Dive](/reference/session-management-compaction) -
   store schema, transcripts, send policy, origin metadata, and advanced config
 - [Multi-Agent](/concepts/multi-agent) - routing and session isolation across agents
-- [Background Tasks](/automation/tasks) - how detached work creates task records with session references
-- [Channel Routing](/channels/channel-routing) - how inbound messages are routed to sessions
-
-## Related
-
-- [Session pruning](/concepts/session-pruning)
-- [Session tools](/concepts/session-tool)
+- [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) - per-agent sandbox and tool restrictions, including session visibility
+- [Transcript hygiene](/reference/transcript-hygiene) - in-memory, provider-specific transcript sanitization applied before a run
 - [Command queue](/concepts/queue)
+- [Background Tasks](/automation/tasks) - how detached work creates task records with session references
+- [Channel routing](/channels/channel-routing) - how inbound messages are routed to sessions

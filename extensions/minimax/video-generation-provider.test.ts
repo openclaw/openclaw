@@ -1,10 +1,12 @@
-// Minimax tests cover video generation provider plugin behavior.
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  expectAllowPrivateNetworkPolicy,
+  expectMinimaxGuardedFetchCall,
   getMinimaxProviderHttpMocks,
   installMinimaxProviderHttpMockCleanup,
   loadMinimaxVideoGenerationProviderModule,
+  mockCallArg,
 } from "./provider-http.test-helpers.js";
 
 const {
@@ -12,7 +14,6 @@ const {
   postJsonRequestMock,
   executeProviderOperationWithRetryMock,
   fetchWithTimeoutMock,
-  fetchWithTimeoutGuardedMock,
   resolveProviderHttpRequestConfigMock,
 } = getMinimaxProviderHttpMocks();
 
@@ -41,37 +42,6 @@ function expectMinimaxFetchCall(index: number, url: string) {
   expect(Number.isInteger(timeoutMs)).toBe(true);
   expect(timeoutMs).toBeGreaterThan(0);
   expect(fetchFn).toBe(fetch);
-}
-
-function expectMinimaxGuardedFetchCall(index: number, url: string) {
-  const call = fetchWithTimeoutGuardedMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected MiniMax guarded fetch call ${index + 1}`);
-  }
-  const [actualUrl, init, timeoutMs, fetchFn, options] = call;
-  expect(actualUrl).toBe(url);
-  expect((init as RequestInit | undefined)?.method).toBe("GET");
-  expect(Number.isInteger(timeoutMs)).toBe(true);
-  expect(timeoutMs).toBeGreaterThan(0);
-  expect(fetchFn).toBe(fetch);
-  return {
-    init: init as RequestInit,
-    options: options as Record<string, unknown> | undefined,
-  };
-}
-
-function expectAllowPrivateNetworkPolicy(options: Record<string, unknown> | undefined): void {
-  expect(options).toEqual({
-    ssrfPolicy: { allowPrivateNetwork: true },
-  });
-}
-
-function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected mock call ${index}`);
-  }
-  return call[0] as Record<string, unknown>;
 }
 
 function streamedVideoResponse(bytes: string): Response {

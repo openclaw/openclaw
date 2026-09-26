@@ -1,21 +1,14 @@
-// Voyage batch tests cover the real HTTP boundary and bounded response reads.
 import { once } from "node:events";
 import { createServer } from "node:http";
+import type { RemoteEmbeddingClient } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runVoyageEmbeddingBatches } from "./embedding-batch.js";
-import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embedding-provider.js";
+import { createVoyageEmbeddingProvider } from "./embedding-provider.js";
 
 type VoyageBatchOptions = Parameters<typeof runVoyageEmbeddingBatches>[0];
 type BatchStage = "upload" | "create" | "status" | "output" | "error";
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function buildClient(): VoyageEmbeddingClient {
+function buildClient(): RemoteEmbeddingClient {
   return {
     baseUrl: "https://api.voyageai.test/v1",
     headers: { authorization: "Bearer fixture-voyage" },
@@ -45,11 +38,11 @@ function resolveBatchStage(url: string, init?: RequestInit): BatchStage {
 function defaultBatchResponse(stage: BatchStage): Response {
   switch (stage) {
     case "upload":
-      return jsonResponse({ id: "input-0" });
+      return Response.json({ id: "input-0" });
     case "create":
-      return jsonResponse({ id: "batch-0", status: "in_progress" });
+      return Response.json({ id: "batch-0", status: "in_progress" });
     case "status":
-      return jsonResponse({ id: "batch-0", status: "completed", output_file_id: "output-0" });
+      return Response.json({ id: "batch-0", status: "completed", output_file_id: "output-0" });
     case "output":
       return new Response(
         JSON.stringify({
@@ -349,7 +342,7 @@ describe("voyage batch bounded reads", () => {
     const streamed = streamingResponse({ chunkCount: 20, chunkSize: 1024 * 1024 });
     stubBatchFetch((stage) => {
       if (stage === "create") {
-        return jsonResponse({
+        return Response.json({
           id: "batch-0",
           status: "completed",
           output_file_id: "output-0",
@@ -413,7 +406,7 @@ describe("voyage batch bounded reads", () => {
   it("reads a completed error file before downloading successful output", async () => {
     const fetchMock = stubBatchFetch((stage) =>
       stage === "status"
-        ? jsonResponse({
+        ? Response.json({
             id: "batch-0",
             status: "completed",
             output_file_id: "output-0",
@@ -459,7 +452,7 @@ describe("voyage batch bounded reads", () => {
       if (stage !== "create" || ++attempts > 1) {
         return undefined;
       }
-      return jsonResponse({ error: { message: "retry this request" } }, 503);
+      return Response.json({ error: { message: "retry this request" } }, { status: 503 });
     });
 
     await expect(runBatch()).resolves.toEqual(new Map([["req-0", [1, 2]]]));

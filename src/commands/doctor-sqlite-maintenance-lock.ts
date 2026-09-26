@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync, resolveRootPathSync } from "../infra/boundary-path.js";
+import { formatGatewayLockFailure } from "../infra/gateway-lock-diagnostics.js";
 import {
   acquireGatewayLock,
   GatewayLockError,
@@ -42,7 +43,7 @@ export class DoctorSqliteMaintenanceLockUnavailableError extends Error {
     public override readonly cause: GatewayLockError,
   ) {
     super(
-      `Cannot run ${operation} while the Gateway or another SQLite maintenance command owns this OpenClaw state directory. Stop the Gateway and retry.`,
+      `Cannot run ${operation}: ${formatGatewayLockFailure(cause)}. Resolve the lock failure and retry.`,
     );
     this.name = "DoctorSqliteMaintenanceLockUnavailableError";
   }
@@ -203,18 +204,20 @@ export async function withDoctorSqliteMaintenanceLock<T>(
 
   let active = true;
   try {
-    await assertMaintenancePathsOwnedByStateDir(
-      env,
-      params.operation,
-      params.protectedPaths ?? [],
-      params.reconcileHardlink,
-    );
-    return await params.run({
-      assertCurrent() {
-        if (!active) {
-          throw new Error("Doctor SQLite maintenance authority has expired.");
-        }
-      },
+    return await lock.run(async () => {
+      await assertMaintenancePathsOwnedByStateDir(
+        env,
+        params.operation,
+        params.protectedPaths ?? [],
+        params.reconcileHardlink,
+      );
+      return await params.run({
+        assertCurrent() {
+          if (!active) {
+            throw new Error("Doctor SQLite maintenance authority has expired.");
+          }
+        },
+      });
     });
   } finally {
     active = false;

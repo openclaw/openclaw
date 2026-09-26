@@ -1,8 +1,11 @@
 // Gateway cron lazy loader.
 // Defers scheduler startup until cron is touched by runtime or API handlers.
 import type { CliDeps } from "../cli/deps.types.js";
+import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayCronExitWatcherHandoff, GatewayCronState } from "./server-cron.js";
@@ -33,9 +36,12 @@ type LoadedGatewayCronState = {
 
 /** Creates a cron state proxy that imports the real cron service on first use. */
 export function createLazyGatewayCronState(params: LazyGatewayCronParams): GatewayCronState {
+  const spawnBroker = getSpawnBroker();
+  const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   const env = params.env ?? process.env;
   const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
-  const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
+  const cronEnabled =
+    env.OPENCLAW_SKIP_CRON !== "1" && (params.cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED);
   let loaded: LoadedGatewayCronState | null = null;
   let stopped = false;
   let exitWatcherHandoff: GatewayCronExitWatcherHandoff | undefined;
@@ -62,7 +68,9 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     () =>
       import("./server-cron.js").then(({ buildGatewayCronService }) => {
         loaded = {
-          state: buildGatewayCronService(params),
+          state: runWithSpawnBroker(spawnBroker, () =>
+            runWithReadOnlyWorkers(() => buildGatewayCronService(params)),
+          ),
           phase: "idle",
           startPromise: null,
           startGeneration: null,
@@ -263,8 +271,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async list(opts) {
       return await (await load()).state.cron.list(opts);
     },
-    async listPage(opts) {
-      return await (await load()).state.cron.listPage(opts);
+    async listPage(opts, matchesJob) {
+      return await (await load()).state.cron.listPage(opts, matchesJob);
     },
     async add(input, opts) {
       return await (await load()).state.cron.add(input, opts);

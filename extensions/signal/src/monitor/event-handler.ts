@@ -1,4 +1,3 @@
-// Signal plugin module implements event handler behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -10,7 +9,6 @@ import {
   resolveAckReaction,
   shouldAckReaction,
   type StatusReactionController,
-  type StatusReactionEmojis,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildMentionRegexes,
@@ -162,20 +160,6 @@ function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult)
   return Object.values(result.settledReceipt?.counts ?? {}).some(
     (counts) => counts.failedBeforeSend > 0 || counts.failedAfterSend > 0,
   );
-}
-
-function resolveSignalStatusReactionEmojis(
-  emojis: StatusReactionEmojis | undefined,
-): StatusReactionEmojis | undefined {
-  if (emojis?.stallHard !== undefined) {
-    return emojis;
-  }
-  return {
-    ...emojis,
-    // Signal exposes one reaction slot on the source message. A warning emoji
-    // reads as terminal failure even when the turn is merely long-running.
-    stallHard: DEFAULT_EMOJIS.stallSoft,
-  };
 }
 
 async function finalizeSignalStatusReaction(params: {
@@ -405,7 +389,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               },
             },
             initialEmoji: ackReaction,
-            emojis: resolveSignalStatusReactionEmojis(undefined),
+            // Signal has one reaction slot. A stall warning otherwise reads as terminal failure.
+            emojis: { stallHard: DEFAULT_EMOJIS.stallSoft },
             timing: statusReactionTiming,
             onError: (err) => {
               logAckFailure({
@@ -986,15 +971,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    // Check for syncMessage (e.g., sentTranscript from other devices)
-    // We need to check if it's from our own account to prevent self-reply loops
     const sender = resolveSignalSender(envelope);
     if (!sender) {
       return;
     }
 
-    // Check if the message is from our own account to prevent loop/self-reply
-    // This handles both phone number and UUID based identification
     const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
     const isOwnMessage =
       (sender.kind === "phone" && normalizedAccount != null && sender.e164 === normalizedAccount) ||
@@ -1018,7 +999,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ? dataMessage?.reaction
         : null;
 
-    // Replace ￼ (object replacement character) with @uuid or @phone from mentions
     // Signal encodes mentions as the object replacement character; hydrate them from metadata first.
     const rawMessage = dataMessage?.message ?? "";
     const normalizedMessage = renderSignalMentions(rawMessage, dataMessage?.mentions);
@@ -1324,24 +1304,21 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && inboundTimestamp) {
-      try {
-        await sendReadReceiptSignal(`signal:${senderRecipient}`, inboundTimestamp, {
-          cfg,
-          baseUrl: deps.baseUrl,
-          account: deps.account,
-          accountId: deps.accountId,
-        });
-      } catch (err) {
-        logVerbose(`signal read receipt failed for ${senderDisplay}: ${String(err)}`);
+    if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup) {
+      if (inboundTimestamp) {
+        try {
+          await sendReadReceiptSignal(`signal:${senderRecipient}`, inboundTimestamp, {
+            cfg,
+            baseUrl: deps.baseUrl,
+            account: deps.account,
+            accountId: deps.accountId,
+          });
+        } catch (err) {
+          logVerbose(`signal read receipt failed for ${senderDisplay}: ${String(err)}`);
+        }
+      } else {
+        logVerbose(`signal read receipt skipped (missing timestamp) for ${senderDisplay}`);
       }
-    } else if (
-      deps.sendReadReceipts &&
-      !deps.readReceiptsViaDaemon &&
-      !isGroup &&
-      !inboundTimestamp
-    ) {
-      logVerbose(`signal read receipt skipped (missing timestamp) for ${senderDisplay}`);
     }
 
     const senderName = envelope.sourceName ?? senderDisplay;

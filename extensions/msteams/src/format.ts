@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { getMarkdownTableSource } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   convertMarkdownTables,
   FormatCapabilityProfile,
   type MarkdownIR,
   markdownToIR,
+  markdownToIRWithMeta,
   renderMarkdownWithMarkers,
 } from "openclaw/plugin-sdk/text-chunking";
 import type { MarkdownTableMode } from "../runtime-api.js";
@@ -152,6 +155,9 @@ function serializeMarkdownDestination(href: string): string {
 type DelimitedMarkdownScan = { end: number } | { next: number } | undefined;
 
 function blankBlockEnd(text: string, index: number): number | undefined {
+  if (text[index] !== "\n" && text[index] !== "\r") {
+    return undefined;
+  }
   const match = /^(?:\r?\n)[ \t]*(?:\r?\n)/u.exec(text.slice(index));
   return match ? index + match[0].length : undefined;
 }
@@ -237,183 +243,31 @@ function protectDelimitedMarkdown(
   return protectedText + text.slice(cursor);
 }
 
-function parseQuotePrefix(line: string): { content: string; depth: number; prefix: string } {
-  let cursor = 0;
-  let depth = 0;
-  while (cursor < line.length) {
-    const checkpoint = cursor;
-    let spaces = 0;
-    while (spaces < 3 && line[cursor] === " ") {
-      cursor += 1;
-      spaces += 1;
-    }
-    if (line[cursor] !== ">") {
-      cursor = checkpoint;
-      break;
-    }
-    cursor += 1;
-    depth += 1;
-    if (line[cursor] === " " || line[cursor] === "\t") {
-      cursor += 1;
-    }
+function protectRawTables(text: string, tokenPrefix: string, rawTables: string[]): string {
+  if (!text.includes("|")) {
+    return text;
   }
-  return { content: line.slice(cursor).replace(/\r$/u, ""), depth, prefix: line.slice(0, cursor) };
-}
-
-function isTableDelimiterLine(content: string): boolean {
-  const trimmed = content.trim();
-  const inner = trimmed.replace(/^\|/u, "").replace(/\|$/u, "");
-  const cells = inner.split("|").map((cell) => cell.trim());
-  return cells.length > 0 && cells.every((cell) => /^:?-+:?$/u.test(cell));
-}
-
-function protectRawTablesInSegment(text: string, tokenPrefix: string, rawTables: string[]): string {
-  const lines = text.split("\n");
-  const output: string[] = [];
-  for (let index = 0; index < lines.length;) {
-    const line = lines[index] ?? "";
-    const header = parseQuotePrefix(line);
-    const delimiter = parseQuotePrefix(lines[index + 1] ?? "");
-    if (
-      header.content.includes("|") &&
-      delimiter.depth === header.depth &&
-      isTableDelimiterLine(delimiter.content)
-    ) {
-      let end = index + 2;
-      while (end < lines.length) {
-        const row = parseQuotePrefix(lines[end] ?? "");
-        if (
-          row.depth !== header.depth ||
-          !row.content.trim() ||
-          isInterruptingBlock(lines[end] ?? "")
-        ) {
-          break;
-        }
-        end += 1;
-      }
-      const table = lines.slice(index, end).join("\n");
-      if (convertMarkdownTables(table, "code") !== table) {
-        const tableIndex = rawTables.push(table.slice(header.prefix.length)) - 1;
-        output.push(`${header.prefix}${tokenPrefix}t${tableIndex}${TOKEN_END}`);
-        index = end;
-        continue;
-      }
-      for (let lineIndex = index; lineIndex < end; lineIndex += 1) {
-        output.push(lines[lineIndex] ?? "");
-      }
-      index = end;
-      continue;
-    }
-    output.push(line);
-    index += 1;
-  }
-  return output.join("\n");
-}
-
-function isInterruptingBlock(line: string): boolean {
-  const content = parseQuotePrefix(line).content;
-  return /^[ \t]{0,3}(?:#{1,6}(?:[ \t]|$)|`{3,}|~{3,}|(?:[-+*]|\d+[.)])[ \t]+)/u.test(content);
-}
-
-function leadingQuoteDepth(line: string): number {
-  return parseQuotePrefix(line).depth;
-}
-
-function parseFenceLine(
-  line: string,
-):
-  | { marker: string; quoteDepth: number; trailing: string; listIndent: number; indent: number }
-  | undefined {
-  const match =
-    /^((?: {0,3}>[ \t]?)*)(?:((?:[-+*]|\d+[.)])[ \t]+))?( {0,3})(`{3,}|~{3,})(.*)$/u.exec(line);
-  const marker = match?.[4];
-  const trailing = match?.[5] ?? "";
-  if (!marker || (marker.startsWith("`") && trailing.includes("`"))) {
-    return undefined;
-  }
-  return {
-    marker,
-    quoteDepth: match?.[1]?.match(/>/gu)?.length ?? 0,
-    trailing,
-    listIndent: match?.[2]?.length ?? 0,
-    indent: match?.[3]?.length ?? 0,
-  };
-}
-
-function protectRawTablesOutsideFences(
-  text: string,
-  tokenPrefix: string,
-  rawTables: string[],
-): string {
+  const { tables } = markdownToIRWithMeta(text, {
+    autolink: false,
+    linkify: false,
+    tableMode: "block",
+  });
   let result = "";
-  let outsideStart = 0;
-  let fenceStart: number | undefined;
-  let active: { marker: string; quoteDepth: number; listIndent: number } | undefined;
-  let listContextIndent = 0;
-  let offset = 0;
-  while (offset <= text.length) {
-    const nextNewline = text.indexOf("\n", offset);
-    const lineEnd = nextNewline < 0 ? text.length : nextNewline;
-    const line = text.slice(offset, lineEnd).replace(/\r$/u, "");
-    let fence = parseFenceLine(line);
-    const lineQuoteDepth = leadingQuoteDepth(line);
-    const lineWithoutQuotes = line.replace(/^(?:[ \t]*>[ \t]?)+/u, "");
-    const lineIndent = /^[ \t]*/u.exec(lineWithoutQuotes)?.[0].length ?? 0;
-    const listMarkerIndent = /^((?:[-+*]|\d+[.)])[ \t]+)/u.exec(lineWithoutQuotes)?.[1]?.length;
-    if (listMarkerIndent) {
-      listContextIndent = listMarkerIndent;
-    } else if (line.trim() && lineIndent < listContextIndent && !fence) {
-      listContextIndent = 0;
-    }
-    if (
-      fence &&
-      fence.listIndent === 0 &&
-      listContextIndent > 0 &&
-      fence.indent >= listContextIndent
-    ) {
-      fence = { ...fence, listIndent: listContextIndent };
-    }
-    const listOutdented = Boolean(
-      active?.listIndent && line.trim() && lineIndent < active.listIndent && !fence,
-    );
-    if (active && (active.quoteDepth > lineQuoteDepth || listOutdented)) {
-      result += text.slice(fenceStart, offset);
-      outsideStart = offset;
-      active = undefined;
-      fenceStart = undefined;
-    }
-    if (!active && fence) {
-      result += protectRawTablesInSegment(text.slice(outsideStart, offset), tokenPrefix, rawTables);
-      fenceStart = offset;
-      active = {
-        marker: fence.marker,
-        quoteDepth: fence.quoteDepth,
-        listIndent: fence.listIndent,
-      };
-    } else if (
-      active &&
-      fence &&
-      fence.marker[0] === active.marker[0] &&
-      fence.marker.length >= active.marker.length &&
-      fence.quoteDepth === active.quoteDepth &&
-      /^[ \t]*$/u.test(fence.trailing)
-    ) {
-      const fenceEnd = nextNewline < 0 ? lineEnd : nextNewline + 1;
-      result += text.slice(fenceStart, fenceEnd);
-      outsideStart = fenceEnd;
-      active = undefined;
-      fenceStart = undefined;
-    }
-    if (nextNewline < 0) {
-      break;
-    }
-    offset = nextNewline + 1;
+  let cursor = 0;
+  for (const table of tables) {
+    const source = expectDefined(getMarkdownTableSource(table), "Markdown table source");
+    // Preserve raw indentation and CRLF trivia without hiding the enclosing quote markers.
+    const lineStart =
+      Math.max(text.lastIndexOf("\n", source.start - 1), text.lastIndexOf("\r", source.start - 1)) +
+      1;
+    const quotePrefix = /^(?: {0,3}>[ \t]?)*/u.exec(text.slice(lineStart, source.start))?.[0] ?? "";
+    const start = lineStart + quotePrefix.length;
+    const end = source.end + (text.slice(source.end, source.end + 2) === "\r\n" ? 1 : 0);
+    const index = rawTables.push(text.slice(start, end)) - 1;
+    result += text.slice(cursor, start) + `${tokenPrefix}t${index}${TOKEN_END}`;
+    cursor = end;
   }
-  if (active && fenceStart !== undefined) {
-    result += text.slice(fenceStart);
-    return result;
-  }
-  return result + protectRawTablesInSegment(text.slice(outsideStart), tokenPrefix, rawTables);
+  return result + text.slice(cursor);
 }
 
 function protectMSTeamsCode(
@@ -516,9 +370,7 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
   );
   const tableInput = convertMarkdownTables(mentionsProtected, tableMode);
   const converted =
-    tableMode === "off"
-      ? protectRawTablesOutsideFences(tableInput, tokenPrefix, rawTables)
-      : tableInput;
+    tableMode === "off" ? protectRawTables(tableInput, tokenPrefix, rawTables) : tableInput;
   const protectedMarkdown = converted.replace(ESCAPED_MARKDOWN_RE, (escaped) => {
     const index = escapedMarkdown.push(escaped) - 1;
     return `${tokenPrefix}e${index}${TOKEN_END}`;

@@ -6,9 +6,11 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, test } from "vitest";
 import { digestClawHubSkillTree } from "../../src/skills/lifecycle/skill-tree-digest.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
+const testNodeExecPath = resolveTestNodeExecPath();
 const checkerSource = path.resolve(
   process.env.OPENCLAW_TEST_RELEASE_VALIDATION_CHECKER ??
     ".agents/skills/openclaw-release-validation/scripts/check-update.mjs",
@@ -35,7 +37,7 @@ async function runChecker(
     };\n`,
   );
   const { stdout } = await execFileAsync(
-    process.execPath,
+    testNodeExecPath,
     ["--import", pathToFileURL(preloadPath).href, scriptPath],
     {
       env: { ...process.env, ...envOverrides },

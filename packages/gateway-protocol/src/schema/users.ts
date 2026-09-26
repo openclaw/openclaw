@@ -12,22 +12,24 @@ import {
   ToolsGitHubAuthorizeFailedResultSchema,
 } from "./agents-models-skills.js";
 import { closedObject } from "./closed-object.js";
-import { NonEmptyString } from "./primitives.js";
+import { ModelAuthProfileIdSchema } from "./model-account-selection.js";
+import { NonEmptyString, UserProfileIdSchema } from "./primitives.js";
+import { USER_PREFS_ENTRY_LIMIT } from "./user-profile-constants.js";
 import { WizardAnswerSchema, WizardStepSchema } from "./wizard.js";
 
-export const USER_PREFS_ENTRY_LIMIT = 32;
-export const USER_PREFS_PROFILE_KEY_LIMIT = 128;
-export const USER_PREFS_VALUE_BYTES = 4 * 1024;
-export const GIT_COAUTHOR_PREFERENCE_KEY = "git.coauthor.enabled";
-export { GATEWAY_OWNER_PROFILE_ID } from "./user-profile-constants.js";
+export {
+  ChatAccountSelectionSchema,
+  type ChatAccountSelection,
+} from "./model-account-selection.js";
 
-// Credit ships on for verified GitHub identities: an absent row is the default, not a
-// refusal, so clearing the row on an account change restores the default instead of
-// revoking credit. The preference API persists arbitrary JSON, so anything other than a
-// missing row or literal `true` fails closed rather than publishing a person's trailer.
-export function isGitCoauthorCreditEnabled(value: unknown): boolean {
-  return value === undefined || value === true;
-}
+export {
+  GATEWAY_OWNER_PROFILE_ID,
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  isGitCoauthorCreditEnabled,
+  USER_PREFS_ENTRY_LIMIT,
+  USER_PREFS_PROFILE_KEY_LIMIT,
+  USER_PREFS_VALUE_BYTES,
+} from "./user-profile-constants.js";
 
 export {
   normalizeUiAppearancePreference,
@@ -35,7 +37,6 @@ export {
   type UiAppearancePreferenceKey,
 } from "./ui-appearance-preferences.js";
 
-const UserProfileIdSchema = Type.String({ minLength: 1, maxLength: 128 });
 const UserProfileDisplayNameSchema = Type.String({ maxLength: 256 });
 const UserProfileRoleSchema = Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" });
 const UserPreferenceKeySchema = Type.String({ pattern: "^.{1,256}$" });
@@ -70,6 +71,26 @@ export const UserProfileSchema = closedObject({
 export const UsersListParamsSchema = closedObject({});
 export const UsersListResultSchema = closedObject({ profiles: Type.Array(UserProfileSchema) });
 
+// The profile and relative path are derived from the authenticated connection.
+export const UsersPersonalFileGetParamsSchema = closedObject({ agentId: NonEmptyString });
+export const UsersPersonalFileSetParamsSchema = closedObject({
+  agentId: NonEmptyString,
+  content: Type.String({ maxLength: 4_000 }),
+  expectedHash: Type.Union([Type.String({ pattern: "^[a-f0-9]{64}$" }), Type.Null()]),
+});
+export const UsersPersonalFileGetResultSchema = closedObject({
+  agentId: NonEmptyString,
+  profileId: UserProfileIdSchema,
+  content: Type.String(),
+  hash: Type.Union([Type.String({ pattern: "^[a-f0-9]{64}$" }), Type.Null()]),
+  missing: Type.Boolean(),
+});
+export const UsersPersonalFileSetResultSchema = UsersPersonalFileGetResultSchema;
+export type UsersPersonalFileGetParams = Static<typeof UsersPersonalFileGetParamsSchema>;
+export type UsersPersonalFileSetParams = Static<typeof UsersPersonalFileSetParamsSchema>;
+export type UsersPersonalFileGetResult = Static<typeof UsersPersonalFileGetResultSchema>;
+export type UsersPersonalFileSetResult = Static<typeof UsersPersonalFileSetResultSchema>;
+
 export const UsersSelfParamsSchema = closedObject({});
 export const UsersSelfResultSchema = closedObject({ profile: UserProfileSchema });
 
@@ -78,6 +99,31 @@ export const UsersLinkEmailParamsSchema = closedObject({
   targetProfileId: UserProfileIdSchema,
 });
 export const UsersLinkEmailResultSchema = closedObject({ profile: UserProfileSchema });
+
+const ChannelIdentityPartSchema = Type.String({
+  minLength: 1,
+  maxLength: 512,
+  pattern: "^\\S(?:.*\\S)?$",
+});
+export const UserChannelIdentitySchema = closedObject({
+  channelId: ChannelIdentityPartSchema,
+  accountId: ChannelIdentityPartSchema,
+  senderId: ChannelIdentityPartSchema,
+});
+export const UserChannelIdentityLinkSchema = closedObject({
+  profileId: UserProfileIdSchema,
+  identity: UserChannelIdentitySchema,
+});
+export const UsersLinkChannelIdentityParamsSchema = UserChannelIdentityLinkSchema;
+export const UsersLinkChannelIdentityResultSchema = UserChannelIdentityLinkSchema;
+export const UsersUnlinkChannelIdentityParamsSchema = UserChannelIdentityLinkSchema;
+export const UsersUnlinkChannelIdentityResultSchema = closedObject({ removed: Type.Boolean() });
+export const UsersListChannelIdentitiesParamsSchema = closedObject({
+  profileId: UserProfileIdSchema,
+});
+export const UsersListChannelIdentitiesResultSchema = closedObject({
+  links: Type.Array(UserChannelIdentityLinkSchema),
+});
 
 export const UsersSetDisplayNameParamsSchema = closedObject({
   profileId: UserProfileIdSchema,
@@ -101,7 +147,6 @@ export const UsersSetAvatarResultSchema = closedObject({
   avatarRevision: NonEmptyString,
 });
 
-const ModelAuthProfileIdSchema = Type.String({ minLength: 1, maxLength: 256 });
 const ModelAuthProviderIdSchema = Type.String({ minLength: 1, maxLength: 128 });
 const ModelAuthConnectIdSchema = Type.String({ minLength: 1, maxLength: 128 });
 export const UserProfileAuthLinkSchema = closedObject({
@@ -134,28 +179,6 @@ export const UsersSelectModelAccountParamsSchema = closedObject({
 export const UsersSelectModelAccountResultSchema = closedObject({
   links: Type.Array(UserProfileAuthLinkSchema),
 });
-
-const ChatAccountSelectionSourceSchema = Type.Optional(
-  Type.Union([Type.Literal("auto"), Type.Literal("user"), Type.Literal("user-link")]),
-);
-const ChatAccountSelectionLabelSchema = Type.String({ minLength: 1, maxLength: 256 });
-/** Configured preference only; provider failover can use a different account. */
-export const ChatAccountSelectionSchema = Type.Union([
-  closedObject({ kind: Type.Literal("automatic"), label: ChatAccountSelectionLabelSchema }),
-  closedObject({
-    kind: Type.Literal("personal"),
-    label: ChatAccountSelectionLabelSchema,
-    // Collaborators see the person, not private credential identifiers or labels.
-    authProfileId: Type.Optional(ModelAuthProfileIdSchema),
-    source: ChatAccountSelectionSourceSchema,
-  }),
-  closedObject({
-    kind: Type.Literal("shared"),
-    label: ChatAccountSelectionLabelSchema,
-    authProfileId: ModelAuthProfileIdSchema,
-    source: ChatAccountSelectionSourceSchema,
-  }),
-]);
 
 export const UsersListAuthLinksParamsSchema = closedObject({ profileId: UserProfileIdSchema });
 export const UsersListAuthLinksResultSchema = closedObject({
@@ -255,9 +278,14 @@ export const UsersPrefsGetResultSchema = Type.Union([
   closedObject({ status: Type.Literal("ok"), entries: UserPreferenceEntriesSchema }),
   closedObject({ status: Type.Literal("no_durable_identity") }),
 ]);
-export const UsersPrefsSetParamsSchema = closedObject({ entries: UserPreferenceSetEntriesSchema });
+export const UsersPrefsSetParamsSchema = closedObject({
+  entries: UserPreferenceSetEntriesSchema,
+  // JSON null expects an absent key, matching the null-as-removal write contract.
+  expectedEntries: Type.Optional(UserPreferenceSetEntriesSchema),
+});
 export const UsersPrefsSetResultSchema = Type.Union([
   closedObject({ status: Type.Literal("ok") }),
+  closedObject({ status: Type.Literal("conflict") }),
   closedObject({ status: Type.Literal("no_durable_identity") }),
 ]);
 export const UsersPrefsChangedEventSchema = closedObject({
@@ -276,6 +304,20 @@ export type UsersSelfParams = Static<typeof UsersSelfParamsSchema>;
 export type UsersSelfResult = Static<typeof UsersSelfResultSchema>;
 export type UsersLinkEmailParams = Static<typeof UsersLinkEmailParamsSchema>;
 export type UsersLinkEmailResult = Static<typeof UsersLinkEmailResultSchema>;
+export type UsersLinkChannelIdentityParams = Static<typeof UsersLinkChannelIdentityParamsSchema>;
+export type UsersLinkChannelIdentityResult = Static<typeof UsersLinkChannelIdentityResultSchema>;
+export type UsersUnlinkChannelIdentityParams = Static<
+  typeof UsersUnlinkChannelIdentityParamsSchema
+>;
+export type UsersUnlinkChannelIdentityResult = Static<
+  typeof UsersUnlinkChannelIdentityResultSchema
+>;
+export type UsersListChannelIdentitiesParams = Static<
+  typeof UsersListChannelIdentitiesParamsSchema
+>;
+export type UsersListChannelIdentitiesResult = Static<
+  typeof UsersListChannelIdentitiesResultSchema
+>;
 export type UsersSetDisplayNameParams = Static<typeof UsersSetDisplayNameParamsSchema>;
 export type UsersSetDisplayNameResult = Static<typeof UsersSetDisplayNameResultSchema>;
 export type UsersSetRoleParams = Static<typeof UsersSetRoleParamsSchema>;
@@ -288,7 +330,7 @@ export type UsersListModelAccountsParams = Static<typeof UsersListModelAccountsP
 export type UsersListModelAccountsResult = Static<typeof UsersListModelAccountsResultSchema>;
 export type UsersSelectModelAccountParams = Static<typeof UsersSelectModelAccountParamsSchema>;
 export type UsersSelectModelAccountResult = Static<typeof UsersSelectModelAccountResultSchema>;
-export type ChatAccountSelection = Static<typeof ChatAccountSelectionSchema>;
+
 export type UsersAuthConnectStartParams = Static<typeof UsersAuthConnectStartParamsSchema>;
 export type UsersAuthConnectStartResult = Static<typeof UsersAuthConnectStartResultSchema>;
 export type UsersAuthConnectAnswerParams = Static<typeof UsersAuthConnectAnswerParamsSchema>;

@@ -158,7 +158,7 @@ describe("copySessionCatalogToGateway", () => {
             },
           }),
           logGateway: { debug: vi.fn(), warn: vi.fn() },
-          loadGatewayModelCatalog: vi.fn(async () => []),
+          loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
         } as never,
       });
 

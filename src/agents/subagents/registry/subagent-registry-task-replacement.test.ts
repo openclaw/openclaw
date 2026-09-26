@@ -1,3 +1,9 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  persistSubagentRunsToDiskOrThrow,
+  useSubagentControlFixture,
+} from "./subagent-control.test-support.js";
 import { Value } from "typebox/value";
 import { expect, it, vi } from "vitest";
 import {
@@ -5,13 +11,14 @@ import {
   type WorkerLiveEventParams,
 } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import type { WorkerConnectionIdentity } from "../../../gateway/worker-environments/connection-identity.js";
 import { createWorkerLiveEventReceiver } from "../../../gateway/worker-environments/live-events.js";
 import { createWorkerSessionPlacementStore } from "../../../gateway/worker-environments/placement-store.js";
+import { seedAttachedPlacementEnvironment } from "../../../gateway/worker-environments/placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "../../../gateway/worker-environments/placement-worker-gate.js";
+import { resolveWorkerTurnTranscriptTarget } from "../../../gateway/worker-environments/worker-turn-transcript-target.js";
 import {
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
@@ -29,15 +36,13 @@ import { failFlow, getTaskFlowById } from "../../../tasks/task-flow-registry.js"
 import { getTaskActivitySnapshot } from "../../../tasks/task-registry-activity.js";
 import { findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
 import type { AgentWaitResult } from "../../run-wait.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  onSubagentRegistryPersisted,
-  persistSubagentRunsToDiskOrThrow,
-} from "./subagent-registry-state.js";
+import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import {
+  settleSubagentRegistryPersistenceWork,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { finalizeInterruptedSubagentRun } from "./subagent-registry.test-helpers.js";
 
@@ -46,7 +51,7 @@ const fixture = useSubagentControlFixture();
 it.each(["end", "error"] as const)(
   "keeps a timeout successor running when its exact predecessor owner publishes its first %s terminal",
   async (phase) => {
-    vi.spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow").mockResolvedValue("delivered");
+    fixture.announce.mockResolvedValue("delivered");
     const oldWait = createDeferred<AgentWaitResult>();
     const nextWait = createDeferred<AgentWaitResult>();
     const previousSettled = createDeferred();
@@ -60,7 +65,7 @@ it.each(["end", "error"] as const)(
         successorSettled.resolve();
       }
     });
-    vi.spyOn(subagentRegistryDeps, "callGateway").mockImplementation(async (request) => {
+    fixture.gateway.mockImplementation(async (request) => {
       expect(request.method).toBe("agent.wait");
       return (request.params as { runId: string }).runId === "timeout-predecessor"
         ? await oldWait.promise
@@ -68,13 +73,13 @@ it.each(["end", "error"] as const)(
     });
     const childSessionKey = "agent:main:subagent:late-owner-terminal";
     const sessionId = "late-owner-terminal-session";
-    await writeSubagentSessionEntry({
+    const storePath = await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId: "main",
       sessionKey: childSessionKey,
       defaultSessionId: sessionId,
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "timeout-predecessor",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -90,7 +95,12 @@ it.each(["end", "error"] as const)(
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const placementStore = createWorkerSessionPlacementStore();
     const placementIdentity = { sessionId, sessionKey: childSessionKey, agentId: "main" };
-    let placement = placementStore.startDispatch(placementIdentity);
+    seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
+      environmentId: "timeout-worker",
+      sessionId,
+      ownerEpoch: 1,
+    });
+    let placement = await placementStore.startDispatch(placementIdentity);
     for (const transition of [
       { from: "requested", to: "provisioning", patch: { environmentId: "timeout-worker" } },
       { from: "provisioning", to: "syncing", patch: { workerBundleHash: "b".repeat(64) } },
@@ -110,7 +120,7 @@ it.each(["end", "error"] as const)(
         ...transition,
       });
     }
-    const turnClaim = placementStore.claimTurn({
+    const turnClaim = await placementStore.claimTurn({
       ...placementIdentity,
       claimId: "fixture-turn-claim",
       runId: previous.runId,
@@ -130,14 +140,26 @@ it.each(["end", "error"] as const)(
       protocolFeatures: ["worker-live-event-v1"],
       credentialExpiresAtMs: Date.now() + 60_000,
     };
-    const receiver = createWorkerLiveEventReceiver({
-      getConfig: getRuntimeConfig,
-      startupBindings: [
-        { sessionId, environmentId: identity.environmentId, runEpoch: identity.ownerEpoch },
-      ],
-      startupOwners: new Map([[identity.environmentId, identity.ownerEpoch]]),
-    });
-    receiver.start();
+    const entry = loadSessionEntry({ agentId: "main", storePath, sessionKey: childSessionKey });
+    if (!entry) {
+      throw new Error("expected worker session entry");
+    }
+    const sessionTarget = {
+      ...placementIdentity,
+      storePath,
+      expectedLifecycleRevision: entry.lifecycleRevision,
+      expectedWriterRunId: entry.activeWriterRunId,
+    };
+    const source = {
+      sessionTarget,
+      receiptAuthority: () => {
+        if (!placementGate.validateWorkerTurn(turnClaim)) {
+          throw new Error("worker turn was revoked");
+        }
+        resolveWorkerTurnTranscriptTarget({ ...sessionTarget, sessionTarget });
+      },
+    };
+    const receiver = createWorkerLiveEventReceiver();
     const terminalEvents: string[] = [];
     const stop = onAgentEvent((event) => {
       if (
@@ -158,7 +180,9 @@ it.each(["end", "error"] as const)(
         event: { kind: "lifecycle", payload: { phase: "start", startedAt } },
       } as const;
       expect(Value.Check(WorkerLiveEventParamsSchema, startRequest)).toBe(true);
-      expect(receiver.apply({ identity, request: startRequest })).toEqual({
+      expect(
+        await receiver.apply({ identity, source, request: startRequest, readAckedSeq: () => 0 }),
+      ).toEqual({
         ok: true,
         result: { ackedSeq: 1 },
       });
@@ -166,8 +190,10 @@ it.each(["end", "error"] as const)(
       const owner = getAgentRunContext(previous.runId)!;
       expect(claimId).toBeDefined();
       expect(
-        receiver.apply({
+        await receiver.apply({
+          readAckedSeq: () => 0,
           identity,
+          source,
           request: {
             runId: previous.runId,
             runEpoch: identity.ownerEpoch,
@@ -229,14 +255,21 @@ it.each(["end", "error"] as const)(
         expect(placementGate.validateWorkerTurn(turnClaim)).toBe(true);
         expect(identity.runId).toBe(terminalRequest.runId);
         expect(Value.Check(WorkerLiveEventParamsSchema, terminalRequest)).toBe(true);
-        expect(receiver.apply({ identity, request: terminalRequest })).toEqual({
+        expect(
+          await receiver.apply({
+            identity,
+            source,
+            request: terminalRequest,
+            readAckedSeq: () => 0,
+          }),
+        ).toEqual({
           ok: true,
           result: { ackedSeq: 3 },
         });
         expect(terminalEvents).toEqual([previous.runId]);
         expect(subagentRuns.get(successor.runId)).toBe(successor);
         expect(successor.execution.status).toBe("running");
-        reloadTaskRuntimeStateFromStore();
+        await reloadTaskRuntimeStateFromStore();
         expect.soft(getTaskById(originalTask.taskId)?.status).toBe("running");
         expect.soft(getTaskFlowById(originalTask.parentFlowId!)?.status).toBe("running");
         nextWait.resolve({
@@ -263,7 +296,7 @@ it.each(["end", "error"] as const)(
 it.each(["successor", "task activation", "flow activation"] as const)(
   "restores a terminal predecessor when %s persistence rejects replacement",
   async (rejectedWrite) => {
-    vi.spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow").mockResolvedValue("delivered");
+    fixture.announce.mockResolvedValue("delivered");
     const childSessionKey = "agent:main:subagent:rearm-rollback";
     await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
@@ -271,7 +304,7 @@ it.each(["successor", "task activation", "flow activation"] as const)(
       sessionKey: childSessionKey,
       defaultSessionId: "rearm-rollback-session",
     });
-    registerSubagentRun({
+    await registerSubagentRun({
       runId: "rollback-predecessor",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -350,7 +383,7 @@ it.each(["successor", "task activation", "flow activation"] as const)(
     expect
       .soft(loadSubagentRegistryFromSqlite().get(previous.runId)?.execution.status)
       .toBe("terminal");
-    reloadTaskRuntimeStateFromStore();
+    await reloadTaskRuntimeStateFromStore();
     const restored = getTaskById(originalTask.taskId)!;
     expect(restored.detail).toMatchObject({ generation: previous.generation });
     expect.soft(restored.status).toBe("failed");
@@ -361,7 +394,7 @@ it.each(["successor", "task activation", "flow activation"] as const)(
 );
 
 it("rearms the canonical task and mirrored flow for an interrupted run's successor", async () => {
-  vi.spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow").mockResolvedValue("delivered");
+  fixture.announce.mockResolvedValue("delivered");
   const childSessionKey = "agent:main:subagent:interrupted-task";
   const requesterSessionKey = "agent:main:main";
   const storePath = await writeSubagentSessionEntry({
@@ -370,7 +403,7 @@ it("rearms the canonical task and mirrored flow for an interrupted run's success
     sessionKey: childSessionKey,
     defaultSessionId: "interrupted-task-session",
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: "interrupted-task-old",
     childSessionKey,
     requesterSessionKey,
@@ -391,6 +424,7 @@ it("rearms the canonical task and mirrored flow for an interrupted run's success
   ).toBe(1);
   expect(getTaskById(originalTask.taskId)).toMatchObject({ status: "failed", error });
   expect(getTaskFlowById(flowId)?.status).toBe("failed");
+  await settleSubagentRegistryPersistenceWork();
   expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toEqual(previous);
 
   const observerSnapshots: Array<{ run?: string; task?: string; flow?: string }> = [];
@@ -423,7 +457,7 @@ it("rearms the canonical task and mirrored flow for an interrupted run's success
     execution: { status: "running" },
   });
   expect(successor.taskRunId).toBe(previous.runId);
-  reloadTaskRuntimeStateFromStore();
+  await reloadTaskRuntimeStateFromStore();
   const task = getTaskById(originalTask.taskId)!;
   const flow = getTaskFlowById(flowId)!;
   expect(task).toMatchObject({

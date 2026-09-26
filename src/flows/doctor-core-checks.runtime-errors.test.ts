@@ -22,7 +22,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: mocks.loadModelCatalog,
+  readPreparedModelCatalog: mocks.loadModelCatalog,
 }));
 
 vi.mock("../agents/model-selection.js", async (importOriginal) => ({
@@ -43,7 +43,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   normalizeProviderToolSchemasWithPlugin: mocks.normalizeProviderToolSchemasWithPlugin,
 }));
 
-const { collectRuntimeToolSchemaFindings } = await import("./doctor-core-checks.runtime.js");
+const { collectRuntimeToolSchemaFindings } = await import("./doctor-tool-schema-runtime.js");
 
 function tool(name: string, parameters: unknown): AnyAgentTool {
   return {

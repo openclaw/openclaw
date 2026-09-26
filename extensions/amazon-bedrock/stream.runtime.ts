@@ -39,7 +39,6 @@ import {
   parseStreamingJson,
   sanitizeSurrogates,
   transformMessages,
-  type Api,
   type AssistantMessage,
   type AssistantMessageEvent,
   type CacheRetention,
@@ -86,7 +85,10 @@ import {
   resolveBedrockPromptCachePolicy,
   type BedrockOptions,
 } from "./bedrock-options.js";
-import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
+import {
+  resolveBedrockClaudeThinkingProfile,
+  supportsBedrockNativeMaxEffort,
+} from "./thinking-policy.js";
 
 type Block = (TextContent | ThinkingContent | ToolCall) & {
   index?: number;
@@ -168,7 +170,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     const output: AssistantMessage = {
       role: "assistant",
       content: [],
-      api: "bedrock-converse-stream" as Api,
+      api: "bedrock-converse-stream",
       provider: model.provider,
       model: model.id,
       usage: {
@@ -494,16 +496,12 @@ function resolveSimpleBedrockOptions(
     return {
       ...base,
       maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
-      reasoning: options?.reasoning === "off" ? "low" : (options?.reasoning ?? "high"),
+      reasoning: options?.reasoning,
       thinkingBudgets: options?.thinkingBudgets,
     } satisfies BedrockOptions;
   }
   if (!options?.reasoning) {
-    const reasoning =
-      usesClaudeOpus5BedrockContract(model) ||
-      (isAnthropicClaudeModel(model) && requiresMandatoryAdaptiveThinking(model))
-        ? "high"
-        : undefined;
+    const reasoning = usesClaudeOpus5BedrockContract(model) ? "high" : undefined;
     return {
       ...base,
       ...(reasoning !== undefined || supportsAdaptiveThinking(model)
@@ -814,10 +812,7 @@ function supportsAdaptiveThinking(model: Model<"bedrock-converse-stream">): bool
   return (
     supportsClaudeAdaptiveThinking(model) ||
     supportsClaudeAdaptiveThinking({ id: profileModelId }) ||
-    isClaudeMythosPreviewModelId(resolveClaudeModelIdentity(model)) ||
-    isClaudeMythosPreviewModelId(profileModelId) ||
-    usesClaudeSonnet5BedrockContract(model) ||
-    resolveClaudeSonnet5ModelIdentity({ id: profileModelId }) !== undefined
+    isClaudeMythosPreviewModelId(resolveClaudeModelIdentity(model))
   );
 }
 
@@ -827,10 +822,28 @@ function requiresMandatoryAdaptiveThinking(model: Model<"bedrock-converse-stream
     requiresClaudeMandatoryAdaptiveThinking(model) ||
     requiresClaudeMandatoryAdaptiveThinking({ id: profileModelId }) ||
     isClaudeMythosPreviewModelId(resolveClaudeModelIdentity(model)) ||
-    isClaudeMythosPreviewModelId(profileModelId) ||
     usesClaudeSonnet5BedrockContract(model) ||
     resolveClaudeSonnet5ModelIdentity({ id: profileModelId }) !== undefined
   );
+}
+
+function resolveMandatoryAdaptiveDefault(model: Model<"bedrock-converse-stream">): ThinkingLevel {
+  const defaultLevel =
+    resolveBedrockClaudeThinkingProfile(model.id, model.params).defaultLevel ??
+    resolveBedrockClaudeThinkingProfile(resolveClaudeProfileNameModelId(model.name) ?? "")
+      .defaultLevel;
+  switch (defaultLevel) {
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+      return defaultLevel;
+    default:
+      // Adaptive is a picker mode; the Bedrock payload needs a scalar effort.
+      return "high";
+  }
 }
 
 function supportsNativeXhighEffort(model: Model<"bedrock-converse-stream">): boolean {
@@ -904,9 +917,6 @@ function resolveCacheRetention(
  * whose ARNs don't contain the model name.
  */
 function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolean {
-  if (usesClaudeFable5BedrockContract(model)) {
-    return true;
-  }
   if (resolveClaudeModelIdentity(model).startsWith("claude-")) {
     return true;
   }
@@ -919,18 +929,6 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
     name.includes("anthropic/claude") ||
     name.includes("claude")
   );
-}
-
-/**
- * Check if the model supports thinking signatures in reasoningContent.
- * Only Anthropic Claude models support the signature field.
- * Other models (OpenAI, Qwen, Minimax, Moonshot, etc.) reject it with:
- * "This model doesn't support the reasoningContent.reasoningText.signature field"
- *
- * Checks both model ID and model name to support application inference profiles.
- */
-function supportsThinkingSignature(model: Model<"bedrock-converse-stream">): boolean {
-  return isAnthropicClaudeModel(model);
 }
 
 function buildSystemPrompt(
@@ -948,7 +946,7 @@ function buildSystemPrompt(
   const split = splitSystemPromptCacheBoundary(systemPrompt);
   const stablePrefix = split?.stablePrefix ?? systemPrompt;
   const blocks: SystemContentBlock[] = stablePrefix
-    ? [{ text: sanitizeSurrogates(stablePrefix) }]
+    ? [{ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(stablePrefix)) }]
     : [];
 
   if (stablePrefix && cachePoint) {
@@ -1062,7 +1060,7 @@ function convertMessages(
               if (c.redacted) {
                 // transformMessages already strips opaque reasoning after a model
                 // switch; this also rejects routes that cannot consume the format.
-                if (!supportsThinkingSignature(model)) {
+                if (!isAnthropicClaudeModel(model)) {
                   continue;
                 }
                 if (!c.thinkingSignature) {
@@ -1082,7 +1080,7 @@ function convertMessages(
               }
               const thinkingSignature = c.thinkingSignature;
               const normalizedThinkingSignature = thinkingSignature?.trim();
-              const supportsSignature = supportsThinkingSignature(model);
+              const supportsSignature = isAnthropicClaudeModel(model);
               const hasNativeThinkingSignature =
                 supportsSignature &&
                 Boolean(normalizedThinkingSignature) &&
@@ -1153,9 +1151,36 @@ function convertMessages(
         // Skip the messages we've already processed
         i = j - 1;
 
+        // GPT-5.6 Sol accepts user images but rejects images nested in tool results.
+        // Keep all tool outputs contiguous before labeled images, without rewriting history.
+        const attachedImages: ContentBlock[] = [];
+        const userContent: ContentBlock[] = model.id.includes("openai.gpt-5.6-sol")
+          ? toolResults.map((block): ContentBlock => {
+              const images: ContentBlock[] = [];
+              const content = (block.toolResult.content ?? []).filter((part) => {
+                if (part.image) {
+                  images.push({ image: part.image });
+                  return false;
+                }
+                return true;
+              });
+              if (images.length === 0) {
+                return block;
+              }
+              const label = `Images from tool result ${block.toolResult.toolUseId}`;
+              attachedImages.push({ text: `${label}:` }, ...images);
+              return {
+                toolResult: {
+                  ...block.toolResult,
+                  content: [...content, { text: `(see attached images labeled "${label}")` }],
+                },
+              };
+            })
+          : toolResults;
+        userContent.push(...attachedImages);
         result.push({
           role: ConversationRole.USER,
-          content: toolResults,
+          content: userContent,
         });
         break;
       }
@@ -1310,14 +1335,15 @@ function buildAdditionalModelRequestFields(
   options: BedrockOptions,
 ): DocumentType | undefined {
   // Mandatory-adaptive Claude routes preserve the public `off` control by
-  // lowering effort instead of silently falling back to the route's high default.
+  // lowering effort instead of silently falling back to the route's default.
   const mandatoryAdaptiveThinking = requiresMandatoryAdaptiveThinking(model);
   const reasoning =
     options.reasoning === "off"
       ? mandatoryAdaptiveThinking
         ? "low"
         : "off"
-      : (options.reasoning ?? (mandatoryAdaptiveThinking ? "high" : undefined));
+      : (options.reasoning ??
+        (mandatoryAdaptiveThinking ? resolveMandatoryAdaptiveDefault(model) : undefined));
   if (reasoning === "off") {
     return undefined;
   }
@@ -1336,39 +1362,32 @@ function buildAdditionalModelRequestFields(
     const display = isGovCloudBedrockTarget(model, options)
       ? undefined
       : (options.thinkingDisplay ?? "summarized");
-    const result: Record<string, unknown> = supportsAdaptiveThinking(model)
-      ? {
-          thinking: { type: "adaptive", ...(display !== undefined ? { display } : {}) },
-          output_config: { effort: mapThinkingLevelToEffort(model, reasoning) },
-        }
-      : (() => {
-          const defaultBudgets: Record<ThinkingLevel, number> = {
-            minimal: 1024,
-            low: 2048,
-            medium: 8192,
-            high: 16384,
-            xhigh: 16384, // Claude doesn't support xhigh, clamp to high
-            max: 16384,
-          };
-
-          // Custom budgets override defaults (xhigh not in ThinkingBudgets, use high)
-          const level = reasoning === "xhigh" ? "high" : reasoning;
-          const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[reasoning];
-
-          return {
-            thinking: {
-              type: "enabled",
-              budget_tokens: budget,
-              ...(display !== undefined ? { display } : {}),
-            },
-          };
-        })();
-
-    if (!supportsAdaptiveThinking(model) && (options.interleavedThinking ?? true)) {
-      result.anthropic_beta = ["interleaved-thinking-2025-05-14"];
+    if (supportsAdaptiveThinking(model)) {
+      return {
+        thinking: { type: "adaptive", ...(display !== undefined ? { display } : {}) },
+        output_config: { effort: mapThinkingLevelToEffort(model, reasoning) },
+      };
     }
-
-    return result as DocumentType;
+    const defaultBudgets: Record<ThinkingLevel, number> = {
+      minimal: 1024,
+      low: 2048,
+      medium: 8192,
+      high: 16384,
+      xhigh: 16384,
+      max: 16384,
+    };
+    // Manual Claude thinking uses the high budget for xhigh.
+    const level = reasoning === "xhigh" ? "high" : reasoning;
+    return {
+      thinking: {
+        type: "enabled",
+        budget_tokens: options.thinkingBudgets?.[level] ?? defaultBudgets[reasoning],
+        ...(display !== undefined ? { display } : {}),
+      },
+      ...((options.interleavedThinking ?? true)
+        ? { anthropic_beta: ["interleaved-thinking-2025-05-14"] }
+        : {}),
+    };
   }
 
   return undefined;

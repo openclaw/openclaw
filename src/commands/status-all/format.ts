@@ -24,20 +24,15 @@ type StatusOverviewRow = {
   Value: string;
 };
 
-type StatusUpdateLike = UpdateCheckResult;
-
 type StatusGatewayConnection = {
   url: string;
   urlSource?: string;
 };
 
-function resolveStatusGatewayDisplayUrl(connection: StatusGatewayConnection): string {
-  return projectGatewayUrlForDiagnostics(connection.url);
-}
-
 type StatusGatewayProbe = {
   connectLatencyMs?: number | null;
   error?: string | null;
+  startupPhase?: string;
 } | null;
 
 type StatusGatewayProbeAuth = {
@@ -62,6 +57,7 @@ type StatusManagedService = {
   managedByOpenClaw?: boolean;
   loadedText: string;
   runtimeShort?: string | null;
+  installationDrift?: string;
   runtime?: {
     status?: string | null;
     pid?: number | null;
@@ -92,7 +88,7 @@ export function resolveStatusUpdateChannelInfo(params: {
 /** Builds the update row fields reused by the overview table and status-all report. */
 export function buildStatusUpdateSurface(params: {
   updateConfigChannel?: string | null;
-  update: StatusUpdateLike;
+  update: UpdateCheckResult;
 }) {
   const channelInfo = resolveStatusUpdateChannelInfo({
     updateConfigChannel: params.updateConfigChannel,
@@ -107,19 +103,11 @@ export function buildStatusUpdateSurface(params: {
   };
 }
 
-/** Formats missing dashboard URLs as disabled instead of leaking empty/null into status rows. */
-function formatStatusDashboardValue(value: string | null | undefined): string {
-  const trimmed = normalizeOptionalString(value);
-  return trimmed && trimmed.length > 0 ? trimmed : "disabled";
-}
-
 /** Formats Tailscale exposure in a compact, warning-aware status row value. */
 function formatStatusTailscaleValue(params: {
   tailscaleMode: string;
   dnsName?: string | null;
   httpsUrl?: string | null;
-  backendState?: string | null;
-  includeBackendStateWhenOff?: boolean;
   includeBackendStateWhenOn?: boolean;
   includeDnsNameWhenOff?: boolean;
   decorateOff?: (value: string) => string;
@@ -128,21 +116,14 @@ function formatStatusTailscaleValue(params: {
   const decorateOff = params.decorateOff ?? ((value: string) => value);
   const decorateWarn = params.decorateWarn ?? ((value: string) => value);
   if (params.tailscaleMode === "off") {
-    // Off mode can still show daemon/DNS context when the caller wants diagnostic detail.
-    const suffix = [
-      params.includeBackendStateWhenOff && params.backendState
-        ? `daemon ${params.backendState}`
-        : null,
-      params.includeDnsNameWhenOff && params.dnsName ? params.dnsName : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    // Off mode can still show DNS context when the caller wants diagnostic detail.
+    const suffix = params.includeDnsNameWhenOff ? params.dnsName : null;
     return decorateOff(suffix ? `off · ${suffix}` : "off");
   }
   if (params.dnsName && params.httpsUrl) {
     const parts = [
       params.tailscaleMode,
-      params.includeBackendStateWhenOn ? (params.backendState ?? "unknown") : null,
+      params.includeBackendStateWhenOn ? "unknown" : null,
       params.dnsName,
       params.httpsUrl,
     ].filter(Boolean);
@@ -150,7 +131,7 @@ function formatStatusTailscaleValue(params: {
   }
   const parts = [
     params.tailscaleMode,
-    params.includeBackendStateWhenOn ? (params.backendState ?? "unknown") : null,
+    params.includeBackendStateWhenOn ? "unknown" : null,
     "magicdns unknown",
   ].filter(Boolean);
   return decorateWarn(parts.join(" · "));
@@ -182,7 +163,8 @@ function formatStatusServiceValue(params: StatusManagedService): string {
   const runtimeText = inspectionFailed
     ? redactSensitiveText(runtimeSuffix, { mode: "tools" })
     : runtimeSuffix;
-  return `${params.label} ${installedPrefix}${loadedText}${runtimeText}`;
+  const installationWarning = params.installationDrift ? ` · ${params.installationDrift}` : "";
+  return `${params.label} ${installedPrefix}${loadedText}${runtimeText}${installationWarning}`;
 }
 
 /** Returns the dashboard URL when the Control UI is enabled for the current gateway binding. */
@@ -201,65 +183,14 @@ function resolveStatusDashboardUrl(params: {
   }).httpUrl;
 }
 
-/** Builds the ordered overview rows shared by status command variants. */
-function buildStatusOverviewRows(params: {
-  prefixRows?: StatusOverviewRow[];
-  dashboardValue: string;
-  tailscaleValue: string;
-  channelLabel: string;
-  gitLabel?: string | null;
-  updateValue: string;
-  gatewayValue: string;
-  gatewayAuthWarning?: string | null;
-  middleRows?: StatusOverviewRow[];
-  gatewaySelfValue?: string | null;
-  gatewayServiceValue: string;
-  nodeServiceValue: string;
-  agentsValue: string;
-  suffixRows?: StatusOverviewRow[];
-}): StatusOverviewRow[] {
-  const rows: StatusOverviewRow[] = [...(params.prefixRows ?? [])];
-  rows.push(
-    { Item: "Dashboard", Value: params.dashboardValue },
-    { Item: "Tailscale exposure", Value: params.tailscaleValue },
-    { Item: "Channel", Value: params.channelLabel },
-  );
-  if (params.gitLabel) {
-    rows.push({ Item: "Git", Value: params.gitLabel });
-  }
-  rows.push(
-    { Item: "Update", Value: params.updateValue },
-    { Item: "Gateway", Value: params.gatewayValue },
-  );
-  if (params.gatewayAuthWarning) {
-    rows.push({
-      Item: "Gateway auth warning",
-      Value: params.gatewayAuthWarning,
-    });
-  }
-  rows.push(...(params.middleRows ?? []));
-  if (params.gatewaySelfValue != null) {
-    rows.push({ Item: "Gateway self", Value: params.gatewaySelfValue });
-  }
-  rows.push(
-    { Item: "Gateway service", Value: params.gatewayServiceValue },
-    { Item: "Node service", Value: params.nodeServiceValue },
-    { Item: "Agents", Value: params.agentsValue },
-  );
-  rows.push(...(params.suffixRows ?? []));
-  return rows;
-}
-
 /** Builds overview rows directly from raw scan/update/gateway inputs. */
 export function buildStatusOverviewSurfaceRows(params: {
   cfg: Pick<OpenClawConfig, "update" | "gateway" | "telemetry">;
-  update: StatusUpdateLike;
+  update: UpdateCheckResult;
   tailscaleMode: string;
   tailscaleDns?: string | null;
   tailscaleHttpsUrl?: string | null;
   advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
-  tailscaleBackendState?: string | null;
-  includeBackendStateWhenOff?: boolean;
   includeBackendStateWhenOn?: boolean;
   includeDnsNameWhenOff?: boolean;
   decorateTailscaleOff?: (value: string) => string;
@@ -291,62 +222,73 @@ export function buildStatusOverviewSurfaceRows(params: {
     updateConfigChannel: params.cfg.update?.channel,
     update: params.update,
   });
-  const { dashboardUrl, gatewayValue, gatewaySelfValue, gatewayServiceValue, nodeServiceValue } =
-    buildStatusGatewaySurfaceValues({
-      cfg: params.cfg,
-      ...(params.advertisedControlUiLinks
-        ? { advertisedControlUiLinks: params.advertisedControlUiLinks }
-        : {}),
-      gatewayMode: params.gatewayMode,
-      remoteUrlMissing: params.remoteUrlMissing,
-      gatewayConnection: params.gatewayConnection,
-      gatewayReachable: params.gatewayReachable,
-      gatewayProbe: params.gatewayProbe,
-      gatewayProbeAuth: params.gatewayProbeAuth,
-      gatewaySelf: params.gatewaySelf,
-      gatewayService: params.gatewayService,
-      nodeService: params.nodeService,
-      nodeOnlyGateway: params.nodeOnlyGateway,
-      decorateOk: params.decorateOk,
-      decorateWarn: params.decorateWarn,
-    });
-  return buildStatusOverviewRows({
-    prefixRows: params.prefixRows,
-    dashboardValue: formatStatusDashboardValue(dashboardUrl),
-    tailscaleValue: formatStatusTailscaleValue({
-      tailscaleMode: params.tailscaleMode,
-      dnsName: params.tailscaleDns,
-      httpsUrl: params.tailscaleHttpsUrl,
-      backendState: params.tailscaleBackendState,
-      includeBackendStateWhenOff: params.includeBackendStateWhenOff,
-      includeBackendStateWhenOn: params.includeBackendStateWhenOn,
-      includeDnsNameWhenOff: params.includeDnsNameWhenOff,
-      decorateOff: params.decorateTailscaleOff,
-      decorateWarn: params.decorateTailscaleWarn,
-    }),
-    channelLabel: updateSurface.channelLabel,
-    gitLabel: updateSurface.gitLabel,
-    updateValue: params.updateValue ?? updateSurface.updateLine,
-    gatewayValue,
-    gatewayAuthWarning:
-      params.gatewayAuthWarningValue !== undefined
-        ? params.gatewayAuthWarningValue
-        : params.gatewayProbeAuthWarning,
-    middleRows: params.middleRows,
-    gatewaySelfValue: params.gatewaySelfFallbackValue ?? gatewaySelfValue,
-    gatewayServiceValue,
-    nodeServiceValue,
-    agentsValue: params.agentsValue,
-    suffixRows: params.suffixRows,
+  const decorateOk = params.decorateOk ?? ((value: string) => value);
+  const decorateWarn = params.decorateWarn ?? ((value: string) => value);
+  const gatewaySummary = buildGatewayStatusSummaryParts(params);
+  const gatewaySelfValue = formatGatewaySelfSummary(params.gatewaySelf);
+  const gatewayValue =
+    params.nodeOnlyGateway?.gatewayValue ??
+    `${gatewaySummary.modeLabel} · ${gatewaySummary.targetTextWithSource} · ${
+      params.remoteUrlMissing
+        ? decorateWarn(gatewaySummary.reachText)
+        : params.gatewayReachable
+          ? decorateOk(gatewaySummary.reachText)
+          : decorateWarn(gatewaySummary.reachText)
+    }${
+      params.gatewayReachable && !params.remoteUrlMissing && gatewaySummary.authText
+        ? ` · ${gatewaySummary.authText}`
+        : ""
+    }${gatewaySelfValue ? ` · ${gatewaySelfValue}` : ""}`;
+  const dashboardUrl =
+    params.advertisedControlUiLinks?.httpUrl ?? resolveStatusDashboardUrl({ cfg: params.cfg });
+  const gatewayServiceValue = formatStatusServiceValue(params.gatewayService);
+  const nodeServiceValue = formatStatusServiceValue(params.nodeService);
+  const tailscaleValue = formatStatusTailscaleValue({
+    tailscaleMode: params.tailscaleMode,
+    dnsName: params.tailscaleDns,
+    httpsUrl: params.tailscaleHttpsUrl,
+    includeBackendStateWhenOn: params.includeBackendStateWhenOn,
+    includeDnsNameWhenOff: params.includeDnsNameWhenOff,
+    decorateOff: params.decorateTailscaleOff,
+    decorateWarn: params.decorateTailscaleWarn,
   });
+  const gatewayAuthWarning =
+    params.gatewayAuthWarningValue !== undefined
+      ? params.gatewayAuthWarningValue
+      : params.gatewayProbeAuthWarning;
+  const gatewaySelfRowValue = gatewaySelfValue ?? params.gatewaySelfFallbackValue;
+  const rows: StatusOverviewRow[] = [
+    ...(params.prefixRows ?? []),
+    { Item: "Dashboard", Value: normalizeOptionalString(dashboardUrl) ?? "disabled" },
+    { Item: "Tailscale exposure", Value: tailscaleValue },
+    { Item: "Channel", Value: updateSurface.channelLabel },
+  ];
+  if (updateSurface.gitLabel) {
+    rows.push({ Item: "Git", Value: updateSurface.gitLabel });
+  }
+  rows.push(
+    { Item: "Update", Value: params.updateValue ?? updateSurface.updateLine },
+    { Item: "Gateway", Value: gatewayValue },
+  );
+  if (gatewayAuthWarning) {
+    rows.push({ Item: "Gateway auth warning", Value: gatewayAuthWarning });
+  }
+  rows.push(...(params.middleRows ?? []));
+  if (gatewaySelfRowValue != null) {
+    rows.push({ Item: "Gateway self", Value: gatewaySelfRowValue });
+  }
+  rows.push(
+    { Item: "Gateway service", Value: gatewayServiceValue },
+    { Item: "Node service", Value: nodeServiceValue },
+    { Item: "Agents", Value: params.agentsValue },
+    ...(params.suffixRows ?? []),
+  );
+  return rows;
 }
 
 /** Returns which gateway auth material was actually used for the probe. */
 function formatGatewayAuthUsed(
-  auth: {
-    token?: string;
-    password?: string;
-  } | null,
+  auth: StatusGatewayProbeAuth,
 ): "token" | "password" | "token+password" | "none" {
   const hasToken = Boolean(auth?.token?.trim());
   const hasPassword = Boolean(auth?.password?.trim());
@@ -391,18 +333,20 @@ function buildGatewayStatusSummaryParts(params: {
   authText: string;
   modeLabel: string;
 } {
-  const displayUrl = resolveStatusGatewayDisplayUrl(params.gatewayConnection);
+  const displayUrl = projectGatewayUrlForDiagnostics(params.gatewayConnection.url);
   const targetText = params.remoteUrlMissing ? `fallback ${displayUrl}` : displayUrl;
   const targetTextWithSource = params.gatewayConnection.urlSource
     ? `${targetText} (${params.gatewayConnection.urlSource})`
     : targetText;
   const reachText = params.remoteUrlMissing
     ? "misconfigured (remote.url missing)"
-    : params.gatewayReachable
-      ? `reachable ${formatDurationPrecise(params.gatewayProbe?.connectLatencyMs ?? 0)}`
-      : params.gatewayProbe?.error
-        ? `unreachable (${params.gatewayProbe.error})`
-        : "unreachable";
+    : params.gatewayProbe?.startupPhase
+      ? `still starting (phase ${params.gatewayProbe.startupPhase})`
+      : params.gatewayReachable
+        ? `reachable ${formatDurationPrecise(params.gatewayProbe?.connectLatencyMs ?? 0)}`
+        : params.gatewayProbe?.error
+          ? `unreachable (${params.gatewayProbe.error})`
+          : "unreachable";
   const authText = params.gatewayReachable
     ? `auth ${formatGatewayAuthUsed(params.gatewayProbeAuth)}`
     : "";
@@ -416,69 +360,10 @@ function buildGatewayStatusSummaryParts(params: {
   };
 }
 
-/** Builds gateway/dashboard/service values for overview rows. */
-function buildStatusGatewaySurfaceValues(params: {
-  cfg: Pick<OpenClawConfig, "gateway">;
-  advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
-  gatewayMode: "local" | "remote";
-  remoteUrlMissing: boolean;
-  gatewayConnection: StatusGatewayConnection;
-  gatewayReachable: boolean;
-  gatewayProbe: StatusGatewayProbe;
-  gatewayProbeAuth: StatusGatewayProbeAuth;
-  gatewaySelf: StatusGatewaySelf;
-  gatewayService: StatusManagedService;
-  nodeService: StatusManagedService;
-  nodeOnlyGateway?: {
-    gatewayValue: string;
-  } | null;
-  decorateOk?: (value: string) => string;
-  decorateWarn?: (value: string) => string;
-}) {
-  const decorateOk = params.decorateOk ?? ((value: string) => value);
-  const decorateWarn = params.decorateWarn ?? ((value: string) => value);
-  const gatewaySummary = buildGatewayStatusSummaryParts({
-    gatewayMode: params.gatewayMode,
-    remoteUrlMissing: params.remoteUrlMissing,
-    gatewayConnection: params.gatewayConnection,
-    gatewayReachable: params.gatewayReachable,
-    gatewayProbe: params.gatewayProbe,
-    gatewayProbeAuth: params.gatewayProbeAuth,
-  });
-  const gatewaySelfValue = formatGatewaySelfSummary(params.gatewaySelf);
-  const gatewayValue =
-    params.nodeOnlyGateway?.gatewayValue ??
-    `${gatewaySummary.modeLabel} · ${gatewaySummary.targetTextWithSource} · ${
-      params.remoteUrlMissing
-        ? decorateWarn(gatewaySummary.reachText)
-        : params.gatewayReachable
-          ? decorateOk(gatewaySummary.reachText)
-          : decorateWarn(gatewaySummary.reachText)
-    }${
-      params.gatewayReachable &&
-      !params.remoteUrlMissing &&
-      gatewaySummary.authText &&
-      gatewaySummary.authText.length > 0
-        ? ` · ${gatewaySummary.authText}`
-        : ""
-    }${gatewaySelfValue ? ` · ${gatewaySelfValue}` : ""}`;
-  return {
-    dashboardUrl:
-      params.advertisedControlUiLinks?.httpUrl ?? resolveStatusDashboardUrl({ cfg: params.cfg }),
-    gatewayValue,
-    gatewaySelfValue,
-    gatewayServiceValue: formatStatusServiceValue(params.gatewayService),
-    nodeServiceValue: formatStatusServiceValue(params.nodeService),
-  };
-}
-
 /** Builds the stable gateway object used by `openclaw status --json`. */
 export function buildGatewayStatusJsonPayload(params: {
   gatewayMode: "local" | "remote";
-  gatewayConnection: {
-    url: string;
-    urlSource?: string;
-  };
+  gatewayConnection: StatusGatewayConnection;
   remoteUrlMissing: boolean;
   gatewayReachable: boolean;
   gatewayProbe:
@@ -486,26 +371,22 @@ export function buildGatewayStatusJsonPayload(params: {
         connectLatencyMs?: number | null;
         error?: string | null;
         health?: unknown;
+        startupPhase?: string;
       }
     | null
     | undefined;
-  gatewaySelf:
-    | {
-        host?: string | null;
-        ip?: string | null;
-        version?: string | null;
-        platform?: string | null;
-      }
-    | null
-    | undefined;
+  gatewaySelf: StatusGatewaySelf;
   gatewayProbeAuthWarning?: string | null;
 }) {
   return {
     mode: params.gatewayMode,
-    url: resolveStatusGatewayDisplayUrl(params.gatewayConnection),
+    url: projectGatewayUrlForDiagnostics(params.gatewayConnection.url),
     urlSource: params.gatewayConnection.urlSource,
     misconfigured: params.remoteUrlMissing,
     reachable: params.gatewayReachable,
+    ...(params.gatewayProbe?.startupPhase
+      ? { readiness: "still-starting", startupPhase: params.gatewayProbe.startupPhase }
+      : {}),
     connectLatencyMs: params.gatewayProbe?.connectLatencyMs ?? null,
     self: params.gatewaySelf ?? null,
     error: params.gatewayProbe?.error ?? null,

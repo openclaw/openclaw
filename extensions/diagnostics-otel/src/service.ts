@@ -1,4 +1,3 @@
-// Diagnostics Otel plugin module implements service behavior.
 import { createNoopMeter, diag, metrics, trace, type SpanContext } from "@opentelemetry/api";
 import * as otelCore from "@opentelemetry/core";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
@@ -13,8 +12,9 @@ import {
   TraceIdRatioBasedSampler,
 } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import type { DiagnosticTraceContext } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
-import type { DiagnosticTraceContext, OpenClawPluginService } from "../api.js";
 import {
   DEFAULT_SERVICE_NAME,
   OTEL_EXPORTER_OTLP_ENDPOINT_ENV,
@@ -599,7 +599,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           recordSecurityEvent,
         }),
         metricsActive
-          ? undefined
+          ? tracesActive
+            ? undefined
+            : { exclude: ["diagnostic.phase.completed"] }
           : tracesActive
             ? { exclude: ["gateway.event_loop.sample", "diagnostic.gc"] }
             : { include: ["log.record", "security.event"] },

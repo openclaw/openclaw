@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
-import { sanitizeUntrustedFileName } from "../../infra/fs-safe-advanced.js";
 import { readPersistedMediaFacts } from "../../media/media-facts.js";
 import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { readMediaBuffer } from "../../media/store.js";
@@ -90,11 +90,14 @@ export async function prepareWorkerTurnAttachments(params: {
   >;
   tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand">;
   remoteWorkspaceDir: string;
+  // Placement ownership authorizes cleanup even after the run closes.
   assertCurrent: () => void;
+  assertRunCurrent?: () => void;
 }): Promise<string | undefined> {
   const { turn, tunnel, assertCurrent } = params;
   const check = () => {
     turn.abortSignal?.throwIfAborted();
+    params.assertRunCurrent?.();
     assertCurrent();
   };
   check();
@@ -187,7 +190,11 @@ export async function prepareWorkerTurnAttachments(params: {
       timeoutMs,
       ...(!cleanup && turn.abortSignal ? { signal: turn.abortSignal } : {}),
     });
-    assertDispatchCurrent();
+    // Retain the created directory identity before checking run revocation so
+    // the catch path can clean it using the still-current placement claim.
+    if (operation !== "init") {
+      assertDispatchCurrent();
+    }
     if (result.termination !== "exit" || result.code !== 0) {
       throw new Error(
         `Cloud attachment transfer failed: ${truncateUtf16Safe(result.stderr.trim() || "remote write failed", 512)}. Retry this turn.`,

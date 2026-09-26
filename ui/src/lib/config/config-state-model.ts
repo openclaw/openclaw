@@ -9,45 +9,70 @@ import type { ConfigSnapshot, ConfigUiHints } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 
-export type ConfigAutoSaveStatus = "idle" | "saving" | "saved" | "error" | "conflict" | "paused";
-export type RuntimeConfigState = {
+export type ConfigAutoSaveStatus =
+  | "idle"
+  | "saving"
+  | "saved"
+  | "rejected"
+  | "error"
+  | "conflict"
+  | "paused";
+
+type RuntimeConfigGatewaySnapshot = {
   client: GatewayBrowserClient | null;
-  connected: boolean;
-  applySessionKey: string;
-  configLoading: boolean;
-  configRaw: string;
-  configRawOriginal: string;
-  configRawOriginalParsed: Record<string, unknown> | null;
-  configRawOriginalParsePending: Promise<void> | null;
-  configValid: boolean | null;
-  configIssues: unknown[];
-  configSaving: boolean;
-  configApplying: boolean;
-  configAutoSaveStatus: ConfigAutoSaveStatus;
-  /** True when the config file revision differs from the active Gateway runtime. */
-  configNeedsApply: boolean;
-  configSnapshot: ConfigSnapshot | null;
-  configDraftBaseHash?: string | null;
-  configSchema: unknown;
-  configSchemaVersion: string | null;
-  configSchemaLoading: boolean;
-  configUiHints: ConfigUiHints;
-  configForm: Record<string, unknown> | null;
-  configFormOriginal: Record<string, unknown> | null;
-  configFormDirty: boolean;
-  configFormMode: "form" | "raw";
-  configSearchQuery: string;
-  configActiveSection: string | null;
-  configActiveSubsection: string | null;
-  lastError: string | null;
-  chatError?: string | null;
+  phase: ApplicationGatewayPhase;
+  sessionKey: string;
+  hello?: GatewayHelloOk | null;
 };
+
+const initialConfigValue = <T>(value: T): T => value;
+
+export function createInitialConfigState(snapshot?: Partial<RuntimeConfigGatewaySnapshot>) {
+  return {
+    client: snapshot?.client ?? null,
+    connected: snapshot?.phase === "connected",
+    applySessionKey: snapshot?.sessionKey ?? "main",
+    configLoading: false,
+    configRaw: "{\n}\n",
+    configRawOriginal: "",
+    configRawOriginalParsed: initialConfigValue<Record<string, unknown> | null>(null),
+    configRawOriginalParsePending: initialConfigValue<Promise<void> | null>(null),
+    configValid: initialConfigValue<boolean | null>(null),
+    configIssues: initialConfigValue<unknown[]>([]),
+    configSaving: false,
+    configApplying: false,
+    configAutoSaveStatus: initialConfigValue<ConfigAutoSaveStatus>("idle"),
+    configRecoveryError: initialConfigValue<string | null>(null),
+    configNeedsApply: false,
+    configSnapshot: initialConfigValue<ConfigSnapshot | null>(null),
+    configDraftBaseHash: initialConfigValue<string | null>(null),
+    configSchema: initialConfigValue<unknown>(null),
+    configSchemaVersion: initialConfigValue<string | null>(null),
+    configSchemaLoading: false,
+    configUiHints: initialConfigValue<ConfigUiHints>({}),
+    configForm: initialConfigValue<Record<string, unknown> | null>(null),
+    configFormOriginal: initialConfigValue<Record<string, unknown> | null>(null),
+    configFormDirty: false,
+    configFormMode: initialConfigValue<"form" | "raw">("form"),
+    configSearchQuery: "",
+    configActiveSection: initialConfigValue<string | null>(null),
+    configActiveSubsection: initialConfigValue<string | null>(null),
+    lastError: initialConfigValue<string | null>(null),
+  };
+}
+
+type ProducedRuntimeConfigState = ReturnType<typeof createInitialConfigState>;
+export type RuntimeConfigState = Omit<ProducedRuntimeConfigState, "configDraftBaseHash"> &
+  Partial<Pick<ProducedRuntimeConfigState, "configDraftBaseHash">> & {
+    chatError?: string | null;
+  };
 
 const requestVersionsByState = new WeakMap<
   RuntimeConfigState,
   { config: number; schema: number }
 >();
 const connectionEpochsByState = new WeakMap<object, number>();
+const staleConfigSnapshots = new WeakSet<object>();
 export type ConfigRead = {
   version: number;
   client: GatewayBrowserClient;
@@ -83,19 +108,13 @@ export function beginConfigRead(
   return read;
 }
 
-type RuntimeConfigGatewaySnapshot = {
-  client: GatewayBrowserClient | null;
-  phase: ApplicationGatewayPhase;
-  sessionKey: string;
-  hello?: GatewayHelloOk | null;
-};
-
 export type RuntimeConfigGateway = {
   readonly snapshot: RuntimeConfigGatewaySnapshot;
   subscribe: (listener: (snapshot: RuntimeConfigGatewaySnapshot) => void) => () => void;
 };
 
 export type LoadConfigOptions = {
+  preservePendingChanges?: boolean;
   discardPendingChanges?: boolean;
 };
 
@@ -107,41 +126,6 @@ type ConfigConnectionState = {
   client: ConfigGatewayClient | null;
   connected: boolean;
 };
-
-export function createInitialConfigState(
-  snapshot?: Partial<RuntimeConfigGatewaySnapshot>,
-): RuntimeConfigState {
-  return {
-    client: snapshot?.client ?? null,
-    connected: snapshot?.phase === "connected",
-    applySessionKey: snapshot?.sessionKey ?? "main",
-    configLoading: false,
-    configRaw: "{\n}\n",
-    configRawOriginal: "",
-    configRawOriginalParsed: null,
-    configRawOriginalParsePending: null,
-    configValid: null,
-    configIssues: [],
-    configSaving: false,
-    configApplying: false,
-    configAutoSaveStatus: "idle",
-    configNeedsApply: false,
-    configSnapshot: null,
-    configDraftBaseHash: null,
-    configSchema: null,
-    configSchemaVersion: null,
-    configSchemaLoading: false,
-    configUiHints: {},
-    configForm: null,
-    configFormOriginal: null,
-    configFormDirty: false,
-    configFormMode: "form",
-    configSearchQuery: "",
-    configActiveSection: null,
-    configActiveSubsection: null,
-    lastError: null,
-  };
-}
 
 export function nextRequestVersion(state: RuntimeConfigState, key: "config" | "schema"): number {
   if (key === "config") {
@@ -162,7 +146,13 @@ export function currentConfigConnectionEpoch(state: object): number {
   return connectionEpochsByState.get(state) ?? 0;
 }
 
+export function setConfigSnapshot(state: RuntimeConfigState, snapshot: ConfigSnapshot): void {
+  state.configSnapshot = snapshot;
+  staleConfigSnapshots.delete(state);
+}
+
 export function invalidateConfigConnection(state: object): void {
+  staleConfigSnapshots.add(state);
   invalidateConfigRead(state);
   connectionEpochsByState.set(state, currentConfigConnectionEpoch(state) + 1);
 }
@@ -192,7 +182,6 @@ export function isCurrentRequest(
   );
 }
 
-/** Resolves true only when a current-epoch snapshot was actually applied. */
 export function resolveEditableSnapshotConfig(
   snapshot: ConfigSnapshot | null | undefined,
 ): Record<string, unknown> | null {
@@ -206,7 +195,9 @@ export function resolveEditableSnapshotConfig(
 export function currentConfigObject(
   state: Pick<RuntimeConfigState, "configForm" | "configSnapshot">,
 ): Record<string, unknown> | null {
-  return state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot);
+  return !staleConfigSnapshots.has(state)
+    ? (state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot))
+    : null;
 }
 export type AgentConfigEntryTarget = {
   path: ["agents", "entries", string];
@@ -218,10 +209,7 @@ const BLOCKED_AGENT_CONFIG_ENTRY_IDS = new Set(["__proto__", "prototype", "const
 
 function normalizeAgentConfigEntryId(agentId: string): string | null {
   const trimmedAgentId = agentId.trim();
-  if (
-    !AGENT_CONFIG_ENTRY_ID_PATTERN.test(trimmedAgentId) ||
-    BLOCKED_AGENT_CONFIG_ENTRY_IDS.has(trimmedAgentId)
-  ) {
+  if (!AGENT_CONFIG_ENTRY_ID_PATTERN.test(trimmedAgentId)) {
     return null;
   }
   const normalizedAgentId = normalizeAgentId(trimmedAgentId);
@@ -236,15 +224,14 @@ export function resolveAgentConfigEntryTarget(
   if (!normalizedAgentId) {
     return null;
   }
-  const agents = isRecord(config?.agents) ? config.agents : null;
-  const entries = isRecord(agents?.entries) ? agents.entries : null;
+  const agents = asConfigRecord(config?.agents);
+  const entries = asConfigRecord(agents?.entries);
   const authoredAgentId = Object.keys(entries ?? {}).find(
     (candidate) =>
       AGENT_CONFIG_ENTRY_ID_PATTERN.test(candidate) &&
-      !BLOCKED_AGENT_CONFIG_ENTRY_IDS.has(candidate) &&
       normalizeAgentId(candidate) === normalizedAgentId,
   );
-  if (!entries || !authoredAgentId || !Object.hasOwn(entries, authoredAgentId)) {
+  if (!entries || !authoredAgentId) {
     return null;
   }
   const entry = entries[authoredAgentId];

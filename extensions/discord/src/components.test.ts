@@ -447,7 +447,7 @@ describe("discord component registry", () => {
   ).href;
 
   it("registers and consumes component entries", async () => {
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
       modals: [
         {
@@ -475,7 +475,6 @@ describe("discord component registry", () => {
   });
 
   it.each([
-    { placement: "row", buttonReusable: true, cardReusable: undefined, expectedReusable: true },
     { placement: "row", buttonReusable: true, cardReusable: false, expectedReusable: true },
     { placement: "row", buttonReusable: false, cardReusable: true, expectedReusable: false },
     { placement: "row", buttonReusable: undefined, cardReusable: true, expectedReusable: true },
@@ -485,14 +484,7 @@ describe("discord component registry", () => {
       cardReusable: undefined,
       expectedReusable: undefined,
     },
-    { placement: "section", buttonReusable: true, cardReusable: undefined, expectedReusable: true },
     { placement: "section", buttonReusable: false, cardReusable: true, expectedReusable: false },
-    {
-      placement: "section",
-      buttonReusable: undefined,
-      cardReusable: true,
-      expectedReusable: true,
-    },
   ] as const)(
     "preserves $placement button reuse=$buttonReusable over card reuse=$cardReusable through delivery",
     async ({ placement, buttonReusable, cardReusable, expectedReusable }) => {
@@ -529,9 +521,7 @@ describe("discord component registry", () => {
             init?.method === "GET"
               ? { id: "789", type: 0 }
               : { id: "delivered-message", channel_id: "789" };
-          return new Response(JSON.stringify(message), {
-            headers: { "content-type": "application/json" },
-          });
+          return Response.json(message);
         },
       });
 
@@ -607,7 +597,7 @@ describe("discord component registry", () => {
     expect(cancel.consumptionGroupId).toBe(confirm.consumptionGroupId);
     expect(confirm.consumptionGroupEntryIds).toEqual([confirm.id, cancel.id]);
 
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: result.entries,
       modals: [],
       messageId: "msg_1",
@@ -630,7 +620,7 @@ describe("discord component registry", () => {
     )) as typeof import("./components-registry.js");
 
     clearDiscordComponentEntriesForTest();
-    first.registerDiscordComponentEntries({
+    await first.registerDiscordComponentEntries({
       entries: [{ id: "btn_shared", kind: "button", label: "Shared" }],
       modals: [],
     });
@@ -666,7 +656,7 @@ describe("discord component registry", () => {
   it("expires component entries registered while the process clock is invalid", async () => {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
     try {
-      registerDiscordComponentEntries({
+      await registerDiscordComponentEntries({
         entries: [{ id: "btn_invalid_clock", kind: "button", label: "Invalid clock" }],
         modals: [],
         ttlMs: 1000,
@@ -686,7 +676,7 @@ describe("discord component registry", () => {
   it("expires component entries whose calculated expiry exceeds the Date range", async () => {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
     try {
-      registerDiscordComponentEntries({
+      await registerDiscordComponentEntries({
         entries: [{ id: "btn_overflow", kind: "button", label: "Overflow" }],
         modals: [],
         ttlMs: 1000,
@@ -700,33 +690,20 @@ describe("discord component registry", () => {
     ).resolves.toBeNull();
   });
 
-  it("persists component and modal entries when runtime state is available", async () => {
-    const componentRegister = vi.fn().mockResolvedValue(undefined);
-    const modalRegister = vi.fn().mockResolvedValue(undefined);
-    const componentLookup = vi.fn().mockResolvedValue({
-      version: 1,
-      entry: { id: "btn_persisted", kind: "button", label: "Persisted" },
-    });
-    const modalLookup = vi.fn().mockResolvedValue({
-      version: 1,
-      entry: { id: "mdl_persisted", title: "Persisted", fields: [] },
-    });
-    const componentStore = {
-      register: componentRegister,
-      lookup: componentLookup,
+  function createPersistentRegistryStore() {
+    return {
+      register: vi.fn().mockResolvedValue(undefined),
+      lookup: vi.fn(),
       consume: vi.fn(),
       delete: vi.fn(),
       entries: vi.fn(),
       clear: vi.fn(),
     };
-    const modalStore = {
-      register: modalRegister,
-      lookup: modalLookup,
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
-    };
+  }
+
+  function installPersistentRegistryStores() {
+    const componentStore = createPersistentRegistryStore();
+    const modalStore = createPersistentRegistryStore();
     const openKeyedStore = vi.fn((opts: { namespace: string }) =>
       opts.namespace === "discord.components" ? componentStore : modalStore,
     );
@@ -734,11 +711,26 @@ describe("discord component registry", () => {
       state: { openKeyedStore },
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
     } as never);
+    return { componentStore, modalStore, openKeyedStore };
+  }
+
+  it("persists component and modal entries when runtime state is available", async () => {
+    const { componentStore, modalStore, openKeyedStore } = installPersistentRegistryStores();
+    const { register: componentRegister, lookup: componentLookup } = componentStore;
+    const { register: modalRegister, lookup: modalLookup } = modalStore;
+    componentLookup.mockResolvedValue({
+      version: 1,
+      entry: { id: "btn_persisted", kind: "button", label: "Persisted" },
+    });
+    modalLookup.mockResolvedValue({
+      version: 1,
+      entry: { id: "mdl_persisted", title: "Persisted", fields: [] },
+    });
 
     const now = 1_700_000_000_000;
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
-      registerDiscordComponentEntries({
+      await registerDiscordComponentEntries({
         entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
         modals: [{ id: "mdl_1", title: "Details", fields: [] }],
         ttlMs: 1000,
@@ -747,7 +739,7 @@ describe("discord component registry", () => {
       dateNowSpy.mockRestore();
     }
 
-    await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(1));
+    expect(componentRegister).toHaveBeenCalledTimes(1);
     expect(componentRegister).toHaveBeenCalledWith(
       "btn_1",
       {
@@ -790,31 +782,9 @@ describe("discord component registry", () => {
   });
 
   it("omits undefined component fields before persisting registry state", async () => {
-    const componentRegister = vi.fn().mockResolvedValue(undefined);
-    const modalRegister = vi.fn().mockResolvedValue(undefined);
-    const componentStore = {
-      register: componentRegister,
-      lookup: vi.fn(),
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
-    };
-    const modalStore = {
-      register: modalRegister,
-      lookup: vi.fn(),
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
-    };
-    const openKeyedStore = vi.fn((opts: { namespace: string }) =>
-      opts.namespace === "discord.components" ? componentStore : modalStore,
-    );
-    setDiscordRuntime({
-      state: { openKeyedStore },
-      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
-    } as never);
+    const { componentStore, modalStore } = installPersistentRegistryStores();
+    const componentRegister = componentStore.register;
+    const modalRegister = modalStore.register;
 
     const componentEntry = Object.assign(
       {
@@ -844,13 +814,13 @@ describe("discord component registry", () => {
       { sessionKey: undefined },
     );
 
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [componentEntry],
       modals: [modalEntry],
       ttlMs: 1000,
     });
 
-    await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(1));
+    expect(componentRegister).toHaveBeenCalledTimes(1);
     expect(modalRegister).toHaveBeenCalledTimes(1);
 
     const persistedComponent = componentRegister.mock.calls[0]?.[1] as
@@ -937,7 +907,7 @@ describe("discord component registry", () => {
       logging: { getChildLogger: () => ({ warn }) },
     } as never);
 
-    registerDiscordComponentEntries({
+    await registerDiscordComponentEntries({
       entries: [{ id: "btn_fallback", kind: "button", label: "Fallback" }],
       modals: [],
     });

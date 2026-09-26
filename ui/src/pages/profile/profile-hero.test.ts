@@ -20,14 +20,12 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-it("keeps the connected person's hero independent of the default agent and live name updates", () => {
+it("keeps the connected person's hero independent of the default agent and live name updates", async () => {
   const props = {
     row: { id: "clipper", name: "Clipper" },
     identity: null,
     user: { id: "person-1", name: "Ada", email: "ada@example.test" },
-    resolveImageUrl: vi.fn(() => null),
-    failedAvatarUrl: null,
-    onAvatarError: vi.fn(),
+    avatarLoader: { resolve: vi.fn(() => null), imageErrorHandler: vi.fn(() => vi.fn()) },
   };
   render(renderProfileHero(props), container);
   expect(container.querySelector(".profile-hero__name")?.textContent).toBe("Ada");
@@ -38,12 +36,16 @@ it("keeps the connected person's hero independent of the default agent and live 
 
   render(renderProfileHero({ ...props, user: { ...props.user, name: "Ada Lovelace" } }), container);
   expect(container.querySelector(".profile-hero__name")?.textContent).toBe("Ada Lovelace");
-  expect(props.resolveImageUrl).not.toHaveBeenCalled();
+  expect(props.avatarLoader.resolve).not.toHaveBeenCalled();
 
   render(renderProfileHero({ ...props, user: null }), container);
   expect(container.querySelector(".profile-hero__name")?.textContent).toBe("Clipper");
   expect(container.querySelector(".profile-hero__handle")?.textContent).toContain("@clipper");
-  expect(container.querySelector(".profile-hero__avatar-mascot svg")).not.toBeNull();
+  await waitForFast(() =>
+    expect(
+      container.querySelector(".profile-hero__avatar .identity-avatar__agent-face"),
+    ).not.toBeNull(),
+  );
 
   render(renderProfileHero({ ...props, user: { id: "gateway-owner" } }), container);
   expect(container.querySelector(".profile-hero__name")?.textContent).toBe(t("nav.owner"));

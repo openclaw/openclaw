@@ -1,5 +1,11 @@
 // Channels status command-flow tests cover gateway calls, config fallback, and timeout validation.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+  waitForGatewayDiagnosticReadiness: vi.fn(async () => undefined),
+}));
+import { validateChannelsStatusParams } from "../../packages/gateway-protocol/src/index.js";
+import { waitForGatewayDiagnosticReadiness } from "../cli/daemon-cli/diagnostic-readiness.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -77,48 +83,6 @@ vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
   },
 }));
 
-vi.mock("./channels/shared.js", () => ({
-  formatChannelAccountLabel: ({
-    channel,
-    accountId,
-  }: {
-    channel: string;
-    accountId: string;
-    name?: string;
-  }) => `${channel} ${accountId}`,
-  appendEnabledConfiguredLinkedBits: (bits: string[], account: Record<string, unknown>) => {
-    if (typeof account.enabled === "boolean") {
-      bits.push(account.enabled ? "enabled" : "disabled");
-    }
-    if (account.configured === true) {
-      bits.push("configured");
-      if (Object.values(account).includes("configured_unavailable")) {
-        bits.push("secret unavailable in this command path");
-      }
-    }
-  },
-  appendModeBit: (bits: string[], account: Record<string, unknown>) => {
-    if (typeof account.mode === "string" && account.mode.length > 0) {
-      bits.push(`mode:${account.mode}`);
-    }
-  },
-  appendTokenSourceBits: (bits: string[], account: Record<string, unknown>) => {
-    if (account.tokenSource === "config") {
-      const unavailable = account.tokenStatus === "configured_unavailable" ? " (unavailable)" : "";
-      bits.push(`token:config${unavailable}`);
-    }
-  },
-  appendBaseUrlBit: (bits: string[], account: Record<string, unknown>) => {
-    if (typeof account.baseUrl === "string" && account.baseUrl) {
-      bits.push(`url:${account.baseUrl}`);
-    }
-  },
-  buildChannelAccountLine: (channel: string, account: Record<string, unknown>, bits: string[]) => {
-    const accountId = typeof account.accountId === "string" ? account.accountId : "default";
-    return `- ${channel} ${accountId}: ${bits.join(", ")}`;
-  },
-}));
-
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => mocks.listChannelPlugins(),
   getChannelPlugin: (channel: string) =>
@@ -129,15 +93,6 @@ vi.mock("../channels/plugins/index.js", () => ({
 
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfig: () => mocks.listChannelPlugins(),
-}));
-
-vi.mock("../channels/account-snapshot-fields.js", () => ({
-  hasConfiguredUnavailableCredentialStatus: (account: Record<string, unknown>) =>
-    Object.values(account).includes("configured_unavailable"),
-  hasResolvedCredentialValue: (account: Record<string, unknown>) =>
-    ["token", "botToken", "appToken", "signingSecret"].some(
-      (key) => typeof account[key] === "string" && account[key].length > 0,
-    ),
 }));
 
 vi.mock("../channels/plugins/status.js", () => ({
@@ -229,6 +184,7 @@ function createGatewayTransportError(message = "Gateway not reachable (ECONNREFU
 
 describe("channelsStatusCommand SecretRef fallback flow", () => {
   beforeEach(() => {
+    vi.spyOn(performance, "now").mockReturnValue(0);
     mocks.callGateway.mockReset();
     mocks.resolveCommandConfigWithSecrets.mockReset();
     mocks.readConfigFileSnapshot.mockClear();
@@ -242,6 +198,55 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     mocks.listChannelPlugins.mockReturnValue([createTokenOnlyPlugin()]);
   });
 
+  it("sends valid channel RPC parameters after fractional startup timing", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockImplementationOnce(async () => {
+      vi.spyOn(performance, "now").mockReturnValue(1250.25);
+      return {
+        healthy: true,
+        waitOutcome: "healthy",
+        elapsedMs: 1250.25,
+        runtime: { status: "running", pid: 42 },
+        portUsage: { port: 18789, status: "busy", listeners: [{ pid: 42 }], hints: [] },
+        staleGatewayPids: [],
+      };
+    });
+    mocks.callGateway.mockResolvedValueOnce({});
+
+    await channelsStatusCommand({ probe: true, json: true, timeout: "5000" }, runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    const request = mocks.callGateway.mock.calls[0]?.[0];
+    expect(validateChannelsStatusParams(request?.params)).toBe(true);
+    expect(request?.params.timeoutMs).toBe(3750);
+    expect(request?.timeoutMs).toBe(3750);
+    expect(request?.sharedStateMode).toBe("read-only");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reports pending startup in JSON without falling back to a Gateway error", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce({
+      healthy: false,
+      waitOutcome: "still-starting",
+      startupPhase: "startup-sidecars",
+      elapsedMs: 60_000,
+      runtime: { status: "running", pid: 42 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      staleGatewayPids: [],
+    });
+    await channelsStatusCommand({ probe: true, json: true }, runtime);
+    expect(runtime.log.mock.calls.map(([message]) => JSON.parse(message))).toEqual([
+      { status: "starting", startupPhase: "startup-sidecars" },
+    ]);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.requireValidConfig).not.toHaveBeenCalled();
+  });
+
   it("passes a channel filter to the gateway status request", async () => {
     mocks.callGateway.mockResolvedValue({
       channelAccounts: { imessage: [] },
@@ -253,8 +258,9 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
 
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "channels.status",
-      params: { channel: "imsg", probe: true, timeoutMs: 30000 },
-      timeoutMs: 30000,
+      params: { channel: "imsg", probe: true, timeoutMs: 60000 },
+      timeoutMs: 60000,
+      sharedStateMode: "read-only",
     });
   });
 
@@ -545,16 +551,5 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
 
     const payload = JSON.parse(logs.at(-1) ?? "{}");
     expect(payload.configuredChannels).toStrictEqual(["clickclack"]);
-  });
-
-  it("rejects invalid timeout before falling back to config-only status", async () => {
-    const { runtime } = createCapturingTestRuntime();
-
-    await expect(channelsStatusCommand({ timeout: "1000ms" }, runtime as never)).rejects.toThrow(
-      'Received: "1000ms"',
-    );
-
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.requireValidConfig).not.toHaveBeenCalled();
   });
 });

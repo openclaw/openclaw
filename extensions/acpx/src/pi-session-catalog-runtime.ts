@@ -147,13 +147,10 @@ function assertPiLocalAccess(hostId: string, allowProcessHomeFallback?: boolean)
   }
 }
 
-export async function listPiSessions(params: unknown) {
-  return await listLocalPiSessionPage(params);
-}
-
-export async function readPiSession(params: unknown) {
-  return await readLocalPiTranscriptPage(params);
-}
+export {
+  listLocalPiSessionPage as listPiSessions,
+  readLocalPiTranscriptPage as readPiSession,
+} from "./pi-session-catalog.js";
 
 export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
   return createSessionCatalogFamily(
@@ -245,6 +242,7 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
       },
       terminal: {
         executable: "pi",
+        uploadPathStyle: "native",
         args: (threadId) => ["--session", threadId],
         title: (threadId) => `pi --session ${threadId.slice(0, 12)}…`,
         requireLocalSession: requireLocalPiSession,

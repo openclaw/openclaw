@@ -8,6 +8,7 @@ import type {
 import {
   clickBrowserCoords,
   inspectBrowserElementAt,
+  insertBrowserText,
   isBrowserEvaluateDisabledError,
   pressBrowserKey,
   scrollBrowserBy,
@@ -76,12 +77,18 @@ export class BrowserPanelInputController {
   private drawingGesture: BrowserPanelDrawingGesture | null = null;
   private suppressStageClick = false;
   private inspectionError: string | null = null;
+  private pendingClick: Promise<boolean> | null = null;
+  private clickSequence = 0;
+  private inputGeneration = 0;
 
   constructor(private readonly host: BrowserPanelInputHost) {}
 
   resetCaptureState(): void {
     this.host.pendingInput.clearInput();
     this.cancelOverlayPointerGesture();
+    this.pendingClick = null;
+    this.clickSequence += 1;
+    this.inputGeneration += 1;
   }
 
   private stageElement(): HTMLElement | null {
@@ -106,19 +113,34 @@ export class BrowserPanelInputController {
     if (this.host.mode !== "interact") {
       return;
     }
-    // Keep keyboard forwarding live after a click; the canvas itself is not
-    // focusable, so focus the surrounding viewport explicitly.
+    // The empty input gives WebKit native Paste commands for the remote page.
     this.host.host.renderRoot
-      .querySelector<HTMLElement>(".bp-viewport")
+      .querySelector<HTMLElement>(".bp-input")
       ?.focus({ preventScroll: true });
     const point = this.remotePoint(event);
     const targetId = this.host.activeTargetId;
-    if (!point || !targetId) {
+    const client = this.host.operations.captureClient();
+    if (!point || !targetId || !client) {
       return;
     }
-    void this.host.runAction((client) =>
-      clickBrowserCoords(client, { targetId, x: point.x, y: point.y }),
-    );
+    const epoch = this.host.operations.epoch;
+    const generation = this.inputGeneration;
+    const click = () => {
+      if (
+        this.inputGeneration !== generation ||
+        !this.host.operations.isLive(epoch, client) ||
+        this.host.activeTargetId !== targetId ||
+        this.host.mode !== "interact"
+      ) {
+        return Promise.resolve(false);
+      }
+      return this.host.runAction((actionClient) =>
+        clickBrowserCoords(actionClient, { targetId, x: point.x, y: point.y }),
+      );
+    };
+    this.clickSequence += 1;
+    // Preserve click order and failure: a failed click can leave the previous field focused.
+    this.pendingClick = this.pendingClick ? this.pendingClick.then(click) : click();
   }
 
   handleWheel(event: WheelEvent): void {
@@ -162,12 +184,62 @@ export class BrowserPanelInputController {
       return;
     }
     const key = event.key;
-    const targetId = this.host.activeTargetId;
-    if (!browserPanelShouldForwardKey(key) || !targetId) {
+    if (!browserPanelShouldForwardKey(key)) {
       return;
     }
     event.preventDefault();
-    void this.host.runAction((client) => pressBrowserKey(client, { targetId, key }));
+    this.runAfterClick((client, targetId) => pressBrowserKey(client, { targetId, key }));
+  }
+
+  handleViewportPaste(event: ClipboardEvent): void {
+    // Clipboard bytes belong to the remote field, never the local textarea or chat.
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.clipboardData?.types.includes("text/plain")) {
+      return;
+    }
+    const text = event.clipboardData.getData("text/plain");
+    if (text) {
+      this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }));
+    }
+  }
+
+  private runAfterClick(
+    action: (client: BrowserRequestClient, targetId: string) => Promise<void>,
+  ): void {
+    const targetId = this.host.activeTargetId;
+    const client = this.host.operations.captureClient();
+    if (
+      !client ||
+      !targetId ||
+      this.host.view?.targetId !== targetId ||
+      this.host.mode !== "interact"
+    ) {
+      return;
+    }
+    const epoch = this.host.operations.epoch;
+    const clickSequence = this.clickSequence;
+    const run = () => {
+      if (
+        !this.host.operations.isLive(epoch, client) ||
+        this.host.activeTargetId !== targetId ||
+        this.host.view?.targetId !== targetId ||
+        this.host.mode !== "interact" ||
+        this.clickSequence !== clickSequence
+      ) {
+        return;
+      }
+      void this.host.runAction((actionClient) => action(actionClient, targetId));
+    };
+    if (this.pendingClick) {
+      void this.pendingClick.then((succeeded) => {
+        if (succeeded) {
+          run();
+        }
+      });
+    } else {
+      run();
+    }
   }
 
   handleOverlayPointerDown(event: PointerEvent): void {
@@ -327,14 +399,12 @@ export class BrowserPanelInputController {
       this.host.reportError(error);
       return;
     }
-    if (result === "unhandled") {
+    if (result !== "accepted") {
       this.host.setState("noticeText", null);
-      this.host.setState("errorText", t("browser.noChatTarget"));
-      return;
-    }
-    if (result === "rejected") {
-      this.host.setState("noticeText", null);
-      this.host.setState("errorText", t("browser.annotationLimitReached"));
+      this.host.setState(
+        "errorText",
+        t(result === "unhandled" ? "browser.noChatTarget" : "browser.annotationLimitReached"),
+      );
       return;
     }
     this.host.setState("errorText", null);

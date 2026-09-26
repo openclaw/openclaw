@@ -1,5 +1,7 @@
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { AgentEventPayload } from "../../src/infra/agent-events.js";
-import { listKnownProviderAuthEnvVarNames } from "../../src/secrets/provider-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../../src/secrets/provider-env-vars.js";
+import { extractFirstTextBlock } from "../../src/shared/chat-message-content.js";
 // Native live fixture setup and capture shared with its offline boundary regressions.
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
@@ -13,7 +15,9 @@ export function createCodexHarnessLiveInstance(
     state: { layout: "state-only" },
     gatewayToken: token,
     env: {
-      ...Object.fromEntries(listKnownProviderAuthEnvVarNames().map((name) => [name, undefined])),
+      ...Object.fromEntries(
+        listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
+      ),
       OPENCLAW_AGENT_RUNTIME: "codex",
       OPENCLAW_GATEWAY_TOKEN: token,
       OPENCLAW_ALLOW_SLOW_REPLY_TESTS: "1",
@@ -71,6 +75,7 @@ export function createCodexHarnessEventCapture(params: {
         return;
       }
       events.push({
+        runId: event.runId,
         stream: event.stream,
         sessionKey: event.sessionKey,
         data: event.data,
@@ -81,6 +86,7 @@ export function createCodexHarnessEventCapture(params: {
 }
 
 export type CapturedAgentEvent = {
+  runId?: string;
   stream: string;
   data?: Record<string, unknown>;
   sessionKey?: string;
@@ -134,4 +140,118 @@ export function readCodexNativeUsageSnapshots(
       },
     ];
   });
+}
+
+export function readCompletedCodexCompactionStats(events: readonly CapturedAgentEvent[]): {
+  count: number;
+  durationMs?: number;
+  startedCount: number;
+} {
+  const startedItemIds = new Set<string>();
+  const startedAtByItemId = new Map<string, number>();
+  let count = 0;
+  let durationMs = 0;
+  let measuredCount = 0;
+  for (const event of events) {
+    if (event.stream !== "compaction") {
+      continue;
+    }
+    const itemId = event.data?.itemId;
+    if (event.data?.phase === "start" && typeof itemId === "string") {
+      startedItemIds.add(itemId);
+      if (event.ts !== undefined) {
+        startedAtByItemId.set(itemId, event.ts);
+      }
+      continue;
+    }
+    if (event.data?.phase !== "end" || event.data?.completed !== true) {
+      continue;
+    }
+    count += 1;
+    const startedAt = typeof itemId === "string" ? startedAtByItemId.get(itemId) : undefined;
+    if (startedAt !== undefined && event.ts !== undefined) {
+      durationMs += Math.max(0, event.ts - startedAt);
+      measuredCount += 1;
+    }
+  }
+  return { count, startedCount: startedItemIds.size, ...(measuredCount > 0 ? { durationMs } : {}) };
+}
+
+export function extractChatFinalText(event: EventFrame, runId: string): string | undefined {
+  if (event.event !== "chat") {
+    return undefined;
+  }
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  if (record.runId !== runId || record.state !== "final") {
+    return undefined;
+  }
+  const message = record.message;
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const messageRecord = message as Record<string, unknown>;
+  if (typeof messageRecord.text === "string" && messageRecord.text.trim()) {
+    return messageRecord.text;
+  }
+  const content = Array.isArray(messageRecord.content) ? messageRecord.content : [];
+  return content
+    .map((entry) =>
+      entry && typeof entry === "object" ? (entry as Record<string, unknown>).text : undefined,
+    )
+    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    .join("\n")
+    .trim();
+}
+
+export function readCodexAppServerPluginApprovalId(event: EventFrame): string | undefined {
+  if (event.event !== "plugin.approval.requested") {
+    return undefined;
+  }
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  const request = record.request;
+  if (!request || typeof request !== "object") {
+    return undefined;
+  }
+  const requestRecord = request as Record<string, unknown>;
+  if (requestRecord.pluginId !== "codex") {
+    return undefined;
+  }
+  return typeof record.id === "string" && record.id ? record.id : undefined;
+}
+
+export function extractAssistantTexts(messages: unknown[]): string[] {
+  const texts: string[] = [];
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    if ((entry as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const text = extractFirstTextBlock(entry);
+    if (typeof text === "string" && text.trim().length > 0) {
+      texts.push(text);
+    }
+  }
+  return texts;
+}
+
+export function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
+  const combined = texts.join("\n\n").trim();
+  if (!combined) {
+    return "<none>";
+  }
+  if (combined.length <= maxChars) {
+    return combined;
+  }
+  const half = Math.floor(maxChars / 2);
+  return `${combined.slice(0, half)}\n...\n${combined.slice(-half)}`;
 }

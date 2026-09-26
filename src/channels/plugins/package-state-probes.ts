@@ -18,6 +18,7 @@ import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import { isPluginSourceModulePath } from "../../plugins/native-module-require.js";
 import { pluginCacheExistsSync } from "../../plugins/plugin-cache-files.js";
 import { isSafeChannelEnvVarTriggerName } from "../../secrets/channel-env-var-names.js";
+import { isOpenClawStateDatabaseDefinitelyAbsent } from "../../state/openclaw-state-db-readonly.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
 type ChannelPackageStateChecker = (params: {
@@ -299,6 +300,13 @@ export function hasChannelPackageState(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): boolean {
+  if (
+    params.metadataKey === "persistedAuthState" &&
+    params.entry.channel.persistedAuthState?.backingStore === "plugin-state" &&
+    isOpenClawStateDatabaseDefinitelyAbsent(params.env)
+  ) {
+    return false;
+  }
   const checker = resolveChannelPackageStateChecker({
     entry: params.entry,
     metadataKey: params.metadataKey,

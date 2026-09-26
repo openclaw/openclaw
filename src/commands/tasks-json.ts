@@ -1,5 +1,5 @@
-// JSON-only task command helpers.
-// These paths avoid maintenance reconciliation so short-lived JSON CLI processes stay read-only and exit cleanly.
+// JSON-only task commands use read-only registry snapshots without maintenance reconciliation.
+// This avoids broader task runtimes so short-lived CLI processes exit cleanly.
 
 import { parseCliEnumFilter } from "../cli/enum-filter.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -11,7 +11,6 @@ import {
   matchesTaskStatusFilter,
   TASK_RUNTIMES,
   TASK_STATUS_FILTERS,
-  type TaskRecord,
 } from "../tasks/task-registry.types.js";
 import {
   TASK_SYSTEM_AUDIT_CODES,
@@ -23,12 +22,6 @@ import {
   buildTaskSystemAuditJsonPayload,
   buildTaskSystemAuditFindings,
 } from "./tasks-audit-system.js";
-
-function listTaskJsonRecords(): TaskRecord[] {
-  // Keep the routed JSON path a read-only store snapshot; maintenance reconciliation imports
-  // broader task runtimes and can keep JSON-only CLI processes alive.
-  return listTaskRecords();
-}
 
 type TasksListJsonArgs = {
   json?: boolean;
@@ -47,30 +40,25 @@ function toSystemAuditFindings(params: {
   severityFilter?: TaskSystemAuditSeverity;
   codeFilter?: TaskSystemAuditCode;
 }) {
-  const tasks = listTaskJsonRecords();
+  const tasks = listTaskRecords();
   const taskFindings = listTaskAuditFindings({ tasks });
   const flowFindings = listTaskFlowAuditFindings();
-  const result = buildTaskSystemAuditFindings({
+  return buildTaskSystemAuditFindings({
     taskFindings,
     flowFindings,
     severityFilter: params.severityFilter,
     codeFilter: params.codeFilter,
   });
-  return result;
 }
 
 function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
   const runtimeFilter = parseCliEnumFilter(opts.runtime, "--runtime", TASK_RUNTIMES);
   const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_STATUS_FILTERS);
-  const tasks = listTaskJsonRecords().filter((task) => {
-    if (runtimeFilter && task.runtime !== runtimeFilter) {
-      return false;
-    }
-    if (statusFilter && !matchesTaskStatusFilter(task, statusFilter)) {
-      return false;
-    }
-    return true;
-  });
+  const tasks = listTaskRecords(
+    (task) =>
+      (!runtimeFilter || task.runtime === runtimeFilter) &&
+      (!statusFilter || matchesTaskStatusFilter(task, statusFilter)),
+  );
   return {
     count: tasks.length,
     runtime: runtimeFilter ?? null,
@@ -84,10 +72,8 @@ function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
     opts.severity,
     "--severity",
     TASK_SYSTEM_AUDIT_SEVERITIES,
-  ) as TaskSystemAuditSeverity | undefined;
-  const codeFilter = parseCliEnumFilter(opts.code, "--code", TASK_SYSTEM_AUDIT_CODES) as
-    | TaskSystemAuditCode
-    | undefined;
+  );
+  const codeFilter = parseCliEnumFilter(opts.code, "--code", TASK_SYSTEM_AUDIT_CODES);
   const result = toSystemAuditFindings({
     severityFilter,
     codeFilter,

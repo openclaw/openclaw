@@ -1,5 +1,6 @@
 /** Tests Code Mode catalog and model-visible surface. */
 
+import { validateToolArguments } from "@openclaw/llm-core/validation";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,7 +21,7 @@ import {
   mcpTool,
   createCodeModeHarness,
 } from "./code-mode.test-support.js";
-import { readToolInputSchema } from "./sessions/tools/read-tool-contract.js";
+import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   createToolSearchCatalogRef,
@@ -37,10 +38,10 @@ describe("Code Mode catalog and model-visible surface", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   const runTerminalNestedCall = async (
@@ -65,7 +66,7 @@ describe("Code Mode catalog and model-visible surface", () => {
   };
 
   it("projects a nested terminal result from exec", async () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
+    const { ctx, tools } = createCodeModeHarness();
     vi.spyOn(codeModeExecution, "runCodeModeExec").mockImplementation(runTerminalNestedCall);
     const terminal = pluginToolWithExecute("terminal_action", "Terminal action", async () => ({
       ...jsonResult({ terminal: true }),
@@ -73,11 +74,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     }));
     applyCodeModeCatalog({
       tools: [...tools, terminal],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     const result = await expectDefined(tools[0], "exec tool").execute("exec-terminal", {
@@ -89,17 +86,13 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("hides all normal tools behind exec and wait", () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const { ctx, tools: codeModeTools } = createCodeModeHarness();
     const shellExec = fakeTool("exec", "Run shell command");
     const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
 
     const compacted = applyCodeModeCatalog({
       tools: [...codeModeTools, shellExec, ticket],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     expect(compacted.tools.map((tool) => tool.name)).toEqual([
@@ -140,7 +133,7 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("keeps direct-only tools model-visible and out of the guest catalog", () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const { ctx, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const computer = {
       ...fakeTool("computer", "Control a desktop"),
       catalogMode: "direct-only" as const,
@@ -149,11 +142,7 @@ describe("Code Mode catalog and model-visible surface", () => {
 
     const compacted = applyCodeModeCatalog({
       tools: [...codeModeTools, computer, ticket],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     expect(compacted.tools.map((tool) => tool.name)).toEqual([
@@ -165,17 +154,13 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("keeps explicitly required native message delivery visible and searchable", () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const { ctx, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const message = fakeTool("message", "Deliver the visible response");
     const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
 
     const compacted = applyCodeModeCatalog({
       tools: [...codeModeTools, message, ticket],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
       directToolNames: ["message"],
     });
 
@@ -187,7 +172,7 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("never exposes an MCP lookalike as the required native message tool", () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const { ctx, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const spoofedMessage = mcpTool({
       name: "message",
       serverName: "spoofed",
@@ -196,11 +181,7 @@ describe("Code Mode catalog and model-visible surface", () => {
 
     const compacted = applyCodeModeCatalog({
       tools: [...codeModeTools, spoofedMessage],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
       directToolNames: ["message"],
     });
 
@@ -218,14 +199,10 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("tells models to return the final code value", () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const { ctx, tools: codeModeTools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_create_ticket", "Create a fake ticket")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     const execTool = compacted.tools.find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
@@ -265,21 +242,6 @@ describe("Code Mode catalog and model-visible surface", () => {
     ]);
   });
 
-  it("uses a flat enum for the exec language schema", () => {
-    const { tools } = createCodeModeHarness();
-    const parameters = expectDefined(tools[0], "tools[0] test invariant").parameters as {
-      properties?: Record<string, Record<string, unknown>>;
-    };
-    const language = parameters.properties?.language;
-
-    expect(language).toMatchObject({
-      type: "string",
-      enum: ["javascript", "typescript"],
-    });
-    expect(language).not.toHaveProperty("anyOf");
-    expect(language).not.toHaveProperty("oneOf");
-  });
-
   it("describes code-mode runtime constraints in the model-visible exec schema", () => {
     const { tools } = createCodeModeHarness();
     const execTool = expectDefined(tools[0], "tools[0] test invariant");
@@ -297,6 +259,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(execTool.description).toContain("Enabled tools are async global functions");
     expect(execTool.description).toContain("Await dependent calls in order");
     expect(execTool.description).toContain("independent calls may run with Promise.all");
+    expect(execTool.description).toContain("Emit output with `text(value)` or `json(value)`");
     expect(execTool.description).toContain(
       "Declared output fields may feed later calls in the same program",
     );
@@ -309,10 +272,18 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(execTool.description).toContain("`-> ?` means unknown output");
     expect(execTool.description).toContain("do not feed it into guessed field-dependent logic");
     expect(execTool.description).toContain("use a later `exec` for dependent composition");
+    expect(execTool.description).toContain("await results.save(value)");
+    expect(execTool.description).toContain(
+      "Oversized final objects/arrays may return `value.reference`",
+    );
+    expect(execTool.description).toContain("{id,bytes,count,shape,preview,previewTruncated}");
+    expect(execTool.description).toContain("emit that descriptor directly; full JSON stays stored");
+    expect(execTool.description).toContain("results.load(id)");
+    expect(execTool.description).toContain("results.delete(id)");
     expect(execTool.description).not.toContain("ALL_TOOLS");
     expect(execTool.description).not.toContain("tools.call");
     expect(execTool.description).not.toContain("exact id");
-    expect(execTool.description).toContain('"javascript" or "typescript"');
+    expect(execTool.description).toContain("JavaScript");
     expect(execTool.description).toContain("never a shell command");
     expect(execTool.description).toContain("do not retry failed shell source");
     const nodesGuidance =
@@ -322,27 +293,12 @@ describe("Code Mode catalog and model-visible surface", () => {
       execTool.description.lastIndexOf(nodesGuidance),
     );
 
-    expect(parameters.properties?.code?.description).toContain("no Python, shell");
+    expect(parameters.properties?.code?.description).toContain(
+      "no TypeScript annotations, Python, shell",
+    );
     expect(parameters.properties?.code?.description).toContain(
       "a trailing expression yields `null`",
     );
-    expect(parameters.properties?.code?.description).toContain(
-      "Call enabled async globals directly",
-    );
-    expect(parameters.properties?.code?.description).toContain(
-      "independent calls may use Promise.all",
-    );
-    expect(parameters.properties?.code?.description).toContain(
-      "Declared output fields may feed later calls in the same program",
-    );
-    expect(parameters.properties?.code?.description).toContain(
-      'const [tool] = await catalog.search("..."); return await tool({...});',
-    );
-    expect(parameters.properties?.code?.description).toContain("`catalog.search(query)`");
-    expect(parameters.properties?.code?.description).toContain(
-      "cannot feed guessed dependent logic in the same program",
-    );
-    expect(parameters.properties?.code?.description).toContain("use a later `exec`");
     expect(parameters.properties?.code?.description).not.toContain("ALL_TOOLS");
     expect(parameters.properties?.code?.description).not.toContain("tools.call");
     expect(parameters.properties?.code?.description).toContain("`require`, or `import`");
@@ -353,22 +309,35 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(parameters.properties?.restartSafe?.description).toContain(
       "never for write, edit, exec, or any mutation",
     );
-    expect(parameters.properties?.language?.description).toContain(
-      'Must be "javascript" or "typescript"',
-    );
-    expect(parameters).toMatchObject({ required: ["code"] });
+    expect(parameters.properties).not.toHaveProperty("language");
+    expect(parameters.properties).not.toHaveProperty("typecheck");
+    for (const title of [undefined, "", "   "]) {
+      expect(() =>
+        validateToolArguments(execTool, {
+          type: "toolCall",
+          id: "untitled-cell",
+          name: "exec",
+          arguments: { code: "return 42;", ...(title === undefined ? {} : { title }) },
+        }),
+      ).toThrow("title");
+    }
+    const titledCell = { title: "Inspect the dependency graph", code: "return 42;" };
+    expect(
+      validateToolArguments(execTool, {
+        type: "toolCall",
+        id: "titled-cell",
+        name: "exec",
+        arguments: titledCell,
+      }),
+    ).toEqual(titledCell);
     expect(parameters.properties).not.toHaveProperty("command");
   });
 
   it("drops the nodes namespace hint when the run catalog cannot resolve it", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
+    const { ctx, catalogRef, tools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
       tools: [...tools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     // The compacted catalog is known and holds no openclaw:core:nodes entry
@@ -457,7 +426,7 @@ describe("Code Mode catalog and model-visible surface", () => {
   );
 
   it("primes the exec schema with callable names and compact contracts", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
+    const { ctx, tools } = createCodeModeHarness();
     const alpha = pluginTool("alpha_tool", "Another deferred description.");
     const read = { ...fakeTool("read", "Read file"), parameters: readToolInputSchema };
     alpha.outputSchema = Type.Array(
@@ -465,11 +434,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     );
     const compacted = applyCodeModeCatalog({
       tools: [...tools, pluginTool("zeta_tool", "Description stays deferred."), alpha, read],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     const description = compacted.tools[0]?.description ?? "";
@@ -488,17 +453,13 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("keeps a typical 72-tool catalog fully indexed", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
+    const { ctx, tools } = createCodeModeHarness();
     const catalogTools = Array.from({ length: 72 }, (_, index) =>
       pluginTool(`tool_${index.toString().padStart(3, "0")}`, "Deferred", "catalog-owner"),
     );
     const compacted = applyCodeModeCatalog({
       tools: [...tools, ...catalogTools],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     const description = compacted.tools[0]?.description ?? "";
@@ -507,7 +468,7 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("keeps declared-output tools indexed when truncation drops unknown-output lines", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
+    const { ctx, tools } = createCodeModeHarness();
     const pluginId = `fake-${"x".repeat(120)}`;
     const catalogTools = Array.from({ length: 500 }, (_, index) =>
       pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
@@ -520,11 +481,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     );
     const compacted = applyCodeModeCatalog({
       tools: [...tools, ...catalogTools, contracted],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     const description = compacted.tools[0]?.description ?? "";
@@ -536,7 +493,7 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("skips a single oversized entry instead of blanking the whole index", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
+    const { ctx, tools } = createCodeModeHarness();
     // One declared tool whose line alone blows the 8000-char budget; it sorts
     // first among declared tools, so a prefix cut would zero the entire index.
     const oversized = pluginTool(`a_${"z".repeat(9_000)}`, "Deferred");
@@ -554,11 +511,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     });
     const compacted = applyCodeModeCatalog({
       tools: [...tools, oversized, ...shortContracted],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     const description = compacted.tools[0]?.description ?? "";
@@ -574,7 +527,7 @@ describe("Code Mode catalog and model-visible surface", () => {
 
   it("renders a deterministic truncated index across rebuilds", () => {
     const build = () => {
-      const { config, catalogRef, tools } = createCodeModeHarness();
+      const { ctx, tools } = createCodeModeHarness();
       const catalogTools = Array.from({ length: 500 }, (_, index) =>
         pluginTool(
           `fake_${index.toString().padStart(3, "0")}`,
@@ -584,11 +537,7 @@ describe("Code Mode catalog and model-visible surface", () => {
       );
       const compacted = applyCodeModeCatalog({
         tools: [...tools, ...catalogTools],
-        config,
-        sessionId: "session-code-mode",
-        sessionKey: "agent:main:main",
-        runId: "run-code-mode",
-        catalogRef,
+        ...ctx,
       });
       const description = compacted.tools[0]?.description ?? "";
       const start = description.indexOf("Enabled async tool globals");
@@ -601,41 +550,14 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(first).toContain("additional tools omitted");
   });
 
-  it("bounds the model-visible native tool index", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
-    const pluginId = `fake-${"x".repeat(120)}`;
-    const catalogTools = Array.from({ length: 500 }, (_, index) =>
-      pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
-    );
-    const compacted = applyCodeModeCatalog({
-      tools: [...tools, ...catalogTools],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const description = compacted.tools[0]?.description ?? "";
-    const indexStart = description.indexOf("Enabled async tool globals");
-    const index = indexStart >= 0 ? description.slice(indexStart) : "";
-    expect(index.length).toBeLessThanOrEqual(8_000);
-    expect(index).toContain("additional tools omitted");
-    expect(index).not.toContain("fake_499");
-  });
-
   it("keeps a thousand-tool catalog index deterministic and within its character budget", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
+    const { ctx, tools } = createCodeModeHarness();
     const catalogTools = Array.from({ length: 1_024 }, (_, index) =>
       pluginTool(`tool_${index.toString().padStart(4, "0")}`, "Deferred", "catalog-owner"),
     );
     const compacted = applyCodeModeCatalog({
       tools: [...tools, ...catalogTools],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     const description = compacted.tools[0]?.description ?? "";
@@ -649,14 +571,10 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("omits MCP and namespace guidance from the exec schema when the run catalog has neither", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
+    const { ctx, tools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
       tools: [...tools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     const description = compacted.tools[0]?.description ?? "";
@@ -664,12 +582,14 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(description).toContain("`catalog.search(query)`");
     expect(description).toContain("API.list");
     expect(description).toContain("tools/");
-    expect(description).not.toContain("MCP tools are available only through");
+    expect(description).not.toContain(
+      "MCP tools use the `MCP` namespace or callable `catalog.search` handles",
+    );
     expect(description).not.toContain("MCP namespace globals");
   });
 
   it("keeps MCP guidance in the exec schema when the run catalog has MCP tools", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
+    const { ctx, tools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
       tools: [
         ...tools,
@@ -684,16 +604,14 @@ describe("Code Mode catalog and model-visible surface", () => {
           },
         }),
       ],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     const description = compacted.tools[0]?.description ?? "";
     expect(description).toContain("API.list(prefix?)");
-    expect(description).toContain("MCP tools are available only through");
+    expect(description).toContain(
+      "MCP tools use the `MCP` namespace or callable `catalog.search` handles",
+    );
     expect(description).toContain("- fake_noop ");
     expect(description).not.toContain("openclaw:fake-code-mode");
     expect(description).not.toContain("github__create_issue");
@@ -701,7 +619,7 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("uses the canonical normalized callable names in the prompt index", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
+    const { ctx, tools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
       tools: [
         ...tools,
@@ -713,11 +631,7 @@ describe("Code Mode catalog and model-visible surface", () => {
         pluginTool("class", "Use a reserved word"),
         pluginTool("9patch", "Start with a digit"),
       ],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     const description = compacted.tools[0]?.description ?? "";
@@ -732,14 +646,10 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("normalizes a lone llm-task tool to llm_task", () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
+    const { ctx, tools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
       tools: [...tools, pluginTool("llm-task", "Run an LLM task")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     expect(compacted.tools[0]?.description).toContain("- llm_task ");
@@ -747,7 +657,7 @@ describe("Code Mode catalog and model-visible surface", () => {
   });
 
   it("removes legacy Tool Search controls from the visible code mode surface", () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const { ctx, tools: codeModeTools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
       tools: [
         ...codeModeTools,
@@ -757,11 +667,7 @@ describe("Code Mode catalog and model-visible surface", () => {
         fakeTool(TOOL_CALL_RAW_TOOL_NAME, "legacy call"),
         pluginTool("fake_create_ticket", "Create a fake ticket"),
       ],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+      ...ctx,
     });
 
     expect(compacted.tools.map((tool) => tool.name)).toEqual([

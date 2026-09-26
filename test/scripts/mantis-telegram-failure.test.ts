@@ -95,7 +95,7 @@ describe("Telegram failure diagnostics", () => {
         await writeFile(archive, await zip.generateAsync({ type: "nodebuffer" }));
         const run = () =>
           execFileSync(
-            "python",
+            "python3",
             [
               "-I",
               "-S",

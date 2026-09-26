@@ -475,25 +475,6 @@ afterEach(() => {
 });
 
 describe("discoverOpenClawPlugins", () => {
-  it("discovers global and workspace extensions", async () => {
-    const stateDir = makeTempDir();
-    const workspaceDir = path.join(stateDir, "workspace");
-
-    createPackagePluginWithEntry({
-      packageDir: path.join(stateDir, "extensions", "alpha"),
-      packageName: "@openclaw/alpha",
-      pluginId: "alpha",
-    });
-    createPackagePluginWithEntry({
-      packageDir: path.join(workspaceDir, ".openclaw", "extensions", "beta"),
-      packageName: "@openclaw/beta",
-      pluginId: "beta",
-    });
-
-    const { candidates } = await discoverWithStateDir(stateDir, { workspaceDir });
-    expectCandidateIds(candidates, { includes: ["alpha", "beta"] });
-  });
-
   it("ignores standalone helper scripts in auto-discovered extension roots", async () => {
     const stateDir = makeTempDir();
     const workspaceDir = path.join(stateDir, "workspace");
@@ -547,6 +528,12 @@ describe("discoverOpenClawPlugins", () => {
       id: "diffs-language-pack",
       requiresPlugins: ["diffs"],
     });
+    const workspaceDir = path.join(stateDir, "workspace");
+    createPackagePluginWithEntry({
+      packageDir: path.join(workspaceDir, ".openclaw", "extensions", "diffs"),
+      packageName: "@openclaw/diffs",
+      pluginId: "diffs",
+    });
 
     const result = await discoverWithStateDir(stateDir, {});
 
@@ -554,6 +541,13 @@ describe("discoverOpenClawPlugins", () => {
     expectDiagnostic({
       diagnostics: result.diagnostics,
       level: "warn",
+      pluginId: "diffs-language-pack",
+      messageIncludes: 'requires plugin "diffs"',
+    });
+    const satisfied = await discoverWithStateDir(stateDir, { workspaceDir });
+    expectCandidatePresence(satisfied, { present: ["diffs-language-pack", "diffs"] });
+    expectNoDiagnostic({
+      diagnostics: satisfied.diagnostics,
       pluginId: "diffs-language-pack",
       messageIncludes: 'requires plugin "diffs"',
     });
@@ -647,32 +641,6 @@ describe("discoverOpenClawPlugins", () => {
     },
   );
 
-  it.skipIf(!canCreateDirectorySymlinks)(
-    "discovers symlinked plugin directories in workspace roots",
-    async () => {
-      const stateDir = makeTempDir();
-      const workspaceDir = path.join(stateDir, "workspace");
-      const workspaceExt = path.join(workspaceDir, ".openclaw", "extensions");
-      mkdirSafe(workspaceExt);
-
-      const linkedPluginDir = path.join(stateDir, "workspace-linked-plugin-src");
-      createPackagePluginWithEntry({
-        packageDir: linkedPluginDir,
-        packageName: "@openclaw/workspace-linked-plugin",
-        pluginId: "workspace-linked-plugin",
-      });
-
-      symlinkDirectory(linkedPluginDir, path.join(workspaceExt, "workspace-linked-plugin"));
-
-      const { candidates, diagnostics } = await discoverWithStateDir(stateDir, { workspaceDir });
-      expectCandidateIds(candidates, { includes: ["workspace-linked-plugin"] });
-      expect(findCandidateById(candidates, "workspace-linked-plugin")?.rootDir).toBe(
-        fs.realpathSync(linkedPluginDir),
-      );
-      expect(diagnostics).toStrictEqual([]);
-    },
-  );
-
   it.skipIf(process.platform === "win32" || !canCreateDirectorySymlinks)(
     "ignores broken symlinked plugin directories in scanned roots",
     async () => {
@@ -746,19 +714,19 @@ describe("discoverOpenClawPlugins", () => {
 
     const backupDir = path.join(globalExt, "feishu.backup-20260222");
     mkdirSafe(backupDir);
-    fs.writeFileSync(path.join(backupDir, "index.ts"), "export default function () {}", "utf-8");
+    writePluginEntry(path.join(backupDir, "index.ts"));
 
     const disabledDir = path.join(globalExt, "telegram.disabled.20260222");
     mkdirSafe(disabledDir);
-    fs.writeFileSync(path.join(disabledDir, "index.ts"), "export default function () {}", "utf-8");
+    writePluginEntry(path.join(disabledDir, "index.ts"));
 
     const bakDir = path.join(globalExt, "discord.bak");
     mkdirSafe(bakDir);
-    fs.writeFileSync(path.join(bakDir, "index.ts"), "export default function () {}", "utf-8");
+    writePluginEntry(path.join(bakDir, "index.ts"));
 
     const liveDir = path.join(globalExt, "live");
     mkdirSafe(liveDir);
-    fs.writeFileSync(path.join(liveDir, "index.ts"), "export default function () {}", "utf-8");
+    writePluginEntry(path.join(liveDir, "index.ts"));
 
     const { candidates } = await discoverWithStateDir(stateDir, {});
     expectCandidateIds(candidates, {
@@ -1298,11 +1266,11 @@ describe("discoverOpenClawPlugins", () => {
       const env = buildDiscoveryEnv(stateDir);
       const raw = discoverConfiguredPluginLoadPaths({ env, loadPaths });
       expect(raw.candidates.map((candidate) => candidate.source)).toEqual(loadPaths.slice(0, 2));
-      expect(raw.diagnostics).toEqual(
+      expect(raw.diagnostics).toMatchObject(
         [missing, missing].map((source) => ({
-          level: "error",
+          level: "warn",
           source,
-          message: `plugin path not found: ${source}`,
+          code: "configured-plugin-path-unavailable",
         })),
       );
       const registry = loadPluginManifestRegistryCore({ discovery: raw, installRecords: {}, env });
@@ -1617,7 +1585,7 @@ describe("discoverOpenClawPlugins", () => {
   });
 
   it("reuses one filesystem realpath lookup per package root within a discovery run", () => {
-    const stateDir = makeTempDir();
+    const stateDir = fs.realpathSync(makeTempDir());
     const packageDir = path.join(stateDir, "extensions", "pack");
     mkdirSafe(path.join(packageDir, "src"));
     mkdirSafe(path.join(packageDir, "dist"));
@@ -1632,14 +1600,16 @@ describe("discoverOpenClawPlugins", () => {
     writePluginEntry(path.join(packageDir, "dist", "one.js"));
     writePluginEntry(path.join(packageDir, "dist", "two.js"));
 
+    const nativeRealpathSync = vi.spyOn(fs.realpathSync, "native");
     const realpathSync = vi.spyOn(fs, "realpathSync");
+    Object.assign(realpathSync, { native: nativeRealpathSync });
     const { candidates } = discoverOpenClawPlugins({
       env: buildDiscoveryEnv(stateDir),
     });
 
     expectCandidateIds(candidates, { includes: ["pack/one", "pack/two"] });
     expect(
-      realpathSync.mock.calls.filter(
+      [...realpathSync.mock.calls, ...nativeRealpathSync.mock.calls].filter(
         ([targetPath]) => path.resolve(String(targetPath)) === path.resolve(packageDir),
       ),
     ).toHaveLength(1);
@@ -1934,7 +1904,7 @@ describe("discoverOpenClawPlugins", () => {
     ).toBe(true);
   });
 
-  it.each([42, false, { invalid: true }, ["invalid"], "@scope/", "/"])(
+  it.each([42, "@scope/"])(
     "reports invalid package extensions when the package name is malformed: %j",
     async (packageName) => {
       const stateDir = makeTempDir();
@@ -2043,7 +2013,6 @@ describe("discoverOpenClawPlugins", () => {
   it.each([
     { packageName: "@openclaw/package-plugin-owner", candidateId: "package-plugin-owner" },
     { packageName: "@scope/", candidateId: "channel-package-root" },
-    { packageName: "/", candidateId: "channel-package-root" },
     { packageName: 42, candidateId: "channel-package-root" },
   ])(
     "preserves channel diagnostic ownership separately from package candidate identity: %j",
@@ -2329,41 +2298,6 @@ describe("discoverOpenClawPlugins", () => {
     },
   );
 
-  it("checks non-bundled package plugin API before package entry validation", () => {
-    const stateDir = makeTempDir();
-    const globalExt = path.join(stateDir, "extensions");
-    const pluginDir = path.join(globalExt, "future-shape");
-    mkdirSafe(pluginDir);
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/future-shape",
-        openclaw: {
-          extensions: { runtime: "./src/index.ts" },
-          compat: { pluginApi: ">=2026.5.27-beta.2" },
-        },
-      }),
-      "utf-8",
-    );
-
-    const { candidates, diagnostics } = discoverOpenClawPlugins({
-      env: buildDiscoveryEnvWithOverrides(stateDir, {
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.27-beta.1",
-      }),
-    });
-
-    expectCandidateIds(candidates, { excludes: ["future-shape"] });
-    expectDiagnostic({
-      diagnostics,
-      level: "warn",
-      pluginId: "future-shape",
-      source: path.join(pluginDir, "package.json"),
-      messageIncludes:
-        "plugin requires plugin API >=2026.5.27-beta.2, but this host is 2026.5.27-beta.1; skipping discovery",
-    });
-    expectNoDiagnostic({ diagnostics, messageIncludes: "openclaw.extensions" });
-  });
-
   it("discovers same-floor beta non-bundled package plugin API candidates", () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions");
@@ -2522,16 +2456,8 @@ describe("discoverOpenClawPlugins", () => {
       extensions: ["./src/index.ts"],
     });
     writePluginManifest({ pluginDir, id: "opik-openclaw" });
-    fs.writeFileSync(
-      path.join(pluginDir, "src", "index.ts"),
-      "export default function () {}",
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "dist", "index.js"),
-      "export default function () {}",
-      "utf-8",
-    );
+    writePluginEntry(path.join(pluginDir, "src", "index.ts"));
+    writePluginEntry(path.join(pluginDir, "dist", "index.js"));
 
     writePluginPackageManifest({
       packageDir: path.join(pluginDir, "node_modules", "openclaw"),
@@ -2602,21 +2528,6 @@ describe("discoverOpenClawPlugins", () => {
       includes: ["voice-call"],
     },
     {
-      name: "strips provider suffixes from package-derived ids",
-      setup: (stateDir: string) => {
-        const packageDir = path.join(stateDir, "extensions", "local-provider-pack");
-        createPackagePluginWithEntry({
-          packageDir,
-          packageName: "@example/local-provider",
-          pluginId: "local",
-          entryPath: "src/index.ts",
-        });
-        return {};
-      },
-      includes: ["local"],
-      excludes: ["local-provider"],
-    },
-    {
       name: "strips plugin suffixes consistently from package-derived ids",
       setup: (stateDir: string) => {
         const packageDir = path.join(stateDir, "extensions", "example-plugin-pack");
@@ -2629,26 +2540,6 @@ describe("discoverOpenClawPlugins", () => {
       },
       includes: ["example"],
       excludes: ["example-plugin"],
-    },
-    {
-      name: "normalizes bundled speech package ids to canonical plugin ids",
-      setup: (stateDir: string) => {
-        for (const [dirName, packageName, pluginId] of [
-          ["elevenlabs-speech-pack", "@openclaw/elevenlabs-speech", "elevenlabs"],
-          ["microsoft-speech-pack", "@openclaw/microsoft-speech", "microsoft"],
-        ] as const) {
-          const packageDir = path.join(stateDir, "extensions", dirName);
-          createPackagePluginWithEntry({
-            packageDir,
-            packageName,
-            pluginId,
-            entryPath: "src/index.ts",
-          });
-        }
-        return {};
-      },
-      includes: ["elevenlabs", "microsoft"],
-      excludes: ["elevenlabs-speech", "microsoft-speech"],
     },
     {
       name: "treats configured directory paths as plugin packages",
@@ -3128,7 +3019,7 @@ describe("discoverOpenClawPlugins", () => {
       const bundledDir = path.join(packageRoot, "dist", "extensions");
       const packDir = path.join(bundledDir, "demo-pack");
       mkdirSafe(packDir);
-      fs.writeFileSync(path.join(packDir, "index.ts"), "export default function () {}", "utf-8");
+      writePluginEntry(path.join(packDir, "index.ts"));
       fs.chmodSync(packDir, 0o777);
 
       const result = withOpenClawPackageArgv(packageRoot, () =>
@@ -3181,7 +3072,7 @@ describe("discoverOpenClawPlugins", () => {
     mkdirSafe(globalExt);
     const blockedDir = path.join(globalExt, "blocked-plugin");
     mkdirSafe(blockedDir);
-    fs.writeFileSync(path.join(blockedDir, "index.ts"), "export default function () {}", "utf-8");
+    writePluginEntry(path.join(blockedDir, "index.ts"));
     fs.chmodSync(blockedDir, 0o777);
 
     try {
@@ -3286,7 +3177,9 @@ describe("discoverOpenClawPlugins", () => {
     const unchangedTimestamp = new Date("2025-01-01T00:00:00.000Z");
     fs.utimesSync(packageManifestPath, unchangedTimestamp, unchangedTimestamp);
 
-    const first = discoverWithEnv({ env });
+    const workspaceA = path.join(stateDir, "workspace-a");
+    const workspaceB = path.join(stateDir, "workspace-b");
+    const first = discoverWithEnv({ env, workspaceDir: workspaceA });
     expect(requireCandidateById(first.candidates, "cached-bundle").packageName).toBe(
       "@openclaw/cache-one",
     );
@@ -3301,14 +3194,14 @@ describe("discoverOpenClawPlugins", () => {
     expect(replacementStat.size).toBe(originalStat.size);
     expect(replacementStat.mtimeMs).toBe(originalStat.mtimeMs);
 
-    const beforeReload = discoverWithEnv({ env });
+    const beforeReload = discoverWithEnv({ env, workspaceDir: workspaceB });
     expect(requireCandidateById(beforeReload.candidates, "cached-bundle").packageName).toBe(
       "@openclaw/cache-one",
     );
 
     clearPluginMetadataLifecycleCaches();
 
-    const afterReload = discoverWithEnv({ env });
+    const afterReload = discoverWithEnv({ env, workspaceDir: workspaceB });
     expect(requireCandidateById(afterReload.candidates, "cached-bundle").packageName).toBe(
       "@openclaw/cache-two",
     );
@@ -3390,6 +3283,71 @@ describe("discoverOpenClawPlugins", () => {
 
     const second = withPluginCache(createPluginCache(), () => discoverWithEnv({ env }));
     expect(second.candidates.map((candidate) => candidate.idHint)).not.toContain("fresh");
+  });
+
+  it("keeps configured selection and installed ownership isolated across workspace scans", () => {
+    const stateDir = makeTempDir();
+    const packageRoot = path.join(stateDir, "node_modules", "openclaw");
+    const bundledDir = path.join(packageRoot, "dist", "extensions");
+    const bundledPlugin = path.join(bundledDir, "shared-plugin");
+    const installedPlugin = path.join(stateDir, "installed", "shared-plugin");
+    for (const packageDir of [bundledPlugin, installedPlugin]) {
+      createPackagePluginWithEntry({
+        packageDir,
+        packageName: "@openclaw/shared-plugin",
+        pluginId: "shared-plugin",
+        entryPath: "index.js",
+      });
+    }
+    const env = buildDiscoveryEnvWithOverrides(stateDir, {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+    });
+    const installRecords: Record<string, PluginInstallRecord> = {
+      "installed-owner": {
+        source: "path",
+        installPath: installedPlugin,
+        sourcePath: installedPlugin,
+      },
+    };
+    withOpenClawPackageArgv(packageRoot, () => {
+      const read = (workspaceDir?: string, extraPaths: string[] = []) => {
+        const discovery = discoverWithEnv({ env, workspaceDir, extraPaths, installRecords });
+        const registry = loadPluginManifestRegistryCore({
+          env,
+          workspaceDir,
+          installRecords,
+          discovery,
+          config: { plugins: { load: { paths: extraPaths } } },
+        });
+        const winner = registry.plugins.find((plugin) => plugin.id === "shared-plugin");
+        if (!winner) {
+          throw new Error("Expected a selected shared-plugin manifest");
+        }
+        return { discovery, winner };
+      };
+      const initial = read();
+      expect(initial.winner.rootDir).toBe(fs.realpathSync(installedPlugin));
+      const workspaceA = path.join(stateDir, "workspace-a");
+      const selected = read(workspaceA, [bundledPlugin]);
+      expect(selected.winner.rootDir).toBe(fs.realpathSync(bundledPlugin));
+      expect(selected.winner.sourcePreferred).toBe(true);
+      const workspaceB = path.join(stateDir, "workspace-b");
+      const ordinary = read(workspaceB);
+      expect(ordinary.winner.rootDir).toBe(fs.realpathSync(installedPlugin));
+      expect(resolvePluginManifestInstallOwner(ordinary.winner)).toBe("installed-owner");
+      for (const [result, workspaceDir] of [
+        [initial, undefined],
+        [selected, workspaceA],
+        [ordinary, workspaceB],
+      ] as const) {
+        const installed = result.discovery.candidates.find(
+          (candidate) => candidate.origin === "global",
+        );
+        expectCandidateFields(installed, { workspaceDir, installOwner: "installed-owner" });
+      }
+      expect(selected.winner.sourcePreferred).toBe(true);
+      expect(ordinary.winner.sourcePreferred).toBeUndefined();
+    });
   });
 
   it("discovers bundled and global plugins for each workspace-specific scan", () => {

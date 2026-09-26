@@ -102,6 +102,7 @@ async function sendZaloDelivery(ctx: {
   text: string;
   accountId?: string | null;
   mediaUrl?: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<{ messageId: string; receipt: MessageReceipt }> {
   const result = await (
     await loadZaloChannelRuntime()
@@ -111,6 +112,7 @@ async function sendZaloDelivery(ctx: {
     accountId: ctx.accountId ?? undefined,
     mediaUrl: ctx.mediaUrl,
     cfg: ctx.cfg,
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
   });
   if (!result.ok) {
     throw new Error(result.error ?? `Failed to send Zalo ${ctx.mediaUrl ? "media" : "message"}`);
@@ -195,7 +197,7 @@ const collectZaloSecurityWarnings = createOpenProviderGroupPolicyWarningCollecto
 const collectZaloOpenGroupFindings = createConditionalWarningCollector.findings({
   collectWarnings: collectZaloSecurityWarnings,
   checkId: "channels.zalo.groups.open",
-  severity: "critical",
+  severity: "warn",
   title: "Zalo security warning",
 });
 

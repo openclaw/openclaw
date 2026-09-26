@@ -21,7 +21,11 @@ import {
   installEmbeddedRunnerFastRunE2eMocks,
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
+type ProductionModelResolver = typeof import("./embedded-agent-runner/model.js").resolveModelAsync;
+let resolveModelAsyncActual: ProductionModelResolver;
+
 type EmbeddedRunnerModelResolution =
+  | Awaited<ReturnType<ProductionModelResolver>>
   | ReturnType<typeof createResolvedEmbeddedRunnerModel>
   | {
       model?: undefined;
@@ -38,8 +42,9 @@ const disposeSessionMcpRuntimeMock = vi.fn<(sessionId: string) => Promise<void>>
 const resolveSessionKeyForRequestMock = vi.fn();
 const resolveStoredSessionKeyForSessionIdMock = vi.fn();
 const resolveModelAsyncMock = vi.fn(
-  async (provider: string, modelId: string): Promise<EmbeddedRunnerModelResolution> =>
-    createResolvedEmbeddedRunnerModel(provider, modelId),
+  async (
+    ...[provider, modelId]: Parameters<ProductionModelResolver>
+  ): Promise<EmbeddedRunnerModelResolution> => createResolvedEmbeddedRunnerModel(provider, modelId),
 );
 const ensureOpenClawModelsJsonMock = vi.fn(async () => ({ wrote: false }));
 const loggerWarnMock = vi.fn();
@@ -149,6 +154,7 @@ const installRunEmbeddedMocks = () => {
     const actual = await vi.importActual<typeof import("./embedded-agent-runner/model.js")>(
       "./embedded-agent-runner/model.js",
     );
+    resolveModelAsyncActual = actual.resolveModelAsync;
     return {
       ...actual,
       resolveModelAsync: (...args: Parameters<typeof resolveModelAsyncMock>) =>
@@ -790,6 +796,114 @@ describe("runEmbeddedAgent", () => {
     ).toBe("openai");
     expect(result.meta.agentMeta?.contextTokens).toBe(1_050_000);
   });
+
+  it.each([
+    {
+      label: "configured",
+      baseUrl: "https://configured.example.test/proxy/v1",
+      expectedBaseUrl: "https://configured.example.test/proxy/v1",
+    },
+    { label: "static fallback", baseUrl: "", expectedBaseUrl: "https://static.example.test/v1" },
+  ])(
+    "keeps the $label endpoint when runEmbeddedAgent rematerializes a stored profile",
+    async ({ baseUrl, expectedBaseUrl }) => {
+      const { writePersistedAuthProfileStoreRaw } = await import("./auth-profiles/sqlite.js");
+      const { clearRuntimeAuthProfileStoreSnapshot } = await import("./auth-profiles.js");
+      const staticCatalog = await import("./embedded-agent-runner/model.static-catalog.js");
+      const materializer = vi.mocked(
+        (await import("./runtime-plan/materialize-model.js")).materializePreparedRuntimeModel,
+      );
+      const previousMaterializer = materializer.getMockImplementation();
+      if (!previousMaterializer) {
+        throw new Error("expected the fast runner materialization fixture");
+      }
+      materializer.mockImplementation(
+        (
+          await vi.importActual<typeof import("./runtime-plan/materialize-model.js")>(
+            "./runtime-plan/materialize-model.js",
+          )
+        ).materializePreparedRuntimeModel,
+      );
+      const provider = "proxy-fixture";
+      const modelId = "static-chat";
+      const configuredBaseUrl = baseUrl;
+      const config = {
+        ...createEmbeddedAgentRunnerOpenAiConfig([]),
+        models: {
+          providers: {
+            [provider]: {
+              api: "openai-completions" as const,
+              baseUrl: configuredBaseUrl,
+              models: [],
+            },
+          },
+        },
+      };
+      writePersistedAuthProfileStoreRaw(
+        {
+          version: 1,
+          profiles: { "proxy-fixture:stored": { type: "api_key", provider, key: "synthetic-key" } },
+        },
+        agentDir,
+      );
+      clearRuntimeAuthProfileStoreSnapshot(agentDir);
+      const catalog = vi.spyOn(staticCatalog, "resolveBundledStaticCatalogModel").mockReturnValue({
+        provider,
+        id: modelId,
+        name: "Static chat fixture",
+        api: "openai-completions",
+        baseUrl: "https://static.example.test/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_000,
+        maxTokens: 2_048,
+      });
+      const { createEmptyAgentDiscoveryStores } = await vi.importActual<
+        typeof import("./embedded-agent-runner/model.js")
+      >("./embedded-agent-runner/model.js");
+      const stores = createEmptyAgentDiscoveryStores();
+      resolveModelAsyncMock.mockImplementation(
+        (lookupProvider, lookupModelId, lookupAgentDir, lookupConfig, options) =>
+          resolveModelAsyncActual(lookupProvider, lookupModelId, lookupAgentDir, lookupConfig, {
+            ...options,
+            ...stores,
+          }),
+      );
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeEmbeddedRunnerAttempt({
+          assistantTexts: ["ok"],
+          lastAssistant: buildEmbeddedRunnerAssistant({ content: [{ type: "text", text: "ok" }] }),
+        }),
+      );
+      try {
+        await runEmbeddedAgent({
+          sessionId: nextRunId("proxy-profile"),
+          sessionFile: nextSessionCompatibilityKey(),
+          workspaceDir,
+          config,
+          prompt: "hello",
+          provider,
+          model: modelId,
+          authProfileId: "proxy-fixture:stored",
+          authProfileIdSource: "user",
+          timeoutMs: 5_000,
+          agentDir,
+          runId: nextRunId("proxy-profile"),
+          enqueue: immediateEnqueue,
+        });
+        expect(resolveModelAsyncMock.mock.calls.length).toBeGreaterThan(1);
+        expect(firstRunEmbeddedAttemptParams()).toMatchObject({
+          model: { provider, id: modelId, baseUrl: expectedBaseUrl, api: "openai-completions" },
+        });
+      } finally {
+        catalog.mockRestore();
+        materializer.mockImplementation(previousMaterializer);
+        writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir);
+        clearRuntimeAuthProfileStoreSnapshot(agentDir);
+      }
+    },
+  );
 
   it("resolves a transport-owned Codex model from the bundled static catalog in one resolver pass", async () => {
     const sessionFile = nextSessionCompatibilityKey();

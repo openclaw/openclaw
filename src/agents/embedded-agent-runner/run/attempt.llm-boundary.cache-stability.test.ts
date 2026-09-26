@@ -42,6 +42,7 @@ import {
   relocateCurrentRuntimeContextCarrierToTail,
 } from "../../internal-runtime-context.js";
 import { convertToLlm } from "../../sessions/messages.js";
+import { timestampedTextAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 
 // ---------------------------------------------------------------------------
@@ -74,11 +75,7 @@ function currentUserMsg(text: string, timestamp: number): AgentMsg {
   } as AgentMsg;
 }
 
-const ASSISTANT_MSG: AgentMsg = {
-  role: "assistant",
-  content: [{ type: "text", text: "I understand." }],
-  timestamp: 500,
-} as AgentMsg;
+const ASSISTANT_MSG: AgentMsg = timestampedTextAssistant("I understand.", 500) as AgentMsg;
 
 const TS_TURN1 = 1717570800000; // fixed arrival time for turn 1
 const TS_TURN2 = 1717570860000; // turn 2 (a minute later — crosses minute boundary)

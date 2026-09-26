@@ -12,13 +12,16 @@ import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-eve
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import {
-  interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+  startSessionWorkAdmissionInterruption,
+  waitForSessionWorkAdmissionRelease,
 } from "../../../sessions/session-lifecycle-admission.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
+import type { TaskCancellationControl } from "../../../tasks/task-cancellation-context.js";
 import type { SubagentKillTargetState } from "../../../tasks/task-registry-control.types.js";
+import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { isCurrentSubagentRun } from "./subagent-control-scope.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
@@ -27,6 +30,7 @@ import {
 } from "./subagent-registry-completion.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
+  cancelSubagentRequesterSettleWake,
   claimSubagentRunKill,
   markSubagentRunTerminated,
   releaseSubagentRunKillClaim,
@@ -144,6 +148,7 @@ export async function killSubagentRun(params: {
   cfg: OpenClawConfig;
   entry: SubagentRunRecord;
   session: ReturnType<typeof resolveSubagentKillSession>;
+  cancellationControl?: TaskCancellationControl;
   suppressTaskDelivery?: boolean;
   beforeSessionKill?: () => boolean;
   isCurrent?: (entry: SubagentRunRecord) => boolean;
@@ -167,6 +172,14 @@ export async function killSubagentRun(params: {
     });
   const initialTargetState = resolveSubagentKillTargetState(params.entry);
   if (initialTargetState) {
+    if (params.suppressTaskDelivery && params.entry.requesterSettleWake) {
+      await cancelSubagentRequesterSettleWake(params.entry, () => {
+        params.cancellationControl?.assertCurrent();
+        if (!isCurrent()) {
+          throw new Error("Subagent ownership changed during cancellation; retry.");
+        }
+      });
+    }
     if (
       params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
       params.entry.suppressAnnounceReason !== "steer-restart"
@@ -184,11 +197,92 @@ export async function killSubagentRun(params: {
   const sessionLifecycleRevision = resolved.entry?.lifecycleRevision;
   const runtime = await subagentKillRuntimeLoader.load();
   let admission: "ready" | "declined" | "busy" = "ready";
+  let killClaim: ReturnType<typeof claimSubagentRunKill>;
+  let stopAccepted = false;
+  let preparationResult: Awaited<ReturnType<typeof killSubagentRun>> | undefined;
+  const cancellationFailure = (
+    error: unknown,
+    declined?: true,
+  ): NonNullable<typeof preparationResult> => {
+    let reason = formatErrorMessage(error);
+    if (killClaim && !stopAccepted) {
+      try {
+        releaseSubagentRunKillClaim({
+          runId: params.entry.runId,
+          expected: params.entry,
+          claim: killClaim,
+        });
+      } catch (releaseError) {
+        reason += ` Kill intent could not be released: ${formatErrorMessage(releaseError)}`;
+      }
+    }
+    return { killed: false, sessionId, ...(declined ? { declined } : {}), error: reason };
+  };
+  const declineRevokedCancellation = (): typeof preparationResult => {
+    try {
+      params.cancellationControl?.assertCurrent();
+      return undefined;
+    } catch (error) {
+      return cancellationFailure(error, true);
+    }
+  };
+  const killOwnerCurrent = () =>
+    isCurrent() &&
+    (!killClaim ||
+      ((params.entry.killIntent === killClaim ||
+        (params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+          params.entry.killReconciliation !== undefined &&
+          params.entry.execution.lifecycleGeneration === killClaim.lifecycleGeneration)) &&
+        (killClaim.lifecycleGeneration === undefined ||
+          isAgentEventLifecycleGenerationCurrent(killClaim.lifecycleGeneration))));
+  const ownsSessionIncarnation = () => {
+    const currentSessionEntry = loadExactSessionEntryReadOnly({
+      storePath: resolved.storePath,
+      sessionKey: childSessionKey,
+      clone: false,
+    })?.entry;
+    return (
+      (currentSessionEntry !== undefined) === (resolved.entry !== undefined) &&
+      currentSessionEntry?.sessionId === sessionId &&
+      currentSessionEntry?.lifecycleRevision === sessionLifecycleRevision
+    );
+  };
+  const releaseChangedSessionKill = (claim: NonNullable<typeof killClaim>) => {
+    try {
+      releaseSubagentRunKillClaim({
+        runId: params.entry.runId,
+        expected: params.entry,
+        claim,
+      });
+    } catch (error) {
+      return {
+        killed: false,
+        sessionId,
+        error: `Subagent session changed and its kill intent could not be released: ${formatErrorMessage(error)}`,
+      };
+    }
+    return {
+      killed: false,
+      sessionId,
+      error: "Subagent session changed while the kill was pending; retry.",
+    };
+  };
   return await runExclusiveSessionLifecycleMutation({
     scope: resolved.storePath,
     identities: [childSessionKey, sessionId],
     prepare: async () => {
+      for (
+        let pending = params.cancellationControl?.prepareRead?.();
+        pending;
+        pending = params.cancellationControl?.prepareRead?.()
+      ) {
+        await pending;
+      }
       if (!isCurrent()) {
+        return;
+      }
+      preparationResult = declineRevokedCancellation();
+      if (preparationResult) {
         return;
       }
       // Admissions can release scheduler capacity synchronously when interrupted.
@@ -202,50 +296,137 @@ export async function killSubagentRun(params: {
       if (!isCurrent()) {
         return;
       }
-      const released = await interruptSessionWorkAdmissions({
+      preparationResult = declineRevokedCancellation();
+      if (preparationResult) {
+        return;
+      }
+      if (
+        params.entry.swarmLaunchPending !== true &&
+        params.entry.execution.restartRecovery === undefined &&
+        !resolveSubagentKillTargetState(params.entry)
+      ) {
+        try {
+          // Active completion must see cancellation before admission interruption.
+          // Pending launch/recovery owners first need the drain to commit their identity.
+          killClaim = claimSubagentRunKill({
+            runId: params.entry.runId,
+            expected: params.entry,
+            sessionId,
+            sessionLifecycleRevision,
+            suppressTaskDelivery: params.suppressTaskDelivery,
+          });
+        } catch (error) {
+          preparationResult = {
+            killed: false,
+            sessionId,
+            error: `Failed to persist subagent kill intent: ${formatErrorMessage(error)}`,
+          };
+          return;
+        }
+        if (killClaim) {
+          if (!ownsSessionIncarnation()) {
+            preparationResult = releaseChangedSessionKill(killClaim);
+            return;
+          }
+          if (!killOwnerCurrent()) {
+            preparationResult = { killed: false, sessionId, superseded: true };
+            return;
+          }
+        }
+      }
+      preparationResult = declineRevokedCancellation();
+      if (preparationResult) {
+        return;
+      }
+      const interruption = startSessionWorkAdmissionInterruption({
         scope: resolved.storePath,
         identities: [childSessionKey, sessionId],
-        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+        reason: createAgentRunDirectAbortError(),
       });
+      stopAccepted = interruption.interruptedRunIds.has(params.entry.runId) && killOwnerCurrent();
+      const released = await waitForSessionWorkAdmissionRelease(
+        interruption.released,
+        SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+      );
       admission = released ? "ready" : "busy";
     },
     run: async () => {
+      if (preparationResult) {
+        return preparationResult;
+      }
       if (admission === "declined") {
         return { killed: false, sessionId, declined: true as const };
       }
       if (admission === "busy") {
+        try {
+          if (killClaim && !stopAccepted) {
+            releaseSubagentRunKillClaim({
+              runId: params.entry.runId,
+              expected: params.entry,
+              claim: killClaim,
+            });
+          }
+        } catch (error) {
+          return {
+            killed: false,
+            sessionId,
+            error: `Subagent remained active and its kill intent could not be released: ${formatErrorMessage(error)}`,
+          };
+        }
         return {
           killed: false,
           sessionId,
-          error: "Subagent is still active; try the kill again in a moment.",
+          error: stopAccepted
+            ? "Subagent accepted cancellation but is still active; cleanup is pending."
+            : "Subagent is still active; try the kill again in a moment.",
         };
+      }
+      let readFailure: { error: unknown } | undefined;
+      try {
+        for (
+          let pending = params.cancellationControl?.prepareRead?.();
+          pending;
+          pending = params.cancellationControl?.prepareRead?.()
+        ) {
+          await pending;
+        }
+      } catch (error) {
+        if (!stopAccepted) {
+          return cancellationFailure(error);
+        }
+        readFailure = { error };
       }
       // Runtime loading and admission draining yield. Fence the exact row before
       // touching session-owned queues so a successor cannot inherit an older kill.
       if (!isCurrent()) {
         return { killed: false, sessionId, superseded: true };
       }
-      params.refreshDescendants();
+      if (killClaim && !ownsSessionIncarnation()) {
+        return releaseChangedSessionKill(killClaim);
+      }
+      if (!readFailure) {
+        params.refreshDescendants();
+      }
       const targetStateAfterRuntimeLoad = resolveSubagentKillTargetState(params.entry);
       if (targetStateAfterRuntimeLoad) {
-        if (
+        const killedTarget =
           params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-          params.entry.suppressAnnounceReason !== "steer-restart"
-        ) {
+          params.entry.suppressAnnounceReason !== "steer-restart";
+        const claimedCurrentKill = killClaim !== undefined && killOwnerCurrent();
+        if (killedTarget && (!killClaim || claimedCurrentKill)) {
           markKilledBestEffort();
         }
-        return { killed: false, sessionId, targetState: targetStateAfterRuntimeLoad };
+        return {
+          killed: killedTarget && claimedCurrentKill,
+          sessionId,
+          targetState: targetStateAfterRuntimeLoad,
+          ...(readFailure ? { error: formatErrorMessage(readFailure.error) } : {}),
+        };
       }
-      let killClaim: ReturnType<typeof claimSubagentRunKill>;
-      const killOwnerCurrent = () =>
-        isCurrent() &&
-        (!killClaim ||
-          ((params.entry.killIntent === killClaim ||
-            (params.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-              params.entry.killReconciliation !== undefined &&
-              params.entry.execution.lifecycleGeneration === killClaim.lifecycleGeneration)) &&
-            (killClaim.lifecycleGeneration === undefined ||
-              isAgentEventLifecycleGenerationCurrent(killClaim.lifecycleGeneration))));
+      const declined = readFailure ? undefined : declineRevokedCancellation();
+      if (declined && !stopAccepted) {
+        return declined;
+      }
       const persistAbortedLastRun = (abortedLastRun: boolean, strict = false) =>
         persistSubagentAbortedLastRun({
           childSessionKey,
@@ -262,22 +443,22 @@ export async function killSubagentRun(params: {
           },
           strict,
         });
-      try {
-        // Persist operator intent before aborting runtime work. If terminal
-        // persistence fails, recovery still cannot replay this exact row.
-        killClaim = claimSubagentRunKill({
-          runId: params.entry.runId,
-          expected: params.entry,
-          sessionId,
-          sessionLifecycleRevision,
-          suppressTaskDelivery: params.suppressTaskDelivery,
-        });
-      } catch (error) {
-        return {
-          killed: false,
-          sessionId,
-          error: `Failed to persist subagent kill intent: ${formatErrorMessage(error)}`,
-        };
+      if (!killClaim) {
+        try {
+          killClaim = claimSubagentRunKill({
+            runId: params.entry.runId,
+            expected: params.entry,
+            sessionId,
+            sessionLifecycleRevision,
+            suppressTaskDelivery: params.suppressTaskDelivery,
+          });
+        } catch (error) {
+          return {
+            killed: false,
+            sessionId,
+            error: `Failed to persist subagent kill intent: ${formatErrorMessage(error)}`,
+          };
+        }
       }
       if (!killClaim) {
         return {
@@ -287,52 +468,67 @@ export async function killSubagentRun(params: {
         };
       }
       const claimedKill = killClaim;
-      const ownsSessionIncarnation = () => {
-        const currentSessionEntry = loadExactSessionEntryReadOnly({
-          storePath: resolved.storePath,
-          sessionKey: childSessionKey,
-          clone: false,
-        })?.entry;
-        return (
-          (currentSessionEntry !== undefined) === (resolved.entry !== undefined) &&
-          currentSessionEntry?.sessionId === sessionId &&
-          currentSessionEntry?.lifecycleRevision === sessionLifecycleRevision
-        );
-      };
-      const releaseChangedSessionKill = () => {
+      const settleTargetCancellation = async () => {
+        if (!ownsSessionIncarnation()) {
+          return releaseChangedSessionKill(claimedKill);
+        }
+        if (!killOwnerCurrent()) {
+          return { killed: false, sessionId, superseded: true };
+        }
+        let marked: number;
         try {
-          releaseSubagentRunKillClaim({
+          marked = markSubagentRunTerminated({
             runId: params.entry.runId,
-            expected: params.entry,
-            claim: claimedKill,
+            reason: "killed",
+            suppressTaskDelivery: params.suppressTaskDelivery,
           });
         } catch (error) {
           return {
             killed: false,
             sessionId,
-            error: `Subagent session changed and its kill intent could not be released: ${formatErrorMessage(error)}`,
+            error: `Failed to persist subagent kill tombstone: ${formatErrorMessage(error)}`,
           };
         }
-        return {
-          killed: false,
-          sessionId,
-          error: "Subagent session changed while the kill was pending; retry.",
-        };
+        await persistAbortedLastRun(true);
+        return { killed: marked > 0, sessionId };
       };
       try {
         if (!ownsSessionIncarnation()) {
-          return releaseChangedSessionKill();
+          return releaseChangedSessionKill(claimedKill);
         }
         if (!killOwnerCurrent()) {
           return { killed: false, sessionId, superseded: true };
         }
+        if (readFailure || declined) {
+          // Missing caller facts or revocation fence new effects, but the accepted
+          // interruption's exact claim still owns settlement.
+          const settled: Awaited<ReturnType<typeof killSubagentRun>> =
+            await settleTargetCancellation();
+          return readFailure
+            ? {
+                ...settled,
+                error: [settled.error, formatErrorMessage(readFailure.error)]
+                  .filter(Boolean)
+                  .join(" "),
+              }
+            : settled;
+        }
         const active = sessionId ? runtime.isEmbeddedAgentRunActive(sessionId) : false;
         if (!ownsSessionIncarnation()) {
-          return releaseChangedSessionKill();
+          return releaseChangedSessionKill(claimedKill);
+        }
+        const declinedBeforeAbort = declineRevokedCancellation();
+        if (declinedBeforeAbort) {
+          return stopAccepted ? await settleTargetCancellation() : declinedBeforeAbort;
         }
         const aborted = sessionId ? runtime.abortEmbeddedAgentRun(sessionId) : false;
+        stopAccepted ||= aborted;
         if (!ownsSessionIncarnation()) {
-          return releaseChangedSessionKill();
+          return releaseChangedSessionKill(claimedKill);
+        }
+        const declinedBeforeQueueClear = declineRevokedCancellation();
+        if (declinedBeforeQueueClear) {
+          return stopAccepted ? await settleTargetCancellation() : declinedBeforeQueueClear;
         }
         const cleared = runtime.clearSessionQueues([childSessionKey, sessionId]);
         if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
@@ -340,7 +536,7 @@ export async function killSubagentRun(params: {
             `subagents control kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
           );
         }
-        if (active && !aborted) {
+        if (active && !stopAccepted) {
           try {
             releaseSubagentRunKillClaim({
               runId: params.entry.runId,
@@ -386,36 +582,20 @@ export async function killSubagentRun(params: {
           }
           return { killed: killedTarget, sessionId, targetState };
         }
-        let marked: number;
-        try {
-          marked = markSubagentRunTerminated({
-            runId: params.entry.runId,
-            reason: "killed",
-            suppressTaskDelivery: params.suppressTaskDelivery,
-          });
-        } catch (error) {
-          return {
-            killed: false,
-            sessionId,
-            error: `Failed to persist subagent kill tombstone: ${formatErrorMessage(error)}`,
-          };
-        }
-        await persistAbortedLastRun(true);
-        return {
-          killed: marked > 0,
-          sessionId,
-        };
+        return await settleTargetCancellation();
       } catch (error) {
         return { killed: false, sessionId, error: formatErrorMessage(error) };
-      } finally {
-        // Disposition follows the exact retained claim, not fallible session/ancestor reads.
-        // The captured scheduler capability cannot withdraw a replacement or active launch.
-        if (
-          subagentRuns.get(params.entry.runId) === params.entry &&
-          params.entry.killIntent === claimedKill
-        ) {
-          params.withdrawQueuedReservation();
-        }
+      }
+    },
+    finalize: async () => {
+      // Preparation now owns the claim, including failed drains and persistence.
+      // Only its exact retained claim may withdraw the captured reservation.
+      if (
+        killClaim &&
+        subagentRuns.get(params.entry.runId) === params.entry &&
+        params.entry.killIntent === killClaim
+      ) {
+        params.withdrawQueuedReservation();
       }
     },
   });

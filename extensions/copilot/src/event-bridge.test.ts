@@ -1,42 +1,35 @@
 import type { SessionEvent } from "@github/copilot-sdk";
 // Copilot tests cover event bridge plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import type {
+  AgentHarnessTaskRecord,
+  AgentHarnessTaskRuntime,
+  AgentHarnessTaskRuntimeScope,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
+import { registerCopilotToolEventTests } from "./event-bridge.tools.test-support.js";
+import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
+
+const nativeTaskRuntime = vi.hoisted<{
+  current?: Pick<
+    AgentHarnessTaskRuntime,
+    "tryCreateRunningTaskRun" | "finalizeTaskRunByRunId" | "listTaskRecords"
+  >;
+}>(() => ({}));
+
+vi.mock("openclaw/plugin-sdk/agent-harness-task-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-task-runtime")>();
+  return { ...actual, createAgentHarnessTaskRuntime: () => nativeTaskRuntime.current };
+});
 
 const MODEL_REF = {
   api: "openai-responses",
   id: "gpt-5",
   provider: "github-copilot",
 } as const;
-const REGISTERED_EVENT_TYPES = [
-  "user.message",
-  "system.message",
-  "skill.invoked",
-  "system.notification",
-  "assistant.message_delta",
-  "assistant.reasoning_delta",
-  "assistant.reasoning",
-  "assistant.turn_start",
-  "assistant.message",
-  "assistant.usage",
-  "tool.user_requested",
-  "tool.execution_start",
-  "tool.execution_complete",
-  "session.plan_changed",
-  "exit_plan_mode.requested",
-  "exit_plan_mode.completed",
-  "subagent.started",
-  "subagent.completed",
-  "subagent.failed",
-  "session.compaction_start",
-  "session.compaction_complete",
-  "session.idle",
-  "session.error",
-  "abort",
-] as const;
-
 type FakeSession = SessionLike & {
   emit: (eventType: string, event: SessionEvent) => void;
   listenerCount: (eventType: string) => number;
@@ -118,37 +111,121 @@ function createFakeSession(
   };
 }
 
+function attachTestBridge(
+  session: SessionLike,
+  options: Partial<Parameters<typeof attachEventBridge>[1]> = {},
+) {
+  return attachEventBridge(session, {
+    getSdkSessionId: () => "sdk-session-id",
+    isAborted: () => false,
+    ...options,
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("attachEventBridge", () => {
-  it("assistant.message_delta accumulates text per messageId in arrival order", () => {
-    const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
-
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "he", messageId: "msg-1" }),
-    );
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "llo", messageId: "msg-1" }),
-    );
-
-    expect(bridge.snapshot().assistantTexts).toEqual(["hello"]);
-  });
+  it.each([
+    { terminal: "subagent.completed", failureMode: "empty" },
+    { terminal: "subagent.failed", failureMode: "throw" },
+  ] as const)(
+    "retries the original $terminal result after a swallowed $failureMode callback",
+    async ({ terminal, failureMode }) => {
+      const session = createFakeSession();
+      let now = 100;
+      let task: AgentHarnessTaskRecord | undefined;
+      let attempts = 0;
+      nativeTaskRuntime.current = {
+        tryCreateRunningTaskRun(params) {
+          task = {
+            taskId: "owned-task",
+            runId: params.runId,
+            runtime: "subagent",
+            taskKind: "copilot-native",
+            requesterSessionKey: "agent:parent:session",
+            ownerKey: "agent:parent:session",
+            scopeKind: "session",
+            task: params.task,
+            status: "running",
+            deliveryStatus: "not_applicable",
+            notifyPolicy: "silent",
+            createdAt: now,
+          };
+          return task;
+        },
+        finalizeTaskRunByRunId(params) {
+          attempts += 1;
+          if (attempts === 1) {
+            if (failureMode === "throw") {
+              throw new Error("store unavailable");
+            }
+            return [];
+          }
+          task = {
+            ...expectDefined(task, "persisted native task"),
+            status: params.status,
+            endedAt: params.endedAt,
+            lastEventAt: params.lastEventAt,
+            error: params.error,
+            terminalSummary: params.terminalSummary ?? undefined,
+          };
+          return [task];
+        },
+        listTaskRecords: () => (task ? [task] : []),
+      };
+      const mirror = expectDefined(
+        createCopilotNativeSubagentTaskMirror({
+          now: () => now,
+          scope: {} as AgentHarnessTaskRuntimeScope,
+        }),
+        "native task mirror",
+      );
+      const bridge = attachEventBridge(session, {
+        getSdkSessionId: () => "sdk-session-id",
+        isAborted: () => false,
+        onNativeSubagentEvent: (event) => mirror.handleEvent(event),
+      });
+      const data = {
+        agentDescription: "inspect",
+        agentDisplayName: "Researcher",
+        agentName: "researcher",
+        toolCallId: "call-1",
+      };
+      session.emit("subagent.started", makeEvent("subagent.started", data));
+      session.emit(
+        terminal,
+        makeEvent(terminal, { ...data, error: "child failed", totalTokens: 30 }),
+      );
+      expect(task?.status).toBe("running");
+      expect(attempts).toBe(1);
+      bridge.detach();
+      now = 200;
+      mirror.finalizeActiveRuns();
+      expect(task).toMatchObject({
+        status: terminal === "subagent.completed" ? "succeeded" : "failed",
+        endedAt: 100,
+        lastEventAt: 100,
+        error: terminal === "subagent.failed" ? "child failed" : undefined,
+        terminalSummary:
+          terminal === "subagent.completed"
+            ? "Subagent completed (30 tokens)."
+            : "Subagent failed.",
+      });
+      await session.disconnect();
+      mirror.finalizeActiveRuns();
+      expect(attempts).toBe(2);
+    },
+  );
 
   it("ignores child assistant and usage events but keeps child tool side effects", async () => {
     const session = createFakeSession();
     const onAssistantDelta = vi.fn();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
+    const onAgentEvent = vi.fn();
+    const bridge = attachTestBridge(session, {
       onAssistantDelta,
+      onAgentEvent,
     });
 
     session.emit("assistant.message_delta", {
@@ -163,6 +240,13 @@ describe("attachEventBridge", () => {
       ...makeEvent("tool.execution_start", { toolCallId: "child-call", toolName: "write" }),
       agentId: "child-1",
     } as SessionEvent);
+    bridge.completeTool({ toolCallId: "child-call", toolName: "write", isError: false });
+    bridge.completeTool({
+      toolCallId: "child-nested",
+      parentToolCallId: "child-call",
+      toolName: "read",
+      isError: false,
+    });
     session.emit("tool.execution_complete", {
       ...makeEvent("tool.execution_complete", {
         result: { content: "child write" },
@@ -188,15 +272,14 @@ describe("attachEventBridge", () => {
       } as SessionEvent),
     ).toBe(false);
     await bridge.awaitDeltaChain();
+    await bridge.awaitAgentEventChain();
     expect(onAssistantDelta).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent.mock.calls.some(([event]) => event.stream === "item")).toBe(false);
   });
 
   it("interleaved messageIds produce two ordered assistantTexts entries", () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     session.emit(
       "assistant.message_delta",
@@ -216,10 +299,7 @@ describe("attachEventBridge", () => {
 
   it("ignored child and ephemeral users do not split a root assistant API call", () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     session.emit("assistant.message", {
       ...makeAssistantMessageEvent("first", {
@@ -254,9 +334,8 @@ describe("attachEventBridge", () => {
     const session = createFakeSession();
     let sdkSessionId = "sdk-session-1";
     const onAssistantDelta = vi.fn().mockResolvedValue(undefined);
-    const bridge = attachEventBridge(session, {
+    const bridge = attachTestBridge(session, {
       getSdkSessionId: () => sdkSessionId,
-      isAborted: () => false,
       onAssistantDelta,
     });
 
@@ -296,9 +375,7 @@ describe("attachEventBridge", () => {
     const session = createFakeSession();
     const order: string[] = [];
     const releases: Array<() => void> = [];
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
+    const bridge = attachTestBridge(session, {
       onAssistantDelta: vi.fn(async (payload: { delta: string }) => {
         order.push(`start:${payload.delta}`);
         await new Promise<void>((resolve) => {
@@ -335,9 +412,7 @@ describe("attachEventBridge", () => {
     const order: string[] = [];
     const firstError = new Error("delta failed");
     const secondDeferred = createDeferred<void>();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
+    const bridge = attachTestBridge(session, {
       onAssistantDelta: vi.fn((payload: { delta: string }) => {
         order.push(`start:${payload.delta}`);
         if (payload.delta === "a") {
@@ -369,10 +444,7 @@ describe("attachEventBridge", () => {
 
   it("assistant.reasoning_delta accumulates reasoning in arrival order for buildAssistantMessage", () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     session.emit(
       "assistant.reasoning_delta",
@@ -392,10 +464,7 @@ describe("attachEventBridge", () => {
 
   it("buildAssistantMessage prefers terminal reasoningText over reasoning deltas", () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     session.emit(
       "assistant.reasoning_delta",
@@ -415,10 +484,7 @@ describe("attachEventBridge", () => {
 
   it("assistant.message only overwrites accumulated text when content is at least as long", () => {
     const shorterSession = createFakeSession();
-    const shorterBridge = attachEventBridge(shorterSession, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const shorterBridge = attachTestBridge(shorterSession);
     shorterSession.emit(
       "assistant.message_delta",
       makeEvent("assistant.message_delta", { deltaContent: "longer", messageId: "msg-1" }),
@@ -429,10 +495,7 @@ describe("attachEventBridge", () => {
     );
 
     const longerSession = createFakeSession();
-    const longerBridge = attachEventBridge(longerSession, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const longerBridge = attachTestBridge(longerSession);
     longerSession.emit(
       "assistant.message_delta",
       makeEvent("assistant.message_delta", { deltaContent: "tiny", messageId: "msg-1" }),
@@ -448,10 +511,7 @@ describe("attachEventBridge", () => {
 
   it("does not let an ephemeral assistant replace the final root response", () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
     const persisted = makeAssistantMessageEvent("persisted final");
     session.emit("assistant.message", persisted);
 
@@ -469,10 +529,7 @@ describe("attachEventBridge", () => {
 
   it("assistant.message with toolRequests produces toolCall content and toolUse stopReason", () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     bridge.recordSendResult(
       makeAssistantMessageEvent("call tool", {
@@ -520,51 +577,10 @@ describe("attachEventBridge", () => {
     });
   });
 
-  it("assistant.usage updates internal usage and the next onAssistantDelta payload reads it", async () => {
-    const session = createFakeSession();
-    const onAssistantDelta = vi.fn().mockResolvedValue(undefined);
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-      onAssistantDelta,
-    });
-
-    session.emit(
-      "assistant.usage",
-      makeEvent("assistant.usage", {
-        cacheReadTokens: -2,
-        cacheWriteTokens: Number.NaN,
-        inputTokens: 4.9,
-        outputTokens: 5.1,
-      }),
-    );
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "x", messageId: "msg-1" }),
-    );
-
-    await bridge.awaitDeltaChain();
-
-    expect(onAssistantDelta).toHaveBeenCalledWith({
-      delta: "x",
-      sessionId: "sdk-session-id",
-      text: "x",
-      usage: {
-        cacheRead: 0,
-        cacheWrite: undefined,
-        input: 4,
-        output: 5,
-        total: 9,
-      },
-    });
-  });
-
   it("projects Copilot plan events through the generic plan stream", async () => {
     const session = createFakeSession();
     const onAgentEvent = vi.fn().mockResolvedValue(undefined);
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
+    const bridge = attachTestBridge(session, {
       onAgentEvent,
     });
 
@@ -636,9 +652,7 @@ describe("attachEventBridge", () => {
   it("forwards native Copilot subagent lifecycle events to the adapter", () => {
     const session = createFakeSession();
     const onNativeSubagentEvent = vi.fn();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
+    const bridge = attachTestBridge(session, {
       onNativeSubagentEvent,
     });
     const event = makeEvent("subagent.started", {
@@ -654,16 +668,14 @@ describe("attachEventBridge", () => {
     bridge.detach();
   });
 
-  it("preserves all-zero usage snapshot after an invalid assistant.usage event", () => {
+  it("replaces prior usage and terminal token fallback with an invalid usage zero snapshot", () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     bridge.recordSendResult(
       makeAssistantMessageEvent("done", { apiCallId: "usage-without-id", outputTokens: 7 }),
     );
+    session.emit("assistant.usage", makeEvent("assistant.usage", { inputTokens: 5 }));
     session.emit(
       "assistant.usage",
       makeEvent("assistant.usage", {
@@ -697,64 +709,11 @@ describe("attachEventBridge", () => {
     });
   });
 
-  it("overwrites prior usage with an all-zero snapshot when a later invalid usage event arrives", () => {
-    const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
-
-    session.emit(
-      "assistant.usage",
-      makeEvent("assistant.usage", {
-        inputTokens: 5,
-      }),
-    );
-    session.emit(
-      "assistant.usage",
-      makeEvent("assistant.usage", {
-        inputTokens: "bad",
-      }),
-    );
-
-    expect(bridge.snapshot().usage).toEqual({
-      cacheRead: undefined,
-      cacheWrite: undefined,
-      input: undefined,
-      output: undefined,
-      total: 0,
-    });
-  });
-
-  it("tool.execution_start increments startedCount and pushes toolMetas without meta", () => {
-    const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
-
-    session.emit(
-      "tool.execution_start",
-      makeEvent("tool.execution_start", { toolCallId: "call-1", toolName: "bash" }),
-    );
-
-    expect(bridge.snapshot()).toEqual({
-      assistantTexts: [],
-      completedCount: 0,
-      lastAssistantEvent: undefined,
-      startedCount: 1,
-      streamError: undefined,
-      toolMetas: [{ toolName: "bash" }],
-      usage: undefined,
-    });
-  });
+  registerCopilotToolEventTests({ createFakeSession, makeEvent });
 
   it("tool.execution_complete updates one tool meta per call and marks failures", () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     session.emit(
       "tool.execution_start",
@@ -789,10 +748,7 @@ describe("attachEventBridge", () => {
 
   it("tool.execution_complete without a matching start increments completedCount without pushing meta", () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     session.emit(
       "tool.execution_complete",
@@ -810,9 +766,7 @@ describe("attachEventBridge", () => {
   it("serializes compaction callbacks and clears active compaction state on completion", async () => {
     const session = createFakeSession();
     const calls: string[] = [];
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
+    const bridge = attachTestBridge(session, {
       onCompactionStart: () => {
         calls.push("start");
       },
@@ -840,9 +794,7 @@ describe("attachEventBridge", () => {
   it("invalidates shared tool context synchronously after every successful compaction", () => {
     const session = createFakeSession();
     const onContextCompacted = vi.fn();
-    attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
+    attachTestBridge(session, {
       onContextCompacted,
     });
 
@@ -868,9 +820,7 @@ describe("attachEventBridge", () => {
   it("waits for an active compaction and its completion callback", async () => {
     const session = createFakeSession();
     const complete = vi.fn();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
+    const bridge = attachTestBridge(session, {
       onCompactionComplete: complete,
     });
 
@@ -890,27 +840,9 @@ describe("attachEventBridge", () => {
     expect(bridge.isCompacting()).toBe(false);
   });
 
-  it("waits for the SDK terminal idle event", async () => {
-    const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
-
-    const idle = bridge.awaitSessionIdle();
-    await flushAsync();
-    session.emit("session.idle", makeEvent("session.idle", {}));
-    await idle;
-
-    expect(bridge.hasObservedSessionIdle()).toBe(true);
-  });
-
   it("ignores subagent idle events while waiting for the root session", async () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     const idle = bridge.awaitSessionIdle();
     session.emit("session.idle", {
@@ -927,10 +859,7 @@ describe("attachEventBridge", () => {
 
   it("keeps compaction pending after an abort until the SDK reports completion", async () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
     const completion = bridge.awaitCompactionCompletion();
@@ -949,10 +878,7 @@ describe("attachEventBridge", () => {
 
   it("settles an active compaction wait before terminal teardown", async () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
     const completion = bridge.awaitCompactionCompletion();
@@ -966,9 +892,7 @@ describe("attachEventBridge", () => {
     const session = createFakeSession();
     const onCompactionStart = vi.fn();
     const onCompactionComplete = vi.fn();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
+    const bridge = attachTestBridge(session, {
       onCompactionStart,
       onCompactionComplete,
     });
@@ -991,10 +915,7 @@ describe("attachEventBridge", () => {
 
   it("session.error populates streamError with errorCode or errorType only when not aborted", () => {
     const activeSession = createFakeSession();
-    const activeBridge = attachEventBridge(activeSession, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const activeBridge = attachTestBridge(activeSession);
     activeSession.emit(
       "session.error",
       makeEvent("session.error", {
@@ -1005,8 +926,7 @@ describe("attachEventBridge", () => {
     );
 
     const abortedSession = createFakeSession();
-    const abortedBridge = attachEventBridge(abortedSession, {
-      getSdkSessionId: () => "sdk-session-id",
+    const abortedBridge = attachTestBridge(abortedSession, {
       isAborted: () => true,
     });
     abortedSession.emit(
@@ -1026,15 +946,11 @@ describe("attachEventBridge", () => {
 
   it("abort populates streamError with session_aborted only when not aborted", () => {
     const activeSession = createFakeSession();
-    const activeBridge = attachEventBridge(activeSession, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const activeBridge = attachTestBridge(activeSession);
     activeSession.emit("abort", makeEvent("abort", { reason: "because" }));
 
     const abortedSession = createFakeSession();
-    const abortedBridge = attachEventBridge(abortedSession, {
-      getSdkSessionId: () => "sdk-session-id",
+    const abortedBridge = attachTestBridge(abortedSession, {
       isAborted: () => true,
     });
     abortedSession.emit("abort", makeEvent("abort", { reason: "ignored" }));
@@ -1050,40 +966,26 @@ describe("attachEventBridge", () => {
 
   it("recordSendResult returns false for undefined and true for assistant.message while updating lastAssistantEvent", () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     expect(bridge.recordSendResult(undefined)).toBe(false);
     const event = makeAssistantMessageEvent("done", { outputTokens: 2 });
     expect(bridge.recordSendResult(event)).toBe(true);
     expect(bridge.snapshot().lastAssistantEvent).toEqual(event);
+    expect(bridge.finalizeAssistantTexts()).toEqual(["done"]);
     expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 11 })?.content).toEqual([
       { text: "done", type: "text" },
     ]);
   });
 
-  it("recordSendResult falls back to terminal content when no deltas arrived", () => {
-    const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
-
-    bridge.recordSendResult(makeAssistantMessageEvent("done"));
-
-    expect(bridge.finalizeAssistantTexts()).toEqual(["done"]);
-  });
-
   it("ignores empty assistant and reasoning deltas", () => {
     const onAssistantDelta = vi.fn();
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
+    const bridge = attachTestBridge(session, {
       onAssistantDelta,
     });
+
+    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 13 })).toBeUndefined();
 
     session.emit(
       "assistant.message_delta",
@@ -1103,9 +1005,7 @@ describe("attachEventBridge", () => {
   it("keeps ephemeral deltas live without folding their text into the terminal message", async () => {
     const session = createFakeSession();
     const onAssistantDelta = vi.fn();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
+    const bridge = attachTestBridge(session, {
       onAssistantDelta,
     });
 
@@ -1142,37 +1042,14 @@ describe("attachEventBridge", () => {
         order.push(eventType);
       },
     });
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
+    const registeredEvents = vi.mocked(session.on).mock.calls.map(([eventType]) => eventType);
     bridge.detach();
     bridge.detach();
 
-    expect(order).toEqual([...REGISTERED_EVENT_TYPES].toReversed());
-    expect(session.off).toHaveBeenCalledTimes(REGISTERED_EVENT_TYPES.length);
-  });
-
-  it("detach unsubscribes in reverse order when session.on returns unsubscribe functions", () => {
-    const order: string[] = [];
-    const session = createFakeSession({
-      onReturnedUnsubscribe: (eventType) => {
-        order.push(eventType);
-      },
-    });
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
-
-    bridge.detach();
-    session.emit(
-      "assistant.message_delta",
-      makeEvent("assistant.message_delta", { deltaContent: "ignored", messageId: "msg-1" }),
-    );
-
-    expect(order).toEqual([...REGISTERED_EVENT_TYPES].toReversed());
+    expect(order).toEqual(registeredEvents.toReversed());
+    expect(session.off).toHaveBeenCalledTimes(registeredEvents.length);
     expect(session.listenerCount("assistant.message_delta")).toBe(0);
   });
 
@@ -1184,37 +1061,22 @@ describe("attachEventBridge", () => {
       },
       returnUnsubscribe: false,
     });
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
+    const registeredEvents = vi.mocked(session.on).mock.calls.map(([eventType]) => eventType);
     bridge.detach();
     session.emit(
       "assistant.message_delta",
       makeEvent("assistant.message_delta", { deltaContent: "ignored", messageId: "msg-1" }),
     );
 
-    expect(order).toEqual([...REGISTERED_EVENT_TYPES].toReversed());
+    expect(order).toEqual(registeredEvents.toReversed());
     expect(session.listenerCount("assistant.message_delta")).toBe(0);
-  });
-
-  it("buildAssistantMessage returns undefined with no event, text, reasoning, or toolRequests", () => {
-    const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
-
-    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 12 })).toBeUndefined();
   });
 
   it("snapshot returns defensive copies for arrays and usage objects", () => {
     const session = createFakeSession();
-    const bridge = attachEventBridge(session, {
-      getSdkSessionId: () => "sdk-session-id",
-      isAborted: () => false,
-    });
+    const bridge = attachTestBridge(session);
 
     session.emit(
       "assistant.message_delta",
@@ -1249,4 +1111,3 @@ describe("attachEventBridge", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

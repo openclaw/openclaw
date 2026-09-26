@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import type { NavigationRouteId } from "../app-navigation.ts";
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
 import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
 import {
@@ -7,13 +6,18 @@ import {
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
 import type { ApplicationContext } from "./context.ts";
-import type { UpdateProgress } from "./update-confirmation.ts";
 
 const NAV_DRAWER_FOCUSABLE_SELECTOR =
   "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
 type AppSidebarElement = HTMLElement & { dismissTransientMenus(): boolean };
 type SidebarAttentionElement = HTMLElement & { dismissPanel(): boolean };
+
+export function navDrawerFocusableElements(drawer: HTMLElement): HTMLElement[] {
+  return [...drawer.querySelectorAll<HTMLElement>(NAV_DRAWER_FOCUSABLE_SELECTOR)].filter(
+    (candidate) => candidate.checkVisibility(),
+  );
+}
 
 export function dismissNavigationTransientSurfaces(host: HTMLElement): boolean {
   // Unupgraded elements cannot own transient UI; navigation must not wait for their imports.
@@ -45,9 +49,7 @@ function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): void {
   ) {
     return;
   }
-  const focusable = [...drawer.querySelectorAll<HTMLElement>(NAV_DRAWER_FOCUSABLE_SELECTOR)].filter(
-    (candidate) => candidate.checkVisibility(),
-  );
+  const focusable = navDrawerFocusableElements(drawer);
   const target = event.shiftKey ? focusable.at(-1) : focusable[0];
   const boundary = event.shiftKey ? focusable[0] : focusable.at(-1);
   if (
@@ -90,7 +92,7 @@ export function moveToastToNavDrawer(host: HTMLElement): void {
   const drawer = host.querySelector<HTMLElement>(".shell-nav");
   const toastHost = host.querySelector<HTMLElement>("openclaw-toast-host");
   if (drawer && toastHost && toastHost.parentElement !== drawer) {
-    drawer.moveBefore(toastHost, null);
+    drawer.append(toastHost);
   }
 }
 
@@ -98,7 +100,7 @@ export function restoreToastFromNavDrawer(host: HTMLElement): void {
   const shell = host.querySelector<HTMLElement>(".shell");
   const toastHost = host.querySelector<HTMLElement>("openclaw-toast-host");
   if (shell && toastHost?.parentElement?.classList.contains("shell-nav")) {
-    shell.moveBefore(toastHost, null);
+    shell.append(toastHost);
   }
 }
 
@@ -135,26 +137,11 @@ export function renderFloatingUpdateCard(params: {
   mobileNavLayout: boolean;
   onboarding: boolean;
   compact?: boolean;
-  updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
-  updateSchedule?: ApplicationContext["overlays"]["snapshot"]["updateSchedule"];
-  heldUpdateCampaignId?: string | null;
-  updateBusy: boolean;
   updateRun?: ApplicationContext["overlays"]["snapshot"]["updateRun"];
-  updateRunAcknowledged?: boolean;
-  connected?: boolean;
-  onAcknowledge?: () => void;
-  onCheckStatus?: () => Promise<void>;
   statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
-  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
-  canUpdate?: boolean;
-  canHoldUpdate?: boolean;
-  onUpdate: () => void;
   refreshRequired: boolean;
   onRefresh: () => Promise<boolean>;
-  onHoldUpdate?: () => Promise<boolean>;
-  onReviewUpdate?: () => void;
-  onNavigate?: (routeId: NavigationRouteId) => void;
-  onOpenApprovals?: () => void;
+  onNavigate?: ApplicationContext["navigate"];
 }) {
   const showAttention = floatingSidebarAttentionVisible(params);
   const showUpdateCard = !params.compact && params.refreshRequired;
@@ -166,31 +153,16 @@ export function renderFloatingUpdateCard(params: {
       ? html`<openclaw-sidebar-attention
           class="sidebar-attention--floating"
           .onNavigate=${params.onNavigate}
-          .onOpenApprovals=${params.onOpenApprovals}
         ></openclaw-sidebar-attention>`
       : nothing
   }${
     showUpdateCard
       ? html`<openclaw-sidebar-update-card
           class="sidebar-update-card--floating"
-          .updateAvailable=${params.updateAvailable}
-          .updateSchedule=${params.updateSchedule ?? null}
-          .heldUpdateCampaignId=${params.heldUpdateCampaignId ?? null}
-          .updateBusy=${params.updateBusy}
           .updateRun=${params.updateRun ?? null}
-          .updateRunAcknowledged=${params.updateRunAcknowledged ?? false}
-          .connected=${params.connected ?? false}
-          .onAcknowledge=${params.onAcknowledge}
-          .onCheckStatus=${params.onCheckStatus}
           .statusBanner=${params.statusBanner ?? null}
-          .watchUpdateProgress=${params.watchUpdateProgress}
-          .canUpdate=${params.canUpdate ?? false}
-          .canHoldUpdate=${params.canHoldUpdate ?? false}
-          .onUpdate=${params.onUpdate}
           .refreshRequired=${params.refreshRequired}
           .onRefresh=${params.onRefresh}
-          .onHoldUpdate=${params.onHoldUpdate ?? (async () => false)}
-          .onReviewUpdate=${params.onReviewUpdate ?? (() => undefined)}
         ></openclaw-sidebar-update-card>`
       : nothing
   }`;

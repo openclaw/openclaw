@@ -227,10 +227,11 @@ to a workspace installation or an Enterprise Grid org-wide installation. No
 installation-mode setting is required. Slack remains the source of truth for
 which workspaces have granted the installation; OpenClaw then applies the
 configured channel, user, DM, and mention policies to each delivered event.
-Enterprise installs reject bot-authored `message` and `app_mention` events by
-default. Set `allowBots` on the account or channel to admit them under the same
-loop-prevention rules used by workspace installs. OpenClaw retains the org
-installation's `auth.test` `user_id` and `bot_id` for that check.
+Enterprise installs default `allowBots` to `true`, with the same channel access,
+mention, bot-room authorization, and loop-prevention rules as workspace installs.
+Set `allowBots: false` on the account or channel to disable bot-triggered turns.
+OpenClaw retains the org installation's `auth.test` `user_id` and `bot_id` to
+ignore its own messages.
 
 Enterprise support accepts direct Socket Mode or HTTP message, mention,
 membership, reaction, pin, channel-created, channel-renamed, Block Kit action,
@@ -261,7 +262,11 @@ client and require `reactions:write`.
 
 OpenClaw records Enterprise Grid destinations as
 `team:<team-id>:channel:<channel-id>` or `team:<team-id>:user:<user-id>`.
-Current-conversation Slack tool actions inherit that workspace. Detached or
+Current-conversation Slack tool actions inherit that workspace. Heartbeat owner
+routing can resolve a bare user ID by verifying the recipient's membership against
+the sending bot's installed workspaces, then selecting one shared workspace.
+An explicit workspace-qualified owner target is preserved. If that verification
+fails, the detached-send guard remains in effect. Other detached or
 proactive calls must provide a workspace-qualified target; bare channel and
 user IDs fail closed because those IDs can be reused by different workspaces.
 Actions without a destination parameter, such as `member-info` and

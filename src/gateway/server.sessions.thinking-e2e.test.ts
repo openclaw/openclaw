@@ -10,6 +10,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
+import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -130,6 +131,12 @@ async function listMainSessionWithThinking(params: {
   const respond = vi.fn();
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
+  const context = {
+    getRuntimeConfig,
+    readPreparedGatewayModelCatalog:
+      params.readPreparedGatewayModelCatalog ?? (async () => ({ entries: [] })),
+  } as GatewayRequestContext;
+  await initializeSessionReadContext(context);
   await expectDefined(
     sessionsHandlers["sessions.list"],
     'sessionsHandlers["sessions.list"] test invariant',
@@ -139,11 +146,7 @@ async function listMainSessionWithThinking(params: {
     respond,
     client: null,
     isWebchatConnect: () => false,
-    context: {
-      getRuntimeConfig,
-      readPreparedGatewayModelCatalog:
-        params.readPreparedGatewayModelCatalog ?? (async () => ({ entries: [] })),
-    } as never,
+    context,
   });
 
   const result = firstResponseResult(respond) as SessionsListResult | undefined;
@@ -291,7 +294,7 @@ test("active Codex sessions patch and list catalog-advertised Ultra", async () =
   expect(listedSession?.thinkingOptions).toContain("ultra");
 });
 
-test("unsupported generic stored levels clamp through the current profile", async () => {
+test("generic models retain stored Ultra as a native harness mode", async () => {
   const { session } = await listMainSessionWithThinking({
     reqId: "req-e2e-generic-ultra",
     primaryModel: "test-generic/reasoner",
@@ -312,6 +315,6 @@ test("unsupported generic stored levels clamp through the current profile", asyn
     }),
   });
 
-  expect(session?.thinkingOptions).not.toContain("ultra");
-  expect(session?.thinkingLevel).toBe("max");
+  expect(session?.thinkingOptions).toContain("ultra");
+  expect(session?.thinkingLevel).toBe("ultra");
 });

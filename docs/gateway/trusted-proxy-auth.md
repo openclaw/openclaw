@@ -49,10 +49,6 @@ read_when:
 
 ## Configuration
 
-<Note>
-The `deviceAutoApprove` examples below target beta/current-main builds. Stable `v2026.7.1` does not support this option.
-</Note>
-
 ```json5
 {
   gateway: {
@@ -105,13 +101,16 @@ The `deviceAutoApprove` examples below target beta/current-main builds. Stable `
 
 `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
 
-Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
+Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. For browser access, omit `gateway.controlUi.allowedOrigins` to use `gateway.publicOrigin` as the default, or configure an explicit list that overrides it.
+
+Update and restart health checks can also reuse the local CLI's existing paired device credentials when no shared credential is configured. These checks read existing identity and token state without creating an identity or saving replacement credentials.
 </Warning>
 
 ### Configuration reference
 
 <ParamField path="gateway.trustedProxies" type="string[]" required>
   Array of proxy IP addresses (or CIDRs) to trust. Requests from other IPs are rejected.
+  IPv4 ranges may be written plainly (`10.0.0.0/8`) or in IPv4-mapped IPv6 form (`::ffff:10.0.0.0/104`); the two are equivalent, and both match a peer connecting as `10.1.2.3` or as `::ffff:10.1.2.3`. A mapped prefix counts the 96 leading mapped bits, so `::ffff:0:0/96` denotes all of IPv4 — including loopback, which still requires `gateway.auth.trustedProxy.allowLoopback`. Native IPv6 peers never match a mapped range.
 </ParamField>
 <ParamField path="gateway.auth.mode" type="string" required>
   Must be `"trusted-proxy"`.
@@ -147,6 +146,14 @@ Any local process that can connect to the Gateway can impersonate a loopback rev
 Run `openclaw configure --section gateway` and select **Trusted Proxy**. Entering an address or CIDR that matches a loopback source under the Gateway's runtime rules shows the security warning above and asks whether to allow loopback authentication. This includes ranges containing loopback, even when their base address is not loopback. The default is **No** for a new configuration. **Yes** saves `gateway.auth.trustedProxy.allowLoopback: true`; **No** leaves it unset and warns that loopback proxy requests will fail with `trusted_proxy_loopback_source`, with a link back to this page.
 
 When reconfiguring an existing trusted-proxy setup, the prompt defaults to the existing `allowLoopback` opt-in. Choosing **No** revokes it. If no entered address or range matches a loopback source, the wizard leaves the existing value unchanged. Same-mode reconfiguration also preserves `deviceAutoApprove` verbatim; device enrollment policy is not changed by this prompt. Switching from another auth mode does not restore dormant trusted-proxy opt-ins.
+
+With live configuration reload enabled, changes to `gateway.trustedProxies`,
+`gateway.allowRealIpFallback`, `gateway.auth.allowTailscale`,
+`gateway.auth.identityScopes`, and `gateway.auth.trustedProxy` apply without a
+Gateway restart. Gateway clients reconnect under the new policy. A configuration
+writer receives its accepted result before its connection closes. Pending
+handshakes and HTTP requests cannot retain old policy authority through an
+asynchronous wait; already-admitted work follows its existing completion lifecycle.
 
 ## Per-identity scope grants
 
@@ -482,7 +489,7 @@ Before enabling trusted-proxy auth, verify:
 - [ ] **Proxy strips headers**: Your proxy overwrites (not appends) `x-forwarded-*` headers from clients.
 - [ ] **Client IP is attributable**: The proxy always rebuilds `X-Forwarded-For` with the original non-loopback client address.
 - [ ] **TLS termination**: Your proxy handles TLS; users connect via HTTPS.
-- [ ] **allowedOrigins is explicit**: Non-loopback Control UI uses explicit `gateway.controlUi.allowedOrigins`.
+- [ ] **Browser origins are configured**: Non-loopback Control UI uses `gateway.publicOrigin` with `gateway.controlUi.allowedOrigins` omitted, or an explicit allowlist.
 - [ ] **allowUsers is set** (recommended): Restrict to known users rather than allowing anyone authenticated.
 - [ ] **No mixed token config**: Do not set both `gateway.auth.token` and `gateway.auth.mode: "trusted-proxy"`.
 - [ ] **Local password fallback is private**: If you configure `gateway.auth.password` for internal direct callers, keep the Gateway port firewalled so non-proxy remote clients cannot reach it directly.
@@ -636,3 +643,4 @@ A Gateway token cannot replace proxy authentication. Do not send identity header
 - [Remote access](/gateway/remote) — other remote access patterns
 - [Security](/gateway/security) — full security guide
 - [Tailscale](/gateway/tailscale) — simpler alternative for tailnet-only access
+- [Security audit checks](/gateway/security/audit-checks) — the catalog entry for the trusted-proxy findings

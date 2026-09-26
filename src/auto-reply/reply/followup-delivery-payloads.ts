@@ -1,13 +1,12 @@
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { stripHeartbeatToken } from "../heartbeat.js";
-import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { setReplyPayloadMetadata, isRenderablePayload } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads-base.js";
+import { applyReplyTagsToPayload } from "./reply-payloads-base.js";
 import { filterMessagingToolReplyPayload } from "./reply-payloads.js";
 import {
   createReplyDeliveryContext,
@@ -15,7 +14,7 @@ import {
   resolveReplyToMode,
 } from "./reply-threading.js";
 
-/** Strips empty/heartbeat payloads, applies threading, and dedupes message-tool sends. */
+/** Normalizes delivery content, applies threading, and dedupes message-tool sends. */
 export function resolveFollowupDeliveryPayloads(params: {
   cfg: OpenClawConfig;
   payloads: ReplyPayload[];
@@ -31,6 +30,7 @@ export function resolveFollowupDeliveryPayloads(params: {
   sentMediaUrls?: string[];
   sentTargets?: MessagingToolSend[];
   sentTexts?: string[];
+  onDeliveredTerminalDuplicate?: () => void;
 }): ReplyPayload[] {
   const replyMessageProvider = resolveOriginMessageProvider({
     originatingChannel: params.originatingChannel,
@@ -60,18 +60,9 @@ export function resolveFollowupDeliveryPayloads(params: {
   );
   const sanitizedPayloads: ReplyPayload[] = [];
   for (const payload of deliverablePayloads) {
-    const text = payload.text;
-    const sanitized =
-      text?.includes("HEARTBEAT_OK") === true
-        ? copyReplyPayloadMetadata(payload, {
-            ...payload,
-            text: stripHeartbeatToken(text, { mode: "message" }).text,
-          })
-        : payload;
-    // Normalize before callers decide whether the run was empty. Otherwise a
-    // whitespace-only model payload can suppress the interactive fallback.
-    if (hasOutboundReplyContent(sanitized, { trimText: true })) {
-      sanitizedPayloads.push(sanitized);
+    const normalized = normalizeReplyPayload(payload, { applyChannelTransforms: false });
+    if (normalized) {
+      sanitizedPayloads.push(normalized);
     }
   }
   const originatingTo = params.originatingTo;
@@ -92,6 +83,7 @@ export function resolveFollowupDeliveryPayloads(params: {
       accountId,
       sentMediaUrls: params.sentMediaUrls,
       sentTexts: params.sentTexts,
+      onDeliveredTerminalDuplicate: params.onDeliveredTerminalDuplicate,
     })
       .filter(isRenderablePayload)
       .map(applyReplyToMode),

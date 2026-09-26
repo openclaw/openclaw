@@ -1,13 +1,14 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Usage selected-range tool calls" });
+const suite = createControlUiE2eSuite({ name: "Usage selected-session details" });
 
 suite.define(() => {
-  it("counts each assistant invocation once after dragging the timeline range", async () => {
+  it("counts assistant invocations and refreshes selected usage details", async () => {
     const date = "2026-08-20";
     const start = Date.parse(`${date}T12:00:00Z`);
     const totals = {
@@ -23,16 +24,15 @@ suite.define(() => {
       cacheWriteCost: 0,
       missingCostEntries: 0,
     };
-    // The current whole-session producer groups repeated names within each message.
     const tools = {
-      totalCalls: 2,
+      totalCalls: 3,
       uniqueTools: 2,
       tools: [
-        { name: "read", count: 1 },
+        { name: "read", count: 2 },
         { name: "exec", count: 1 },
       ],
     };
-    const messages = { total: 3, user: 0, assistant: 3, toolCalls: 2, toolResults: 2, errors: 0 };
+    const messages = { total: 3, user: 0, assistant: 3, toolCalls: 3, toolResults: 2, errors: 0 };
     const points = [start, start + 2000, start + 4000].map((timestamp, index) => ({
       timestamp,
       input: 100,
@@ -57,7 +57,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         await page.clock.setFixedTime(new Date(start + 5000));
-        const gateway = await installMockGateway(page, {
+        const scenario = {
           methodResponses: {
             "sessions.usage": {
               updatedAt: start + 5000,
@@ -86,13 +86,8 @@ suite.define(() => {
                 byAgent: [],
                 byChannel: [],
                 daily: [],
+                costDaily: [{ date, ...totals }],
               },
-            },
-            "usage.cost": {
-              updatedAt: start + 5000,
-              days: 1,
-              daily: [{ date, ...totals }],
-              totals,
             },
             "usage.status": { updatedAt: start + 5000, providers: [] },
             "sessions.usage.timeseries": { points },
@@ -114,7 +109,8 @@ suite.define(() => {
               ],
             },
           },
-        });
+        };
+        const gateway = await installMockGateway(page, scenario);
         await page.goto(`${suite.server.baseUrl}usage`);
         await page.getByRole("button", { name: "Review two files", exact: true }).click();
         await gateway.waitForRequest("sessions.usage.timeseries");
@@ -122,6 +118,11 @@ suite.define(() => {
         const panel = page.locator(".session-detail-panel");
         const handle = panel.locator(".chart-handle-right");
         await handle.waitFor({ state: "visible" });
+        const count = panel.locator(".session-summary-value").nth(1);
+        await expect.poll(() => count.textContent()).toBe("3");
+        if (proofDir) {
+          await panel.screenshot({ path: path.join(proofDir, "whole-session.png") });
+        }
         await handle.scrollIntoViewIfNeeded();
         const handleBox = await handle.boundingBox();
         const chartBox = await panel.locator(".timeseries-svg").boundingBox();
@@ -138,7 +139,6 @@ suite.define(() => {
         });
         await page.mouse.up();
         await panel.locator(".session-detail-indicator").waitFor({ state: "visible" });
-        const count = panel.locator(".session-summary-value").nth(1);
         await expect.poll(() => panel.locator(".session-log-entry").count()).toBe(4);
         if (proofDir) {
           await panel.screenshot({ path: path.join(proofDir, "selected-range.png") });
@@ -152,6 +152,78 @@ suite.define(() => {
         await panel.getByRole("button", { name: "Reset", exact: true }).click();
         await expect.poll(() => panel.locator(".session-detail-indicator").count()).toBe(0);
         await expect.poll(() => panel.locator(".session-log-entry").count()).toBe(5);
+        await expect.poll(() => count.textContent()).toBe("3");
+
+        const refreshedTotals = { ...totals, input: 400, output: 80, totalTokens: 480 };
+        const usage = scenario.methodResponses["sessions.usage"];
+        const session = usage.sessions[0]!;
+        const latestReply = "The newly completed reply is included after Refresh.";
+        await page.clock.setFixedTime(new Date(start + 7000));
+        await gateway.setMethodResponse("sessions.usage", {
+          ...usage,
+          updatedAt: start + 7000,
+          sessions: [
+            {
+              ...session,
+              updatedAt: start + 7000,
+              usage: {
+                ...session.usage,
+                ...refreshedTotals,
+                messageCounts: { ...messages, total: 4, assistant: 4 },
+              },
+            },
+          ],
+          totals: refreshedTotals,
+          aggregates: {
+            ...usage.aggregates,
+            costDaily: [{ date, ...refreshedTotals }],
+          },
+        });
+        await gateway.setMethodResponse("sessions.usage.timeseries", {
+          points: [...points, { ...points[2]!, timestamp: start + 6000, cumulativeTokens: 480 }],
+        });
+        await gateway.setMethodResponse("sessions.usage.logs", {
+          logs: [
+            ...scenario.methodResponses["sessions.usage.logs"].logs,
+            { timestamp: start + 6000, role: "assistant", content: latestReply },
+          ],
+        });
+        await page.getByRole("button", { name: "Refresh", exact: true }).click();
+        await expect
+          .poll(() => panel.locator(".session-detail-stats").textContent())
+          .toContain("480");
+        const readDetails = async () => ({
+          timeline: await panel.locator(".timeseries-summary").textContent(),
+          conversation: await panel.locator(".session-log-content").allTextContents(),
+        });
+        try {
+          await expect.poll(readDetails).toMatchObject({
+            timeline: expect.stringContaining("480"),
+            conversation: expect.arrayContaining([latestReply]),
+          });
+          for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
+            expect(await gateway.getRequests(method)).toHaveLength(2);
+          }
+        } finally {
+          if (proofDir) {
+            await panel.locator(".timeseries-summary").scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(proofDir, "manual-refresh.png") });
+            await panel.locator(".session-log-entry").last().scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(proofDir, "manual-conversation.png") });
+            await fs.writeFile(
+              path.join(proofDir, "manual-refresh.json"),
+              JSON.stringify(
+                {
+                  ...(await readDetails()),
+                  timelineRequests: await gateway.getRequests("sessions.usage.timeseries"),
+                  conversationRequests: await gateway.getRequests("sessions.usage.logs"),
+                },
+                null,
+                2,
+              ),
+            );
+          }
+        }
       },
     );
   });

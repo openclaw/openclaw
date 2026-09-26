@@ -1,9 +1,13 @@
 // Test Perf Budget tests cover test perf budget script behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/test-perf-budget.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function withReport(payload: unknown, run: (reportPath: string) => void) {
   const reportPath = path.join(os.tmpdir(), `openclaw-test-perf-budget-${Date.now()}.json`);
@@ -19,6 +23,67 @@ function withReport(payload: unknown, run: (reportPath: string) => void) {
 }
 
 describe("test perf budget script", () => {
+  it.each([
+    { actions: "", childExitCode: 0, expectedExitCode: 1 },
+    { actions: "true", childExitCode: 0, expectedExitCode: 0 },
+    { actions: "true", childExitCode: 2, expectedExitCode: 2 },
+  ])(
+    "keeps runner failures blocking and reports timing limits ($actions/$childExitCode)",
+    ({ actions, childExitCode, expectedExitCode }) => {
+      const root = tempDirs.make("openclaw-perf-budget-boundary-");
+      const preloadPath = path.join(root, "vitest-report-fixture.mjs");
+      const summaryPath = path.join(root, "summary.md");
+      fs.writeFileSync(
+        preloadPath,
+        `
+      import childProcess from "node:child_process";
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      childProcess.spawnSync = (_command, args) => {
+        fs.writeFileSync(args[args.indexOf("--outputFile") + 1], JSON.stringify({
+          testResults: [{ startTime: 1000, endTime: 1001 }],
+        }));
+        return { status: ${childExitCode} };
+      };
+      syncBuiltinESMExports();
+    `,
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          preloadPath,
+          "--import",
+          "./scripts/tsx.mjs",
+          "scripts/test-perf-budget.mts",
+          "--max-wall-ms",
+          "0",
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CI: "1",
+            GITHUB_ACTIONS: actions,
+            GITHUB_STEP_SUMMARY: summaryPath,
+            TMPDIR: root,
+            TEMP: root,
+            TMP: root,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(expectedExitCode);
+      if (actions && childExitCode === 0) {
+        expect(result.stderr).toContain("::warning file=");
+        expect(fs.readFileSync(summaryPath, "utf8")).toContain("Test wall-time budget");
+      } else {
+        expect(result.stderr).not.toContain("::warning");
+        expect(fs.existsSync(summaryPath)).toBe(false);
+      }
+    },
+  );
+
   it("requires a budget source unless report-only mode is explicit", () => {
     expect(() => testing.parseArgs([], {})).toThrow(
       "provide --max-wall-ms, --baseline-wall-ms, or set --report-only",

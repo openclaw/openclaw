@@ -10,10 +10,18 @@ type StateMigrationConfigInput = {
 export function resolveStateMigrationConfigInput(params: {
   snapshot: ConfigFileSnapshot;
   baseConfig: OpenClawConfig;
+  /** Validated runtime projection from the guarded post-convergence repair plan. */
+  postConvergenceConfig?: OpenClawConfig;
 }): StateMigrationConfigInput | null {
   const pluginDoctorConfig = (params.snapshot.sourceConfig ??
     params.snapshot.config ??
     params.snapshot.parsed) as OpenClawConfig | undefined;
+  if (params.postConvergenceConfig) {
+    return {
+      cfg: params.postConvergenceConfig,
+      ...(pluginDoctorConfig ? { pluginDoctorConfig } : {}),
+    };
+  }
   if (params.snapshot.valid) {
     return params.snapshot.legacyIssues.length > 0 && pluginDoctorConfig !== undefined
       ? { cfg: params.baseConfig, pluginDoctorConfig }
@@ -23,7 +31,9 @@ export function resolveStateMigrationConfigInput(params: {
   if (params.snapshot.legacyIssues.length === 0 || migrationSource === undefined) {
     return null;
   }
-  const migrated = migrateLegacyConfig(migrationSource);
+  const migrated = migrateLegacyConfig(migrationSource, {
+    sourceConfigBeforeMigrations: params.snapshot.sourceConfigBeforeMigrations,
+  });
   // Plugin config repair may retain a legacy locator until its state migration
   // completes. No config mutation must not prevent that owner from retrying.
   if (!migrated.config || migrated.partiallyValid) {

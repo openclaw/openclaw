@@ -34,6 +34,7 @@ export function buildAgentRuntimeAuthPlan(params: {
   modelId?: string;
   authProfileProvider?: string;
   authProfileMode?: string;
+  authProfileFlow?: string;
   sessionAuthProfileId?: string;
   sessionAuthProfileSource?: "auto" | "user" | "user-link";
   sessionAuthProfileCandidateIds?: string[];
@@ -61,10 +62,13 @@ export function buildAgentRuntimeAuthPlan(params: {
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
   };
   const providerForAuth = resolveProviderIdForAuth(params.provider, aliasLookupParams);
-  const authProfileProviderForAuth = resolveProviderIdForAuth(
-    params.authProfileProvider ?? params.provider,
-    aliasLookupParams,
-  );
+  const authProfileProviderForAuth =
+    params.authProfileProvider !== undefined
+      ? resolveProviderIdForAuth(params.authProfileProvider, {
+          ...aliasLookupParams,
+          storedCredential: true,
+        })
+      : providerForAuth;
   const harnessAuthProvider = resolveHarnessAuthProvider(params);
   const harnessProviderForAuth = harnessAuthProvider
     ? resolveProviderIdForAuth(harnessAuthProvider, aliasLookupParams)
@@ -98,6 +102,9 @@ export function buildAgentRuntimeAuthPlan(params: {
       : {}),
     ...(canForwardProfile && params.authProfileMode
       ? { selectedAuthMode: params.authProfileMode }
+      : {}),
+    ...(canForwardProfile && params.authProfileFlow
+      ? { selectedAuthFlow: params.authProfileFlow }
       : {}),
     ...(params.modelRoute ? { modelRoute: params.modelRoute } : {}),
     ...(params.deferredRouteSupport ? { deferredRouteSupport: params.deferredRouteSupport } : {}),

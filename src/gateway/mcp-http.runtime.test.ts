@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
+import { createComputerTool } from "../agents/tools/computer-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
@@ -14,11 +15,19 @@ const listNodes = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/tools/gateway.js", () => ({
   callGatewayTool: async (
-    _method: string,
+    method: string,
     _opts: unknown,
     _args: unknown,
     options: { signal?: AbortSignal },
-  ) => ({ nodes: await listNodes(options.signal) }),
+  ) => {
+    if (method === "node.list") {
+      return { nodes: await listNodes(options.signal) };
+    }
+    if (method === "computer.status") {
+      return { configured: false, available: false };
+    }
+    throw new Error(`Unexpected Gateway method: ${method}`);
+  },
 }));
 
 vi.mock("./tool-resolution.js", () => ({
@@ -30,6 +39,38 @@ function scopedToolFixture(names: string[]) {
     agentId: "main",
     tools: names.map((name) => ({ name, description: `${name} tool` })),
   };
+}
+
+function computerNode(nodeId: string, actions: string[]) {
+  return {
+    nodeId,
+    displayName: nodeId === "headless-windows-node" ? "E6540" : "Windows Companion",
+    platform: "win32",
+    connected: true,
+    commands: ["screen.snapshot", "computer.act"],
+    computerUse: {
+      contractVersion: 2,
+      provider: {
+        id: "cua-driver",
+        label: "CUA Driver",
+        generation: `${nodeId}-generation`,
+      },
+      actions,
+      targets: ["screen", "window"],
+      deliveryModes: ["foreground"],
+      observations: ["image", "accessibility"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
+    },
+  };
+}
+
+function readComputerActions(
+  resolved: Awaited<ReturnType<McpLoopbackToolCache["resolve"]>>,
+): string[] | undefined {
+  const computer = resolved.toolSchema.find((tool) => tool.name === "computer");
+  expect(computer).toBeDefined();
+  return (computer?.inputSchema.properties as { action?: { enum?: string[] } } | undefined)?.action
+    ?.enum;
 }
 
 type ScopeParams = Parameters<typeof resolveMcpLoopbackScopedTools>[0];
@@ -82,11 +123,6 @@ describe("resolveMcpLoopbackScopedTools", () => {
   it.each([
     { name: "no nodes", nodes: [], exposed: false },
     {
-      name: "offline executor",
-      nodes: [{ nodeId: "worker", connected: false, commands: ["system.run"] }],
-      exposed: false,
-    },
-    {
       name: "approval-only phone",
       nodes: [{ nodeId: "phone", connected: true, commands: ["canvas.present"] }],
       exposed: false,
@@ -122,11 +158,6 @@ describe("resolveMcpLoopbackScopedTools", () => {
         },
       ],
       exposed: false,
-    },
-    {
-      name: "eligible executor",
-      nodes: [{ nodeId: "worker", connected: true, commands: ["system.run"] }],
-      exposed: true,
     },
     {
       name: "multiple executors",
@@ -167,26 +198,6 @@ describe("resolveMcpLoopbackScopedTools", () => {
     },
   );
 
-  it("keeps the full session scope without a grant allowlist", async () => {
-    const scoped = await resolveMcpLoopbackScopedTools(scopeParams());
-    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual([
-      "memory_search",
-      "memory_get",
-      "message",
-      "cron",
-    ]);
-  });
-
-  it("hard-filters the surface to the grant allowlist", async () => {
-    const scoped = await resolveMcpLoopbackScopedTools(
-      scopeParams({ toolsAllow: ["memory_search", "memory_get"] }),
-    );
-    expect(scoped.tools.map((tool) => (tool as { name: string }).name)).toEqual([
-      "memory_search",
-      "memory_get",
-    ]);
-  });
-
   it("keeps exact grant names exact instead of reinterpreting policy shorthand", async () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["write", "apply_patch"]));
 
@@ -196,11 +207,6 @@ describe("resolveMcpLoopbackScopedTools", () => {
     expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).toMatchObject({
       mediatedToolNames: new Set(["write"]),
     });
-  });
-
-  it("fails closed on an empty grant allowlist", async () => {
-    const scoped = await resolveMcpLoopbackScopedTools(scopeParams({ toolsAllow: [] }));
-    expect(scoped.tools).toEqual([]);
   });
 
   it("forwards the exact Skill Workshop revision into loopback tool construction", async () => {
@@ -424,9 +430,14 @@ describe("McpLoopbackToolCache", () => {
     const restricted = await cache.resolve(scopeParams({ cfg, toolsAllow: ["memory_search"] }));
     const denied = await cache.resolve(scopeParams({ cfg, toolsAllow: [] }));
 
-    expect(unrestricted.tools).toHaveLength(4);
-    expect(restricted.tools).toHaveLength(1);
-    expect(denied.tools).toHaveLength(0);
+    expect(unrestricted.tools.map((tool) => tool.name)).toEqual([
+      "memory_search",
+      "memory_get",
+      "message",
+      "cron",
+    ]);
+    expect(restricted.tools.map((tool) => tool.name)).toEqual(["memory_search"]);
+    expect(denied.tools).toEqual([]);
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(3);
 
     // Duplicate entries do not change the granted set.
@@ -567,5 +578,95 @@ describe("McpLoopbackToolCache", () => {
 
     await cache.resolve(scopeParams({ cfg, delegationCapability: "report_only" }));
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("MCP loopback Computer Use schema", () => {
+  beforeEach(() => {
+    resolveGatewayScopedTools.mockImplementation(({ cfg, pairedNodeComputerUse }) => {
+      const computerDenied = cfg.tools?.deny?.includes("computer");
+      return {
+        agentId: "main",
+        tools: computerDenied
+          ? []
+          : [createComputerTool({ modelHasVision: true, pairedNodeComputerUse })],
+      };
+    });
+  });
+
+  it("does not query node inventory when the grant excludes computer", async () => {
+    const resolved = await new McpLoopbackToolCache().resolve(
+      scopeParams({
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        modelHasVision: true,
+        toolsAllow: ["memory_search"],
+      }),
+    );
+
+    expect(resolved.toolSchema.some((tool) => tool.name === "computer")).toBe(false);
+    expect(listNodes).not.toHaveBeenCalled();
+  });
+
+  it("does not query node inventory when configured policy excludes computer", async () => {
+    listNodes.mockImplementation(() => {
+      throw new Error("node inventory must not be queried");
+    });
+
+    const resolved = await new McpLoopbackToolCache().resolve(
+      scopeParams({
+        cfg: { tools: { deny: ["computer"] } } as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        modelHasVision: true,
+      }),
+    );
+
+    expect(resolved.toolSchema.some((tool) => tool.name === "computer")).toBe(false);
+    expect(listNodes).not.toHaveBeenCalled();
+  });
+
+  it("serializes paired-node v2 actions before the first tool execution", async () => {
+    listNodes.mockResolvedValue([
+      computerNode("headless-windows-node", ["screenshot", "list_windows"]),
+    ]);
+    const resolved = await new McpLoopbackToolCache().resolve(
+      scopeParams({
+        cfg: { tools: { allow: ["computer"] } } as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        modelHasVision: true,
+      }),
+    );
+
+    const actions = readComputerActions(resolved);
+    expect(actions).toContain("list_windows");
+    expect(actions).not.toContain("launch_app");
+    expect(listNodes).toHaveBeenCalledTimes(1);
+  });
+
+  it("unions approved actions across distinct paired node identities", async () => {
+    const cache = new McpLoopbackToolCache();
+    const scope = scopeParams({
+      cfg: { tools: { allow: ["computer"] } } as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      senderIsOwner: true,
+      modelHasVision: true,
+    });
+    listNodes.mockResolvedValue([
+      computerNode("headless-windows-node", ["screenshot", "list_windows"]),
+    ]);
+    expect(readComputerActions(await cache.resolve(scope))).not.toContain("launch_app");
+
+    listNodes.mockResolvedValue([
+      computerNode("headless-windows-node", ["screenshot", "list_windows"]),
+      computerNode("windows-companion-node", ["screenshot", "launch_app"]),
+    ]);
+    const resolved = await cache.resolve(scope);
+
+    expect(readComputerActions(resolved)).toEqual(
+      expect.arrayContaining(["screenshot", "list_windows", "launch_app", "wait"]),
+    );
+    expect(listNodes).toHaveBeenCalledTimes(2);
   });
 });

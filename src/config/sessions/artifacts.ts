@@ -1,4 +1,4 @@
-// Session artifact filename classifiers and archive timestamp helpers.
+// Session artifact paths, filename classifiers, and archive timestamp helpers.
 // Cleanup, disk-budget, and usage accounting use these predicates to avoid deleting live transcripts.
 
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
@@ -31,14 +31,7 @@ function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boole
 
 /** Returns true for archived session artifacts and legacy store backup names. */
 export function isSessionArchiveArtifactName(fileName: string): boolean {
-  if (LEGACY_STORE_BACKUP_RE.test(fileName)) {
-    return true;
-  }
-  return (
-    hasArchiveSuffix(fileName, "deleted") ||
-    hasArchiveSuffix(fileName, "reset") ||
-    hasArchiveSuffix(fileName, "bak")
-  );
+  return LEGACY_STORE_BACKUP_RE.test(fileName) || isRetainedSessionTranscriptArchiveName(fileName);
 }
 
 /** Returns true for retained archives and disposable legacy compact backups pruned at high water. */
@@ -89,20 +82,9 @@ export function isSessionStoreTempArtifactName(fileName: string, storeBasename: 
   return sessionStoreTempPattern(storeBasename).test(fileName);
 }
 
-/** Parses a compaction checkpoint transcript filename into session/checkpoint ids. */
-function parseCompactionCheckpointTranscriptFileName(fileName: string): {
-  sessionId: string;
-  checkpointId: string;
-} | null {
-  const match = COMPACTION_CHECKPOINT_TRANSCRIPT_RE.exec(fileName);
-  const sessionId = match?.[1];
-  const checkpointId = match?.[2];
-  return sessionId && checkpointId ? { sessionId, checkpointId } : null;
-}
-
 /** Returns true when a filename is a compaction checkpoint transcript. */
 export function isCompactionCheckpointTranscriptFileName(fileName: string): boolean {
-  return parseCompactionCheckpointTranscriptFileName(fileName) !== null;
+  return COMPACTION_CHECKPOINT_TRANSCRIPT_RE.test(fileName);
 }
 
 /** Returns true for trajectory runtime jsonl artifacts. */
@@ -113,6 +95,18 @@ function isTrajectoryRuntimeArtifactName(fileName: string): boolean {
 /** Returns true for trajectory pointer artifacts. */
 function isTrajectoryPointerArtifactName(fileName: string): boolean {
   return fileName.endsWith(".trajectory-path.json");
+}
+
+export function resolveTrajectoryPath(transcriptPath: string): string | undefined {
+  return transcriptPath.endsWith(".jsonl")
+    ? `${transcriptPath.slice(0, -".jsonl".length)}.trajectory.jsonl`
+    : undefined;
+}
+
+export function resolveTrajectoryPointerPath(transcriptPath: string): string | undefined {
+  return transcriptPath.endsWith(".jsonl")
+    ? `${transcriptPath.slice(0, -".jsonl".length)}.trajectory-path.json`
+    : undefined;
 }
 
 /** Returns true for any trajectory-related session artifact. */

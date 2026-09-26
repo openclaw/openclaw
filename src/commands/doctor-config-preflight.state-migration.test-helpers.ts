@@ -1,5 +1,3 @@
-import { expect, vi } from "vitest";
-
 export function makePreflightConfigSnapshot(config: Record<string, unknown>) {
   return {
     exists: true,
@@ -7,9 +5,9 @@ export function makePreflightConfigSnapshot(config: Record<string, unknown>) {
     config,
     sourceConfig: config,
     parsed: config,
-    legacyIssues: [] as Array<{ path: string; message: string }>,
-    warnings: [] as Array<{ path: string; message: string }>,
-    issues: [] as Array<{ path: string; message: string }>,
+    legacyIssues: [],
+    warnings: [],
+    issues: [],
   };
 }
 
@@ -21,18 +19,6 @@ export function queueConfigSnapshot<T>(
   for (let index = 0; index < count; index += 1) {
     reader.mockResolvedValueOnce(snapshot);
   }
-}
-
-export function expectMigrationIdentity(): {
-  effectiveConfigFingerprint: unknown;
-  pluginDoctorConfigFingerprint: unknown;
-  pluginMigrationFingerprint: string;
-} {
-  return {
-    effectiveConfigFingerprint: expect.any(String),
-    pluginDoctorConfigFingerprint: expect.any(String),
-    pluginMigrationFingerprint: "plugin-migrations",
-  };
 }
 
 export type StateMigrationResult = {
@@ -47,25 +33,8 @@ export function makeStateMigrationResult(changes: string[], migrated = true): St
   return { migrated, skipped: false, changes, warnings: [] };
 }
 
-const maybeRepairPluginOpenClawHostLinks = vi.hoisted(() =>
-  vi.fn(
-    async (_params: {
-      env: NodeJS.ProcessEnv;
-      prompter: { shouldRepair: boolean };
-    }): Promise<boolean> => false,
-  ),
-);
-
-vi.mock("./doctor-plugin-host-links.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./doctor-plugin-host-links.js")>();
-  return { ...actual, maybeRepairPluginOpenClawHostLinks };
-});
-
-export function getMaybeRepairPluginOpenClawHostLinksMock() {
-  return maybeRepairPluginOpenClawHostLinks;
-}
-
 type StartupConvergenceWarning = {
+  kind?: "load" | "repair";
   pluginId?: string;
   reason: string;
   message: string;
@@ -75,7 +44,11 @@ type StartupConvergenceWarning = {
 export type StartupSmokeFailure = {
   pluginId: string;
   installPath?: string;
-  reason: "missing-install-path" | "missing-main-entry" | "unreadable-package-json";
+  reason:
+    | "missing-install-path"
+    | "missing-main-entry"
+    | "missing-package-json"
+    | "unreadable-package-json";
   detail: string;
 };
 
@@ -87,19 +60,6 @@ export type StartupConvergenceResult = {
   smokeFailures: StartupSmokeFailure[];
   installRecords: Record<string, unknown>;
 };
-
-export const stateCheckpointOptions = {
-  migrateState: true,
-  migrateLegacyConfig: false,
-  invalidConfigNote: false,
-  requireStateMigrationCheckpoint: true,
-} as const;
-
-export const startupCheckpointOptions = {
-  migrateLegacyConfig: false,
-  invalidConfigNote: false,
-  requireStartupMigrationCheckpoint: true,
-} as const;
 
 export function makeStartupConvergenceResult(
   overrides: Partial<StartupConvergenceResult> = {},
@@ -113,4 +73,39 @@ export function makeStartupConvergenceResult(
     installRecords: {},
     ...overrides,
   };
+}
+
+export function makeQuarantinedPluginRepairConvergence(
+  pluginId: string,
+  repairPluginId: string | undefined,
+): StartupConvergenceResult {
+  return makeStartupConvergenceResult({
+    errored: true,
+    warnings: [
+      {
+        kind: "repair",
+        pluginId: repairPluginId,
+        reason: "npm package not found",
+        message: `Failed to update ${repairPluginId ?? pluginId}: npm package not found.`,
+        guidance: ["Run `openclaw update repair` to retry plugin repair."],
+      },
+      {
+        pluginId,
+        reason: "missing-package-json: package.json is missing",
+        message: `Plugin "${pluginId}" failed post-core payload smoke check (missing): package.json is missing`,
+        guidance: [
+          "Run `openclaw update repair` to retry plugin repair.",
+          `Run \`openclaw plugins inspect ${pluginId} --runtime --json\` for details.`,
+        ],
+      },
+    ],
+    smokeFailures: [
+      {
+        pluginId,
+        installPath: `/plugins/${pluginId}`,
+        reason: "missing-package-json",
+        detail: "package.json is missing",
+      },
+    ],
+  });
 }

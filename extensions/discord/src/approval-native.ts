@@ -1,7 +1,10 @@
-// Discord plugin module implements approval native behavior.
+import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
+import {
+  createChannelApproverDmTargetResolver,
+  createChannelNativeOriginTargetResolver,
+  resolveApprovalRequestSessionConversation,
+} from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -9,11 +12,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listDiscordAccountIds, resolveDiscordAccount } from "./accounts.js";
-import {
-  createChannelApproverDmTargetResolver,
-  createChannelNativeOriginTargetResolver,
-  createApproverRestrictedNativeApprovalCapability,
-} from "./approval-runtime.js";
 import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 import {
   getDiscordExecApprovalApprovers,
@@ -184,6 +182,7 @@ function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalCon
     resolveApproverDmTargets: createDiscordApproverDmTargetResolver(configOverride),
     notifyOriginWhenDmOnly: true,
     nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+      capabilityBoundary: true,
       eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId }) =>
         isDiscordExecApprovalClientEnabled({ cfg, accountId, configOverride }),
@@ -195,8 +194,7 @@ function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalCon
           configOverride,
         }),
       load: async () =>
-        (await import("./approval-handler.runtime.js"))
-          .discordApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
+        (await import("./approval-handler.runtime.js")).discordApprovalNativeRuntime,
     }),
   });
 }

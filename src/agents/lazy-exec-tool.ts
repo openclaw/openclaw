@@ -12,6 +12,7 @@ import { resolveAgentConfig } from "./agent-scope.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { execCompletionSchema, execSchema } from "./bash-tools.schemas.js";
+import { createExecToolExecutionTimeoutResolver } from "./exec-tool-timeout.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -50,12 +51,14 @@ export function createLazyExecTool(
     name: "exec",
     label: "exec",
     displaySummary: presentation?.displaySummary ?? EXEC_TOOL_DISPLAY_SUMMARY,
+    getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
     get description() {
       return (
         presentation?.description ??
         describeExecTool({
           hasCronTool: defaults?.hasCronTool === true,
           hasProcessTool: defaults?.processToolAvailabilityRef?.value,
+          autoReview: defaults?.mode === "auto",
         })
       );
     },
@@ -86,13 +89,16 @@ export function resolveExecToolConfig(params: { cfg?: OpenClawConfig; agentId?: 
   const agentExec =
     cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec : undefined;
   const layeredPolicy = applyExecPolicyLayer(applyExecPolicyLayer({}, globalExec), agentExec);
+  const configuredPathPrepend = agentExec?.pathPrepend ?? globalExec?.pathPrepend;
   return {
     host: agentExec?.host ?? globalExec?.host,
     mode: layeredPolicy.mode,
     security: layeredPolicy.security,
     ask: layeredPolicy.ask,
     node: agentExec?.node ?? globalExec?.node,
-    pathPrepend: mergeGatewayAgentCliPath(agentExec?.pathPrepend ?? globalExec?.pathPrepend),
+    // Native harnesses distinguish operator PATH policy from the automatic CLI shim.
+    configuredPathPrepend,
+    pathPrepend: mergeGatewayAgentCliPath(configuredPathPrepend),
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
     strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
     commandHighlighting: resolveExecCommandHighlighting({

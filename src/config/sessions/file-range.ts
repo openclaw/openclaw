@@ -1,5 +1,6 @@
 // Session file helpers share bounded random-access reads across transcript consumers.
 import type { FileHandle } from "node:fs/promises";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 
 export async function readFileRangeAsync(
   fileHandle: FileHandle,
@@ -7,13 +8,6 @@ export async function readFileRangeAsync(
   length: number,
 ): Promise<Buffer> {
   const buffer = Buffer.alloc(length);
-  let offset = 0;
-  while (offset < length) {
-    const { bytesRead } = await fileHandle.read(buffer, offset, length - offset, position + offset);
-    if (bytesRead <= 0) {
-      break;
-    }
-    offset += bytesRead;
-  }
-  return offset === length ? buffer : buffer.subarray(0, offset);
+  const bytesRead = await readFileWindowFully(fileHandle, buffer, position);
+  return bytesRead === length ? buffer : buffer.subarray(0, bytesRead);
 }

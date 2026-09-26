@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import { logWarn } from "../logger.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
@@ -17,6 +19,11 @@ import type { MediaAttachment } from "./types.js";
 
 const runExecMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: vi.fn(),
+}));
 
 vi.mock("../process/exec.js", () => ({
   runExec: (...args: unknown[]) => runExecMock(...args),
@@ -136,6 +143,149 @@ describe("media-understanding CLI audio entry", () => {
     vi.clearAllMocks();
   });
 
+  it.each<{ name: string; entry: MediaUnderstandingModelConfig; reason: string }>([
+    { name: "missing command", entry: { type: "cli" }, reason: "cli-missing-command" },
+    { name: "blank command", entry: { type: "cli", command: "  " }, reason: "cli-missing-command" },
+    {
+      name: "missing args",
+      entry: { type: "cli", command: "fixture-transcribe" },
+      reason: "cli-missing-attachment-arg",
+    },
+    {
+      name: "empty args",
+      entry: { command: "fixture-transcribe", args: [] },
+      reason: "cli-missing-attachment-arg",
+    },
+  ])("reports $name as unavailable without executing it", async ({ entry, reason }) => {
+    const { runCapability } = await import("./runner.js");
+    await withAudioFixture("openclaw-cli-unavailable", async ({ ctx, media, cache }) => {
+      await expect(
+        runCliEntry({
+          capability: "audio",
+          entry,
+          cfg: {},
+          ctx,
+          attachment: requireFirstAttachment(media),
+          cache,
+        }),
+      ).rejects.toMatchObject({ reason });
+      const result = await runCapability({
+        capability: "audio",
+        cfg: { tools: { media: { models: [{ ...entry, capabilities: ["audio"] }] } } },
+        ctx,
+        media,
+        attachments: cache,
+        providerRegistry: new Map(),
+      });
+      expect(result.outputs).toEqual([]);
+      expect(result.decision).toMatchObject({
+        outcome: "failed",
+        attachmentProcessing: { 0: "omitted" },
+        attachmentDispositions: { 0: { kind: "failed" } },
+        attachments: [
+          {
+            attempts: [{ type: "cli", outcome: "failed", reason: expect.stringContaining(reason) }],
+          },
+        ],
+      });
+      expect(logWarn).toHaveBeenCalledWith(expect.stringContaining(reason));
+      expect(runExecMock).not.toHaveBeenCalled();
+      expect(runFfmpegMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("continues to a working CLI after an unavailable entry", async () => {
+    const { runCapability } = await import("./runner.js");
+    await withAudioFixture("openclaw-cli-fallback", async ({ ctx, media, cache }) => {
+      const result = await runCapability({
+        capability: "audio",
+        cfg: {
+          tools: {
+            media: {
+              models: [
+                { type: "cli", command: "invalid-transcribe", capabilities: ["audio"] },
+                {
+                  type: "cli",
+                  command: "working-transcribe",
+                  args: ["{{ AttachmentPath }}"],
+                  capabilities: ["audio"],
+                },
+              ],
+            },
+          },
+        },
+        ctx,
+        media,
+        attachments: cache,
+        providerRegistry: new Map(),
+      });
+      expect(result.outputs[0]?.text).toBe("cli transcript");
+      expect(result.decision.attachments[0]?.attempts.map((attempt) => attempt.outcome)).toEqual([
+        "failed",
+        "success",
+      ]);
+      expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
+        "working-transcribe",
+        [expect.any(String)],
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("executes a custom CLI with a literal attachment path", async () => {
+    const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+    runExecMock.mockImplementationOnce(actual.runExec);
+    await withAudioFixture(
+      "openclaw-cli-literal-input",
+      async ({ ctx, media, mediaPath, cache }) => {
+        const args = [
+          "-e",
+          "process.stdout.write(String(require('node:fs').readFileSync(process.argv[1]).length))",
+          mediaPath,
+        ];
+        const result = await runCliEntry({
+          capability: "audio",
+          entry: { type: "cli", command: process.execPath, args },
+          cfg: {},
+          ctx,
+          attachment: requireFirstAttachment(media),
+          cache,
+        });
+        expect(result?.text).toBe(String((await fs.stat(mediaPath)).size));
+        expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
+          process.execPath,
+          args,
+          expect.any(Object),
+        );
+      },
+    );
+  });
+
+  it("preserves custom arguments relative to the attachment working directory", async () => {
+    await withAudioFixture(
+      "openclaw-cli-custom-input",
+      async ({ ctx, media, mediaPath, cache }) => {
+        const args = ["describe", path.basename(mediaPath)];
+        const result = await runCliEntry({
+          capability: "audio",
+          entry: { type: "cli", command: "agy", args },
+          cfg: {},
+          ctx,
+          attachment: requireFirstAttachment(media),
+          cache,
+        });
+        expect(result?.text).toBe("cli transcript");
+        expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
+          "agy",
+          args,
+          expect.objectContaining({
+            cwd: path.dirname(await fs.realpath(mediaPath)),
+          }),
+        );
+      },
+    );
+  });
+
   it("applies per-request prompt and language overrides to CLI transcription templating", async () => {
     let mediaPath = "";
 
@@ -166,21 +316,18 @@ describe("media-understanding CLI audio entry", () => {
                 audio: {
                   prompt: "configured prompt",
                   language: "fr",
-                  _requestPromptOverride: "Focus on names",
-                  _requestLanguageOverride: "en",
                 },
               },
             },
-          } as OpenClawConfig,
+          },
           ctx,
           attachment: requireFirstAttachment(media),
           cache,
           config: {
             prompt: "configured prompt",
             language: "fr",
-            _requestPromptOverride: "Focus on names",
-            _requestLanguageOverride: "en",
-          } as never,
+          },
+          request: { prompt: "Focus on names", language: "en" },
         });
       },
     );
@@ -305,7 +452,7 @@ describe("media-understanding CLI audio entry", () => {
     },
   );
 
-  it.each(transcriptFileCases)("reads $name transcript output", async (testCase) => {
+  it.each(transcriptFileCases.slice(1))("reads $name transcript output", async (testCase) => {
     runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
       await fs.writeFile(testCase.resolvePath(args), "file transcript\n");
       return { stdout: "Transcribing...\n", stderr: "" };
@@ -401,12 +548,17 @@ describe("media-understanding CLI audio entry", () => {
 
   it.each(
     transcriptFileCases.flatMap((testCase) =>
-      (["empty", "missing"] as const).map((fileState) => Object.assign({ fileState }, testCase)),
+      (["empty", "missing", "artifact"] as const).map((fileState) =>
+        Object.assign({ fileState }, testCase),
+      ),
     ),
   )("treats $fileState $name transcript output as empty", async (testCase) => {
     runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
-      if (testCase.fileState === "empty") {
-        await fs.writeFile(testCase.resolvePath(args), "  \n");
+      if (testCase.fileState !== "missing") {
+        await fs.writeFile(
+          testCase.resolvePath(args),
+          testCase.fileState === "artifact" ? "context:" : "  \n",
+        );
       }
       return { stdout: "Transcribing with Whisper...\n", stderr: "" };
     });

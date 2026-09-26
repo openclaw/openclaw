@@ -1,4 +1,3 @@
-// Qwen plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -235,36 +234,16 @@ function enforceQwenPayloadAfterCaller(
   delete payload.reasoning;
 }
 
-function finalizeQwenPayloadAfterCaller(
-  value: unknown,
-  fallbackPayload: Record<string, unknown> | undefined,
-  tokenPlanContract: QwenThinkingContract | undefined,
-  forceThinking: boolean,
-  requestedEnableThinking: boolean,
-  requestedThinkingLevel: QwenThinkingLevel,
-): unknown {
-  const finalPayload = asPayloadRecord(value) ?? fallbackPayload;
-  if (finalPayload) {
-    enforceQwenPayloadAfterCaller(
-      finalPayload,
-      tokenPlanContract,
-      forceThinking,
-      requestedEnableThinking,
-      requestedThinkingLevel,
-    );
-  }
-  return value;
-}
-
 function createQwenConstraintWrapper(
   baseStreamFn: StreamFn | undefined,
   tokenPlanContract: QwenThinkingContract | undefined,
   forceThinking: boolean,
   thinkingLevel: QwenThinkingLevel,
+  sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (model.api !== "openai-completions" || (!model.reasoning && !forceThinking)) {
+    if ((sourceApi ?? model.api) !== "openai-completions" || (!model.reasoning && !forceThinking)) {
       return underlying(model, context, options);
     }
     const requestedThinkingLevel = resolveQwenThinkingLevel(thinkingLevel, options);
@@ -275,27 +254,24 @@ function createQwenConstraintWrapper(
       ...options,
       onPayload(payload, payloadModel) {
         const payloadObj = asPayloadRecord(payload);
-        const result = originalOnPayload?.(payload, payloadModel);
-        if (result && typeof (result as Promise<unknown>).then === "function") {
-          return Promise.resolve(result).then((resolved) =>
-            finalizeQwenPayloadAfterCaller(
-              resolved,
-              payloadObj,
+        const finalizePayload = (value: unknown) => {
+          const finalPayload = asPayloadRecord(value) ?? payloadObj;
+          if (finalPayload) {
+            enforceQwenPayloadAfterCaller(
+              finalPayload,
               tokenPlanContract,
               forceThinking,
               requestedEnableThinking,
               requestedThinkingLevel,
-            ),
-          );
+            );
+          }
+          return value;
+        };
+        const result = originalOnPayload?.(payload, payloadModel);
+        if (result && typeof (result as Promise<unknown>).then === "function") {
+          return Promise.resolve(result).then(finalizePayload);
         }
-        return finalizeQwenPayloadAfterCaller(
-          result,
-          payloadObj,
-          tokenPlanContract,
-          forceThinking,
-          requestedEnableThinking,
-          requestedThinkingLevel,
-        );
+        return finalizePayload(result);
       },
     });
   };
@@ -328,8 +304,11 @@ function patchTokenPlanGlmPayload(
   }
 }
 
-function readQwenThinkingFormatFromModel(model: Parameters<StreamFn>[0]): QwenThinkingFormat {
-  if (model.api !== "openai-completions") {
+function readQwenThinkingFormatFromModel(
+  model: Parameters<StreamFn>[0],
+  sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
+): QwenThinkingFormat {
+  if ((sourceApi ?? model.api) !== "openai-completions") {
     return undefined;
   }
   const compat =
@@ -345,6 +324,7 @@ export function createQwenThinkingWrapper(
   thinkingFormat?: QwenThinkingFormat,
   forceThinking = false,
   tokenPlanContract?: QwenThinkingContract,
+  sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
 ): StreamFn {
   return createPayloadPatchStreamWrapper(
     baseStreamFn,
@@ -353,7 +333,8 @@ export function createQwenThinkingWrapper(
       const effectiveThinkingLevel = resolveQwenThinkingLevel(thinkingLevel, options);
       const enableThinking =
         forceThinking || isOpenAICompatibleThinkingEnabled({ thinkingLevel, options });
-      const effectiveThinkingFormat = thinkingFormat ?? readQwenThinkingFormatFromModel(model);
+      const effectiveThinkingFormat =
+        thinkingFormat ?? readQwenThinkingFormatFromModel(model, sourceApi);
       if (effectiveThinkingFormat === "qwen-chat-template") {
         setQwenChatTemplateThinking(payloadObj, enableThinking);
         delete payloadObj.enable_thinking;
@@ -386,16 +367,20 @@ export function createQwenThinkingWrapper(
     },
     {
       shouldPatch: ({ model }) =>
-        model.api === "openai-completions" && (model.reasoning || forceThinking),
+        (sourceApi ?? model.api) === "openai-completions" && (model.reasoning || forceThinking),
     },
   );
 }
 
 export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  if (!isQwenProviderId(ctx.provider) || (ctx.model && ctx.model.api !== "openai-completions")) {
+  // Simple completions use dispatch aliases; payload policy follows the original wire API.
+  const sourceApi = ctx.sourceApi ?? ctx.model?.api;
+  if (!isQwenProviderId(ctx.provider) || (sourceApi && sourceApi !== "openai-completions")) {
     return undefined;
   }
-  const thinkingFormat = ctx.model ? readQwenThinkingFormatFromModel(ctx.model) : undefined;
+  const thinkingFormat = ctx.model
+    ? readQwenThinkingFormatFromModel(ctx.model, sourceApi)
+    : undefined;
   const explicitLegacyThinkingFormat =
     normalizeProviderId(ctx.provider) === QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID &&
     thinkingFormat !== undefined;
@@ -419,6 +404,7 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
     thinkingFormat,
     forceThinking,
     tokenPlanContract,
+    ctx.sourceApi,
   );
   if (useWireConstraints) {
     // Config and request extra_body hooks run outside plugin wrappers. Reapply
@@ -428,6 +414,7 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
       tokenPlanContract,
       forceThinking,
       ctx.thinkingLevel,
+      ctx.sourceApi,
     );
   }
   return streamFn;

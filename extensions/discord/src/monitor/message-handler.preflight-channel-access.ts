@@ -1,4 +1,3 @@
-// Discord plugin module implements message handler.preflight channel access behavior.
 import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -19,13 +18,13 @@ export function resolveDiscordPreflightChannelAccess(params: {
   guildInfo: DiscordGuildEntryResolved | null;
   channelConfig: DiscordChannelConfigResolved | null;
   channelMatchMeta: string;
-}): { allowed: boolean; channelAllowlistConfigured: boolean; channelAllowed: boolean } {
+}): boolean {
   if (params.isGuildMessage && params.channelConfig?.enabled === false) {
     logDebug(`[discord-preflight] drop: channel disabled`);
     logVerbose(
       `Blocked discord channel ${params.messageChannelId} (channel disabled, ${params.channelMatchMeta})`,
     );
-    return { allowed: false, channelAllowlistConfigured: false, channelAllowed: false };
+    return false;
   }
 
   const groupDmAllowed =
@@ -37,7 +36,7 @@ export function resolveDiscordPreflightChannelAccess(params: {
       channelSlug: params.displayChannelSlug,
     });
   if (params.isGroupDm && !groupDmAllowed) {
-    return { allowed: false, channelAllowlistConfigured: false, channelAllowed: false };
+    return false;
   }
 
   const channelAllowlistConfigured =
@@ -68,7 +67,7 @@ export function resolveDiscordPreflightChannelAccess(params: {
         `Blocked discord channel ${params.messageChannelId} not in guild channel allowlist (groupPolicy: allowlist, ${params.channelMatchMeta})`,
       );
     }
-    return { allowed: false, channelAllowlistConfigured, channelAllowed };
+    return false;
   }
 
   if (params.isGuildMessage && params.channelConfig?.allowed === false) {
@@ -76,12 +75,12 @@ export function resolveDiscordPreflightChannelAccess(params: {
     logVerbose(
       `Blocked discord channel ${params.messageChannelId} not in guild channel allowlist (${params.channelMatchMeta})`,
     );
-    return { allowed: false, channelAllowlistConfigured, channelAllowed };
+    return false;
   }
   if (params.isGuildMessage) {
     logDebug(`[discord-preflight] pass: channel allowed`);
     logVerbose(`discord: allow channel ${params.messageChannelId} (${params.channelMatchMeta})`);
   }
 
-  return { allowed: true, channelAllowlistConfigured, channelAllowed };
+  return true;
 }

@@ -1,12 +1,11 @@
-// Slack plugin module implements approval auth behavior.
 import {
   createChannelApprovalAuth,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-auth-runtime";
+import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolveSlackAccount, resolveSlackAccountAllowFrom } from "./accounts.js";
 import { normalizeSlackApproverTarget } from "./exec-approvals.js";
 import {
-  normalizeAllowListLower,
   resolveSlackAllowListMatch,
   resolveSlackUserAllowListForTeam,
 } from "./monitor/allow-list.js";
@@ -27,7 +26,7 @@ function slackApprovalTargetMatches(senderId: string, approvers: readonly string
   return (
     sender?.kind === "user" &&
     resolveSlackAllowListMatch({
-      allowList: normalizeAllowListLower([...approvers]),
+      allowList: normalizeStringEntriesLower([...approvers]),
       teamId: sender.teamId,
       id: sender.id,
     }).allowed

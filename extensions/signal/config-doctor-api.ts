@@ -6,6 +6,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { repairSignalAccountKeys } from "./src/account-key-repair.js";
 import { migrateLegacySignalTransportConfigSync } from "./src/config-compat.js";
 
 const RETIRED_SIGNAL_ACCOUNT_TRANSPORT_FIELDS = [
@@ -65,11 +66,12 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const streaming = streamingAliasMigration.normalizeChannelConfig({ cfg });
+  const accountKeys = repairSignalAccountKeys({ cfg });
+  const streaming = streamingAliasMigration.normalizeChannelConfig({ cfg: accountKeys.config });
   const transport = migrateLegacySignalTransportConfigSync(streaming.config);
   return {
     config: transport.config,
-    changes: [...streaming.changes, ...transport.changes],
+    changes: [...accountKeys.changes, ...streaming.changes, ...transport.changes],
     ...(transport.warnings?.length ? { warnings: transport.warnings } : {}),
   };
 }

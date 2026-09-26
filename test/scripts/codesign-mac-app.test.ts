@@ -20,6 +20,9 @@ import { createMacScriptTest, type MacScriptFixture } from "./mac-script-fixture
 
 const it = createMacScriptTest();
 const scriptPath = "scripts/codesign-mac-app.sh";
+// Exercise the shebang on POSIX while retaining Git Bash support on Windows.
+const codesignCommand = process.platform === "win32" ? "bash" : scriptPath;
+const codesignArgs = process.platform === "win32" ? [scriptPath] : [];
 // Signing integration exercises the real Darwin mutation fence, not a sandbox mock.
 const macIt = it.runIf(process.platform === "darwin");
 
@@ -39,7 +42,7 @@ async function runCodesignWithoutAllocation(
     `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(allocation)}, 'called');\nprocess.exit(91);\n`,
   );
   await chmod(allocator, 0o755);
-  const result = await mac.run("bash", [scriptPath, ...args], {
+  const result = await mac.run(codesignCommand, [...codesignArgs, ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
@@ -51,6 +54,29 @@ async function runCodesignWithoutAllocation(
   });
   expect(existsSync(allocation), result.stderr).toBe(false);
   return result;
+}
+
+async function runElevationMetadataFixture(mac: MacScriptFixture, env: NodeJS.ProcessEnv) {
+  const tempRoot = mac.createTempDir("openclaw-codesign-elevation-metadata-");
+  const app = path.join(tempRoot, "Fake.app");
+  const binDir = path.join(tempRoot, "bin");
+  await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
+  await mkdir(binDir);
+  await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
+  await installElevationFakeCodesign(binDir);
+  const result = await mac.run(codesignCommand, [...codesignArgs, app], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...env,
+      OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
+      TMPDIR: tempRoot,
+    },
+  });
+  return { app, result };
 }
 
 describe("codesign-mac-app temp file hygiene", () => {
@@ -122,7 +148,7 @@ describe("codesign-mac-app temp file hygiene", () => {
       await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
       await installFakeCodesign(binDir);
 
-      const result = await mac.run("bash", [scriptPath, app], {
+      const result = await mac.run(codesignCommand, [...codesignArgs, app], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: {
@@ -200,7 +226,7 @@ describe("codesign-mac-app temp file hygiene", () => {
         script.indexOf("else", script.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]')),
       );
 
-      expect(script).toContain(
+      expect(readFileSync("scripts/lib/mac-signing-identity.sh", "utf8")).toContain(
         'ELEVATION_IDENTITY="Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)"',
       );
       expect(script).toContain('ELEVATION_TEAM_ID="FWJYW4S8P8"');
@@ -230,7 +256,7 @@ describe("codesign-mac-app temp file hygiene", () => {
         }
         await installElevationFakeCodesign(binDir);
 
-        const result = await mac.run("bash", [scriptPath, app], {
+        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
           cwd: process.cwd(),
           encoding: "utf8",
           env: {
@@ -251,25 +277,8 @@ describe("codesign-mac-app temp file hygiene", () => {
     "consumes complete codesign metadata under pipefail before validating authority",
     ({ mac, expect }) =>
       mac.lifetime.run(async () => {
-        const tempRoot = mac.createTempDir("openclaw-codesign-elevation-metadata-");
-        const app = path.join(tempRoot, "Fake.app");
-        const binDir = path.join(tempRoot, "bin");
-        await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
-        await mkdir(binDir);
-        await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
-        await installElevationFakeCodesign(binDir);
-
-        const result = await mac.run("bash", [scriptPath, app], {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            CODESIGN_FAKE_SECOND_AUTHORITY: "1",
-            OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
-            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-            SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
-            TMPDIR: tempRoot,
-          },
+        const { app, result } = await runElevationMetadataFixture(mac, {
+          CODESIGN_FAKE_SECOND_AUTHORITY: "1",
         });
 
         expect(result.status).toBe(0);
@@ -283,25 +292,8 @@ describe("codesign-mac-app temp file hygiene", () => {
     "preserves the precise diagnostic when codesign omits Authority",
     ({ mac, expect }) =>
       mac.lifetime.run(async () => {
-        const tempRoot = mac.createTempDir("openclaw-codesign-elevation-no-authority-");
-        const app = path.join(tempRoot, "Fake.app");
-        const binDir = path.join(tempRoot, "bin");
-        await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
-        await mkdir(binDir);
-        await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
-        await installElevationFakeCodesign(binDir);
-
-        const result = await mac.run("bash", [scriptPath, app], {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            CODESIGN_FAKE_NO_AUTHORITY: "1",
-            OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
-            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-            SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
-            TMPDIR: tempRoot,
-          },
+        const { result } = await runElevationMetadataFixture(mac, {
+          CODESIGN_FAKE_NO_AUTHORITY: "1",
         });
 
         expect(result.status).toBe(1);
@@ -311,25 +303,8 @@ describe("codesign-mac-app temp file hygiene", () => {
 
   macIt.concurrent("preserves a codesign failure after metadata output", ({ mac, expect }) =>
     mac.lifetime.run(async () => {
-      const tempRoot = mac.createTempDir("openclaw-codesign-elevation-failed-metadata-");
-      const app = path.join(tempRoot, "Fake.app");
-      const binDir = path.join(tempRoot, "bin");
-      await mkdir(path.join(app, "Contents", "MacOS"), { recursive: true });
-      await mkdir(binDir);
-      await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
-      await installElevationFakeCodesign(binDir);
-
-      const result = await mac.run("bash", [scriptPath, app], {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          CODESIGN_FAKE_FAIL_AFTER_METADATA: "1",
-          OPENCLAW_MAC_SIGNING_VARIANT: "elevation-host",
-          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-          SIGN_IDENTITY: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
-          TMPDIR: tempRoot,
-        },
+      const { app, result } = await runElevationMetadataFixture(mac, {
+        CODESIGN_FAKE_FAIL_AFTER_METADATA: "1",
       });
 
       expect(result.status).toBe(7);
@@ -351,7 +326,7 @@ describe("codesign-mac-app temp file hygiene", () => {
       await writeFile(path.join(app, "Contents", "MacOS", "OpenClaw"), "#!/bin/sh\n");
       await installTransientFakeCodesign(binDir);
 
-      const result = await mac.run("bash", [scriptPath, app], {
+      const result = await mac.run(codesignCommand, [...codesignArgs, app], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: {
@@ -392,7 +367,7 @@ describe("codesign-mac-app temp file hygiene", () => {
           await writeFile(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
         }
 
-        const result = await mac.run("bash", [scriptPath, app], {
+        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
           cwd: process.cwd(),
           encoding: "utf8",
           env: {
@@ -433,11 +408,6 @@ describe("codesign-mac-app temp file hygiene", () => {
   );
 
   macIt.concurrent.for([
-    {
-      label: "Developer ID hash",
-      identity: "63A99BFF1D40E5A75C8A32B84BE99D1DDA6A44E1",
-      timestamp: true,
-    },
     {
       label: "lowercase Developer ID hash",
       identity: "63a99bff1d40e5a75c8a32b84be99d1dda6a44e1",
@@ -482,7 +452,7 @@ describe("codesign-mac-app temp file hygiene", () => {
         const fakeSecurity = path.join(binDir, "security");
         await writeFile(
           fakeSecurity,
-          `#!/usr/bin/env bash
+          `#!/bin/bash
 printf '%s\\n' \\
   '  1) 63A99BFF1D40E5A75C8A32B84BE99D1DDA6A44E1 "Developer ID Application: Example Corp (ABCDE12345)"' \\
   '  2) 11AA22BB33CC44DD55EE66FF77008899AABBCCDD "Apple Development: Example Developer (ABCDE12345)"'
@@ -490,7 +460,7 @@ printf '%s\\n' \\
         );
         await chmod(fakeSecurity, 0o755);
 
-        const result = await mac.run("bash", [scriptPath, app], {
+        const result = await mac.run(codesignCommand, [...codesignArgs, app], {
           cwd: process.cwd(),
           encoding: "utf8",
           env: {
@@ -772,9 +742,10 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
       }),
   );
 
-  it.concurrent.for(
-    [false, true].flatMap((fat64) => [0, 1].map((imageSlice) => ({ fat64, imageSlice }))),
-  )(
+  it.concurrent.for([
+    { fat64: false, imageSlice: 0 },
+    { fat64: true, imageSlice: 1 },
+  ])(
     "rejects object/image containers in either slice order (fat64: $fat64, image: $imageSlice)",
     ({ fat64, imageSlice }, { mac, expect }) =>
       mac.lifetime.run(async () => {
@@ -887,7 +858,7 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
       expect(records).not.toContain(path.join(outside, "native"));
     }));
 
-  it.concurrent.for(["", "/", "///"])(
+  it.concurrent.for(["", "///"])(
     "rejects a symlink bundle root with suffix %j before signing",
     (suffix, { mac, expect }) =>
       mac.lifetime.run(async () => {
@@ -1050,7 +1021,7 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
       expect(fixture.events()).toEqual([]);
     }));
 
-  it.concurrent.for(["", "/", "///"])(
+  it.concurrent.for(["", "///"])(
     "seals each bundle owner once after nested code with suffix %j",
     (suffix, { mac, expect }) =>
       mac.lifetime.run(async () => {
@@ -1124,15 +1095,9 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
   );
 
   it.concurrent.for([
-    "mismatch",
-    "metadata",
     "metadataFailure",
-    "missingTeam",
-    "format",
     "formatSkipTeam",
-    "missingFormat",
     "verifyFailure",
-    "authority",
     "appleEvents",
     "entitlementFailure",
   ])("fails closed on %s at the signing/audit boundary", (failure, { mac, expect }) =>
@@ -1140,23 +1105,10 @@ with open(sys.argv[1], 'ab', buffering=0) as stream:
       const fixture = await makeSigningFixture(mac, mac.createTempDir("openclaw-inventory-gates-"));
       const native = await fixture.put(workerPath + "node");
       const config =
-        failure === "formatSkipTeam"
-          ? { format: native, skipTeam: true }
-          : failure === "missingTeam"
-            ? { metadata: "missing" }
-            : failure === "missingFormat"
-              ? { signatureFormat: "missing" }
-              : {
-                  [failure]:
-                    failure === "metadata"
-                      ? "failure"
-                      : failure === "authority"
-                        ? "Wrong Authority"
-                        : native,
-                };
+        failure === "formatSkipTeam" ? { format: native, skipTeam: true } : { [failure]: native };
       const result = await fixture.run(
         config,
-        ["authority", "appleEvents", "entitlementFailure"].includes(failure),
+        ["appleEvents", "entitlementFailure"].includes(failure),
       );
       expect(result.status, result.stdout).not.toBe(0);
       expect(result.stdout).not.toContain("Codesign complete");

@@ -51,11 +51,17 @@ export async function applyStagedWorkerWorkspace(params: {
   base: WorkerWorkspaceManifest;
   current: WorkerWorkspaceManifest;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
-  publishAcceptedManifest?: (accepted: {
-    manifestRef: string;
-    manifest: WorkerWorkspaceManifest;
-    conflictPaths: string[];
-  }) => Promise<void>;
+  assertCurrent?: () => void;
+  acceptance:
+    | {
+        kind: "reconcile";
+        publish?: (accepted: {
+          manifestRef: string;
+          manifest: WorkerWorkspaceManifest;
+          conflictPaths: string[];
+        }) => Promise<void>;
+      }
+    | { kind: "exact-target"; verify: () => Promise<void> };
 }): Promise<WorkerWorkspaceApplyResult> {
   return await withWorkspaceHashContext(
     async () => await applyStagedWorkerWorkspaceWithMemo(params),
@@ -71,6 +77,20 @@ async function applyStagedWorkerWorkspaceWithMemo(
   const baseNodes = manifestNodes(params.base);
   const currentNodes = manifestNodes(params.current);
   const changed = changedPaths(params.base, params.current);
+  const acceptance = params.acceptance;
+  const acceptExactTarget = async (
+    verify: () => Promise<void>,
+  ): Promise<WorkerWorkspaceApplyResult> => {
+    await verify();
+    params.assertCurrent?.();
+    params.journal.commit(params.currentManifestRef);
+    return {
+      manifest: params.current,
+      manifestRef: params.currentManifestRef,
+      conflictPaths: [],
+      verifyLocalStable: verify,
+    };
+  };
   const assertInputOwnership = async () => {
     if (stagedInputDirectories.size === 0) {
       return;
@@ -129,18 +149,20 @@ async function applyStagedWorkerWorkspaceWithMemo(
         metrics,
       ),
   });
-  const preflight = await preflightWorkspaceApply({
-    root,
-    base: params.base,
-    current: params.current,
-  });
-  if (changed.size === 0) {
+  const inspectPaths = () =>
+    preflightWorkspaceApply({ root, base: params.base, current: params.current });
+  const preflight = await inspectPaths();
+  const acceptReconciled = async (
+    reconcile: Extract<typeof acceptance, { kind: "reconcile" }>,
+    preparedPreflight?: Awaited<ReturnType<typeof inspectPaths>>,
+  ) => {
     const actual = await readActualWorkspaceManifest({
       root,
       baseCommit: params.current.baseCommit,
       preserveDirectories,
       includePaths,
     });
+    const finalPreflight = preparedPreflight ?? (await inspectPaths());
     await assertActualWorkspaceManifest({
       root,
       expectedRef: actual.manifestRef,
@@ -148,10 +170,17 @@ async function applyStagedWorkerWorkspaceWithMemo(
       preserveDirectories,
       includePaths,
     });
-    const conflictPaths = retainedConflictPaths(preflight, preflight.applyPaths);
-    await params.publishAcceptedManifest?.({ ...actual, conflictPaths });
+    const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
+    params.assertCurrent?.();
+    await reconcile.publish?.({ ...actual, conflictPaths });
+    params.assertCurrent?.();
     params.journal.commit(actual.manifestRef);
     return createApplyResult(actual, conflictPaths);
+  };
+  if (changed.size === 0) {
+    return acceptance.kind === "exact-target"
+      ? await acceptExactTarget(acceptance.verify)
+      : await acceptReconciled(acceptance, preflight);
   }
   const baseByPath = new Map(
     reconciliationEntries(params.base.entries).map((entry) => [entry.path, entry]),
@@ -199,11 +228,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
     baseEntries,
     appliedEntries,
   });
-  const confirmedPreflight = await preflightWorkspaceApply({
-    root,
-    base: params.base,
-    current: params.current,
-  });
+  const confirmedPreflight = await inspectPaths();
   if (
     JSON.stringify([...confirmedPreflight.applyPaths].toSorted()) !==
       JSON.stringify([...preflight.applyPaths].toSorted()) ||
@@ -230,46 +255,38 @@ async function applyStagedWorkerWorkspaceWithMemo(
     basePackSha256: createHash("sha256").update(snapshot.basePack).digest("hex"),
     basePack: snapshot.basePack,
   };
+  params.assertCurrent?.();
   params.journal.begin(journal);
   try {
-    await prepareNonDirectoryTargets(root, appliedEntries);
-    await applyWorkspacePatch({ root, patch: snapshot.patch });
+    await prepareNonDirectoryTargets(root, appliedEntries, undefined, params.assertCurrent);
+    await applyWorkspacePatch({ root, patch: snapshot.patch, assertCurrent: params.assertCurrent });
     await applyWorkspaceDirectoryChanges({
       root,
       base: params.base,
       current: params.current,
       applyPaths: preflight.applyPaths,
+      assertCurrent: params.assertCurrent,
     });
-    const actual = await readActualWorkspaceManifest({
-      root,
-      baseCommit: params.current.baseCommit,
-      preserveDirectories,
-      includePaths,
-    });
-    const finalPreflight = await preflightWorkspaceApply({
-      root,
-      base: params.base,
-      current: params.current,
-    });
-    await assertActualWorkspaceManifest({
-      root,
-      expectedRef: actual.manifestRef,
-      baseCommit: actual.manifest.baseCommit,
-      preserveDirectories,
-      includePaths,
-    });
-    const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
-    await params.publishAcceptedManifest?.({ ...actual, conflictPaths });
-    params.journal.commit(actual.manifestRef);
-    return createApplyResult(actual, conflictPaths);
+    if (acceptance.kind === "exact-target") {
+      await inspectPaths();
+    } else {
+      return await acceptReconciled(acceptance);
+    }
   } catch (error) {
     // Transport or settlement timeouts are observation evidence, never authority
     // for an inverse operation; recovery owns restoring both sides.
     if (isAcceptedWorkspacePublicationIndeterminateError(error)) {
       throw error;
     }
+    // A revoked owner cannot authorize an inverse mutation or consume the journal.
+    params.assertCurrent?.();
     try {
-      await recoverWorkerWorkspaceReconciliation({ root, journal });
+      await recoverWorkerWorkspaceReconciliation({
+        root,
+        journal,
+        assertCurrent: params.assertCurrent,
+      });
+      params.assertCurrent?.();
       params.journal.abort();
     } catch (rollbackError) {
       const recoveryError = new Error("Cloud reconciliation failed and rollback needs recovery", {
@@ -280,4 +297,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
     }
     throw error;
   }
+  // A late exact-target fence failure leaves the prepared owner's mutation pending.
+  // It is not evidence permitting rollback or reopening that binding.
+  return await acceptExactTarget(acceptance.verify);
 }

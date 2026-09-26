@@ -26,10 +26,10 @@ function isDisabledRecord(value: unknown): boolean {
 }
 
 /** Scan all configured channels/accounts for empty allowlist policy warnings. */
-export function scanEmptyAllowlistPolicyWarnings(
+export async function scanEmptyAllowlistPolicyWarnings(
   cfg: OpenClawConfig,
   params: ScanEmptyAllowlistPolicyWarningsParams,
-): string[] {
+): Promise<string[]> {
   const channels = cfg.channels;
   if (!channels || typeof channels !== "object") {
     return [];
@@ -101,7 +101,7 @@ export function scanEmptyAllowlistPolicyWarnings(
           Boolean(account && typeof account === "object" && !isDisabledRecord(account)),
         )
       : [];
-    const accountIds = resolveDoctorChannelAccountIds(
+    const accountIds = await resolveDoctorChannelAccountIds(
       channelName,
       cfg,
       Object.keys(accounts ?? {}),

@@ -16,7 +16,7 @@ import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { skillCollectionReviewMonitorAgentId } from "../../../../src/cron/skill-collection-review-monitor.js";
 import type { CronJob } from "../../../../src/cron/types.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
-import { closeOpenClawStateDatabaseByPath } from "../../../../src/state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../../../src/state/openclaw-state-db-cache.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { proveHotReloadBrowserSettings } from "./gateway-config-hot-reload-browser.js";
 import { proveHotReloadChannels } from "./gateway-config-hot-reload-channels.js";
@@ -92,6 +92,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         },
         providerMode: "mock-openai",
         providerBaseUrl: `${fixture.baseUrl}/v1`,
+        mockSessionObserverUrl: mock.sessionObserverUrl,
         primaryModel: MODEL,
         alternateModel: "mock-openai/gpt-5.6-luna-alt",
         controlUiEnabled: true,

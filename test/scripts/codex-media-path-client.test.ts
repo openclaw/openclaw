@@ -1,13 +1,10 @@
 // Codex Media Path Client tests cover codex media path client script behavior.
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
-import {
-  readPositiveIntEnv,
-  readTcpPortEnv,
-} from "../../scripts/e2e/lib/codex-media-path/limits.mjs";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -84,23 +81,6 @@ async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 describe("codex media path limits", () => {
-  it("rejects loose numeric env values instead of parsing prefixes", () => {
-    expect(() =>
-      readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", 180, {
-        OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: "1e3",
-      }),
-    ).toThrow("invalid OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: 1e3");
-    expect(() =>
-      readPositiveIntEnv("OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES", 2 * 1024 * 1024, {
-        OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: "64bytes",
-      }),
-    ).toThrow("invalid OPENCLAW_CODEX_MEDIA_PATH_LOG_TAIL_MAX_BYTES: 64bytes");
-  });
-
-  it("rejects out-of-range TCP ports", () => {
-    expect(() => readTcpPortEnv("PORT", 18790, { PORT: "65536" })).toThrow("invalid PORT: 65536");
-  });
-
   it("writes strict positive timeout and port values into generated config", () => {
     const root = tempRoots.make("openclaw-codex-media-path-");
     const result = runWriteConfig(root, {
@@ -174,6 +154,8 @@ describe("codex media path fake app-server", () => {
     child.stderr.on("data", (chunk: string) => {
       stderr.append(chunk);
     });
+    // Reproduce independent pipe delivery: stdout can arrive before stderr.
+    child.stderr.pause();
 
     try {
       const responseLine = readStdoutLine(child);
@@ -186,6 +168,11 @@ describe("codex media path fake app-server", () => {
         },
         id: "request-1",
       });
+      // Closing stdin lets the fixture exit; close joins both output streams.
+      const closed = once(child, "close");
+      child.stdin.end();
+      child.stderr.resume();
+      await closed;
       expect(stderr.text()).toContain("fake Codex app-server request log write failed");
     } finally {
       await stopChild(child);

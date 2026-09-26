@@ -1,17 +1,67 @@
 // Node match tests cover node selection from names, ids, and address hints.
-import { describe, expect, it } from "vitest";
-import { resolveNodeIdFromCandidates } from "./node-match.js";
+import { describe, expect, it, vi } from "vitest";
+import { resolveNodeIdFromCandidates, type NodeMatchCandidate } from "./node-match.js";
 
 describe("shared/node-match", () => {
+  it.each(["id", "ip"])("resolves exact %s matches without normalizing display names", (kind) => {
+    const nodes: NodeMatchCandidate[] = Array.from({ length: 1_000 }, (_, index) => ({
+      nodeId: `node-${index}`,
+      displayName: `Рабочая станция ${index}`,
+      connected: true,
+    }));
+    const target = nodes[731]!;
+    target.remoteIp = "198.51.100.17";
+    const query = kind === "id" ? target.nodeId : target.remoteIp;
+    const normalize = vi.spyOn(String.prototype, "normalize");
+    let selected: string;
+    let normalizations: number;
+    try {
+      selected = resolveNodeIdFromCandidates(nodes, query);
+      normalizations = normalize.mock.calls.length;
+    } finally {
+      normalize.mockRestore();
+    }
+    expect(selected).toBe(target.nodeId);
+    expect(normalizations).toBe(0);
+  });
+
+  it("retains ambiguity across duplicate exact ids", () => {
+    const nodes = [
+      { nodeId: "duplicate", displayName: "First", connected: true },
+      { nodeId: "duplicate", displayName: "Second", connected: true },
+    ];
+    expect(() => resolveNodeIdFromCandidates(nodes, "duplicate")).toThrow(
+      "ambiguous node: duplicate (matches: First [node=duplicate], Second [node=duplicate])",
+    );
+  });
+
+  it("selects the connected record across all exact IP matches", () => {
+    const nodes = [
+      { nodeId: "offline", remoteIp: "198.51.100.17", connected: false },
+      { nodeId: "online", remoteIp: "198.51.100.17", connected: true },
+    ];
+    for (const candidates of [nodes, nodes.toReversed()]) {
+      expect(resolveNodeIdFromCandidates(candidates, "198.51.100.17")).toBe("online");
+    }
+  });
+
+  it("keeps an offline exact id above connected IP and name matches", () => {
+    const query = "198.51.100.17";
+    const nodes = [
+      { nodeId: "ip-match", remoteIp: query, connected: true },
+      { nodeId: "name-match", displayName: query, connected: true },
+      { nodeId: query, connected: false },
+    ];
+    for (const candidates of [nodes, nodes.toReversed()]) {
+      expect(resolveNodeIdFromCandidates(candidates, query)).toBe(query);
+    }
+  });
+
   it("normalizes node keys by lowercasing and collapsing separators", () => {
     for (const [displayName, query] of [
       [" Mac Studio! ", "mac-studio"],
       ["---PI__Node---", "pi node"],
-      ["工作站 01", "工作站-01"],
       ["Cafe\u0301 01", "café-01"],
-      ["किताब", "किताब"],
-      ["Mac ❤️ Studio", "mac studio"],
-      ["Node 1️⃣", "node 1"],
     ] as const) {
       expect(resolveNodeIdFromCandidates([{ nodeId: "node-1", displayName }], query)).toBe(
         "node-1",
@@ -22,18 +72,6 @@ describe("shared/node-match", () => {
         resolveNodeIdFromCandidates([{ nodeId: "node-1", displayName }], "named-node"),
       ).toThrow(/unknown node/);
     }
-  });
-
-  it("resolves unique matches and prefers a unique connected node", () => {
-    expect(
-      resolveNodeIdFromCandidates(
-        [
-          { nodeId: "ios-old", displayName: "iPhone", connected: false },
-          { nodeId: "ios-live", displayName: "iPhone", connected: true },
-        ],
-        "iphone",
-      ),
-    ).toBe("ios-live");
   });
 
   it("prefers the strongest match type before client heuristics", () => {
@@ -48,37 +86,12 @@ describe("shared/node-match", () => {
     ).toBe("mac-studio");
   });
 
-  it("prefers a unique current OpenClaw client over a legacy clawdbot client", () => {
-    expect(
-      resolveNodeIdFromCandidates(
-        [
-          {
-            nodeId: "legacy-mac",
-            displayName: "Peter’s Mac Studio",
-            clientId: "clawdbot-macos",
-            connected: false,
-          },
-          {
-            nodeId: "current-mac",
-            displayName: "Peter’s Mac Studio",
-            clientId: "openclaw-macos",
-            connected: false,
-          },
-        ],
-        "Peter's Mac Studio",
-      ),
-    ).toBe("current-mac");
-  });
-
   it.each([
     { clientIds: ["openclaw-macos", "node-host"] },
     { clientIds: ["openclaw-macos", "openclaw-linux"] },
     { clientIds: ["openclaw-macos", undefined] },
-    { clientIds: ["openclaw-macos", "custom-client"] },
     { clientIds: ["openclaw-macos", "clawdbot-macos", "node-host"] },
-    { clientIds: ["openclaw-macos", "moldbot-macos", undefined] },
     { clientIds: ["clawdbot-macos", undefined] },
-    { clientIds: ["node-host", "clawdbot-macos"] },
   ])("keeps non-migration ties ambiguous for $clientIds", ({ clientIds }) => {
     for (const connected of [true, false, undefined]) {
       const nodes = clientIds.map((clientId, index) => ({

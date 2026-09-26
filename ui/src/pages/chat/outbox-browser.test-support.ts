@@ -1,10 +1,22 @@
 import { Blob as NodeBlob, File as NodeFile } from "node:buffer";
 import { IDBFactory } from "fake-indexeddb";
-import { afterEach, vi } from "vitest";
+import { beforeEach, onTestFinished, vi } from "vitest";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as payloads from "./durable-composer-persistence.ts";
 
-let factory: IDBFactory | undefined;
-let restoreLocks: (() => void) | undefined;
+export function useChatSendBrowserFixture(): void {
+  beforeEach(() => {
+    // Child hosts and storage retire before their browser globals.
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    });
+    installOutboxBrowserStorage();
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => undefined);
+  });
+}
 
 function createDocumentLocks() {
   const held = new Set<string>();
@@ -36,7 +48,7 @@ const documentLocks = new WeakMap<Navigator, ReturnType<typeof createDocumentLoc
 
 /** Node send tests exercise IDB transactions and lock ownership; native FileReader lives in E2E. */
 export function installOutboxBrowserStorage(): void {
-  factory = new IDBFactory();
+  const factory = new IDBFactory();
   vi.stubGlobal("indexedDB", factory);
   vi.stubGlobal("Blob", NodeBlob);
   vi.stubGlobal("File", NodeFile);
@@ -45,7 +57,7 @@ export function installOutboxBrowserStorage(): void {
   const locks = documentLocks.get(browserNavigator) ?? createDocumentLocks();
   documentLocks.set(browserNavigator, locks);
   Object.defineProperty(browserNavigator, "locks", { configurable: true, value: locks });
-  restoreLocks = () => {
+  const restoreLocks = () => {
     if (descriptor) {
       Object.defineProperty(browserNavigator, "locks", descriptor);
     } else {
@@ -56,23 +68,17 @@ export function installOutboxBrowserStorage(): void {
     async (blob) =>
       `data:${blob.type};base64,${Buffer.from(await blob.arrayBuffer()).toString("base64")}`,
   );
-}
-
-afterEach(async () => {
-  try {
-    if (!factory) {
-      return;
+  onTestFinished(async () => {
+    try {
+      const request = factory.deleteDatabase("openclaw-control-ui");
+      await new Promise<void>((resolve, reject) => {
+        request.onsuccess = () => resolve();
+        request.addEventListener("error", () =>
+          reject(request.error ?? new Error("IndexedDB request failed")),
+        );
+      });
+    } finally {
+      restoreLocks();
     }
-    const request = factory.deleteDatabase("openclaw-control-ui");
-    await new Promise<void>((resolve, reject) => {
-      request.onsuccess = () => resolve();
-      request.addEventListener("error", () =>
-        reject(request.error ?? new Error("IndexedDB request failed")),
-      );
-    });
-    factory = undefined;
-  } finally {
-    restoreLocks?.();
-    restoreLocks = undefined;
-  }
-});
+  });
+}

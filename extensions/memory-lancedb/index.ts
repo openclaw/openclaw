@@ -8,12 +8,12 @@ import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isIncognitoSessionKey, normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
-import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import { createAutoRecallHook } from "./auto-recall.js";
 import {
   MEMORY_CATEGORIES,
@@ -649,6 +649,8 @@ export default definePluginEntry({
     api.registerService({
       id: "memory-lancedb",
       start: () => {
+        embeddings.start();
+        captureStopped = false;
         api.logger.info(
           `memory-lancedb: initialized (db: ${resolvedDbPath}, model: ${cfg.embedding.model})`,
         );

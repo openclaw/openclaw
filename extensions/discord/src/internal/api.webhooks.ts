@@ -1,6 +1,6 @@
-// Discord plugin module implements api.webhooks behavior.
 import { Routes } from "discord-api-types/v10";
-import type { RequestClient, RequestData } from "./rest.js";
+import type { RequestData } from "./rest-body.js";
+import type { RequestClient } from "./rest.js";
 
 export async function createChannelWebhook(
   rest: RequestClient,

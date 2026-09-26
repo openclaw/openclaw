@@ -1,5 +1,3 @@
-// Telegram plugin module implements public-poll vote routing registry behavior.
-//
 // Telegram only emits `poll_answer` updates for non-anonymous (public) polls, and those
 // updates do not carry the originating chat/thread. Persist the authoritative route
 // returned by sendPoll so a later vote can enter the normal inbound turn pipeline.
@@ -133,16 +131,12 @@ function normalizePollRegistryEntry(raw: unknown): TelegramPollRegistryEntry | n
   };
 }
 
-export async function recordTelegramPollRegistryEntry(params: {
-  accountId?: string;
-  pollId: string;
-  chat: TelegramPollRouteChat;
-  messageId: number;
-  threadSpec: TelegramPollRegistryEntry["threadSpec"];
-  question: string;
-  options: string[];
-  env?: NodeJS.ProcessEnv;
-}): Promise<TelegramPollRegistryEntry> {
+export async function recordTelegramPollRegistryEntry(
+  params: TelegramPollRegistryEntry & {
+    accountId?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): Promise<TelegramPollRegistryEntry> {
   const entry = createTelegramPollRegistryEntry(params);
   await openPollRegistryStore(params.env).register(
     telegramPollRegistryKey(params.accountId, params.pollId),
@@ -151,20 +145,11 @@ export async function recordTelegramPollRegistryEntry(params: {
   return entry;
 }
 
-export function createTelegramPollRegistryEntry(params: {
-  pollId: string;
-  chat: TelegramPollRouteChat;
-  messageId: number;
-  threadSpec: TelegramPollRegistryEntry["threadSpec"];
-  question: string;
-  options: string[];
-}): TelegramPollRegistryEntry {
+export function createTelegramPollRegistryEntry(
+  params: TelegramPollRegistryEntry,
+): TelegramPollRegistryEntry {
   const entry = normalizePollRegistryEntry({
-    pollId: params.pollId,
-    chat: params.chat,
-    messageId: params.messageId,
-    threadSpec: params.threadSpec,
-    question: params.question,
+    ...params,
     options: [...params.options],
   });
   if (!entry) {
@@ -186,6 +171,7 @@ export async function findTelegramPollRegistryEntry(params: {
   return normalizePollRegistryEntry(stored);
 }
 
+/** Retained for hosts whose ingress monitor does not support inspectAsync. */
 export function findTelegramPollRegistryEntrySync(params: {
   accountId?: string;
   pollId: string;
