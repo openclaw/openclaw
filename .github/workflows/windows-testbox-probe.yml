@@ -81,6 +81,7 @@ env:
 
 jobs:
   probe:
+    if: ${{ false }} # Isolated mechanism branch; no full upgrade or broad probe.
     name: Windows probe
     outputs:
       native_package_id: ${{ steps.native_package_upload.outputs.artifact-id }}
@@ -913,7 +914,7 @@ jobs:
   # Native session qualification must not depend on headless CI or WSL results.
   native-schtasks:
     name: Native Scheduled Task proof
-    if: ${{ inputs.run_windows_ci && inputs.installed_startup_package == '' && !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && inputs.windows_ci_replay == '' }}
+    if: ${{ false }} # Diagnostic branch: never run a full native upgrade.
     runs-on: windows-2025
     timeout-minutes: 75
     env:
@@ -1512,7 +1513,7 @@ jobs:
   # independent while package mode explicitly waits for its current-run producer.
   native-schtasks-package:
     name: Native Scheduled Task installed proof
-    if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && !inputs.run_private_node_provisioning && !inputs.installed_repair_worker && !inputs.installed_startup_cpu_diagnostic && inputs.windows_ci_replay == '' }}
+    if: ${{ false }} # Diagnostic branch: never run a full native upgrade.
     needs: probe
     permissions:
       contents: read
@@ -1523,3 +1524,81 @@ jobs:
       NATIVE_PACKAGE_DIGEST: ${{ needs.probe.outputs.native_package_digest }}
       NATIVE_MANIFEST_SHA256: ${{ needs.probe.outputs.native_manifest_sha256 }}
     steps: *native_schtasks_steps
+
+  # Diagnostic branch only. Do not merge this job or the disabled probe into product.
+  loaded-addon-mechanism:
+    if: ${{ github.ref == 'refs/heads/codex/windows-loaded-addon-mechanism' }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - *windows_checkout
+      - name: Authenticate shallow mechanism inputs
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+          WORKFLOW_HEAD: ${{ github.sha }}
+          KEEPALIVE: ${{ inputs.keepalive_minutes }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:EXPECTED_HEAD -cnotmatch '^[0-9a-f]{40}$' -or $env:EXPECTED_HEAD -cne $env:WORKFLOW_HEAD -or (git rev-parse HEAD) -cne $env:EXPECTED_HEAD -or $env:KEEPALIVE -ne '0') { throw 'Expected exact diagnostic source and zero keepalive.' }
+          $root = Join-Path $env:RUNNER_TEMP 'loaded-addon-mechanism'
+          $evidence = Join-Path $root 'evidence'
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          $nodeZip = Join-Path $root 'node-v26.8.2-win-x64.zip'
+          $sums = Join-Path $root 'SHASUMS256.txt'
+          Invoke-WebRequest -Uri 'https://nodejs.org/dist/v26.8.2/SHASUMS256.txt' -OutFile $sums -TimeoutSec 60
+          Invoke-WebRequest -Uri 'https://nodejs.org/dist/v26.8.2/node-v26.8.2-win-x64.zip' -OutFile $nodeZip -TimeoutSec 120
+          $checksumLines = @(Get-Content $sums | Where-Object { $_ -cmatch '^([0-9a-f]{64})  node-v26\.8\.2-win-x64\.zip$' })
+          if ($checksumLines.Count -ne 1) { throw 'Missing unique official Node checksum.' }
+          $expectedNodeZip = $checksumLines[0].Substring(0, 64)
+          $nodeZipHash = (Get-FileHash $nodeZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($nodeZipHash -cne $expectedNodeZip) { throw 'Node archive hash mismatch.' }
+          Expand-Archive -LiteralPath $nodeZip -DestinationPath $root
+          $nodeDir = Join-Path $root 'node-v26.8.2-win-x64'
+          $nodeExe = Join-Path $nodeDir 'node.exe'
+          if ((& $nodeExe -p "process.version + '/' + process.arch") -cne 'v26.8.2/x64') { throw 'Unexpected Node runtime.' }
+          $tgz = Join-Path $root 'koffi-win32-x64-3.1.6.tgz'
+          Invoke-WebRequest -Uri 'https://registry.npmjs.org/@koromix/koffi-win32-x64/-/koffi-win32-x64-3.1.6.tgz' -OutFile $tgz -TimeoutSec 60
+          $sha512 = [Convert]::ToBase64String([Security.Cryptography.SHA512]::HashData([IO.File]::ReadAllBytes($tgz)))
+          if ($sha512 -cne 'lPKjAaHz0aoiZXT/wDVqH+joR5y3lCZj1s9Bk5qx/DGRq+0MK8Ib8VoqiBOrJ69NG5AsJSvn0tQDcSqfRgLmBQ==') { throw 'Published addon archive integrity mismatch.' }
+          $expectedMembers = @('package/index.js','package/package.json','package/win32_x64/koffi.lib','package/README.md','package/win32_x64/koffi.node') | Sort-Object
+          $members = @(tar -tf $tgz | Sort-Object)
+          if ($LASTEXITCODE -ne 0 -or ($members -join "`n") -cne ($expectedMembers -join "`n")) { throw 'Unexpected addon archive members.' }
+          $addonDir = Join-Path $root 'addon'
+          New-Item -ItemType Directory -Path $addonDir | Out-Null
+          tar -xf $tgz -C $addonDir
+          if ($LASTEXITCODE -ne 0) { throw 'Addon extraction failed.' }
+          $addon = Join-Path $addonDir 'package/win32_x64/koffi.node'
+          $addonHash = (Get-FileHash $addon -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($addonHash -cne '939156f310bd7a7d9d1db1b5249a5d135739b049c24c79fd3c201701333ddbf3' -or (Get-Item $addon).Length -ne 1044480) { throw 'Published addon bytes mismatch.' }
+          [ordered]@{ source = $env:EXPECTED_HEAD; nodeVersion = '26.8.2'; nodePath = $nodeExe; nodeArchiveSha256 = $nodeZipHash; nodeSha256 = (Get-FileHash $nodeExe -Algorithm SHA256).Hash.ToLowerInvariant(); addonPath = $addon; addonSha256 = $addonHash; addonBytes = (Get-Item $addon).Length; addonArchiveSha512 = $sha512 } | ConvertTo-Json | Set-Content (Join-Path $evidence 'inputs.json')
+          $nodeDir >> $env:GITHUB_PATH
+          "MECHANISM_ADDON=$addon" >> $env:GITHUB_ENV
+          "MECHANISM_EVIDENCE=$evidence" >> $env:GITHUB_ENV
+          "MECHANISM_NODE=$nodeExe" >> $env:GITHUB_ENV
+      - name: Setup pinned repository tooling
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: "26.8.2"
+          cache-mode: "off"
+      - name: Install frozen repository dependencies
+        shell: bash
+        env:
+          CI: true
+        run: pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+      - name: Compare unloaded and loaded shallow removal
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          & $env:MECHANISM_NODE scripts/qa/windows-loaded-addon-mechanism.mjs $env:MECHANISM_ADDON $env:MECHANISM_EVIDENCE
+          if ($LASTEXITCODE -ne 0) { throw 'Mechanism experiment or owned cleanup failed; retain evidence.' }
+      - name: Retain mechanism evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: loaded-addon-mechanism-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/loaded-addon-mechanism/evidence
+          if-no-files-found: error
+          retention-days: 7
