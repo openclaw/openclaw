@@ -364,10 +364,10 @@ describe("renderPluginCatalogResults", () => {
         result: {
           items: [
             plugin("official", {
-              catalog: { name: "Official", official: true, categories: [], imageUrl },
+              catalog: { name: "Official", official: true, categories: ["channels"], imageUrl },
             }),
             plugin("community", {
-              catalog: { name: "Community", official: false, categories: [], imageUrl },
+              catalog: { name: "Community", official: false, categories: ["channels"], imageUrl },
             }),
             plugin("missing"),
           ],
