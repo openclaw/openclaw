@@ -37,11 +37,11 @@ import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
-import "./chat-pane.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
+import "./chat-pane.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
@@ -52,6 +52,7 @@ import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./cha
 import type { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
+import type { ChatTypingActorState, ChatTypingActorView } from "./chat-typing-presence.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
@@ -132,8 +133,8 @@ export type TestChatPane = HTMLElement & {
   handleSessionTypingEvent: (event: SessionTypingEvent) => void;
   clearTypingActorForSessionMessage: (payload: unknown) => void;
   pruneTypingActors: () => void;
-  typingActors: Map<string, { label: string; expiresAt: number; preview?: string }>;
-  typingActorViews: () => { id: string; label: string; preview?: string; paused?: boolean }[];
+  typingActors: Map<string, ChatTypingActorState>;
+  typingActorViews: () => ChatTypingActorView[];
   sendTypingState: (typing: boolean, preview?: string) => void;
   refreshSessionSuggestions: () => Promise<void>;
   resolveCurrentSessionSuggestion: (
