@@ -54,6 +54,7 @@ import {
 } from "./prepared-model-runtime.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
+import { CREDENTIAL_ONLY_PROVIDER_ID } from "./test-helpers/prepared-model-catalog-credential-only.test-support.js";
 import { withHeldCatalogOAuthRefresh } from "./test-helpers/prepared-model-catalog-oauth-fixture.js";
 import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
 import {
@@ -387,6 +388,24 @@ describe("prepared model catalog worker boundary", () => {
       expect(fullAuth?.authModes[PROVIDER_ID]).toBe("oauth");
     },
   );
+
+  it("captures runtime synthetic auth for credential-only providers before full refresh", async () => {
+    const fixture = await createStaticSnapshot(0, {}, { credentialOnlySyntheticAuth: true });
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
+
+    // The provider's catalog emits this row only when its stored token resolves.
+    expect(catalog?.entries).toContainEqual(
+      expect.objectContaining({
+        provider: CREDENTIAL_ONLY_PROVIDER_ID,
+        id: "credential-only-model",
+      }),
+    );
+    // The worker read the parent's captured answer; it never ran the hook itself.
+    expect(
+      fs.readFileSync(path.join(fixture.root, "credential-only-auth-owner.txt"), "utf8"),
+    ).toMatch(/^(parent\n)+$/u);
+  });
 
   it.each([
     { retirement: "superseded", request: "catalog" },
