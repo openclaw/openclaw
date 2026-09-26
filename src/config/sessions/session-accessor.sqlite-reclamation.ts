@@ -16,6 +16,7 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
   resolveOpenClawStateDirForDatabasePath,
   resolveOpenClawStateSqlitePath,
@@ -437,11 +438,15 @@ export async function runSqliteSessionReclamation(params: {
   ) => void;
   plan: SqliteSessionReclamationPlan;
 }): Promise<SqliteSessionReclamationResult> {
+  const requestedPlan = params.plan;
   if (params.diagnostics) {
-    params.diagnostics.kind = params.plan.kind;
+    params.diagnostics.kind = requestedPlan.kind;
   }
   if (
     params.forceInProcess ||
+    ((requestedPlan.kind === "maintenance-plan" ||
+      requestedPlan.kind === "maintenance-statistics") &&
+      !supportsOpenClawAgentDatabaseExecution(requestedPlan.databaseOptions)) ||
     isIncognitoOpenClawAgentSqlitePath(params.plan.databaseOptions.path, {
       agentId: params.plan.databaseOptions.agentId,
       env: params.plan.databaseOptions.env,
@@ -500,13 +505,33 @@ export async function runSqliteSessionReclamation(params: {
       }
       const { database, claim } = retained;
       try {
+        const databaseOptions = {
+          ...requestedPlan.databaseOptions,
+          path: readOpenClawAgentDatabaseIdentity(database).filename,
+        };
+        if (
+          requestedPlan.kind === "maintenance-plan" ||
+          requestedPlan.kind === "maintenance-statistics"
+        ) {
+          const { runSessionMaintenanceMetadataInWorker } =
+            await import("./session-accessor.sqlite-maintenance-worker.js");
+          return await runSessionMaintenanceMetadataInWorker({
+            plan: { ...requestedPlan, databaseOptions },
+            database,
+            claim,
+            assertCurrent: () => {
+              assertRequestCurrent();
+              claim.assertCurrent();
+            },
+            signal,
+            diagnostics: params.diagnostics,
+            onWorkerResult: params.onWorkerResult,
+          });
+        }
         // The parent keeps its exact handle live; only the existing cloneable filename crosses threads.
         const plan = {
-          ...params.plan,
-          databaseOptions: {
-            ...params.plan.databaseOptions,
-            path: readOpenClawAgentDatabaseIdentity(database).filename,
-          },
+          ...requestedPlan,
+          databaseOptions,
         };
         return await withSqliteReclamationWorker(
           plan.databaseOptions,

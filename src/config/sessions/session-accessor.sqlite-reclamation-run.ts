@@ -1,16 +1,13 @@
-import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import {
   deferSqlitePostCommitPublication,
   withSqlitePostCommitPublications,
 } from "../../infra/sqlite-post-commit.js";
-import { getChildLogger } from "../../logging/logger.js";
 import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
-import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import type {
-  SqliteSessionReclamationPlan,
+  SqliteArchiveReclamationPlan,
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
@@ -21,7 +18,7 @@ import {
 import type { SqliteReclamationWorker } from "./session-accessor.sqlite-reclamation-worker.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 
-function prepareReclamationWorkerTransferList(plan: SqliteSessionReclamationPlan): ArrayBuffer[] {
+function prepareReclamationWorkerTransferList(plan: SqliteArchiveReclamationPlan): ArrayBuffer[] {
   const buffers = new Set<ArrayBuffer>();
   for (const materializedPlan of plan.materializedPlans) {
     const archive = materializedPlan.archive;
@@ -55,7 +52,7 @@ export async function runPreparedSqliteSessionReclamation(
       result: SqliteSessionReclamationResult,
       databaseIdentity: string | symbol,
     ) => void;
-    plan: SqliteSessionReclamationPlan;
+    plan: SqliteArchiveReclamationPlan;
   },
   owner: {
     database: OpenClawAgentReadOnlyDatabase;
@@ -121,29 +118,6 @@ export async function runPreparedSqliteSessionReclamation(
                       publishSessionEntryCacheInvalidation(database, { sessionKey });
                     }
                   });
-                  if (
-                    plan.kind === "maintenance-statistics" &&
-                    getOpenClawAgentDatabaseIfOpen(plan.databaseOptions)?.db === database.db
-                  ) {
-                    try {
-                      assertCommitAllowed();
-                      runWithSqliteBusyTimeout(database.db, 0, () => {
-                        // sqlite-allow-raw -- Reload this connection's committed planner metadata without scanning tables.
-                        database.db.exec("ANALYZE sqlite_schema;");
-                      });
-                    } catch (error) {
-                      // The Worker already committed. Parent refresh failure must not
-                      // reject durable success or retire its settled Worker as uncertain.
-                      try {
-                        getChildLogger({ subsystem: "session-sqlite" }).warn(
-                          "Committed SQLite session statistics could not refresh parent planner metadata",
-                          { agentId: database.agentId, error, path: database.path },
-                        );
-                      } catch {
-                        // Diagnostic transport failure cannot undo the committed result.
-                      }
-                    }
-                  }
                 }
               },
               "session.reclamation.worker-commit",

@@ -62,11 +62,11 @@ export {
   retainSessionEntryWorkerPublication,
   withSessionEntryCreationPublication,
   runWithSessionEntryCreationPublication,
-  type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache-publication.js";
 export {
   projectSessionSharingEntry,
   type SessionEntryPlaceholder,
+  type SessionEntryReplacementPublication,
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 

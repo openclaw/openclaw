@@ -24,6 +24,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
+import { observeSessionMaintenancePlanningWorker } from "./session-accessor.sqlite-maintenance.test-support.js";
 import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import {
@@ -304,15 +305,13 @@ test("reschedules maintenance superseded by a write during Worker planning witho
         firstRun.resolve();
         return operation;
       });
-      const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
       let raced = false;
-      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
-        const worker = spawn(data);
-        worker.prependListener("message", (message: { type: string }) => {
-          if (message.type !== "admission-request" || raced) {
+      observeSessionMaintenancePlanningWorker({
+        beforeAdmission(nativeRequest) {
+          if (nativeRequest.stage !== "prepare" || raced) {
             return;
           }
-          // The Worker planned from older inputs; an ordinary write lands before its commit.
+          // Native preparation precedes BEGIN; the competing write can still commit.
           raced = true;
           runOpenClawAgentWriteTransaction((owner) => {
             writeSessionEntry(owner, sessionKey, {
@@ -322,8 +321,7 @@ test("reschedules maintenance superseded by a write during Worker planning witho
             });
           }, scope);
           kickSessionEntryMaintenanceAfterWrite(request);
-        });
-        return worker;
+        },
       });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {

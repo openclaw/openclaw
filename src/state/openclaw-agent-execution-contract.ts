@@ -3,7 +3,14 @@ import type {
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
 } from "../config/sessions/session-accessor.sqlite-archive-types.js";
-import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import type {
+  SessionEntryReplacementPublication,
+  SessionTranscriptInitializationPublication,
+} from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import type {
+  SessionMaintenanceMetadataCommand,
+  SessionMaintenanceMetadataResult,
+} from "../config/sessions/session-accessor.sqlite-lifecycle-types.js";
 import type {
   SessionEntryReplacementCommit,
   SessionEntryReplacementCommitted,
@@ -71,6 +78,27 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   "session.entries.replace": {
     input: SessionEntryReplacementCommit;
     output: SessionEntryReplacementCommitted;
+  };
+  "session.maintenance.metadata": {
+    input: SessionMaintenanceMetadataCommand;
+    output:
+      | {
+          kind: "committed";
+          workerThreadId: number;
+          value: Exclude<
+            SessionMaintenanceMetadataResult,
+            { kind: "maintenance-preservation-required" }
+          >;
+          publication: SessionEntryReplacementPublication;
+        }
+      | {
+          kind: "not-committed";
+          workerThreadId: number;
+          value: Extract<
+            SessionMaintenanceMetadataResult,
+            { kind: "maintenance-preservation-required" }
+          >;
+        };
   };
   "session.providerReview.compare": {
     input: SessionProviderReviewComparison;

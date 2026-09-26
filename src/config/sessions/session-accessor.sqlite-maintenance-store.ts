@@ -38,6 +38,7 @@ import {
   type SessionMaintenancePreservationSnapshot,
 } from "./store-maintenance-preserve-snapshot.js";
 import { shouldRunSessionEntryMaintenance } from "./store-maintenance.js";
+import type { SessionEntry } from "./types.js";
 
 export function readSessionTranscriptJsonlBytesInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -114,6 +115,7 @@ export function applySessionEntryMaintenanceInDatabase(
   database: OpenClawAgentDatabase,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
+  onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
 ): SessionEntryMaintenancePlan {
   const maintenance = params.maintenance;
   if (maintenance.mode === "warn") {
@@ -185,7 +187,10 @@ export function applySessionEntryMaintenanceInDatabase(
       archiveReason: planned.archiveReason,
     };
     delete entry.archivedBy;
-    writeSessionEntry(database, key, entry, { canonicalPreviousEntry: previousEntry });
+    const written = writeSessionEntry(database, key, entry, {
+      canonicalPreviousEntry: previousEntry,
+    });
+    onArchived?.(key, previousEntry, written);
     archivedSessionKeys.push(key);
     if (entry.worktree) {
       archivedWorktrees.push({

@@ -2,6 +2,7 @@ import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
+  type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import {
@@ -10,6 +11,9 @@ import {
   partitionUnchangedPlannedLifecycleArtifactEntries,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
+  ReclamationDatabaseOptions,
+  SessionMaintenanceMetadataCommand,
+  SessionMaintenanceMetadataResult,
   SqliteSessionReclamationCallbacks,
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
@@ -34,53 +38,9 @@ export function reclaimSessionMaintenanceInTransaction(
   plan: MaintenancePlan,
   callbacks: SqliteSessionReclamationCallbacks,
 ): SqliteSessionReclamationResult {
-  if (plan.kind === "maintenance-statistics") {
-    const database = openOpenClawAgentDatabase(plan.databaseOptions);
-    runWithSqliteBusyTimeout(database.db, 0, () =>
-      runOpenClawAgentWriteTransaction(
-        (current) => {
-          callbacks.beforeMutation?.();
-          refreshSessionPlannerStatisticsInDatabase(current);
-          callbacks.onCommit?.(current);
-        },
-        plan.databaseOptions,
-        { busyTimeoutMs: 0 },
-      ),
-    );
-    return { kind: plan.kind, value: true };
+  if (plan.kind !== "maintenance-finalize") {
+    return runSessionMaintenanceMetadataInTransaction(plan, callbacks);
   }
-  if (plan.kind === "maintenance-plan") {
-    let preservationRequired: Error | undefined;
-    try {
-      return runOpenClawAgentWriteTransaction((database) => {
-        callbacks.beforeMutation?.();
-        // Retained Workers receive only the parent's current fact, including its absence.
-        stageSessionEntryMaintenanceAgeFact(database.db, plan.input.ageFact);
-        const maintenance = applySessionEntryMaintenanceInDatabase(database, plan.input, () => {
-          if (plan.input.preservation === null) {
-            preservationRequired = new Error("SQLite maintenance requires session preservation");
-            throw preservationRequired;
-          }
-          return plan.input.preservation;
-        });
-        if (maintenance.archived > 0 || maintenance.entryRemovals.length > 0) {
-          callbacks.onCommit?.(database);
-        }
-        return {
-          kind: plan.kind,
-          value: maintenance,
-          ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.input.maintenance),
-        };
-      }, plan.databaseOptions);
-    } catch (error) {
-      if (preservationRequired && error === preservationRequired) {
-        // Candidate discovery requested protection before writes; the transaction has rolled back.
-        return { kind: "maintenance-preservation-required" };
-      }
-      throw error;
-    }
-  }
-
   return runSqliteSessionDeletionTransaction((database) => {
     callbacks.beforeMutation?.();
     const partition = partitionUnchangedPlannedLifecycleArtifactEntries(database, plan.entries);
@@ -102,4 +62,66 @@ export function reclaimSessionMaintenanceInTransaction(
     callbacks.onCommit?.(database, result);
     return result;
   }, plan.databaseOptions);
+}
+
+export function runSessionMaintenanceMetadataInTransaction(
+  plan: SessionMaintenanceMetadataCommand & { databaseOptions: ReclamationDatabaseOptions },
+  callbacks: {
+    beforeMutation?: (database: OpenClawAgentDatabase) => void;
+    onCommit?: SqliteSessionReclamationCallbacks["onCommit"];
+    beforeCommit?: (database: OpenClawAgentDatabase) => void;
+    onArchived?: Parameters<typeof applySessionEntryMaintenanceInDatabase>[3];
+  },
+): SessionMaintenanceMetadataResult {
+  if (plan.kind === "maintenance-statistics") {
+    const database = openOpenClawAgentDatabase(plan.databaseOptions);
+    runWithSqliteBusyTimeout(database.db, 0, () =>
+      runOpenClawAgentWriteTransaction(
+        (current) => {
+          callbacks.beforeMutation?.(current);
+          refreshSessionPlannerStatisticsInDatabase(current);
+          callbacks.onCommit?.(current);
+          callbacks.beforeCommit?.(current);
+        },
+        plan.databaseOptions,
+        { busyTimeoutMs: 0 },
+      ),
+    );
+    return { kind: plan.kind, value: true };
+  }
+  let preservationRequired: Error | undefined;
+  try {
+    return runOpenClawAgentWriteTransaction((database) => {
+      callbacks.beforeMutation?.(database);
+      // Retained Workers receive only the parent's current fact, including its absence.
+      stageSessionEntryMaintenanceAgeFact(database.db, plan.input.ageFact);
+      const maintenance = applySessionEntryMaintenanceInDatabase(
+        database,
+        plan.input,
+        () => {
+          if (plan.input.preservation === null) {
+            preservationRequired = new Error("SQLite maintenance requires session preservation");
+            throw preservationRequired;
+          }
+          return plan.input.preservation;
+        },
+        callbacks.onArchived,
+      );
+      if (maintenance.archived > 0 || maintenance.entryRemovals.length > 0) {
+        callbacks.onCommit?.(database);
+      }
+      callbacks.beforeCommit?.(database);
+      return {
+        kind: plan.kind,
+        value: maintenance,
+        ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.input.maintenance),
+      };
+    }, plan.databaseOptions);
+  } catch (error) {
+    if (preservationRequired && error === preservationRequired) {
+      // Candidate discovery requested protection before writes; the transaction has rolled back.
+      return { kind: "maintenance-preservation-required" };
+    }
+    throw error;
+  }
 }

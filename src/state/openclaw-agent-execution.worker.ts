@@ -1,8 +1,9 @@
-import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
+import { MessageChannel, receiveMessageOnPort, threadId } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
@@ -317,6 +318,9 @@ function openAgentDatabaseBackend(
   let replacements:
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
     | undefined;
+  let maintenance:
+    | typeof import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js")
+    | undefined;
   let trajectory: typeof import("../trajectory/runtime-store.sqlite.js") | undefined;
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
@@ -449,6 +453,46 @@ function openAgentDatabaseBackend(
         { operationLabel: "session.entry-replacements" },
       );
     }
+    if (command.type === "session.maintenance.metadata" && maintenance && replacements) {
+      const opened = openWriter();
+      const previous = new Map<string, SessionEntry>();
+      const current = new Map<string, SessionEntry>();
+      const preparePublication = replacements.prepareSessionEntryReplacementPublication;
+      let publication: ReturnType<typeof preparePublication> | undefined;
+      const value = maintenance.runSessionMaintenanceMetadataInTransaction(
+        { ...command.input, databaseOptions: options },
+        {
+          beforeMutation(database) {
+            if (database.db !== opened.db) {
+              throw new Error("Session maintenance lost its canonical database owner");
+            }
+            admit("transaction");
+          },
+          onArchived(sessionKey, before, after) {
+            previous.set(sessionKey, before);
+            current.set(sessionKey, after);
+          },
+          beforeCommit(database) {
+            publication = preparePublication({
+              previous,
+              current,
+              maintenancePlans: [],
+              membershipInvalidatedKeys: [],
+            });
+            deferSqliteWorkerCommitReceipt(database.db, publication);
+            admit("commit", publication);
+          },
+        },
+      );
+      return value.kind === "maintenance-preservation-required"
+        ? { kind: "not-committed", workerThreadId: threadId, value }
+        : {
+            kind: "committed",
+            workerThreadId: threadId,
+            value,
+            publication: expectDefined(publication, "Session maintenance commit receipt"),
+          };
+    }
     if (command.type === "session.providerReview.compare" && providerReview) {
       return providerReview.compareSessionProviderReviewInWorker(
         openWriter(),
@@ -532,6 +576,15 @@ function openAgentDatabaseBackend(
             replacements = module;
           },
         );
+      }
+      if (command.type === "session.maintenance.metadata") {
+        return Promise.all([
+          import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js"),
+          import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
+        ]).then(([metadata, replacement]) => {
+          maintenance = metadata;
+          replacements = replacement;
+        });
       }
       if (command.type === "session.providerReview.compare") {
         return import("../config/sessions/provider-review-store.worker.js").then((module) => {

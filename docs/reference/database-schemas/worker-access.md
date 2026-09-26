@@ -120,6 +120,17 @@ Standalone recovery probes reuse the read worker without archive or writer admis
 Maintenance finalization takes writer admission only when its worker requests native
 access, then rechecks current entries and retains admission through commit publication.
 
+Maintenance planning and planner-statistics updates use the existing agent database
+executor. These metadata commands carry no transcript buffers and do not reserve
+the archive queue while waiting for their database's writer. Planning preserves
+age facts and the preservation-required rollback before retrying with current
+protection facts. Commit receipts publish archived-entry facts before releasing
+the writer, including when the ordinary result is lost. Archive materialization,
+finalization, and cold restoration keep their global memory bound and foreground
+progress during preparation. Incognito and explicit native maintenance scopes
+retain the same transaction kernels. Schemas, retention, and update behavior are
+unchanged.
+
 Physical page reclamation releases the session writer permit between vacuum units,
 so queued foreground writers receive their FIFO turn before the next unit. Each
 connection starts with eight-page units and adjusts toward a 25 ms hold target,
