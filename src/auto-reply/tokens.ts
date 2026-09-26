@@ -9,11 +9,141 @@ export const SILENT_REPLY_TOKEN = "NO_REPLY";
 const HARMONY_CHANNEL_MARKER_RE = /^\s*(?:set-thought\s+)?<[\w]*\|[^>]*>\s*$/;
 const BOX_DRAWING_HR_ONLY_RE = /^\s*─{3,}\s*$/;
 
-export function isInternalFormattingArtifact(text: string | undefined): boolean {
+// Anthropic-style tool-call markup a model can emit as plain assistant text (#153594).
+// Everything below is scanned by walking characters. A regex over repeated blocks can expand a
+// parameter body past its closing tag (dropping prose between blocks), backtrack exponentially on a
+// rejecting suffix, and — because `<\s*\/?\s*name` repeats whitespace either side of an optional
+// slash — explore every partition of a run of spaces inside one malformed tag before the scan can
+// advance.
+const TOOL_CALL_NAMES = ["function_calls", "invoke", "parameter"] as const;
+const NAMESPACE_PREFIXES = ["antml:", "mm:"] as const;
+
+type ToolCallTag = { closing: boolean; name: string; selfClosing: boolean };
+
+/**
+ * Parses `< [/] [antml:|mm:] name … >` by walking it once. `raw` starts with `<`, ends with `>`,
+ * and contains no other angle bracket, so one forward pass is enough and no amount of whitespace
+ * can send the matcher back to try another split.
+ */
+function parseToolCallTag(raw: string): ToolCallTag | null {
+  const end = raw.length - 1;
+  const isSpace = (char: string) => /\s/.test(char);
+  let index = 1;
+  while (index < end && isSpace(raw[index] ?? "")) {
+    index += 1;
+  }
+  let closing = false;
+  if (raw[index] === "/") {
+    closing = true;
+    index += 1;
+    while (index < end && isSpace(raw[index] ?? "")) {
+      index += 1;
+    }
+  }
+  const lower = raw.toLowerCase();
+  for (const prefix of NAMESPACE_PREFIXES) {
+    if (lower.startsWith(prefix, index)) {
+      index += prefix.length;
+      break;
+    }
+  }
+  const name = TOOL_CALL_NAMES.find((candidate) => lower.startsWith(candidate, index));
+  if (name === undefined) {
+    return null;
+  }
+  index += name.length;
+  // The name needs a delimiter, which keeps lookalike element names such as `<parameter-value>` out.
+  const next = index < end ? (raw[index] ?? "") : ">";
+  if (next !== "/" && next !== ">" && !isSpace(next)) {
+    return null;
+  }
+  let tail = end - 1;
+  while (tail > index && isSpace(raw[tail] ?? "")) {
+    tail -= 1;
+  }
+  return { closing, name, selfClosing: raw[tail] === "/" };
+}
+
+/**
+ * An artifact is markup the model wrote as ordinary reply text. Markup the sanitizer already owns
+ * as Markdown code is not an artifact: `    <invoke …>` is an indented code sample the user asked
+ * for, and `sanitizeUserFacingText` protects code regions for exactly that reason. The caller knows
+ * the code regions, so this module stays free of Markdown and only asks about offsets.
+ */
+export type InternalFormattingArtifactOptions = {
+  /** True when the offset sits inside a protected region, treated as literal text. */
+  isProtected?: (offset: number) => boolean;
+};
+
+// True only for a whole invocation: an `<invoke>`/`<function_calls>` outside parameter content,
+// with every non-whitespace character inside a `<parameter>` payload. A standalone parameter
+// wrapper keeps its content (assistant-visible-text unwraps it), and the delimiter check in
+// parseToolCallTag keeps lookalike element names such as `<parameter-value>` out.
+function isToolCallMarkupOnly(text: string, isProtected?: (offset: number) => boolean): boolean {
+  let parameterDepth = 0;
+  let hasInvocation = false;
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index] ?? "";
+    if (char !== "<") {
+      if (parameterDepth === 0 && /\S/.test(char)) {
+        return false;
+      }
+      index += 1;
+      continue;
+    }
+    // A tag cannot contain "<" or ">", so it ends at whichever comes first. Stopping there keeps
+    // the scan linear: a run of "<" that opens nothing advances one character at a time instead of
+    // re-searching the whole remaining suffix for a ">" on every character.
+    let close = index + 1;
+    while (close < text.length && text[close] !== ">" && text[close] !== "<") {
+      close += 1;
+    }
+    if (close >= text.length) {
+      // No ">" remains, so no later tag can close and the depth can never return to zero.
+      return false;
+    }
+    const tag = text[close] === ">" ? parseToolCallTag(text.slice(index, close + 1)) : null;
+    if (!tag) {
+      // A "<" that opens no tool-call tag is payload text inside a parameter, prose otherwise.
+      if (parameterDepth === 0) {
+        return false;
+      }
+      index += 1;
+      continue;
+    }
+    if (isProtected?.(index)) {
+      // Code sample, not artifact: leave it for the sanitizer's code-region handling.
+      index = close + 1;
+      continue;
+    }
+    if (tag.name === "parameter") {
+      if (!tag.selfClosing) {
+        parameterDepth += tag.closing ? -1 : 1;
+        if (parameterDepth < 0) {
+          return false;
+        }
+      }
+    } else if (parameterDepth === 0) {
+      hasInvocation = true;
+    }
+    index = close + 1;
+  }
+  return hasInvocation && parameterDepth === 0;
+}
+
+export function isInternalFormattingArtifact(
+  text: string | undefined,
+  options: InternalFormattingArtifactOptions = {},
+): boolean {
   if (!text) {
     return false;
   }
-  return HARMONY_CHANNEL_MARKER_RE.test(text) || BOX_DRAWING_HR_ONLY_RE.test(text);
+  return (
+    HARMONY_CHANNEL_MARKER_RE.test(text) ||
+    BOX_DRAWING_HR_ONLY_RE.test(text) ||
+    isToolCallMarkupOnly(text, options.isProtected)
+  );
 }
 
 function createTokenRegex(createRegex: (escaped: string) => RegExp) {

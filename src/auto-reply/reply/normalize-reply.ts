@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { findCodeRegions, isInsideCode } from "../../shared/text/code-regions.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   copyReplyPayloadMetadata,
@@ -63,6 +64,15 @@ type NormalizeReplyOptions = {
   conversationContext?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
+
+/**
+ * Code regions matter only once a reply already looks like tool-call markup, and a Markdown parse
+ * is not free, so resolve them lazily on the first offset the detector actually asks about.
+ */
+function createCodeRegionProtection(text: string): (offset: number) => boolean {
+  let regions: ReturnType<typeof findCodeRegions> | undefined;
+  return (offset) => isInsideCode(offset, (regions ??= findCodeRegions(text)));
+}
 
 export function normalizeReplyPayloadOutcome(
   payload: ReplyPayload,
@@ -130,7 +140,11 @@ export function normalizeReplyPayloadOutcome(
       text = stripped.text;
     }
 
-    if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
+    if (
+      text &&
+      isInternalFormattingArtifact(text, { isProtected: createCodeRegionProtection(text) }) &&
+      !hasContent("")
+    ) {
       return suppress("silent");
     }
 

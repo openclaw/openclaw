@@ -1,5 +1,6 @@
 /** Tests silent-reply and heartbeat token parsing helpers. */
 import { describe, it, expect } from "vitest";
+import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import {
   isInternalFormattingArtifact,
   isSilentReplyPrefixText,
@@ -68,6 +69,145 @@ describe("isInternalFormattingArtifact", () => {
   it("returns false for code blocks and multi-line content", () => {
     expect(isInternalFormattingArtifact("```js\nconsole.log('hi')\n```")).toBe(false);
     expect(isInternalFormattingArtifact("**bold** and *italic* text")).toBe(false);
+  });
+
+  it("matches whole tool-call invocations emitted as plain text (#153594)", () => {
+    expect(
+      isInternalFormattingArtifact(
+        '<function_calls>\n<invoke name="Bash">\n<parameter name="command">echo end1</parameter>\n</invoke>\n</function_calls>',
+      ),
+    ).toBe(true);
+    expect(
+      isInternalFormattingArtifact(
+        '<invoke name="Bash"><parameter name="command">echo end1</parameter></invoke>',
+      ),
+    ).toBe(true);
+    expect(
+      isInternalFormattingArtifact(
+        '<antml:invoke name="Bash"><antml:parameter name="command">ls -la</antml:parameter></antml:invoke>',
+      ),
+    ).toBe(true);
+    expect(
+      isInternalFormattingArtifact(
+        '<invoke name="Bash"><parameter name="command">echo end1</parameter></invoke>\n' +
+          '<invoke name="Bash"><parameter name="command">echo end2</parameter></invoke>',
+      ),
+    ).toBe(true);
+    expect(
+      isInternalFormattingArtifact(
+        '<invoke name="Bash"><parameter name="command">sort < file | head</parameter></invoke>',
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps standalone parameter content and lookalike element names (#153594)", () => {
+    // assistant-visible-text unwraps a standalone parameter wrapper; it must not be silenced.
+    expect(isInternalFormattingArtifact('<parameter name="data">{"key":"value"}</parameter>')).toBe(
+      false,
+    );
+    expect(isInternalFormattingArtifact("<parameter-value>42</parameter-value>")).toBe(false);
+    expect(isInternalFormattingArtifact("<parameterized>text</parameterized>")).toBe(false);
+  });
+
+  it("keeps prose between or inside invocation markup (#153594)", () => {
+    // A parameter body must stop at its own closing tag, not expand to a later one.
+    expect(
+      isInternalFormattingArtifact(
+        '<invoke name="Bash"><parameter name="command">echo end1</parameter></invoke>' +
+          " The answer is 42. " +
+          '<invoke name="Bash"><parameter name="command">echo end2</parameter></invoke>',
+      ),
+    ).toBe(false);
+    // An invocation marker inside a parameter payload is content, not invocation context.
+    expect(
+      isInternalFormattingArtifact(
+        '<parameter name="data">Use <invoke name="Bash"> for execution.</parameter>',
+      ),
+    ).toBe(false);
+  });
+
+  it("handles a long run of invocation blocks without exponential backtracking (#153594)", () => {
+    const block = '<invoke name="Bash"><parameter name="command">echo end1</parameter></invoke>';
+    expect(isInternalFormattingArtifact(block.repeat(300))).toBe(true);
+    expect(isInternalFormattingArtifact(`${block.repeat(300)} trailing prose`)).toBe(false);
+  });
+
+  it("stays linear on repeated invalid delimiters inside a parameter (#153594)", () => {
+    // Each "<" used to re-search the whole remaining suffix for a ">", which is quadratic in
+    // model-controlled text. 200k of them is milliseconds for a single forward scan.
+    const delimiters = "<".repeat(200_000);
+    const started = performance.now();
+    expect(
+      isInternalFormattingArtifact(
+        `<invoke name="Bash"><parameter name="command">${delimiters}</parameter></invoke>`,
+      ),
+    ).toBe(true);
+    const elapsed = performance.now() - started;
+    // Generous bound: this is a blow-up guard, not a benchmark. The rescanning revision needs
+    // tens of seconds here.
+    expect(elapsed).toBeLessThan(1000);
+    // Truncated output never closes the parameter, so it is not a complete invocation.
+    expect(
+      isInternalFormattingArtifact(`<invoke name="Bash"><parameter name="command">${delimiters}`),
+    ).toBe(false);
+  });
+
+  it("stays linear on a whitespace-filled malformed tag inside a parameter (#153594)", () => {
+    // `<\s*\/?\s*name` repeats whitespace either side of an optional slash, so rejecting this
+    // candidate used to explore every partition of the run before the scan could advance.
+    const spaces = " ".repeat(200_000);
+    const started = performance.now();
+    expect(
+      isInternalFormattingArtifact(
+        `<invoke name="Bash"><parameter name="command"><${spaces}x></parameter></invoke>`,
+      ),
+    ).toBe(true);
+    const elapsed = performance.now() - started;
+    // Generous bound: a blow-up guard, not a benchmark. Partition search needs minutes here.
+    expect(elapsed).toBeLessThan(1000);
+  });
+
+  it("keeps markup inside a protected code region (#153594)", () => {
+    // An indented example is Markdown code the sanitizer already owns; silencing it would drop a
+    // reply the user asked for. The caller supplies the regions, so the offsets stand in for them.
+    const indented =
+      '    <invoke name="Bash"><parameter name="command">echo hi</parameter></invoke>';
+    const tabbed = '\t<invoke name="Bash"><parameter name="command">echo hi</parameter></invoke>';
+    const protectedFrom = (offset: number) => (index: number) => index >= offset;
+    expect(isInternalFormattingArtifact(indented, { isProtected: protectedFrom(4) })).toBe(false);
+    expect(isInternalFormattingArtifact(tabbed, { isProtected: protectedFrom(1) })).toBe(false);
+    // Unprotected, the same text is still the artifact from #153594.
+    expect(isInternalFormattingArtifact(indented)).toBe(true);
+    expect(isInternalFormattingArtifact(tabbed)).toBe(true);
+  });
+
+  it("keeps indented code samples the real sanitizer protects (#153594)", () => {
+    const markup = '<invoke name="Bash"><parameter name="command">echo hi</parameter></invoke>';
+    const protect = (text: string) => (offset: number) =>
+      isInsideCode(offset, findCodeRegions(text));
+    // CommonMark treats four spaces or a tab as an indented code block; the sanitizer preserves
+    // those regions, so silencing them would delete a code sample the user asked for.
+    const indented = `    ${markup}`;
+    const tabbed = `\t${markup}`;
+    expect(findCodeRegions(indented)).toHaveLength(1);
+    expect(findCodeRegions(tabbed)).toHaveLength(1);
+    expect(findCodeRegions(markup)).toHaveLength(0);
+    expect(isInternalFormattingArtifact(indented, { isProtected: protect(indented) })).toBe(false);
+    expect(isInternalFormattingArtifact(tabbed, { isProtected: protect(tabbed) })).toBe(false);
+    // The reported case is bare text, with no code region to protect it.
+    expect(isInternalFormattingArtifact(markup, { isProtected: protect(markup) })).toBe(true);
+  });
+
+  it("returns false for prose that mentions tool-call markup (#153594)", () => {
+    expect(isInternalFormattingArtifact('Use <invoke name="Bash"> to call a tool.')).toBe(false);
+    expect(isInternalFormattingArtifact('<invoke name="Bash">run the tests</invoke>')).toBe(false);
+    expect(
+      isInternalFormattingArtifact("<function_calls>Here is your answer: 42</function_calls>"),
+    ).toBe(false);
+    expect(isInternalFormattingArtifact("<tool_call>hello</tool_call>")).toBe(false);
+    expect(isInternalFormattingArtifact('<parameter name="command">echo hi</parameter> done')).toBe(
+      false,
+    );
   });
 });
 
