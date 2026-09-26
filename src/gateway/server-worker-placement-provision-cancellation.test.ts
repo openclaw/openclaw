@@ -1,5 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
 import {
   publishWorkerEnvironmentFixture,
@@ -178,6 +179,7 @@ describe("dispatch Stop before provider allocation", () => {
         ...harness.environments,
       };
       const runtime = createGatewayWorkerPlacementRuntime({
+        scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         placements,
         environments,
@@ -305,6 +307,7 @@ describe("dispatch Stop before provider allocation", () => {
     const environments = support.createService(support.createProvider({ provision }));
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const runtime = createGatewayWorkerPlacementRuntime({
+      scheduler: createTestGatewayScheduler(),
       getCommittedRuntimeConfig: getRuntimeConfig,
       placements,
       environments,
@@ -392,6 +395,7 @@ describe("dispatch Stop before provider allocation", () => {
       });
       const create = vi.spyOn(environments, "createWithRequest");
       const runtime = createGatewayWorkerPlacementRuntime({
+        scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         placements,
         environments,
@@ -436,6 +440,7 @@ describe("dispatch Stop before provider allocation", () => {
       onInterrupt: interrupted,
     });
     const runtime = createGatewayWorkerPlacementRuntime({
+      scheduler: createTestGatewayScheduler(),
       getCommittedRuntimeConfig: getRuntimeConfig,
       placements,
       environments,
@@ -535,6 +540,7 @@ describe("dispatch Stop before provider allocation", () => {
         ...harness.environments,
       };
       const runtime = createGatewayWorkerPlacementRuntime({
+        scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         placements,
         environments,
@@ -670,6 +676,7 @@ describe("dispatch Stop before provider allocation", () => {
         );
       }
       const runtime = createGatewayWorkerPlacementRuntime({
+        scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         placements,
         environments,
@@ -859,6 +866,7 @@ describe("dispatch Stop before provider allocation", () => {
         });
       }
       const runtime = createGatewayWorkerPlacementRuntime({
+        scheduler: createTestGatewayScheduler(),
         getCommittedRuntimeConfig: getRuntimeConfig,
         placements,
         environments,
