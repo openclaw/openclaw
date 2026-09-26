@@ -67,7 +67,7 @@ export function createTelegramLegacyWebhookAuthLimiter(config: OpenClawConfig | 
       ?.split(",")
       .map(parseIpLiteral)
       .filter((ip) => ip !== undefined);
-    for (const hop of forwarded?.reverse() ?? []) {
+    for (const hop of forwarded?.toReversed() ?? []) {
       // Shipped Telegram ports count an untrusted loopback hop rather than
       // applying the Gateway's stricter forwarded-identity selection.
       if (!isTrusted(hop)) {

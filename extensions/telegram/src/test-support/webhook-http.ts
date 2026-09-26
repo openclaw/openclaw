@@ -244,12 +244,12 @@ export async function postWebhookPayloadWithChunkPlan(params: {
         const remaining = payloadBuffer.length - offset;
         const nextSize = Math.max(1, Math.min(remaining, 1 + Math.floor(rng() * 8_192)));
         const chunk = payloadBuffer.subarray(offset, offset + nextSize);
-        const written = new Promise<void>((resolve, reject) => {
+        const written = new Promise<void>((resolveWrite, rejectWrite) => {
           req.write(chunk, (error) => {
             if (error) {
-              reject(error);
+              rejectWrite(error);
             } else {
-              resolve();
+              resolveWrite();
             }
           });
         });
