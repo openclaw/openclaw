@@ -19,6 +19,12 @@ import {
   truncateSanitizedExternalContent,
   wrapWebContent,
 } from "../../security/external-content.js";
+import {
+  consumeWebSearchUrlBudget as consumeUrlBudget,
+  selectWebSearchCitations,
+  toWebSearchHttpUrl as toHttpUrl,
+  WEB_SEARCH_OUTPUT_MAX_CHARS,
+} from "./web-search-citations.js";
 import { MAX_SEARCH_COUNT } from "./web-search-provider-common.js";
 
 const WebSearchExternalContentSchema = Type.Object(
@@ -113,9 +119,6 @@ type WebSearchOutput = Static<typeof WebSearchOutputSchema>;
 const ENVELOPE_OPEN_RE =
   /^[ \t]*<<<EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]+">>>[ \t]*\r?\n(?:Source: [^\n]*\r?\n---\r?\n)?/gmu;
 const ENVELOPE_END_RE = /^[ \t]*<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]+">>>[ \t]*\r?\n?/gmu;
-const WEB_SEARCH_OUTPUT_MAX_CHARS = 20_000;
-const WEB_SEARCH_CITATION_MAX_COUNT = 20;
-const WEB_SEARCH_CITATION_MAX_SCAN = 1_000;
 
 type WebSearchOutputBudget = { remaining: number; truncated: boolean };
 
@@ -123,22 +126,6 @@ export function unwrapWebSearchOutputText(value: string): string {
   return value.replace(ENVELOPE_OPEN_RE, "").replace(ENVELOPE_END_RE, "").trim();
 }
 
-// URLs are emitted canonicalized (percent-encoded), so whitespace or readable
-// prose smuggled into a URL slot cannot ride outside the envelope as-is.
-function toHttpUrl(value: string): string | undefined {
-  if (value.length > 2_048) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(value);
-    return (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      parsed.href.length <= 2_048
-      ? parsed.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
 // Purely structural date charset; free-form dates could smuggle instructions.
 const PUBLISHED_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 
@@ -153,56 +140,8 @@ function wrapProse(value: string, budget?: WebSearchOutputBudget): string {
   return inner.length === 0 ? "" : wrapWebContent(inner, "web_search");
 }
 
-function consumeUrlBudget(url: string, budget: WebSearchOutputBudget): boolean {
-  if (url.length > budget.remaining) {
-    budget.truncated = true;
-    return false;
-  }
-  budget.remaining -= url.length;
-  return true;
-}
-
 function externalContentStamp(provider: string): WebSearchExternalContent {
   return { untrusted: true, source: "web_search", wrapped: true, provider };
-}
-
-function normalizeCitations(
-  value: unknown,
-  budget: WebSearchOutputBudget,
-): Array<{ url: string; title?: string }> | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const citations: Array<{ url: string; title?: string }> = [];
-  let scanned = 0;
-  // A citation url must actually parse as http(s); free text in a url slot
-  // would bypass the untrusted-content envelope.
-  for (const entry of value) {
-    if (
-      ++scanned > WEB_SEARCH_CITATION_MAX_SCAN ||
-      citations.length >= WEB_SEARCH_CITATION_MAX_COUNT
-    ) {
-      budget.truncated = true;
-      break;
-    }
-    if (typeof entry === "string") {
-      const url = toHttpUrl(entry);
-      if (url && consumeUrlBudget(url, budget)) {
-        citations.push({ url });
-      }
-      continue;
-    }
-    const url = isRecord(entry) && typeof entry.url === "string" ? toHttpUrl(entry.url) : undefined;
-    if (!isRecord(entry) || !url || !consumeUrlBudget(url, budget)) {
-      continue;
-    }
-    const citation: Static<typeof WebSearchCitationSchema> = { url };
-    if (typeof entry.title === "string") {
-      citation.title = entry.title;
-    }
-    citations.push(citation);
-  }
-  return citations;
 }
 
 // Provider output is untrusted third-party data (bundled or, worse, external
@@ -343,7 +282,10 @@ export function normalizeWebSearchOutput(params: {
   }
 
   if (typeof result.content === "string") {
-    const citations = normalizeCitations(result.citations, budget);
+    const selection = selectWebSearchCitations(result.citations);
+    const citations = selection.citations;
+    budget.remaining = selection.remainingChars;
+    budget.truncated ||= selection.truncated;
     const content = wrapProse(result.content, budget);
     for (const citation of citations ?? []) {
       if (citation.title !== undefined) {

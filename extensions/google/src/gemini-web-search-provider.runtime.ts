@@ -19,6 +19,7 @@ import {
   readProviderEnvValue,
   readStringParam,
   resolveCitationRedirectUrl,
+  selectWebSearchCitations,
   resolveSearchCacheTtlMs,
   resolveSearchTimeoutSeconds,
   type SearchConfigRecord,
@@ -260,7 +261,11 @@ async function runGeminiSearch(params: {
   signal?: AbortSignal;
   timeRangeFilter?: GeminiTimeRangeFilter;
   headers?: Record<string, string>;
-}): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
+}): Promise<{
+  content: string;
+  citations: Array<{ url: string; title?: string }>;
+  truncated?: true;
+}> {
   const endpoint = `${params.baseUrl}/models/${params.model}:generateContent`;
   const googleSearch =
     params.timeRangeFilter === undefined ? {} : { timeRangeFilter: params.timeRangeFilter };
@@ -376,18 +381,24 @@ async function runGeminiSearch(params: {
         ];
       });
 
+      const selection = selectWebSearchCitations(rawCitations);
+      const admitted = selection.citations ?? [];
       const citations: Array<{ url: string; title?: string }> = [];
-      for (let index = 0; index < rawCitations.length; index += 10) {
-        const batch = rawCitations.slice(index, index + 10);
+      for (let index = 0; index < admitted.length; index += 10) {
+        params.signal?.throwIfAborted();
+        const batch = admitted.slice(index, index + 10);
         const resolved = await Promise.all(
           batch.map(async (citation) =>
-            Object.assign({}, citation, { url: await resolveCitationRedirectUrl(citation.url) }),
+            Object.assign({}, citation, {
+              url: await resolveCitationRedirectUrl(citation.url, params.signal),
+            }),
           ),
         );
+        params.signal?.throwIfAborted();
         citations.push(...resolved);
       }
 
-      return { content, citations };
+      return { content, citations, ...(selection.truncated ? { truncated: true as const } : {}) };
     },
   );
 }
@@ -483,6 +494,7 @@ export async function executeGeminiSearch(
     },
     content: wrapWebContent(result.content),
     citations: result.citations,
+    ...(result.truncated ? { truncated: true } : {}),
   };
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;

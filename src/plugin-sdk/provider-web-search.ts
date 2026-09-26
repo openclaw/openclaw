@@ -16,6 +16,7 @@ export {
   readStringArrayParam,
   readToolStringParam as readStringParam,
 } from "../agents/tools/common.js";
+export { selectWebSearchCitations } from "../agents/tools/web-search-citations.js";
 export { resolveCitationRedirectUrl } from "../agents/tools/web-search-citation-redirect.js";
 export {
   buildSearchCacheKey,

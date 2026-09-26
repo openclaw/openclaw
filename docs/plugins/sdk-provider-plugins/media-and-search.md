@@ -237,6 +237,14 @@ plugins](/plugins/sdk-provider-plugins) guide.
     `undefined` on a miss. The reader's `ttlMs` argument is optional:
     existing one-argument calls continue to use the stored expiry alone.
 
+    Before enriching answer citations with remote requests, use
+    `selectWebSearchCitations(citations)` from that same SDK entrypoint. It shares
+    the core output limits: scan at most 1,000 entries, select at most 20 valid
+    HTTP(S) URLs, and reserve their space in the response budget. Preserve the
+    returned `truncated` flag in the provider result. For redirect resolution,
+    pass the execution signal to `resolveCitationRedirectUrl(url, signal)`;
+    ordinary failures keep the original URL, while cancellation rejects.
+
     Both tool definitions accept `execute(args, context?)`, where the optional
     context carries `signal?: AbortSignal`. Forward that signal to network
     requests and check cancellation after asynchronous work. Existing

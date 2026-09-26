@@ -53,4 +53,33 @@ describe("web_search redirect resolution hardening", () => {
       "https://example.com/start",
     );
   });
+
+  it("does not start a redirect request after caller cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("search cancelled");
+    controller.abort(reason);
+    await expect(
+      resolveCitationRedirectUrl("https://example.com/start", controller.signal),
+    ).rejects.toBe(reason);
+    expect(withStrictWebToolsEndpointMock).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "preserves caller cancellation when the transport resolves=%s",
+    async (resolves) => {
+      const controller = new AbortController();
+      const reason = new Error("search cancelled during redirect");
+      withStrictWebToolsEndpointMock.mockImplementation(async (params, run) => {
+        expect(params.signal).toBe(controller.signal);
+        controller.abort(reason);
+        if (!resolves) {
+          throw new Error("transport stopped");
+        }
+        return run({ finalUrl: "https://example.com/final" });
+      });
+      await expect(
+        resolveCitationRedirectUrl("https://example.com/start", controller.signal),
+      ).rejects.toBe(reason);
+    },
+  );
 });
