@@ -1,14 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { createDirectChatContext } from "../../../gateway/server-chat.agent-events.test-helpers.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection,
+} from "../../../gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../../../gateway/session-row-projection.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   runOpenClawAgentWriteTransaction,
 } from "../../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { resolveRequesterToolPolicies } from "../../requester-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveStoredSubagentCapabilities,
@@ -17,6 +28,7 @@ import {
   resolveSubagentCapabilityStore,
 } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { createSubagentSessionStore } from "./subagent-session-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -29,6 +41,99 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("persisted subagent capability lookups", () => {
+  it("resolves current requester policy from its Gateway owner without session SQL", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.statePath("capabilities.sqlite");
+      const cfg = { session: { store: storePath } };
+      const key = "agent:main:dashboard:resident-capabilities";
+      const scope = { agentId: "main", storePath, sessionKey: key };
+      await sessionAccessor.upsertSessionEntryCore(
+        { ...scope, sessionKey: "agent:main:main" },
+        { sessionId: "parent", updatedAt: 1 },
+      );
+      await sessionAccessor.upsertSessionEntryCore(scope, {
+        sessionId: "resident-child",
+        updatedAt: 1,
+        spawnedBy: "agent:main:main",
+        spawnDepth: 2,
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["read"],
+        inheritedToolDeny: ["exec"],
+      });
+      const projection = await createSessionRowProjection({ cfg });
+      try {
+        await projection.ensureMaterialized();
+        const context = bindSessionRowProjection(
+          createDirectChatContext({ getRuntimeConfig: () => cfg }),
+          () => projection,
+        );
+        const copied = { ...context };
+        let retired = false;
+        await withPluginRuntimeGatewayContextResolver(
+          () => {
+            if (retired) {
+              throw new Error("Gateway owner retired");
+            }
+            return copied;
+          },
+          async () => {
+            const resolve = () =>
+              resolveRequesterToolPolicies({ config: cfg, agentId: "main", sessionKey: key });
+            expect(resolve().inheritedToolPolicy).toEqual({ allow: ["read"], deny: ["exec"] });
+            const queries = observeSqliteReadSql(StatementSync.prototype);
+            try {
+              for (let turn = 0; turn < 50; turn += 1) {
+                const policy = resolve();
+                expect(policy.inheritedToolPolicy).toEqual({ allow: ["read"], deny: ["exec"] });
+                expect(
+                  resolveStoredSubagentCapabilities(key, { cfg, store: policy.subagentStore })
+                    .depth,
+                ).toBe(2);
+              }
+              expect(queries.queries).toHaveLength(0);
+            } finally {
+              queries.restore();
+            }
+            await sessionAccessor.patchSessionEntryCore(scope, () => ({
+              spawnDepth: 3,
+              inheritedToolDeny: ["exec", "write"],
+            }));
+            const current = resolve();
+            expect(current.inheritedToolPolicy).toEqual({
+              allow: ["read"],
+              deny: ["exec", "write"],
+            });
+            expect(
+              resolveStoredSubagentCapabilities(key, { cfg, store: current.subagentStore }).depth,
+            ).toBe(3);
+
+            // Rebinding a context updates its copies; rebinding a copy creates a separate owner.
+            bindSessionRowProjection(context, () => undefined);
+            expect(getSessionRowProjection(copied)).toBeUndefined();
+            bindSessionRowProjection(copied, () => projection);
+            expect(getSessionRowProjection(context)).toBeUndefined();
+            expect(getSessionRowProjection(copied)).toBe(projection);
+
+            const exact = vi.spyOn(sessionAccessor, "loadExactSessionEntryReadOnly");
+            expect(createSubagentSessionStore(storePath, "main").get("main")).toBeUndefined();
+            expect(
+              resolveRequesterToolPolicies({
+                config: { session: { store: state.statePath("absent.sqlite") } },
+                sessionKey: key,
+              }).delegated,
+            ).toBe(false);
+            expect(exact).toHaveBeenCalledTimes(2);
+            exact.mockRestore();
+            retired = true;
+            expect(resolve).toThrow("Gateway owner retired");
+          },
+        );
+      } finally {
+        projection.dispose();
+      }
+    });
+  });
+
   it("memoizes exact reads and misses only within one capability resolution", () => {
     const storePath = path.join(tempDirs.make("subagent-capability-memo-"), "sessions.sqlite");
     const cfg = { session: { store: storePath } };
