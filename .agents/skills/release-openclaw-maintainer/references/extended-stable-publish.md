@@ -103,10 +103,12 @@ own repair and fresh qualification; workflow recovery does not waive those gates
 Use this lower-level route only for an approved workflow recovery, not normal
 shared publication. It does not itself attach evidence or finalize the GitHub
 Release. Retain both child identities and their evidence for approved closeout;
-a direct-main recovery run is not automatically interchangeable with the
+an independently dispatched recovery run is not automatically interchangeable with the
 protected parent's core-resume receipt.
 
-In `gh workflow run`, `--ref main` selects trusted publishing **tooling**.
+Mint or reuse a protected `release-publish/<tooling-sha12>-<epoch>` tag at the
+frozen trusted-main Tooling SHA as above. In `gh workflow run`, `--ref` selects
+that publishing **tooling** tag.
 The plugin input `-f ref=<release-sha>` selects the exact **package source**;
 never replace it with `main`, a branch name, or the tooling SHA.
 
@@ -114,10 +116,11 @@ After the publication prerequisites above pass, dispatch:
 
 ```bash
 gh workflow run plugin-npm-release.yml --repo openclaw/openclaw \
-  --ref main \
+  --ref release-publish/<tooling-sha12>-<epoch> \
   -f publish_scope=all-publishable \
   -f ref=<exact-40-character-release-sha> \
-  -f npm_dist_tag=extended-stable
+  -f npm_dist_tag=extended-stable \
+  -f release_candidate_branch=extended-stable/YYYY.M.33
 ```
 
 Leave `plugins` empty and `preflight_only=false` (the default). A successful
@@ -129,7 +132,7 @@ and replacing its qualification, not substituting a new SHA into old evidence.
 Keep final tags immutable and use a new patch for source changes after tagging.
 
 Save the successful plugin publication run ID after exact-version and selector
-readback. Dispatch `openclaw-npm-release.yml` with `--ref main` and the existing
+readback. Dispatch `openclaw-npm-release.yml` with the same `--ref release-publish/...` and the existing
 core recovery inputs:
 
 - `tag=vYYYY.M.P`, `preflight_only=false`, and `npm_dist_tag=extended-stable`.
@@ -142,7 +145,8 @@ core recovery inputs:
 
 Core verifies the plugin workflow's identity, trusted-main ancestry, and exact
 candidate binding. Record both workflows' actual tooling SHAs and run IDs in
-the release handoff. Required environment approvals, immutable artifact checks,
+the release handoff. Each direct human dispatch requires its `npm-release`
+approval job before publishing in `npm-publish`. Immutable artifact checks,
 and registry readback still apply; extended-stable token bootstrap is prohibited.
 Reuse already-published versions and verified bytes. If only core failed, retain
 the successful plugin run instead of dispatching plugin publication again.

@@ -275,7 +275,13 @@ git push origin "$TAG"
 rm -rf "$plugin_sdk_diff_dir"
 ```
 
-8. Dispatch the publish wrapper from the same alpha branch. Use the successful npm preflight run ID and the full release validation run ID plus exact attempt from the same head SHA:
+8. Publication is currently blocked: npm children require a protected
+   `release-publish/*` tooling tag, but alpha branch SHAs are not on `main`, so
+   `ensureReleasePublishToolingTag` cannot mint one for them. The parent's
+   approval receipt `create` also rejects `tideclaw/alpha/*` refs. Keep the
+   candidate and validation evidence, report this tooling blocker, and do not
+   widen the environment policy. The historical dispatch below records the
+   alpha inputs for recovery after that route is repaired; do not run it now:
 
 ```bash
 FULL_RELEASE_VALIDATION_RUN_ATTEMPT="$(gh api \
@@ -294,7 +300,7 @@ FULL_RELEASE_VALIDATION_RUN_ATTEMPT="$(gh api \
   -f wait_for_clawhub=false
 ```
 
-9. Watch the publish wrapper plus child runs. If `openclaw-npm-release.yml` is waiting on the `npm-release` environment and Tideclaw cannot approve it, report that as the only blocker; do not call the release done.
+9. After the publication route is repaired, watch the publish wrapper plus child runs and verify their outcomes; do not call the release done while publication is blocked.
 10. Do not publish npm directly from the host; use GitHub Actions/OIDC.
 
 Important: `openclaw-npm-release.yml` with `preflight_only=true` only prepares artifacts. It does not publish. A successful alpha requires the later `openclaw-release-publish.yml` wrapper, a pushed git tag, npm `alpha` dist-tag proof, and a GitHub prerelease.
