@@ -378,6 +378,23 @@ describe("agent run terminal outcome", () => {
     expect(mergeAgentRunTerminalOutcome(timeout, earlierCompletion)).toBe(earlierCompletion);
   });
 
+  it("keeps a proven completion when a later soft queue timeout observation merges", () => {
+    const completed = buildAgentRunTerminalOutcome({
+      status: "ok",
+      endedAt: 200,
+    });
+    const laterQueueTimeout = buildAgentRunTerminalOutcome({
+      status: "timeout",
+      timeoutPhase: "queue",
+      providerStarted: false,
+      endedAt: 300,
+    });
+
+    expect(completed.reason).toBe("completed");
+    expect(laterQueueTimeout.reason).toBe("timed_out");
+    expect(mergeAgentRunTerminalOutcome(completed, laterQueueTimeout)).toBe(completed);
+  });
+
   it("keeps the first proven sticky outcome regardless of callback ordering", () => {
     const timeout = buildAgentRunTerminalOutcome({
       status: "timeout",
