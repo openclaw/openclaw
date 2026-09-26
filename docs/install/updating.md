@@ -114,6 +114,10 @@ applies to updates driven by 2026.9.4. If an optional read fails, the updater
 prints `candidate-config-read-failed` and leaves the service definition unchanged.
 Reads follow the restored package after a rollback. Inspect the reported problem
 with the updated CLI after the update.
+Node and Bun readers run only one child per read. An attempted nested reader
+stops before spawning and records `candidate-config-read-recursion`.
+Both runtimes use the same result channel for synchronous and asynchronous reads;
+config diagnostics stay separate from the result.
 
 When a writable managed Gateway service points at another global installation,
 the update keeps the active CLI's installation as its target and refreshes the

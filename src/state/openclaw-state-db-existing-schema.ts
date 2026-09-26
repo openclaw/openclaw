@@ -4,6 +4,7 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/k
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   assertSqliteSchemaContains,
+  createSqliteTableContractReader,
   readSqliteSchemaCookie,
 } from "../infra/sqlite-schema-contract.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
@@ -58,13 +59,15 @@ export function assertExistingOpenClawStateRuntimeSchema(
       cached?.unregister();
       validatedSchemas.delete(database);
       assertSqliteIntegrity(database, pathname);
-      assertCurrentStateRuntimeSchema(database, pathname);
+      const readTable = createSqliteTableContractReader(database);
+      assertCurrentStateRuntimeSchema(database, pathname, readTable);
       assertNoLegacyStateRuntimeRepair(database, pathname);
       assertSqliteSchemaContains(
         database,
         pathname,
         getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
         STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+        readTable,
       );
     }
     return currentCookie;

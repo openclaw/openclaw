@@ -123,16 +123,6 @@ export function readStateDirDotEnvFromStateDir(stateDir: string): ParsedStateDir
   }
 }
 
-/**
- * Read and parse `~/.openclaw/.env` (or `$OPENCLAW_STATE_DIR/.env`), returning
- * a filtered record of key-value pairs suitable for a managed service
- * environment source.
- */
-function readStateDirDotEnvVars(env: Record<string, string | undefined>): Record<string, string> {
-  const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
-  return readStateDirDotEnvFromStateDir(stateDir).entries;
-}
-
 /** Split view of durable gateway service env sources before precedence is applied. */
 type DurableServiceEnvVarSources = {
   stateDirDotEnvEnvironment: Record<string, string>;
@@ -145,7 +135,9 @@ export function collectDurableServiceEnvVarSources(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
 }): DurableServiceEnvVarSources {
-  const stateDirDotEnvEnvironment = readStateDirDotEnvVars(params.env);
+  const stateDirDotEnvEnvironment = readStateDirDotEnvFromStateDir(
+    resolveStateDir(params.env),
+  ).entries;
   const configEnvironment = collectConfigServiceEnvVars(params.config);
   return {
     stateDirDotEnvEnvironment,

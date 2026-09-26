@@ -377,6 +377,40 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       })();
       return closing;
     };
+    const settleCandidates = async () => {
+      // Bun and failed discovery can retain native handles outside candidate custody.
+      if (discoveryFailed || process.versions.bun) {
+        await retire();
+        return;
+      }
+      const through = lane.nativeSequence;
+      candidateCleanupPending = true;
+      try {
+        await lane.pool.closeResources(JSON.stringify(selected));
+        candidateCleanupPending = false;
+        for (const resource of historyDatabases.values()) {
+          const sequence = resource.nativeSequences.get(lane);
+          if (
+            sequence !== undefined &&
+            sequence <= through &&
+            selected.some((candidate) =>
+              matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
+            )
+          ) {
+            resource.nativeSequences.delete(lane);
+          }
+        }
+        pruneHistoryDatabases();
+      } catch (error) {
+        try {
+          await retire();
+          candidateCleanupPending = false;
+        } catch (retirementError) {
+          throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
+        }
+        throw error;
+      }
+    };
     const close = async () => {
       await retire();
       release();
@@ -475,9 +509,9 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             );
           }
           if (result.kind === "session-target-registry-required") {
-            // Native discovery may already have opened other candidates. Settle
-            // their worker before continuing through the registry's read owner.
-            await retire();
+            // Release native readers before registry work without discarding a healthy worker.
+            discoveryFailed ||= result.readFailed === true;
+            await settleCandidates();
           }
           assertCurrent();
           return result;
@@ -492,37 +526,10 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     // settle; a later close through an alias must never miss a retained handle.
     if (dispatched) {
       try {
-        // Bun retains native statements after close; failed reads may leave unowned handles.
-        if ("error" in outcome || discoveryFailed || process.versions.bun) {
+        if ("error" in outcome) {
           await retire();
         } else {
-          const through = lane.nativeSequence;
-          candidateCleanupPending = true;
-          try {
-            await lane.pool.closeResources(JSON.stringify(selected));
-            candidateCleanupPending = false;
-            for (const resource of historyDatabases.values()) {
-              const sequence = resource.nativeSequences.get(lane);
-              if (
-                sequence !== undefined &&
-                sequence <= through &&
-                selected.some((candidate) =>
-                  matchesAgentDatabaseReadCandidatePath(candidate, resource.database.path),
-                )
-              ) {
-                resource.nativeSequences.delete(lane);
-              }
-            }
-            pruneHistoryDatabases();
-          } catch (error) {
-            try {
-              await retire();
-              candidateCleanupPending = false;
-            } catch (retirementError) {
-              throw sessionHistoryCleanupError(error, retirementError, "worker retirement");
-            }
-            throw error;
-          }
+          await settleCandidates();
         }
       } catch (cleanupError) {
         outcome = {

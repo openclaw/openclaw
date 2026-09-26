@@ -57,7 +57,6 @@ export const LoggingConfigSchema = z
     maxFileBytes: z.number().int().positive().optional(),
     consoleLevel: LoggingLevelSchema.optional(),
     consoleStyle: z.union([z.literal("pretty"), z.literal("json")]).optional(),
-    /** Redact sensitive tokens in log sinks and persisted transcript text. Default: "tools". Safety-boundary UI/tool/diagnostic payloads may still redact when this is "off". */
     /** Regex patterns used to redact sensitive tokens from logs and transcripts. */
     redactPatterns: z.array(z.string()).optional(),
     /** Metadata-only agent activity audit ledger settings. */

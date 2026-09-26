@@ -190,6 +190,10 @@ describe("TOOLS.md migration", () => {
       "\n## Safety\n\nBe careful.\n";
     await fs.writeFile(fixture.agentsPath, agents);
     await fs.writeFile(fixture.toolsPath, tools);
+    if (process.platform !== "win32") {
+      await fs.chmod(fixture.workspace, 0o751);
+      await fs.chmod(fixture.agentsPath, 0o640);
+    }
 
     const result = await maybeMigrateToolsMd({
       cfg: fixture.cfg,
@@ -202,6 +206,10 @@ describe("TOOLS.md migration", () => {
     await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(expected);
     await expect(readOnlyArchive(fixture.stateDir)).resolves.toEqual(Buffer.from(tools));
     await expectMissing(fixture.toolsPath);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(fixture.workspace)).mode & 0o777).toBe(0o751);
+      expect((await fs.stat(fixture.agentsPath)).mode & 0o777).toBe(0o640);
+    }
 
     await expect(
       maybeMigrateToolsMd({
@@ -304,28 +312,37 @@ describe("TOOLS.md migration", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")("refuses symlinked AGENTS.md files", async () => {
-    const linkedFixture = await createFixture();
-    const linkedTarget = path.join(linkedFixture.root, "outside-agents.md");
-    await fs.writeFile(linkedTarget, "Private external instructions.\n");
-    await fs.writeFile(linkedFixture.toolsPath, "Local tool notes.\n");
-    await fs.symlink(linkedTarget, linkedFixture.agentsPath);
+  it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
+    "refuses AGENTS.md %s aliases",
+    async (kind) => {
+      const linkedFixture = await createFixture();
+      const linkedTarget = path.join(linkedFixture.root, "outside-agents.md");
+      await fs.writeFile(linkedTarget, "Private external instructions.\n");
+      await fs.writeFile(linkedFixture.toolsPath, "Local tool notes.\n");
+      if (kind === "symlink") {
+        await fs.symlink(linkedTarget, linkedFixture.agentsPath);
+      } else {
+        await fs.link(linkedTarget, linkedFixture.agentsPath);
+      }
 
-    const linkedResult = await maybeMigrateToolsMd({
-      cfg: linkedFixture.cfg,
-      shouldRepair: true,
-      env: linkedFixture.env,
-    });
+      const linkedResult = await maybeMigrateToolsMd({
+        cfg: linkedFixture.cfg,
+        shouldRepair: true,
+        env: linkedFixture.env,
+      });
 
-    expect(linkedResult.changes).toEqual([]);
-    expect(linkedResult.warnings).toEqual([
-      expect.stringContaining("AGENTS.md must be an unlinked regular file"),
-    ]);
-    await expect(fs.readFile(linkedFixture.toolsPath, "utf8")).resolves.toBe("Local tool notes.\n");
-    await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe(
-      "Private external instructions.\n",
-    );
-  });
+      expect(linkedResult.changes).toEqual([]);
+      expect(linkedResult.warnings).toEqual([
+        expect.stringContaining("AGENTS.md must be an unlinked regular file"),
+      ]);
+      await expect(fs.readFile(linkedFixture.toolsPath, "utf8")).resolves.toBe(
+        "Local tool notes.\n",
+      );
+      await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe(
+        "Private external instructions.\n",
+      );
+    },
+  );
 
   it("reruns after an interrupted AGENTS.md temp write and converges", async () => {
     const fixture = await createFixture();

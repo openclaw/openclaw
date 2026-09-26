@@ -9,6 +9,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
 import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
@@ -94,6 +95,7 @@ export async function createFixture(
   };
   await seed(sessionKey, profile.id, initialSessionPatch);
   const connections = createGatewayConnectionState({
+    scheduler: createTestGatewayScheduler(),
     bootId: "publication-read",
     cfg,
     getRuntimeConfig,

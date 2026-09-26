@@ -153,7 +153,6 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `plugins.entries.voice-call.config.streaming.providers.*.apiKey`
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
 - `plugins.entries.voice-call.config.twilio.authToken`
-- `plugins.entries.webhooks.config.routes.*.secret`
 - `plugins.entries.xai.config.webSearch.apiKey`
 
 #### `skills`

@@ -1,17 +1,20 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
-import { MatrixMediaSizeLimitError } from "../media-errors.js";
-import { readResponseWithLimit } from "./read-response-with-limit.js";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
-  buildTimeoutAbortSignal,
+  fetchWithRuntimeDispatcherOrMockedGlobal,
+  type DispatcherAwareRequestInit,
+} from "openclaw/plugin-sdk/runtime-fetch";
+import {
   closeDispatcher,
   createPinnedDispatcher,
-  fetchWithRuntimeDispatcherOrMockedGlobal,
   resolvePinnedHostnameWithPolicy,
   type SsrFPolicy,
   type PinnedDispatcherPolicy,
-} from "./transport-runtime-api.js";
+} from "openclaw/plugin-sdk/ssrf-dispatcher";
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
 
 // The SDK retries every fetch error except AbortError, including stale host authority.
 class MatrixSdkAuthorityError extends Error {
@@ -42,10 +45,6 @@ type QueryValue =
   | Array<string | number | boolean | null | undefined>;
 
 export type QueryParams = Record<string, QueryValue> | null | undefined;
-
-type MatrixDispatcherRequestInit = RequestInit & {
-  dispatcher?: ReturnType<typeof createPinnedDispatcher>;
-};
 
 function normalizeEndpoint(endpoint: string): string {
   if (!endpoint) {
@@ -154,22 +153,6 @@ async function enforceDeclaredResponseSize(params: {
   throw error;
 }
 
-async function fetchWithMatrixDispatcher(params: {
-  url: string;
-  init: MatrixDispatcherRequestInit;
-  assertCurrent?: () => void;
-  onDispatch?: () => void;
-}): Promise<Response> {
-  // Keep this dispatcher-routing logic local to Matrix transport. Shared SSRF
-  // fetches must stay fail-closed unless a retry path can preserve the
-  // validated pinned-address binding. Route dispatcher-attached requests
-  // through undici runtime fetch so the pinned dispatcher is preserved.
-  params.assertCurrent?.();
-  params.init.signal?.throwIfAborted();
-  params.onDispatch?.();
-  return await fetchWithRuntimeDispatcherOrMockedGlobal(params.url, params.init);
-}
-
 async function fetchWithMatrixGuardedRedirects(params: {
   url: string;
   init?: RequestInit;
@@ -214,22 +197,21 @@ async function fetchWithMatrixGuardedRedirects(params: {
       assertDispatchCurrent();
       signal?.throwIfAborted();
       await params.beforeDispatch?.();
-      const response = await fetchWithMatrixDispatcher({
-        url: currentUrl.toString(),
-        assertCurrent: assertDispatchCurrent,
-        onDispatch: () => {
-          dispatched = true;
-        },
-        init: {
-          ...params.init,
-          method,
-          body,
-          headers,
-          redirect: "manual",
-          signal,
-          dispatcher,
-        } as MatrixDispatcherRequestInit,
-      });
+      const fetchUrl = currentUrl.toString();
+      const requestInit: DispatcherAwareRequestInit = {
+        ...params.init,
+        method,
+        body,
+        headers,
+        redirect: "manual",
+        signal,
+        dispatcher,
+      };
+      assertDispatchCurrent();
+      signal?.throwIfAborted();
+      dispatched = true;
+      // The runtime fetch preserves the validated pinned-address dispatcher.
+      const response = await fetchWithRuntimeDispatcherOrMockedGlobal(fetchUrl, requestInit);
 
       if (!isRedirectStatus(response.status)) {
         return {
@@ -484,10 +466,10 @@ export async function performMatrixRequest(params: {
     const buffer = await readResponseWithLimit(response, maxBytes, {
       onOverflow: ({ size }) => createSizeError(size),
       chunkTimeoutMs: params.readIdleTimeoutMs,
-      onIdleTimeout: params.raw
-        ? undefined
-        : ({ chunkTimeoutMs }) =>
-            new Error(`Matrix JSON response stalled: no data received for ${chunkTimeoutMs}ms`),
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(
+          `${params.raw ? "Matrix media download" : "Matrix JSON response"} stalled: no data received for ${chunkTimeoutMs}ms`,
+        ),
     });
     assertCurrent?.();
     return {

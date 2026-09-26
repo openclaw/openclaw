@@ -14,6 +14,7 @@ import type { AgentItemEventData } from "../infra/agent-activity-events.js";
 import type { AssistantMessage, ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
+import type { StreamDirectiveCodePrefix } from "../utils/directive-tags.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import type {
@@ -91,12 +92,6 @@ export type StreamBlockState = {
   finalFence?: FenceScanState;
   pendingFenceFragment?: string;
   pendingTagFragment?: string;
-};
-
-/** Raw offsets for literal directives whose Markdown code ownership is settled. */
-export type StreamDirectiveCodePrefix = {
-  end: number;
-  checkedRawLength: number;
 };
 
 /** Mutable subscription state shared by embedded-agent event handlers. */

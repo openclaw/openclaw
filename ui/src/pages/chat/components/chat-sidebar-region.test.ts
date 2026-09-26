@@ -90,6 +90,48 @@ afterEach(() => {
 });
 
 describe("chat sidebar region", () => {
+  it("updates the conversation tab identity without relabeling other panels or their controls", async () => {
+    const layout = openSlot(openSlot({ columns: [] }, "dashboard"), "workspace");
+    const dashboard = layout.columns[0]!.panels.find((panel) => panel.slot === "dashboard")!;
+    const region = await createRegion(promoteSidebarPanel(layout, dashboard.id));
+    const label = () =>
+      root(region).querySelector('wa-tab[panel="conversation"] .tabstrip-tab__label');
+    expect(label()?.textContent).toBe("Chat");
+
+    region.conversationTab = {
+      label: "Research assistant",
+      icon: html`<span data-agent-avatar>🦉</span>`,
+    };
+    await region.updateComplete;
+    expect(label()?.textContent).toBe("Research assistant");
+    expect(
+      root(region).querySelector('wa-tab[panel="conversation"] [data-agent-avatar]'),
+    ).not.toBeNull();
+    expect(root(region).querySelector('button[aria-label="Close Chat"]')).not.toBeNull();
+    expect(
+      [...root(region).querySelectorAll(".tabstrip-tab__label")].map((tab) => tab.textContent),
+    ).toContain("Files");
+
+    region.conversationTab = { label: "", icon: html`` };
+    await region.updateComplete;
+    expect(label()?.textContent).toBe("Chat");
+    expect(
+      root(region).querySelector('wa-tab[panel="conversation"]')?.querySelector("openclaw-tooltip")
+        ?.content,
+    ).toBe("Chat");
+
+    region.conversationTab = {
+      label: "Planning assistant",
+      icon: html`<span data-agent-avatar>🦊</span>`,
+    };
+    await region.updateComplete;
+    expect(label()?.textContent).toBe("Planning assistant");
+    expect(root(region).querySelector("[data-agent-avatar]")?.textContent).toBe("🦊");
+    region.conversationTab = undefined;
+    await region.updateComplete;
+    expect(label()?.textContent).toBe("Chat");
+  });
+
   it("coalesces committed geometry and retires disconnected measurements", async () => {
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     onTestFinished(() => {

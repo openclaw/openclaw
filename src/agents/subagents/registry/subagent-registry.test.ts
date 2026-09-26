@@ -22,7 +22,6 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
-  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -78,6 +77,8 @@ import {
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   registerCompletedTaskSettlementTest,
+  registerForcedCollectorCompletionSettlementTests,
+  registerRestartDrainCompletionSettlementTest,
   registerProvisionalKillCompletionSettlementTest,
   registerReplacedGenerationTaskSettlementTest,
   registerRestoredRunDeadlineSettlementTests,
@@ -768,39 +769,7 @@ describe("subagent registry seam flow", () => {
 
   registerSubagentResultRefreshCases({ getRegistry: () => mod, getLifecycleHandler, mocks });
 
-  it("retries a terminal completion deferred by restart drain", async () => {
-    const now = Date.now();
-    const runId = "run-terminal-restart-retry";
-    mod.addSubagentRunForTests({
-      runId,
-      childSessionKey: "agent:main:subagent:terminal-restart-retry",
-      task: "deliver terminal completion after restart",
-      expectsCompletionMessage: true,
-      createdAt: now - 10_000,
-      startedAt: now - 9_000,
-      endedAt: now - 1_000,
-      endedReason: SUBAGENT_ENDED_REASON_ERROR,
-      outcome: { status: "error", error: "provider interrupted" },
-    });
-
-    markGatewayRestartDraining();
-    await expect(
-      mod.finalizeInterruptedSubagentRun({
-        runId,
-        error: "provider interrupted",
-        endedAt: now - 1_000,
-      }),
-    ).resolves.toBe(1);
-    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-
-    resetGatewayWorkAdmission();
-    await vi.advanceTimersByTimeAsync(1_000);
-    await waitForFast(() => expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce());
-    await waitForFast(() => {
-      const entry = findRequesterRun(runId);
-      expect(entry?.cleanupCompletedAt).toBeTypeOf("number");
-    });
-  });
+  registerRestartDrainCompletionSettlementTest({ getRegistry: () => mod, mocks, findRequesterRun });
 
   it("keeps killed session timing root-admitted after task finalization", async () => {
     let finishTiming: (() => void) | undefined;
@@ -3292,68 +3261,13 @@ describe("subagent registry seam flow", () => {
     },
   );
 
-  it.each([
-    { observation: "lifecycle", schema: false, captured: false },
-    { observation: "wait", schema: false, captured: false },
-    { observation: "lifecycle", schema: true, captured: false },
-    { observation: "wait", schema: true, captured: false },
-    { observation: "lifecycle", schema: true, captured: true },
-    { observation: "wait", schema: true, captured: true },
-  ])(
-    "settles forced collector yield through $observation (schema=$schema, captured=$captured)",
-    async ({ observation, schema, captured }) => {
-      const runId = "forced-collector-yield";
-      const childSessionKey = "agent:main:subagent:forced-collector-yield";
-      const terminal = {
-        status: "ok",
-        startedAt: 111,
-        endedAt: 222,
-        yielded: true,
-        livenessState: "paused",
-      };
-      const waitResult = createDeferred<Record<string, unknown>>();
-      if (observation === "wait") {
-        mocks.callGateway.mockImplementation(async () => waitResult.promise);
-      } else {
-        mockPendingAgentWait();
-      }
-      mocks.entries = {
-        [childSessionKey]: createSessionEntry({ lifecycleRevision: "forced-yield" }),
-      };
-      await mod.registerSubagentRun({
-        runId,
-        childSessionKey,
-        task: "force the terminal boundary",
-        collect: true,
-        expectsCompletionMessage: false,
-        swarmRequesterSessionKey: "agent:main:main",
-        ...(schema ? { outputSchema: { type: "object" } } : {}),
-      });
-      if (captured) {
-        mod.recordSwarmStructuredOutput(
-          { runId, childSessionKey },
-          { invalidAttempts: 0, structured: { answer: 42 } },
-        );
-      }
-      if (observation === "wait") {
-        waitResult.resolve(terminal);
-      } else {
-        getLifecycleHandler()({ runId, stream: "lifecycle", data: { phase: "end", ...terminal } });
-      }
-      await waitForFast(() => {
-        const entry = findRequesterRun(runId);
-        expect(entry?.execution.status).toBe("terminal");
-        expect(entry?.collectorCompletion?.status).toBe(schema && !captured ? "failed" : "done");
-        expect(entry?.pauseReason).toBeUndefined();
-        if (captured) {
-          expect(entry?.collectorCompletion?.structured).toEqual({ answer: 42 });
-        } else if (schema) {
-          expect(entry?.collectorCompletion?.schemaError).toBe("structured_output was not called");
-        }
-      });
-      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    },
-  );
+  registerForcedCollectorCompletionSettlementTests({
+    getRegistry: () => mod,
+    mocks,
+    findRequesterRun,
+    getLifecycleHandler,
+    mockPendingAgentWait,
+  });
 
   it.each(
     ["lifecycle", "wait"].flatMap((observation) =>

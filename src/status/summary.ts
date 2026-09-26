@@ -386,7 +386,7 @@ export async function getStatusSummary(
           resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
         )
     : null;
-  const agentList = listGatewayAgentsBasic(cfg);
+  const agentList = await listGatewayAgentsBasic(cfg);
   // One roster-facts batch spans enrollment and the per-agent route inputs:
   // outside it every resolveAgentConfig re-walks the roster and
   // a large fleet stalls the loop for the whole projection (#137570).

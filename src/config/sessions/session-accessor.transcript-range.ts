@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import {
@@ -9,12 +10,7 @@ import {
   SqliteJsonlReadBudgetExceededError,
 } from "../../infra/sqlite-jsonl-budget.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  getSessionKysely,
-  resolveSqliteTranscriptScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { TranscriptEntryAnchor, TranscriptTurnBoundary } from "./transcript-entry-anchor.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 
@@ -136,29 +132,25 @@ function validateTerminalAncestry(params: {
   return ancestry.found === 1 ? "descendant" : "non-descendant";
 }
 
-/** Reads one bounded accepted transcript range from a single SQLite snapshot. */
-export function readClosedTranscriptTurn(params: {
-  boundary: TranscriptTurnBoundary;
-  maxEvents: number;
-  maxBytes: number;
-}): ClosedTranscriptTurnReadResult {
+/** Reads a closed turn through the caller's connection, such as an agent database worker's. */
+export function readClosedTranscriptTurnInDatabase(
+  connection: DatabaseSync,
+  params: {
+    boundary: TranscriptTurnBoundary;
+    maxEvents: number;
+    maxBytes: number;
+  },
+): ClosedTranscriptTurnReadResult {
   if (!anchorsShareTarget(params.boundary)) {
     return { kind: "session-rebound" };
   }
   const target = params.boundary.admission;
-  const resolved = resolveSqliteTranscriptScope({
-    agentId: target.agentId,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-  });
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   return runSqliteDeferredTransactionSync(
-    database.db,
+    connection,
     () => {
-      const db = getSessionKysely(database.db);
+      const db = getSessionKysely(connection);
       const binding = executeSqliteQueryTakeFirstSync(
-        database.db,
+        connection,
         db
           .selectFrom("session_windows")
           .select(["session_id"])
@@ -170,7 +162,7 @@ export function readClosedTranscriptTurn(params: {
         return { kind: "session-rebound" } as const;
       }
       const frontier = executeSqliteQueryTakeFirstSync(
-        database.db,
+        connection,
         db
           .selectFrom("transcript_events")
           .select("seq")
@@ -179,7 +171,7 @@ export function readClosedTranscriptTurn(params: {
           .limit(1),
       )?.seq;
       const projection = executeSqliteQueryTakeFirstSync(
-        database.db,
+        connection,
         db
           .selectFrom("session_transcript_index_state")
           .select(["indexed_seq", "needs_rebuild"])
@@ -195,7 +187,7 @@ export function readClosedTranscriptTurn(params: {
       }
       const readAnchor = (anchor: TranscriptEntryAnchor) =>
         executeSqliteQueryTakeFirstSync(
-          database.db,
+          connection,
           db
             .selectFrom("transcript_event_identities as identity")
             .innerJoin("session_transcript_active_events as active", (join) =>
@@ -238,7 +230,7 @@ export function readClosedTranscriptTurn(params: {
         return { kind: "stale" } as const;
       }
       const ancestry = validateTerminalAncestry({
-        database: database.db,
+        database: connection,
         sessionId: target.sessionId,
         admissionEntryId: params.boundary.admission.entryId,
         terminalEntryId: params.boundary.terminal.entryId,
@@ -263,7 +255,7 @@ export function readClosedTranscriptTurn(params: {
       // Admit count and bytes in this snapshot before acquiring any selected body.
       try {
         assertSqliteJsonlReadBudget(
-          database.db,
+          connection,
           selected
             .clearOrderBy()
             .select(["event.event_json", "event.event_utf8_bytes"])
@@ -279,8 +271,8 @@ export function readClosedTranscriptTurn(params: {
         throw error;
       }
       const rows = executeSqliteQuerySync(
-        database.db,
-        selected.select(transcriptEventJsonSql(database.db, "event").as("event_json")),
+        connection,
+        selected.select(transcriptEventJsonSql(connection, "event").as("event_json")),
       ).rows;
       const messages = rows.flatMap((row) => {
         const event = JSON.parse(row.event_json) as { message?: unknown; type?: unknown };
@@ -292,7 +284,7 @@ export function readClosedTranscriptTurn(params: {
       } as const;
     },
     {
-      databaseLabel: database.path,
+      databaseLabel: target.storePath,
       operationLabel: "session transcript accepted turn read",
     },
   );

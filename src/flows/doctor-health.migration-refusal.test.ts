@@ -88,6 +88,47 @@ describe("Doctor refused-migration maintenance outcome", () => {
     expect(maintenance.release).toHaveBeenCalledOnce();
   });
 
+  it("forwards database write proof produced while failed Doctor maintenance settles", async () => {
+    const resultPath = createUpdatePostInstallDoctorResultPath();
+    await withOpenClawTestState(
+      {
+        scenario: "minimal",
+        env: { OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: resultPath },
+      },
+      async (state) => {
+        await state.writeConfig({ gateway: { mode: "local" } });
+        const databaseGenerations = { [state.statePath("state/openclaw.sqlite")]: null };
+        const databaseWrites = { unchanged: false, generations: databaseGenerations };
+        let released = false;
+        vi.mocked(doctorMaintenance.beginDoctorMaintenance).mockResolvedValueOnce({
+          ...maintenance,
+          get databaseWrites() {
+            return released ? databaseWrites : undefined;
+          },
+          release: async () => {
+            released = true;
+          },
+        });
+        const failure = new Error("injected post-migration Doctor failure");
+        mocks.runContributions.mockRejectedValueOnce(failure);
+        await expect(
+          runDoctorHealthFlow(
+            { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            { repair: true, nonInteractive: true },
+            { inputHash: hashConfigRaw(null), assertCurrent() {}, databaseGenerations },
+          ),
+        ).rejects.toBe(failure);
+        expect(doctorMaintenance.beginDoctorMaintenance).toHaveBeenCalledWith(
+          expect.objectContaining({ databaseGenerations }),
+        );
+        await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toMatchObject({
+          status: "error",
+          databaseWrites,
+        });
+      },
+    );
+  });
+
   it.each(["success", "validation", "conflict", "missing-receipt"] as const)(
     "uses the latest receipt for maintenance-time token recovery (%s)",
     async (outcome) => {

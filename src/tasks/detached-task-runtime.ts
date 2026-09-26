@@ -17,6 +17,7 @@ import {
   getRegisteredDetachedTaskLifecycleRuntime,
 } from "./detached-task-runtime-state.js";
 import { cancelTaskById as cancelDetachedTaskRunByIdInCore } from "./runtime-internal.js";
+import { isIncognitoTask, projectTaskContentForPersistence } from "./task-content.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
 import {
   completeTaskRunByRunIdCore,
@@ -169,19 +170,21 @@ export function prepareRunningTaskRun(
       },
     };
   }
+  const incognito = isIncognitoTask(params);
   const { admission, close } = captureTaskCreationAdmission(owner.assertCurrent, assertCurrent);
   try {
     const finalize = runtime.finalizeTaskRunByRunId;
     const complete = runtime.completeTaskRunByRunId;
     const fail = runtime.failTaskRunByRunId;
     admission.assertCurrent();
-    const task = runtime.createRunningTaskRun(params);
+    const task = runtime.createRunningTaskRun(projectTaskContentForPersistence(incognito, params));
     return {
       kind: "legacy",
       task,
-      finalizeRun(terminal) {
+      finalizeRun(terminalInput) {
         // This is the shipped run-scoped operation, not an exact-task cleanup receipt.
         owner.assertCurrent();
+        const terminal = projectTaskContentForPersistence(incognito, terminalInput);
         if (finalize) {
           return finalize.call(runtime, terminal);
         }

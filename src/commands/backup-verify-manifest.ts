@@ -311,7 +311,7 @@ function parseBackupManifestSqliteSnapshots(
   if (!Array.isArray(value)) {
     throw new Error("Backup manifest sqliteSnapshots must be an array.");
   }
-  const owners = new Set<string>();
+  let hasGlobal = false;
   const paths = new Set<string>();
   return value.map((snapshot) => {
     if (
@@ -337,13 +337,13 @@ function parseBackupManifestSqliteSnapshots(
       }
       identity = { role: "agent", agentId };
     }
-    const owner = identity.role === "global" ? "global" : `agent:${identity.agentId}`;
     // Archives must restore portably, even when created on a case-sensitive host.
     const sourceKey = sourcePath.replaceAll("\\", "/").normalize("NFC").toLowerCase();
-    if (owners.has(owner) || paths.has(sourceKey)) {
+    // A moved agent can retain a distinct database at its previous location.
+    if ((identity.role === "global" && hasGlobal) || paths.has(sourceKey)) {
       throw new Error("Backup manifest contains duplicate SQLite snapshot ownership.");
     }
-    owners.add(owner);
+    hasGlobal ||= identity.role === "global";
     paths.add(sourceKey);
     return { sourcePath, ...identity };
   });
