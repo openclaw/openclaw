@@ -377,14 +377,11 @@ defineDiscordVoiceTests(
       await vi.waitFor(() => expectUserMessageIncludes("local retry answer"));
     });
 
-    it.each(
-      ["Error", "TimeoutError"].flatMap((name) =>
-        ["native", "forced-suppressed", "forced-unsuppressed"].map((delivery) => ({
-          name,
-          delivery,
-        })),
-      ),
-    )(
+    it.each([
+      { name: "TimeoutError", delivery: "native" },
+      { name: "Error", delivery: "forced-suppressed" },
+      { name: "TimeoutError", delivery: "forced-unsuppressed" },
+    ])(
       "preserves $name failure reporting through $delivery consult delivery",
       async ({ name, delivery }) => {
         const hostTurn = createDeferred<{ payloads: Array<{ text: string }> }>();

@@ -7,10 +7,6 @@ import {
   resolveCompletionProfileHint,
   resolveCompletionProfilePath,
 } from "../cli/completion-runtime.js";
-import type {
-  CompletionCacheGenerationOptions,
-  ShellCompletionStatus,
-} from "../commands/doctor-completion.js";
 import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
@@ -21,12 +17,9 @@ import type { WizardFlow } from "./setup.types.js";
 
 type CompletionDeps = {
   resolveCliName: () => string;
-  checkShellCompletionStatus: (binName: string) => Promise<ShellCompletionStatus>;
-  ensureCompletionCacheExists: (
-    binName: string,
-    options: CompletionCacheGenerationOptions,
-  ) => Promise<boolean>;
-  installCompletion: (shell: string, yes: boolean, binName?: string) => Promise<void>;
+  checkShellCompletionStatus: (binName: string) => ReturnType<typeof checkShellCompletionStatus>;
+  ensureCompletionCacheExists: typeof ensureCompletionCacheExists;
+  installCompletion: typeof installCompletion;
 };
 
 export async function setupWizardShellCompletion(params: {
@@ -82,7 +75,6 @@ export async function setupWizardShellCompletion(params: {
   };
 
   if (completionStatus.usesSlowPattern) {
-    // Case 1: Profile uses slow dynamic pattern - silently upgrade to cached version
     const cacheGenerated = await ensureCompletionCache();
     if (cacheGenerated) {
       await installCompletionForSetup();
@@ -91,13 +83,11 @@ export async function setupWizardShellCompletion(params: {
   }
 
   if (completionStatus.profileInstalled && !completionStatus.cacheExists) {
-    // Case 2: Profile has completion but no cache - auto-fix silently
     await ensureCompletionCache();
     return;
   }
 
   if (!completionStatus.profileInstalled) {
-    // Case 3: No completion at all
     const shouldInstall =
       params.flow === "quickstart"
         ? true
@@ -113,13 +103,11 @@ export async function setupWizardShellCompletion(params: {
       return;
     }
 
-    // Generate cache first (required for fast shell startup)
     const cacheGenerated = await ensureCompletionCache();
     if (!cacheGenerated) {
       return;
     }
 
-    // Install to shell profile
     const completionInstalled = await installCompletionForSetup();
     if (!completionInstalled) {
       return;
@@ -136,5 +124,4 @@ export async function setupWizardShellCompletion(params: {
       t("wizard.completion.title"),
     );
   }
-  // Case 4: Both profile and cache exist (using cached version) - all good, nothing to do
 }

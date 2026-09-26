@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   errorShape,
@@ -7,17 +8,22 @@ import type { ChatMetadataParams } from "../../../packages/gateway-protocol/src/
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import { readUserProfileAliasRevision } from "../../state/user-profile-events.js";
+import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
+import { readOperatorRolePolicyRevision } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE } from "../operator-scopes.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { hiddenSessionNotFound } from "../session-sharing-policy.js";
+import { hasSessionReadAccessChanged, hiddenSessionNotFound } from "../session-sharing-policy.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { retainGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
+import {
+  chatMetadataSessionFields,
+  type ChatMetadataReadParams,
+} from "./chat-metadata-contract.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
@@ -28,15 +34,19 @@ import { assertValidParams } from "./validation.js";
 export function resolveChatMetadataReadParams(
   options: Pick<GatewayRequestHandlerOptions, "respond" | "context" | "client" | "signal">,
   params: ChatMetadataParams,
+  draftAccountSelection?: UserModelAccountSelection,
 ): ChatMetadataReadParams | undefined {
   const { respond, context, client, signal } = options;
   const cfg = context.getRuntimeConfig();
-  const accessRevision = readGatewayAccessRevision();
+  // Session mutations are checked against the retained target before publication.
+  const roleRevision = readOperatorRolePolicyRevision();
+  const aliasRevision = readUserProfileAliasRevision();
   const profileInput = client?.authenticatedUserProfile?.profileId;
   const userInput = client?.authenticatedUserId;
   const isRequestCurrent = () =>
     !signal?.aborted &&
-    readGatewayAccessRevision() === accessRevision &&
+    readOperatorRolePolicyRevision() === roleRevision &&
+    readUserProfileAliasRevision() === aliasRevision &&
     client?.authenticatedUserProfile?.profileId === profileInput &&
     client?.authenticatedUserId === userInput;
   const assertRequestCurrent = () => {
@@ -59,7 +69,15 @@ export function resolveChatMetadataReadParams(
     }
     // Persisted session state owns account pins; a caller cannot replace them with a draft id.
     const requesterProfileId = resolveAuthenticatedProfileId(client);
-    const session = retainGatewaySessionEntryReadOnly(params.sessionKey, requested.agentId);
+    const session = retainGatewaySessionEntryReadOnly(
+      params.sessionKey,
+      requested.agentId,
+      (previous, current) =>
+        !hasSessionReadAccessChanged(previous, current) &&
+        chatMetadataSessionFields.every((field) =>
+          isDeepStrictEqual(previous[field], current[field]),
+        ),
+    );
     const isCurrent = () => isRequestCurrent() && session.isCurrent();
     const assertVisible = () => {
       const visible = createSessionListEntryFilter({
@@ -112,13 +130,7 @@ export function resolveChatMetadataReadParams(
     return undefined;
   }
   assertRequestCurrent();
-  const draftAccountSelection = params.authProfileId
-    ? preparePersonalModelAccountSelection(
-        { client, context, signal },
-        params.authProfileId,
-        SESSION_READ_SCOPE,
-      )
-    : undefined;
+  draftAccountSelection?.assertCurrent();
   return {
     agentId: resolved.agentId,
     requesterProfileId: draftAccountSelection?.owner ?? resolveAuthenticatedProfileId(client),
@@ -137,7 +149,15 @@ export async function handleChatMetadataRequest(
   }
   let scope: ChatMetadataReadParams | undefined;
   try {
-    scope = resolveChatMetadataReadParams(options, params);
+    const draftAccountSelection =
+      !params.sessionKey && params.authProfileId
+        ? await preparePersonalModelAccountSelection(
+            options,
+            params.authProfileId,
+            SESSION_READ_SCOPE,
+          )
+        : undefined;
+    scope = resolveChatMetadataReadParams(options, params, draftAccountSelection);
     if (!scope) {
       return;
     }

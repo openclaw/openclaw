@@ -34,6 +34,14 @@ type SlackActionInvoke = (
   toolContext?: ChannelMessageActionContext["toolContext"],
 ) => Promise<AgentToolResult<unknown>>;
 
+const SLACK_MESSAGE_ACTIONS = new Map([
+  ["reactions", "reactions"],
+  ["delete", "deleteMessage"],
+  ["pin", "pinMessage"],
+  ["unpin", "unpinMessage"],
+  ["list-pins", "listPins"],
+]);
+
 function readSlackForceDocument(params: Record<string, unknown>): boolean {
   return (
     readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false
@@ -187,15 +195,17 @@ export async function handleSlackMessageAction(params: {
     });
   }
 
-  if (action === "reactions") {
-    const messageId = readStringParam(actionParams, "messageId", {
-      required: true,
-    });
+  const messageAction = SLACK_MESSAGE_ACTIONS.get(action);
+  if (messageAction) {
+    const messageId =
+      action === "list-pins"
+        ? undefined
+        : readStringParam(actionParams, "messageId", { required: true });
     return await invokeSlackAction({
-      action: "reactions",
+      action: messageAction,
       channelId: resolveChannelId(),
       messageId,
-      limit: actionParams.limit,
+      ...(action === "reactions" ? { limit: actionParams.limit } : {}),
     });
   }
 
@@ -250,29 +260,6 @@ export async function handleSlackMessageAction(params: {
       messageId,
       content: accessibleContent,
       blocks,
-    });
-  }
-
-  if (action === "delete") {
-    const messageId = readStringParam(actionParams, "messageId", {
-      required: true,
-    });
-    return await invokeSlackAction({
-      action: "deleteMessage",
-      channelId: resolveChannelId(),
-      messageId,
-    });
-  }
-
-  if (action === "pin" || action === "unpin" || action === "list-pins") {
-    const messageId =
-      action === "list-pins"
-        ? undefined
-        : readStringParam(actionParams, "messageId", { required: true });
-    return await invokeSlackAction({
-      action: action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
-      channelId: resolveChannelId(),
-      messageId,
     });
   }
 

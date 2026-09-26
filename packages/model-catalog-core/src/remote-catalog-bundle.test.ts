@@ -143,24 +143,49 @@ const validBundleV2 = {
 } as const;
 
 describe("remote model catalog v2", () => {
+  it("preserves ordered provider recommendations only in v2", () => {
+    const providers = { first: { recommendedModels: [" other ", "vendor/model"] }, second: {} };
+    const bundle = parseRemoteModelCatalogBundleV2({
+      ...validBundleV2,
+      providers,
+      models: [
+        ...validBundleV2.models,
+        { id: "other", provider: "first", pricing: { status: "unknown" } },
+      ],
+    });
+    expect(bundle.providers.first?.recommendedModels).toEqual(["other", "vendor/model"]);
+    expect(() =>
+      parseRemoteModelCatalogBundle({
+        ...validBundle,
+        providers: {
+          anthropic: { ...validBundle.providers.anthropic, recommendedModels: ["claude-test"] },
+        },
+      }),
+    ).toThrow("recommendedModels");
+  });
+
+  it.each([
+    ["unknown id", ["missing"]],
+    ["duplicate id", ["vendor/model", " vendor/model "]],
+    ["empty id", [" "]],
+    ["other provider", ["second-only"]],
+  ])("rejects recommended models with %s", (_name, recommendedModels) => {
+    expect(() =>
+      parseRemoteModelCatalogBundleV2({
+        ...validBundleV2,
+        providers: { first: { recommendedModels }, second: {} },
+        models: [
+          ...validBundleV2.models,
+          { id: "second-only", provider: "second", pricing: { status: "unknown" } },
+        ],
+      }),
+    ).toThrow();
+  });
+
   it("keeps native ids distinct by provider and unknown prices distinct from free", () => {
     const bundle = parseRemoteModelCatalogBundleV2(validBundleV2);
     expect(bundle.providers).toEqual(validBundleV2.providers);
-    expect(bundle.models.map(({ id, provider, pricing }) => ({ id, provider, pricing }))).toEqual([
-      {
-        id: "vendor/model",
-        provider: "first",
-        pricing: {
-          status: "known",
-          currency: "USD",
-          unit: "million_tokens",
-          source: "native-feed",
-          input: 0,
-          output: 0,
-        },
-      },
-      { id: "vendor/model", provider: "second", pricing: { status: "unknown" } },
-    ]);
+    expect(bundle.models).toEqual(validBundleV2.models);
   });
 
   it("preserves partial rates, context tiers, and authoritative unavailable prices", () => {

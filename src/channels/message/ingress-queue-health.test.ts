@@ -34,6 +34,7 @@ describe("channel ingress queue health", () => {
       { layout: "state-only", prefix: "openclaw-ingress-health-absent-", applyEnv: false },
       async ({ stateDir }) => {
         expect(await countFailedChannelIngressQueueEntries(stateDir)).toEqual([]);
+        expect(await countChannelIngressQueuePressure(stateDir)).toEqual([]);
         expect(await fs.readdir(stateDir)).toEqual([]);
       },
     );
@@ -154,25 +155,25 @@ describe("channel ingress queue health", () => {
           });
         try {
           expect(await countFailedChannelIngressQueueEntries(stateDir)).toEqual([]);
+          const pressure = await countChannelIngressQueuePressure(stateDir);
+          expect(pressure).toEqual([
+            {
+              channelId: "telegram",
+              accountId: "ops",
+              laneCount: 2,
+              pendingCount: 3,
+              claimedCount: 1,
+              blockedCount: 2,
+              oldestReceivedAt: 100,
+            },
+          ]);
+          expect(JSON.stringify(pressure)).not.toMatch(
+            /private-(?:id|lane|owner|payload|error)|retry-private|stale-private|null-(?:pressured|stale)/,
+          );
           expect(hostQueries).not.toHaveBeenCalled();
         } finally {
           hostQueries.mockRestore();
         }
-        const pressure = countChannelIngressQueuePressure(stateDir);
-        expect(pressure).toEqual([
-          {
-            channelId: "telegram",
-            accountId: "ops",
-            laneCount: 2,
-            pendingCount: 3,
-            claimedCount: 1,
-            blockedCount: 2,
-            oldestReceivedAt: 100,
-          },
-        ]);
-        expect(JSON.stringify(pressure)).not.toMatch(
-          /private-(?:id|lane|owner|payload|error)|retry-private|stale-private|null-(?:pressured|stale)/,
-        );
       },
     );
   });

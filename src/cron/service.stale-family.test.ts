@@ -7,6 +7,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
@@ -99,6 +100,7 @@ async function withFamilyStore(
       }
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: activeStore,
       cronEnabled: false,
       log: createNoopLogger(),

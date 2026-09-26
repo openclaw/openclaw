@@ -116,12 +116,16 @@ ${details}</pre>
     >
       <header class="update-run-view__heading">
         <h3 role="status" aria-live="polite">${view.headline}</h3>
-        <span class="update-run-view__progress">${view.compactLabel}</span>
+        ${view.compactLabel ? html`<span class="update-run-view__progress">${view.compactLabel}</span>` : nothing}
       </header>
       ${!this.connected && !view.terminal ? html`<p class="update-run-view__connection">${t("updates.run.reconnecting")}</p>` : nothing}
-      <ol class="update-run-view__phases" aria-label=${t("updates.run.phases")}>
-        ${view.phases.map((phase) => this.renderStep(phase, phase.label))}
-      </ol>
+      ${
+        view.phases.length
+          ? html`<ol class="update-run-view__phases" aria-label=${t("updates.run.phases")}>
+              ${view.phases.map((phase) => this.renderStep(phase, phase.label))}
+            </ol>`
+          : nothing
+      }
       ${
         view.steps.length
           ? html`<details
@@ -165,9 +169,13 @@ ${details}</pre>
         >
 ${view.details || t(view.detailStep === "updater-runtime-retention" ? "updates.run.prepareUpdaterDetails" : "updates.run.noDetails")}</pre>
       </details>
-      <ul class="update-run-view__oracles" aria-label=${t("updates.run.verification")}>
-        ${view.oracles.map((oracle) => html`<li data-oracle=${oracle.name} data-state=${oracle.state} class="update-run-view__oracle update-run-view__oracle--${oracle.state}"><span aria-hidden="true">${ORACLE_MARKS[oracle.state]}</span><span>${t(`updates.run.oracle.${oracle.name}`)}</span><small>${t(`updates.run.oracleState.${oracle.state}`)}</small></li>`)}
-      </ul>
+      ${
+        view.oracles.length
+          ? html`<ul class="update-run-view__oracles" aria-label=${t("updates.run.verification")}>
+              ${view.oracles.map((oracle) => html`<li data-oracle=${oracle.name} data-state=${oracle.state} class="update-run-view__oracle update-run-view__oracle--${oracle.state}"><span aria-hidden="true">${ORACLE_MARKS[oracle.state]}</span><span>${t(`updates.run.oracle.${oracle.name}`)}</span><small>${t(`updates.run.oracleState.${oracle.state}`)}</small></li>`)}
+            </ul>`
+          : nothing
+      }
       ${
         view.terminal
           ? html`<section

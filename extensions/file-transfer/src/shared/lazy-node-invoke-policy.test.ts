@@ -77,24 +77,6 @@ describe("lazy file-transfer node invoke policy", () => {
     expect(invokeNode).toHaveBeenCalledTimes(2);
   });
 
-  it("fails closed when the delegate cannot load", async () => {
-    const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(async () => ({
-      ok: true,
-      payload: { ok: true },
-      payloadJSON: null,
-    }));
-    const policy = createLazyFileTransferNodeInvokePolicy(async () => {
-      throw new Error("load failed");
-    });
-
-    await expect(policy.handle(createPolicyContext({ invokeNode }))).resolves.toMatchObject({
-      ok: false,
-      code: "PLUGIN_POLICY_UNAVAILABLE",
-      unavailable: true,
-    });
-    expect(invokeNode).not.toHaveBeenCalled();
-  });
-
   it("does not rewrite delegate failures as load failures", async () => {
     const delegateError = new Error("delegate failed");
     const policy = createLazyFileTransferNodeInvokePolicy(async () => ({

@@ -310,11 +310,13 @@ export function unwrapExpression(expression: ts.Expression) {
   }
 }
 
-export function collectTypeScriptCommentRanges(
+/** Walk literal spans and scanned gaps without interpreting literal text as trivia. */
+export function walkTypeScriptTokens(
   sourceFile: ts.SourceFile,
-): Iterable<ts.CommentRange> {
+  onToken: (kind: ts.SyntaxKind, pos: number, end: number) => void,
+): void {
   const source = sourceFile.getFullText();
-  const literals: Array<{ pos: number; end: number }> = [];
+  const literals: Array<{ kind: ts.SyntaxKind; pos: number; end: number }> = [];
   const visit = (node: ts.Node): void => {
     if (
       ts.isStringLiteralLikeNode(node) ||
@@ -324,23 +326,21 @@ export function collectTypeScriptCommentRanges(
       node.kind === ts.SyntaxKind.TemplateTail ||
       node.kind === ts.SyntaxKind.JsxText
     ) {
-      literals.push({ pos: node.getStart(sourceFile), end: node.end });
+      literals.push({
+        kind: node.kind,
+        pos: node.kind === ts.SyntaxKind.JsxText ? node.pos : node.getStart(sourceFile),
+        end: node.end,
+      });
       return;
     }
     node.forEachChild(visit);
   };
   visit(sourceFile);
   const scanner = ts.createScanner(false);
-  const comments: ts.CommentRange[] = [];
   const scanGap = (start: number, end: number): void => {
     scanner.setText(source, start, end - start);
     for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFile; kind = scanner.scan()) {
-      if (
-        kind === ts.SyntaxKind.SingleLineCommentTrivia ||
-        kind === ts.SyntaxKind.MultiLineCommentTrivia
-      ) {
-        comments.push({ kind, pos: scanner.getTokenStart(), end: scanner.getTokenEnd() });
-      }
+      onToken(kind, scanner.getTokenStart(), scanner.getTokenEnd());
     }
   };
   let end = 0;
@@ -348,9 +348,24 @@ export function collectTypeScriptCommentRanges(
   // Literal spans come from the parser so regexp and template text cannot invent comments.
   for (const literal of literals.toSorted((left, right) => left.pos - right.pos)) {
     scanGap(end, literal.pos);
+    onToken(literal.kind, literal.pos, literal.end);
     end = literal.end;
   }
   scanGap(end, source.length);
+}
+
+export function collectTypeScriptCommentRanges(
+  sourceFile: ts.SourceFile,
+): Iterable<ts.CommentRange> {
+  const comments: ts.CommentRange[] = [];
+  walkTypeScriptTokens(sourceFile, (kind, pos, end) => {
+    if (
+      kind === ts.SyntaxKind.SingleLineCommentTrivia ||
+      kind === ts.SyntaxKind.MultiLineCommentTrivia
+    ) {
+      comments.push({ kind, pos, end });
+    }
+  });
   return comments;
 }
 

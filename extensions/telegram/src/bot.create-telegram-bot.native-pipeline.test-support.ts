@@ -37,7 +37,6 @@ import {
 } from "./runtime.test-support.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
-import { resolveTelegramIngressSpoolDir } from "./telegram-ingress-spool.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 const saveRemoteMedia = vi.fn();
@@ -203,7 +202,6 @@ export async function admitSpooledUpdate(
   });
   try {
     const monitor = createTelegramTransportIngressMonitor({
-      spoolDir: resolveTelegramIngressSpoolDir({ accountId: "default" }),
       bot,
       accountId: "default",
       botInfo: bot.botInfo,

@@ -31,10 +31,6 @@ function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nul
   return null;
 }
 
-function normalizeGroupLabel(raw?: string) {
-  return normalizeHyphenSlug(raw);
-}
-
 function joinOpaqueTail(parts: string[], start: number): string | null {
   return normalizeOptionalString(parts[start]) ? parts.slice(start).join(":") : null;
 }
@@ -60,10 +56,7 @@ function resolveOriginatingGroupTargetId(params: {
   if (secondIsKind && (head === params.provider || getGroupSurfaces().has(head))) {
     return joinOpaqueTail(parts, 2);
   }
-  if (head === params.provider || head === "chat" || head === "room" || head === "group") {
-    return joinOpaqueTail(parts, 1);
-  }
-  if (head === "channel") {
+  if (head === params.provider || ["chat", "room", "group", "channel"].includes(head)) {
     return joinOpaqueTail(parts, 1);
   }
   return null;
@@ -71,9 +64,6 @@ function resolveOriginatingGroupTargetId(params: {
 
 function shortenGroupId(value?: string) {
   const trimmed = normalizeOptionalString(value) ?? "";
-  if (!trimmed) {
-    return "";
-  }
   if (trimmed.length <= 14) {
     return trimmed;
   }
@@ -125,10 +115,10 @@ export function buildGroupDisplayName(params: {
       : groupChannel || subject || space || "") || "";
   const fallbackId = normalizeOptionalString(params.id) ?? params.key;
   const rawLabel = detail || fallbackId;
-  let token = normalizeGroupLabel(rawLabel);
+  let token = normalizeHyphenSlug(rawLabel);
   // Very long opaque ids become a readable stable token instead of leaking full route ids into UI.
   if (!token) {
-    token = normalizeGroupLabel(shortenGroupId(rawLabel));
+    token = normalizeHyphenSlug(shortenGroupId(rawLabel));
   }
   if (!params.groupChannel && token.startsWith("#")) {
     token = token.replace(/^#+/, "");

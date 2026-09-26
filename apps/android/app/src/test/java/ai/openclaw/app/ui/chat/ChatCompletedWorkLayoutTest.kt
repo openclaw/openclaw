@@ -183,7 +183,7 @@ class ChatCompletedWorkLayoutTest {
       // IO publications reach the ViewModel bridges through Android Main.
       composeRule.runOnIdle {
         model.chatSessionKey.value == SESSION && !model.chatHistoryLoading.value &&
-          model.chatHealthOk.value && model.chatMessages.value.size == 5 && runtime.pendingRunCount.value == 0
+          model.chatHealthOk.value && model.chatMessages.value.size == 5 && runtime.chat.pendingRunCount.value == 0
       }
     }
   }

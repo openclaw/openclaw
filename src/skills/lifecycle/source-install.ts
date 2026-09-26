@@ -100,20 +100,15 @@ async function copyGitWorktreeExport(params: {
   }
 }
 
-async function installLocalSkillDir(params: {
-  workspaceDir: string;
-  sourceDir: string;
-  sourceSpec: string;
-  source: "path" | "git";
-  fallbackLabel: string;
-  slug?: string;
-  force?: boolean;
-  timeoutMs?: number;
-  logger?: Logger;
-  config?: OpenClawConfig;
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  git?: SkillSourceOrigin["git"];
-}): Promise<SkillSourceInstallResult> {
+async function installLocalSkillDir(
+  params: Omit<SkillSourceInstallParams, "spec"> & {
+    sourceDir: string;
+    sourceSpec: string;
+    source: "path" | "git";
+    fallbackLabel: string;
+    git?: SkillSourceOrigin["git"];
+  },
+): Promise<SkillSourceInstallResult> {
   const slug = await resolveSkillInstallSlug({
     sourceDir: params.sourceDir,
     fallbackLabel: params.fallbackLabel,
@@ -217,17 +212,11 @@ async function installGitSkill(
     }
 
     return await installLocalSkillDir({
-      workspaceDir: params.workspaceDir,
+      ...params,
       sourceDir: exportDir,
       sourceSpec: redactSensitiveUrlLikeString(parsed.normalizedSpec),
       source: "git",
       fallbackLabel: path.basename(parsed.label),
-      slug: params.slug,
-      force: params.force,
-      timeoutMs: params.timeoutMs,
-      logger: params.logger,
-      config: params.config,
-      onInstallPolicyWarning: params.onInstallPolicyWarning,
       git,
     });
   });
@@ -247,17 +236,11 @@ async function installPathSkill(
     return { ok: false, error: `Skill path is not a directory: ${sourceDir}` };
   }
   return await installLocalSkillDir({
-    workspaceDir: params.workspaceDir,
+    ...params,
     sourceDir,
     sourceSpec: params.spec,
     source: "path",
     fallbackLabel: path.basename(path.resolve(sourceDir)).trim(),
-    slug: params.slug,
-    force: params.force,
-    timeoutMs: params.timeoutMs,
-    logger: params.logger,
-    config: params.config,
-    onInstallPolicyWarning: params.onInstallPolicyWarning,
   });
 }
 

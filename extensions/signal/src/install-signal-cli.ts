@@ -1,4 +1,3 @@
-// Signal plugin module implements install signal cli behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
@@ -115,7 +114,6 @@ export function pickAsset(
     Boolean(asset.name && asset.browser_download_url),
   );
 
-  // Archives only, excluding signature files (.asc)
   const archives = withName.filter((a) =>
     looksLikeArchive(normalizeLowercaseStringOrEmpty(a.name)),
   );
@@ -130,7 +128,6 @@ export function pickAsset(
     if (arch === "x64") {
       return byName(/linux-native/) || byName(/linux/) || archives[0];
     }
-    // No native release for this arch — caller should fall back.
     return undefined;
   }
 
@@ -211,10 +208,6 @@ async function findSignalCliBinary(root: string): Promise<string | null> {
   return entries[0]?.path ?? null;
 }
 
-// ---------------------------------------------------------------------------
-// Brew-based install (used on architectures without an official native build)
-// ---------------------------------------------------------------------------
-
 async function resolveBrewSignalCliPath(brewExe: string): Promise<string | null> {
   try {
     const result = await runPluginCommandWithTimeout({
@@ -271,7 +264,6 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
     };
   }
 
-  // Extract version from the installed binary.
   let version: string | undefined;
   try {
     const vResult = await runPluginCommandWithTimeout({
@@ -286,10 +278,6 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
 
   return { ok: true, cliPath, version };
 }
-
-// ---------------------------------------------------------------------------
-// Direct download install (used when an official native asset is available)
-// ---------------------------------------------------------------------------
 
 /** @internal Exported for testing. */
 export async function installSignalCliFromRelease(
@@ -355,9 +343,6 @@ export async function installSignalCliFromRelease(
       const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", releaseInfo.version);
       await fs.mkdir(installRoot, { recursive: true });
 
-      if (!looksLikeArchive(normalizeLowercaseStringOrEmpty(asset.name))) {
-        return { ok: false, error: `Unsupported archive type: ${asset.name}` };
-      }
       try {
         await extractSignalCliArchive(archivePath, installRoot, 60_000);
       } catch (err) {
@@ -386,10 +371,6 @@ export async function installSignalCliFromRelease(
     },
   );
 }
-
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
 
 export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInstallResult> {
   if (process.platform === "win32") {

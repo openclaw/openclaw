@@ -57,7 +57,6 @@ import {
   writeJsonFixture,
   writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
-import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -408,7 +407,7 @@ describe("update-cli", () => {
       replaceConfigFile,
       launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
     );
-    expect(commandCalls().map(([argv]) => argv)).toEqual(runtimeRecovery.expectedNpmProbes);
+    expect(commandCalls().map(([argv]) => argv)).toEqual([["npm", "--version"]]);
     expect(legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });

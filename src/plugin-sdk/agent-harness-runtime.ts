@@ -524,6 +524,8 @@ export {
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
 } from "../agents/bootstrap-files.js";
+export { prepareAgentWorkspaceContext } from "../agents/harness/workspace-context.js";
+export { buildAgentWorkspaceInstructionSnapshot } from "../agents/harness/workspace-instructions.js";
 export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/context-file.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export {

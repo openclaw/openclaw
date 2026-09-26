@@ -185,9 +185,16 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
+    Host ingress queues provide `listUnsettled({ orderBy })`, returning `{ pending, claims }` from one snapshot in the shared-state broker, ordered with queue mutations. The shared drain uses this coherent view so a claim released during inspection cannot let a later event overtake its lane head. The method remains optional through the next Plugin SDK major for existing external queue implementations; only those implementations retain the separate `listPending`/`listClaims` path. A failed snapshot read never falls back to separate reads.
+
     Plugin-state leases were removed in 2026.8.1. Use short SQLite transactions for atomic database work and plugin-scoped keyed stores (`openKeyedStore` or `openSyncKeyedStore`) for bounded durable state.
 
     `openChannelIngressDrain(...)` opens the core channel-agnostic worker over that queue (or creates a queue when none is supplied). The drain owns stale-claim recovery, per-lane claim serialization, complete-at-adoption or complete-on-dispatch-return, retry/dead-letter disposition, optional pre-adoption supersede, and claim→adoption stall timeout. Wire claim ownership into reply generation with `turnAdoptionLifecycle` (via `bindIngressLifecycleToReplyOptions` from `plugin-sdk/channel-outbound`). Channel plugins keep accept-side enqueue, lane derivation, non-retryable classification, and any supersede authorization policy.
+
+    Shared ingress monitors keep their drain alive during shutdown until completion,
+    release, and failure writes that have already started settle. If a write fails
+    while the drain still owns the claim, shutdown reports the error and retains
+    that ownership.
 
     <Warning>
     `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. Refusals include the recorded reason, registry database path, origin, and install source/spec; `plugins inspect` reports the same trust facts. A load path selecting the recorded official installation preserves trust; an untracked local copy does not. See [Trusted plugin state refused](/tools/plugin#trusted-plugin-state-refused) for doctor migrations and cause-specific remedies. An untrusted channel's ingress monitor fails channel start instead of running without a durable queue.

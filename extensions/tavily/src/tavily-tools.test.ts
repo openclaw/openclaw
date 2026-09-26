@@ -1,10 +1,8 @@
-// Tavily tests cover tavily tools plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  DEFAULT_TAVILY_BASE_URL,
   resolveTavilyApiKey,
   resolveTavilyBaseUrl,
   resolveTavilyExtractTimeoutSeconds,
@@ -16,43 +14,29 @@ const { runTavilySearch, runTavilyExtract } = vi.hoisted(() => ({
   runTavilyExtract: vi.fn(async (params: Record<string, unknown>) => ({ ok: true, params })),
 }));
 
-type TavilyExtractParams = {
-  cfg?: unknown;
-  urls?: string[];
-  query?: string;
-  chunksPerSource?: number;
-};
-
 vi.mock("./tavily-client.js", () => ({
   runTavilySearch,
   runTavilyExtract,
 }));
 
-function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`Expected ${label}`);
-  }
-  return call[0];
+function configWithWebSearch(webSearch: Record<string, unknown>): OpenClawConfig {
+  return {
+    plugins: { entries: { tavily: { config: { webSearch } } } },
+  };
 }
 
-function fakeApi(): OpenClawPluginApi {
-  return {
-    config: {},
-  } as OpenClawPluginApi;
+function fakeApi() {
+  return createTestPluginApi({ config: {} });
 }
 
 describe("tavily tools", () => {
-  let createTavilyWebSearchProvider: typeof import("./tavily-search-provider.js").createTavilyWebSearchProvider;
-  let createTavilyContractWebSearchProvider: typeof import("../web-search-contract-api.js").createTavilyWebSearchProvider;
+  let createTavilyWebSearchProvider: typeof import("../web-search-contract-api.js").createTavilyWebSearchProvider;
   let createTavilySearchTool: typeof import("./tavily-search-tool.js").createTavilySearchTool;
   let createTavilyExtractTool: typeof import("./tavily-extract-tool.js").createTavilyExtractTool;
   let tavilyPlugin: typeof import("../index.js").default;
 
   beforeAll(async () => {
-    ({ createTavilyWebSearchProvider } = await import("./tavily-search-provider.js"));
-    ({ createTavilyWebSearchProvider: createTavilyContractWebSearchProvider } =
-      await import("../web-search-contract-api.js"));
+    ({ createTavilyWebSearchProvider } = await import("../web-search-contract-api.js"));
     ({ createTavilySearchTool } = await import("./tavily-search-tool.js"));
     ({ createTavilyExtractTool } = await import("./tavily-extract-tool.js"));
     ({ default: tavilyPlugin } = await import("../index.js"));
@@ -71,132 +55,54 @@ describe("tavily tools", () => {
 
   it("exposes the expected metadata and selection wiring", () => {
     const provider = createTavilyWebSearchProvider();
-    if (!provider.applySelectionConfig) {
-      throw new Error("Expected applySelectionConfig to be defined");
-    }
-    const applied = provider.applySelectionConfig({});
-
     expect(provider.id).toBe("tavily");
     expect(provider.credentialPath).toBe("plugins.entries.tavily.config.webSearch.apiKey");
-    expect(applied.plugins?.entries?.tavily?.enabled).toBe(true);
+    expect(provider.applySelectionConfig?.({}).plugins?.entries?.tavily?.enabled).toBe(true);
   });
 
-  it("maps generic provider args into Tavily search params", async () => {
-    const provider = createTavilyWebSearchProvider();
-    const tool = provider.createTool({
-      config: { test: true },
-    } as never);
-    if (!tool) {
-      throw new Error("Expected tool definition");
-    }
+  it("forwards cancellation through the public provider registration", async () => {
+    const tool = createTavilyWebSearchProvider().createTool({ config: {} });
+    expect(tool).not.toBeNull();
+    const controller = new AbortController();
 
-    const result = await tool.execute({
-      query: "weather sf",
-      count: 7,
-    });
+    await tool!.execute({ query: "cancel" }, { signal: controller.signal });
 
-    expect(runTavilySearch).toHaveBeenCalledWith({
-      cfg: { test: true },
-      query: "weather sf",
-      maxResults: 7,
-    });
-    expect(result).toEqual({
-      cfg: { test: true },
-      query: "weather sf",
-      maxResults: 7,
-    });
+    expect(runTavilySearch).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+
+    const reason = new Error("cancelled");
+    controller.abort(reason);
+    runTavilySearch.mockClear();
+    await expect(tool!.execute({ query: "cancel" }, { signal: controller.signal })).rejects.toBe(
+      reason,
+    );
+    expect(runTavilySearch).not.toHaveBeenCalled();
   });
-
-  it("keeps the contract web search provider executable", async () => {
-    const provider = createTavilyContractWebSearchProvider();
-    const tool = provider.createTool({
-      config: { test: "contract" },
-    } as never);
-    if (!tool) {
-      throw new Error("Expected contract provider tool definition");
-    }
-
-    const result = await tool.execute({
-      query: "runtime registration",
-      count: 3,
-    });
-
-    expect(runTavilySearch).toHaveBeenCalledWith({
-      cfg: { test: "contract" },
-      query: "runtime registration",
-      maxResults: 3,
-    });
-    expect(result).toEqual({
-      cfg: { test: "contract" },
-      query: "runtime registration",
-      maxResults: 3,
-    });
-  });
-
-  it.each(["runtime", "public contract"] as const)(
-    "forwards cancellation through the %s provider registration",
-    async (registration) => {
-      const provider =
-        registration === "runtime"
-          ? createTavilyWebSearchProvider()
-          : createTavilyContractWebSearchProvider();
-      const tool = provider.createTool({ config: { test: true } } as never);
-      expect(tool).not.toBeNull();
-      const controller = new AbortController();
-
-      await tool!.execute({ query: registration }, { signal: controller.signal });
-
-      expect(runTavilySearch).toHaveBeenCalledWith(
-        expect.objectContaining({ signal: controller.signal }),
-      );
-
-      const reason = new Error(`${registration} cancelled`);
-      controller.abort(reason);
-      runTavilySearch.mockClear();
-      await expect(
-        tool!.execute({ query: registration }, { signal: controller.signal }),
-      ).rejects.toBe(reason);
-      expect(runTavilySearch).not.toHaveBeenCalled();
-    },
-  );
 
   it("normalizes generic Tavily search count before dispatch", async () => {
-    const provider = createTavilyWebSearchProvider();
-    const tool = provider.createTool({
-      config: { test: true },
-    } as never);
+    const tool = createTavilyWebSearchProvider().createTool({ config: {} });
     if (!tool) {
       throw new Error("Expected tool definition");
     }
 
-    await tool.execute({
-      query: "weather sf",
-      count: "7",
-    });
+    const result = await tool.execute({ query: "weather sf", count: "7" });
 
     expect(runTavilySearch).toHaveBeenCalledWith({
-      cfg: { test: true },
+      cfg: {},
       query: "weather sf",
       maxResults: 7,
     });
-    await expect(
-      tool.execute({
-        query: "weather sf",
-        count: "7.5",
-      }),
-    ).rejects.toThrow("count must be an integer from 1 to 20");
+    expect(result).toEqual({ cfg: {}, query: "weather sf", maxResults: 7 });
+    await expect(tool.execute({ query: "weather sf", count: "7.5" })).rejects.toThrow(
+      "count must be an integer from 1 to 20",
+    );
   });
 
   it("normalizes optional parameters before invoking Tavily", async () => {
-    runTavilySearch.mockImplementationOnce(async (params: Record<string, unknown>) => ({
-      ok: true,
-      params,
-    }));
-    const tool = createTavilySearchTool({
-      config: { env: "test" },
-    } as never);
+    const tool = createTavilySearchTool(fakeApi());
 
-    const result = await tool.execute("call-1", {
+    await tool.execute("call-1", {
       query: "best docs",
       search_depth: "advanced",
       topic: "news",
@@ -208,7 +114,7 @@ describe("tavily tools", () => {
     });
 
     expect(runTavilySearch).toHaveBeenCalledWith({
-      cfg: { env: "test" },
+      cfg: {},
       query: "best docs",
       searchDepth: "advanced",
       topic: "news",
@@ -217,24 +123,6 @@ describe("tavily tools", () => {
       timeRange: "week",
       includeDomains: ["docs.openclaw.ai", "openclaw.ai"],
       excludeDomains: ["bad.example"],
-    });
-    const expectedResult = {
-      ok: true,
-      params: {
-        cfg: { env: "test" },
-        query: "best docs",
-        searchDepth: "advanced",
-        topic: "news",
-        maxResults: 5,
-        includeAnswer: true,
-        timeRange: "week",
-        includeDomains: ["docs.openclaw.ai", "openclaw.ai"],
-        excludeDomains: ["bad.example"],
-      },
-    };
-    expect(result).toEqual({
-      content: [{ type: "text", text: JSON.stringify(expectedResult, null, 2) }],
-      details: expectedResult,
     });
   });
 
@@ -267,51 +155,23 @@ describe("tavily tools", () => {
   );
 
   it("late-binds dedicated tools to the resolved runtime config snapshot", async () => {
-    const rawConfig = {
-      plugins: {
-        entries: {
-          tavily: {
-            config: {
-              webSearch: {
-                apiKey: { source: "exec", provider: "default", id: "printf resolved-key" },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const runtimeConfig = {
-      plugins: {
-        entries: {
-          tavily: {
-            config: {
-              webSearch: {
-                apiKey: "resolved-key",
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const registeredTools: Array<Parameters<OpenClawPluginApi["registerTool"]>[0]> = [];
-    const registeredOptions: Array<Parameters<OpenClawPluginApi["registerTool"]>[1]> = [];
+    const rawConfig = configWithWebSearch({
+      apiKey: { source: "exec", provider: "default", id: "printf resolved-key" },
+    });
+    const runtimeConfig = configWithWebSearch({ apiKey: "resolved-key" });
+    const registeredTools = new Map<string, Parameters<OpenClawPluginApi["registerTool"]>[0]>();
     const api = createTestPluginApi({
       config: rawConfig,
       registerTool(tool, opts) {
-        registeredTools.push(tool);
-        registeredOptions.push(opts);
+        if (opts?.name) {
+          registeredTools.set(opts.name, tool);
+        }
       },
     });
 
     tavilyPlugin.register(api);
-    const searchFactory = registeredTools.find(
-      (tool, index) =>
-        registeredOptions[index]?.name === "tavily_search" && typeof tool === "function",
-    );
-    const extractFactory = registeredTools.find(
-      (tool, index) =>
-        registeredOptions[index]?.name === "tavily_extract" && typeof tool === "function",
-    );
+    const searchFactory = registeredTools.get("tavily_search");
+    const extractFactory = registeredTools.get("tavily_extract");
     if (typeof searchFactory !== "function" || typeof extractFactory !== "function") {
       throw new Error("Expected Tavily tools to register as runtime-context factories");
     }
@@ -333,46 +193,23 @@ describe("tavily tools", () => {
     await searchTool.execute("search-call", { query: "openclaw" });
     await extractTool.execute("extract-call", { urls: ["https://example.com"] });
 
-    const searchParams = requireFirstMockArg(runTavilySearch, "Tavily search params") as Record<
-      string,
-      unknown
-    >;
-    expect(searchParams.cfg).toBe(runtimeConfig);
-    expect(searchParams.query).toBe("openclaw");
-    const extractParams = requireFirstMockArg(
-      runTavilyExtract,
-      "Tavily extract params",
-    ) as TavilyExtractParams;
-    expect(extractParams.cfg).toBe(runtimeConfig);
-    expect(extractParams.urls).toEqual(["https://example.com"]);
+    expect(runTavilySearch.mock.calls[0]?.[0]?.cfg).toBe(runtimeConfig);
+    expect(runTavilySearch.mock.calls[0]?.[0]?.query).toBe("openclaw");
+    expect(runTavilyExtract.mock.calls[0]?.[0]?.cfg).toBe(runtimeConfig);
+    expect(runTavilyExtract.mock.calls[0]?.[0]?.urls).toEqual(["https://example.com"]);
   });
 
   it("drops empty domain arrays and forwards query-scoped chunking", async () => {
-    runTavilySearch.mockImplementationOnce(async (params: Record<string, unknown>) => ({
-      ok: true,
-      params,
-    }));
-    const searchTool = createTavilySearchTool({
-      config: { env: "test" },
-    } as never);
-
-    const expectedResult = {
-      ok: true,
-      params: {
-        cfg: { env: "test" },
-        query: "simple",
-        includeAnswer: false,
-      },
-    };
-    await expect(
-      searchTool.execute("call-2", {
-        query: "simple",
-        include_domains: ["   "],
-        exclude_domains: [],
-      }),
-    ).resolves.toEqual({
-      content: [{ type: "text", text: JSON.stringify(expectedResult, null, 2) }],
-      details: expectedResult,
+    const searchTool = createTavilySearchTool(fakeApi());
+    await searchTool.execute("call-2", {
+      query: "simple",
+      include_domains: ["   "],
+      exclude_domains: [],
+    });
+    expect(runTavilySearch).toHaveBeenCalledWith({
+      cfg: {},
+      query: "simple",
+      includeAnswer: false,
     });
 
     const extractTool = createTavilyExtractTool(fakeApi());
@@ -382,14 +219,13 @@ describe("tavily tools", () => {
       chunks_per_source: 2,
     });
 
-    const extractParams = requireFirstMockArg(
-      runTavilyExtract,
-      "Tavily extract params",
-    ) as TavilyExtractParams;
-    expect(extractParams.cfg).toEqual({});
-    expect(extractParams.urls).toEqual(["https://example.com"]);
-    expect(extractParams.query).toBe("pricing");
-    expect(extractParams.chunksPerSource).toBe(2);
+    expect(runTavilyExtract).toHaveBeenCalledWith({
+      cfg: {},
+      urls: ["https://example.com"],
+      query: "pricing",
+      chunksPerSource: 2,
+      includeImages: false,
+    });
   });
 
   it("rejects chunks_per_source without query", async () => {
@@ -420,11 +256,7 @@ describe("tavily tools", () => {
       urls: [" https://example.com/article "],
     });
 
-    const extractParams = requireFirstMockArg(
-      runTavilyExtract,
-      "Tavily extract params",
-    ) as TavilyExtractParams;
-    expect(extractParams.urls).toEqual(["https://example.com/article"]);
+    expect(runTavilyExtract.mock.calls[0]?.[0]?.urls).toEqual(["https://example.com/article"]);
   });
 
   it("rejects fractional and out-of-range integer options before Tavily calls", async () => {
@@ -466,20 +298,10 @@ describe("tavily tools", () => {
     vi.stubEnv("TAVILY_API_KEY", "env-key");
     vi.stubEnv("TAVILY_BASE_URL", "https://env.tavily.test");
 
-    const cfg = {
-      plugins: {
-        entries: {
-          tavily: {
-            config: {
-              webSearch: {
-                apiKey: "plugin-key",
-                baseUrl: "https://plugin.tavily.test",
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = configWithWebSearch({
+      apiKey: "plugin-key",
+      baseUrl: "https://plugin.tavily.test",
+    });
 
     expect(resolveTavilyApiKey(cfg)).toBe("plugin-key");
     expect(resolveTavilyBaseUrl(cfg)).toBe("https://plugin.tavily.test");
@@ -491,17 +313,7 @@ describe("tavily tools", () => {
 
     expect(resolveTavilyApiKey()).toBe("env-key");
     expect(resolveTavilyBaseUrl()).toBe("https://env.tavily.test");
-    expect(resolveTavilyBaseUrl({} as OpenClawConfig)).not.toBe(DEFAULT_TAVILY_BASE_URL);
     expect(resolveTavilySearchTimeoutSeconds()).toBe(30);
     expect(resolveTavilyExtractTimeoutSeconds()).toBe(60);
-  });
-
-  it("accepts positive numeric timeout overrides and floors them", () => {
-    expect(resolveTavilySearchTimeoutSeconds(19.9)).toBe(19);
-    expect(resolveTavilyExtractTimeoutSeconds(42.7)).toBe(42);
-    expect(resolveTavilySearchTimeoutSeconds(0.5)).toBe(1);
-    expect(resolveTavilyExtractTimeoutSeconds(0.5)).toBe(1);
-    expect(resolveTavilySearchTimeoutSeconds(0)).toBe(30);
-    expect(resolveTavilyExtractTimeoutSeconds(Number.NaN)).toBe(60);
   });
 });

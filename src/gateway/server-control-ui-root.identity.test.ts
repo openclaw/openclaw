@@ -26,8 +26,11 @@ vi.mock("../version.js", async (importOriginal) => ({
   resolveRuntimeServiceBuildId: () => fixture.buildId,
 }));
 
-import { handleControlUiHttpRequest, type ControlUiRootState } from "./control-ui.js";
-import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
+import { handleControlUiHttpRequest } from "./control-ui.js";
+import {
+  createGatewayControlUiRootLifecycle,
+  type ControlUiRootState,
+} from "./server-control-ui-root.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 async function requestIndex(root: ControlUiRootState) {

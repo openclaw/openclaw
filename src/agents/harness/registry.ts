@@ -27,6 +27,8 @@ import type {
 
 const log = createSubsystemLogger("agents/harness");
 const CODEX_NATIVE_COMPACTION_OWNER_ID = "codex";
+// Diagnostic suppression is process-wide, including replacement plugin registries.
+const warnedResetHarnessIds = new Set<string>();
 
 function getAgentHarnesses() {
   const registry = getPluginRegistryForContext();
@@ -156,10 +158,13 @@ export async function resetRegisteredAgentHarnessSessions(
           try {
             await entry.harness.reset(params);
           } catch (error) {
-            log.warn(`${entry.harness.label} session reset hook failed`, {
-              harnessId: entry.harness.id,
-              error,
-            });
+            if (!warnedResetHarnessIds.has(entry.harness.id)) {
+              warnedResetHarnessIds.add(entry.harness.id);
+              log.warn(`${entry.harness.label} session reset hook failed`, {
+                harnessId: entry.harness.id,
+                error,
+              });
+            }
           }
         }),
       );

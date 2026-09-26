@@ -77,24 +77,24 @@ export function renderChatImageActions(title: string, readOriginalBlob: () => Pr
   };
   return html`
     <span class="chat-image-actions">
-      <button
-        type="button"
-        class="chat-image-action"
-        title=${t("chat.imageLightbox.download")}
-        aria-label=${t("chat.imageLightbox.download")}
-        @click=${() => void download()}
-      >
-        ${icons.download}
-      </button>
-      <button
-        type="button"
-        class="chat-image-action"
-        title=${t("chat.imageLightbox.copy")}
-        aria-label=${t("chat.imageLightbox.copy")}
-        @click=${() => void copy()}
-      >
-        ${icons.copy}
-      </button>
+      ${(
+        [
+          ["chat.imageLightbox.download", icons.download, download],
+          ["chat.imageLightbox.copy", icons.copy, copy],
+        ] as const
+      ).map(
+        ([label, icon, action]) => html`
+          <button
+            type="button"
+            class="chat-image-action"
+            title=${t(label)}
+            aria-label=${t(label)}
+            @click=${() => void action()}
+          >
+            ${icon}
+          </button>
+        `,
+      )}
     </span>
   `;
 }

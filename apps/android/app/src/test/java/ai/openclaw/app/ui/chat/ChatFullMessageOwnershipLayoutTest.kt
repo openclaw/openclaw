@@ -262,7 +262,7 @@ class ChatFullMessageOwnershipLayoutTest {
       } while (true)
       assertEquals(gateway.fullText(session), text.toString())
       assertTrue(gateway.fullReads.all { it.sessionKey == session })
-      assertEquals(FULL_MESSAGE_FIRST_CHAT, runtime.chatSessionKey.value)
+      assertEquals(FULL_MESSAGE_FIRST_CHAT, runtime.chat.sessionKey.value)
     }
 
   @Test
@@ -343,7 +343,7 @@ class ChatFullMessageOwnershipLayoutTest {
     viewAll().assertIsDisplayed().assertIsEnabled().performClick()
     awaitInlineExpanded()
     assertEquals(listOf(expectedRequest()), gateway.fullReads.toList())
-    val timeline = prepareChatHistory(runtime.chatMessages.value, "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
+    val timeline = prepareChatHistory(runtime.chat.messages.value, "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
     assertEquals(1, timeline.items.filterIsInstance<ChatTimelineItem.ToolActivity>().size)
     composeRule.onNodeWithText("Show less").performScrollTo().performClick()
     viewAll().performClick()
@@ -376,7 +376,7 @@ class ChatFullMessageOwnershipLayoutTest {
       refreshSelectedChat()
       viewAll().assertDoesNotExist()
       assertFalse(
-        runtime.chatMessages.value
+        runtime.chat.messages.value
           .single()
           .truncated,
       )
@@ -414,12 +414,20 @@ class ChatFullMessageOwnershipLayoutTest {
       refreshSelectedChat()
       assertEquals(
         FULL_MESSAGE_ENTRY,
-        runtime.chatMessages.value
+        runtime.chat.messages.value
           .single()
           .entryId,
       )
       viewAll().assertDoesNotExist()
-      assertNull(runtime.prepareFullMessageRead(currentOwner(), runtime.chatSelectionGeneration.value, runtime.gatewayCatalogRevision.value, runtime.chatMessages.value.single()))
+      assertNull(
+        runtime.chat.prepareFullMessageRead(
+          currentOwner(),
+          runtime.chat.selectionGeneration.value,
+          runtime.gatewayCatalogRevision.value,
+          runtime.chat.messages.value
+            .single(),
+        ),
+      )
       assertTrue(gateway.fullReads.isEmpty())
     }
   }
@@ -465,7 +473,7 @@ class ChatFullMessageOwnershipLayoutTest {
   @Test
   fun inFlightResponseCannotPublishAfterItsPreviewBecomesAMessageToolMirror() =
     runBlocking {
-      val selection = runtime.chatSelectionGeneration.value
+      val selection = runtime.chat.selectionGeneration.value
       val catalog = runtime.gatewayCatalogRevision.value
       val connection = gateway.operatorConnection.get()
       gateway.holdFullResponses = true
@@ -475,12 +483,12 @@ class ChatFullMessageOwnershipLayoutTest {
         withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gateway.heldResponses.first { it.isNotEmpty() } }
         gateway.historyMessageToolMirror = true
         refreshSelectedChat()
-        assertEquals(selection, runtime.chatSelectionGeneration.value)
+        assertEquals(selection, runtime.chat.selectionGeneration.value)
         assertEquals(catalog, runtime.gatewayCatalogRevision.value)
         assertEquals(connection, gateway.operatorConnection.get())
         assertEquals(
           FULL_MESSAGE_ENTRY,
-          runtime.chatMessages.value
+          runtime.chat.messages.value
             .single()
             .entryId,
         )
@@ -520,7 +528,7 @@ class ChatFullMessageOwnershipLayoutTest {
           .config[SemanticsActions.OnClick]
           .action,
       )
-    val selection = runtime.chatSelectionGeneration.value
+    val selection = runtime.chat.selectionGeneration.value
     val catalog = runtime.gatewayCatalogRevision.value
     val connection = gateway.operatorConnection.get()
     val previousHistoryCount = gateway.historyReads.value.size
@@ -535,12 +543,12 @@ class ChatFullMessageOwnershipLayoutTest {
           .drop(previousHistoryCount)
           .contains(connection to FULL_MESSAGE_FIRST_CHAT),
       )
-      assertEquals(selection, runtime.chatSelectionGeneration.value)
+      assertEquals(selection, runtime.chat.selectionGeneration.value)
       assertEquals(catalog, runtime.gatewayCatalogRevision.value)
       assertEquals(connection, gateway.operatorConnection.get())
       assertEquals(
         FULL_MESSAGE_ENTRY,
-        runtime.chatMessages.value
+        runtime.chat.messages.value
           .single()
           .entryId,
       )
@@ -681,7 +689,7 @@ class ChatFullMessageOwnershipLayoutTest {
       viewAll().assertIsDisplayed()
       assertEquals(
         gateway.preview(FULL_MESSAGE_SECOND_CHAT),
-        runtime.chatMessages.value
+        runtime.chat.messages.value
           .single()
           .content
           .single()
@@ -785,9 +793,11 @@ class ChatFullMessageOwnershipLayoutTest {
   fun pendingFullReadSurvivesItsPreviewRowLeavingTheViewport() {
     val request = expectedRequest()
     val owner = currentOwner()
-    val selection = runtime.chatSelectionGeneration.value
+    val selection = runtime.chat.selectionGeneration.value
     val catalog = runtime.gatewayCatalogRevision.value
-    val preview = runtime.chatMessages.value.single()
+    val preview =
+      runtime.chat.messages.value
+        .single()
     gateway.holdFullResponses = true
     try {
       viewAll().assertIsDisplayed().assertIsEnabled().performClick()
@@ -795,9 +805,13 @@ class ChatFullMessageOwnershipLayoutTest {
       runBlocking { withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) { gateway.heldResponses.first { it.isNotEmpty() } } }
       appendBackgroundHistoryAndShowLatest()
       assertEquals(owner, currentOwner())
-      assertEquals(selection, runtime.chatSelectionGeneration.value)
+      assertEquals(selection, runtime.chat.selectionGeneration.value)
       assertEquals(catalog, runtime.gatewayCatalogRevision.value)
-      assertEquals(preview, runtime.chatMessages.value.first())
+      assertEquals(
+        preview,
+        runtime.chat.messages.value
+          .first(),
+      )
       composeRule.onNode(hasText("...(truncated)...", substring = true)).assertDoesNotExist()
       assertExpandedTextAbsent()
 
@@ -853,8 +867,10 @@ class ChatFullMessageOwnershipLayoutTest {
     gateway.historyTextOverride = full.take(8_000) + "\n...(truncated)..."
     gateway.historyAppendRole = "assistant"
     refreshSelectedChat()
-    val preview = runtime.chatMessages.value.single()
-    val selection = runtime.chatSelectionGeneration.value
+    val preview =
+      runtime.chat.messages.value
+        .single()
+    val selection = runtime.chat.selectionGeneration.value
     val catalog = runtime.gatewayCatalogRevision.value
     viewAll().assertIsDisplayed().assertIsEnabled().performClick()
     composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) {
@@ -887,8 +903,12 @@ class ChatFullMessageOwnershipLayoutTest {
         gateway.historyReads.value.size > before && !model.chatHistoryLoading.value && model.chatHealthOk.value && model.chatMessages.value.size == count + 1
       }
       composeRule.waitForIdle()
-      assertEquals(preview, runtime.chatMessages.value.first())
-      assertEquals(selection, runtime.chatSelectionGeneration.value)
+      assertEquals(
+        preview,
+        runtime.chat.messages.value
+          .first(),
+      )
+      assertEquals(selection, runtime.chat.selectionGeneration.value)
       assertEquals(catalog, runtime.gatewayCatalogRevision.value)
       assertNull(model.chatError.value)
     }
@@ -1056,11 +1076,13 @@ class ChatFullMessageOwnershipLayoutTest {
     runBlocking { unchanged.execute() }
     assertEquals(gateway.fullText(FULL_MESSAGE_FIRST_CHAT), loadedText(unchanged.state.value))
 
-    val oldPreview = runtime.chatMessages.value.single()
+    val oldPreview =
+      runtime.chat.messages.value
+        .single()
     val changed = prepareCurrentRead()
     gateway.previewPrefix = "An edited answer. "
     refreshSelectedChat()
-    assertNull(runtime.prepareFullMessageRead(currentOwner(), runtime.chatSelectionGeneration.value, runtime.gatewayCatalogRevision.value, oldPreview))
+    assertNull(runtime.chat.prepareFullMessageRead(currentOwner(), runtime.chat.selectionGeneration.value, runtime.gatewayCatalogRevision.value, oldPreview))
     runBlocking { changed.execute() }
     val current = prepareCurrentRead()
     runBlocking { current.execute() }
@@ -1188,7 +1210,7 @@ class ChatFullMessageOwnershipLayoutTest {
       if (index > 0) selectChat(if (index % 2 == 0) FULL_MESSAGE_FIRST_CHAT else FULL_MESSAGE_SECOND_CHAT)
       gateway.fullResponseOverride =
         if (reason == "still-capped") {
-          gateway.fullResponse(runtime.chatSessionKey.value, truncated = true)
+          gateway.fullResponse(runtime.chat.sessionKey.value, truncated = true)
         } else {
           buildJsonObject {
             put("ok", JsonPrimitive(false))
@@ -1343,7 +1365,9 @@ class ChatFullMessageOwnershipLayoutTest {
   fun closingFullReaderPreservesPreviewActionsAndCachedReopening() {
     gateway.includeMedia = true
     refreshSelectedChat()
-    val history = runtime.chatMessages.value.single()
+    val history =
+      runtime.chat.messages.value
+        .single()
     assertEquals(listOf("image", "text", "file", "text", "audio"), history.content.map { it.type })
     val full = gateway.fullText(FULL_MESSAGE_FIRST_CHAT) + "\n\n" + FULL_MESSAGE_MEDIA_TEXT
     val preview = gateway.preview(FULL_MESSAGE_FIRST_CHAT) + "\n\n" + FULL_MESSAGE_MEDIA_TEXT
@@ -1422,7 +1446,11 @@ class ChatFullMessageOwnershipLayoutTest {
     assertEquals("Full and preview actions plus cached reopening must not fetch again", 1, gateway.fullReads.size)
     composeRule.onNodeWithText("Show less").performScrollTo().performClick()
     assertInlineCollapsed()
-    assertEquals(history, runtime.chatMessages.value.single())
+    assertEquals(
+      history,
+      runtime.chat.messages.value
+        .single(),
+    )
   }
 
   @Test
@@ -1465,7 +1493,9 @@ class ChatFullMessageOwnershipLayoutTest {
   }
 
   private fun assertDisconnectedReaderSurvivesFailedReconnect() {
-    val preview = runtime.chatMessages.value.single()
+    val preview =
+      runtime.chat.messages.value
+        .single()
     val catalog = runtime.gatewayCatalogRevision.value
     gateway.disconnectOperatorAndRejectReconnects()
     composeRule.waitUntil(FULL_MESSAGE_READY_TIMEOUT_MS) {
@@ -1474,9 +1504,13 @@ class ChatFullMessageOwnershipLayoutTest {
         !model.gatewayConnectionDisplay.value.isConnected &&
         runtime.gatewayCatalogRevision.value > catalog &&
         model.gatewayCatalogRevision.value == runtime.gatewayCatalogRevision.value &&
-        model.chatSelectionGeneration.value == runtime.chatSelectionGeneration.value
+        model.chatSelectionGeneration.value == runtime.chat.selectionGeneration.value
     }
-    assertEquals(preview, runtime.chatMessages.value.single())
+    assertEquals(
+      preview,
+      runtime.chat.messages.value
+        .single(),
+    )
     viewAll().assertIsDisplayed().assertIsEnabled()
     viewAll().performClick()
     composeRule.onNodeWithText("Reconnect to load the full message.").assertIsDisplayed()
@@ -1509,7 +1543,7 @@ class ChatFullMessageOwnershipLayoutTest {
       .performSemanticsAction(SemanticsActions.OnLongClick) { it() }
   }
 
-  private fun currentOwner() = ChatComposerOwner(gateway.endpoint.stableId, "main", runtime.chatSessionKey.value)
+  private fun currentOwner() = ChatComposerOwner(gateway.endpoint.stableId, "main", runtime.chat.sessionKey.value)
 
   private fun operatorSession(): GatewaySession =
     NodeRuntime::class.java
@@ -1519,7 +1553,13 @@ class ChatFullMessageOwnershipLayoutTest {
 
   private fun prepareCurrentRead() =
     checkNotNull(
-      runtime.prepareFullMessageRead(currentOwner(), runtime.chatSelectionGeneration.value, runtime.gatewayCatalogRevision.value, runtime.chatMessages.value.single()),
+      runtime.chat.prepareFullMessageRead(
+        currentOwner(),
+        runtime.chat.selectionGeneration.value,
+        runtime.gatewayCatalogRevision.value,
+        runtime.chat.messages.value
+          .single(),
+      ),
     )
 
   private fun loadedText(value: ChatFullMessageState) = chatMessagePlainText((value as ChatFullMessageState.Loaded).content)
@@ -1530,14 +1570,14 @@ class ChatFullMessageOwnershipLayoutTest {
     runBlocking { old.execute() }
     val current = prepareCurrentRead()
     runBlocking { current.execute() }
-    assertEquals(gateway.fullText(runtime.chatSessionKey.value), loadedText(current.state.value))
+    assertEquals(gateway.fullText(runtime.chat.sessionKey.value), loadedText(current.state.value))
     assertEquals("Only the fresh operation may dispatch after retirement", listOf(expectedRequest()), gateway.fullReads.toList())
     assertEquals(ChatFullMessageState.Loading, old.state.value)
   }
 
   private fun refreshSelectedChat() {
     val before = gateway.historyReads.value.size
-    val key = runtime.chatSessionKey.value
+    val key = runtime.chat.sessionKey.value
     val connection = gateway.operatorConnection.get()
     composeRule.runOnIdle { model.refreshChat() }
     runBlocking {
@@ -1578,7 +1618,7 @@ class ChatFullMessageOwnershipLayoutTest {
 
   private fun replaceConnectionBeforeRecomposition() {
     val oldConnection = gateway.operatorConnection.get()
-    val key = runtime.chatSessionKey.value
+    val key = runtime.chat.sessionKey.value
     val session = operatorSession()
     runtime.refreshGatewayConnection()
     runBlocking {
@@ -1623,16 +1663,16 @@ class ChatFullMessageOwnershipLayoutTest {
       // Runtime IO consumes the real replacement history while Main is occupied. Replay the
       // retained rendered callback before Compose can apply the changed owner (including ABA).
       retire()
-      assertFalse(runtime.chatHistoryLoading.value)
-      assertTrue(runtime.chatHealthOk.value)
-      assertNull(runtime.chatError.value)
+      assertFalse(runtime.chat.historyLoading.value)
+      assertTrue(runtime.chat.healthOk.value)
+      assertNull(runtime.chat.errorText.value)
       oldAction()
     }
     composeRule.waitForIdle()
     assertExpandedTextAbsent()
     val previousHistoryCount = gateway.historyReads.value.size
     val currentConnection = gateway.operatorConnection.get()
-    val currentSession = runtime.chatSessionKey.value
+    val currentSession = runtime.chat.sessionKey.value
     composeRule.runOnIdle { model.refreshChat() }
     runBlocking {
       withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) {
@@ -1666,10 +1706,10 @@ class ChatFullMessageOwnershipLayoutTest {
       }
     } catch (failure: Exception) {
       throw AssertionError(
-        "Chat readiness for $key: runtime=${runtime.chatSessionKey.value}/${runtime.chatHistoryLoading.value}/${runtime.chatHealthOk.value}; " +
+        "Chat readiness for $key: runtime=${runtime.chat.sessionKey.value}/${runtime.chat.historyLoading.value}/${runtime.chat.healthOk.value}; " +
           "model=${model.chatSessionKey.value}/${model.chatHistoryLoading.value}/${model.chatHealthOk.value}; " +
-          "rows=${runtime.chatMessages.value.size}/${model.chatMessages.value.size}; " +
-          "textMatches=${runtime.chatMessages.value
+          "rows=${runtime.chat.messages.value.size}/${model.chatMessages.value.size}; " +
+          "textMatches=${runtime.chat.messages.value
             .singleOrNull()
             ?.content
             ?.firstOrNull { it.type == "text" }
@@ -1679,7 +1719,7 @@ class ChatFullMessageOwnershipLayoutTest {
             ?.content
             ?.firstOrNull { it.type == "text" }
             ?.text == gateway.historyText(key)}; " +
-          "error=${runtime.chatError.value}/${model.chatError.value}; " +
+          "error=${runtime.chat.errorText.value}/${model.chatError.value}; " +
           "connected=${runtime.gatewayConnectionDisplay.value.isConnected}; " +
           "history=${gateway.historyReads.value.takeLast(8)}",
         failure,
@@ -1693,13 +1733,13 @@ class ChatFullMessageOwnershipLayoutTest {
   private fun selectBeforeRecomposition(key: String) {
     model.switchChatSession(key, ownerAgentId = "main")
     awaitRuntimeReady(key)
-    assertEquals(key, runtime.chatSessionKey.value)
+    assertEquals(key, runtime.chat.sessionKey.value)
   }
 
   private fun awaitRuntimeReady(key: String) {
     runBlocking {
       withTimeout(FULL_MESSAGE_READY_TIMEOUT_MS) {
-        combine(runtime.chatMessages, runtime.chatHistoryLoading, runtime.chatHealthOk) { messages, loading, healthy ->
+        combine(runtime.chat.messages, runtime.chat.historyLoading, runtime.chat.healthOk) { messages, loading, healthy ->
           !loading &&
             healthy &&
             messages
@@ -1710,12 +1750,12 @@ class ChatFullMessageOwnershipLayoutTest {
         }.first { it }
       }
     }
-    assertNull(runtime.chatError.value)
+    assertNull(runtime.chat.errorText.value)
   }
 
   private fun awaitInlineExpanded(
     tail: String = FULL_MESSAGE_TAIL,
-    expected: String = gateway.fullText(runtime.chatSessionKey.value),
+    expected: String = gateway.fullText(runtime.chat.sessionKey.value),
   ) {
     assertTrue("View all must expand the transcript bubble without opening a dialog", composeRule.onAllNodes(isDialog()).fetchSemanticsNodes().isEmpty())
     val assistant = hasAnyAncestor(hasContentDescription("OpenClaw"))
@@ -1738,7 +1778,7 @@ class ChatFullMessageOwnershipLayoutTest {
     composeRule.onNode(isDialog()).assertDoesNotExist()
   }
 
-  private fun awaitExpanded(expected: String = gateway.fullText(runtime.chatSessionKey.value)) {
+  private fun awaitExpanded(expected: String = gateway.fullText(runtime.chat.sessionKey.value)) {
     awaitInlineExpanded(tail = expected.lineSequence().last { it.isNotBlank() }.takeLast(128), expected = expected)
   }
 

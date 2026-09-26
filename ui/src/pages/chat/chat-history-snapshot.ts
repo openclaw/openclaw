@@ -14,7 +14,12 @@ import {
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
-import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  readChatHistoryCursor,
+  setChatHistoryCursor,
+} from "./session-message-cache.ts";
 import type { AgentEventPayload } from "./tool-stream-contract.ts";
 
 export type ChatHistoryResult = {
@@ -183,6 +188,10 @@ export function commitCurrentChatHistorySnapshot(
   state: ChatState,
   deltaCursor?: string | null,
 ): void {
+  if (deltaCursor !== undefined) {
+    setChatHistoryCursor(state, deltaCursor ?? undefined);
+  }
+  const cachedDeltaCursor = readChatHistoryCursor(state);
   if (!state.chatMessagesBySession) {
     return;
   }
@@ -190,13 +199,6 @@ export function commitCurrentChatHistorySnapshot(
   const agentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
-  const cachedDeltaCursor =
-    deltaCursor === undefined
-      ? readChatSessionSnapshot(state.chatMessagesBySession, state, {
-          sessionKey,
-          agentId,
-        })?.deltaCursor
-      : (deltaCursor ?? undefined);
   cacheChatSessionSnapshot(
     state.chatMessagesBySession,
     state,
@@ -214,6 +216,7 @@ export function commitCurrentChatHistorySnapshot(
 }
 
 export function clearHistoryCursor(state: ChatState, sessionKey: string, agentId?: string): void {
+  delete state.chatHistoryCursor;
   if (!state.chatMessagesBySession) {
     return;
   }

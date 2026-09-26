@@ -15,6 +15,8 @@ import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import "./app-host.ts";
 
 vi.hoisted(() => {
+  // Build identity is captured on import, including imports from an earlier shared test.
+  vi.resetModules();
   vi.stubGlobal("OPENCLAW_CONTROL_UI_BUILD_INFO", {
     version: "1.0.0",
     buildId: "serving-build",

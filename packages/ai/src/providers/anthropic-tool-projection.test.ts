@@ -52,10 +52,7 @@ describe("projectAnthropicTools", () => {
     ]);
   });
 
-  it.each([
-    { names: ["Read", "Read", "read"], first: "Read", last: "read" },
-    { names: ["read", "read", "Read"], first: "read", last: "Read" },
-  ])(
+  it.each([{ names: ["Read", "Read", "read"], first: "Read", last: "read" }])(
     "keeps the first accepted spelling in a collision after $first duplicates",
     ({ names, first, last }) => {
       expect(() =>

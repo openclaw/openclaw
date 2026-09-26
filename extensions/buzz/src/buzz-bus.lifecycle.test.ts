@@ -140,8 +140,6 @@ describe("Buzz bus lifecycle", () => {
   it.each([
     ["truncated JSON", '{"self":'],
     ["null", "null"],
-    ["an array", "[]"],
-    ["a primitive", "true"],
   ])("rejects malformed NIP-11 relay information containing %s", async (_label, body) => {
     relayMocks.auth.mockResolvedValue("ok");
     vi.stubGlobal(

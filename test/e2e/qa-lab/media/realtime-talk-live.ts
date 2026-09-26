@@ -341,15 +341,6 @@ async function runRealtimeTalkLiveProof(params: {
   };
 }
 
-export function buildRealtimeTalkLiveEvidence(params: {
-  env?: NodeJS.ProcessEnv;
-  options: RealtimeTalkLiveOptions;
-  result: RealtimeTalkProofResult;
-}): QaEvidenceSummaryJson {
-  const env = params.env ?? process.env;
-  return createRealtimeTalkEvidenceWriter(params.options, env).build(params.result);
-}
-
 export async function runRealtimeTalkLiveProducer(
   options: RealtimeTalkLiveOptions,
   env: NodeJS.ProcessEnv = process.env,

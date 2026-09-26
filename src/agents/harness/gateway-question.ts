@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/schema/questions.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import {
@@ -168,12 +169,11 @@ export function registerPendingAgentQuestion(params: {
   if (existing) {
     throw new Error(`session already has a pending agent input request: ${sessionKey}`);
   }
-  let resolveRegistration!: (value: unknown) => void;
-  let rejectRegistration!: (error: unknown) => void;
-  const registration = new Promise<unknown>((resolve, reject) => {
-    resolveRegistration = resolve;
-    rejectRegistration = reject;
-  });
+  const {
+    promise: registration,
+    resolve: resolveRegistration,
+    reject: rejectRegistration,
+  } = createDeferredCore<unknown>();
   void registration.catch(() => undefined);
   let registrationAttached = false;
   const state: PendingAgentQuestion = {

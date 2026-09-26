@@ -17,7 +17,7 @@ vi.mock("./store-maintenance-runtime.js", () => ({
   }),
 }));
 
-import { resolveSessionCleanupAction, runSessionsCleanup } from "./cleanup-service.js";
+import { runSessionsCleanup } from "./cleanup-service.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -25,22 +25,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("session cleanup cap archives", () => {
   afterEach(() => {
     closeOpenClawAgentDatabasesForTest();
-  });
-
-  it("reports cap archives separately from dashboard-age archives", () => {
-    const key = "agent:main:dashboard:cap-victim";
-    expect(
-      resolveSessionCleanupAction({
-        key,
-        missingKeys: new Set(),
-        modelRunPrunedKeys: new Set(),
-        archivedKeys: new Set(),
-        capArchivedKeys: new Set([key]),
-        staleKeys: new Set(),
-        cappedKeys: new Set(),
-        dmScopeRetiredKeys: new Set(),
-      }),
-    ).toBe("archive-cap");
   });
 
   it("separates cap archives in cleanup summary JSON", async () => {

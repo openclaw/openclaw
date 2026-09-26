@@ -346,40 +346,37 @@ describe("config schema", () => {
   });
 
   it("validates MCP OAuth client metadata URLs against the SDK contract", () => {
-    expect(() =>
-      OpenClawSchema.parse({
-        mcp: {
-          servers: {
-            docs: {
-              url: "https://mcp.example.com/mcp",
-              transport: "streamable-http",
-              auth: "oauth",
-              oauth: {
-                clientMetadataUrl: "https://client.example.com/openclaw-mcp.json",
-              },
-            },
+    const configWithMetadataUrl = (clientMetadataUrl: string) => ({
+      mcp: {
+        servers: {
+          docs: {
+            url: "https://mcp.example.com/mcp",
+            transport: "streamable-http",
+            auth: "oauth",
+            oauth: { clientMetadataUrl },
           },
         },
-      }),
+      },
+    });
+    expect(() =>
+      OpenClawSchema.parse(configWithMetadataUrl("https://client.example.com/openclaw-mcp.json")),
     ).not.toThrow();
     for (const clientMetadataUrl of [
       "http://client.example.com/openclaw-mcp.json",
       "https://client.example.com/",
+      "not a url",
+      "https://[invalid]/openclaw-mcp.json",
+      "",
     ]) {
-      expect(() =>
-        OpenClawSchema.parse({
-          mcp: {
-            servers: {
-              docs: {
-                url: "https://mcp.example.com/mcp",
-                transport: "streamable-http",
-                auth: "oauth",
-                oauth: { clientMetadataUrl },
-              },
-            },
-          },
-        }),
-      ).toThrow();
+      expect(validateConfigObjectRaw(configWithMetadataUrl(clientMetadataUrl))).toMatchObject({
+        ok: false,
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            path: "mcp.servers.docs.oauth.clientMetadataUrl",
+            message: "Expected https:// URL with a non-root pathname",
+          }),
+        ]),
+      });
     }
   });
 
@@ -1127,7 +1124,7 @@ describe("config schema", () => {
     );
   });
 
-  it.each([undefined, {}, { maxConcurrent: 3 }, false, { enabled: false }])(
+  it.each([undefined, {}, false, { enabled: false }])(
     "preserves authored Swarm config %j without materializing defaults",
     (swarm) => {
       expect(ToolsSchema.parse(swarm === undefined ? {} : { swarm })?.swarm).toEqual(swarm);
@@ -1287,6 +1284,7 @@ describe("config schema", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.entries.main.runtime");
     expect(lookup?.path).toBe("agents.entries.main.runtime");
     expect(lookup?.hintPath).toBe("agents.entries.*.runtime");
+    expect(lookup?.hint?.label).toBe("Agent Runtime");
     expect(lookup?.schema).not.toHaveProperty("allOf");
     expect(lookup?.schema).not.toHaveProperty("oneOf");
     const schema = lookup?.schema as { anyOf?: Array<{ properties?: Record<string, unknown> }> };
@@ -1331,13 +1329,6 @@ describe("config schema", () => {
   it("rejects quoted bracket map paths", () => {
     const lookup = lookupConfigSchema(baseSchema, 'agents.entries["main"].identity.avatar');
     expect(lookup).toBeNull();
-  });
-
-  it("matches ui hints for keyed record entries", () => {
-    const lookup = lookupConfigSchema(baseSchema, "agents.entries.main.runtime");
-    expect(lookup?.path).toBe("agents.entries.main.runtime");
-    expect(lookup?.hintPath).toBe("agents.entries.*.runtime");
-    expect(lookup?.hint?.label).toBe("Agent Runtime");
   });
 
   it("uses the indexed tuple item schema for positional array lookups", () => {

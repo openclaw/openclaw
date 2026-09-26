@@ -80,15 +80,8 @@ async function terminateAcpServer(child: ChildProcess): Promise<void> {
   await waitForChildExit(child, ACP_SERVER_FORCE_KILL_TIMEOUT_MS);
 }
 
-function toArgs(value: string[] | string | undefined): string[] {
-  if (!value) {
-    return [];
-  }
-  return Array.isArray(value) ? value : [value];
-}
-
 function buildServerArgs(opts: AcpClientOptions): string[] {
-  const args = ["acp", ...toArgs(opts.serverArgs)];
+  const args = ["acp", ...(opts.serverArgs ?? [])];
   if (opts.serverVerbose && !args.includes("--verbose") && !args.includes("-v")) {
     args.push("--verbose");
   }

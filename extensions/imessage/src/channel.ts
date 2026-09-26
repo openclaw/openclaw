@@ -1,5 +1,4 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-// Imessage plugin module implements channel behavior.
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { formatTrimmedAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -220,15 +219,6 @@ const imessageMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-function buildIMessageBaseSessionKey(params: {
-  cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
-  agentId: string;
-  accountId?: string | null;
-  peer: RoutePeer;
-}) {
-  return buildOutboundBaseSessionKey({ ...params, channel: "imessage" });
-}
-
 function isCanonicalIMessageDirectHandle(raw: string, normalized: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed || !normalized) {
@@ -249,6 +239,10 @@ function resolveIMessageOutboundSessionRoute(params: {
   target: string;
 }) {
   const parsed = parseIMessageTarget(params.target);
+  let peer: RoutePeer;
+  let from: string;
+  let to: string;
+  let recipientSessionExact = false;
   if (parsed.kind === "handle") {
     const handle = normalizeIMessageHandle(parsed.to);
     if (!handle) {
@@ -259,55 +253,38 @@ function resolveIMessageOutboundSessionRoute(params: {
       resolveIMessageDirectChatService(
         parsed.serviceExplicit ? parsed.service : account.config.service,
       ) ?? "auto";
-    const directTarget = `${service}:${handle}`;
-    const peer: RoutePeer = { kind: "direct", id: handle };
-    const baseSessionKey = buildIMessageBaseSessionKey({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      accountId: params.accountId,
-      peer,
-    });
-    return {
-      sessionKey: baseSessionKey,
-      baseSessionKey,
-      recipientSessionExact: isCanonicalIMessageDirectHandle(parsed.to, handle),
-      peer,
-      chatType: "direct" as const,
-      from: directTarget,
-      to: directTarget,
-    };
+    from = to = `${service}:${handle}`;
+    peer = { kind: "direct", id: handle };
+    recipientSessionExact = isCanonicalIMessageDirectHandle(parsed.to, handle);
+  } else {
+    const peerId =
+      parsed.kind === "chat_id"
+        ? String(parsed.chatId)
+        : parsed.kind === "chat_guid"
+          ? parsed.chatGuid
+          : parsed.chatIdentifier;
+    if (!peerId) {
+      return null;
+    }
+    peer = { kind: "group", id: peerId };
+    from = `imessage:group:${peerId}`;
+    to = `${parsed.kind}:${peerId}`;
   }
-
-  const peerId =
-    parsed.kind === "chat_id"
-      ? String(parsed.chatId)
-      : parsed.kind === "chat_guid"
-        ? parsed.chatGuid
-        : parsed.chatIdentifier;
-  if (!peerId) {
-    return null;
-  }
-  const peer: RoutePeer = { kind: "group", id: peerId };
-  const baseSessionKey = buildIMessageBaseSessionKey({
+  const baseSessionKey = buildOutboundBaseSessionKey({
     cfg: params.cfg,
+    channel: "imessage",
     agentId: params.agentId,
     accountId: params.accountId,
     peer,
   });
-  const toPrefix =
-    parsed.kind === "chat_id"
-      ? "chat_id"
-      : parsed.kind === "chat_guid"
-        ? "chat_guid"
-        : "chat_identifier";
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
-    recipientSessionExact: false,
+    recipientSessionExact,
     peer,
-    chatType: "group" as const,
-    from: `imessage:group:${peerId}`,
-    to: `${toPrefix}:${peerId}`,
+    chatType: peer.kind,
+    from,
+    to,
   };
 }
 

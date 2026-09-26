@@ -217,8 +217,6 @@ function resolveCustomStoreSqlitePath(params: {
   };
   const { registeredOwners: registeredUnsuffixedOwners, effectiveOwner: persistedUnsuffixedOwner } =
     resolvePersistedOwner(unsuffixedPath);
-  const suffixedPathFor = (ownerAgentId: string) =>
-    path.join(sessionsDir, `${sqliteBaseName}.${ownerAgentId}.sqlite`);
   const resolveSuffixedTarget = (ownerAgentId: string) => {
     const prefix = `${sqliteBaseName}.${ownerAgentId}`;
     const parseIndex = (fileName: string): number | undefined => {
@@ -262,9 +260,7 @@ function resolveCustomStoreSqlitePath(params: {
       // A missing target directory has no occupied on-disk suffixes.
     }
     const candidatePathAt = (index: number) =>
-      index === 1
-        ? suffixedPathFor(ownerAgentId)
-        : path.join(sessionsDir, `${prefix}.${index}.sqlite`);
+      path.join(sessionsDir, index === 1 ? `${prefix}.sqlite` : `${prefix}.${index}.sqlite`);
     const sortedOccupiedIndexes = [...occupiedIndexes].toSorted((left, right) => left - right);
     for (const index of sortedOccupiedIndexes) {
       const candidatePath = candidatePathAt(index);
@@ -381,18 +377,19 @@ export function resolveSqliteTargetFromSessionStorePath(
       databaseOwner ??
       configuredDefaultAgentId;
     return {
-      ...(ownerAgentId ? { agentId: ownerAgentId } : {}),
+      agentId: ownerAgentId,
       path: unsuffixedTarget.path,
       // Exact locators are shared session stores: scoped keys partition rows inside one file.
       // The physical schema owner must never turn the first caller into the store's sole owner.
       shared: true,
-      ...(registeredOwners.length === 1
-        ? { ownerSource: "database-registry" as const }
-        : databaseOwner
-          ? { ownerSource: "database-path" as const }
-          : registeredOwners.length > 1
-            ? { ownerSource: "ambiguous-registry" as const }
-            : { ownerSource: "configured-default" as const }),
+      ownerSource:
+        registeredOwners.length === 1
+          ? "database-registry"
+          : databaseOwner
+            ? "database-path"
+            : registeredOwners.length > 1
+              ? "ambiguous-registry"
+              : "configured-default",
     };
   }
   return resolveCustomStoreSqlitePath({ unsuffixedPath: unsuffixedTarget.path, options });

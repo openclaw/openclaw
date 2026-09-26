@@ -4,21 +4,28 @@ import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-ta
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonStatus } from "./status.gather.js";
 
-const gatherDaemonStatus = vi.fn(async (_opts?: unknown): Promise<DaemonStatus> => ({
-  service: {
-    label: "LaunchAgent",
-    loaded: true,
-    loadState: { status: "loaded" },
-    loadedText: "loaded",
-    notLoadedText: "not loaded",
-  },
-  rpc: {
+function createStatus(
+  rpc: DaemonStatus["rpc"] = {
     ok: true,
     url: "ws://127.0.0.1:18789",
   },
-  extraServices: [],
-}));
+): DaemonStatus {
+  return {
+    service: {
+      label: "LaunchAgent",
+      loaded: true,
+      loadState: { status: "loaded" },
+      loadedText: "loaded",
+      notLoadedText: "not loaded",
+    },
+    rpc,
+    extraServices: [],
+  };
+}
+
+const gatherDaemonStatus = vi.fn(async (_opts?: unknown) => createStatus());
 const printDaemonStatus = vi.fn();
+const statusOptions = { rpc: {}, probe: true, requireRpc: false, json: false };
 
 vi.mock("../../infra/update-check-package-target.js", () => ({
   fetchNpmPackageTargetStatus: vi.fn(),
@@ -79,7 +86,7 @@ describe("runDaemonStatus", () => {
       error: "HTTP 404",
     });
 
-    await runDaemonStatus({ rpc: {}, probe: true, requireRpc: false, json: false, deep });
+    await runDaemonStatus({ ...statusOptions, deep });
 
     expect(fetchNpmPackageTargetStatus).toHaveBeenCalledTimes(deep ? 1 : 0);
     const printed = printDaemonStatus.mock.calls[0]?.[0] as DaemonStatus;
@@ -90,30 +97,17 @@ describe("runDaemonStatus", () => {
   });
 
   it("exits when require-rpc is set and the probe fails", async () => {
-    gatherDaemonStatus.mockResolvedValueOnce({
-      service: {
-        label: "LaunchAgent",
-        loaded: true,
-        loadState: { status: "loaded" },
-        loadedText: "loaded",
-        notLoadedText: "not loaded",
-      },
-      rpc: {
+    gatherDaemonStatus.mockResolvedValueOnce(
+      createStatus({
         ok: false,
         url: "ws://127.0.0.1:18789",
         error: "gateway closed",
-      },
-      extraServices: [],
-    });
-
-    await expect(
-      runDaemonStatus({
-        rpc: {},
-        probe: true,
-        requireRpc: true,
-        json: false,
       }),
-    ).rejects.toThrow("__exit__:1");
+    );
+
+    await expect(runDaemonStatus({ ...statusOptions, requireRpc: true })).rejects.toThrow(
+      "__exit__:1",
+    );
 
     expect(printDaemonStatus).toHaveBeenCalledTimes(1);
     expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
@@ -126,28 +120,15 @@ describe("runDaemonStatus", () => {
   it.each([false, true])(
     "does not exit after reporting a failed non-required RPC probe in json=%s mode",
     async (json) => {
-      gatherDaemonStatus.mockResolvedValueOnce({
-        service: {
-          label: "LaunchAgent",
-          loaded: true,
-          loadState: { status: "loaded" },
-          loadedText: "loaded",
-          notLoadedText: "not loaded",
-        },
-        rpc: {
+      gatherDaemonStatus.mockResolvedValueOnce(
+        createStatus({
           ok: false,
           url: "ws://127.0.0.1:18789",
           error: "connect ECONNREFUSED 127.0.0.1:18789",
-        },
-        extraServices: [],
-      });
+        }),
+      );
 
-      await runDaemonStatus({
-        rpc: {},
-        probe: true,
-        requireRpc: false,
-        json,
-      });
+      await runDaemonStatus({ ...statusOptions, json });
 
       expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
         json,
@@ -158,12 +139,7 @@ describe("runDaemonStatus", () => {
   );
 
   it("forwards require-rpc to daemon status gathering", async () => {
-    await runDaemonStatus({
-      rpc: {},
-      probe: true,
-      requireRpc: true,
-      json: false,
-    });
+    await runDaemonStatus({ ...statusOptions, requireRpc: true });
 
     expect(gatherDaemonStatus).toHaveBeenCalledWith({
       rpc: {},
@@ -175,12 +151,7 @@ describe("runDaemonStatus", () => {
 
   it("rejects require-rpc when probing is disabled", async () => {
     await expect(
-      runDaemonStatus({
-        rpc: {},
-        probe: false,
-        requireRpc: true,
-        json: false,
-      }),
+      runDaemonStatus({ ...statusOptions, probe: false, requireRpc: true }),
     ).rejects.toThrow("__exit__:1");
 
     expect(gatherDaemonStatus).not.toHaveBeenCalled();
@@ -192,12 +163,7 @@ describe("runDaemonStatus", () => {
 
   it("renders disabled-probe validation failures as JSON in JSON mode", async () => {
     await expect(
-      runDaemonStatus({
-        rpc: {},
-        probe: false,
-        requireRpc: true,
-        json: true,
-      }),
+      runDaemonStatus({ ...statusOptions, probe: false, requireRpc: true, json: true }),
     ).rejects.toThrow("__exit__:1");
 
     expect(gatherDaemonStatus).not.toHaveBeenCalled();
@@ -219,14 +185,7 @@ describe("runDaemonStatus", () => {
     error.name = "ServiceManagerError";
     gatherDaemonStatus.mockRejectedValueOnce(error);
 
-    await expect(
-      runDaemonStatus({
-        rpc: {},
-        probe: true,
-        requireRpc: false,
-        json: true,
-      }),
-    ).rejects.toThrow("__exit__:1");
+    await expect(runDaemonStatus({ ...statusOptions, json: true })).rejects.toThrow("__exit__:1");
 
     expect(printDaemonStatus).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
@@ -243,29 +202,16 @@ describe("runDaemonStatus", () => {
   });
 
   it("exits only once after printing a failed required RPC probe", async () => {
-    gatherDaemonStatus.mockResolvedValueOnce({
-      service: {
-        label: "LaunchAgent",
-        loaded: true,
-        loadState: { status: "loaded" },
-        loadedText: "loaded",
-        notLoadedText: "not loaded",
-      },
-      rpc: {
+    gatherDaemonStatus.mockResolvedValueOnce(
+      createStatus({
         ok: false,
         url: "ws://127.0.0.1:18789",
         error: "gateway closed",
-      },
-      extraServices: [],
-    });
+      }),
+    );
 
     await expect(
-      runDaemonStatus({
-        rpc: {},
-        probe: true,
-        requireRpc: true,
-        json: true,
-      }),
+      runDaemonStatus({ ...statusOptions, requireRpc: true, json: true }),
     ).rejects.toThrow("__exit__:1");
 
     expect(printDaemonStatus).toHaveBeenCalledTimes(1);

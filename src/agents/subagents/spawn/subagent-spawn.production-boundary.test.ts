@@ -801,7 +801,9 @@ describe("recursive spawn production boundary", () => {
       sessionKey: childSessionKey,
     });
     const worker = target.startsWith("worker-") ? await createBoundWorker(bound) : undefined;
-    let replacementClaim: ReturnType<NonNullable<typeof worker>["store"]["claimTurn"]> | undefined;
+    let replacementClaim:
+      | Awaited<ReturnType<NonNullable<typeof worker>["store"]["claimTurn"]>>
+      | undefined;
     const results: boolean[] = [];
     const errors: unknown[] = [];
     const failures: unknown[] = [];
@@ -887,8 +889,8 @@ describe("recursive spawn production boundary", () => {
       } else if (target === "replaced-gateway") {
         bound.gatewayBinding.current = { ...context };
       } else if (target === "worker-reassigned" && worker) {
-        worker.store.releaseTurn(worker.claim);
-        replacementClaim = worker.store.claimTurn({
+        await worker.store.releaseTurn(worker.claim);
+        replacementClaim = await worker.store.claimTurn({
           ...worker.session,
           owner: worker.claim.owner,
           claimId: "replacement-claim",
@@ -917,8 +919,8 @@ describe("recursive spawn production boundary", () => {
             throw new Error("cleanup ended before the session mutation barrier");
           }),
         ]);
-        worker.store.releaseTurn(worker.claim);
-        replacementClaim = worker.store.claimTurn({
+        await worker.store.releaseTurn(worker.claim);
+        replacementClaim = await worker.store.claimTurn({
           ...worker.session,
           owner: worker.claim.owner,
           claimId: "replacement-claim",
@@ -965,7 +967,7 @@ describe("recursive spawn production boundary", () => {
       }
       try {
         if (worker && worker.store.validateTurnClaim(replacementClaim ?? worker.claim)) {
-          worker.store.releaseTurn(replacementClaim ?? worker.claim);
+          await worker.store.releaseTurn(replacementClaim ?? worker.claim);
         }
       } catch (error) {
         failures.push(error);

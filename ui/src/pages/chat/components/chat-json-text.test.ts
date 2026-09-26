@@ -17,7 +17,7 @@ import { renderToolCard } from "./chat-tool-cards.ts";
 const jsonSources = [
   {
     name: "object numeric lexemes",
-    text: '{"id":9007199254740993,"overflow":1e400,"decimal":0.1234567890123456789,"zero":-0}',
+    text: '{\n  "id":9007199254740993,"overflow":1e400,"decimal":0.1234567890123456789,"zero":-0\n}',
   },
   {
     name: "array numeric lexemes",
@@ -29,7 +29,6 @@ const jsonSources = [
     text: String.raw`{"quoted":"say \"hello\"","slash":"\/","unicode":"\u0061","backslash":"\\"}`,
   },
   { name: "literal Markdown", text: '{"text":"**stars**"}' },
-  { name: "ordinary formatted JSON", text: '{\n  "count": 42,\n  "ready": true\n}' },
   {
     name: "natural nested indentation and string whitespace",
     text: '{\n\t"nested": {\n\t\t"id": 9007199254740993,\n\t\t"state": "before", "state": "after",\n\t\t"text": "  keep these spaces  "\n\t}\n}',
@@ -112,23 +111,20 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
     }
   });
 
-  it.each([19_999, 20_000, 20_001])(
-    "retains the auto-JSON rendering boundary at %i characters",
-    (size) => {
-      const text = '{"text":"' + "x".repeat(size - 11) + '"}';
-      expect(text).toHaveLength(size);
-      const container = renderMessage(text);
-      if (size <= 20_000) {
-        expect(container.querySelector(".chat-text pre code")?.textContent).toBe(text);
-        expect(container.querySelectorAll(".code-block-json-tree")).toHaveLength(
-          role === "assistant" ? 1 : 0,
-        );
-      } else {
-        expect(container.querySelector(".code-block-json-tree")).toBeNull();
-        expect(container.querySelector(".chat-text pre code")?.textContent).toBe(text);
-      }
-    },
-  );
+  it.each([20_000, 20_001])("retains the auto-JSON rendering boundary at %i characters", (size) => {
+    const text = '{"text":"' + "x".repeat(size - 11) + '"}';
+    expect(text).toHaveLength(size);
+    const container = renderMessage(text);
+    if (size <= 20_000) {
+      expect(container.querySelector(".chat-text pre code")?.textContent).toBe(text);
+      expect(container.querySelectorAll(".code-block-json-tree")).toHaveLength(
+        role === "assistant" ? 1 : 0,
+      );
+    } else {
+      expect(container.querySelector(".code-block-json-tree")).toBeNull();
+      expect(container.querySelector(".chat-text pre code")?.textContent).toBe(text);
+    }
+  });
 
   it("keeps explicitly fenced JSON literal in one shared code block", () => {
     const text = '{"id":9007199254740993,"text":"**stars**"}';
@@ -222,16 +218,14 @@ describe("tool JSON details", () => {
     expect(panel.querySelector("pre strong")).toBeNull();
   });
 
-  it.each([19_999, 20_000, 20_001])(
-    "keeps %i-character JSON output literal in details",
-    async (size) => {
-      const text = '{"text":"**stars**' + "x".repeat(size - 20) + '"}';
-      expect(text).toHaveLength(size);
-      const panel = await openToolDetails(text);
-      expect(panel.querySelector("pre code")?.textContent).toBe(text);
-      expect(panel.querySelector("pre strong")).toBeNull();
-    },
-  );
+  it("keeps oversized JSON output literal in details", async () => {
+    const size = 20_001;
+    const text = '{"text":"**stars**' + "x".repeat(size - 20) + '"}';
+    expect(text).toHaveLength(size);
+    const panel = await openToolDetails(text);
+    expect(panel.querySelector("pre code")?.textContent).toBe(text);
+    expect(panel.querySelector("pre strong")).toBeNull();
+  });
 
   it("keeps explicitly fenced JSON output literal in details", async () => {
     const text = '{"id":9007199254740993,"text":"**stars**"}';

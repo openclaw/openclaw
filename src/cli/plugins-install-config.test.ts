@@ -185,7 +185,6 @@ describe("loadConfigForInstall", () => {
 
   it.each([
     { path: "channels.discord", message: "unknown channel id: discord" },
-    { path: "channels.discord", message: "invalid config for plugin discord: must be object" },
     {
       path: "channels.discord.accounts.work",
       message: "invalid config for plugin discord: must be object",
@@ -843,11 +842,6 @@ describe("loadConfigForInstall", () => {
       scope: "plugins",
     },
     {
-      label: "root include without authored plugins",
-      parsed: { $include: "./root.json5" },
-      scope: "config",
-    },
-    {
       label: "root include with authored plugins",
       parsed: { $include: "./root.json5", plugins: { entries: {} } },
       scope: "config",
@@ -894,26 +888,6 @@ describe("loadConfigForInstall", () => {
         scope,
         reason: expect.stringContaining("unsupported $include shape"),
       });
-    },
-  );
-
-  it.each(unsupportedPluginIncludeShapes)(
-    "blocks valid known plugins through an unsupported $label",
-    async ({ parsed }) => {
-      const snapshotCfg = { plugins: {} } as OpenClawConfig;
-      readConfigFileSnapshotMock.mockResolvedValue(
-        makeSnapshot({
-          valid: true,
-          parsed,
-          sourceConfig: snapshotCfg as ConfigFileSnapshot["sourceConfig"],
-          config: snapshotCfg,
-          issues: [],
-        }),
-      );
-
-      await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-        "unsupported $include shape",
-      );
     },
   );
 

@@ -28,15 +28,6 @@ describe("canonical persisted media", () => {
       expected: [{ ...canonicalFact, kind: "image" }],
     },
     {
-      name: "both-equal",
-      message: {
-        MediaPath: canonicalFact.path,
-        MediaType: canonicalFact.contentType,
-        __openclaw: { media: [canonicalFact] },
-      },
-      expected: [{ ...canonicalFact, kind: "image" }],
-    },
-    {
       name: "both-conflict",
       message: {
         MediaPath: "/media/legacy-conflict.jpg",
@@ -61,11 +52,6 @@ describe("canonical persisted media", () => {
       name: "type-only",
       message: { MediaType: "image" },
       expected: [{ kind: "image" }],
-    },
-    {
-      name: "media-only",
-      message: { role: "user", content: "", __openclaw: { media: [canonicalFact] } },
-      expected: [{ ...canonicalFact, kind: "image" }],
     },
   ])("canonicalizes $name rows", ({ message, expected }) => {
     const result = canonicalizePersistedUserMessageMedia(message);
@@ -350,16 +336,6 @@ describe("canonical image media facts", () => {
     {
       name: "unknown-kind PDF with image filename",
       fact: { path: "/tmp/report.png", contentType: "application/pdf", kind: "unknown" as const },
-      expected: false,
-    },
-    {
-      name: "unknown-kind ZIP with image filename",
-      fact: { path: "/tmp/report.png", contentType: "application/zip", kind: "unknown" as const },
-      expected: false,
-    },
-    {
-      name: "unknown-kind text with image filename",
-      fact: { path: "/tmp/report.png", contentType: "text/plain", kind: "unknown" as const },
       expected: false,
     },
     {

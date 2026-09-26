@@ -1,3 +1,4 @@
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/outbound-echo-runtime";
 import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
@@ -47,7 +48,6 @@ type ThreadBindingsGlobalState = {
 // imports it via ESM. Store mutable state on globalThis so both paths share one
 // registry.
 const THREAD_BINDINGS_STATE_KEY = Symbol.for("openclaw.discordThreadBindingsState");
-let threadBindingsState: ThreadBindingsGlobalState | undefined;
 
 function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
   return {
@@ -70,20 +70,12 @@ function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
   };
 }
 
-function resolveThreadBindingsGlobalState(): ThreadBindingsGlobalState {
-  if (!threadBindingsState) {
-    const globalStore = globalThis as Record<PropertyKey, unknown>;
-    threadBindingsState =
-      (globalStore[THREAD_BINDINGS_STATE_KEY] as ThreadBindingsGlobalState | undefined) ??
-      createThreadBindingsGlobalState();
-    // Source-plugin reloads retain the previous generation's shared registry.
-    threadBindingsState.accountOperationTails ??= new WeakMap();
-    globalStore[THREAD_BINDINGS_STATE_KEY] = threadBindingsState;
-  }
-  return threadBindingsState;
-}
-
-export const THREAD_BINDINGS_STATE = resolveThreadBindingsGlobalState();
+export const THREAD_BINDINGS_STATE = resolveGlobalSingleton(
+  THREAD_BINDINGS_STATE_KEY,
+  createThreadBindingsGlobalState,
+);
+// Source-plugin reloads retain the previous generation's shared registry.
+THREAD_BINDINGS_STATE.accountOperationTails ??= new WeakMap();
 
 export const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 export const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;

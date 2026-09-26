@@ -48,6 +48,7 @@ function parseSystemdShow(output: string) {
     nRestarts: parseStrictInteger(entries.nrestarts),
     startLimitBurst: parseStrictInteger(entries.startlimitburst),
     unit: entries.id || undefined,
+    controlGroup: entries.controlgroup || undefined,
     killMode: entries.killmode || undefined,
     tasksCurrent: parseStrictNonNegativeInteger(entries.taskscurrent),
     memoryCurrent: parseStrictNonNegativeInteger(entries.memorycurrent),
@@ -141,7 +142,7 @@ export async function readSystemdServiceRuntime(
     unitName,
     "--no-page",
     "--property",
-    "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+    "Id,LoadState,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent,ControlGroup",
   ];
   const res =
     installed?.scope === "system"
@@ -191,6 +192,7 @@ export async function readSystemdServiceRuntime(
       scope: installed?.scope ?? "user",
       transport: installed?.scope === "system" ? undefined : await readSystemdUserTransport(env),
       unit: parsed.unit ?? unitName,
+      controlGroup: parsed.controlGroup,
       killMode: parsed.killMode,
       tasksCurrent: parsed.tasksCurrent,
       memoryCurrent: parsed.memoryCurrent,

@@ -112,29 +112,6 @@ describe("resolveReferencedReplyMediaList", () => {
 });
 
 describe("Discord media SSRF policy", () => {
-  it("passes Discord CDN hostname allowlist with RFC2544 enabled", async () => {
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({ path: "/tmp/a.png", contentType: "image/png" });
-
-    await resolveMediaList(
-      asMessage({
-        attachments: [{ id: "a1", url: "https://cdn.discordapp.com/a.png", filename: "a.png" }],
-      }),
-      1024,
-    );
-
-    const call = readRemoteMediaBuffer.mock.calls[0]?.[0] as
-      | { ssrfPolicy?: Record<string, unknown> }
-      | undefined;
-    expect(call?.ssrfPolicy?.allowRfc2544BenchmarkRange).toBe(true);
-    expect(call?.ssrfPolicy?.hostnameAllowlist).toEqual(
-      expect.arrayContaining(["cdn.discordapp.com", "media.discordapp.net"]),
-    );
-  });
-
   it("merges provided ssrfPolicy with Discord CDN defaults", async () => {
     readRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.from("img"),

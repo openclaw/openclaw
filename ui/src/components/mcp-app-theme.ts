@@ -1,13 +1,5 @@
-/**
- * Control UI custom properties published to embedded MCP apps, keyed by the
- * specification variable they satisfy. The key set is closed by the MCP Apps
- * specification, so an OpenClaw name can never be added here; the canonical
- * meaning of each key lives in the carapace embed contract.
- *
- * Only keys Control UI can honestly source are listed. The specification lets
- * a host publish any subset, and an app resolves the rest from its own
- * fallbacks, so omitting a key is preferable to inventing a value for it.
- */
+// MCP Apps owns the keys; the carapace embed contract owns their meanings.
+// Publish only sourced values so apps retain their fallbacks for unsupported keys.
 const HOST_TOKEN_SOURCES = {
   "--color-background-primary": "--card",
   "--color-background-secondary": "--bg",
@@ -50,17 +42,8 @@ const HOST_TOKEN_SOURCES = {
   "--shadow-lg": "--shadow-lg",
 } as const;
 
-/**
- * Values with no Control UI source, fixed by the specification's own scale or
- * the carapace embed contract.
- *
- * The font stacks are the carapace embed stacks (`--oc-font-embed-sans` /
- * `--oc-font-embed-mono`), sent in place of Control UI's own font tokens. The
- * sandbox policy allows font requests only from resource domains the app
- * itself declares, so a stack leading with a brand face would silently
- * resolve to an arbitrary system font; every family here is system
- * resolvable. Keep them byte-identical to carapace `candidate/embed.css`.
- */
+// Keep these system-resolvable fonts byte-identical to carapace candidate/embed.css.
+// Sandbox CSP admits only app-declared font domains, so host brand fonts may not load.
 const STATIC_VARIABLES = {
   "--border-width-regular": "1px",
   "--font-weight-normal": "400",
@@ -76,14 +59,7 @@ const STATIC_VARIABLES = {
 type StyleVariableKey = keyof typeof HOST_TOKEN_SOURCES | keyof typeof STATIC_VARIABLES;
 type StyleVariables = Partial<Record<StyleVariableKey, string>>;
 
-/**
- * Snapshot the current theme as MCP Apps style variables.
- *
- * Values are read as computed custom properties, which substitutes nested
- * `var()` references and leaves a self-contained value. That matters because
- * the app document is a separate origin: an unresolved reference to a Control
- * UI token would have nothing to resolve against once it crosses the boundary.
- */
+// Resolve nested var() references before crossing into the app's separate origin.
 export function collectMcpAppStyleVariables(
   root: HTMLElement | undefined = document.documentElement,
 ): StyleVariables | undefined {

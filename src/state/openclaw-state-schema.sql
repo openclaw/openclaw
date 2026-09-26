@@ -1852,7 +1852,8 @@ CREATE TABLE IF NOT EXISTS worktrees (
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
   removed_at INTEGER,
-  run_end_cleanup_json TEXT
+  run_end_cleanup_json TEXT,
+  gc_protection_json TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint

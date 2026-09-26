@@ -68,9 +68,8 @@ function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
   if (!database.isTransaction) {
     sessionNodesGenerationTrackerSchemaVersions.set(database, schemaVersion);
   } else {
-    const version = schemaVersion;
     stageSqliteTransactionState(database, {
-      stage: () => sessionNodesGenerationTrackerSchemaVersions.set(database, version),
+      stage: () => sessionNodesGenerationTrackerSchemaVersions.set(database, schemaVersion),
       rollback: () => sessionNodesGenerationTrackerSchemaVersions.delete(database),
       commit: () => {},
     });

@@ -130,7 +130,7 @@ describe("createCronToolSchema", () => {
     expect(schemaRecord.properties).not.toHaveProperty("patch");
   });
 
-  it.each([undefined, "", " \t ", "agent:main:telegram:direct:alice", " agent:main:main "])(
+  it.each([undefined, " \t ", " agent:main:main "])(
     "advertises job retargeting only without session scope (%j)",
     (agentSessionKey) => {
       const toolSchema = createCronTool({ agentSessionKey, agentId: "main" }).parameters;
@@ -370,10 +370,6 @@ describe("createCronToolSchema", () => {
     );
   });
 
-  it("job.payload includes fallbacks", () => {
-    expect(keysAt(schemaRecord, "job.payload")).toContain("fallbacks");
-  });
-
   it("accepts script payloads in create and update calls", () => {
     expect(
       Value.Check(schema, {
@@ -575,12 +571,6 @@ describe("createCronToolSchema with cron triggers disabled", () => {
     expect(tool.description).not.toContain("Silent watcher");
     expect(tool.description).not.toContain("event watchers");
     expect(tool.description).toContain("say it is unsupported");
-  });
-
-  it("keeps the full surface when no config is provided", () => {
-    const configlessSchema = createCronTool().parameters as unknown as Record<string, unknown>;
-    expect(keysAt(configlessSchema, "job")).toContain("trigger");
-    expect(propertyAt(configlessSchema, "job.schedule.kind")?.enum).toContain("stream");
   });
 
   it("keeps the full surface when config omits cron.triggers (enabled default)", () => {

@@ -106,13 +106,7 @@ export function removeAckReactionAfterReply(params: {
   remove: () => Promise<void>;
   onError?: (err: unknown) => void;
 }) {
-  if (!params.removeAfterReply) {
-    return;
-  }
-  if (!params.ackReactionPromise) {
-    return;
-  }
-  if (!params.ackReactionValue) {
+  if (!params.removeAfterReply || !params.ackReactionPromise || !params.ackReactionValue) {
     return;
   }
   // Only remove if the send actually succeeded; failed sends are already reported by the handle.

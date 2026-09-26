@@ -167,6 +167,7 @@ async function runDoctorHealthFlowWithResult(
       root,
       runtime: repairRuntime,
       assertCurrent: writeAuthority?.assertCurrent,
+      databaseGenerations: writeAuthority?.databaseGenerations,
     });
     const runChecks = async () => {
       const doctorRuntime = maintenance ? repairRuntime : effectiveRuntime;
@@ -270,6 +271,18 @@ async function runDoctorHealthFlowWithResult(
       }
       for (const message of deletionJournal.warnings) {
         effectiveRuntime.log(message);
+      }
+      if (prompter.shouldRepair && deletionJournal.warnings.length > 0) {
+        const failure = createUpdateFailureFact({
+          check: "agent-deletion-journal",
+          code: "unverified-agent-databases",
+          message: deletionJournal.warnings.join("\n"),
+        });
+        throw new DoctorMaintenanceRefusalError(
+          formatUpdateFailureFact(failure),
+          { kind: "data-at-risk", reason: "incomplete-migration" },
+          { failureFacts: [failure] },
+        );
       }
 
       // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
@@ -541,12 +554,16 @@ async function runDoctorHealthFlowWithResult(
         const warnings = normalizeUpdatePostInstallDoctorWarnings([
           ...contributionWarnings.slice(0, deferredCount),
           ...(doctorResult.warnings ?? []),
+          ...(maintenance?.warnings ?? []).filter(
+            (warning) => !doctorResult.warnings?.includes(warning),
+          ),
           ...contributionWarnings.slice(deferredCount),
         ]);
         await writeUpdatePostInstallDoctorResult({
           resultPath: updateResult.resultPath,
           result: {
             ...doctorResult,
+            ...(maintenance?.databaseWrites ? { databaseWrites: maintenance.databaseWrites } : {}),
             ...(warnings.length ? { warnings } : {}),
             ...(updateResult.capture.configChanges.length
               ? { configChanges: updateResult.capture.configChanges }

@@ -911,7 +911,6 @@
     <string name="native_79b1916f9fedb270" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نموذج Codex الأصلي"</string>
     <string name="native_79d3a1f108e8d9c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مضمّن"</string>
     <string name="native_79d3d8a05bab3172" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s متاحون"</string>
-    <string name="native_79e675583adc1ab5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"موافقة العقدة معلّقة"</string>
     <string name="native_7a1058bb81879dbd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway قيد الانتظار"</string>
     <string name="native_7a13d46682b4c94b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اتصل بـ Gateway لفتح هذه الجلسة."</string>
     <string name="native_7a211017043ea5cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المصادقة مطلوبة"</string>
@@ -1258,7 +1257,6 @@
     <string name="native_abd1b2fa48abb83a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّر تشغيل الكاميرا. اختر صورة لرمز QR من المعرض أو أدخل رمز الإعداد يدويًا."</string>
     <string name="native_abefee79c9ed4bb3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اضغط للنسخ"</string>
     <string name="native_abf88bc4972bb194" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"في الانتظار %1$sد"</string>
-    <string name="native_ac07bf982425811c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s."</string>
     <string name="native_ac1c17acbaa7cf14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اتصل بـ Gateway لتثبيت مهارات ClawHub."</string>
     <string name="native_ac295eb2e4d5ee74" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّر التأكد من صلاحية وصول الهاتف. تحقّق من الموافقة مرة أخرى."</string>
     <string name="native_ac3a53754a79a614" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · الميكروفون: يستمع"</string>
@@ -1474,7 +1472,6 @@
     <string name="native_cae7d57bc067a514" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"إيقاف"</string>
     <string name="native_cae98462b30650eb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"لا توجد سلاسل محادثات مطابقة حتى الآن."</string>
     <string name="native_caf85b0888d78f1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المصادر"</string>
-    <string name="native_cba62d81f910c7f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"نجح إقران Gateway.\nوافق على إمكانات عقدة هذا الهاتف من واجهة مستخدم للمشغّل."</string>
     <string name="native_cbb96d163f80c1f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تعذّرت قراءة الصورة المحددة."</string>
     <string name="native_cc4b66e7e22230c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"هذه المهارة مثبّتة، لكنها غير مؤهلة للتشغيل حاليًا. استخدم تطبيق سطح المكتب أو CLI لإجراء تغييرات على الإعدادات."</string>
     <string name="native_cc5f45fb30a26e07" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"أداة التعرّف مشغولة"</string>
@@ -1625,6 +1622,7 @@
     <string name="native_df13a5b93e14deb4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خطأ في المضيف"</string>
     <string name="native_df194cb3eb3cb3cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تمت إضافة تشغيل الأتمتة إلى قائمة الانتظار."</string>
     <string name="native_df2e1ea7f2793fb8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversation Turn"</string>
+    <string name="native_df4589b6c2b4eb96" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"طيّ معاينة الرابط"</string>
     <string name="native_df539a150f19b260" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بدأت الأتمتة."</string>
     <string name="native_df743d3e530679e1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"معلومات الجهاز"</string>
     <string name="native_df796c655f6f5ed4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"مجموعة جديدة"</string>

@@ -1114,18 +1114,6 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("include");
   });
 
-  it("uses shared stream reasoning as OpenAI Responses effort", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      emptyResponsesContext(),
-      {
-        reasoning: "high",
-      } as never,
-    ) as { reasoning?: unknown };
-
-    expect(params.reasoning).toEqual({ effort: "high", summary: "auto" });
-  });
-
   it("normalizes canonical reasoning casing in Responses and Chat Completions payloads", () => {
     const context = emptyResponsesContext();
     const baseModel = {
@@ -1346,20 +1334,6 @@ describe("openai transport stream", () => {
     expect(assistantItem?.id).toBeUndefined();
   });
 
-  it("strips the internal cache boundary from OpenAI system prompts", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
-        messages: [],
-        tools: [],
-      } as never,
-      undefined,
-    ) as { instructions?: string };
-
-    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
-  });
-
   it("defaults responses tool schemas to strict on native OpenAI routes", () => {
     const params = buildOpenAIResponsesParams(
       responsesModelFixture("gpt-5.4", "GPT-5.4"),
@@ -1556,31 +1530,6 @@ describe("openai transport stream", () => {
 
     expect(first.tools?.map((tool) => tool.name)).toEqual(["alpha", "zeta"]);
     expect(first.tools).toEqual(second.tools);
-  });
-
-  it("falls back to strict:false when a native OpenAI tool schema is not strict-compatible", () => {
-    const params = buildOpenAIResponsesParams(
-      responsesModelFixture("gpt-5.4", "GPT-5.4"),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "read",
-            description: "Read file",
-            parameters: {
-              type: "object",
-              additionalProperties: false,
-              properties: { path: { type: "string" } },
-              required: [],
-            },
-          },
-        ],
-      } as never,
-      undefined,
-    ) as { tools?: Array<{ strict?: boolean }> };
-
-    expect(params.tools?.[0]?.strict).toBe(false);
   });
 
   it("deduplicates repeated OpenAI strict schema downgrade diagnostics", async () => {

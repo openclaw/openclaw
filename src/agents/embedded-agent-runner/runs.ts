@@ -82,6 +82,11 @@ import {
   type EmbeddedRunWaiter,
   type EmbeddedAgentQueueFailureReason,
 } from "./run-state.js";
+import {
+  canSteerEmbeddedRunDuringCompaction,
+  isEmbeddedRunHandleAbortable,
+  isEmbeddedRunHandleSupersedable,
+} from "./runs.probes.js";
 
 export type { EmbeddedAgentQueueHandle, EmbeddedAgentQueueMessageOptions } from "./run-state.js";
 
@@ -485,32 +490,6 @@ function resolveEmbeddedInjection(
   }
 }
 
-function isEmbeddedRunHandleAbortable(
-  sessionId: string,
-  handle: EmbeddedAgentQueueHandle,
-): boolean {
-  try {
-    return handle.isAbortable?.() !== false;
-  } catch (err) {
-    diag.warn(
-      `abort failed: sessionId=${sessionId} reason=abortable_check_failed err=${String(err)}`,
-    );
-    return false;
-  }
-}
-
-function isEmbeddedRunHandleSupersedable(runId: string, handle: EmbeddedAgentQueueHandle): boolean {
-  if (!isEmbeddedRunHandleAbortable(runId, handle)) {
-    return false;
-  }
-  try {
-    return handle.isStopped?.() !== true && handle.isAborted?.() !== true;
-  } catch (err) {
-    diag.warn(`supersede failed: runId=${runId} reason=lifecycle_check_failed err=${String(err)}`);
-    return false;
-  }
-}
-
 export function isEmbeddedAgentRunAbortableForRunId(runId: string): boolean {
   const normalizedRunId = runId.trim();
   if (!normalizedRunId) {
@@ -775,7 +754,7 @@ function prepareEmbeddedAgentQueueMessage(
     diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
     return reject("stale_run");
   }
-  if (handle.isCompacting()) {
+  if (!canSteerEmbeddedRunDuringCompaction(sessionId, handle)) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
     return reject("compacting");
   }
@@ -902,10 +881,7 @@ export function abortEmbeddedAgentRun(
   });
   let aborted = false;
   for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-    if (replyOwnedSessionIds.has(id) || (mode === "compacting" && !handle.isCompacting())) {
-      continue;
-    }
-    if (!isEmbeddedRunHandleAbortable(id, handle)) {
+    if (replyOwnedSessionIds.has(id) || !isEmbeddedRunHandleAbortable(id, handle, mode)) {
       continue;
     }
     diag.debug(`aborting ${mode === "compacting" ? "compacting " : ""}run: sessionId=${id}`);

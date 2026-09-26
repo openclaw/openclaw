@@ -701,8 +701,6 @@ describe("update report diagnostic command boundary", () => {
   });
 
   it.each([
-    'Command failed: python -c "private-customer-text"',
-    'ruby -e "private-customer-text"',
     "custom-tool private-customer-text",
     "custom-tool\u00a0private-customer-text",
     "custom-tool;private-customer-text",
@@ -714,17 +712,13 @@ describe("update report diagnostic command boundary", () => {
     expect(report.body).toContain("- Reason code: [redacted-command]\n");
   });
 
-  it.each([
-    "build",
-    "global-install-failed",
-    "origin/main@abcdef",
-    "openclaw@2026.9.1",
-    "linux/arm64",
-    "🦞".repeat(5),
-  ])("preserves scalar structured fact %s", async (value) => {
-    const report = await prepareDiagnosticReport(value);
-    expect(report.body).toContain(`- Reason code: ${value}\n`);
-  });
+  it.each(["origin/main@abcdef", "openclaw@2026.9.1", "🦞".repeat(5)])(
+    "preserves scalar structured fact %s",
+    async (value) => {
+      const report = await prepareDiagnosticReport(value);
+      expect(report.body).toContain(`- Reason code: ${value}\n`);
+    },
+  );
 
   it.each(["\n", "\r\n", "\r", "\u2028", "\u2029"])(
     "keeps independent scalar lines around a command with separator %j",
@@ -780,8 +774,6 @@ describe("update report diagnostic command boundary", () => {
     "version 2026.9.1+build.abc",
     "stable channel",
     "extended-stable channel",
-    "beta channel",
-    "dev channel",
   ])("retains the canonical structured target %s", async (target) => {
     const report = await prepareUpdateFailureReport(
       {

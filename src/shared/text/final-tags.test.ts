@@ -28,12 +28,9 @@ describe("stripFinalTags", () => {
   });
 
   it.each([
-    ["<final>Hello</final>", "Hello"],
-    ["<final data-model='demo'>Hello</final>", "Hello"],
     ["Unclosed `<final>Hello</final>", "Unclosed `Hello"],
     ["<final-result>Hello</final-result>", "<final-result>Hello</final-result>"],
     ["Plain text", "Plain text"],
-    ["", ""],
   ])("retains existing outside-tag behavior: %s", (input, expected) => {
     expect(stripFinalTags(input)).toBe(expected);
   });

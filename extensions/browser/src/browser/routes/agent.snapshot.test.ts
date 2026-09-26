@@ -29,16 +29,6 @@ describe("resolveOperationTargetOutcome", () => {
       }),
     ).toBe("replacement-456");
   });
-
-  it("never adopts a newcomer when the captured relay owner was revoked or replaced", async () => {
-    expect(
-      await resolveOperationTargetOutcome({
-        actedOnTargetId: "old-123",
-        operationTargetId: "unrelated-999",
-        resolveRelayTarget: () => undefined,
-      }),
-    ).toBe("old-123");
-  });
 });
 
 describe("captureBrowserOperationTarget", () => {

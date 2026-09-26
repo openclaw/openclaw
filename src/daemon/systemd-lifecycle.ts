@@ -112,6 +112,9 @@ async function runSystemdServiceAction(
     await runSystemctl(["reset-failed", unitName]);
   }
   params.assertCurrent?.();
+  if (action === "restart") {
+    params.onRestartAttempted?.();
+  }
   const res = await runSystemctl([action, unitName]);
   if (res.code !== 0) {
     throw new Error(`systemctl ${action} failed: ${res.stderr || res.stdout}`.trim());

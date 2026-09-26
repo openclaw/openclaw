@@ -588,109 +588,80 @@ async function readThread(params: {
   }
 }
 
-async function listLoadedSessions(
+async function listSessions(
   request: EndpointRequest,
   endpoint: ResolvedSupervisionEndpoint,
+  storedLimit?: number,
 ): Promise<CodexSupervisorSession[]> {
+  const loaded = storedLimit === undefined;
+  const method = loaded ? "thread/loaded/list" : "thread/list";
+  const limit = storedLimit ?? Infinity;
   const sessions: CodexSupervisorSession[] = [];
   const seenCursors = new Set<string>();
   let cursor: string | undefined;
   for (let pageIndex = 0; pageIndex < MAX_COMPAT_PAGINATION_PAGES; pageIndex += 1) {
-    const listed = await request(endpoint, "thread/loaded/list", {
-      limit: PAGE_LIMIT,
-      ...(cursor ? { cursor } : {}),
-    });
-    if (!isRecord(listed) || !Array.isArray(listed.data)) {
-      throw new Error("Codex thread/loaded/list returned an invalid response");
-    }
-    const threadIds = readLoadedThreadIds(listed.data);
-    for (const threadId of threadIds) {
-      if (sessions.some((entry) => entry.threadId === threadId)) {
-        continue;
-      }
-      try {
-        const thread = await readThread({ request, endpoint, threadId, includeTurns: false });
-        const session = toSession(endpoint.id, thread, true);
-        if (session) {
-          sessions.push(session);
-        }
-      } catch (error) {
-        if (!isLoadedThreadReadMiss(error)) {
-          throw error;
-        }
-      }
-    }
-    const nextCursor = readCompatNextCursor(listed.nextCursor, "thread/loaded/list");
-    if (nextCursor && seenCursors.has(nextCursor)) {
-      throw new Error(`Codex thread/loaded/list returned repeated cursor ${nextCursor}`);
-    }
-    if (nextCursor) {
-      seenCursors.add(nextCursor);
-    }
-    cursor = nextCursor;
-    if (!cursor) {
-      break;
-    }
-  }
-  if (cursor) {
-    throw new Error(
-      `Codex thread/loaded/list exceeded ${MAX_COMPAT_PAGINATION_PAGES} pages with a continuation cursor`,
-    );
-  }
-  return sessions;
-}
-
-async function listStoredSessions(params: {
-  request: EndpointRequest;
-  endpoint: ResolvedSupervisionEndpoint;
-  limit: number;
-}): Promise<CodexSupervisorSession[]> {
-  const sessions: CodexSupervisorSession[] = [];
-  const seenCursors = new Set<string>();
-  let cursor: string | undefined;
-  for (let pageIndex = 0; pageIndex < MAX_COMPAT_PAGINATION_PAGES; pageIndex += 1) {
-    const remaining = params.limit - sessions.length;
+    const remaining = limit - sessions.length;
     if (remaining <= 0) {
       break;
     }
     const pageLimit = Math.min(PAGE_LIMIT, remaining);
-    const listed = await params.request(params.endpoint, "thread/list", {
-      archived: false,
+    const listed = await request(endpoint, method, {
+      ...(loaded
+        ? {}
+        : {
+            archived: false,
+            sourceKinds: [...ALL_CODEX_THREAD_SOURCE_KINDS],
+            modelProviders: [],
+            sortKey: "recency_at",
+            sortDirection: "desc",
+            useStateDbOnly: true,
+          }),
       limit: pageLimit,
-      sourceKinds: [...ALL_CODEX_THREAD_SOURCE_KINDS],
-      modelProviders: [],
-      sortKey: "recency_at",
-      sortDirection: "desc",
-      useStateDbOnly: true,
       ...(cursor ? { cursor } : {}),
     });
     if (!isRecord(listed) || !Array.isArray(listed.data)) {
-      throw new Error("Codex thread/list returned an invalid response");
+      throw new Error(`Codex ${method} returned an invalid response`);
     }
-    for (const thread of readStoredThreads(listed.data, pageLimit)) {
-      if (sessions.length >= params.limit) {
-        break;
+    const entries = loaded
+      ? readLoadedThreadIds(listed.data)
+      : readStoredThreads(listed.data, pageLimit);
+    for (const entry of entries) {
+      if (typeof entry === "string" && sessions.some((session) => session.threadId === entry)) {
+        continue;
       }
-      const session = toSession(params.endpoint.id, thread);
-      if (session && !sessions.some((entry) => entry.threadId === session.threadId)) {
-        sessions.push(session);
+      try {
+        const thread =
+          typeof entry === "string"
+            ? await readThread({ request, endpoint, threadId: entry, includeTurns: false })
+            : entry;
+        const session = toSession(endpoint.id, thread, loaded ? true : undefined);
+        if (
+          session &&
+          (loaded || !sessions.some((existing) => existing.threadId === session.threadId))
+        ) {
+          sessions.push(session);
+        }
+      } catch (error) {
+        if (!loaded || !isLoadedThreadReadMiss(error)) {
+          throw error;
+        }
       }
     }
-    const nextCursor = readCompatNextCursor(listed.nextCursor, "thread/list");
-    if (nextCursor && sessions.length < params.limit && seenCursors.has(nextCursor)) {
-      throw new Error(`Codex thread/list returned repeated cursor ${nextCursor}`);
+    const nextCursor = readCompatNextCursor(listed.nextCursor, method);
+    if (nextCursor && sessions.length < limit && seenCursors.has(nextCursor)) {
+      throw new Error(`Codex ${method} returned repeated cursor ${nextCursor}`);
     }
     if (nextCursor) {
       seenCursors.add(nextCursor);
     }
     cursor = nextCursor;
-    if (!cursor || sessions.length >= params.limit) {
+    if (!cursor || sessions.length >= limit) {
       break;
     }
   }
-  if (cursor && sessions.length < params.limit) {
+  if (cursor && sessions.length < limit) {
     throw new Error(
-      `Codex thread/list exceeded ${MAX_COMPAT_PAGINATION_PAGES} pages with a continuation cursor`,
+      `Codex ${method} exceeded ${MAX_COMPAT_PAGINATION_PAGES} pages with a continuation cursor`,
     );
   }
   return sessions;
@@ -706,14 +677,14 @@ async function listSessionSnapshot(params: {
   const errors: CodexSupervisorEndpointHealth[] = [];
   for (const endpoint of params.endpoints) {
     try {
-      const loaded = await listLoadedSessions(params.request, endpoint);
+      const loaded = await listSessions(params.request, endpoint);
       sessions.push(...loaded);
       if (params.includeStored) {
-        const stored = await listStoredSessions({
-          request: params.request,
+        const stored = await listSessions(
+          params.request,
           endpoint,
-          limit: params.maxStoredSessions ?? DEFAULT_MAX_STORED_SESSIONS,
-        });
+          params.maxStoredSessions ?? DEFAULT_MAX_STORED_SESSIONS,
+        );
         for (const session of stored) {
           if (
             !sessions.some(

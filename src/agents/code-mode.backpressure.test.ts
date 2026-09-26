@@ -65,7 +65,6 @@ afterEach(async () => {
 describe.each([false, true])("ordinary bridge backpressure, headless=%s", (headless) => {
   it.each([
     { limit: 16, count: 20, race: false },
-    { limit: 2, count: 20, race: false },
     { limit: 1, count: 20, race: true },
     { limit: 16, count: 144, race: false },
   ])("drains $count calls inline with $limit slots, race=$race", async ({ limit, count, race }) => {

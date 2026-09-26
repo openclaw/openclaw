@@ -3629,6 +3629,7 @@ jobs:
             ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts \
             ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
             ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts \
+            ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts \
             ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts \
             ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts \
             ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts \
@@ -5887,11 +5888,11 @@ jobs:
       - *platform_checkout_step
 
       - &select_xcode_step
-        name: Select Xcode 27
+        name: Select Xcode
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
-          select_xcode_toolchain 27.0
+          select_xcode_toolchain
 
       - name: Setup Node environment for Apple assets
         if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
@@ -6411,6 +6412,12 @@ jobs:
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
           simulator_id="$(prepare_ios_test_simulator)"
+          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
+            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
+            ./scripts/install-simslim.sh "$simslim_dir"
+            OPENCLAW_CI_SIMSLIM_BINARY="$simslim_dir/simslim" \
+              ./scripts/ios-simulator-prepare.sh "$simulator_id"
+          fi
           echo "IOS_SIMULATOR_ID=$simulator_id" >> "$GITHUB_ENV"
           if [[ "$IOS_CI_PHASE" == "smoke" || "$IOS_MAIN_TIER" == "true" ]]; then
             # Apply to the embedded Watch build and the later XCTest build too.
@@ -6632,6 +6639,16 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  ios-release-e2e:
+    permissions:
+      contents: read
+    needs: [preflight]
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.checkout_revision == github.sha && needs.preflight.outputs.compatibility_target != 'true' && needs.preflight.outputs.run_ios_build == 'true' }}
+    uses: ./.github/workflows/ios-release-e2e.yml
+    with:
+      target_sha: ${{ needs.preflight.outputs.checkout_revision }}
+      mode: stock
+
   ios-screenshot-shard:
     permissions:
       contents: read
@@ -6691,11 +6708,22 @@ jobs:
 
       - *install_watch_rust_toolchain
 
+      - name: Install iOS simulator tooling
+        id: ios_simslim
+        run: |
+          set -euo pipefail
+          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
+            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
+            ./scripts/install-simslim.sh "$simslim_dir"
+            echo "binary=$simslim_dir/simslim" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Capture iOS device screenshot shard
         id: device_screenshots
         env:
           OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ matrix.device_family }}
           OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ matrix.device_family == 'iphone' && '1' || '0' }}
+          OPENCLAW_CI_SIMSLIM_BINARY: ${{ steps.ios_simslim.outputs.binary }}
         run: pnpm ios:screenshots
 
       - name: Package iOS screenshot shard evidence
@@ -7357,6 +7385,7 @@ jobs:
       - macos-node
       - macos-swift
       - ios-build
+      - ios-release-e2e
       - ios-screenshot-shard
       - ios-screenshot-evidence
       - android
@@ -7419,6 +7448,7 @@ jobs:
             macos-node=${{ needs.macos-node.result }}|${{ needs.preflight.outputs.run_macos_node }}
             macos-swift=${{ needs.macos-swift.result }}|${{ needs.preflight.outputs.run_macos_swift }}
             ios-build=${{ needs.ios-build.result }}|${{ needs.preflight.outputs.run_ios_build }}
+            ios-release-e2e=${{ needs.ios-release-e2e.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.checkout_revision == github.sha && needs.preflight.outputs.compatibility_target != 'true' && needs.preflight.outputs.run_ios_build == 'true' }}
             ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_ios_screenshots == 'true') }}
             ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_ios_screenshots == 'true') }}
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
@@ -7492,6 +7522,7 @@ jobs:
       - macos-node
       - macos-swift
       - ios-build
+      - ios-release-e2e
       - ios-screenshot-shard
       - ios-screenshot-evidence
       - android

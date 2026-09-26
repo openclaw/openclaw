@@ -267,11 +267,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             ) => {
               assertTrustedPluginRuntime("openChannelIngressQueue");
               const stateDir = options?.stateDir ?? baseState.resolveStateDir();
-              return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
-                ...options,
-                channelId: pluginId,
-                stateDir,
-              });
+              return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>(
+                { ...options, channelId: pluginId, stateDir },
+                assertRuntimeCurrent,
+              );
             },
             openChannelIngressDrain: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options: Omit<
@@ -291,11 +290,10 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               const stateDir = options.stateDir ?? baseState.resolveStateDir();
               const queue =
                 options.queue ??
-                createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
-                  channelId: pluginId,
-                  accountId: options.accountId,
-                  stateDir,
-                });
+                createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>(
+                  { channelId: pluginId, accountId: options.accountId, stateDir },
+                  assertRuntimeCurrent,
+                );
               const {
                 queue: _queue,
                 accountId: _accountId,

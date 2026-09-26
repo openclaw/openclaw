@@ -15,6 +15,11 @@ export const pluginProcessRuntimeEntrypoints = {
     sourceWorkerName: "plugin-source-capture-directory",
     distWorkerPath: "plugins/plugin-source-capture-directory.js",
   },
+  scheduler: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/gateway-scheduler",
+    distWorkerPath: "infra/gateway-scheduler.js",
+  },
   metadataCapture: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "plugin-package-metadata-capture",

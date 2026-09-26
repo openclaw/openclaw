@@ -30,6 +30,7 @@ import { CommandLane } from "../../process/lanes.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 type CallerClosure = "revoked" | "aborted";
@@ -71,6 +72,7 @@ async function withCronGateway(
     const finished = createDeferredCore<CronEvent>();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: false,
       defaultAgentId: "main",

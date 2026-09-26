@@ -2,6 +2,7 @@ import type {
   DesktopObserveResult,
   DesktopSource,
   EnvironmentSummary,
+  WorkerDesktopAppId,
 } from "@openclaw/gateway-protocol";
 import type { ControlUiFocusBuildTarget } from "@openclaw/session-url-contract";
 import { html, nothing } from "lit";
@@ -12,6 +13,7 @@ import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
+import { FullscreenController } from "../fullscreen-controller.ts";
 import {
   DESKTOP_PANEL_TOGGLE_EVENT,
   type DesktopPanelToggleDetail,
@@ -23,18 +25,16 @@ import { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import {
   DesktopConnectionHandoff,
   releaseDesktopObservation,
-  type DesktopAppId,
   type DesktopCredentials,
   type ObservedDesktopConnection,
   type PendingDesktopConnection,
 } from "./desktop-panel-connection.ts";
 import * as desktopAuth from "./desktop-panel-credentials.ts";
-import { DesktopPanelFullscreenController } from "./desktop-panel-fullscreen-controller.ts";
 import { desktopPanelLayout } from "./desktop-panel-layout.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { desktopPanelElementStyles } from "./desktop-panel-styles.ts";
 import { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
-import { renderDesktopPresentation } from "./desktop-presentation.ts";
+import { desktopFullscreenOptions, renderDesktopPresentation } from "./desktop-presentation.ts";
 import { DesktopSessionController } from "./desktop-session-controller.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
@@ -78,7 +78,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @state() private errorText: string | null = null;
   @state() private noticeText: string | null = null;
   @state() private disconnectedReason: string | null = null;
-  @state() private desktopApps: DesktopAppId[] = [];
+  @state() private desktopApps: WorkerDesktopAppId[] = [];
   @state() private sizingMode: desktopTransport.DesktopSizingMode = "fit";
   @state() private canResize = false;
 
@@ -153,18 +153,18 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     isAvailable: () => this.available,
     isFullscreen: () => this.fullscreenMode.active,
   });
-  private readonly fullscreenMode = new DesktopPanelFullscreenController(this, {
+  private readonly fullscreenMode = new FullscreenController(this, {
+    ...desktopFullscreenOptions,
     section: () => this.renderRoot.querySelector<HTMLElement>("section.bp"),
     onChange: () => this.dockLayout.syncReservation(),
   });
-  private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
 
   static override styles = desktopPanelElementStyles;
 
   override connectedCallback(): void {
     super.connectedCallback();
     if (!this.embedded) {
-      window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     }
     this.dockLayout.setSuppressed(this.suppressed);
     // The first document update owns startup; reconnects still need a fresh lookup.
@@ -177,7 +177,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   }
 
   override disconnectedCallback(): void {
-    window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     if (this.documentMode && this.usesAutomaticSource) {
       this.returnToPicker("pending");
     } else {
@@ -191,9 +191,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   override updated(changed: Map<string, unknown>): void {
     if (changed.has("embedded")) {
       if (this.embedded) {
-        window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+        window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       } else {
-        window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+        window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       }
     }
     if (changed.has("suppressed")) {
@@ -264,7 +264,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     });
   }
 
-  handleToggleRequest(event: Event): void {
+  handleToggleRequest = (event: Event): void => {
     if (this.documentMode || this.suppressed || (this.embedded && !this.presented)) {
       return;
     }
@@ -298,7 +298,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     } else if (detail?.open !== true) {
       this.closePanel();
     }
-  }
+  };
 
   private closePanel(): void {
     this.returnToPicker();

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import type { CronStoredJob } from "../types.js";
@@ -31,6 +32,7 @@ describe("scheduled exec target recovery", () => {
       const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
       const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath: `/tmp/cron-exec-target-recovery-${kind}.json`,
         cronEnabled: true,
         log: createNoopLogger(),
@@ -56,6 +58,7 @@ describe("scheduled exec target recovery", () => {
   it("keeps legacy unmarked exec grants on baseline policy", async () => {
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: "/tmp/cron-exec-target-legacy.json",
       cronEnabled: true,
       log: createNoopLogger(),
@@ -120,6 +123,7 @@ describe("scheduled agent admission", () => {
     async ({ overrides, admissionSource }) => {
       const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath: "/tmp/cron-admission-source.json",
         cronEnabled: true,
         log: createNoopLogger(),

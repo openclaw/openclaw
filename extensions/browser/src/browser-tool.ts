@@ -1,9 +1,3 @@
-/**
- * Browser agent tool registration.
- *
- * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
- * maps high-level actions onto browser control client calls.
- */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -184,7 +178,6 @@ function readToolTimeoutMs(params: Record<string, unknown>) {
   });
 }
 
-/** Create the Browser tool exposed to agents. */
 export function createBrowserTool(
   opts?: BrowserScreenshotOptions & {
     sandboxBridgeUrl?: string;
