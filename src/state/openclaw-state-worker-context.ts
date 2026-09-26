@@ -13,9 +13,8 @@ import {
 } from "./openclaw-state-worker-context.capture.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
-export type OpenClawStateReadContext = Pick<
-  OpenClawStateWorkerContext,
-  "admission" | "maintenanceScope" | "existingSchemaPath" | "runInCapturedSchemaScope"
+export type OpenClawStateReadContext = ReturnType<
+  typeof captureOpenClawStateReadContextWithAdmission
 >;
 
 /** Capture read authority without constructing a worker environment. */

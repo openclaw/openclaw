@@ -15,23 +15,14 @@ import {
 import {
   queueRecoveryCutoffCleanup,
   shouldIgnoreRecoveredOwnerStartEvent,
-  type DiagnosticRecoveryEmbeddedRun,
-  type DiagnosticRecoveryModelCall,
-  type DiagnosticRecoveryTool,
+  type DiagnosticRecoveryActivity,
 } from "./diagnostic-run-activity-recovery.js";
 
 export type SessionActivity = DiagnosticArgumentChurnActivity &
-  DiagnosticRepeatedRequestActivity & {
+  DiagnosticRepeatedRequestActivity &
+  DiagnosticRecoveryActivity & {
     sessionId?: string;
     sessionKey?: string;
-    activeEmbeddedRuns: Map<string, DiagnosticRecoveryEmbeddedRun>;
-    activeTools: Map<string, DiagnosticRecoveryTool>;
-    activeModelCalls: Map<string, DiagnosticRecoveryModelCall>;
-    activeCoreModelCalls: Map<
-      CoreModelRequestOwnerGeneration,
-      Map<string, DiagnosticRecoveryModelCall>
-    >;
-    recoveredOwnerStartEventCutoffs: Map<string, number>;
     lastProgressAt: number;
     lastProgressReason?: string;
   };
