@@ -1,6 +1,8 @@
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyToolCatalogCompaction, createToolSearchCatalogRef } from "./tool-search-catalog.js";
+import { resolveToolSearchConfig } from "./tool-search-config.js";
+import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -40,9 +42,8 @@ describe("catalog fingerprint reuse", () => {
     expect(sha256StableValue).toHaveBeenCalledTimes(1);
     expect(secondRef.current?.counterScope).not.toBe(firstRef.current?.counterScope);
     expect(apply(second, secondRef).catalogReused).toBe(true);
-    await expect(secondRef.current?.entries[0]?.tool.execute("call", {})).resolves.toMatchObject({
-      details: { marker: "second" },
-    });
+    const runtime = new ToolSearchRuntime({ catalogRef: secondRef }, resolveToolSearchConfig());
+    await expect(runtime.callValue(second.name)).resolves.toEqual({ marker: "second" });
     expect(first.execute).not.toHaveBeenCalled();
     expect(second.execute).toHaveBeenCalledOnce();
     expect(sha256StableValue).toHaveBeenCalledTimes(1);
