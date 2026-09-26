@@ -160,7 +160,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "mcp-app": () => import("./mcp-app.js").then((module) => module.mcpAppHandlers),
   canvas: () => import("./canvas.js").then((module) => module.canvasHandlers),
   tts: () => import("./tts.js").then((module) => module.ttsHandlers),
-  update: () => import("./update.js").then((module) => module.updateHandlers),
+  update: () => import("./update-ocm.js").then((module) => module.updateHandlers),
   usage: () => import("./usage.js").then((module) => module.usageHandlers),
   "voicewake-routing": () =>
     import("./voicewake-routing.js").then((module) => module.voicewakeRoutingHandlers),

@@ -314,7 +314,7 @@ function replaceKnownPathPrefix(value: string, prefix: PathRedactionPrefix): str
   return next;
 }
 
-function redactKnownPathPrefixesForSupport(
+export function redactKnownPathPrefixesForSupport(
   value: string,
   redaction: SupportRedactionContext,
 ): string {

@@ -510,7 +510,20 @@ not execute them in the shell of the Gateway hosting its session. A missing
 owner permission requires owner setup, and an externally supervised installation
 uses its deployment owner's update workflow.
 
-Chat, CLI, Control UI, and automatic updates share a durable run ID. Use
+For compatible OCM-managed installations, **Update** in the Control UI
+hands the request to OCM. OCM owns installation, checkpoints, service restart,
+verification, and recovery. The Update view follows the same job after reconnecting;
+`ocm upgrade job status <env>` also shows its result. Automatic reconnect requires
+stable Gateway authentication; with a runtime-only token, open a new
+[dashboard link](/cli/dashboard) after restarting. Native OpenClaw repair and
+failure-report actions do not apply to these jobs. If OCM does not advertise an
+update operation for the installation, the external-supervisor refusal remains.
+Source updates use the native updater's configured channel without requesting an
+OCM package conversion. Updates requested from external chat still require the
+deployment owner's workflow.
+
+For installations updated by OpenClaw itself, chat, CLI, Control UI, and automatic
+updates share a durable run ID. Use
 `openclaw update status` to read the active or latest report, including after a
 restart; `--json` exposes the `activeRun` and `lastRun` records. See
 [Run history and reports](/cli/update#run-history-and-reports) for Gateway history

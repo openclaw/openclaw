@@ -10,6 +10,7 @@ import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 let ledgerHome: TempHomeEnv | undefined;
 beforeEach(async () => {
@@ -329,7 +330,11 @@ vi.mock("../../infra/update-status-schedule.js", () => ({
 }));
 
 vi.mock("../../infra/update-campaign.js", () => ({
-  gatewayUpdateCampaign: { adopt: adoptUpdateCampaignMock },
+  gatewayUpdateCampaign: {
+    adopt: adoptUpdateCampaignMock,
+    getRunId: () => undefined,
+    reconcileRun: () => {},
+  },
 }));
 
 vi.mock("../../infra/update-runner-install-surface.js", async (importOriginal) => ({
@@ -493,14 +498,19 @@ export async function invokeUpdateRun(
     commands: { ownerAllowFrom: ["slack:C0123ABC", "slack:C0456DEF"] },
   },
   contextOverrides: Record<string, unknown> = {},
+  authority: Pick<
+    GatewayRequestHandlerOptions,
+    "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
+  > = {},
 ) {
-  const { updateHandlers } = await import("./update.js");
+  const { updateHandlers } = await import("./update-ocm.js");
   const onRespond = respond ?? (() => {});
   await expectDefined(
     updateHandlers["update.run"],
     'updateHandlers["update.run"] test invariant',
   )({
     params,
+    ...authority,
     respond: onRespond as never,
     context: { getRuntimeConfig: () => runtimeConfig, ...contextOverrides },
   } as never);
