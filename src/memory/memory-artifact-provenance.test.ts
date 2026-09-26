@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as pluginState from "../plugin-state/plugin-state-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   clearMemoryArtifactProvenance,
@@ -20,6 +21,86 @@ afterEach(() => {
 });
 
 describe("memory artifact provenance", () => {
+  it("reads only the selected workspace while preserving order and corruption errors", async () => {
+    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
+      const workspaceDir = path.join(tempRoot, "workspace");
+      for (const relativePath of [
+        "memory/late.md",
+        "MEMORY.md",
+        "memory/first.md",
+        "memory/expired.md",
+      ]) {
+        await recordMemoryArtifactWriteProvenance({
+          workspaceDir,
+          relativePath,
+          contentBefore: "",
+          contentAfter: "synthetic note",
+          originClass: "untrusted",
+          observedAt: 1,
+        });
+      }
+      await recordMemoryArtifactWriteProvenance({
+        workspaceDir: path.join(tempRoot, "other-workspace"),
+        relativePath: "memory/other.md",
+        contentBefore: "",
+        contentAfter: "synthetic other note",
+        originClass: "agent",
+        observedAt: 1,
+      });
+      const { db } = openOpenClawStateDatabase();
+      // sqlite-allow-raw -- Seed historical ordering, expiry, and corruption at the storage boundary.
+      db.prepare(
+        `UPDATE plugin_state_entries SET
+         created_at = CASE json_extract(value_json, '$.relativePath') WHEN 'memory/late.md' THEN 20 ELSE 10 END,
+         expires_at = CASE json_extract(value_json, '$.relativePath') WHEN 'memory/expired.md' THEN 1 ELSE NULL END
+         WHERE plugin_id = ? AND namespace = ?`,
+      ).run("core:memory-artifact-provenance", "workspace-files");
+      const materializedKeys: string[] = [];
+      const createStore = pluginState.createCorePluginStateKeyedStore;
+      vi.spyOn(pluginState, "createCorePluginStateKeyedStore").mockImplementation((options) => {
+        const store = createStore(options);
+        return {
+          ...store,
+          entries: async () => {
+            const entries = await store.entries();
+            materializedKeys.push(...entries.map((entry) => entry.key));
+            return entries;
+          },
+          entriesInKeyRange: async (range) => {
+            const entries = await store.entriesInKeyRange(range);
+            materializedKeys.push(...entries.map((entry) => entry.key));
+            return entries;
+          },
+        };
+      });
+      const selected = await listMemoryArtifactProvenance({ workspaceDir });
+      expect(selected.map((entry) => entry.relativePath)).toEqual([
+        "memory/first.md",
+        "MEMORY.md",
+        "memory/late.md",
+      ]);
+      expect(materializedKeys).toHaveLength(3);
+      const selectedKey = expectDefined(materializedKeys[0], "selected provenance key");
+      // sqlite-allow-raw -- Unrelated and expired malformed JSON must not poison this workspace.
+      db.prepare(
+        "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key NOT IN (?, ?, ?)",
+      ).run(
+        "{malformed",
+        "core:memory-artifact-provenance",
+        "workspace-files",
+        ...materializedKeys,
+      );
+      await expect(listMemoryArtifactProvenance({ workspaceDir })).resolves.toEqual(selected);
+      // sqlite-allow-raw -- A selected corrupt row must still fail through the real worker reader.
+      db.prepare(
+        "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+      ).run("{malformed", "core:memory-artifact-provenance", "workspace-files", selectedKey);
+      await expect(listMemoryArtifactProvenance({ workspaceDir })).rejects.toMatchObject({
+        code: "PLUGIN_STATE_CORRUPT",
+      });
+    });
+  });
+
   it.each(
     (["write", "restore", "remove", "clear"] as const).flatMap((operation) =>
       (["resolve", "reject"] as const).map((outcome) => ({ operation, outcome })),
