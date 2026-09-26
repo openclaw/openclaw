@@ -122,8 +122,11 @@ describe("config-eval helpers", () => {
     const cmdCandidate = path.join(toolsDir, "tool.CMD");
     fs.writeFileSync(cmdCandidate, "#!/bin/sh\nexit 0\n");
     fs.chmodSync(cmdCandidate, 0o755);
+    const accessSpy = vi.spyOn(fs, "accessSync");
 
     expect(hasBinary("tool")).toBe(true);
+    // Candidates that are not regular files never reach the permission probe.
+    expect(accessSpy.mock.calls.map(([candidate]) => String(candidate))).toEqual([cmdCandidate]);
 
     vi.stubEnv("PATHEXT", ".EXE");
     expect(hasBinary("tool")).toBe(false);
@@ -153,6 +156,42 @@ describe("config-eval helpers", () => {
       expect(hasBinary("fixture-tool")).toBe(true);
     },
   );
+
+  it.each([
+    { platform: "linux", suffix: "" },
+    { platform: "darwin", suffix: "" },
+    { platform: "win32", suffix: ".CMD" },
+  ] as const)(
+    "reports a $platform PATH directory named like the binary as missing",
+    ({ platform, suffix }) => {
+      const binDir = tempDirs.make("openclaw-binary-dir-");
+      mockProcessPlatform(platform);
+      vi.stubEnv("PATH", binDir);
+      vi.stubEnv("PATHEXT", ".EXE;.CMD");
+      const candidate = path.join(binDir, `fixture-tool${suffix}`);
+      fs.mkdirSync(candidate);
+      // A searchable directory passes X_OK, which is what used to make it look installed.
+      expect(fs.accessSync(candidate, fs.constants.X_OK)).toBeUndefined();
+
+      expect(hasBinary("fixture-tool")).toBe(false);
+    },
+  );
+
+  it("accepts a PATH symlink pointing at an executable file", () => {
+    const root = tempDirs.make("openclaw-binary-symlink-");
+    mockProcessPlatform("linux");
+    const binDir = path.join(root, "bin");
+    const targetDir = path.join(root, "target");
+    fs.mkdirSync(binDir);
+    fs.mkdirSync(targetDir);
+    const target = path.join(targetDir, "fixture-tool");
+    fs.writeFileSync(target, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(target, 0o755);
+    fs.symlinkSync(target, path.join(binDir, "fixture-tool"));
+    vi.stubEnv("PATH", binDir);
+
+    expect(hasBinary("fixture-tool")).toBe(true);
+  });
 });
 
 describe("prepared binary availability", () => {
@@ -202,6 +241,15 @@ describe("prepared binary availability", () => {
     vi.stubEnv("PATHEXT", ".CMD");
     expect((await prepareBinaryAvailability(["fixture-tool"])).hasBinary("fixture-tool")).toBe(
       true,
+    );
+  });
+
+  it("reports a PATH directory named like the binary as missing", async () => {
+    const binDir = tempDirs.make("openclaw-prepared-dir-");
+    fs.mkdirSync(path.join(binDir, "fixture-tool"));
+    vi.stubEnv("PATH", binDir);
+    expect((await prepareBinaryAvailability(["fixture-tool"])).hasBinary("fixture-tool")).toBe(
+      false,
     );
   });
 

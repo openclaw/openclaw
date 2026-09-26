@@ -157,7 +157,7 @@ function windowsPathExtensions(raw: string | undefined): string[] {
 }
 
 // Share pending I/O only so completed misses are checked again on the next preparation.
-const pendingBinaryAccess = new Map<string, Promise<void>>();
+const pendingBinaryAccess = new Map<string, Promise<boolean>>();
 
 // Installs can create binaries under unchanged PATH/PATHEXT, so cache only successful probes.
 let binaryCache: { path: string; pathExt: string; hits: Set<string> } | undefined;
@@ -200,8 +200,10 @@ export function hasBinary(bin: string): boolean {
   const search = resolveBinarySearch(cache);
   for (const candidate of binaryCandidates(search, bin)) {
     try {
-      // Avoid missing-file errors without changing Windows symlink checks.
-      if (!search.isWindows && !fs.existsSync(candidate)) {
+      // X_OK also succeeds for searchable directories, so a PATH entry holding a
+      // directory named like the binary would otherwise be reported available.
+      // throwIfNoEntry keeps missing candidates free of thrown errors.
+      if (!fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) {
         continue;
       }
       fs.accessSync(candidate, fs.constants.X_OK);
@@ -241,12 +243,19 @@ export async function prepareBinaryAvailability(
       try {
         // access uses the filesystem's case, permission, and symlink semantics.
         const resolvedCandidate = path.resolve(cwd, candidate);
-        await getOrCreatePromise(
+        const isFile = await getOrCreatePromise(
           pendingBinaryAccess,
           resolvedCandidate,
-          () => fs.promises.access(resolvedCandidate, fs.constants.X_OK),
+          async () => {
+            await fs.promises.access(resolvedCandidate, fs.constants.X_OK);
+            // X_OK also succeeds for searchable directories; stat only hits so misses stay one call.
+            return (await fs.promises.stat(resolvedCandidate)).isFile();
+          },
           { evictOnSettled: true },
         );
+        if (!isFile) {
+          continue;
+        }
       } catch {
         continue;
       }
