@@ -1,5 +1,6 @@
 import { runInNewContext, runInThisContext } from "node:vm";
 import { describe, expect, it } from "vitest";
+import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 
 const cases = (["host", "VM"] as const).flatMap((realm) =>
@@ -13,6 +14,55 @@ function createSource(realm: "host" | "VM", kind: "object" | "function" | "array
 }
 
 describe("managed plugin reflection", () => {
+  it.each([42, "receiver", true, 1n, Symbol("receiver")])(
+    "preserves primitive accessor receiver %s",
+    async (receiver) => {
+      const instance = new PluginInstance("primitive-receiver");
+      const view = instance.wrap({
+        get receiverKind() {
+          return typeof this;
+        },
+      });
+      try {
+        expect(Reflect.get(view, "receiverKind", receiver)).toBe(typeof receiver);
+        const descriptor = Object.getOwnPropertyDescriptor(view, "receiverKind")!;
+        expect(descriptor.get!.call(receiver)).toBe(typeof receiver);
+      } finally {
+        await instance.dispose();
+      }
+    },
+  );
+
+  it("keeps ownership opaque to reflection and foreign Proxy forwarding", async () => {
+    const instance = new PluginInstance("opaque-owner");
+    const source = { execute: () => "current" };
+    const view = instance.wrap(source);
+    const reads: PropertyKey[] = [];
+    const forwarded = new Proxy(view, {
+      get(target, key, receiver) {
+        reads.push(key);
+        return Reflect.get(target, key, receiver);
+      },
+      getOwnPropertyDescriptor(target, key) {
+        reads.push(key);
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
+    try {
+      expect(getPluginValueInstance(view)).toBe(instance);
+      expect(Reflect.ownKeys(view)).toEqual(Reflect.ownKeys(source));
+      expect(getPluginValueInstance(source)).toBeUndefined();
+      expect(getPluginValueInstance(forwarded)).toBeUndefined();
+      expect(getPluginValueInstance(Object.create(view))).toBeUndefined();
+      expect(reads).toEqual([]);
+      await instance.dispose();
+      expect(getPluginValueInstance(view)).toBe(instance);
+      expect(() => view.execute()).toThrow("reloaded or disabled");
+    } finally {
+      await instance.dispose();
+    }
+  });
+
   it.each(cases)("defines fixed data on $realm $kind views atomically", async ({ realm, kind }) => {
     const instance = new PluginInstance("fixed-data");
     const source = createSource(realm, kind);

@@ -9,6 +9,7 @@ import {
   PluginInstanceUnavailableError,
 } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation as invocation } from "./plugin-instance-invocation.js";
+import { PluginCallToken } from "./plugin-instance-owned-values.js";
 import {
   pluginInstanceState,
   pluginInvocationContext,
@@ -23,7 +24,7 @@ import type {
   PluginInstanceLifecycle,
   PluginModuleLoaderRecovery,
 } from "./plugin-instance.types.js";
-import { resolvePluginReturnPromise } from "./plugin-return-value.js";
+import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
@@ -49,7 +50,6 @@ export class PluginInstance {
   private readonly calls = new Map<object, { registry?: PluginRegistry; cleanup: boolean }>();
   private forcedRetirement = false;
   private disposalFailures?: Set<unknown>;
-  private readonly hostCleanupCalls = new WeakSet<object>();
   private timedOutCalls?: {
     remaining: Set<object>;
     settled: ReturnType<typeof createDeferredCore<void>>;
@@ -65,7 +65,6 @@ export class PluginInstance {
   >();
   private readonly cleanups = new Map<() => void | Promise<void>, "plugin" | "module">();
   private readonly waiters = new Set<() => void>();
-  private readonly originalValues = new WeakMap<object, object>();
   readonly wrap = this.createValueView(
     <T>(run: () => T) => this.run(run),
     <T>(run: () => T) => this.runConsumer(run),
@@ -158,7 +157,7 @@ export class PluginInstance {
 
   /** Associates an identity-sensitive public value without replacing it with a view. */
   adopt<T>(value: T): T {
-    const seen = new WeakSet<object>();
+    const seen = new Set<object>();
     const visit = (candidate: unknown) => {
       if (
         !candidate ||
@@ -358,7 +357,8 @@ export class PluginInstance {
         const value = run();
         const completion = resolvePluginReturnPromise(value);
         if (completion) {
-          const settled = completion.then(
+          const settled = mapPluginReturnPromise(
+            completion,
             async (result) => {
               await release();
               if (this.forcedRetirement && !cleanup && !this.hasToken(token)) {
@@ -373,10 +373,14 @@ export class PluginInstance {
               throw error;
             },
           );
-          valueInstances.set(settled, this);
+          if (settled.host) {
+            valueInstances.setHost(settled.value, this);
+          } else {
+            valueInstances.set(settled.value, this);
+          }
           // Then getters and assimilation can execute plugin code; retain the admitting scope.
           // SAFETY: Promise-like calls retain their resolved value while joining owner cleanup.
-          return settled as T;
+          return settled.value as T;
         }
         void release();
         if (this.forcedRetirement && !cleanup && !this.hasToken(token)) {
@@ -435,13 +439,11 @@ export class PluginInstance {
     if (!registry && current && this.consumers.has(current.token)) {
       return { token: current.token, release: () => undefined };
     }
-    const token = {};
-    if (
+    const token = new PluginCallToken(
+      {},
       (options.cleanup && options.hostCleanup) ||
-      (current && this.hostCleanupCalls.has(current.token))
-    ) {
-      this.hostCleanupCalls.add(token);
-    }
+        (current !== undefined && PluginCallToken.isHostCleanup(current.token)),
+    );
     this.calls.set(token, {
       registry,
       // Not joining disposal never grants teardown authority to ordinary work.
@@ -474,7 +476,6 @@ export class PluginInstance {
     return createPluginValueView(
       {
         instance: this,
-        originalValues: this.originalValues,
         invoke: (run, lease) => this.invoke(run, lease),
         lease: () => this.lease(),
         hasToken: (token) => this.hasToken(token),
@@ -606,7 +607,7 @@ export class PluginInstance {
       const terminalFailures = (this.disposalFailures = new DisposalFailures(() => {
         const current = invocation.getStore();
         // Async failure observers retain their originating token after its call has returned.
-        return current?.instance === this && this.hostCleanupCalls.has(current.token);
+        return current?.instance === this && PluginCallToken.isHostCleanup(current.token);
       }));
       const work = new AsyncWorkScope(terminalFailures);
       // Shared state owners still join real cleanup, independently of code-file custody.

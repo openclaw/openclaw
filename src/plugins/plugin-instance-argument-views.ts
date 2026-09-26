@@ -1,10 +1,24 @@
 import { types } from "node:util";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { PluginHostObject } from "./plugin-instance-owned-values.js";
+
+class CallbackView extends PluginHostObject {
+  #factory: object;
+
+  constructor(value: Function, factory: object) {
+    super(value);
+    this.#factory = factory;
+  }
+
+  static belongsTo(value: Function, factory: object): boolean {
+    return #factory in value && value.#factory === factory;
+  }
+}
 
 /** Restore opaque handles only when they return to the instance that created their view. */
 function restorePluginArgumentViews(
   args: unknown[],
-  originals: WeakMap<object, object>,
+  originalValue: (value: object) => object | undefined,
 ): unknown[] {
   // Callable arguments are handled separately; only objects can contain opaque handles.
   if (!args.some((value) => value !== null && typeof value === "object")) {
@@ -18,10 +32,10 @@ function restorePluginArgumentViews(
       return;
     }
     if (!parents.has(value)) {
-      let original = originals.get(value);
+      let original = originalValue(value);
       // Collapse only this instance's object views; callable restoration keeps its separate guard.
       while (original && typeof original === "object") {
-        const previous = originals.get(original);
+        const previous = originalValue(original);
         if (!previous || typeof previous !== "object") {
           break;
         }
@@ -105,7 +119,7 @@ function restorePluginArgumentViews(
     }
   }
   for (const [value, replacement] of replacements) {
-    if (!originals.has(value)) {
+    if (!originalValue(value)) {
       // The synchronous, data-only walk executes no caller code. Read descriptors
       // only for copied ancestors instead of retaining them for the entire input.
       const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(value);
@@ -123,12 +137,14 @@ function restorePluginArgumentViews(
 
 /** Preserves caller data and caches callback views within one instance. */
 export function createPluginArgumentView(bindings: {
-  originalValues: WeakMap<object, object>;
-  wrapped: WeakMap<object, unknown>;
+  original: (value: object) => object | undefined;
+  setOriginal: (value: object, original: object) => void;
+  isWrapped: (value: object) => boolean;
   wrap: <T>(value: T) => T;
   invoke: <T>(run: () => T) => T;
 }) {
   const callbacks = new WeakMap<Function, Function>();
+  const factory = {};
   return (
     args: unknown[],
     callbackIndex?: 0 | null,
@@ -141,7 +157,7 @@ export function createPluginArgumentView(bindings: {
       return {
         args: args.map((value) =>
           value && (typeof value === "object" || typeof value === "function")
-            ? (bindings.originalValues.get(value) ?? value)
+            ? (bindings.original(value) ?? value)
             : value,
         ),
       };
@@ -151,19 +167,21 @@ export function createPluginArgumentView(bindings: {
         ? args.slice(1, 2)
         : undefined;
     const callArgs =
-      callbackIndex === undefined
-        ? restorePluginArgumentViews(args, bindings.originalValues)
-        : args;
+      callbackIndex === undefined ? restorePluginArgumentViews(args, bindings.original) : args;
     const prepared = callArgs.map((value, index) => {
       if (typeof value !== "function" || (callbackIndex !== undefined && index !== callbackIndex)) {
         return value;
       }
       // Returned handles regain identity only in their own instance. One hop preserves
       // the guarded callback when the plugin returned an incoming caller callback.
-      if (callbackIndex === undefined && bindings.wrapped.get(value) === value) {
-        return bindings.originalValues.get(value) ?? value;
+      if (callbackIndex === undefined && bindings.isWrapped(value)) {
+        return bindings.original(value) ?? value;
       }
-      let callback = callerData ? undefined : callbacks.get(value);
+      let callback = callerData
+        ? undefined
+        : CallbackView.belongsTo(value, factory)
+          ? value
+          : callbacks.get(value);
       if (!callback) {
         const invoke = <R>(values: unknown[], run: (values: unknown[]) => R): R =>
           bindings.invoke(() =>
@@ -188,10 +206,10 @@ export function createPluginArgumentView(bindings: {
               Reflect.construct(target, wrapped, newTarget === callback ? target : newTarget),
             ),
         });
-        bindings.originalValues.set(callback, value);
+        bindings.setOriginal(callback, value);
         if (!callerData) {
           callbacks.set(value, callback);
-          callbacks.set(callback, callback);
+          void new CallbackView(callback, factory);
         }
       }
       return callback;

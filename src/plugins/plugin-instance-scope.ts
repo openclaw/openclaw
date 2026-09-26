@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import { createPluginValueInstances } from "./plugin-instance-owned-values.js";
 import type {
   PluginInvocationInstance,
   PluginInstanceResource,
@@ -58,7 +59,7 @@ export const pluginInstanceState = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInstanceState"),
   () => ({
     records: new WeakMap<PluginRecord | PluginInstanceResource, PluginInstanceOwner>(),
-    values: new WeakMap<object, PluginInstanceHandle>(),
+    values: createPluginValueInstances(),
   }),
 );
 
@@ -137,6 +138,23 @@ export function getPluginInstance(record: PluginRecord): PluginInstanceHandle | 
 /** Exact owner of a callable public view; never inferred from a plugin id or path. */
 export function getPluginValueInstance(value: object): PluginInstanceHandle | undefined {
   return pluginInstanceState.values.get(value);
+}
+
+/** Only a view's creating instance may restore the original passed back to it. */
+export function getPluginOriginalValue(
+  value: object,
+  instance: PluginInstanceHandle,
+): object | undefined {
+  return pluginInstanceState.values.getOriginal(value, instance);
+}
+
+/** The caller must have created this object; foreign plugin objects remain unmodified. */
+export function setPluginOriginalValue(
+  value: object,
+  original: object,
+  instance: PluginInstanceHandle,
+): void {
+  pluginInstanceState.values.setOriginal(value, original, instance);
 }
 
 /** Host consumers retain the exact stream owner until their terminal work settles. */
