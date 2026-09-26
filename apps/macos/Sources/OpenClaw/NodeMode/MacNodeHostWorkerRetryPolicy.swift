@@ -1,10 +1,6 @@
 import Foundation
 
 struct MacNodeHostWorkerRetryPolicy: Sendable {
-    struct Input: Equatable, Sendable {
-        let launch: MacNodeHostWorkerLaunch
-    }
-
     enum UnexpectedExitDisposition: Equatable, Sendable {
         case retry(attempt: Int, delayNanoseconds: UInt64)
         case giveUp(unexpectedExitCount: Int)
@@ -31,7 +27,7 @@ struct MacNodeHostWorkerRetryPolicy: Sendable {
     private let maximumRetryCount: Int
     private let initialDelayNanoseconds: UInt64
     private let maximumDelayNanoseconds: UInt64
-    private var input: Input?
+    private var input: MacNodeHostWorkerLaunch?
     private var unexpectedExitCount = 0
     private var exhausted = false
 
@@ -48,14 +44,14 @@ struct MacNodeHostWorkerRetryPolicy: Sendable {
         self.maximumDelayNanoseconds = maximumDelayNanoseconds
     }
 
-    mutating func prepareForStart(_ input: Input) throws {
+    mutating func prepareForStart(_ input: MacNodeHostWorkerLaunch) throws {
         self.adopt(input)
         if self.exhausted {
             throw RetryBudgetExhausted(unexpectedExitCount: self.unexpectedExitCount)
         }
     }
 
-    mutating func recordUnexpectedExit(for input: Input) -> UnexpectedExitDisposition {
+    mutating func recordUnexpectedExit(for input: MacNodeHostWorkerLaunch) -> UnexpectedExitDisposition {
         self.adopt(input)
         guard !self.exhausted else {
             return .giveUp(unexpectedExitCount: self.unexpectedExitCount)
@@ -77,7 +73,7 @@ struct MacNodeHostWorkerRetryPolicy: Sendable {
         self.exhausted = false
     }
 
-    private mutating func adopt(_ input: Input) {
+    private mutating func adopt(_ input: MacNodeHostWorkerLaunch) {
         guard self.input != input else { return }
         self.input = input
         self.unexpectedExitCount = 0

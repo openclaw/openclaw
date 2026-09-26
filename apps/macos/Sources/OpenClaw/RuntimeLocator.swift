@@ -76,7 +76,7 @@ enum RuntimeLocator {
         let pathEnv = searchPaths.joined(separator: ":")
         let runtime: RuntimeKind = .node
 
-        guard let binary = findExecutable(named: runtime.binaryName, searchPaths: searchPaths) else {
+        guard let binary = CommandResolver.findExecutable(named: runtime.rawValue, searchPaths: searchPaths) else {
             return .failure(.notFound(searchPaths: searchPaths))
         }
         guard let rawVersion = await readVersion(of: binary, pathEnv: pathEnv) else {
@@ -123,19 +123,6 @@ enum RuntimeLocator {
         }
     }
 
-    // MARK: - Internals
-
-    private static func findExecutable(named name: String, searchPaths: [String]) -> String? {
-        let fm = FileManager()
-        for dir in searchPaths {
-            let candidate = (dir as NSString).appendingPathComponent(name)
-            if fm.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
-        }
-        return nil
-    }
-
     private static func readVersion(of binary: String, pathEnv: String) async -> String? {
         let start = Date()
         do {
@@ -171,11 +158,5 @@ enum RuntimeLocator {
                 """)
             return nil
         }
-    }
-}
-
-extension RuntimeKind {
-    fileprivate var binaryName: String {
-        "node"
     }
 }

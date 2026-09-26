@@ -50,10 +50,9 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
 @Suite(.serialized)
 struct MacNodeHostWorkerTests {
     @Test func `worker crash retry budget is bounded and exponentially delayed`() throws {
-        let input = MacNodeHostWorkerRetryPolicy.Input(
-            launch: MacNodeHostWorkerLaunch(
-                command: ["/usr/local/bin/openclaw", "node", "worker"],
-                configurationGeneration: 4))
+        let input = MacNodeHostWorkerLaunch(
+            command: ["/usr/local/bin/openclaw", "node", "worker"],
+            configurationGeneration: 4)
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 5)
 
         try policy.prepareForStart(input)
@@ -75,14 +74,12 @@ struct MacNodeHostWorkerTests {
     }
 
     @Test func `new worker input resets an exhausted crash retry budget`() throws {
-        let original = MacNodeHostWorkerRetryPolicy.Input(
-            launch: MacNodeHostWorkerLaunch(
-                command: ["/usr/local/bin/openclaw", "node", "worker"],
-                configurationGeneration: 4))
-        let updated = MacNodeHostWorkerRetryPolicy.Input(
-            launch: MacNodeHostWorkerLaunch(
-                command: original.launch.command,
-                configurationGeneration: 5))
+        let original = MacNodeHostWorkerLaunch(
+            command: ["/usr/local/bin/openclaw", "node", "worker"],
+            configurationGeneration: 4)
+        let updated = MacNodeHostWorkerLaunch(
+            command: original.command,
+            configurationGeneration: 5)
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 1)
 
         try policy.prepareForStart(original)

@@ -1,3 +1,4 @@
+import OpenClawKit
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
@@ -14,7 +15,9 @@ struct TalkModeConfigParsingTests {
             "voiceId": AnyCodable("voice-legacy"),
         ]
 
-        let selection = TalkModeRuntime.selectTalkProviderConfig(talk)
+        let selection = TalkConfigParsing.selectProviderConfig(
+            talk,
+            defaultProvider: TalkModeRuntime.defaultTalkProvider)
         #expect(selection == nil)
     }
 
@@ -24,7 +27,9 @@ struct TalkModeConfigParsingTests {
             "apiKey": AnyCodable("legacy-key"),
         ]
 
-        let selection = TalkModeRuntime.selectTalkProviderConfig(talk)
+        let selection = TalkConfigParsing.selectProviderConfig(
+            talk,
+            defaultProvider: TalkModeRuntime.defaultTalkProvider)
         #expect(selection?.provider == "elevenlabs")
         #expect(selection?.normalizedPayload == false)
         #expect(selection?.config["voiceId"]?.stringValue == "voice-legacy")
@@ -36,11 +41,12 @@ struct TalkModeConfigParsingTests {
             "silenceTimeoutMs": AnyCodable(1500),
         ]
 
-        #expect(TalkModeRuntime.resolvedSilenceTimeoutMs(talk) == 1500)
+        #expect(TalkConfigParsing.resolvedSilenceTimeoutMs(talk, fallback: TalkDefaults.silenceTimeoutMs) == 1500)
     }
 
     @Test func `defaults silence timeout ms when missing`() {
-        #expect(TalkModeRuntime.resolvedSilenceTimeoutMs(nil) == TalkDefaults.silenceTimeoutMs)
+        #expect(TalkConfigParsing.resolvedSilenceTimeoutMs(nil, fallback: TalkDefaults.silenceTimeoutMs) == TalkDefaults
+            .silenceTimeoutMs)
     }
 
     @Test func `defaults silence timeout ms when invalid`() {
@@ -48,6 +54,7 @@ struct TalkModeConfigParsingTests {
             "silenceTimeoutMs": AnyCodable(0),
         ]
 
-        #expect(TalkModeRuntime.resolvedSilenceTimeoutMs(talk) == TalkDefaults.silenceTimeoutMs)
+        #expect(TalkConfigParsing
+            .resolvedSilenceTimeoutMs(talk, fallback: TalkDefaults.silenceTimeoutMs) == TalkDefaults.silenceTimeoutMs)
     }
 }

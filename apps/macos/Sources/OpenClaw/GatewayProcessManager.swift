@@ -16,15 +16,13 @@ final class GatewayProcessManager {
     static let shared = GatewayProcessManager()
 
     private struct LaunchAgentEnableRequest: Sendable {
-        let bundlePath: String
         let port: Int
         let allowUnconfigured: Bool
         let generation: UInt64
         var invocationIDs: [UInt64]
 
         func hasSameConfiguration(as other: LaunchAgentEnableRequest) -> Bool {
-            self.bundlePath == other.bundlePath &&
-                self.port == other.port &&
+            self.port == other.port &&
                 self.allowUnconfigured == other.allowUnconfigured &&
                 self.generation == other.generation
         }
@@ -304,10 +302,8 @@ final class GatewayProcessManager {
             self.logger.info("gateway launchd auto-enable skipped (disable marker set)")
             return false
         }
-        let bundlePath = Bundle.main.bundleURL.path
         let port = GatewayEnvironment.gatewayPort()
         let result = await self.enableLaunchAgentIfNeeded(
-            bundlePath: bundlePath,
             port: port,
             generation: self.gatewayStartGeneration)
         if let err = result.error {
@@ -317,7 +313,6 @@ final class GatewayProcessManager {
     }
 
     private func enableLaunchAgentIfNeeded(
-        bundlePath: String,
         port: Int,
         generation expectedGeneration: UInt64? = nil) async -> LaunchAgentEnableResult
     {
@@ -327,7 +322,6 @@ final class GatewayProcessManager {
         self.launchAgentEnableNextInvocationID &+= 1
         let invocationID = self.launchAgentEnableNextInvocationID
         let request = LaunchAgentEnableRequest(
-            bundlePath: bundlePath,
             port: port,
             allowUnconfigured: self.hostsLocalGatewayWithRemotePrimary,
             generation: generation,
@@ -450,7 +444,6 @@ final class GatewayProcessManager {
             "[gateway] enabling launchd job (\(gatewayLaunchdLabel)) on port \(request.port)\n")
         if let error = await GatewayLaunchAgentManager.set(
             enabled: true,
-            bundlePath: request.bundlePath,
             port: request.port,
             allowUnconfigured: request.allowUnconfigured)
         {
@@ -579,7 +572,6 @@ final class GatewayProcessManager {
         let enableTask = self.launchAgentEnableTask
         self.status = .stopped
         self.logger.info("gateway stop requested")
-        let bundlePath = Bundle.main.bundleURL.path
         let priorDisableTask = self.launchAgentDisableTask
         let disableTask = Task { @MainActor in
             _ = await priorDisableTask?.value
@@ -587,7 +579,6 @@ final class GatewayProcessManager {
             if self.launchAgentDisableGeneration == stopGeneration {
                 _ = await GatewayLaunchAgentManager.set(
                     enabled: false,
-                    bundlePath: bundlePath,
                     port: GatewayEnvironment.gatewayPort())
             }
             if self.launchAgentDisableGeneration == stopGeneration {
@@ -843,11 +834,9 @@ extension GatewayProcessManager {
             return nil
         }
 
-        let bundlePath = Bundle.main.bundleURL.path
         let port = GatewayEnvironment.gatewayPort()
         self.logger.info("gateway ensuring launchd port=\(port)")
         let enableResult = await self.enableLaunchAgentIfNeeded(
-            bundlePath: bundlePath,
             port: port,
             generation: startGeneration)
         guard self.isCurrentGatewayStart(startGeneration) else { return nil }
@@ -1416,12 +1405,12 @@ extension GatewayProcessManager {
             startGeneration: self.gatewayStartGeneration)
     }
 
-    func _testEnableLaunchAgentIfNeeded(bundlePath: String, port: Int) async -> String? {
-        await self.enableLaunchAgentIfNeeded(bundlePath: bundlePath, port: port).error
+    func _testEnableLaunchAgentIfNeeded(port: Int) async -> String? {
+        await self.enableLaunchAgentIfNeeded(port: port).error
     }
 
-    func _testEnableLaunchAgentIfNeededInstalled(bundlePath: String, port: Int) async -> Bool {
-        await self.enableLaunchAgentIfNeeded(bundlePath: bundlePath, port: port).installed
+    func _testEnableLaunchAgentIfNeededInstalled(port: Int) async -> Bool {
+        await self.enableLaunchAgentIfNeeded(port: port).installed
     }
 
     func _testRecordLaunchAgentReadinessFailure(port: Int, startingPID: Int32?) async {

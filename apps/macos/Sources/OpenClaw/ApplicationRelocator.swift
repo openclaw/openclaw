@@ -141,7 +141,6 @@ enum ApplicationRelocator {
     private struct BundleReplacementSnapshot: Sendable {
         let bundleURL: URL
         let bundleIdentifier: String
-        let executableURL: URL
         let codeDirectoryHash: Data
         let requirementData: Data
     }
@@ -200,7 +199,7 @@ enum ApplicationRelocator {
                 guard let installedIdentity = candidate.identity,
                       candidate.isTrusted,
                       installedIdentity.bundleIdentifier == currentIdentity.bundleIdentifier,
-                      compareBuild(installedIdentity.buildVersion, currentIdentity.buildVersion) !=
+                      installedIdentity.buildVersion.compare(currentIdentity.buildVersion, options: .numeric) !=
                       .orderedAscending
                 else { continue }
                 return .handOff(candidate.url)
@@ -270,7 +269,6 @@ enum ApplicationRelocator {
             #endif
             if !processInfo.isRunningTests, !processInfo.isPreview, monitorDebugReplacement {
                 let monitoredBundleURL = replacementSourceBundleURL(
-                    environment: processInfo.environment,
                     fallback: bundle.bundleURL)
                 startBundleReplacementMonitoring(bundle: bundle, at: monitoredBundleURL)
             }
@@ -331,7 +329,6 @@ enum ApplicationRelocator {
         }
 
         let bundleURL = replacementSourceBundleURL(
-            environment: processInfo.environment,
             fallback: bundle.bundleURL)
         let isReadOnlyVolume = (try? bundleURL.resourceValues(forKeys: [.volumeIsReadOnlyKey]))?
             .volumeIsReadOnly ?? false
@@ -358,21 +355,18 @@ extension ApplicationRelocator {
     static func relaunchStrategy(
         xpcServiceName: String?,
         executableURL: URL?,
-        homeDirectory: URL,
-        fileManager: FileManager = .default) -> RelaunchStrategy
+        homeDirectory: URL) -> RelaunchStrategy
     {
         self.verifiedKeepAliveSupervisor(
             xpcServiceName: xpcServiceName,
             executableURL: executableURL,
-            homeDirectory: homeDirectory,
-            fileManager: fileManager) == nil ? .openAfterTermination : .externalSupervisor
+            homeDirectory: homeDirectory) == nil ? .openAfterTermination : .externalSupervisor
     }
 
     private static func verifiedKeepAliveSupervisor(
         xpcServiceName: String?,
         executableURL: URL?,
-        homeDirectory: URL,
-        fileManager _: FileManager = .default) -> KeepAliveSupervisor?
+        homeDirectory: URL) -> KeepAliveSupervisor?
     {
         guard let serviceName = xpcServiceName?.trimmingCharacters(in: .whitespacesAndNewlines),
               !serviceName.isEmpty,
@@ -573,7 +567,6 @@ extension ApplicationRelocator {
         processInfo: ProcessInfo) -> Environment
     {
         let bundleURL = self.replacementSourceBundleURL(
-            environment: processInfo.environment,
             fallback: bundle.bundleURL)
         let homeDirectory = fileManager.homeDirectoryForCurrentUser.standardizedFileURL
         let appName = bundleURL.lastPathComponent
@@ -617,23 +610,14 @@ extension ApplicationRelocator {
         return ApplicationIdentity(bundleIdentifier: bundleIdentifier, buildVersion: buildVersion)
     }
 
-    private static func replacementSourceBundleURL(
-        environment _: [String: String],
-        fallback: URL) -> URL
-    {
+    private static func replacementSourceBundleURL(fallback: URL) -> URL {
         self.authenticatedReplacementSourceBundleURL ?? fallback.standardizedFileURL
     }
 
     private static func startBundleReplacementMonitoring(bundle: Bundle, at monitoredBundleURL: URL) {
         self.bundleReplacementRecoveryTask?.cancel()
         self.bundleReplacementRecoveryTask = nil
-        self.bundleReplacementSource?.cancel()
-        self.bundleReplacementSource = nil
-        self.bundleReplacementSnapshot = nil
-        self.bundleReplacementCheckPending = false
-        self.bundleReplacementHandoffInProgress = false
-        self.bundleReplacementHandoffAttempt = 0
-        self.bundleReplacementHandoffTargetHash = nil
+        self.disableBundleReplacementMonitoring()
 
         let bundleURL = monitoredBundleURL.standardizedFileURL
         guard bundleURL.pathExtension == "app",
@@ -649,7 +633,6 @@ extension ApplicationRelocator {
         self.bundleReplacementSnapshot = BundleReplacementSnapshot(
             bundleURL: bundleURL,
             bundleIdentifier: bundleIdentifier,
-            executableURL: installedApp.executableURL,
             codeDirectoryHash: runningIdentity.codeDirectoryHash,
             requirementData: runningIdentity.requirementData)
 
@@ -761,15 +744,10 @@ extension ApplicationRelocator {
     private nonisolated static func replacementEvaluationOnDisk(
         for snapshot: BundleReplacementSnapshot) -> ReplacementEvaluation
     {
-        guard let installedApp = applicationOnDisk(at: snapshot.bundleURL) else {
-            return ReplacementEvaluation(
-                action: .waitForTrustedReplacement,
-                launchReference: nil,
-                launchCodeDirectoryHash: nil)
-        }
-        guard let launchReference = bundleFileReference(
-            bundleURL: snapshot.bundleURL,
-            executableURL: installedApp.executableURL)
+        guard let installedApp = applicationOnDisk(at: snapshot.bundleURL),
+              let launchReference = bundleFileReference(
+                  bundleURL: snapshot.bundleURL,
+                  executableURL: installedApp.executableURL)
         else {
             return ReplacementEvaluation(
                 action: .waitForTrustedReplacement,
@@ -947,24 +925,13 @@ extension ApplicationRelocator {
         matching requirement: SecRequirement?,
         fileManager: FileManager) -> Bool
     {
-        guard let executableURL = bundle.executableURL else { return false }
-        return self.isTrustedInstalledApp(
-            at: bundle.bundleURL,
-            executableURL: executableURL,
-            matching: requirement,
-            fileManager: fileManager)
-    }
-
-    private static func isTrustedInstalledApp(
-        at bundleURL: URL,
-        executableURL: URL,
-        matching requirement: SecRequirement?,
-        fileManager: FileManager) -> Bool
-    {
-        guard let requirement, fileManager.isExecutableFile(atPath: executableURL.path) else { return false }
+        guard let executableURL = bundle.executableURL,
+              let requirement,
+              fileManager.isExecutableFile(atPath: executableURL.path)
+        else { return false }
 
         var code: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(bundleURL as CFURL, SecCSFlags(), &code) == errSecSuccess,
+        guard SecStaticCodeCreateWithPath(bundle.bundleURL as CFURL, SecCSFlags(), &code) == errSecSuccess,
               let code
         else { return false }
         return SecStaticCodeCheckValidity(
@@ -1251,6 +1218,11 @@ extension ApplicationRelocator {
         guard pipe(&descriptors) == 0 else { return nil }
         let readDescriptor = descriptors[0]
         let writeDescriptor = descriptors[1]
+        var handoffOwnsReadDescriptor = false
+        defer {
+            Darwin.close(writeDescriptor)
+            if !handoffOwnsReadDescriptor { Darwin.close(readDescriptor) }
+        }
 
         var environmentAssignments = [
             "\(replacementSourceBundleEnvironmentKey)=\(sourceBundleURL.path)",
@@ -1269,25 +1241,17 @@ extension ApplicationRelocator {
         }
         // The detached child is no longer owned by the current launchd job. Do not
         // let it inherit that job's identity and attempt a second bootout later.
-        let arguments = [
-            "/usr/bin/env",
-            "-u",
+        let clearedEnvironmentKeys = [
             "XPC_SERVICE_NAME",
-            "-u",
             replacementSourceBundleEnvironmentKey,
-            "-u",
             replacementParentPIDEnvironmentKey,
-            "-u",
             replacementCodeHashEnvironmentKey,
-            "-u",
             replacementReadyFDEnvironmentKey,
-            "-u",
             replacementBootoutTargetEnvironmentKey,
-            "-u",
             replacementSupervisorLabelEnvironmentKey,
-            "-u",
             replacementSupervisorPlistEnvironmentKey,
-        ] + environmentAssignments +
+        ]
+        let arguments = ["/usr/bin/env"] + clearedEnvironmentKeys.flatMap { ["-u", $0] } + environmentAssignments +
             [launchReference.executableURL.path] + forwardedArguments
         var cArguments = arguments.map { strdup($0) } + [nil]
         defer { cArguments.compactMap(\.self).forEach { free($0) } }
@@ -1296,11 +1260,7 @@ extension ApplicationRelocator {
         var attributes: posix_spawnattr_t?
         guard posix_spawn_file_actions_init(&fileActions) == 0,
               posix_spawnattr_init(&attributes) == 0
-        else {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
-        }
+        else { return nil }
         defer {
             posix_spawn_file_actions_destroy(&fileActions)
             posix_spawnattr_destroy(&attributes)
@@ -1309,23 +1269,15 @@ extension ApplicationRelocator {
               posix_spawnattr_setflags(
                   &attributes,
                   Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0
-        else {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
-            return nil
-        }
+        else { return nil }
         if readDescriptor != childReadyDescriptor,
            posix_spawn_file_actions_addclose(&fileActions, readDescriptor) != 0
         {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
             return nil
         }
         if writeDescriptor != childReadyDescriptor,
            posix_spawn_file_actions_addclose(&fileActions, writeDescriptor) != 0
         {
-            Darwin.close(readDescriptor)
-            Darwin.close(writeDescriptor)
             return nil
         }
 
@@ -1339,11 +1291,8 @@ extension ApplicationRelocator {
                 buffer.baseAddress,
                 environ)
         }
-        Darwin.close(writeDescriptor)
-        guard spawnResult == 0 else {
-            Darwin.close(readDescriptor)
-            return nil
-        }
+        guard spawnResult == 0 else { return nil }
+        handoffOwnsReadDescriptor = true
         return (processIdentifier, readDescriptor)
     }
 
@@ -1378,10 +1327,6 @@ extension ApplicationRelocator {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
-    }
-
-    private static func compareBuild(_ lhs: String, _ rhs: String) -> ComparisonResult {
-        lhs.compare(rhs, options: .numeric)
     }
 
     private static func isInside(_ path: String, root: String) -> Bool {

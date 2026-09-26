@@ -18,9 +18,9 @@ struct PostAppUpdateReceipt: Codable, Equatable {
     let fromVersion: String
     let toVersion: String
     let recordedAt: Date
-    let gatewayUpdateIncomplete: Bool
-    let notificationAttempts: Int
-    let notificationInFlight: Bool
+    var gatewayUpdateIncomplete: Bool
+    var notificationAttempts: Int
+    var notificationInFlight: Bool
 
     init(
         fromVersion: String,
@@ -126,13 +126,8 @@ enum PostAppUpdateReceiptStore {
         receipt: PostAppUpdateReceipt,
         defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
     {
-        let updated = PostAppUpdateReceipt(
-            fromVersion: receipt.fromVersion,
-            toVersion: receipt.toVersion,
-            recordedAt: receipt.recordedAt,
-            gatewayUpdateIncomplete: incomplete,
-            notificationAttempts: receipt.notificationAttempts,
-            notificationInFlight: receipt.notificationInFlight)
+        var updated = receipt
+        updated.gatewayUpdateIncomplete = incomplete
         self.persist(updated, defaults: defaults)
         return updated
     }
@@ -144,13 +139,8 @@ enum PostAppUpdateReceiptStore {
     {
         // One later-launch retry handles restart races. The bound prevents
         // permanent auth/schema errors from reopening this window forever.
-        let updated = PostAppUpdateReceipt(
-            fromVersion: receipt.fromVersion,
-            toVersion: receipt.toVersion,
-            recordedAt: receipt.recordedAt,
-            gatewayUpdateIncomplete: receipt.gatewayUpdateIncomplete,
-            notificationAttempts: min(receipt.notificationAttempts + 1, self.notificationRetryLimit),
-            notificationInFlight: receipt.notificationInFlight)
+        var updated = receipt
+        updated.notificationAttempts = min(receipt.notificationAttempts + 1, self.notificationRetryLimit)
         self.persist(updated, defaults: defaults)
         return updated
     }
@@ -161,13 +151,8 @@ enum PostAppUpdateReceiptStore {
         receipt: PostAppUpdateReceipt,
         defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt
     {
-        let updated = PostAppUpdateReceipt(
-            fromVersion: receipt.fromVersion,
-            toVersion: receipt.toVersion,
-            recordedAt: receipt.recordedAt,
-            gatewayUpdateIncomplete: receipt.gatewayUpdateIncomplete,
-            notificationAttempts: receipt.notificationAttempts,
-            notificationInFlight: inFlight)
+        var updated = receipt
+        updated.notificationInFlight = inFlight
         self.persist(updated, defaults: defaults)
         // Cross the persistence boundary before the Gateway request. A crash
         // after enqueue must not replay this one-time welcome on next launch.
@@ -367,26 +352,16 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         }
 
         let managedStatus = await CLIInstaller.managedStatus()
-        let runtimeProgramArguments: [String]
-        switch connectionMode {
-        case .local:
-            guard let programArguments = GatewayLaunchAgentManager.launchdProgramArguments() else {
-                self.finishAfterOwnershipCheckFailure(
-                    connectionMode: connectionMode,
-                    receipt: receipt)
-                return
-            }
-            runtimeProgramArguments = programArguments
-        case .remote:
-            guard let programArguments = NodeServiceManager.launchdProgramArguments() else {
-                self.finishAfterOwnershipCheckFailure(
-                    connectionMode: connectionMode,
-                    receipt: receipt)
-                return
-            }
-            runtimeProgramArguments = programArguments
-        case .unconfigured:
-            runtimeProgramArguments = []
+        let runtimeProgramArguments: [String]? = switch connectionMode {
+        case .local: GatewayLaunchAgentManager.launchdProgramArguments()
+        case .remote: NodeServiceManager.launchdProgramArguments()
+        case .unconfigured: [String]()
+        }
+        guard let runtimeProgramArguments else {
+            self.finishAfterOwnershipCheckFailure(
+                connectionMode: connectionMode,
+                receipt: receipt)
+            return
         }
         let ownsManagedRuntime = Self.ownsManagedRuntime(
             connectionMode: connectionMode,
@@ -398,11 +373,11 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
 
         // App-only relaunches stay invisible. The window belongs only to
         // confirmed managed Gateway work and its recovery path.
-        switch Self.gatewayAction(
+        let action = Self.gatewayAction(
             status: managedStatus,
             ownsManagedRuntime: ownsManagedRuntime,
             gatewayUpdateIncomplete: receipt.gatewayUpdateIncomplete)
-        {
+        switch action {
         case .none:
             self.finishSilently()
             return
@@ -411,28 +386,23 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
                 connectionMode: connectionMode,
                 receipt: receipt)
             return
-        case .repair:
+        case .repair, .update:
+            if action == .update {
+                self.setGatewayUpdateIncomplete(true, receipt: receipt)
+            }
             self.model.phase = .updating
             self.show()
             let outcome = await CLIInstaller.updateManaged(
                 targetVersion: receipt.toVersion,
                 restartGateway: restartGateway,
-                repair: true)
+                repair: action == .repair)
             { [weak self] message in
                 self?.model.message = message
             }
-            guard self.consume(outcome) else { return }
-        case .update:
-            self.setGatewayUpdateIncomplete(true, receipt: receipt)
-            self.model.phase = .updating
-            self.show()
-            let outcome = await CLIInstaller.updateManaged(
-                targetVersion: receipt.toVersion,
-                restartGateway: restartGateway)
-            { [weak self] message in
-                self?.model.message = message
+            if case let .failure(message, details) = outcome {
+                self.fail(message: message, details: details)
+                return
             }
-            guard self.consume(outcome) else { return }
         case .install:
             self.setGatewayUpdateIncomplete(true, receipt: receipt)
             self.model.phase = .updating
@@ -531,16 +501,6 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
             String(localized: "The Gateway remains paused, so OpenClaw did not wake your agent.")
         default:
             nil
-        }
-    }
-
-    private func consume(_ outcome: ManagedCLIUpdateOutcome) -> Bool {
-        switch outcome {
-        case .success:
-            return true
-        case let .failure(message, details):
-            self.fail(message: message, details: details)
-            return false
         }
     }
 
