@@ -21,7 +21,10 @@ import {
   isWorktreeRegistryReadCommand,
   executeWorktreeRegistryReadCommand,
 } from "../agents/worktrees/registry-read.worker.js";
-import { retireMissingWorktreeInWorker } from "../agents/worktrees/registry-retirement.worker.js";
+import {
+  retireMissingWorktreeInWorker,
+  deferWorktreeCleanupInWorker,
+} from "../agents/worktrees/registry-retirement.worker.js";
 import { executeWorktreeRunLeaseCommand } from "../agents/worktrees/run-lease-store.worker.js";
 import { listAuditEventsInDatabase } from "../audit/audit-event-read.kernel.js";
 import { executeAuditWriterCommand } from "../audit/audit-event-writer.worker.js";
@@ -630,6 +633,9 @@ export function executeSharedStateCommand(
   }
   if (command.type === "worktrees.retireMissing") {
     return retireMissingWorktreeInWorker(command.input, writeOptions);
+  }
+  if (command.type === "worktrees.deferCleanup") {
+    return deferWorktreeCleanupInWorker(command.input, writeOptions);
   }
   if (command.type === "worktrees.releaseRunLease" || command.type === "worktrees.reapRunLeases") {
     return executeWorktreeRunLeaseCommand(command, writeOptions);
