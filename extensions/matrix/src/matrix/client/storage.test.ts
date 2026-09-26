@@ -1,4 +1,3 @@
-// Matrix tests cover storage plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -105,6 +104,17 @@ describe("matrix client storage paths", () => {
     });
   }
 
+  async function storageMetaFor(accessToken: string, extra: Record<string, unknown> = {}) {
+    return {
+      homeserver: defaultStorageAuth.homeserver,
+      userId: defaultStorageAuth.userId,
+      accountId: "default",
+      accessTokenHash: (await resolveDefaultStoragePaths({ accessToken })).tokenHash,
+      deviceId: "DEVICE123",
+      ...extra,
+    };
+  }
+
   async function setupCurrentTokenBackfillScenario(params: {
     currentRootFiles: "thread-bindings" | "startup-verification";
     oldRootFiles: "crypto-only" | "thread-bindings";
@@ -152,14 +162,7 @@ describe("matrix client storage paths", () => {
     const oldStoragePaths = await seedExistingStorageRoot({
       accessToken: "secret-token-old",
       deviceId: "DEVICE123",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: (await resolveDefaultStoragePaths({ accessToken: "secret-token-old" }))
-          .tokenHash,
-        deviceId: "DEVICE123",
-      },
+      storageMeta: await storageMetaFor("secret-token-old"),
     });
     fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
     if (params.oldRootFiles === "thread-bindings") {
@@ -419,14 +422,7 @@ describe("matrix client storage paths", () => {
     const newerCanonicalPaths = seedCanonicalStorageRoot({
       stateDir,
       accessToken: "secret-token-new",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: (await resolveDefaultStoragePaths({ accessToken: "secret-token-new" }))
-          .tokenHash,
-        deviceId: "NEWDEVICE",
-      },
+      storageMeta: await storageMetaFor("secret-token-new", { deviceId: "NEWDEVICE" }),
     });
 
     const resolvedPaths = await resolveDefaultStoragePaths({
@@ -594,41 +590,13 @@ describe("matrix client storage paths", () => {
     },
   );
 
-  it("keeps the canonical current-token storage root when deviceId is still unknown", async () => {
-    const stateDir = setupStateDir();
-    const oldStoragePaths = await seedExistingStorageRoot({
-      accessToken: "secret-token-old",
-    });
-
-    const rotatedStoragePaths = await resolveDefaultStoragePaths({
-      accessToken: "secret-token-new",
-    });
-    const canonicalPaths = resolveMatrixAccountStorageRoot({
-      stateDir,
-      homeserver: defaultStorageAuth.homeserver,
-      userId: defaultStorageAuth.userId,
-      accessToken: "secret-token-new",
-    });
-
-    expect(rotatedStoragePaths.rootDir).toBe(canonicalPaths.rootDir);
-    expect(rotatedStoragePaths.tokenHash).toBe(canonicalPaths.tokenHash);
-    expect(rotatedStoragePaths.rootDir).not.toBe(oldStoragePaths.rootDir);
-  });
-
   it("reuses an existing token-hash storage root for the same device after the access token changes", async () => {
     const logger = createTestLogger();
     setupStateDir(undefined, logger);
     const oldStoragePaths = await seedExistingStorageRoot({
       accessToken: "secret-token-old",
       deviceId: "DEVICE123",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: (await resolveDefaultStoragePaths({ accessToken: "secret-token-old" }))
-          .tokenHash,
-        deviceId: "DEVICE123",
-      },
+      storageMeta: await storageMetaFor("secret-token-old"),
     });
 
     const rotatedStoragePaths = await resolveDefaultStoragePaths({
@@ -648,26 +616,12 @@ describe("matrix client storage paths", () => {
     const oldStoragePaths = await seedExistingStorageRoot({
       accessToken: "secret-token-old",
       deviceId: "DEVICE123",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: (await resolveDefaultStoragePaths({ accessToken: "secret-token-old" }))
-          .tokenHash,
-        deviceId: "DEVICE123",
-      },
+      storageMeta: await storageMetaFor("secret-token-old"),
     });
     const canonicalPaths = seedCanonicalStorageRoot({
       stateDir,
       accessToken: "secret-token-new",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: (await resolveDefaultStoragePaths({ accessToken: "secret-token-new" }))
-          .tokenHash,
-        deviceId: "DEVICE123",
-      },
+      storageMeta: await storageMetaFor("secret-token-new"),
     });
     fs.mkdirSync(path.join(canonicalPaths.rootDir, "crypto"), { recursive: true });
 
@@ -697,26 +651,12 @@ describe("matrix client storage paths", () => {
     const canonicalPaths = seedCanonicalStorageRoot({
       stateDir,
       accessToken: "secret-token-new",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: (await resolveDefaultStoragePaths({ accessToken: "secret-token-new" }))
-          .tokenHash,
-        deviceId: "DEVICE123",
-      },
+      storageMeta: await storageMetaFor("secret-token-new"),
     });
     const previousPaths = seedCanonicalStorageRoot({
       stateDir,
       accessToken: "secret-token-old",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: (await resolveDefaultStoragePaths({ accessToken: "secret-token-old" }))
-          .tokenHash,
-        deviceId: "DEVICE123",
-      },
+      storageMeta: await storageMetaFor("secret-token-old"),
     });
     fs.mkdirSync(path.join(previousPaths.rootDir, "crypto"), { recursive: true });
     const archivedTokenRoot = `${previousPaths.rootDir}.apr24-cutover-20260424`;
@@ -883,27 +823,12 @@ describe("matrix client storage paths", () => {
     const oldStoragePaths = seedCanonicalStorageRoot({
       stateDir,
       accessToken: "secret-token-old",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: (await resolveDefaultStoragePaths({ accessToken: "secret-token-old" }))
-          .tokenHash,
-        currentTokenStateClaimed: true,
-        deviceId: "DEVICE123",
-      },
+      storageMeta: await storageMetaFor("secret-token-old", { currentTokenStateClaimed: true }),
     });
     seedCanonicalStorageRoot({
       stateDir,
       accessToken: "secret-token-new",
-      storageMeta: {
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        accountId: "default",
-        accessTokenHash: (await resolveDefaultStoragePaths({ accessToken: "secret-token-new" }))
-          .tokenHash,
-        deviceId: "DEVICE123",
-      },
+      storageMeta: await storageMetaFor("secret-token-new"),
     });
 
     const readdirSync = vi.spyOn(fs, "readdirSync");

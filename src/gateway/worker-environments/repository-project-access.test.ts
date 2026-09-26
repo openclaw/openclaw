@@ -90,6 +90,7 @@ describe("prepared repository source access", () => {
     });
     const access = createWorkerEnvironmentAccess({
       store: fixture.store,
+      getCleanupError: () => undefined,
       getConfig: () => fixture.config,
       projectNamespace: "gateway",
       bindPreparedWorkspace: bind,

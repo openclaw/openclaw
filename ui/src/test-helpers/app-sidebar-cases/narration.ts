@@ -142,29 +142,40 @@ describe("AppSidebar live narration", () => {
     ).toBe(false);
   });
 
-  it("keeps only the six newest running subscriptions and evicts the old boundary", async () => {
+  it("retains six running subscriptions across recency changes and fills a settled slot", async () => {
     const keys = Array.from({ length: 7 }, (_, index) => `agent:main:run-${index + 1}`);
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", keys);
-    const rows = keys.map((key, index) => runningRow(key, index + 1));
+    const rows = keys.map((key, index) => ({
+      ...runningRow(key, index + 1),
+      startedAt: undefined,
+    }));
     sessions.publishList({ result: sessionsResult(rows), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(6));
+    expect(sessions.subscribeMessages).toHaveBeenCalledTimes(6);
     expect(sessions.subscribeMessages.mock.calls.map(([key]) => key)).toEqual(
       expect.arrayContaining(keys.slice(1)),
     );
     expect(sessions.subscribeMessages).not.toHaveBeenCalledWith(keys[0], expect.anything());
 
+    const reordered = [{ ...rows[0]!, updatedAt: 100 }, ...rows.slice(1).toReversed()];
+    sessions.publishList({ result: sessionsResult(reordered), agentId: "main" });
+    await sidebar.updateComplete;
+    expect(sessions.subscribeMessages).toHaveBeenCalledTimes(6);
+    expect(sessions.unsubscribeMessages).not.toHaveBeenCalled();
+
+    const settled: GatewaySessionRow = { ...rows[1]!, hasActiveRun: false, status: "done" };
     sessions.publishList({
-      result: sessionsResult([{ ...rows[0]!, startedAt: 100 }, ...rows.slice(1)]),
+      result: sessionsResult(reordered.map((row) => (row.key === settled.key ? settled : row))),
       agentId: "main",
     });
-    await waitForFast(() => expect(sessions.unsubscribeMessages).toHaveBeenCalledTimes(1));
-    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(7));
+    await sidebar.updateComplete;
+    expect(sessions.unsubscribeMessages).toHaveBeenCalledTimes(1);
+    expect(sessions.subscribeMessages).toHaveBeenCalledTimes(7);
     expect(sessions.unsubscribeMessages.mock.calls[0]?.[0]).toMatchObject({ key: keys[1] });
     expect(sessions.subscribeMessages.mock.calls.at(-1)?.[0]).toBe(keys[0]);
   });

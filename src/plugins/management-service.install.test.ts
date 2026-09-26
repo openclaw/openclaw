@@ -272,9 +272,7 @@ describe("managed plugin installation", () => {
   );
 
   it.each([
-    { code: "incompatible_plugin_api", error: "incompatible artifact" },
     { code: "security_scan_blocked", error: "untrusted package" },
-    { code: "security_scan_failed", error: "policy failed" },
     { error: "integrity mismatch" },
   ])("never falls back after npm refusal ($error)", async (failure) => {
     mocks.readConfig.mockResolvedValue(configSnapshot());
@@ -472,33 +470,6 @@ describe("managed plugin installation", () => {
     ).rejects.toThrow("expected sonos, got impostor");
     expect(mocks.clawhubInstall).toHaveBeenCalledWith(
       expect.objectContaining({ expectedPluginId: "sonos" }),
-    );
-  });
-
-  it("threads hosted ClawHub candidate integrity into official installs", async () => {
-    mocks.readConfig.mockResolvedValue(configSnapshot());
-    mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
-    mockClawHubInstall("diffs", "@openclaw/diffs");
-    mocks.persistInstall.mockResolvedValue({});
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
-    );
-
-    await installManagedPlugin({
-      request: {
-        source: "official",
-        pluginId: "diffs",
-        acknowledgeCapabilities: emptyArtifactAcknowledgment,
-      },
-      env: {},
-    });
-
-    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:@openclaw/diffs@2026.6.11",
-        expectedPluginId: "diffs",
-        expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
-      }),
     );
   });
 

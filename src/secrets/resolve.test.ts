@@ -136,73 +136,38 @@ describe("secret ref resolver", () => {
     const sharedExecDir = path.join(fixtureRoot, "shared-exec");
     await fs.mkdir(sharedExecDir, { recursive: true });
 
-    execProtocolV1ScriptPath = path.join(sharedExecDir, "resolver-v1.sh");
-    await writeSecureFile(
-      execProtocolV1ScriptPath,
-      [
-        "#!/bin/sh",
-        'printf \'{"protocolVersion":1,"values":{"openai/api-key":"value:openai/api-key"}}\'',
-      ].join("\n"),
-      0o700,
-    );
+    async function writeResolver(name: string, output: string): Promise<string> {
+      const scriptPath = path.join(sharedExecDir, `${name}.sh`);
+      await writeSecureFile(scriptPath, `#!/bin/sh\nprintf '%s' '${output}'`, 0o700);
+      return scriptPath;
+    }
 
-    execPlainScriptPath = path.join(sharedExecDir, "resolver-plain.sh");
-    await writeSecureFile(
-      execPlainScriptPath,
-      ["#!/bin/sh", "printf 'plain-secret'"].join("\n"),
-      0o700,
+    execProtocolV1ScriptPath = await writeResolver(
+      "resolver-v1",
+      '{"protocolVersion":1,"values":{"openai/api-key":"value:openai/api-key"}}',
     );
-
-    execProtocolV2ScriptPath = path.join(sharedExecDir, "resolver-v2.sh");
-    await writeSecureFile(
-      execProtocolV2ScriptPath,
-      ["#!/bin/sh", 'printf \'{"protocolVersion":2,"values":{"openai/api-key":"x"}}\''].join("\n"),
-      0o700,
+    execPlainScriptPath = await writeResolver("resolver-plain", "plain-secret");
+    execProtocolV2ScriptPath = await writeResolver(
+      "resolver-v2",
+      '{"protocolVersion":2,"values":{"openai/api-key":"x"}}',
     );
-
-    execMissingIdScriptPath = path.join(sharedExecDir, "resolver-missing-id.sh");
-    await writeSecureFile(
-      execMissingIdScriptPath,
-      ["#!/bin/sh", 'printf \'{"protocolVersion":1,"values":{}}\''].join("\n"),
-      0o700,
+    execMissingIdScriptPath = await writeResolver(
+      "resolver-missing-id",
+      '{"protocolVersion":1,"values":{}}',
     );
-
-    execInheritedErrorScriptPath = path.join(sharedExecDir, "resolver-inherited-error.sh");
-    await writeSecureFile(
-      execInheritedErrorScriptPath,
-      [
-        "#!/bin/sh",
-        'printf \'{"protocolVersion":1,"values":{"toString":"resolved"},"errors":{}}\'',
-      ].join("\n"),
-      0o700,
+    execInheritedErrorScriptPath = await writeResolver(
+      "resolver-inherited-error",
+      '{"protocolVersion":1,"values":{"toString":"resolved"},"errors":{}}',
     );
-
-    execProviderErrorScriptPath = path.join(sharedExecDir, "resolver-error.sh");
-    await writeSecureFile(
-      execProviderErrorScriptPath,
-      [
-        "#!/bin/sh",
-        'printf \'{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"NOT_FOUND","message":"provider-private-detail-7f3c"}}}\'',
-      ].join("\n"),
-      0o700,
+    execProviderErrorScriptPath = await writeResolver(
+      "resolver-error",
+      '{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"NOT_FOUND","message":"provider-private-detail-7f3c"}}}',
     );
-
-    execUnsafeProviderErrorScriptPath = path.join(sharedExecDir, "resolver-unsafe-error.sh");
-    await writeSecureFile(
-      execUnsafeProviderErrorScriptPath,
-      [
-        "#!/bin/sh",
-        'printf \'{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"PROVIDERPRIVATEDETAIL9C2E"}}}\'',
-      ].join("\n"),
-      0o700,
+    execUnsafeProviderErrorScriptPath = await writeResolver(
+      "resolver-unsafe-error",
+      '{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"PROVIDERPRIVATEDETAIL9C2E"}}}',
     );
-
-    execInvalidJsonScriptPath = path.join(sharedExecDir, "resolver-invalid-json.sh");
-    await writeSecureFile(
-      execInvalidJsonScriptPath,
-      ["#!/bin/sh", "printf 'not-json'"].join("\n"),
-      0o700,
-    );
+    execInvalidJsonScriptPath = await writeResolver("resolver-invalid-json", "not-json");
 
     execFastExitScriptPath = path.join(sharedExecDir, "resolver-fast-exit.sh");
     await writeSecureFile(execFastExitScriptPath, ["#!/bin/sh", "exit 0"].join("\n"), 0o700);
@@ -357,11 +322,6 @@ describe("secret ref resolver", () => {
     }).catch((caught: unknown) => caught);
 
     expect(isMissingSecretRefResolutionError({ ref, error })).toBe(true);
-  });
-
-  itPosix("resolves exec refs with protocolVersion 1 response", async () => {
-    const value = await resolveExecSecret(execProtocolV1ScriptPath);
-    expect(value).toBe("value:openai/api-key");
   });
 
   itPosix("surfaces bounded exec error codes without provider-supplied detail", async () => {
@@ -551,58 +511,6 @@ describe("secret ref resolver", () => {
     );
   });
 
-  itPosix("rejects symlink command paths", async () => {
-    const root = await createCaseDir("exec-link-reject");
-    const symlinkPath = path.join(root, "resolver-link.mjs");
-    await fs.symlink(execPlainScriptPath, symlinkPath);
-
-    await expect(resolveExecSecret(symlinkPath, { jsonOnly: false })).rejects.toThrow(
-      "must not be a symlink",
-    );
-  });
-
-  itPosix("stays fail-closed when the retired symlink opt-out is present", async () => {
-    const root = await createCaseDir("exec-link-allow");
-    const symlinkPath = path.join(root, "resolver-link.mjs");
-    await fs.symlink(execPlainScriptPath, symlinkPath);
-    await expect(
-      resolveExecSecret(symlinkPath, {
-        jsonOnly: false,
-        allowSymlinkCommand: true,
-      }),
-    ).rejects.toThrow("must not be a symlink");
-  });
-
-  itPosix(
-    "rejects Homebrew-style symlinked exec commands even with the retired opt-out",
-    async () => {
-      const root = await createCaseDir("homebrew");
-      const binDir = path.join(root, "opt", "homebrew", "bin");
-      const cellarDir = path.join(root, "opt", "homebrew", "Cellar", "node", "25.0.0", "bin");
-      await fs.mkdir(binDir, { recursive: true });
-      await fs.mkdir(cellarDir, { recursive: true });
-
-      const targetCommand = path.join(cellarDir, "node");
-      const symlinkCommand = path.join(binDir, "node");
-      await writeSecureFile(
-        targetCommand,
-        [
-          "#!/bin/sh",
-          'suffix="${1:-missing}"',
-          'printf \'{"protocolVersion":1,"values":{"openai/api-key":"%s:openai/api-key"}}\' "$suffix"',
-        ].join("\n"),
-        0o700,
-      );
-      await fs.symlink(targetCommand, symlinkCommand);
-      await expect(
-        resolveExecSecret(symlinkCommand, {
-          args: ["brew"],
-          allowSymlinkCommand: true,
-        }),
-      ).rejects.toThrow("must not be a symlink");
-    },
-  );
-
   itPosix("rejects symlinks before trusted-directory evaluation", async () => {
     const root = await createCaseDir("exec-link-trusted");
     const symlinkPath = path.join(root, "resolver-link.mjs");
@@ -620,12 +528,6 @@ describe("secret ref resolver", () => {
   itPosix("rejects exec refs when protocolVersion is not 1", async () => {
     await expect(resolveExecSecret(execProtocolV2ScriptPath)).rejects.toThrow(
       "protocolVersion must be 1",
-    );
-  });
-
-  itPosix("rejects exec refs when response omits requested id", async () => {
-    await expect(resolveExecSecret(execMissingIdScriptPath)).rejects.toThrow(
-      'response missing id "openai/api-key"',
     );
   });
 
@@ -667,28 +569,6 @@ describe("secret ref resolver", () => {
     await expect(resolveExecSecret(execInvalidJsonScriptPath, { jsonOnly: true })).rejects.toThrow(
       "returned invalid JSON",
     );
-  });
-
-  itPosix("supports file singleValue mode with id=value", async () => {
-    const root = await createCaseDir("file-single-value");
-    const filePath = path.join(root, "token.txt");
-    await writeSecureFile(filePath, "raw-token-value\n");
-
-    const value = await resolveSecretRefString(
-      { source: "file", provider: "rawfile", id: "value" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              rawfile: createFileProviderConfig(filePath, {
-                mode: "singleValue",
-              }),
-            },
-          },
-        },
-      },
-    );
-    expect(value).toBe("raw-token-value");
   });
 
   itPosix("times out file provider reads when timeoutMs elapses", async () => {

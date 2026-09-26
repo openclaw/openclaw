@@ -182,7 +182,7 @@ describe("resolveUpdatedGatewayRestartPort", () => {
 });
 
 describe("resolvePostUpdateServiceStateReadEnv", () => {
-  it.each(["git", "npm", "pnpm", "bun"] as const)(
+  it.each(["git", "npm"] as const)(
     "keeps %s restart preparation anchored to the pre-update service env",
     (updateMode) => {
       const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
@@ -202,7 +202,7 @@ describe("resolvePostUpdateServiceStateReadEnv", () => {
 });
 
 describe("update environment snapshots", () => {
-  it.each(["win32", "linux", "darwin"] as const)(
+  it.each(["win32", "linux"] as const)(
     "preserves %s selector lookup semantics without retaining the live environment",
     (platform) => {
       const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;

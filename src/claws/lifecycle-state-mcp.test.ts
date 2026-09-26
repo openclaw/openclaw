@@ -18,12 +18,12 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { applyClawAddPlan } from "./add.js";
-import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
+import {
+  buildClawRemovalFixture,
+  quiescentClawMonitorGateway,
+} from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
-import { buildClawAddPlan } from "./lifecycle.js";
 import { installClawMcpServers, readClawMcpServerRefsByName } from "./mcp.js";
-import { parseClawManifest } from "./schema.js";
-import type { ClawSourceIdentity } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -39,30 +39,7 @@ const sourceServer = {
 
 async function addMcpFixture() {
   const root = tempDirs.make("openclaw-claw-remove-mcp-");
-  const parsed = parseClawManifest({
-    schemaVersion: 1,
-    agent: { id: "worker", name: "Worker" },
-    mcpServers: { docs: sourceServer },
-  });
-  if (!parsed.ok) {
-    throw new Error(JSON.stringify(parsed.diagnostics));
-  }
-  const source: ClawSourceIdentity = {
-    kind: "package",
-    name: "@acme/worker",
-    version: "1.0.0",
-    packageRoot: root,
-    manifestPath: join(root, "openclaw.claw.json"),
-    integrityKind: "artifact",
-    integrity: "sha256:manifest",
-    byteLength: 100,
-  };
-  const plan = await buildClawAddPlan({
-    manifest: parsed.manifest,
-    source,
-    context: { workspace: join(root, "workspace-worker") },
-  });
-  const env = { OPENCLAW_STATE_DIR: join(root, "state") };
+  const { plan, env } = await buildClawRemovalFixture(root, { withMcp: true });
   let config: OpenClawConfig = {};
   await applyClawAddPlan(plan, {
     consentPlanIntegrity: plan.planIntegrity,

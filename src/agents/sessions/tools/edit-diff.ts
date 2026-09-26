@@ -178,13 +178,6 @@ export interface Edit {
   newText: string;
 }
 
-class EditNoChangeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "EditNoChangeError";
-  }
-}
-
 interface MatchedEdit extends TextReplacement {
   editIndex: number;
 }
@@ -448,17 +441,6 @@ function getEmptyOldTextError(path: string, editIndex: number, totalEdits: numbe
   return new Error(`edits[${editIndex}].oldText must not be empty in ${path}.`);
 }
 
-function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
-  if (totalEdits === 1) {
-    return new EditNoChangeError(
-      `No changes made to ${path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`,
-    );
-  }
-  return new EditNoChangeError(
-    `No changes made to ${path}. The replacements produced identical content.`,
-  );
-}
-
 function getUnsafeFuzzyBoundaryError(path: string, editIndex: number, totalEdits: number): Error {
   const target = totalEdits === 1 ? "The fuzzy match" : `The fuzzy match for edits[${editIndex}]`;
   return new Error(
@@ -530,37 +512,10 @@ function applyEdits(normalizedContent: string, edits: Edit[], path: string): App
     }
   }
 
-  const newContent = applyReplacements(normalizedContent, matchedEdits);
-
-  if (normalizedContent === newContent) {
-    throw getNoChangeError(path, normalizedEdits.length);
-  }
-
   return {
     baseContent: normalizedContent,
-    newContent,
+    newContent: applyReplacements(normalizedContent, matchedEdits),
     replacements: matchedEdits,
-  };
-}
-
-function applyEditsPreservingLineEndings(
-  originalContent: string,
-  edits: Edit[],
-  path: string,
-): { baseContent: string; newContent: string; finalContent: string } {
-  const applied = applyEdits(normalizeToLF(originalContent), edits, path);
-  const finalContent = applyReplacementsPreservingLineEndings(
-    originalContent,
-    applied.baseContent,
-    applied.replacements,
-  );
-  if (normalizeToLF(finalContent) !== applied.newContent) {
-    throw new Error("Line-ending restoration changed the normalized edit result.");
-  }
-  return {
-    baseContent: applied.baseContent,
-    newContent: applied.newContent,
-    finalContent,
   };
 }
 
@@ -619,40 +574,35 @@ function splitNoOpEdits(
   return { noOpEdits, realEdits };
 }
 
-export type FileEditPlan =
+type FileEditPlan =
   | { changed: false; message: string }
   | { changed: true; content: string; editCount: number; receipt: FileDiff };
 
 export function prepareFileEdit(content: string, edits: Edit[], path: string): FileEditPlan {
-  try {
-    const { bom, text } = stripBom(content);
-    const normalized = normalizeToLF(text);
-    const { noOpEdits, realEdits } = splitNoOpEdits(normalized, edits, path);
-    validateNoOpEditTargets(normalized, noOpEdits, realEdits, path);
-    if (realEdits.length === 0) {
-      return {
-        changed: false,
-        message: `No changes made to ${path}. The replacement text is identical to the original.`,
-      };
-    }
-    const { baseContent, newContent, finalContent } = applyEditsPreservingLineEndings(
-      text,
-      realEdits,
-      path,
-    );
-    const receipt = prepareFileDiff(path, baseContent, newContent);
-    if (!receipt) {
-      throw new Error("Unbounded edit diff did not produce a patch");
-    }
-    return { changed: true, content: bom + finalContent, editCount: realEdits.length, receipt };
-  } catch (error) {
-    // Worker failures erase Error subclasses; no-change is a successful planning outcome.
-    if (error instanceof EditNoChangeError) {
-      return {
-        changed: false,
-        message: `No changes made to ${path}. The replacement produced identical content.`,
-      };
-    }
-    throw error;
+  const { bom, text } = stripBom(content);
+  const normalized = normalizeToLF(text);
+  const { noOpEdits, realEdits } = splitNoOpEdits(normalized, edits, path);
+  validateNoOpEditTargets(normalized, noOpEdits, realEdits, path);
+  if (realEdits.length === 0) {
+    return {
+      changed: false,
+      message: `No changes made to ${path}. The replacement text is identical to the original.`,
+    };
   }
+  const { baseContent, newContent, replacements } = applyEdits(normalized, realEdits, path);
+  if (baseContent === newContent) {
+    return {
+      changed: false,
+      message: `No changes made to ${path}. The replacement produced identical content.`,
+    };
+  }
+  const finalContent = applyReplacementsPreservingLineEndings(text, baseContent, replacements);
+  if (normalizeToLF(finalContent) !== newContent) {
+    throw new Error("Line-ending restoration changed the normalized edit result.");
+  }
+  const receipt = prepareFileDiff(path, baseContent, newContent);
+  if (!receipt) {
+    throw new Error("Unbounded edit diff did not produce a patch");
+  }
+  return { changed: true, content: bom + finalContent, editCount: realEdits.length, receipt };
 }

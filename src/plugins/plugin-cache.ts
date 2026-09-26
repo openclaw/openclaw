@@ -14,6 +14,7 @@ import {
 import type { PluginCacheFact } from "./plugin-cache-management.js";
 import { createPluginCacheSdk } from "./plugin-cache-sdk.js";
 import type { PluginCache, PluginRootCacheRecord } from "./plugin-cache.types.js";
+import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
 import {
   createPluginExecutionFrame,
   getPluginExecutionFrame,
@@ -193,6 +194,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
 
 /** Invalidate discovery facts without retiring callbacks owned by this operation. */
 export function invalidatePluginCacheMetadata(cache: PluginCache): void {
+  cache.sourceAdmissions?.invalidate();
   cache.metadata = createPluginMetadataCache();
   for (const root of cache.roots.values()) {
     root.files.clear();
@@ -463,6 +465,26 @@ function beginPluginCacheRetirement(
     const outcomes = await Promise.allSettled(
       [...resources].map(async (resource) => ({ resource, result: await resource.dispose() })),
     );
+    const nativeAdmissions = cache.sourceAdmissions;
+    if (nativeAdmissions) {
+      const pending = outcomes.flatMap((outcome) =>
+        outcome.status === "fulfilled"
+          ? outcome.value.result.errors.flatMap((error) =>
+              error instanceof PluginInstanceDrainTimeoutError ? [error.settled] : [],
+            )
+          : [],
+      );
+      if (pending.length > 0) {
+        // A bounded retirement report does not release files still used by timed-out calls.
+        void Promise.allSettled(pending)
+          .then(() => nativeAdmissions.dispose())
+          .catch((error: unknown) =>
+            process.emitWarning(`Plugin native capture cleanup failed: ${String(error)}`),
+          );
+      } else {
+        await nativeAdmissions.dispose();
+      }
+    }
     cache.setupModules.clear();
     for (const instance of cache.instances) {
       releasePluginCacheInstance(instance, cache);

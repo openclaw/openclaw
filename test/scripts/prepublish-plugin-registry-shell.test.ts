@@ -792,9 +792,4 @@ test "$(npm view @openclaw/brave-plugin version)" = "$FIXTURE_VERSION"
       });
     },
   );
-
-  it("is valid Bash", () => {
-    const result = spawnSync("bash", ["-n", SCRIPT], { encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-  });
 });

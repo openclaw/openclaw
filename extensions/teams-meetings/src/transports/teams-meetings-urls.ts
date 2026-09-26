@@ -1,8 +1,6 @@
 import type { MeetingBrowserCandidateTab } from "openclaw/plugin-sdk/meeting-runtime";
 
-type TeamsMeetingIdentity = { kind: "work"; key: string } | { kind: "consumer"; key: string };
-
-function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentity | undefined {
+export function normalizeTeamsMeetingUrlForReuse(url: string | undefined): string | undefined {
   if (!url) {
     return undefined;
   }
@@ -21,7 +19,7 @@ function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentit
       if (!/^19:[^/]+@thread\.(?:v2|tacv2)$/i.test(threadId)) {
         return undefined;
       }
-      return { kind: "work", key: threadId };
+      return `teams-work:${threadId}`;
     }
     if (hostname === "teams.live.com") {
       const launcherTarget =
@@ -62,10 +60,7 @@ function parseTeamsMeetingIdentity(url: string | undefined): TeamsMeetingIdentit
         : typeof lightMeeting?.passcode === "string"
           ? lightMeeting.passcode
           : parsed.searchParams.get("p");
-      return {
-        kind: "consumer",
-        key: `${meetCode.toLowerCase()}:p:${encodeURIComponent(passcode ?? "")}`,
-      };
+      return `teams-consumer:${meetCode.toLowerCase()}:p:${encodeURIComponent(passcode ?? "")}`;
     }
   } catch {
     return undefined;
@@ -78,7 +73,7 @@ export function normalizeTeamsMeetingUrl(input: unknown): string {
     throw new Error("Microsoft Teams meeting URL is required");
   }
   const value = input.trim();
-  if (!parseTeamsMeetingIdentity(value)) {
+  if (!normalizeTeamsMeetingUrlForReuse(value)) {
     throw new Error(
       "Microsoft Teams meeting URL must use https://teams.microsoft.com/l/meetup-join/... or https://teams.live.com/meet/<id>",
     );
@@ -86,11 +81,6 @@ export function normalizeTeamsMeetingUrl(input: unknown): string {
   const parsed = new URL(value);
   parsed.hash = "";
   return parsed.toString();
-}
-
-export function normalizeTeamsMeetingUrlForReuse(url: string | undefined): string | undefined {
-  const identity = parseTeamsMeetingIdentity(url);
-  return identity ? `teams-${identity.kind}:${identity.key}` : undefined;
 }
 
 export function isSameTeamsMeetingUrl(

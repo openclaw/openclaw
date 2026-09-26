@@ -782,8 +782,8 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
   const fastModeState = resolveFastModeState({
     cfg: args.config,
-    provider: activeProvider,
-    model: activeModel,
+    provider: selectedLookupProvider,
+    model: selectedLookupModel,
     agentId: args.agentId,
     sessionEntry: args.sessionEntry,
   });

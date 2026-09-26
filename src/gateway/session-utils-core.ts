@@ -9,6 +9,7 @@ import {
 } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 import {
   estimateAggregateUsageCost,
@@ -170,15 +171,18 @@ export function resolveSessionChildOwners(params: {
           now,
         })
       : shouldKeepStoreOnlyChildLink(entry, now));
-  if (!keep) {
-    return [];
-  }
-  // Runtime control replaces spawnedBy, but explicit navigation lineage survives moves.
-  const controller = latest
-    ? normalizeOptionalString(latest.controllerSessionKey) ||
-      normalizeOptionalString(latest.requesterSessionKey)
-    : normalizeOptionalString(entry.spawnedBy);
-  const parent = normalizeOptionalString(entry.parentSessionKey);
+  // Runtime control replaces spawnedBy, but only retained runs own controller links.
+  const controller = keep
+    ? latest
+      ? normalizeOptionalString(latest.controllerSessionKey) ||
+        normalizeOptionalString(latest.requesterSessionKey)
+      : normalizeOptionalString(entry.spawnedBy)
+    : undefined;
+  // Persistent dashboard navigation outlives the individual run, including forks.
+  const parent =
+    keep || parseAgentSessionKey(key)?.rest.startsWith("dashboard:")
+      ? normalizeOptionalString(entry.parentSessionKey)
+      : undefined;
   return [...new Set([controller, parent])].filter(
     (owner): owner is string => owner !== undefined && owner !== key,
   );

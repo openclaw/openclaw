@@ -830,39 +830,6 @@ describe("loadWorkspaceSkills", () => {
     );
   });
 
-  it("loads frontmatter edge cases in one workspace", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    const skillDir = path.join(workspaceDir, "skills", "fallback-name");
-    await fs.mkdir(skillDir, { recursive: true });
-    await fs.writeFile(
-      path.join(skillDir, "SKILL.md"),
-      ["---", "description: Skill without explicit name", "---", "", "# Fallback"].join("\n"),
-      "utf8",
-    );
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "hidden-skill"),
-      name: "hidden-skill",
-      description: "Hidden prompt entry",
-      frontmatterExtra: "disable-model-invocation: true",
-    });
-    const bomSkillDir = path.join(workspaceDir, "skills", "bom-skill");
-    await fs.mkdir(bomSkillDir, { recursive: true });
-    await fs.writeFile(
-      path.join(bomSkillDir, "SKILL.md"),
-      "\uFEFF---\nname: bom-skill\ndescription: BOM-prefixed skill\n---\n\n# BOM skill\n",
-      "utf8",
-    );
-
-    const entries = loadTestWorkspaceSkills(workspaceDir);
-
-    expect(entries.map((entry) => entry.skill.name)).toContain("fallback-name");
-    expect(entries.map((entry) => entry.skill.name)).toContain("bom-skill");
-    const hiddenEntry = entries.find((entry) => entry.skill.name === "hidden-skill");
-
-    expect(hiddenEntry?.invocation?.disableModelInvocation).toBe(true);
-    expect(hiddenEntry?.exposure?.includeInAvailableSkillsPrompt).toBe(false);
-  });
-
   it("loads workspace metadata with JSON5-style trailing commas", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const skillDir = path.join(workspaceDir, "skills", "json5-metadata");

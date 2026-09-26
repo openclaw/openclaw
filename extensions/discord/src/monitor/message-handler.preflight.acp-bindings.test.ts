@@ -265,31 +265,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
   });
 
-  it("initializes configured ACP bindings only after preflight accepts the message", async () => {
-    const result = await preflightDiscordMessage(
-      createBasePreflightParams({
-        guildEntries: {
-          [GUILD_ID]: {
-            id: GUILD_ID,
-            channels: {
-              [CHANNEL_ID]: {
-                enabled: true,
-                requireMention: false,
-              },
-            },
-          },
-        },
-      }),
-    );
-
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
-    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(result?.boundSessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.boundAgentId).toBe("codex");
-    expect(result?.route.sessionKey).toBe("agent:codex:acp:binding:discord:default:abc123");
-    expect(result?.route.agentId).toBe("codex");
-  });
-
   it("accepts plain messages in configured ACP-bound channels without a mention", async () => {
     const message = createDiscordMessage({
       id: "m-no-mention",

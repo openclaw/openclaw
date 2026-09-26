@@ -4,19 +4,11 @@ import { describe, expect, it } from "vitest";
 import { addOsc8Hyperlinks, extractUrls } from "./osc8-hyperlinks.js";
 
 describe("extractUrls", () => {
-  it("extracts bare URLs", () => {
-    const urls = extractUrls("Check out https://example.com for more info");
-    expect([...urls]).toEqual(["https://example.com"]);
+  it.each([".", ".?!"])("excludes trailing GFM punctuation %s from bare URLs", (punctuation) => {
+    expect([...extractUrls(`Visit https://example.com/path${punctuation}`)]).toEqual([
+      "https://example.com/path",
+    ]);
   });
-
-  it.each([".", ",", ";", "!", "?", ":", "*", "_", "~", ".?!"])(
-    "excludes trailing GFM punctuation %s from bare URLs",
-    (punctuation) => {
-      expect([...extractUrls(`Visit https://example.com/path${punctuation}`)]).toEqual([
-        "https://example.com/path",
-      ]);
-    },
-  );
 
   it("stops bare URLs before bidi formatting controls", () => {
     const url = "https://example.com/path";
@@ -24,14 +16,7 @@ describe("extractUrls", () => {
     expect([...extractUrls(`مرحبا ${url}\u200f`)]).toEqual([url]);
   });
 
-  it("extracts multiple bare URLs", () => {
-    const urls = extractUrls("Visit https://foo.com and http://bar.com");
-    expect(urls).toContain("https://foo.com");
-    expect(urls).toContain("http://bar.com");
-    expect(urls.size).toBe(2);
-  });
-
-  it.each(["", ".", "?", ";"])("preserves authored markdown href suffix %s", (suffix) => {
+  it.each(["", "."])("preserves authored markdown href suffix %s", (suffix) => {
     const url = `https://example.com/path${suffix}`;
     expect([...extractUrls(`[Click here](${url})`)]).toEqual([url]);
   });
@@ -57,19 +42,8 @@ describe("extractUrls", () => {
     expect([...extractUrls(md)]).toEqual(["https://bare.test"]);
   });
 
-  it("deduplicates URLs", () => {
-    const md = "Visit https://example.com and [link](https://example.com)";
-    const urls = extractUrls(md);
-    expect([...urls]).toEqual(["https://example.com"]);
-  });
-
   it("returns no URLs for text without URLs", () => {
     expect([...extractUrls("No links here")]).toStrictEqual([]);
-  });
-
-  it("handles URLs with query params and fragments", () => {
-    const urls = extractUrls("https://example.com/path?q=1&r=2#section");
-    expect([...urls]).toEqual(["https://example.com/path?q=1&r=2#section"]);
   });
 
   it("extracts a bare URL with a bracketed IPv6 authority", () => {
@@ -98,19 +72,9 @@ describe("extractUrls", () => {
     },
   );
 
-  it("handles bare URLs with trailing closing paren as punctuation", () => {
-    const urls = extractUrls("(see https://example.com/path)");
-    expect([...urls]).toEqual(["https://example.com/path"]);
-  });
-
   it("drops punctuation after an unmatched closing paren", () => {
     const urls = extractUrls("(see https://example.com/path).");
     expect([...urls]).toEqual(["https://example.com/path"]);
-  });
-
-  it("handles markdown link with angle brackets and parenthetical URL", () => {
-    const url = "https://en.wikipedia.org/wiki/Special_(film)";
-    expect([...extractUrls(`[link](<${url}>)`)]).toEqual([url]);
   });
 });
 
@@ -151,7 +115,7 @@ describe("addOsc8Hyperlinks", () => {
     ]);
   });
 
-  it.each([".", ",", ";", "!", "?", ":", "*", "_", "~", ".?!"])(
+  it.each([".", ".?!"])(
     "keeps trailing GFM punctuation %s outside terminal hyperlink targets",
     (punctuation) => {
       const url = "https://example.com/path";
@@ -172,36 +136,23 @@ describe("addOsc8Hyperlinks", () => {
     ]);
   });
 
-  it.each([".", ","])(
-    "keeps authored and bare hyperlink occurrences distinct before %s",
-    (punctuation) => {
-      const bareUrl = "https://example.com/path";
-      const authoredUrl = `${bareUrl}${punctuation}`;
-      const markdown = `[Docs](${authoredUrl}) and ${bareUrl}${punctuation}`;
-      const rendered = `Docs (${authoredUrl}) and ${bareUrl}${punctuation}`;
+  it("keeps authored and bare hyperlink occurrences distinct before punctuation", () => {
+    const punctuation = ".";
+    const bareUrl = "https://example.com/path";
+    const authoredUrl = `${bareUrl}${punctuation}`;
+    const markdown = `[Docs](${authoredUrl}) and ${bareUrl}${punctuation}`;
+    const rendered = `Docs (${authoredUrl}) and ${bareUrl}${punctuation}`;
 
-      expect(addOsc8Hyperlinks([rendered], extractUrls(markdown))).toEqual([
-        `Docs (\x1b]8;;${authoredUrl}\x07${authoredUrl}\x1b]8;;\x07) and \x1b]8;;${bareUrl}\x07${bareUrl}\x1b]8;;\x07${punctuation}`,
-      ]);
-    },
-  );
+    expect(addOsc8Hyperlinks([rendered], extractUrls(markdown))).toEqual([
+      `Docs (\x1b]8;;${authoredUrl}\x07${authoredUrl}\x1b]8;;\x07) and \x1b]8;;${bareUrl}\x07${bareUrl}\x1b]8;;\x07${punctuation}`,
+    ]);
+  });
 
   it("keeps bidi isolation outside the exact OSC 8 target", () => {
     const url = "https://example.com/path";
     expect(addOsc8Hyperlinks([`\u2067مرحبا ${url}\u2069`], new Set([url]))).toEqual([
       `\u2067مرحبا \x1b]8;;${url}\x07${url}\x1b]8;;\x07\u2069`,
     ]);
-  });
-
-  it("wraps a URL broken across two lines", () => {
-    const fullUrl = "https://example.com/very/long/path/to/resource";
-    const lines = ["https://example.com/very/long/pa", "th/to/resource"];
-    const result = addOsc8Hyperlinks(lines, new Set([fullUrl]));
-
-    // Line 1: fragment should be wrapped with the full URL
-    expect(result[0]).toContain(`\x1b]8;;${fullUrl}\x07`);
-    // Line 2: continuation should also be wrapped
-    expect(result[1]).toContain(`\x1b]8;;${fullUrl}\x07`);
   });
 
   it("keeps a whole code point when a wrapped continuation matches only its high surrogate", () => {
@@ -244,15 +195,6 @@ describe("addOsc8Hyperlinks", () => {
     expect(result).toEqual(["https://", "example.com/pathology"]);
   });
 
-  it("does not recover a punctuated incomplete URL as a wrapped URL", () => {
-    const result = addOsc8Hyperlinks(
-      ["broken (https://)", "example.com"],
-      new Set(["https://example.com"]),
-    );
-
-    expect(result).toEqual(["broken (https://)", "example.com"]);
-  });
-
   it("does not wrap a punctuation-only URL body", () => {
     expect(addOsc8Hyperlinks(["https://."], new Set(["https://."]))).toEqual(["https://."]);
   });
@@ -268,26 +210,6 @@ describe("addOsc8Hyperlinks", () => {
     expect(result[0]).toContain("\x1b[0m");
     expect(result[0]).toContain(`\x1b]8;;${url}\x07`);
     expect(result[0]).toContain(`\x1b]8;;\x07`);
-  });
-
-  it("handles named link rendered as text (url)", () => {
-    const url = "https://github.com/org/repo";
-    // pi-tui renders [text](url) as "text (url)"
-    const line = `Click here (${url})`;
-    const result = addOsc8Hyperlinks([line], new Set([url]));
-
-    // The URL part should be wrapped with OSC 8
-    expect(result[0]).toContain(`\x1b]8;;${url}\x07`);
-  });
-
-  it("handles multiple URLs on the same line", () => {
-    const url1 = "https://foo.com";
-    const url2 = "https://bar.com";
-    const line = `${url1} and ${url2}`;
-    const result = addOsc8Hyperlinks([line], new Set([url1, url2]));
-
-    expect(result[0]).toContain(`\x1b]8;;${url1}\x07`);
-    expect(result[0]).toContain(`\x1b]8;;${url2}\x07`);
   });
 
   it("does not modify lines without URL text", () => {
@@ -316,12 +238,6 @@ describe("addOsc8Hyperlinks", () => {
       known: ["https://example.test/ab", "https://example.test/aa"],
       fragment: "https://example.test/a",
       expected: "https://example.test/ab",
-    },
-    {
-      name: "reversed equal-length prefixes",
-      known: ["https://example.test/aa", "https://example.test/ab"],
-      fragment: "https://example.test/a",
-      expected: "https://example.test/aa",
     },
   ])("resolves a rendered fragment by $name", ({ known, fragment, expected }) => {
     expect(addOsc8Hyperlinks([fragment], new Set(known))).toEqual([

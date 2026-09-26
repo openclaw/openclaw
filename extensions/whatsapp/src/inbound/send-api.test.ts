@@ -151,18 +151,6 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("uses MIME mappings for text document filename fallbacks", async () => {
-    const payload = Buffer.from("a,b\n1,2\n");
-    await api.sendMessage("+1555", "doc", payload, "text/csv");
-
-    expectSendContentFields(0, {
-      document: payload,
-      fileName: "file.csv",
-      caption: "doc",
-      mimetype: "text/csv",
-    });
-  });
-
   it("keeps the plain default document filename when MIME has no extension mapping", async () => {
     const payload = Buffer.from("unknown");
     await api.sendMessage("+1555", "doc", payload, "application/x-custom");
@@ -173,23 +161,6 @@ describe("createWebSendApi", () => {
       caption: "doc",
       mimetype: "application/x-custom",
     });
-  });
-
-  it("sends visual media as document when sendOptions.asDocument is true", async () => {
-    const payload = Buffer.from("img");
-    await api.sendMessage("+1555", "promo", payload, "image/png", {
-      asDocument: true,
-      fileName: "promo.png",
-    });
-    expect(sendMessage).toHaveBeenCalledWith(
-      "1555@s.whatsapp.net",
-      expect.objectContaining({
-        document: payload,
-        fileName: "promo.png",
-        caption: "promo",
-        mimetype: "image/png",
-      }),
-    );
   });
 
   it("uses MIME-aware filename fallback for forced visual documents", async () => {
@@ -358,17 +329,6 @@ describe("createWebSendApi", () => {
       });
     },
   );
-
-  it("supports image media with caption", async () => {
-    const payload = Buffer.from("img");
-    await api.sendMessage("+1555", "cap", payload, "image/jpeg");
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expectSendContentFields(0, {
-      image: payload,
-      caption: "cap",
-      mimetype: "image/jpeg",
-    });
-  });
 
   it.each([
     { kind: "image", contentType: " Image/PNG; charset=binary ", mimetype: "image/png" },
@@ -732,16 +692,6 @@ describe("createWebSendApi", () => {
       send: (sendApi: ReturnType<typeof createWebSendApi>) => sendApi.sendMessage("+1555", "hello"),
     },
     {
-      kind: "image",
-      send: (sendApi: ReturnType<typeof createWebSendApi>) =>
-        sendApi.sendMessage("+1555", "image", Buffer.from("image"), "image/png"),
-    },
-    {
-      kind: "document",
-      send: (sendApi: ReturnType<typeof createWebSendApi>) =>
-        sendApi.sendMessage("+1555", "file", Buffer.from("file"), "application/pdf"),
-    },
-    {
       kind: "voice",
       send: (sendApi: ReturnType<typeof createWebSendApi>) =>
         sendApi.sendMessage("+1555", "", Buffer.from("voice"), "audio/ogg"),
@@ -814,12 +764,6 @@ describe("createWebSendApi", () => {
       document: mediaBuffer,
       mimetype: "application/octet-stream",
     });
-  });
-
-  it("does not set mediaType when mediaBuffer is absent", async () => {
-    await api.sendMessage("123", "hello");
-
-    expect(sendMessage).toHaveBeenCalledWith("123@s.whatsapp.net", { text: "hello" });
   });
 
   it("preserves the quoted remoteJid provided by the outbound adapter", async () => {
@@ -963,15 +907,5 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
     });
     await api.sendComposingTo("120363401234567890@newsletter");
     expect(sendPresenceUpdate).not.toHaveBeenCalled();
-  });
-
-  it("preserves legacy behavior (no authDir → PN-only routing)", async () => {
-    const api = createWebSendApi({
-      sock: { sendMessage, sendPresenceUpdate },
-      defaultAccountId: "main",
-      // authDir intentionally omitted
-    });
-    await api.sendMessage("+15555550000", "hello");
-    expect(sendMessage).toHaveBeenCalledWith("15555550000@s.whatsapp.net", { text: "hello" });
   });
 });

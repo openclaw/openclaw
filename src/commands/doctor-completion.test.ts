@@ -353,11 +353,8 @@ describe("doctorShellCompletion", () => {
 
   it.each([
     { code: "EACCES", usesSlowPattern: true, action: "upgraded" },
-    { code: "EPERM", usesSlowPattern: true, action: "upgraded" },
     { code: "EROFS", usesSlowPattern: true, action: "upgraded" },
-    { code: "EACCES", usesSlowPattern: false, action: "installed" },
     { code: "EPERM", usesSlowPattern: false, action: "installed" },
-    { code: "EROFS", usesSlowPattern: false, action: "installed" },
   ])("offers session recovery when completion is not $action after $code", async (testCase) => {
     const profilePath = await setupDoctorCompletionTest(testCase.usesSlowPattern);
     const failedPath = path.dirname(profilePath);

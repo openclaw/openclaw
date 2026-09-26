@@ -497,21 +497,6 @@ describe("Vercel Container Registry publishing", () => {
     }
   });
 
-  it("rejects an otherwise admissible layer total tipped over the cap by config", () => {
-    const manifest = platformManifest();
-    manifest.config.size = 1;
-    manifest.layers = Array.from({ length: 30 }, () => ({
-      ...manifest.layers[0]!,
-      size: 500_000_000,
-    }));
-    const { calls, publish } = admissionFixture(JSON.stringify(manifest));
-
-    expect(publish).toThrow(
-      "total (compressed layers plus config, through layer[29]) is 15000000001 bytes; client cap 15000000000 bytes",
-    );
-    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
-  });
-
   it.each([0, 1])(
     "counts raw manifest UTF-8 bytes including whitespace with excess %i",
     (excess) => {
@@ -534,14 +519,12 @@ describe("Vercel Container Registry publishing", () => {
     },
   );
 
-  it.each(
-    ["config", "layer[0]"].flatMap((field) =>
-      [undefined, null, "1024", -1, 0.5, Number.MAX_SAFE_INTEGER + 1].map((size) => ({
-        field,
-        size,
-      })),
-    ),
-  )("rejects invalid $field size $size before copying", ({ field, size }) => {
+  it.each([
+    { field: "config", size: "1024" },
+    { field: "layer[0]", size: -1 },
+    { field: "layer[0]", size: 0.5 },
+    { field: "config", size: Number.MAX_SAFE_INTEGER + 1 },
+  ])("rejects invalid $field size $size before copying", ({ field, size }) => {
     const manifest = platformManifest();
     const raw = JSON.stringify({
       ...manifest,

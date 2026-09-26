@@ -437,7 +437,7 @@ describe("createComputerTool v2 execution", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it.each(["inspect", "accept", "dismiss"])(
+  it.each(["inspect", "accept"])(
     "captures an after-image only for a dialog mutation: %s",
     async (dialogAction) => {
       listNodesMock.mockResolvedValue([

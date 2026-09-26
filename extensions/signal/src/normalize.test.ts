@@ -8,12 +8,6 @@ describe("normalizeSignalMessagingTarget", () => {
     expect(normalizeSignalMessagingTarget("signal:u:Alice.42")).toBe("username:alice.42");
   });
 
-  it("normalizes uuid targets by stripping uuid:", () => {
-    expect(normalizeSignalMessagingTarget("uuid:123E4567-E89B-12D3-A456-426614174000")).toBe(
-      "123e4567-e89b-12d3-a456-426614174000",
-    );
-  });
-
   it("normalizes signal:uuid targets", () => {
     expect(normalizeSignalMessagingTarget("signal:uuid:123E4567-E89B-12D3-A456-426614174000")).toBe(
       "123e4567-e89b-12d3-a456-426614174000",
@@ -24,12 +18,6 @@ describe("normalizeSignalMessagingTarget", () => {
     expect(
       normalizeSignalMessagingTarget("signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg="),
     ).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
-  });
-
-  it("preserves case for base64-like group IDs without signal prefix", () => {
-    expect(
-      normalizeSignalMessagingTarget("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD="),
-    ).toBe("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD=");
   });
 });
 

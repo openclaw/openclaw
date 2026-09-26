@@ -27,29 +27,6 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     prepareWorkspaceSkillsSpy.mockResolvedValue([]);
   });
 
-  it("loads skill entries with config when no resolved snapshot skills exist", async () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          diffs: { enabled: true },
-        },
-      },
-    };
-
-    const result = await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config,
-      skillsSnapshot: {
-        prompt: "skills prompt",
-        skills: [],
-      },
-    });
-
-    expect(result.shouldLoadSkillEntries).toBe(true);
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledTimes(1);
-    expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledWith("/tmp/workspace", { config }, undefined);
-  });
-
   it("threads agentId through live skill loading", async () => {
     await resolveEmbeddedRunSkillEntries({
       workspaceDir: "/tmp/workspace",
@@ -190,24 +167,6 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     );
   });
 
-  it("skips skill entry loading when resolved snapshot skills are present", async () => {
-    const snapshot: SkillSnapshot = {
-      prompt: "skills prompt",
-      skills: [{ name: "diffs" }],
-      resolvedSkills: [],
-    };
-
-    const result = await resolveEmbeddedRunSkillEntries({
-      workspaceDir: "/tmp/workspace",
-      config: {},
-      skillsSnapshot: snapshot,
-    });
-
-    expect(result.shouldLoadSkillEntries).toBe(false);
-    expect(result.skillEntries).toEqual([]);
-    expect(prepareWorkspaceSkillsSpy).not.toHaveBeenCalled();
-  });
-
   it("exposes a cached lazy loader without eagerly loading a modern snapshot", async () => {
     const loadedEntries: SkillEntry[] = [
       {
@@ -232,6 +191,8 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       },
     });
 
+    expect(result.shouldLoadSkillEntries).toBe(false);
+    expect(result.skillEntries).toEqual([]);
     expect(prepareWorkspaceSkillsSpy).not.toHaveBeenCalled();
     expect(await result.loadSkillEntries()).toBe(loadedEntries);
     expect(await result.loadSkillEntries()).toBe(loadedEntries);

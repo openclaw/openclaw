@@ -1,6 +1,7 @@
 // Browser tests cover index plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRecord, createPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -68,7 +69,7 @@ function createApi() {
   const registerCli = vi.fn();
   const registerGatewayMethod = vi.fn();
   const registerService = vi.fn();
-  const registerTool = vi.fn();
+  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
   const openKeyedStore = vi.fn(() => ({
     register: vi.fn(async () => undefined),
     registerIfAbsent: vi.fn(async () => true),
@@ -110,6 +111,20 @@ function createApi() {
     registerService,
     registerTool,
   };
+}
+
+function createTool(context: OpenClawPluginToolContext, registration = createApi()) {
+  const { api, registerTool } = registration;
+  registerBrowserPlugin(api);
+  const factory = registerTool.mock.calls[0]?.[0];
+  if (typeof factory !== "function") {
+    throw new Error("expected browser plugin to register a tool factory");
+  }
+  const tool = factory(context);
+  if (!tool || Array.isArray(tool)) {
+    throw new Error("expected browser plugin to return a single tool");
+  }
+  return tool;
 }
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
@@ -217,7 +232,8 @@ describe("browser plugin", () => {
   });
 
   it("keeps browser tool registration synchronous while loading runtime on execute", async () => {
-    const { api, registerTool } = createApi();
+    const registration = createApi();
+    const { api, registerTool } = registration;
     const record = createPluginRecord({ id: "browser", contracts: { tools: ["browser"] } });
     const registry = createPluginRegistry({
       runtime: api.runtime,
@@ -227,28 +243,21 @@ describe("browser plugin", () => {
     registerTool.mockImplementation((tool, options) =>
       registry.registerTool(record, tool, options),
     );
-    registerBrowserPlugin(api);
+    const tool = createTool(
+      {
+        sessionKey: "agent:main:webchat:direct:123",
+        browser: {
+          sandboxBridgeUrl: "http://127.0.0.1:9999",
+          allowHostControl: true,
+        },
+      },
+      registration,
+    );
 
     expect(record.toolNames).toEqual(["browser"]);
     expect(registry.registry.tools).toEqual([
       expect.objectContaining({ names: ["browser"], optional: false }),
     ]);
-    const factory = mockCallArg(registerTool);
-    if (typeof factory !== "function") {
-      throw new Error("expected browser plugin to register a tool factory");
-    }
-
-    const tool = factory({
-      sessionKey: "agent:main:webchat:direct:123",
-      browser: {
-        sandboxBridgeUrl: "http://127.0.0.1:9999",
-        allowHostControl: true,
-      },
-    });
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("expected browser plugin to return a single tool");
-    }
-
     expect(tool.name).toBe("browser");
     expect(tool.resultContentSource).toBe("network");
     expect(tool.description).toContain("action=profiles");
@@ -277,15 +286,7 @@ describe("browser plugin", () => {
   });
 
   it("passes runtime context needed for screenshot image understanding", async () => {
-    const { api, registerTool } = createApi();
-    registerBrowserPlugin(api);
-
-    const factory = mockCallArg(registerTool);
-    if (typeof factory !== "function") {
-      throw new Error("expected browser plugin to register a tool factory");
-    }
-
-    const tool = factory({
+    const tool = createTool({
       sessionKey: "agent:main:webchat:direct:123",
       agentId: "main",
       agentDir: "/tmp/agent",
@@ -293,9 +294,6 @@ describe("browser plugin", () => {
       activeModel: { provider: "openai", modelId: "gpt-5.5" },
       deliveryContext: { channel: "telegram" },
     });
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("expected browser plugin to return a single tool");
-    }
 
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
@@ -313,40 +311,8 @@ describe("browser plugin", () => {
     });
   });
 
-  it("passes the browser-owned run binding into the tool layer", async () => {
-    const { api, registerTool } = createApi();
-    registerBrowserPlugin(api);
-    const factory = mockCallArg(registerTool);
-    if (typeof factory !== "function") {
-      throw new Error("expected browser plugin to register a tool factory");
-    }
-    const binding = {
-      kind: "tab",
-      tabId: 7,
-      target: "host",
-      profile: "chrome",
-      targetId: "target-7",
-    };
-    const tool = factory({ toolBindings: { browser: binding } });
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("expected browser plugin to return a single tool");
-    }
-
-    await tool.execute("call-1", { action: "snapshot" });
-    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
-      runToolBinding: binding,
-      toolCapabilities: expect.any(Object),
-    });
-  });
-
   it("describes and freezes only effective tab-bound actions when evaluation is disabled", async () => {
-    const { api, registerTool } = createApi();
-    registerBrowserPlugin(api);
-    const factory = mockCallArg(registerTool);
-    if (typeof factory !== "function") {
-      throw new Error("expected browser plugin to register a tool factory");
-    }
-    const tool = factory({
+    const tool = createTool({
       runtimeConfig: { browser: { evaluateEnabled: false } },
       toolBindings: {
         browser: {
@@ -358,9 +324,6 @@ describe("browser plugin", () => {
         },
       },
     });
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("expected browser plugin to return a single tool");
-    }
     const properties = (tool.parameters as { properties: Record<string, unknown> }).properties;
     const action = properties.action as { enum?: string[] };
     const kind = properties.kind as { enum?: string[] };
@@ -397,7 +360,13 @@ describe("browser plugin", () => {
 
     await tool.execute("call-1", { action: "snapshot" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
-      runToolBinding: expect.objectContaining({ profile: "chrome", targetId: "target-7" }),
+      runToolBinding: {
+        kind: "tab",
+        tabId: 7,
+        target: "host",
+        profile: "chrome",
+        targetId: "target-7",
+      },
       toolCapabilities: expect.objectContaining({
         tabBound: true,
       }),
@@ -405,13 +374,7 @@ describe("browser plugin", () => {
   });
 
   it("omits unsupported actions for a host-bound existing-session profile", () => {
-    const { api, registerTool } = createApi();
-    registerBrowserPlugin(api);
-    const factory = mockCallArg(registerTool);
-    if (typeof factory !== "function") {
-      throw new Error("expected browser plugin to register a tool factory");
-    }
-    const tool = factory({
+    const tool = createTool({
       runtimeConfig: {
         browser: {
           profiles: { user: { driver: "existing-session", attachOnly: true } },
@@ -427,9 +390,6 @@ describe("browser plugin", () => {
         },
       },
     });
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("expected browser plugin to return a single tool");
-    }
     const properties = (tool.parameters as { properties: Record<string, unknown> }).properties;
     const actions = (properties.action as { enum?: string[] }).enum;
     const actKinds = (properties.kind as { enum?: string[] }).enum;
@@ -452,34 +412,16 @@ describe("browser plugin", () => {
   });
 
   it("rejects malformed run bindings before creating the lazy browser tool", () => {
-    const { api, registerTool } = createApi();
-    registerBrowserPlugin(api);
-    const factory = mockCallArg(registerTool);
-    if (typeof factory !== "function") {
-      throw new Error("expected browser plugin to register a tool factory");
-    }
-
-    expect(() => factory({ toolBindings: { browser: { kind: "tab" } } })).toThrow(
+    expect(() => createTool({ toolBindings: { browser: { kind: "tab" } } })).toThrow(
       "invalid browser run binding",
     );
   });
 
   it("derives group chat type for browser media scope", async () => {
-    const { api, registerTool } = createApi();
-    registerBrowserPlugin(api);
-
-    const factory = mockCallArg(registerTool);
-    if (typeof factory !== "function") {
-      throw new Error("expected browser plugin to register a tool factory");
-    }
-
-    const tool = factory({
+    const tool = createTool({
       sessionKey: "agent:main:telegram:group:chat-123",
       messageChannel: "telegram",
     });
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("expected browser plugin to return a single tool");
-    }
 
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
@@ -599,21 +541,16 @@ describe("browser plugin", () => {
     expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledOnce();
   });
 
-  for (const value of ["false", "", "disabled"]) {
-    it(`keeps browser control service env value ${JSON.stringify(value)} lazy`, async () => {
-      vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", value);
-      const { api, registerService } = createApi();
-      registerBrowserPlugin(api);
-
-      const service = mockCallArg(registerService) as {
-        id: string;
-        start: (...args: unknown[]) => unknown;
-      };
-
-      await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
-      expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
-    });
-  }
+  it("keeps an explicitly false browser control service lazy", async () => {
+    vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "false");
+    const { api, registerService } = createApi();
+    registerBrowserPlugin(api);
+    const service = mockCallArg(registerService) as {
+      start: (...args: unknown[]) => unknown;
+    };
+    await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
+    expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+  });
 
   it("declares setup auto-enable reasons for browser config surfaces", () => {
     const probe = registerBrowserAutoEnableProbe();

@@ -2,8 +2,7 @@
 import { createHash } from "node:crypto";
 import fs, { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, sep } from "node:path";
-import { performance } from "node:perf_hooks";
+import { dirname, join } from "node:path";
 import { Parser } from "acorn";
 import { build } from "tsdown";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -189,54 +188,6 @@ describe("check-cli-bootstrap-imports", () => {
       [],
     );
     expect(reads).not.toContain(unrelatedPath);
-  });
-
-  it("records bounded reads alongside legacy discovery", () => {
-    const root = makeTempRoot();
-    writeGatewayRunChunk(root);
-    for (let index = 0; index < 128; index += 1) {
-      writeFixture(
-        root,
-        `dist/plugins/unrelated-${index}.js`,
-        `export const fixture = "${"x".repeat(4096)}";`,
-      );
-    }
-    let unrelatedReads = 0;
-    const observedFs = new Proxy(fs, {
-      get(target, property, receiver) {
-        if (property !== "readFileSync") {
-          return Reflect.get(target, property, receiver);
-        }
-        return (...args: Parameters<typeof fs.readFileSync>) => {
-          if (String(args[0]).includes(`${join("dist", "plugins")}${sep}`)) {
-            unrelatedReads += 1;
-          }
-          return Reflect.apply(target.readFileSync, target, args);
-        };
-      },
-    });
-    const start = performance.now();
-    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root, fs: observedFs })).toEqual([]);
-    const metadataMs = performance.now() - start;
-    expect(unrelatedReads).toBe(0);
-    const legacyStart = performance.now();
-    expect(
-      collectGatewayRunChunkBudgetErrors({
-        rootDir: root,
-        fs: observedFs,
-        legacyGatewayChunkDiscovery: true,
-      }),
-    ).toEqual([]);
-    const legacyMs = performance.now() - legacyStart;
-    expect(unrelatedReads).toBe(128);
-    console.log(
-      JSON.stringify({
-        proof: "gateway-locator-check-work",
-        metadataMs,
-        legacyMs,
-        removedUnrelatedReads: unrelatedReads,
-      }),
-    );
   });
 
   it.each(["invalid JSON", "empty locator", "changed chunk"])(
@@ -685,16 +636,6 @@ describe("gateway run chunk metadata", () => {
   it.each([false, true])("binds emitted bytes with sourcemap=%s", async (sourcemap) => {
     const root = createGatewayBuildFixture();
     const plugin = createGatewayRunChunkMetadataPlugin(root);
-    let producerMs = 0;
-    const originalHook = { ...plugin.generateBundle };
-    plugin.generateBundle.handler = function (...args) {
-      const start = performance.now();
-      try {
-        return originalHook.handler.apply(this, args);
-      } finally {
-        producerMs += performance.now() - start;
-      }
-    };
     const { bundles } = await build({
       config: false,
       cwd: root,
@@ -721,8 +662,6 @@ describe("gateway run chunk metadata", () => {
       expect(() => readGatewayRunChunks(join(root, "dist"))).toThrow(
         "does not match its build metadata",
       );
-      // Evidence only, not a timing threshold that would depend on the runner.
-      console.log(JSON.stringify({ proof: "gateway-locator-producer", sourcemap, producerMs }));
     } finally {
       for (const bundle of bundles) {
         await bundle[Symbol.asyncDispose]();

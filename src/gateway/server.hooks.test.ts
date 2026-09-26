@@ -790,21 +790,6 @@ describe("gateway server hooks", () => {
     });
   });
 
-  test("dedupes repeated /hooks/agent deliveries by idempotency key", async () => {
-    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-    await withGatewayServer(async ({ port }) => {
-      mockIsolatedRunOk();
-      const firstBody = await expectFirstHookDelivery(port, "hook-idem-1");
-      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-
-      const second = await postAgentHookWithIdempotency(port, "hook-idem-1");
-      const secondBody = (await second.json()) as { runId?: string };
-      expect(secondBody.runId).toBe(firstBody.runId);
-      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
-    });
-  });
-
   test("dedupes hook retries even when trusted-proxy client IP changes", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     const configPath = requireNonEmptyString(
@@ -828,6 +813,7 @@ describe("gateway server hooks", () => {
       const secondBody = (await second.json()) as { runId?: string };
       expect(secondBody.runId).toBe(firstBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
     });
   });
 

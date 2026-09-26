@@ -99,11 +99,7 @@ type ApplyDirectiveResult =
       contextTokens: number;
       directiveAck?: ReplyPayload;
       perMessageQueueMode?: InlineDirectives["queueMode"];
-      perMessageQueueOptions?: {
-        debounceMs?: number;
-        cap?: number;
-        dropPolicy?: InlineDirectives["dropPolicy"];
-      };
+      perMessageQueueOptions?: Pick<InlineDirectives, "debounceMs" | "cap" | "dropPolicy">;
     };
 
 const directiveRejection = (
@@ -132,7 +128,6 @@ export async function applyInlineDirectiveOverrides(params: {
   allowTextCommands: boolean;
   command: CommandContext;
   directives: InlineDirectives;
-  messageProviderKey: string;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
   elevatedFailures: Array<{ gate: string; key: string }>;
@@ -166,7 +161,6 @@ export async function applyInlineDirectiveOverrides(params: {
     isGroup,
     allowTextCommands,
     command,
-    messageProviderKey,
     elevatedEnabled,
     elevatedAllowed,
     elevatedFailures,
@@ -190,7 +184,6 @@ export async function applyInlineDirectiveOverrides(params: {
     operatorAuthority: modelState.operatorAuthority,
     allowedModelKeys: modelState.allowedModelKeys,
     allowedModelCatalog: modelState.allowedModelCatalog,
-    policyAliasIndex: modelState.policyAliasIndex,
     resetModelOverride: modelState.resetModelOverride,
   };
   const createDirectiveHandlingBase = () => ({
@@ -204,7 +197,6 @@ export async function applyInlineDirectiveOverrides(params: {
     elevatedEnabled,
     elevatedAllowed,
     elevatedFailures,
-    messageProviderKey,
     defaultProvider,
     defaultModel,
     aliasIndex,
@@ -291,8 +283,6 @@ export async function applyInlineDirectiveOverrides(params: {
       modelPolicy: modelState.modelPolicy,
       operatorAuthority: modelState.operatorAuthority,
       allowedModelKeys: modelState.allowedModelKeys,
-      allowedModelCatalog: modelState.allowedModelCatalog,
-      provider,
       agentId,
       requesterProfileId,
     });

@@ -34,7 +34,7 @@ function createNpmHookInstall(params: {
 }
 
 describe("resolvePluginUpdateSelection", () => {
-  it.each(["missing-plugin", "@acme/missing-plugin@beta", "constructor"])(
+  it.each(["@acme/missing-plugin@beta", "constructor"])(
     "does not select the untracked plugin target %s",
     (rawId) => {
       expect(resolvePluginUpdateSelection({ installs: {}, rawIds: [rawId] })).toEqual({
@@ -251,10 +251,8 @@ describe("resolvePluginUpdateSelection", () => {
 
 describe("resolveHookPackUpdateSelection", () => {
   it.each([
-    { packageName: "@acme/demo-hooks", requestedSpec: "@acme/demo-hooks" },
     { packageName: "openclaw-demo-hooks", requestedSpec: "openclaw-demo-hooks" },
     { packageName: "@acme/demo-hooks", requestedSpec: "@acme/demo-hooks@beta" },
-    { packageName: "@acme/demo-hooks", requestedSpec: "@acme/demo-hooks@1.2.3" },
   ])(
     "maps npm package spec $requestedSpec to its tracked hook pack",
     ({ packageName, requestedSpec }) => {

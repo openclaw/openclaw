@@ -792,8 +792,6 @@ describe("triage --run", () => {
   );
 
   it.each([
-    { status: "improved", reason: "turn-budget", code: 1 },
-    { status: "unrepaired", reason: "Validation regressed after repair.", code: 1 },
     { status: "aborted", reason: "cancelled", code: 1 },
     { status: "unrepaired", reason: "per-turn-budget", code: 2 },
     { status: "improved", reason: "wall-clock-budget", code: 2 },

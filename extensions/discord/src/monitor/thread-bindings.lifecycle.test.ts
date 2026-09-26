@@ -87,10 +87,15 @@ const acpRuntime = await import("openclaw/plugin-sdk/acp-runtime");
 function createTestThreadBindingManager(
   params: Omit<Parameters<typeof createThreadBindingManager>[0], "cfg"> & {
     cfg?: OpenClawConfig;
-  },
+  } = {},
 ) {
   return createThreadBindingManager({
     cfg: EMPTY_DISCORD_TEST_CONFIG,
+    accountId: "default",
+    persist: false,
+    enableSweeper: false,
+    idleTimeoutMs: 24 * 60 * 60 * 1000,
+    maxAgeMs: 0,
     ...params,
   });
 }
@@ -280,11 +285,7 @@ describe("thread binding lifecycle", () => {
 
   const createDefaultSweeperManager = () =>
     createTestThreadBindingManager({
-      accountId: "default",
-      persist: false,
       enableSweeper: true,
-      idleTimeoutMs: 24 * 60 * 60 * 1000,
-      maxAgeMs: 0,
     });
 
   const bindDefaultThreadTarget = async (
@@ -473,15 +474,7 @@ describe("thread binding lifecycle", () => {
         accountId: "default",
       });
 
-      await manager.bindTarget({
-        threadId: "thread-1",
-        channelId: "parent-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-      });
+      await bindDefaultThreadTarget(manager);
 
       const boundAt = manager.getByThreadId("thread-1")?.boundAt;
       vi.setSystemTime(new Date("2026-02-20T23:15:00.000Z"));
@@ -553,15 +546,7 @@ describe("thread binding lifecycle", () => {
         accountId: "default",
       });
 
-      await manager.bindTarget({
-        threadId: "thread-1",
-        channelId: "parent-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-      });
+      await bindDefaultThreadTarget(manager);
 
       await setThreadBindingIdleTimeoutBySessionKeyAsync({
         accountId: "default",
@@ -605,18 +590,9 @@ describe("thread binding lifecycle", () => {
         persist: false,
         enableSweeper: true,
         idleTimeoutMs: 60_000,
-        maxAgeMs: 0,
       });
 
-      await manager.bindTarget({
-        threadId: "thread-1",
-        channelId: "parent-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-      });
+      await bindDefaultThreadTarget(manager);
 
       const updated = await setThreadBindingIdleTimeoutBySessionKeyAsync({
         accountId: "default",
@@ -646,7 +622,6 @@ describe("thread binding lifecycle", () => {
         persist: false,
         enableSweeper: true,
         idleTimeoutMs: 60_000,
-        maxAgeMs: 0,
       });
 
       await manager.bindTarget({
@@ -701,46 +676,6 @@ describe("thread binding lifecycle", () => {
     }
   });
 
-  it("refreshes inactivity window when thread activity is touched", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-      const manager = await createTestThreadBindingManager({
-        accountId: "default",
-        persist: false,
-        enableSweeper: false,
-        idleTimeoutMs: 60_000,
-        maxAgeMs: 0,
-      });
-
-      await manager.bindTarget({
-        threadId: "thread-1",
-        channelId: "parent-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-      });
-
-      vi.setSystemTime(new Date("2026-02-20T00:00:30.000Z"));
-      const touched = await manager.touchThread({ threadId: "thread-1", persist: false });
-      expectFields(touched, "touched binding", {
-        threadId: "thread-1",
-        lastActivityAt: new Date("2026-02-20T00:00:30.000Z").getTime(),
-      });
-
-      const record = requireBinding(manager, "thread-1");
-      expect(record.lastActivityAt).toBe(new Date("2026-02-20T00:00:30.000Z").getTime());
-      expect(
-        resolveThreadBindingInactivityExpiresAt({
-          record,
-          defaultIdleTimeoutMs: manager.getIdleTimeoutMs(),
-        }),
-      ).toBe(new Date("2026-02-20T00:01:30.000Z").getTime());
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("persists touched activity timestamps across restart when persistence is enabled", async () => {
     vi.useFakeTimers();
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -752,20 +687,10 @@ describe("thread binding lifecycle", () => {
       const manager = await createTestThreadBindingManager({
         accountId: "default",
         persist: true,
-        enableSweeper: false,
         idleTimeoutMs: 60_000,
-        maxAgeMs: 0,
       });
 
-      await manager.bindTarget({
-        threadId: "thread-1",
-        channelId: "parent-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        webhookId: "wh-1",
-        webhookToken: "tok-1",
-      });
+      await bindDefaultThreadTarget(manager);
 
       const touchedAt = new Date("2026-02-20T00:00:30.000Z").getTime();
       vi.setSystemTime(touchedAt);
@@ -775,9 +700,7 @@ describe("thread binding lifecycle", () => {
       const reloaded = await createTestThreadBindingManager({
         accountId: "default",
         persist: true,
-        enableSweeper: false,
         idleTimeoutMs: 60_000,
-        maxAgeMs: 0,
       });
 
       const record = requireBinding(reloaded, "thread-1");

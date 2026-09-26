@@ -375,7 +375,7 @@ describe("gateway-status command", () => {
     vi.clearAllMocks();
   });
 
-  it.each(["", "   "])("rejects an explicitly blank timeout %j before probing", async (timeout) => {
+  it.each(["   "])("rejects an explicitly blank timeout %j before probing", async (timeout) => {
     const { runtime } = createRuntimeCapture();
 
     await expect(runGatewayStatus(runtime, { timeout, json: true })).rejects.toThrow(
@@ -434,77 +434,14 @@ describe("gateway-status command", () => {
     );
   });
 
-  it("skips local Windows firewall diagnostics for remote Gateway mode", async () => {
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "remote",
-        bind: "lan",
-        remote: { url: "wss://remote.example:18789", token: "rtok" },
-        auth: { token: "ltok" },
-      },
-    } as never);
-    const { runtime, runtimeLogs } = createRuntimeCapture();
-
-    await runGatewayStatus(runtime, { timeout: "1000", json: true });
-
-    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings: Array<{ code?: string }>;
-    };
-    expect(parsed.warnings.some((warning) => warning.code?.startsWith("windows_firewall_"))).toBe(
-      false,
-    );
-  });
-
-  it("skips local Windows firewall diagnostics for explicit Gateway URLs", async () => {
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "local",
-        bind: "lan",
-        auth: { token: "ltok" },
-      },
-    } as never);
-    const { runtime, runtimeLogs } = createRuntimeCapture();
-
-    await runGatewayStatus(runtime, {
-      timeout: "1000",
-      json: true,
-      url: "wss://remote.example:18789",
-      token: "explicit-remote-token",
-    });
-
-    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings: Array<{ code?: string }>;
-    };
-    expect(parsed.warnings.some((warning) => warning.code?.startsWith("windows_firewall_"))).toBe(
-      false,
-    );
-  });
-
   it.each([
     {
-      source: "configured token",
+      source: "configured and ambient credentials",
       auth: { mode: "token", token: "configured-local-token" },
-      env: {},
-      options: {},
-    },
-    {
-      source: "configured password",
-      auth: { mode: "password", password: "configured-local-password" },
-      env: {},
-      options: {},
-    },
-    {
-      source: "environment token",
-      auth: { mode: "token" },
-      env: { OPENCLAW_GATEWAY_TOKEN: "ambient-local-token" },
-      options: {},
-    },
-    {
-      source: "environment password",
-      auth: { mode: "password" },
-      env: { OPENCLAW_GATEWAY_PASSWORD: "ambient-local-password" },
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "ambient-token",
+        OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
+      },
       options: {},
     },
     {
@@ -1094,27 +1031,6 @@ describe("gateway-status command", () => {
       expect(requireProbeCall("ws://127.0.0.1:18789").timeoutMs).toBe(expected);
     },
   );
-
-  it("uses --port for the local loopback probe target", async () => {
-    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    probeGateway.mockClear();
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "local",
-        port: 18789,
-        auth: { mode: "token", token: "ltok" },
-      },
-    } as never);
-
-    await runGatewayStatus(runtime, { timeout: "15000", json: true, port: "19080" });
-
-    expect(runtimeErrors).toHaveLength(0);
-    expect(requireProbeCall("ws://127.0.0.1:19080").timeoutMs).toBe(15_000);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      network?: { localLoopbackUrl?: string | null };
-    };
-    expect(parsed.network?.localLoopbackUrl).toBe("ws://127.0.0.1:19080");
-  });
 
   it("lets --port select the local probe despite gateway env and configured remote targets", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();

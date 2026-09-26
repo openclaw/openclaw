@@ -102,6 +102,119 @@ describe("SidebarSessionNarrationController", () => {
     vi.unstubAllGlobals();
   });
 
+  it("retains pending interests while switching foreground and resets the window on reconnect", async () => {
+    const ready = createDeferred();
+    const source = {
+      subscribeMessages: vi.fn(async (key: string) => {
+        await ready.promise;
+        return { key, agentId: null };
+      }),
+      unsubscribeMessages: vi.fn(() => Promise.resolve()),
+    };
+    const rows = Array.from({ length: 8 }, (_, index) => ({
+      ...runningRow(`agent:main:run-${index}`),
+      startedAt: undefined,
+      updatedAt: index,
+    }));
+    const input: SidebarNarrationSyncInput = {
+      enabled: true,
+      connected: true,
+      connectionIdentity: {},
+      source,
+      rows,
+      openSessionKey: "",
+      agentId: "main",
+    };
+    const controller = new SidebarSessionNarrationController(() => undefined);
+    controller.sync(input);
+    rows[0]!.updatedAt = 100;
+    controller.sync({ ...input, rows: rows.toReversed() });
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(6);
+
+    controller.sync({ ...input, openSessionKey: rows[0]!.key });
+    ready.resolve();
+    await Promise.all(source.subscribeMessages.mock.results.map(({ value }) => value));
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(7);
+    expect(source.unsubscribeMessages).not.toHaveBeenCalled();
+
+    input.openSessionKey = rows[1]!.key;
+    controller.sync(input);
+    await source.subscribeMessages.mock.results.at(-1)?.value;
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(8);
+    expect(source.unsubscribeMessages).toHaveBeenCalledExactlyOnceWith({
+      key: rows[2]!.key,
+      agentId: null,
+    });
+
+    rows[2]!.updatedAt = 200;
+    controller.sync(input);
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(8);
+    controller.sync({ ...input, connectionIdentity: {} });
+    await Promise.all(source.subscribeMessages.mock.results.map(({ value }) => value));
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(15);
+    expect(source.subscribeMessages.mock.calls.slice(8).map(([key]) => key)).toContain(
+      rows[2]!.key,
+    );
+    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(8);
+    controller.disconnect();
+    expect(source.unsubscribeMessages).toHaveBeenCalledTimes(15);
+  });
+
+  it.each([false, true])("retains a failed hidden release (late acquisition: %s)", async (late) => {
+    const visibility = browserVisibility();
+    const subscribed = createDeferred();
+    const released = createDeferred();
+    const wireKeys = new Set<string>();
+    let releases = 0;
+    const request = vi.fn().mockImplementation(async (method: string, params: { key: string }) => {
+      if (method === "sessions.messages.subscribe") {
+        await subscribed.promise;
+        wireKeys.add(params.key);
+      } else {
+        releases += 1;
+        if (releases === 1) {
+          throw new Error("unsubscribe failed");
+        }
+        await released.promise;
+        wireKeys.delete(params.key);
+      }
+      return { key: params.key };
+    });
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator({ request });
+    const source = {
+      subscribeMessages: vi.fn<SessionCapability["subscribeMessages"]>((key, options) =>
+        coordinator.acquire(key, options),
+      ),
+      unsubscribeMessages: vi.fn<SessionCapability["unsubscribeMessages"]>((handle) =>
+        coordinator.release(handle),
+      ),
+    };
+    const { controller } = createRunningNarrationController(source);
+    if (late) {
+      visibility("hidden");
+    }
+    subscribed.resolve();
+    const handle = await source.subscribeMessages.mock.results[0]?.value;
+    visibility("hidden");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wireKeys.size).toBe(1);
+
+    visibility("hidden");
+    visibility("hidden");
+    expect(source.unsubscribeMessages.mock.calls).toEqual([[handle], [handle]]);
+    visibility("visible");
+    expect(releases).toBe(2);
+    released.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wireKeys.size).toBe(1);
+    expect(source.subscribeMessages).toHaveBeenCalledTimes(2);
+
+    controller.disconnect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(wireKeys.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("releases hidden narration interests while preserving selected-pane and outbox owners", async () => {
     const visibility = browserVisibility();
     const wireKeys = new Set<string>();

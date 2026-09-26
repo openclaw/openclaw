@@ -590,7 +590,7 @@ extension OpenClawChatViewModel {
             verboseLevel: recordedVerboseLevel)
     }
 
-    private func modelControlState(for target: ModelPatchTarget, originalSessionKey: String)
+    func modelControlState(for target: ModelPatchTarget, originalSessionKey: String)
         -> (key: String, exactMatchOnly: Bool)?
     {
         if target == self.currentModelPatchTarget() {

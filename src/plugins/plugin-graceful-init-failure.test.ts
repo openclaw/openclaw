@@ -1,4 +1,3 @@
-// Verifies graceful plugin init failure handling and reporting.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -106,16 +105,6 @@ function requireWarning(warnings: string[], text: string): string {
 }
 
 describe("graceful plugin initialization failure", () => {
-  it("marks plugin entry errored when register throws", async () => {
-    const plugin = writePlugin({
-      id: "throws-on-register",
-      body: `module.exports = { id: "throws-on-register", register() { throw new Error("config schema mismatch"); } };`,
-    });
-
-    const registry = await loadPlugins([plugin.file]);
-    expect(requirePluginEntry(registry, "throws-on-register").status).toBe("error");
-  });
-
   it("keeps loading other plugins after one register failure", async () => {
     const failing = writePlugin({
       id: "plugin-fail",

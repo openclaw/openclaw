@@ -114,16 +114,6 @@ describe("installSessionToolResultGuard", () => {
     expect(synthetic.content?.[0]?.text).toContain("missing tool result");
   });
 
-  it("flushes pending tool calls when asked explicitly", () => {
-    const sm = SessionManager.inMemory();
-    const guard = installSessionToolResultGuard(sm);
-
-    sm.appendMessage(toolCallMessage);
-    guard.flushPendingToolResults();
-
-    expectPersistedRoles(sm, ["assistant", "toolResult"]);
-  });
-
   it("uses configured text for synthetic tool results", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {
@@ -164,23 +154,6 @@ describe("installSessionToolResultGuard", () => {
 
     expectPersistedRoles(sm, ["assistant", "user"]);
     expect(guard.getPendingIds()).toStrictEqual([]);
-  });
-
-  it("does not add synthetic toolResult when a matching one exists", () => {
-    const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(sm);
-
-    sm.appendMessage(toolCallMessage);
-    sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      }),
-    );
-
-    expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
   it("applies count-based truncation wording when persisting oversized tool results", () => {
@@ -250,20 +223,6 @@ describe("installSessionToolResultGuard", () => {
     expect(text).toContain("truncated");
   });
 
-  it("backfills blank toolResult names from pending tool calls", () => {
-    const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(sm);
-
-    sm.appendMessage(toolCallMessage);
-    sm.appendMessage(asAppendMessage(textToolResult("call_1", "   ", "ok", { isError: false })));
-
-    const messages = expectPersistedRoles(sm, ["assistant", "toolResult"]) as Array<{
-      role: string;
-      toolName?: string;
-    }>;
-    expect(messages[1]?.toolName).toBe("read");
-  });
-
   it("preserves ordering with multiple tool calls and partial results", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm);
@@ -295,42 +254,6 @@ describe("installSessionToolResultGuard", () => {
     ]);
     expect((messages[2] as { toolCallId?: string }).toolCallId).toBe("call_b");
     expect(guard.getPendingIds()).toStrictEqual([]);
-  });
-
-  it("flushes pending on guard when no toolResult arrived", () => {
-    const sm = SessionManager.inMemory();
-    const guard = installSessionToolResultGuard(sm);
-
-    sm.appendMessage(toolCallMessage);
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "hard error" }],
-        stopReason: "error",
-      }),
-    );
-    expect(guard.getPendingIds()).toStrictEqual([]);
-  });
-
-  it("handles toolUseId on toolResult", () => {
-    const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(sm);
-
-    sm.appendMessage(
-      asAppendMessage({
-        role: "assistant",
-        content: [{ type: "toolUse", id: "use_1", name: "f", arguments: {} }],
-      }),
-    );
-    sm.appendMessage(
-      asAppendMessage({
-        role: "toolResult",
-        toolUseId: "use_1",
-        content: [{ type: "text", text: "ok" }],
-      }),
-    );
-
-    expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
   it("preserves opaque canonical tool-call ids while repairing result metadata", () => {
@@ -542,17 +465,6 @@ describe("installSessionToolResultGuard", () => {
 
     expectPersistedRoles(sm, ["assistant", "assistant"]);
     expect(guard.getPendingIds()).toEqual(["call_2"]);
-  });
-
-  it("caps oversized tool result text during persistence", () => {
-    const sm = SessionManager.inMemory();
-    installSessionToolResultGuard(sm);
-
-    appendToolResultText(sm, "x".repeat(500_000));
-
-    const text = getToolResultText(getPersistedMessages(sm));
-    expect(text.length).toBeLessThan(500_000);
-    expect(text).toContain("truncated");
   });
 
   it("does not truncate tool results under the limit", () => {

@@ -22,6 +22,24 @@ import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from
 
 type SidebarMenuPosition = { x: number; y: number };
 
+export function renderSidebarMenuAction(
+  value: string,
+  label: string,
+  icon: IconName,
+  options: { disabled?: boolean; title?: string; className?: string; details?: unknown } = {},
+) {
+  return html`<wa-dropdown-item
+    class=${`sidebar-customize-menu__item${options.className ? ` ${options.className}` : ""}`}
+    value=${value}
+    ?disabled=${options.disabled}
+    title=${options.title ?? nothing}
+  >
+    <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons[icon]}</span>
+    <span class="sidebar-customize-menu__text">${label}</span>
+    ${options.details ?? nothing}
+  </wa-dropdown-item>`;
+}
+
 export function renderSidebarMenuTrigger(
   position: SidebarMenuPosition,
   label: string,
@@ -212,10 +230,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
       ${renderSidebarMenuTrigger(position, t("nav.more"))}
       ${moreRoutes.map((routeId) => renderMoreMenuRoute(params, routeId))}
       <div class="sidebar-customize-menu__separator" role="separator"></div>
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="customize">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.penLine}</span>
-        <span class="sidebar-customize-menu__text">${t("nav.customize")}</span>
-      </wa-dropdown-item>
+      ${renderSidebarMenuAction("customize", t("nav.customize"), "penLine")}
     </wa-dropdown>
   `;
 }
@@ -300,10 +315,7 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
           </wa-dropdown-item>`,
         )}
       <div class="sidebar-customize-menu__separator" role="separator"></div>
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="reset">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
-        <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
-      </wa-dropdown-item>
+      ${renderSidebarMenuAction("reset", t("nav.customizeReset"), "refresh")}
     </wa-dropdown>
   `;
 }

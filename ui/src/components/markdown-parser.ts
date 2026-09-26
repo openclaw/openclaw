@@ -27,6 +27,7 @@ import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
+import { replaceMarkdownTextMatches } from "./markdown-text-replacements.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
@@ -427,62 +428,50 @@ export function createMarkdownParser(): MarkdownItParser {
           continue;
         }
 
-        const replacements: typeof children = [];
-        let cursor = 0;
         MARKDOWN_FILE_LINK_SCAN_RE.lastIndex = 0;
-        for (const match of token.content.matchAll(MARKDOWN_FILE_LINK_SCAN_RE)) {
-          const matchIndex = match.index;
-          const matched = match[0];
-          const matchEnd = matchIndex + matched.length;
-          if (!hasMarkdownLinkBoundaries(token.content, matchIndex, matchEnd)) {
-            continue;
-          }
-          const target = parseMarkdownFileLinkTarget(matched);
-          if (!target) {
-            continue;
-          }
-          if (matchIndex > cursor) {
-            const leading = new state.Token("text", "", 0);
-            leading.content = token.content.slice(cursor, matchIndex);
-            replacements.push(leading);
-          }
-          const open = new state.Token("link_open", "a", 1);
-          open.markup = "file-link";
-          open.attrSet("class", "markdown-file-link");
-          open.attrSet("role", "button");
-          open.attrSet("tabindex", "0");
-          open.attrSet("data-file-path", target.path);
-          open.attrSet("data-file-kind", fileKindForPath(target.path));
-          if (target.line !== null) {
-            open.attrSet("data-file-line", String(target.line));
-          }
-          const label = new state.Token("text", "", 0);
-          label.content = matched;
-          const close = new state.Token("link_close", "a", -1);
-          close.markup = "file-link";
-          replacements.push(open, label, close);
-          decorations.push({
-            path: target.path,
-            reference: matched,
-            applyLabel: (text) => {
-              label.content = text;
-              if (text !== matched) {
-                open.attrSet("title", matched);
-              }
-            },
-          });
-          cursor = matchEnd;
-        }
-        if (replacements.length === 0) {
-          continue;
-        }
-        if (cursor < token.content.length) {
-          const trailing = new state.Token("text", "", 0);
-          trailing.content = token.content.slice(cursor);
-          replacements.push(trailing);
-        }
-        children.splice(index, 1, ...replacements);
-        index += replacements.length - 1;
+        index = replaceMarkdownTextMatches(
+          state,
+          children,
+          index,
+          MARKDOWN_FILE_LINK_SCAN_RE,
+          (match) => {
+            const matchIndex = match.index;
+            const matched = match[0];
+            const matchEnd = matchIndex + matched.length;
+            if (!hasMarkdownLinkBoundaries(token.content, matchIndex, matchEnd)) {
+              return null;
+            }
+            const target = parseMarkdownFileLinkTarget(matched);
+            if (!target) {
+              return null;
+            }
+            const open = new state.Token("link_open", "a", 1);
+            open.markup = "file-link";
+            open.attrSet("class", "markdown-file-link");
+            open.attrSet("role", "button");
+            open.attrSet("tabindex", "0");
+            open.attrSet("data-file-path", target.path);
+            open.attrSet("data-file-kind", fileKindForPath(target.path));
+            if (target.line !== null) {
+              open.attrSet("data-file-line", String(target.line));
+            }
+            const label = new state.Token("text", "", 0);
+            label.content = matched;
+            const close = new state.Token("link_close", "a", -1);
+            close.markup = "file-link";
+            decorations.push({
+              path: target.path,
+              reference: matched,
+              applyLabel: (text) => {
+                label.content = text;
+                if (text !== matched) {
+                  open.attrSet("title", matched);
+                }
+              },
+            });
+            return [open, label, close];
+          },
+        );
       }
     }
     // A path carries far more characters than identity: the basename is what a

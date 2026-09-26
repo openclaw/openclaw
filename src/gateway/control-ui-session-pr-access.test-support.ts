@@ -9,7 +9,10 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
 import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
@@ -55,6 +58,8 @@ export async function createFixture(
   useDefaultLoader = false,
   initialSessionPatch: Partial<SessionEntry> = {},
 ) {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
   const fixtureId = ++fixtureSequence;
   const readerEmail = `guest-publication-reader-${fixtureId}@example.test`;
   const profile = ensureProfileForEmail(readerEmail);
@@ -95,7 +100,7 @@ export async function createFixture(
   };
   await seed(sessionKey, profile.id, initialSessionPatch);
   const connections = createGatewayConnectionState({
-    scheduler: createTestGatewayScheduler(),
+    scheduler,
     bootId: "publication-read",
     cfg,
     getRuntimeConfig,
@@ -124,6 +129,7 @@ export async function createFixture(
   const reader = addReader("guest-publication-reader");
   const load = vi.fn<Load>(async () => snapshot);
   const subscriptions = createControlUiSessionPullRequestSubscriptions({
+    scheduler,
     broadcastToConnIds: connections.broadcastToConnIds,
     isConnectionActive: connections.isConnectionActive,
     prepareRead: async (connId, session) => {
@@ -146,6 +152,7 @@ export async function createFixture(
   await initializeSessionReadContext(context);
   return {
     ...reader,
+    clock,
     addReader,
     profile,
     other,
@@ -208,6 +215,7 @@ export async function createFixture(
     },
     async close() {
       await subscriptions.stop();
+      await scheduler.stop();
       connections.clients.clear();
       await disposeSessionReadContexts();
     },

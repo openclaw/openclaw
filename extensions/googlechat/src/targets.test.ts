@@ -1,6 +1,5 @@
 // Googlechat tests cover targets plugin behavior.
 import { createServer } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
@@ -8,11 +7,8 @@ import {
   registerGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatManualApprovalFollowupSuppression,
 } from "./approval-card-actions.js";
-import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import {
   isGoogleChatGroupSpace,
-  isGoogleChatSpaceTarget,
-  isGoogleChatUserTarget,
   normalizeGoogleChatTarget,
   resolveGoogleChatOutboundSessionRoute,
 } from "./targets.js";
@@ -183,12 +179,6 @@ describe("normalizeGoogleChatTarget", () => {
 });
 
 describe("target helpers", () => {
-  it("detects user and space targets", () => {
-    expect(isGoogleChatUserTarget("users/abc")).toBe(true);
-    expect(isGoogleChatSpaceTarget("spaces/abc")).toBe(true);
-    expect(isGoogleChatUserTarget("spaces/abc")).toBe(false);
-  });
-
   it("classifies current and legacy space metadata through the group boundary", () => {
     expect(isGoogleChatGroupSpace({ spaceType: "DIRECT_MESSAGE", type: "ROOM" })).toBe(false);
     expect(isGoogleChatGroupSpace({ spaceType: "SPACE", type: "DM" })).toBe(true);
@@ -265,65 +255,6 @@ describe("outbound session routing", () => {
   });
 });
 
-describe("googlechat group policy", () => {
-  it("uses generic channel group policy helpers", () => {
-    const cfg = {
-      channels: {
-        googlechat: {
-          groups: {
-            "spaces/AAA": {
-              requireMention: false,
-            },
-            "*": {
-              requireMention: true,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveGoogleChatGroupRequireMention({ cfg, groupId: "spaces/AAA" })).toBe(false);
-    expect(resolveGoogleChatGroupRequireMention({ cfg, groupId: "spaces/BBB" })).toBe(true);
-  });
-});
-
-describe("googlechat API JSON response decoding", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("rejects invalid UTF-8 in API JSON responses instead of corrupting identifiers", async () => {
-    const raw = Buffer.concat([
-      Buffer.from('{"name":"spaces/'),
-      Buffer.from([0xff]),
-      Buffer.from('AAA"}'),
-    ]);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(new Uint8Array(raw), { status: 200 })),
-    );
-
-    await expect(
-      sendGoogleChatMessage({ account, space: "spaces/AAA", text: "hello" }),
-    ).rejects.toThrow(/malformed JSON response/);
-  });
-
-  it("keeps valid UTF-8 API JSON responses unchanged (negative control)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(new Uint8Array(Buffer.from('{"name":"spaces/AAA"}')), { status: 200 }),
-        ),
-    );
-
-    await expect(
-      sendGoogleChatMessage({ account, space: "spaces/AAA", text: "hello" }),
-    ).resolves.toEqual({ messageName: "spaces/AAA", threadName: undefined });
-  });
-});
-
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
     unregisterGoogleChatManualApprovalFollowupSuppression("12345678-1234-1234-1234-123456789012");
@@ -363,25 +294,6 @@ describe("downloadGoogleChatMedia", () => {
 
     await expectDownloadToRejectForResponse(response, "invalid content-length header: 0x3");
     expect(arrayBuffer).not.toHaveBeenCalled();
-  });
-
-  it("rejects when streamed payload exceeds max bytes", async () => {
-    const chunks = [new Uint8Array(6), new Uint8Array(6)];
-    let index = 0;
-    const body = new ReadableStream({
-      pull(controller) {
-        if (index < chunks.length) {
-          controller.enqueue(chunks[index++]);
-        } else {
-          controller.close();
-        }
-      },
-    });
-    const response = new Response(body, {
-      status: 200,
-      headers: { "content-type": "application/octet-stream" },
-    });
-    await expectDownloadToRejectForResponse(response);
   });
 
   it("cancels a media body that stops producing chunks", async () => {

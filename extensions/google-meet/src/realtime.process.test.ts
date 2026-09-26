@@ -33,6 +33,75 @@ const GOOGLE_MEET_ENGINE_BINDINGS = {
   handleToolCall: async () => {},
 };
 
+function mockTransport() {
+  return {
+    onFatal: vi.fn(),
+    startInput: vi.fn(),
+    stop: vi.fn(async () => {}),
+    writeOutput: vi.fn(async () => {}),
+    clearOutput: vi.fn(async () => {}),
+    dispose: vi.fn(async () => {}),
+  } satisfies MeetingRealtimeAudioTransport;
+}
+
+function mockTranscriptionSession(connected = false) {
+  return {
+    connect: vi.fn(async () => {}),
+    sendAudio: vi.fn(),
+    close: vi.fn(),
+    isConnected: vi.fn(() => connected),
+  };
+}
+
+function transcriptionProvider(
+  createSession: RealtimeTranscriptionProviderPlugin["createSession"],
+): RealtimeTranscriptionProviderPlugin {
+  return {
+    id: "openai",
+    label: "OpenAI",
+    defaultModel: "gpt-4o-transcribe",
+    autoSelectOrder: 1,
+    resolveConfig: ({ rawConfig }) => rawConfig,
+    isConfigured: () => true,
+    createSession,
+  };
+}
+
+function mockVoiceBridge() {
+  return {
+    connect: vi.fn(async () => {}),
+    sendAudio: vi.fn(),
+    sendUserMessage: vi.fn(),
+    setMediaTimestamp: vi.fn(),
+    submitToolResult: vi.fn(),
+    acknowledgeMark: vi.fn(),
+    close: vi.fn(),
+    triggerGreeting: vi.fn(),
+    isConnected: vi.fn(() => true),
+  };
+}
+
+function voiceProvider(
+  createBridge: RealtimeVoiceProviderPlugin["createBridge"],
+  id = "openai",
+): RealtimeVoiceProviderPlugin {
+  return { id, label: "Test voice provider", isConfigured: () => true, createBridge };
+}
+
+function engineOptions(
+  config: ReturnType<typeof resolveGoogleMeetConfig>,
+  meetingSessionId: string,
+) {
+  return {
+    config,
+    fullConfig: {},
+    runtime: {} as never,
+    ...GOOGLE_MEET_ENGINE_BINDINGS,
+    meetingSessionId,
+    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  };
+}
+
 function writeBridgeCommand(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-bridge-"));
   tempDirs.push(dir);
@@ -93,155 +162,48 @@ afterEach(() => {
 });
 
 describe("local Meet realtime transport process stream errors", () => {
-  it("disposes transport when transcription session creation throws", async () => {
-    const initError = new Error("transcription session creation failed");
-    const provider: RealtimeTranscriptionProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      defaultModel: "gpt-4o-transcribe",
-      autoSelectOrder: 1,
-      resolveConfig: ({ rawConfig }) => rawConfig,
-      isConfigured: () => true,
-      createSession: () => {
-        throw initError;
-      },
-    };
-    const startInput = vi.fn();
-    const stop = vi.fn(async () => {});
-    const dispose = vi.fn(async () => {});
-    const transport: MeetingRealtimeAudioTransport = {
-      onFatal: vi.fn(),
-      startInput,
-      stop,
-      writeOutput: vi.fn(async () => {}),
-      clearOutput: vi.fn(async () => {}),
-      dispose,
-    };
+  it.each(["createSession", "startInput", "connect"] as const)(
+    "disposes acquired resources when transcription %s fails",
+    async (phase) => {
+      const error = new Error(`${phase} failed`);
+      const sttSession = mockTranscriptionSession();
+      const transport = mockTransport();
+      const provider = transcriptionProvider(() => {
+        if (phase === "createSession") {
+          throw error;
+        }
+        return sttSession;
+      });
+      if (phase === "startInput") {
+        transport.startInput.mockImplementation(() => {
+          throw error;
+        });
+      }
+      if (phase === "connect") {
+        sttSession.connect.mockRejectedValueOnce(error);
+      }
 
-    await expect(
-      startMeetingAgentRealtimeEngine({
-        config: resolveGoogleMeetConfig({
-          chrome: { audioFormat: "pcm16-24khz" },
-          realtime: { provider: "openai", agentId: "jay", introMessage: "" },
+      await expect(
+        startMeetingAgentRealtimeEngine({
+          ...engineOptions(
+            resolveGoogleMeetConfig({
+              chrome: { audioFormat: "pcm16-24khz" },
+              realtime: { provider: "openai", agentId: "jay", introMessage: "" },
+            }),
+            `meet-${phase}-failure`,
+          ),
+          providers: [provider],
+          transport,
         }),
-        fullConfig: {} as never,
-        runtime: {} as never,
-        ...GOOGLE_MEET_ENGINE_BINDINGS,
-        meetingSessionId: "meet-create-session-failure",
-        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        providers: [provider],
-        transport,
-      }),
-    ).rejects.toBe(initError);
+      ).rejects.toBe(error);
 
-    expect(startInput).not.toHaveBeenCalled();
-    expect(stop).toHaveBeenCalledOnce();
-    expect(dispose).toHaveBeenCalledOnce();
-  });
-
-  it("closes the STT session and disposes transport when input startup throws", async () => {
-    const initError = new Error("input startup failed");
-    const sttSession = {
-      connect: vi.fn(async () => {}),
-      sendAudio: vi.fn(),
-      close: vi.fn(),
-      isConnected: vi.fn(() => false),
-    };
-    const provider: RealtimeTranscriptionProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      defaultModel: "gpt-4o-transcribe",
-      autoSelectOrder: 1,
-      resolveConfig: ({ rawConfig }) => rawConfig,
-      isConfigured: () => true,
-      createSession: () => sttSession,
-    };
-    const startInput = vi.fn(() => {
-      throw initError;
-    });
-    const stop = vi.fn(async () => {});
-    const dispose = vi.fn(async () => {});
-    const transport: MeetingRealtimeAudioTransport = {
-      onFatal: vi.fn(),
-      startInput,
-      stop,
-      writeOutput: vi.fn(async () => {}),
-      clearOutput: vi.fn(async () => {}),
-      dispose,
-    };
-
-    await expect(
-      startMeetingAgentRealtimeEngine({
-        config: resolveGoogleMeetConfig({
-          chrome: { audioFormat: "pcm16-24khz" },
-          realtime: { provider: "openai", agentId: "jay", introMessage: "" },
-        }),
-        fullConfig: {} as never,
-        runtime: {} as never,
-        ...GOOGLE_MEET_ENGINE_BINDINGS,
-        meetingSessionId: "meet-input-start-failure",
-        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        providers: [provider],
-        transport,
-      }),
-    ).rejects.toBe(initError);
-
-    expect(sttSession.connect).not.toHaveBeenCalled();
-    expect(sttSession.close).toHaveBeenCalledOnce();
-    expect(stop).toHaveBeenCalledOnce();
-    expect(dispose).toHaveBeenCalledOnce();
-  });
-
-  it("closes the STT session and disposes transport when connect rejects", async () => {
-    const connectError = new Error("transcription connect failed");
-    const sttSession = {
-      connect: vi.fn(async () => {
-        throw connectError;
-      }),
-      sendAudio: vi.fn(),
-      close: vi.fn(),
-      isConnected: vi.fn(() => false),
-    };
-    const provider: RealtimeTranscriptionProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      defaultModel: "gpt-4o-transcribe",
-      autoSelectOrder: 1,
-      resolveConfig: ({ rawConfig }) => rawConfig,
-      isConfigured: () => true,
-      createSession: () => sttSession,
-    };
-    const stop = vi.fn(async () => {});
-    const dispose = vi.fn(async () => {});
-    const transport: MeetingRealtimeAudioTransport = {
-      onFatal: vi.fn(),
-      startInput: vi.fn(),
-      stop,
-      writeOutput: vi.fn(async () => {}),
-      clearOutput: vi.fn(async () => {}),
-      dispose,
-    };
-
-    await expect(
-      startMeetingAgentRealtimeEngine({
-        config: resolveGoogleMeetConfig({
-          chrome: { audioFormat: "pcm16-24khz" },
-          realtime: { provider: "openai", agentId: "jay", introMessage: "" },
-        }),
-        fullConfig: {} as never,
-        runtime: {} as never,
-        ...GOOGLE_MEET_ENGINE_BINDINGS,
-        meetingSessionId: "meet-connect-failure",
-        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        providers: [provider],
-        transport,
-      }),
-    ).rejects.toBe(connectError);
-
-    expect(sttSession.close).toHaveBeenCalledOnce();
-    expect(stop).toHaveBeenCalledOnce();
-    expect(dispose).toHaveBeenCalledOnce();
-  });
+      expect(transport.startInput).toHaveBeenCalledTimes(phase === "createSession" ? 0 : 1);
+      expect(sttSession.connect).toHaveBeenCalledTimes(phase === "connect" ? 1 : 0);
+      expect(sttSession.close).toHaveBeenCalledTimes(phase === "createSession" ? 0 : 1);
+      expect(transport.stop).toHaveBeenCalledOnce();
+      expect(transport.dispose).toHaveBeenCalledOnce();
+    },
+  );
 
   it("stops the engine when input fails during provider setup", async () => {
     const bridgeScript = writeBridgeCommand();
@@ -249,21 +211,9 @@ describe("local Meet realtime transport process stream errors", () => {
     const connectGate = new Promise<void>((resolve) => {
       finishConnect = resolve;
     });
-    const sttSession = {
-      connect: vi.fn(() => connectGate),
-      sendAudio: vi.fn(),
-      close: vi.fn(),
-      isConnected: vi.fn(() => false),
-    };
-    const provider: RealtimeTranscriptionProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      defaultModel: "gpt-4o-transcribe",
-      autoSelectOrder: 1,
-      resolveConfig: ({ rawConfig }) => rawConfig,
-      isConfigured: () => true,
-      createSession: () => sttSession,
-    };
+    const sttSession = mockTranscriptionSession();
+    sttSession.connect.mockReturnValue(connectGate);
+    const provider = transcriptionProvider(() => sttSession);
     const logger = {
       debug: vi.fn(),
       error: vi.fn(),
@@ -285,11 +235,7 @@ describe("local Meet realtime transport process stream errors", () => {
       realtime: { provider: "openai", agentId: "jay", introMessage: "" },
     });
     const engineResult = startMeetingAgentRealtimeEngine({
-      config,
-      fullConfig: {} as never,
-      runtime: {} as never,
-      ...GOOGLE_MEET_ENGINE_BINDINGS,
-      meetingSessionId: "meet-startup-failure",
+      ...engineOptions(config, "meet-startup-failure"),
       logger,
       providers: [provider],
       transport,
@@ -319,21 +265,8 @@ describe("local Meet realtime transport process stream errors", () => {
 
   it("contains a forced local command-pair stdout stream error through bridge stop", async () => {
     const bridgeScript = writeBridgeCommand();
-    const sttSession = {
-      connect: vi.fn(async () => {}),
-      sendAudio: vi.fn(),
-      close: vi.fn(),
-      isConnected: vi.fn(() => true),
-    };
-    const provider: RealtimeTranscriptionProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      defaultModel: "gpt-4o-transcribe",
-      autoSelectOrder: 1,
-      resolveConfig: ({ rawConfig }) => rawConfig,
-      isConfigured: () => true,
-      createSession: () => sttSession,
-    };
+    const sttSession = mockTranscriptionSession(true);
+    const provider = transcriptionProvider(() => sttSession);
     const logger = {
       debug: vi.fn(),
       info: vi.fn(),
@@ -355,11 +288,7 @@ describe("local Meet realtime transport process stream errors", () => {
       spawn: makeRecordingSpawn(),
     });
     const handle = await startMeetingAgentRealtimeEngine({
-      config,
-      fullConfig: {} as never,
-      runtime: {} as never,
-      ...GOOGLE_MEET_ENGINE_BINDINGS,
-      meetingSessionId: "meet-1",
+      ...engineOptions(config, "meet-1"),
       logger: logger as never,
       providers: [provider],
       transport,
@@ -449,17 +378,7 @@ describe("Google Meet bidi realtime engine cleanup", () => {
   it("preserves the configured realtime agent through provider startup", async () => {
     let bridgeRequest: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const isConfigured = vi.fn(({ agentId }) => agentId === "molty");
-    const bridge = {
-      connect: vi.fn(async () => {}),
-      sendAudio: vi.fn(),
-      sendUserMessage: vi.fn(),
-      setMediaTimestamp: vi.fn(),
-      submitToolResult: vi.fn(),
-      acknowledgeMark: vi.fn(),
-      close: vi.fn(),
-      triggerGreeting: vi.fn(),
-      isConnected: vi.fn(() => true),
-    };
+    const bridge = mockVoiceBridge();
     const provider: RealtimeVoiceProviderPlugin = {
       id: "openai",
       label: "OpenAI",
@@ -469,14 +388,7 @@ describe("Google Meet bidi realtime engine cleanup", () => {
         return bridge;
       },
     };
-    const transport: MeetingRealtimeAudioTransport = {
-      onFatal: vi.fn(),
-      startInput: vi.fn(),
-      stop: vi.fn(async () => {}),
-      writeOutput: vi.fn(async () => {}),
-      clearOutput: vi.fn(async () => {}),
-      dispose: vi.fn(async () => {}),
-    };
+    const transport = mockTransport();
     const config = resolveGoogleMeetConfig({
       realtime: { strategy: "bidi", provider: "openai", agentId: "molty" },
     });
@@ -485,12 +397,8 @@ describe("Google Meet bidi realtime engine cleanup", () => {
     } as never;
 
     const handle = await startMeetingRealtimeEngine({
-      config,
+      ...engineOptions(config, "meet-routed-agent"),
       fullConfig,
-      runtime: {} as never,
-      ...GOOGLE_MEET_ENGINE_BINDINGS,
-      meetingSessionId: "meet-routed-agent",
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       providers: [provider],
       transport,
     });
@@ -503,47 +411,23 @@ describe("Google Meet bidi realtime engine cleanup", () => {
   it("disposes the audio transport when provider connection fails", async () => {
     const connectError = new Error("voice bridge connect failed");
     const stopError = new Error("transport stop failed");
-    const bridge = {
-      connect: vi.fn(async () => {
-        throw connectError;
-      }),
-      sendAudio: vi.fn(),
-      sendUserMessage: vi.fn(),
-      setMediaTimestamp: vi.fn(),
-      submitToolResult: vi.fn(),
-      acknowledgeMark: vi.fn(),
-      close: vi.fn(),
-      triggerGreeting: vi.fn(),
-      isConnected: vi.fn(() => false),
-    };
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      isConfigured: () => true,
-      createBridge: () => bridge,
-    };
+    const bridge = mockVoiceBridge();
+    bridge.connect.mockRejectedValueOnce(connectError);
+    bridge.isConnected.mockReturnValue(false);
+    const provider = voiceProvider(() => bridge);
     const stop = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(stopError)
       .mockResolvedValueOnce();
     const dispose = vi.fn(async () => {});
-    const transport: MeetingRealtimeAudioTransport = {
-      onFatal: vi.fn(),
-      startInput: vi.fn(),
-      stop,
-      writeOutput: vi.fn(async () => {}),
-      clearOutput: vi.fn(async () => {}),
-      dispose,
-    };
+    const transport = { ...mockTransport(), stop, dispose };
 
     await expect(
       startMeetingRealtimeEngine({
-        config: resolveGoogleMeetConfig({ realtime: { strategy: "bidi", provider: "openai" } }),
-        fullConfig: {} as never,
-        runtime: {} as never,
-        ...GOOGLE_MEET_ENGINE_BINDINGS,
-        meetingSessionId: "meet-connect-failure",
-        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        ...engineOptions(
+          resolveGoogleMeetConfig({ realtime: { strategy: "bidi", provider: "openai" } }),
+          "meet-connect-failure",
+        ),
         providers: [provider],
         transport,
       }),
@@ -556,43 +440,19 @@ describe("Google Meet bidi realtime engine cleanup", () => {
 
   it("stops the audio transport when the provider bridge closes unexpectedly", async () => {
     let closeBridge: ((reason: "completed" | "error") => void) | undefined;
-    const bridge = {
-      connect: vi.fn(async () => {}),
-      sendAudio: vi.fn(),
-      sendUserMessage: vi.fn(),
-      setMediaTimestamp: vi.fn(),
-      submitToolResult: vi.fn(),
-      acknowledgeMark: vi.fn(),
-      close: vi.fn(),
-      triggerGreeting: vi.fn(),
-      isConnected: vi.fn(() => true),
-    };
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      isConfigured: () => true,
-      createBridge: (params) => {
-        closeBridge = params.onClose;
-        return bridge;
-      },
-    };
+    const bridge = mockVoiceBridge();
+    const provider = voiceProvider((params) => {
+      closeBridge = params.onClose;
+      return bridge;
+    });
     const stop = vi.fn(async () => {});
     const dispose = vi.fn(async () => {});
-    const transport: MeetingRealtimeAudioTransport = {
-      onFatal: vi.fn(),
-      startInput: vi.fn(),
-      stop,
-      writeOutput: vi.fn(async () => {}),
-      clearOutput: vi.fn(async () => {}),
-      dispose,
-    };
+    const transport = { ...mockTransport(), stop, dispose };
     const handle = await startMeetingRealtimeEngine({
-      config: resolveGoogleMeetConfig({ realtime: { strategy: "bidi", provider: "openai" } }),
-      fullConfig: {} as never,
-      runtime: {} as never,
-      ...GOOGLE_MEET_ENGINE_BINDINGS,
-      meetingSessionId: "meet-unexpected-close",
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      ...engineOptions(
+        resolveGoogleMeetConfig({ realtime: { strategy: "bidi", provider: "openai" } }),
+        "meet-unexpected-close",
+      ),
       providers: [provider],
       transport,
     });
@@ -608,46 +468,23 @@ describe("Google Meet bidi realtime engine cleanup", () => {
   it("retries only the unsettled transport teardown phase", async () => {
     const stopError = new Error("transport stop failed");
     let closeBridge: ((reason: "completed" | "error") => void) | undefined;
-    const bridge = {
-      connect: vi.fn(async () => {}),
-      sendAudio: vi.fn(),
-      sendUserMessage: vi.fn(),
-      setMediaTimestamp: vi.fn(),
-      submitToolResult: vi.fn(),
-      acknowledgeMark: vi.fn(),
-      close: vi.fn(() => closeBridge?.("completed")),
-      triggerGreeting: vi.fn(),
-      isConnected: vi.fn(() => true),
-    };
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      isConfigured: () => true,
-      createBridge: (params) => {
-        closeBridge = params.onClose;
-        return bridge;
-      },
-    };
+    const bridge = mockVoiceBridge();
+    bridge.close.mockImplementation(() => closeBridge?.("completed"));
+    const provider = voiceProvider((params) => {
+      closeBridge = params.onClose;
+      return bridge;
+    });
     const stop = vi
       .fn<() => Promise<void>>()
       .mockRejectedValueOnce(stopError)
       .mockResolvedValueOnce();
     const dispose = vi.fn(async () => {});
-    const transport: MeetingRealtimeAudioTransport = {
-      onFatal: vi.fn(),
-      startInput: vi.fn(),
-      stop,
-      writeOutput: vi.fn(async () => {}),
-      clearOutput: vi.fn(async () => {}),
-      dispose,
-    };
+    const transport = { ...mockTransport(), stop, dispose };
     const handle = await startMeetingRealtimeEngine({
-      config: resolveGoogleMeetConfig({ realtime: { strategy: "bidi", provider: "openai" } }),
-      fullConfig: {} as never,
-      runtime: {} as never,
-      ...GOOGLE_MEET_ENGINE_BINDINGS,
-      meetingSessionId: "meet-stop-retry",
-      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      ...engineOptions(
+        resolveGoogleMeetConfig({ realtime: { strategy: "bidi", provider: "openai" } }),
+        "meet-stop-retry",
+      ),
       providers: [provider],
       transport,
     });
@@ -665,31 +502,9 @@ describe("Google Meet realtime model logs", () => {
   it("keeps a whole code point when a provider id crosses the log boundary", async () => {
     const prefix = "a".repeat(179);
     const providerId = `${prefix}😀tail`;
-    const bridge = {
-      connect: vi.fn(async () => {}),
-      sendAudio: vi.fn(),
-      sendUserMessage: vi.fn(),
-      setMediaTimestamp: vi.fn(),
-      submitToolResult: vi.fn(),
-      acknowledgeMark: vi.fn(),
-      close: vi.fn(),
-      triggerGreeting: vi.fn(),
-      isConnected: vi.fn(() => true),
-    };
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: providerId,
-      label: "Long identifier provider",
-      isConfigured: () => true,
-      createBridge: () => bridge,
-    };
-    const transport: MeetingRealtimeAudioTransport = {
-      onFatal: vi.fn(),
-      startInput: vi.fn(),
-      stop: vi.fn(async () => {}),
-      writeOutput: vi.fn(async () => {}),
-      clearOutput: vi.fn(async () => {}),
-      dispose: vi.fn(async () => {}),
-    };
+    const bridge = mockVoiceBridge();
+    const provider = voiceProvider(() => bridge, providerId);
+    const transport = mockTransport();
     const logger = {
       debug: vi.fn(),
       error: vi.fn(),
@@ -697,13 +512,10 @@ describe("Google Meet realtime model logs", () => {
       warn: vi.fn(),
     };
     const handle = await startMeetingRealtimeEngine({
-      config: resolveGoogleMeetConfig({
-        realtime: { strategy: "native", provider: providerId },
-      }),
-      fullConfig: {} as never,
-      runtime: {} as never,
-      ...GOOGLE_MEET_ENGINE_BINDINGS,
-      meetingSessionId: "long-provider-log",
+      ...engineOptions(
+        resolveGoogleMeetConfig({ realtime: { strategy: "native", provider: providerId } }),
+        "long-provider-log",
+      ),
       logger,
       providers: [provider],
       transport,

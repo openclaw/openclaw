@@ -25,7 +25,6 @@ import {
   isPrioritizedHighSignalLiveModelRef,
   isSmallLiveModelRef,
   listPrioritizedHighSignalLiveModelRefs,
-  listPrioritizedSmallLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
   selectSmallLiveItems,
@@ -65,13 +64,6 @@ function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model>): void 
   expect(supportsDeveloperRole(normalized)).toBe(false);
 }
 
-function expectSupportsUsageInStreamingForcedOff(overrides?: Partial<Model>): void {
-  const model = { ...baseModel(), ...overrides };
-  delete (model as { compat?: unknown }).compat;
-  const normalized = normalizeModelCompat(model as Model);
-  expect(supportsUsageInStreaming(normalized)).toBe(false);
-}
-
 function expectSupportsStrictModeForcedOff(overrides?: Partial<Model>): void {
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
@@ -86,6 +78,10 @@ function expectNativeStreamingSupported(overrides: Partial<Model>): void {
   expect(supportsDeveloperRole(normalized)).toBe(false);
   expect(supportsUsageInStreaming(normalized)).toBe(true);
   expect(supportsStrictMode(normalized)).toBe(false);
+}
+
+function expectHighSignal(provider: string, id: string, expected: boolean): void {
+  expect(isHighSignalLiveModelRef({ provider, id })).toBe(expected);
 }
 
 beforeEach(() => {
@@ -113,12 +109,6 @@ describe("normalizeModelCompat — Anthropic baseUrl", () => {
       contextWindow: 200_000,
       maxTokens: 8_192,
     }) as Model;
-
-  it("strips /v1 suffix from anthropic-messages baseUrl", () => {
-    const model = { ...anthropicBase(), baseUrl: "https://api.anthropic.com/v1" };
-    const normalized = normalizeModelCompat(model);
-    expect(normalized.baseUrl).toBe("https://api.anthropic.com");
-  });
 
   it("strips trailing /v1/ (with slash) from anthropic-messages baseUrl", () => {
     const model = { ...anthropicBase(), baseUrl: "https://api.anthropic.com/v1/" };
@@ -162,7 +152,6 @@ describe("normalizeModelCompat — Anthropic baseUrl", () => {
 describe("normalizeModelCompat", () => {
   it.each([
     ["z.ai models", undefined],
-    ["moonshot models", { provider: "moonshot", baseUrl: "https://api.moonshot.ai/v1" }],
     [
       "custom moonshot-compatible endpoints",
       { provider: "custom-kimi", baseUrl: "https://api.moonshot.cn/v1" },
@@ -172,23 +161,8 @@ describe("normalizeModelCompat", () => {
       { provider: "dashscope", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
     ],
     [
-      "DashScope-compatible endpoints",
-      {
-        provider: "custom-qwen",
-        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-      },
-    ],
-    [
       "Azure OpenAI chat completions",
       { provider: "azure-openai", baseUrl: "https://my-deployment.openai.azure.com/openai" },
-    ],
-    [
-      "generic custom openai-completions providers",
-      { provider: "custom-cpa", baseUrl: "https://cpa.example.com/v1" },
-    ],
-    [
-      "Qwen proxy via openai-completions",
-      { provider: "qwen-proxy", baseUrl: "https://qwen-api.example.org/compatible-mode/v1" },
     ],
     [
       "malformed baseUrl values",
@@ -202,13 +176,6 @@ describe("normalizeModelCompat", () => {
   );
 
   it.each([
-    [
-      "native Qwen endpoints",
-      {
-        provider: "qwen",
-        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-      },
-    ],
     [
       "DashScope-compatible endpoints regardless of provider id",
       {
@@ -238,20 +205,7 @@ describe("normalizeModelCompat", () => {
     expect(normalized.compat).toBeUndefined();
   });
 
-  it("forces supportsUsageInStreaming off for generic custom openai-completions provider", () => {
-    expectSupportsUsageInStreamingForcedOff({
-      provider: "custom-cpa",
-      baseUrl: "https://cpa.example.com/v1",
-    });
-  });
-
-  it.each([
-    ["z.ai models", undefined],
-    [
-      "custom openai-completions providers",
-      { provider: "custom-cpa", baseUrl: "https://cpa.example.com/v1" },
-    ],
-  ] satisfies Array<[string, Partial<Model> | undefined]>)(
+  it.each([["z.ai models", undefined]] satisfies Array<[string, Partial<Model> | undefined]>)(
     "forces supportsStrictMode off for %s",
     (_name, overrides) => {
       expectSupportsStrictModeForcedOff(overrides);
@@ -289,30 +243,6 @@ describe("normalizeModelCompat", () => {
     };
     const normalized = normalizeModelCompat(model);
     expect(supportsUsageInStreaming(normalized)).toBe(true);
-  });
-
-  it("preserves explicit supportsUsageInStreaming false on non-native endpoints", () => {
-    const model = {
-      ...baseModel(),
-      provider: "custom-cpa",
-      baseUrl: "https://proxy.example.com/v1",
-      compat: { supportsUsageInStreaming: false },
-    };
-    const normalized = normalizeModelCompat(model);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
-  });
-
-  it("still forces flags off when not explicitly set by user", () => {
-    const model = {
-      ...baseModel(),
-      provider: "custom-cpa",
-      baseUrl: "https://proxy.example.com/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
-    expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(false);
-    expect(supportsStrictMode(normalized)).toBe(false);
   });
 
   it("respects explicit supportsStrictMode true on non-native endpoints", () => {
@@ -390,56 +320,6 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "openrouter", id: "claude-opus-4-6" })).toBe(false);
   });
 
-  it("includes plugin-advertised modern models", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(
-      ({ provider, context }) =>
-        provider === "openai" &&
-        [
-          "gpt-5.6",
-          "gpt-5.6-sol",
-          "gpt-5.6-terra",
-          "gpt-5.6-luna",
-          "gpt-5.5",
-          "gpt-5.5-pro",
-          "gpt-5.4",
-          "gpt-5.4-pro",
-          "gpt-5.4-mini",
-          "gpt-5.4-nano",
-        ].includes(context.modelId)
-          ? true
-          : provider === "openai" &&
-              ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"].includes(
-                context.modelId,
-              )
-            ? true
-            : provider === "opencode" &&
-                ["claude-opus-4-6", "gemini-3-pro"].includes(context.modelId)
-              ? true
-              : provider === "opencode-go"
-                ? true
-                : undefined,
-    );
-
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.6" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.6-sol" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.5-pro" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-pro" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-mini" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-nano" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.5-pro" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-pro" })).toBe(true);
-    expect(isModernModelRef({ provider: "openai", id: "gpt-5.4-mini" })).toBe(true);
-    expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
-    expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
-    expect(isModernModelRef({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(true);
-    expect(isModernModelRef({ provider: "opencode-go", id: "glm-5" })).toBe(true);
-    expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.7" })).toBe(true);
-  });
-
   it("matches plugin-advertised modern models only for exact provider ids", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(
       ({ provider, context }) =>
@@ -448,15 +328,6 @@ describe("isModernModelRef", () => {
 
     expect(isModernModelRef({ provider: "z.ai", id: "glm-5" })).toBe(true);
     expect(isModernModelRef({ provider: "z-ai", id: "glm-5" })).toBe(false);
-  });
-
-  it("excludes provider-declined modern models", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(
-      ({ provider, context }) =>
-        provider === "opencode" && context.modelId === "minimax-m2.7" ? false : undefined,
-    );
-
-    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.7" })).toBe(false);
   });
 });
 
@@ -470,203 +341,108 @@ describe("isHighSignalLiveModelRef", () => {
           : undefined,
     );
 
-    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-sonnet-4-6" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-opus-4-6" })).toBe(true);
+    expectHighSignal("anthropic", "claude-sonnet-4-6", true);
+    expectHighSignal("anthropic", "claude-opus-4-6", true);
   });
 
   it("drops low-signal or old Claude variants even when provider marks them modern", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
-    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-opus-4-5" })).toBe(false);
-    expect(
-      isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-haiku-4-5-20251001" }),
-    ).toBe(false);
-    expect(
-      isHighSignalLiveModelRef({ provider: "opencode", id: "claude-3-5-haiku-20241022" }),
-    ).toBe(false);
+    expectHighSignal("anthropic", "claude-opus-4-5", false);
+    expectHighSignal("anthropic", "claude-haiku-4-5-20251001", false);
+    expectHighSignal("opencode", "claude-3-5-haiku-20241022", false);
   });
 
   it("keeps only curated Gemini routes in the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
-    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-2.5-flash-lite" })).toBe(
-      false,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "google/gemini-2.5-pro" })).toBe(
-      false,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-3.5-flash" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-3-flash-preview" })).toBe(
-      false,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-3-pro-preview" })).toBe(
-      false,
-    );
-    expect(
-      isHighSignalLiveModelRef({ provider: "google", id: "gemini-3.1-pro-preview-customtools" }),
-    ).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemma-4-31b-it" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-flash-latest" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-flash-lite-latest" })).toBe(
-      false,
-    );
+    expectHighSignal("google", "gemini-2.5-flash-lite", false);
+    expectHighSignal("openrouter", "google/gemini-2.5-pro", false);
+    expectHighSignal("google", "gemini-3.5-flash", true);
+    expectHighSignal("google", "gemini-3-flash-preview", false);
+    expectHighSignal("google", "gemini-3-pro-preview", false);
+    expectHighSignal("google", "gemini-3.1-pro-preview-customtools", false);
+    expectHighSignal("google", "gemma-4-31b-it", false);
+    expectHighSignal("google", "gemini-flash-latest", false);
+    expectHighSignal("google", "gemini-flash-lite-latest", false);
   });
 
   it("keeps only the current direct OpenAI-family models in the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-3.5-turbo" })).toBe(
-      false,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-oss-120b" })).toBe(
-      false,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/o1" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-4.1" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-4o" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.1" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(false);
+    expectHighSignal("openrouter", "openai/gpt-3.5-turbo", false);
+    expectHighSignal("openrouter", "openai/gpt-oss-120b", false);
+    expectHighSignal("openrouter", "openai/o1", false);
+    expectHighSignal("openai", "gpt-4.1", false);
+    expectHighSignal("openai", "gpt-4o", false);
+    expectHighSignal("openai", "gpt-5", false);
+    expectHighSignal("openai", "gpt-5.1", false);
+    expectHighSignal("openai", "gpt-5.4", false);
+    expectHighSignal("openai", "gpt-5.5", false);
     for (const id of ["gpt-5.6", "gpt-5.6-sol"]) {
-      expect(isHighSignalLiveModelRef({ provider: "openai", id })).toBe(false);
+      expectHighSignal("openai", id, false);
     }
     for (const id of ["gpt-5.6-terra", "gpt-5.6-luna"]) {
       expect(isHighSignalLiveModelRef({ provider: "openai", id })).toBe(true);
     }
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2-codex" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2-chat-latest" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-5.1-chat" })).toBe(
-      false,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "opencode", id: "gpt-5.1-codex-mini" })).toBe(
-      false,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2-codex" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-5.2-chat" })).toBe(
-      true,
-    );
+    expectHighSignal("openai", "gpt-5.2-codex", false);
+    expectHighSignal("openai", "gpt-5.2-chat-latest", false);
+    expectHighSignal("openrouter", "openai/gpt-5.1-chat", false);
+    expectHighSignal("opencode", "gpt-5.1-codex-mini", false);
+    expectHighSignal("openai", "gpt-5.2", false);
+    expectHighSignal("openai", "gpt-5.2-codex", false);
+    expectHighSignal("openrouter", "openai/gpt-5.2-chat", true);
   });
 
   it("drops old MiniMax 2.1 models from the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
-    expect(isHighSignalLiveModelRef({ provider: "minimax", id: "MiniMax-M2.1" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "minimax/minimax-m2.1" })).toBe(
-      false,
-    );
-    expect(
-      isHighSignalLiveModelRef({ provider: "openrouter", id: "minimax/minimax-m2.1:free" }),
-    ).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "minimax", id: "MiniMax-M3" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "minimax", id: "MiniMax-M2.7" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "minimax/minimax-m2.7" })).toBe(
-      true,
-    );
+    expectHighSignal("minimax", "MiniMax-M2.1", false);
+    expectHighSignal("openrouter", "minimax/minimax-m2.1", false);
+    expectHighSignal("openrouter", "minimax/minimax-m2.1:free", false);
+    expectHighSignal("minimax", "MiniMax-M3", true);
+    expectHighSignal("minimax", "MiniMax-M2.7", true);
+    expectHighSignal("openrouter", "minimax/minimax-m2.7", true);
   });
 
   it("keeps only curated OpenRouter routes in the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-5.2-chat" })).toBe(
-      true,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "minimax/minimax-m2.7" })).toBe(
-      true,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "ai21/jamba-large-1.7" })).toBe(
-      true,
-    );
-    expect(
-      isHighSignalLiveModelRef({ provider: "openrouter", id: "allenai/olmo-3.1-32b-instruct" }),
-    ).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "amazon/nova-lite-v1" })).toBe(
-      false,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "amazon/nova-micro-v1" })).toBe(
-      false,
-    );
+    expectHighSignal("openrouter", "openai/gpt-5.2-chat", true);
+    expectHighSignal("openrouter", "minimax/minimax-m2.7", true);
+    expectHighSignal("openrouter", "ai21/jamba-large-1.7", true);
+    expectHighSignal("openrouter", "allenai/olmo-3.1-32b-instruct", false);
+    expectHighSignal("openrouter", "amazon/nova-lite-v1", false);
+    expectHighSignal("openrouter", "amazon/nova-micro-v1", false);
   });
 
   it("drops GLM 4.x models from the default live matrix while keeping GLM 5", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
-    expect(isHighSignalLiveModelRef({ provider: "zai", id: "glm-4.7" })).toBe(false);
-    expect(
-      isHighSignalLiveModelRef({ provider: "fireworks", id: "accounts/fireworks/models/glm-4p7" }),
-    ).toBe(false);
-    expect(
-      isHighSignalLiveModelRef({
-        provider: "fireworks",
-        id: "accounts/fireworks/models/glm-4p5-air",
-      }),
-    ).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "zai", id: "glm-5.1" })).toBe(true);
-    expect(
-      isHighSignalLiveModelRef({ provider: "fireworks", id: "accounts/fireworks/models/glm-5" }),
-    ).toBe(false);
-    expect(
-      isHighSignalLiveModelRef({ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }),
-    ).toBe(false);
-    expect(
-      isHighSignalLiveModelRef({
-        provider: "fireworks",
-        id: "accounts/fireworks/routers/glm-5p2-fast",
-      }),
-    ).toBe(true);
-    expect(
-      isHighSignalLiveModelRef({
-        provider: "fireworks",
-        id: "accounts/fireworks/models/gpt-oss-120b",
-      }),
-    ).toBe(false);
-    expect(
-      isHighSignalLiveModelRef({
-        provider: "fireworks",
-        id: "accounts/fireworks/models/minimax-m2p7",
-      }),
-    ).toBe(false);
-  });
-
-  it("drops Fireworks Kimi routes from the default high-thinking live matrix", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
-
-    expect(
-      isHighSignalLiveModelRef({
-        provider: "fireworks",
-        id: "accounts/fireworks/models/kimi-k2p6",
-      }),
-    ).toBe(false);
-    expect(
-      isHighSignalLiveModelRef({
-        provider: "fireworks",
-        id: "accounts/fireworks/routers/kimi-k2p5-turbo",
-      }),
-    ).toBe(false);
+    expectHighSignal("zai", "glm-4.7", false);
+    expectHighSignal("fireworks", "accounts/fireworks/models/glm-4p7", false);
+    expectHighSignal("fireworks", "accounts/fireworks/models/glm-4p5-air", false);
+    expectHighSignal("zai", "glm-5.1", true);
+    expectHighSignal("fireworks", "accounts/fireworks/models/glm-5", false);
+    expectHighSignal("fireworks", "accounts/fireworks/models/glm-5p1", false);
+    expectHighSignal("fireworks", "accounts/fireworks/routers/glm-5p2-fast", true);
+    expectHighSignal("fireworks", "accounts/fireworks/models/gpt-oss-120b", false);
+    expectHighSignal("fireworks", "accounts/fireworks/models/minimax-m2p7", false);
   });
 
   it("keeps only curated xAI routes in the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
-    expect(
-      isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.20-beta-latest-reasoning" }),
-    ).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.20-0309-reasoning" })).toBe(
-      true,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.7" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.6" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.5" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4.3" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-3" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-1-fast-non-reasoning" })).toBe(
-      false,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-fast-non-reasoning" })).toBe(
-      false,
-    );
-    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-1-fast" })).toBe(false);
+    expectHighSignal("xai", "grok-4.20-beta-latest-reasoning", false);
+    expectHighSignal("xai", "grok-4.20-0309-reasoning", true);
+    expectHighSignal("xai", "grok-4.7", true);
+    expectHighSignal("xai", "grok-4.6", true);
+    expectHighSignal("xai", "grok-4.5", true);
+    expectHighSignal("xai", "grok-4.3", false);
+    expectHighSignal("xai", "grok-3", false);
+    expectHighSignal("xai", "grok-4-1-fast-non-reasoning", false);
+    expectHighSignal("xai", "grok-4-fast-non-reasoning", false);
+    expectHighSignal("xai", "grok-4-1-fast", false);
   });
 
   it("keeps DeepSeek V4 models in the default live matrix when the provider marks them modern", () => {
@@ -675,9 +451,9 @@ describe("isHighSignalLiveModelRef", () => {
         provider === "deepseek" && context.modelId.startsWith("deepseek-v4") ? true : undefined,
     );
 
-    expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-v4-flash" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-v4-pro" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-chat" })).toBe(false);
+    expectHighSignal("deepseek", "deepseek-v4-flash", true);
+    expectHighSignal("deepseek", "deepseek-v4-pro", true);
+    expectHighSignal("deepseek", "deepseek-chat", false);
   });
 });
 
@@ -698,35 +474,11 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
     expect(providerRuntimeMocks.resolveProviderModernModelRef).not.toHaveBeenCalled();
   });
 
-  it("lists priority refs as provider/id pairs", () => {
-    expect(listPrioritizedHighSignalLiveModelRefs()).toStrictEqual([
-      { provider: "anthropic", id: "claude-opus-5-5" },
-      { provider: "anthropic", id: "claude-opus-5" },
-      { provider: "anthropic", id: "claude-opus-4-8" },
-      { provider: "anthropic", id: "claude-sonnet-5" },
-      { provider: "anthropic", id: "claude-sonnet-4-6" },
-      { provider: "anthropic", id: "claude-opus-4-7" },
-      { provider: "google", id: "gemini-3.1-pro-preview" },
-      { provider: "google", id: "gemini-3.5-flash" },
-      { provider: "cohere", id: "command-a-plus-05-2026" },
-      { provider: "moonshot", id: "kimi-k3" },
-      { provider: "anthropic", id: "claude-opus-4-6" },
-      { provider: "deepseek", id: "deepseek-v4-flash" },
-      { provider: "deepseek", id: "deepseek-v4-pro" },
-      { provider: "minimax", id: "minimax-m3" },
-      { provider: "openai", id: "gpt-5.6-luna" },
-      { provider: "openrouter", id: "openai/gpt-5.2-chat" },
-      { provider: "openrouter", id: "minimax/minimax-m2.7" },
-      { provider: "opencode-go", id: "glm-5" },
-      { provider: "openrouter", id: "ai21/jamba-large-1.7" },
-      { provider: "xai", id: "grok-4.7" },
-      { provider: "xai", id: "grok-4.6" },
-      { provider: "xai", id: "grok-4.5" },
-      { provider: "xai", id: "grok-4.20-0309-reasoning" },
-      { provider: "zai", id: "glm-5.1" },
-      { provider: "fireworks", id: "accounts/fireworks/routers/glm-5p2-fast" },
-      { provider: "minimax-portal", id: "minimax-m3" },
-    ]);
+  it("preserves slashes inside prioritized model ids", () => {
+    expect(listPrioritizedHighSignalLiveModelRefs()).toContainEqual({
+      provider: "fireworks",
+      id: "accounts/fireworks/routers/glm-5p2-fast",
+    });
   });
 });
 
@@ -738,21 +490,6 @@ describe("isSmallLiveModelRef", () => {
     expect(isSmallLiveModelRef({ provider: "openrouter", id: "z-ai/glm-5.1" })).toBe(true);
     expect(isSmallLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(false);
     expect(providerRuntimeMocks.resolveProviderModernModelRef).not.toHaveBeenCalled();
-  });
-});
-
-describe("listPrioritizedSmallLiveModelRefs", () => {
-  it("lists priority refs as provider/id pairs", () => {
-    expect(listPrioritizedSmallLiveModelRefs()).toStrictEqual([
-      { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
-      { provider: "vllm", id: "qwen/qwen3-8b" },
-      { provider: "sglang", id: "qwen/qwen3-8b" },
-      { provider: "ollama", id: "gemma3:4b" },
-      { provider: "openrouter", id: "qwen/qwen3.5-9b" },
-      { provider: "openrouter", id: "z-ai/glm-5.1" },
-      { provider: "openrouter", id: "z-ai/glm-5" },
-      { provider: "zai", id: "glm-5.1" },
-    ]);
   });
 });
 

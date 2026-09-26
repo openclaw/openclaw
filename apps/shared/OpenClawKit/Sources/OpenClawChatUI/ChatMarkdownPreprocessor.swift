@@ -252,75 +252,29 @@ enum ChatMarkdownPreprocessor {
         }
 
         let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n")
-        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).makeIterator()
         var outputLines: [String] = []
-        var inMetaBlock = false
-        var inFencedJson = false
-        var inProseBlock = false
-
-        for index in lines.indices {
-            let currentLine = lines[index]
-
-            // Prose context body (chat history/window): drop lines until the
-            // block-terminating blank line so the visible marker never renders.
-            if inProseBlock {
-                if currentLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    inProseBlock = false
-                }
-                continue
-            }
-
-            if !inMetaBlock, self.shouldStripTrailingUntrustedContext(lines: lines, index: index) {
-                break
-            }
-
-            if !inMetaBlock {
-                let trimmed = currentLine.trimmingCharacters(in: .whitespacesAndNewlines)
-                let isContextHeader = trimmed.count > self.inboundContextMarker.count &&
-                    trimmed.hasSuffix(self.inboundContextMarker)
-                if isContextHeader {
-                    let nextLine = index + 1 < lines.count ? lines[index + 1] : nil
-                    if nextLine?.trimmingCharacters(in: .whitespacesAndNewlines) != "```json" {
-                        inProseBlock = true
-                        continue
+        while let currentLine = lines.next() {
+            let trimmed = currentLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == self.contextHeader { break }
+            if trimmed.count > self.inboundContextMarker.count, trimmed.hasSuffix(self.inboundContextMarker) {
+                let firstBodyLine = lines.next()?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let terminator = firstBodyLine == "```json" ? "```" : ""
+                // A context body owns every line through its closing fence or
+                // first prose blank, including any marker-looking text inside.
+                if firstBodyLine != terminator {
+                    while let bodyLine = lines.next() {
+                        if bodyLine.trimmingCharacters(in: .whitespacesAndNewlines) == terminator { break }
                     }
-                    inMetaBlock = true
-                    inFencedJson = false
-                    continue
                 }
+            } else {
+                outputLines.append(String(currentLine))
             }
-
-            if inMetaBlock {
-                if !inFencedJson, currentLine.trimmingCharacters(in: .whitespacesAndNewlines) == "```json" {
-                    inFencedJson = true
-                    continue
-                }
-
-                if inFencedJson {
-                    if currentLine.trimmingCharacters(in: .whitespacesAndNewlines) == "```" {
-                        inMetaBlock = false
-                        inFencedJson = false
-                    }
-                    continue
-                }
-
-                if currentLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    continue
-                }
-
-                inMetaBlock = false
-            }
-
-            outputLines.append(currentLine)
         }
 
         return outputLines
             .joined(separator: "\n")
             .replacingOccurrences(of: #"^\n+"#, with: "", options: .regularExpression)
-    }
-
-    private static func shouldStripTrailingUntrustedContext(lines: [String], index: Int) -> Bool {
-        lines[index].trimmingCharacters(in: .whitespacesAndNewlines) == self.contextHeader
     }
 
     private static func stripPrefixedTimestamps(_ raw: String) -> String {

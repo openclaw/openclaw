@@ -3,7 +3,10 @@
  */
 import type { IncomingMessage } from "node:http";
 import { resolveRequestClientIpFromHeaders } from "../gateway/net.js";
+import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+
+export { getWebhookLegacyListener };
 
 export {
   createBoundedCounter,
@@ -54,10 +57,11 @@ export function resolveRequestClientIp(
   trustedProxies?: string[],
   allowRealIpFallback = false,
 ): string | undefined {
-  // The Gateway validates managed ingress before plugin dispatch; raw requests remain fallback.
+  // Legacy ports keep the channel's proxy policy; the Gateway port uses validated attribution.
   return (
-    getPluginRuntimeGatewayRequestScope()?.client?.clientIp ??
-    resolveRequestClientIpFromHeaders(req, trustedProxies, allowRealIpFallback)
+    (!req || !getWebhookLegacyListener(req)
+      ? getPluginRuntimeGatewayRequestScope()?.client?.clientIp
+      : undefined) ?? resolveRequestClientIpFromHeaders(req, trustedProxies, allowRealIpFallback)
   );
 }
 export { createGatewayAuthRateLimiter as createAuthRateLimiter } from "../gateway/auth-rate-limit.js";

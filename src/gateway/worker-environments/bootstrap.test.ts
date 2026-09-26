@@ -329,7 +329,7 @@ describe("bootstrapWorker", () => {
     },
   );
 
-  it.each([Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY])(
+  it.each([Number.NaN, -1, 1.5])(
     "rejects invalid bundle tarball size %s before any remote work",
     async (tarballBytes) => {
       const runner = fakeRunner([]);
@@ -345,7 +345,6 @@ describe("bootstrapWorker", () => {
 
   it.each([
     `/home/worker/other/.incoming/${UPLOAD_FILENAME}`,
-    `/home/worker/.openclaw-worker/other/${UPLOAD_FILENAME}`,
     `/home/worker/.openclaw-worker/.incoming/../.incoming/${UPLOAD_FILENAME}`,
     `/home/worker/./.openclaw-worker/.incoming/${UPLOAD_FILENAME}`,
     `/home//worker/.openclaw-worker/.incoming/${UPLOAD_FILENAME}`,

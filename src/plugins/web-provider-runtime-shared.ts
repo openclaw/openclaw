@@ -28,44 +28,36 @@ type ResolvePluginWebProvidersParams = {
 };
 
 export type WebProviderRuntimeResolution<TEntry> = {
-  resolveBundledResolutionConfig: (params: {
-    config?: PluginLoadOptions["config"];
-    workspaceDir?: string;
-    env?: PluginLoadOptions["env"];
-    manifestRecords?: readonly PluginManifestRecord[];
-  }) => {
+  resolveBundledResolutionConfig: (
+    params: Pick<
+      ResolvePluginWebProvidersParams,
+      "config" | "workspaceDir" | "env" | "manifestRecords"
+    >,
+  ) => {
     config: PluginLoadOptions["config"];
     activationSourceConfig?: PluginLoadOptions["config"];
     autoEnabledReasons: Record<string, string[]>;
     manifestRecords?: readonly PluginManifestRecord[];
   };
-  resolveCandidatePluginIds: (params: {
-    config?: PluginLoadOptions["config"];
-    workspaceDir?: string;
-    env?: PluginLoadOptions["env"];
-    onlyPluginIds?: readonly string[];
-    origin?: PluginManifestRecord["origin"];
-    sandboxed?: boolean;
-    manifestRecords?: readonly PluginManifestRecord[];
-  }) => string[] | undefined;
+  resolveCandidatePluginIds: (
+    params: Omit<ResolvePluginWebProvidersParams, "activate" | "cache" | "mode">,
+  ) => string[] | undefined;
   mapRegistryProviders: (params: {
     registry: PluginRegistry;
     onlyPluginIds?: readonly string[];
   }) => TEntry[];
-  resolveBundledPublicArtifactProviders?: (params: {
-    config?: PluginLoadOptions["config"];
-    workspaceDir?: string;
-    env?: PluginLoadOptions["env"];
-    onlyPluginIds?: readonly string[];
-    manifestRecords?: readonly PluginManifestRecord[];
-  }) => TEntry[] | null;
-  resolveBundledRuntimeArtifactProviders?: (params: {
-    config?: PluginLoadOptions["config"];
-    workspaceDir?: string;
-    env?: PluginLoadOptions["env"];
-    onlyPluginIds: readonly string[];
-    manifestRecords?: readonly PluginManifestRecord[];
-  }) => TEntry[] | null;
+  resolveBundledPublicArtifactProviders?: (
+    params: Pick<
+      ResolvePluginWebProvidersParams,
+      "config" | "workspaceDir" | "env" | "onlyPluginIds" | "manifestRecords"
+    >,
+  ) => TEntry[] | null;
+  resolveBundledRuntimeArtifactProviders?: (
+    params: Pick<
+      ResolvePluginWebProvidersParams,
+      "config" | "workspaceDir" | "env" | "manifestRecords"
+    > & { onlyPluginIds: readonly string[] },
+  ) => TEntry[] | null;
 };
 
 type WebProviderRuntimeContext = {

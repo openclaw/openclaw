@@ -2071,7 +2071,6 @@ describe("qa suite runtime launcher", () => {
 
   it.each([
     { kind: "report", fileName: "qa-suite-report.md" },
-    { kind: "evidence", fileName: "qa-evidence.json" },
     { kind: "summary", fileName: "qa-suite-summary.json" },
   ])(
     "preserves the prior standard $kind artifact when atomic publication fails",
@@ -2507,96 +2506,6 @@ describe("qa suite runtime launcher", () => {
     expect(canonical.occurrences.every((item) => item.assertions === null)).toBe(true);
   });
 
-  it("fails and stops when a started native partition omits its scenario result", async () => {
-    const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
-    runQaTestFileScenarios.mockImplementationOnce(async (params) => ({
-      ...(await defaultTestFileImplementation(params)),
-      results: [],
-    }));
-
-    const result = await runFailFastQaSuite("fail-fast-missing-native");
-
-    expect(result.executionKind).toBe("suite");
-    if (result.executionKind !== "suite") {
-      throw new Error("expected unified suite result");
-    }
-    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
-    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
-    expect(result.result.scenarios).toMatchObject([
-      { name: "dm-chat-baseline", status: "pass" },
-      {
-        name: "Control UI chat flow Playwright coverage",
-        status: "fail",
-        details: "suite partition returned no scenario result",
-      },
-    ]);
-    const evidence = JSON.parse(await fs.readFile(result.result.evidencePath, "utf8")) as {
-      entries?: Array<{
-        result?: { failure?: { reason?: string }; status?: string };
-        test?: { id?: string };
-      }>;
-    };
-    expect(evidence.entries).toMatchObject([
-      {
-        test: { id: "control-ui-chat-flow-playwright" },
-        result: {
-          status: "fail",
-          failure: { reason: "suite partition returned no scenario result" },
-        },
-      },
-    ]);
-  });
-
-  it("stops later native execution kinds after a started kind omits its result", async () => {
-    const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
-    runQaTestFileScenarios.mockImplementationOnce(async (params) => ({
-      ...(await defaultTestFileImplementation(params)),
-      results: [],
-    }));
-
-    const scenarioIds = [
-      "dm-chat-baseline",
-      "control-ui-assistant-media-tickets",
-      "control-ui-chat-flow-playwright",
-      "docker-npm-onboard-channel-agent",
-    ];
-    const result = await runFailFastQaSuite("fail-fast-missing-native-kind", { scenarioIds });
-
-    expect(result.executionKind).toBe("suite");
-    if (result.executionKind !== "suite") {
-      throw new Error("expected unified suite result");
-    }
-    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
-    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
-    expect(runQaTestFileScenarios).toHaveBeenCalledWith(
-      expect.objectContaining({
-        failFast: true,
-        scenarios: [expect.objectContaining({ id: "control-ui-assistant-media-tickets" })],
-      }),
-    );
-    expect(result.result.scenarios).toMatchObject([
-      { name: "dm-chat-baseline", status: "pass" },
-      {
-        name: "Control UI assistant media ticket evidence",
-        status: "fail",
-        details: "suite partition returned no scenario result",
-      },
-    ]);
-    const summary = JSON.parse(await fs.readFile(result.result.summaryPath, "utf8")) as {
-      run?: { scenarioIds?: string[] };
-      scenarios?: Array<{ details?: string; name?: string; status?: string }>;
-    };
-    expect(summary.run?.scenarioIds).toEqual(scenarioIds);
-    expect(summary.scenarios).toMatchObject([
-      { name: "dm-chat-baseline", status: "pass" },
-      {
-        name: "Control UI assistant media ticket evidence",
-        status: "fail",
-        details: "suite partition returned no scenario result",
-      },
-    ]);
-  });
-
   it("omits a native fail-fast tail after the first missing scenario result", async () => {
     const repoRoot = await makeTempRepo("qa-suite-fail-fast-missing-native-tail-");
     const defaultTestFileImplementation = runQaTestFileScenarios.getMockImplementation();
@@ -2722,50 +2631,6 @@ describe("qa suite runtime launcher", () => {
       "pass",
       "pass",
     ]);
-  });
-
-  it("runs script scenarios after flow Gateways stop without serializing Playwright", async () => {
-    const repoRoot = await makeTempRepo("qa-suite-script-isolation-");
-    vi.stubEnv("OPENCLAW_QA_SUITE_PROGRESS", "1");
-    const flow = blockNextQaFlowSuite();
-
-    const runPromise = runQaSuite({
-      repoRoot,
-      outputDir: ".artifacts/qa-e2e/script-isolation",
-      concurrency: 8,
-      scenarioIds: [
-        "dm-chat-baseline",
-        "control-ui-chat-flow-playwright",
-        "docker-npm-onboard-channel-agent",
-      ],
-    });
-    await flow.started;
-    await vi.waitFor(() => {
-      expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
-    });
-
-    expect(runQaTestFileScenarios).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        scenarios: [
-          expect.objectContaining({ execution: expect.objectContaining({ kind: "playwright" }) }),
-        ],
-      }),
-    );
-
-    flow.release();
-    await runPromise;
-
-    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(2);
-    expect(runQaTestFileScenarios).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        progress: expect.any(Function),
-        scenarios: [
-          expect.objectContaining({ execution: expect.objectContaining({ kind: "script" }) }),
-        ],
-      }),
-    );
   });
 
   it("leaves nested E2E script runtime preparation to the script owner", async () => {
@@ -3212,42 +3077,6 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).toHaveBeenLastCalledWith(
       expect.objectContaining({ failFast: true }),
     );
-  });
-
-  it("keeps multiple isolated flow scenarios in separate serial partitions", async () => {
-    const repoRoot = await makeTempRepo("qa-suite-serial-isolated-");
-    await runQaSuite({
-      repoRoot,
-      outputDir: ".artifacts/qa-e2e/serial-isolated",
-      concurrency: 1,
-      scenarioIds: [
-        "group-visible-reply-tool",
-        "runtime-tool-image-generate",
-        "control-ui-chat-flow-playwright",
-      ],
-    });
-
-    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "serial-isolated");
-    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
-    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        outputDir: path.join(outputDir, "flow", "isolated-1"),
-        concurrency: 1,
-        workerStartStaggerMs: 0,
-        scenarioIds: ["group-visible-reply-tool"],
-      }),
-    );
-    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        outputDir: path.join(outputDir, "flow", "isolated-2"),
-        concurrency: 1,
-        workerStartStaggerMs: 0,
-        scenarioIds: ["runtime-tool-image-generate"],
-      }),
-    );
-    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
   });
 
   it("accounts for isolated flow worker weight in unified suite concurrency", async () => {

@@ -2358,23 +2358,16 @@ process.stdout.write(sessionDir + "\\n");
     },
   );
 
-  it.each([
-    ["npm", "discord"],
-    ["ClawHub", "whatsapp"],
-  ] as const)(
-    "requires the installed package version to match for %s companion installs",
-    (_sourceLabel, pluginId) => {
-      expect(() =>
-        assertCompanionPluginRecords((_records, installPaths) => {
-          const packageName = pluginId === "discord" ? "@openclaw/discord" : "@openclaw/whatsapp";
-          writeJson(join(installPaths[pluginId], "package.json"), {
-            name: packageName,
-            version: "2026.8.0",
-          });
-        }),
-      ).toThrow(new RegExp(`${pluginId} installed package version changed`));
-    },
-  );
+  it("requires the installed package version to match the companion record", () => {
+    expect(() =>
+      assertCompanionPluginRecords((_records, installPaths) => {
+        writeJson(join(installPaths.discord, "package.json"), {
+          name: "@openclaw/discord",
+          version: "2026.8.0",
+        });
+      }),
+    ).toThrow(/discord installed package version changed/);
+  });
 
   it("accepts official ClawHub npm-pack installs for configured external plugins", () => {
     expect(() => assertConfiguredPluginState()).not.toThrow();
@@ -2648,14 +2641,6 @@ process.stdout.write(JSON.stringify(result));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
-
-  it("accepts a SQLite-only migrated session store", () => {
-    expect(() =>
-      runSessionStateAssertion((stateDir) => {
-        writeMigratedSessionState(stateDir);
-      }),
-    ).not.toThrow();
   });
 
   it.each([

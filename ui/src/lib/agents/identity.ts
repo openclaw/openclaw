@@ -1,3 +1,4 @@
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
@@ -135,14 +136,6 @@ export function createAgentIdentityCapability(
 
   gateway.subscribe(resetForGateway);
 
-  const normalizeIds = (agentIds: readonly (string | null | undefined)[]) => [
-    ...new Set(
-      agentIds
-        .map((agentId) => agentId?.trim())
-        .filter((agentId): agentId is string => Boolean(agentId)),
-    ),
-  ];
-
   gateway.subscribeEvents?.((event) => {
     if (event.event !== "config.changed") {
       return;
@@ -170,7 +163,7 @@ export function createAgentIdentityCapability(
         return;
       }
       const generation = connectionGeneration;
-      const missing = normalizeIds(agentIds).filter((agentId) => {
+      const missing = normalizeUniqueTrimmedStringList(agentIds).filter((agentId) => {
         const cached = identityRequests.get(client)?.get(agentId);
         return (
           !hasFreshAgentIdentityResult(cached) ||
@@ -216,7 +209,7 @@ export function createAgentIdentityCapability(
     },
     invalidate(agentIds) {
       let changed = false;
-      const ids = normalizeIds(agentIds);
+      const ids = normalizeUniqueTrimmedStringList(agentIds);
       invalidateAgentIdentityCache(cachedClient, ids);
       for (const agentId of ids) {
         invalidationEpochs.set(agentId, (invalidationEpochs.get(agentId) ?? 0) + 1);

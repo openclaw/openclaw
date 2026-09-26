@@ -152,8 +152,11 @@ type SubagentRegistryPersistListener = (sessionKeys?: readonly (string | undefin
 
 const SUBAGENT_REGISTRY_PERSIST_LISTENERS = new Set<SubagentRegistryPersistListener>();
 
-function emitSubagentRegistryPersisted(keys?: Array<string | undefined>): void {
-  publishSubagentRunChanges(keys);
+function emitSubagentRegistryPersisted(
+  keys?: Array<string | undefined>,
+  runIds?: readonly string[],
+): void {
+  publishSubagentRunChanges(keys, runIds);
   for (const listener of SUBAGENT_REGISTRY_PERSIST_LISTENERS) {
     try {
       listener(keys);
@@ -210,7 +213,7 @@ export function publishSubagentRunsAfterAtomicStore(
   const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds);
   const events = updateCommittedSwarmNotifications(runs, changedRunIds);
   deferredObserverEvents.push(() => {
-    emitSubagentRegistryPersisted(keys);
+    emitSubagentRegistryPersisted(keys, changedRunIds);
     events.forEach(emitSessionLifecycleEvent);
   });
 }
@@ -232,7 +235,7 @@ export function getSubagentSessionListReadSnapshotIdentity(): object | undefined
 
 export type SubagentSessionListReadView = {
   snapshotIdentity(this: void): object | undefined;
-  runs(this: void): Map<string, SubagentRunReadRecord>;
+  runs(this: void, runIds?: ReadonlySet<string>): Map<string, SubagentRunReadRecord>;
   prepare(this: void): Promise<void>;
 };
 
@@ -262,7 +265,21 @@ export function createSubagentSessionListReadView(options: {
         return undefined;
       }
     },
-    runs() {
+    runs(runIds) {
+      if (runIds) {
+        const persisted = readPersisted
+          ? getPersistedSubagentRunsSnapshot(cache, source.current())
+          : undefined;
+        const selected = new Map<string, SubagentRunReadRecord>();
+        for (const runId of runIds) {
+          const live = subagentRuns.get(runId);
+          const entry = live ? cache.project(live) : persisted?.get(runId);
+          if (entry) {
+            selected.set(runId, entry);
+          }
+        }
+        return selected;
+      }
       return getSubagentRunsSnapshot(subagentRuns, cache, {
         context: readPersisted ? source.current() : undefined,
         matches,
@@ -345,7 +362,7 @@ function persistSubagentRuns(
   // In-process readers must observe the authoritative memory snapshot before the wake.
   const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds, { committed });
   const events = committed ? updateCommittedSwarmNotifications(runs, changedRunIds) : [];
-  emitSubagentRegistryPersisted(keys);
+  emitSubagentRegistryPersisted(keys, changedRunIds);
   events.forEach(emitSessionLifecycleEvent);
 }
 
@@ -377,7 +394,7 @@ export function persistSubagentRunsToDiskAsyncOrThrow(
       databasePath: options.context.admission.databasePath,
     });
     const events = updateCommittedSwarmNotifications(snapshot, runIds);
-    emitSubagentRegistryPersisted(keys);
+    emitSubagentRegistryPersisted(keys, runIds);
     events.forEach(emitSessionLifecycleEvent);
   });
 }
