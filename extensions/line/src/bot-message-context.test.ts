@@ -4,8 +4,9 @@ import path from "node:path";
 import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  getSessionBindingService,
+  registerSessionBindingAdapter,
   testing as sessionBindingTesting,
+  type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createTestRegistry,
@@ -133,6 +134,41 @@ describe("buildLineMessageContext", () => {
       deliveryContext: { isRedelivery: false },
       ...overrides,
     }) as PostbackEvent;
+
+  const registerBoundLineConversation = (
+    conversationId: string,
+    touchAsync = vi.fn(async () => {}),
+  ) => {
+    const binding: SessionBindingRecord = {
+      bindingId: "line-default-test123",
+      targetSessionKey: "agent:codex:acp:binding:line:default:test123",
+      targetKind: "session",
+      conversation: {
+        channel: "line",
+        accountId: "default",
+        conversationId,
+      },
+      status: "active",
+      boundAt: Date.now(),
+      metadata: {
+        agentId: "codex",
+      },
+    };
+    const matchesConversation = (ref: SessionBindingRecord["conversation"]) =>
+      ref.channel === binding.conversation.channel &&
+      ref.accountId === binding.conversation.accountId &&
+      ref.conversationId === binding.conversation.conversationId;
+    registerSessionBindingAdapter({
+      channel: "line",
+      accountId: "default",
+      listBySession: (targetSessionKey) =>
+        targetSessionKey === binding.targetSessionKey ? [binding] : [],
+      resolveByConversation: (ref) => (matchesConversation(ref) ? binding : null),
+      inspectByConversationAsync: async (ref) => (matchesConversation(ref) ? binding : null),
+      touchAsync,
+    });
+    return { binding, touchAsync };
+  };
 
   beforeEach(async () => {
     logVerboseMock.mockClear();
@@ -816,19 +852,7 @@ describe("buildLineMessageContext", () => {
 
   it("routes LINE conversations through active ACP session bindings", async () => {
     const userId = "U1234567890abcdef1234567890abcdef";
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:codex:acp:binding:line:default:test123",
-      targetKind: "session",
-      conversation: {
-        channel: "line",
-        accountId: "default",
-        conversationId: userId,
-      },
-      placement: "current",
-      metadata: {
-        agentId: "codex",
-      },
-    });
+    registerBoundLineConversation(userId);
 
     const event = createMessageEvent({ type: "user", userId });
     const context = await buildMessageContext(event);
@@ -843,6 +867,47 @@ describe("buildLineMessageContext", () => {
     expect(routeMetadataKeys).not.toHaveLength(0);
     for (const key of routeMetadataKeys) {
       expect(Reflect.get(context.ctxPayload, key)).toBe(Reflect.get(context.route, key));
+    }
+  });
+
+  it("routes a runtime-bound LINE conversation when ordinary routing is ambiguous", async () => {
+    cfg = {
+      ...cfg,
+      agents: { list: [{ id: "main" }, { id: "codex" }] },
+      bindings: [],
+    };
+    const userId = "U1234567890abcdef1234567890abcdef";
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const touchAsync = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const { binding } = registerBoundLineConversation(userId, touchAsync);
+    let settled = false;
+    const pending = buildMessageContext(createMessageEvent({ type: "user", userId })).then(
+      (context) => {
+        settled = true;
+        return context;
+      },
+    );
+
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("LINE route settled before activity persistence");
+        }),
+      ]);
+      expect(settled).toBe(false);
+      expect(touchAsync).toHaveBeenCalledWith(binding.bindingId, undefined);
+      release.resolve();
+      const context = await pending;
+      expect(context?.route.agentId).toBe("codex");
+      expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
+    } finally {
+      release.resolve();
+      await pending.catch(() => {});
     }
   });
 

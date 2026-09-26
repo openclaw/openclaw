@@ -18,12 +18,17 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ensureConfiguredBindingRouteReady,
-  resolvePinnedMainDmOwnerFromAllowlist,
+  getSessionBindingService,
+  inspectRuntimeConversationBindingRoute,
   resolveConfiguredBindingRoute,
-  resolveRuntimeConversationBindingRoute,
-} from "openclaw/plugin-sdk/conversation-runtime";
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
+import {
+  parseAgentSessionKey,
+  resolveAgentRoute,
+  resolveInboundLastRouteSessionKey,
+} from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
@@ -128,39 +133,66 @@ async function resolveLineInboundRoute(params: {
 
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(params.source);
   const peerId = buildPeerId(params.source);
-  let route = resolveAgentRoute({
-    cfg: params.cfg,
+  const routeInput = {
     channel: "line",
     accountId: params.account.accountId,
     peer: {
-      kind: isGroup ? "group" : "direct",
+      kind: isGroup ? ("group" as const) : ("direct" as const),
       id: peerId,
     },
+  };
+  const conversation = {
+    channel: "line",
+    accountId: params.account.accountId,
+    conversationId: peerId,
+  };
+  const service = getSessionBindingService();
+  const inspection = await service.inspectByConversationAsync(conversation);
+  if (inspection.status === "unavailable") {
+    throw new Error(
+      "LINE conversation binding owner is temporarily unavailable; retry the message.",
+    );
+  }
+  // Classify through the binding owner without consulting the ordinary roster or bindings.
+  // This scope-only route is never dispatched; the selected owner supplies the final agent.
+  const resolveScopeRoute = (agentId?: string) =>
+    resolveAgentRoute({
+      ...routeInput,
+      cfg: { session: params.cfg.session },
+      defaultAgentId: agentId,
+    });
+  const selection = inspectRuntimeConversationBindingRoute({
+    route: resolveScopeRoute(),
+    inspection,
   });
+  const metadataAgentId = selection.bindingRecord?.metadata?.agentId;
+  const hasBoundAgent =
+    selection.boundSessionKey &&
+    (parseAgentSessionKey(selection.boundSessionKey) ||
+      (typeof metadataAgentId === "string" && metadataAgentId.trim()));
 
-  const configuredRoute = resolveConfiguredBindingRoute({
-    cfg: params.cfg,
-    route,
-    conversation: {
-      channel: "line",
-      accountId: params.account.accountId,
-      conversationId: peerId,
-    },
-  });
+  const configuredRoute = hasBoundAgent
+    ? { route: resolveScopeRoute(selection.boundAgentId), bindingResolution: null }
+    : resolveConfiguredBindingRoute({
+        cfg: params.cfg,
+        route: resolveAgentRoute({ ...routeInput, cfg: params.cfg }),
+        conversation,
+      });
   let configuredBinding = configuredRoute.bindingResolution;
   const configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
-  route = configuredRoute.route;
 
-  const runtimeRoute = resolveRuntimeConversationBindingRoute({
-    route,
-    conversation: {
-      channel: "line",
-      accountId: params.account.accountId,
-      conversationId: peerId,
-    },
+  const runtimeRoute = inspectRuntimeConversationBindingRoute({
+    route: configuredRoute.route,
+    inspection,
   });
-  route = runtimeRoute.route;
   if (runtimeRoute.bindingRecord) {
+    // Keep the captured selection through this await. The reply owner must reject a
+    // revoked/reassigned binding, rather than silently dispatching under another owner.
+    await service.touchAsync(
+      runtimeRoute.bindingRecord.bindingId,
+      undefined,
+      runtimeRoute.bindingRecord.conversation,
+    );
     configuredBinding = null;
     logVerbose(
       runtimeRoute.boundSessionKey
@@ -185,7 +217,7 @@ async function resolveLineInboundRoute(params: {
     );
   }
 
-  return { userId, groupId, roomId, isGroup, peerId, route };
+  return { userId, groupId, roomId, isGroup, peerId, route: runtimeRoute.route };
 }
 
 /**
