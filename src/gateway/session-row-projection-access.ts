@@ -23,10 +23,8 @@ export function bindSessionRowProjection<T extends object>(
     projections.get(context)?.binding ??
     new SessionRowProjectionBinding(context, (query) => {
       const target = projections.get(context)?.read()?.sharingTarget(query);
-      // Projection selection also supports aliases; capability readers require an exact tuple.
-      return target?.canonicalKey === query.key &&
-        target.agentId === query.agentId &&
-        target.storePath === query.storePath
+      // The projection owns store-locator mapping; session-key aliases still require an exact read.
+      return target?.canonicalKey === query.key && target.agentId === query.agentId
         ? target.entry
         : undefined;
     });
