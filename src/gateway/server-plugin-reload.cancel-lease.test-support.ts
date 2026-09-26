@@ -34,6 +34,13 @@ export async function verifyCancelledDrainRollbackLease(
   const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
   assert(instance);
   const releaseWork = instance.retainWork();
+  const drainEntered = createDeferredCore();
+  const waitForWork = instance.waitForRetainedWork.bind(instance);
+  const observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
+    const pending = waitForWork(...args);
+    drainEntered.resolve();
+    return pending;
+  });
   let settled = false;
   const reloading = withPluginLifecycleLease(
     { env, waitMs: 0, signal: cancellation.signal },
@@ -52,7 +59,8 @@ export async function verifyCancelledDrainRollbackLease(
     },
   );
   try {
-    await vi.waitFor(() => expect(fixture.owner.getReloadStatus()?.reason).toBeTruthy());
+    await Promise.race([drainEntered.promise, reloading]);
+    expect(fixture.owner.getReloadStatus()?.reason).toBeTruthy();
     cancellation.abort(new Error("operator cancelled reload"));
     await rollbackStarted.promise;
     assert(reloadLease);
@@ -85,5 +93,6 @@ export async function verifyCancelledDrainRollbackLease(
     finishRollback.resolve();
     releaseWork();
     await reloading;
+    observation.mockRestore();
   }
 }

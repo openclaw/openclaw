@@ -421,6 +421,21 @@ async function verifyExplicitDrainWait(
         ? () => consumer.release()
         : () => released.resolve();
   const call = kind === "active call" ? instance.run(() => released.promise) : undefined;
+  const drainEntered = createDeferredCore();
+  const drain = instance.drain.bind(instance);
+  const waitForWork = instance.waitForRetainedWork.bind(instance);
+  const observation =
+    kind === "active call"
+      ? vi.spyOn(instance, "drain").mockImplementation((...args) => {
+          const pending = drain(...args);
+          drainEntered.resolve();
+          return pending;
+        })
+      : vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
+          const pending = waitForWork(...args);
+          drainEntered.resolve();
+          return pending;
+        });
   let settled = false;
   vi.useFakeTimers();
   const reloading = fixture
@@ -431,7 +446,8 @@ async function verifyExplicitDrainWait(
       return result;
     });
   try {
-    await vi.waitFor(() => expect(fixture.owner.getReloadStatus()?.reason).toBeTruthy());
+    await Promise.race([drainEntered.promise, reloading]);
+    expect(fixture.owner.getReloadStatus()?.reason).toBeTruthy();
     await vi.advanceTimersByTimeAsync(70_000);
     expect(settled).toBe(false);
     expect(fixture.candidates).toHaveLength(0);
@@ -465,6 +481,7 @@ async function verifyExplicitDrainWait(
     released.resolve();
     await call;
     await reloading;
+    observation.mockRestore();
     vi.useRealTimers();
   }
 }
