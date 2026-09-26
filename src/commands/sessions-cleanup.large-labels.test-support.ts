@@ -63,7 +63,12 @@ mock.module(new URL(`../config/sessions.${extension}`, import.meta.url), {
   },
 });
 mock.module(new URL(`../gateway/call.${extension}`, import.meta.url), {
-  namedExports: { callGateway: unexpected, isGatewayTransportError: () => false },
+  namedExports: {
+    buildGatewayConnectionDetails: unexpected,
+    callGateway: unexpected,
+    isGatewayTransportError: () => false,
+    isImplicitLocalGatewayTarget: unexpected,
+  },
 });
 mock.module(new URL(`../config/sessions/session-sqlite-target.${extension}`, import.meta.url), {
   namedExports: { resolveSqliteTargetFromSessionStorePath: () => ({ path: storePath }) },

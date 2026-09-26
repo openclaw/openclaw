@@ -15,7 +15,12 @@ import {
 } from "../config/sessions.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway, isGatewayTransportError } from "../gateway/call.js";
+import {
+  buildGatewayConnectionDetails,
+  callGateway,
+  isGatewayTransportError,
+  isImplicitLocalGatewayTarget,
+} from "../gateway/call.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
@@ -225,14 +230,19 @@ function renderAppliedSummaries(params: {
 
 async function maybeRunGatewayCleanup(
   opts: SessionsCleanupOptions,
+  cfg: OpenClawConfig,
 ): Promise<{ delegated: true; result: SessionsCleanupResult } | { delegated: false }> {
   if (opts.store !== undefined || opts.dryRun) {
     // Explicit store paths and dry-runs stay local; sessions.cleanup takes no store param.
     // A blank --store is explicit too: delegating it would clean the default store.
     return { delegated: false };
   }
+  const { url } = buildGatewayConnectionDetails({ config: cfg });
+  const localTarget = await isImplicitLocalGatewayTarget({ config: cfg });
   try {
     const result = await callGateway<SessionsCleanupResult>({
+      config: cfg,
+      expectUrl: url,
       method: "sessions.cleanup",
       params: {
         agent: opts.agent,
@@ -248,9 +258,14 @@ async function maybeRunGatewayCleanup(
     });
     return { delegated: true, result };
   } catch (error) {
-    if (isGatewayTransportError(error) && error.kind === "closed" && error.code === undefined) {
-      // Only a pre-connect failure proves the Gateway never received this
-      // mutation; timeouts and established closes must not replay it locally.
+    if (
+      localTarget &&
+      isGatewayTransportError(error) &&
+      error.kind === "closed" &&
+      error.code === undefined
+    ) {
+      // Only a pre-connect failure to this local backend permits offline cleanup.
+      // Remote targets can use loopback SSH tunnels; never redirect their writes.
       return { delegated: false };
     }
     if (isRecord(error) && isSessionsCleanupPartialResult(error.details)) {
@@ -262,7 +277,8 @@ async function maybeRunGatewayCleanup(
 
 /** Runs session cleanup, optionally using the live gateway for active stores. */
 export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runtime: RuntimeEnv) {
-  const gatewayCleanup = await maybeRunGatewayCleanup(opts);
+  const cfg = getRuntimeConfig();
+  const gatewayCleanup = await maybeRunGatewayCleanup(opts, cfg);
   if (gatewayCleanup.delegated) {
     // The Gateway owns this path. Preserve its syntax because resolving a remote
     // Windows path on a POSIX client (or vice versa) would fabricate a local path.
@@ -288,7 +304,6 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
     return;
   }
 
-  const cfg = getRuntimeConfig();
   const targets = resolveCommandSessionStoreTargets({ cfg, opts });
   const cleanupParams = { cfg, opts, targets };
   let cleanupResult;
