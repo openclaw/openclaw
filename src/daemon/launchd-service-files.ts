@@ -59,6 +59,127 @@ export function resolveLaunchAgentEnvWrapperPath(env: GatewayServiceEnv, label: 
   return path.join(resolveLaunchAgentEnvDir(env), `${label}-env-wrapper.sh`);
 }
 
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+// Matches one generated `export KEY='value'` line. The generated file is
+// line-oriented, so unknown lines pass through byte-for-byte.
+const GENERATED_ENV_EXPORT_LINE = /^export ([A-Za-z_][A-Za-z0-9_]*)='(.*)'$/;
+
+function decodeShellSingleQuoted(value: string): string {
+  return value.replaceAll("'\\''", "'");
+}
+
+// A value whose bytes begin and end with a literal double quote — the shape
+// #103804 corruption left inside the shell quotes (export AWS_REGION='"x"').
+function hasWrappingJsonQuotePair(value: string): boolean {
+  return value.length >= 2 && value.startsWith('"') && value.endsWith('"');
+}
+
+function scanGeneratedEnvFileJsonQuotes(content: string): {
+  healedContent: string;
+  keys: string[];
+} {
+  const keys: string[] = [];
+  const healedLines = content.split("\n").map((line) => {
+    const match = GENERATED_ENV_EXPORT_LINE.exec(line);
+    if (!match) {
+      return line;
+    }
+    const [, key, rawValue] = match;
+    if (!key || rawValue === undefined) {
+      return line;
+    }
+    const value = decodeShellSingleQuoted(rawValue);
+    if (!hasWrappingJsonQuotePair(value)) {
+      return line;
+    }
+    keys.push(key);
+    return `export ${key}=${shellSingleQuote(value.slice(1, -1))}`;
+  });
+  return { healedContent: healedLines.join("\n"), keys };
+}
+
+async function readLaunchAgentEnvFileContent(
+  env: GatewayServiceEnv,
+  label: string,
+): Promise<{ envFilePath: string; content: string } | null> {
+  const envFilePath = resolveLaunchAgentEnvFilePath(env, label);
+  try {
+    return { envFilePath, content: await fs.readFile(envFilePath, "utf8") };
+  } catch {
+    return null;
+  }
+}
+
+/** Reports keys in a generated env file still carrying #103804 quote corruption. */
+export async function detectLaunchAgentEnvFileJsonQuoteKeys(
+  env: GatewayServiceEnv,
+  label: string,
+): Promise<{ envFilePath: string; keys: string[] } | null> {
+  const file = await readLaunchAgentEnvFileContent(env, label);
+  if (!file) {
+    return null;
+  }
+  const { keys } = scanGeneratedEnvFileJsonQuotes(file.content);
+  return keys.length > 0 ? { envFilePath: file.envFilePath, keys } : null;
+}
+
+/**
+ * One-time doctor repair for #103804: rewrites generated env file entries
+ * whose values carry a wrapping JSON quote pair inside the shell quotes.
+ * Detection is shape-based on purpose so legacy files written before the
+ * managed-keys metadata existed heal too; callers gate the rewrite on the
+ * doctor repair prompt, and the runtime reader stays lossless.
+ */
+export async function repairLaunchAgentEnvFileJsonQuotes(
+  env: GatewayServiceEnv,
+  label: string,
+): Promise<{ envFilePath: string; healedKeys: string[] } | null> {
+  const file = await readLaunchAgentEnvFileContent(env, label);
+  if (!file) {
+    return null;
+  }
+  const { healedContent, keys } = scanGeneratedEnvFileJsonQuotes(file.content);
+  if (keys.length === 0) {
+    return null;
+  }
+  // This file carries live service credentials: keep a recovery copy and
+  // publish atomically so an interrupted write can never leave the next
+  // service start without its complete environment (temp + rename, matching
+  // the plist publication above). The recovery copy survives on failure.
+  const recoveryPath = `${file.envFilePath}.openclaw-repair-backup`;
+  try {
+    await fs.writeFile(recoveryPath, file.content, {
+      encoding: "utf8",
+      mode: LAUNCH_AGENT_ENV_FILE_MODE,
+    });
+  } catch (error) {
+    throw new Error(
+      `service env repair aborted before any change (recovery copy failed): ${String(error)}`,
+      { cause: error },
+    );
+  }
+  const temporaryPath = `${file.envFilePath}.openclaw-${randomUUID()}.tmp`;
+  try {
+    await fs.writeFile(temporaryPath, healedContent, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: LAUNCH_AGENT_ENV_FILE_MODE,
+    });
+    await fs.rename(temporaryPath, file.envFilePath);
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true }).catch(() => {});
+    throw new Error(
+      `service env repair failed before publishing; original preserved at ${recoveryPath}: ${String(error)}`,
+      { cause: error },
+    );
+  }
+  await fs.rm(recoveryPath, { force: true }).catch(() => {});
+  return { envFilePath: file.envFilePath, healedKeys: keys };
+}
+
 function collectLaunchAgentEnvironmentEntries(
   environment: GatewayServiceEnv | undefined,
 ): Array<[string, string]> {
