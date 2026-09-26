@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "./string-coerce.js";
+import { normalizeOptionalString } from "./string-coerce.ts";
 
 /** Returns a number only when the input is already finite. */
 export function asFiniteNumber(value: unknown): number | undefined {
