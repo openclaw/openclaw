@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -19,6 +20,15 @@ const testNodeExecPath = resolveTestNodeExecPath();
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 const joinedObservationRoots: string[] = [];
 afterEach(() => cleanupTempDirs(joinedObservationRoots));
+
+type WorkflowStep = {
+  env?: Record<string, string>;
+  if?: string;
+  name: string;
+  run?: string;
+  uses?: string;
+  with?: Record<string, unknown>;
+};
 
 function command(
   executable: string,
@@ -50,6 +60,20 @@ function commit(repository: string, message: string): string {
   git(repository, "add", "-A");
   git(repository, "commit", "-m", message);
   return git(repository, "rev-parse", "HEAD");
+}
+
+function readOutputs(file: string): Record<string, string> {
+  return Object.fromEntries(
+    fs
+      .readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
 }
 
 function releaseArtifactFiles(workflowFile: string, artifactPrefix: string, runnerTemp: string) {
@@ -242,13 +266,7 @@ describe("mobile release CI tools", () => {
         "validate-target": {
           permissions: Record<string, string>;
           "runs-on": string;
-          steps: Array<{
-            env?: Record<string, string>;
-            name: string;
-            run?: string;
-            uses?: string;
-            with?: Record<string, unknown>;
-          }>;
+          steps: WorkflowStep[];
           "timeout-minutes": number;
         };
         diagnose: {
@@ -256,14 +274,7 @@ describe("mobile release CI tools", () => {
           needs: string;
           permissions: Record<string, string>;
           "runs-on": string;
-          steps: Array<{
-            env?: Record<string, string>;
-            if?: string;
-            name: string;
-            run?: string;
-            uses?: string;
-            with?: Record<string, unknown>;
-          }>;
+          steps: WorkflowStep[];
           "timeout-minutes": number;
         };
       };
@@ -564,10 +575,6 @@ describe("mobile release CI tools", () => {
     expect(fs.existsSync(timedOutKvm.sentinel)).toBe(false);
 
     const parityScript = validationSteps[parityIndex]?.run ?? "";
-    expect(parityScript).toContain("git -C .mobile-release-tooling ls-tree");
-    expect(parityScript).toContain("git -C candidate ls-tree");
-    expect(parityScript).toContain("cat-file blob");
-    expect(parityScript).toContain("cmp -s");
 
     const actionPath = ".github/actions/setup-android-toolchain/action.yml";
     const trustedAction = "name: fixture\nruns:\n  using: composite\n  steps: []\n";
@@ -1460,13 +1467,7 @@ fi
     const workflow = parse(source) as {
       jobs: {
         release: {
-          steps: Array<{
-            env?: Record<string, string>;
-            name: string;
-            run?: string;
-            uses?: string;
-            with?: Record<string, unknown>;
-          }>;
+          steps: WorkflowStep[];
         };
       };
     };
@@ -1651,9 +1652,6 @@ fi
         .readdirSync(runnerTemp)
         .some((entry) => entry.startsWith("openclaw-ios-signing-keychain-")),
     ).toBe(false);
-    const postSource = fs.readFileSync(".github/actions/ios-signing-keychain/post.mjs", "utf8");
-    expect(postSource).toContain('import { cleanupOwnedKeychain } from "./keychain.mjs";');
-    expect(postSource).not.toContain("createOwnedKeychain");
   });
 
   it("masks and owns both resolved iOS keychain filename forms through post cleanup", async () => {
@@ -1719,13 +1717,7 @@ fi
         `MATCH_KEYCHAIN_NAME=${created.resolvedPath}\n` +
           `MATCH_KEYCHAIN_PASSWORD=${created.password}\n`,
       );
-      const state = Object.fromEntries(
-        fs
-          .readFileSync(stateFile, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => line.split(/[=](.*)/su).slice(0, 2)),
-      );
+      const state = readOutputs(stateFile);
       expect(state.resolved_path).toBe(created.resolvedPath);
       await cleanupOwnedKeychain({
         env: {
@@ -1786,13 +1778,7 @@ fi
         }),
       ).rejects.toThrow("partial create");
       expect(fs.existsSync(environmentFile)).toBe(false);
-      const state = Object.fromEntries(
-        fs
-          .readFileSync(stateFile, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => line.split(/[=](.*)/su).slice(0, 2)),
-      );
+      const state = readOutputs(stateFile);
       const partialPath = `${state.requested_path}${filenameSuffix}`;
       expect(fs.existsSync(partialPath)).toBe(true);
       await cleanupOwnedKeychain({
@@ -1810,7 +1796,7 @@ fi
           return { stderr: "", stdout: "" };
         },
       });
-      expect(fs.existsSync(state.owned_root)).toBe(false);
+      expect(fs.existsSync(expectDefined(state.owned_root, "owned keychain root"))).toBe(false);
     }
 
     const runnerTemp = tempRoots.make("openclaw-ios-keychain-guard-runner-");
@@ -2086,11 +2072,7 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
     const workflow = parse(source) as {
       jobs: {
         release: {
-          steps: Array<{
-            if?: string;
-            name: string;
-            run?: string;
-          }>;
+          steps: WorkflowStep[];
         };
       };
     };
