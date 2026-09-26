@@ -473,9 +473,7 @@ describe("stuck session diagnostics threshold", () => {
       logSessionStateChange({ sessionId, sessionKey, state: "processing" });
       vi.advanceTimersByTime(61_000);
 
-      expectLoggerMessageContaining(warnSpy, `sessionKey=${sessionKey}`);
-      expectNoLoggerMessageContaining(warnSpy, privateReply);
-      expectNoLoggerMessageContaining(warnSpy, "lastAssistant=");
+      expect(warnSpy).not.toHaveBeenCalled();
     } finally {
       await openClawState.cleanup();
     }
