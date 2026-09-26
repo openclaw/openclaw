@@ -68,6 +68,7 @@ import {
   resolveParallelsProviderAuth,
   runParallelsPrerequisiteEval,
 } from "../../scripts/e2e/parallels/provider-auth-prerequisite.mjs";
+import { assertDevChannelUpdate } from "../../scripts/e2e/parallels/smoke-common.ts";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
 import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
 import {
@@ -2595,6 +2596,106 @@ if (commandArgs[0] === "list") {
     expect(transports).toContain("launch retry");
   });
 
+  it.each([
+    {
+      name: "unpinned main",
+      status: '"installKind": "git", "value": "dev", "branch": "main"',
+      target: undefined,
+      head: "",
+      reads: 0,
+    },
+    {
+      name: "empty target",
+      status: '"installKind": "git", "value": "dev", "branch": "main"',
+      target: "",
+      head: "",
+      reads: 0,
+    },
+    {
+      name: "pinned HEAD with banner and CRLF",
+      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+      target: "a".repeat(40),
+      head: `checkout banner\r\n${"a".repeat(40)}\r\n`,
+      reads: 1,
+    },
+    {
+      name: "missing install kind before all other checks",
+      status: "",
+      target: "a".repeat(40),
+      head: "",
+      reads: 0,
+      error: 'dev update status missing "installKind": "git"',
+    },
+    {
+      name: "missing dev channel before branch and checkout",
+      status: '"installKind": "git"',
+      target: "a".repeat(40),
+      head: "",
+      reads: 0,
+      error: 'dev update status missing "value": "dev"',
+    },
+    {
+      name: "missing pinned branch before checkout",
+      status: '"installKind": "git", "value": "dev"',
+      target: "a".repeat(40),
+      head: "",
+      reads: 0,
+      error: 'dev update status missing "branch": "HEAD"',
+    },
+    {
+      name: "wrong unpinned branch",
+      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+      target: undefined,
+      head: "",
+      reads: 0,
+      error: 'dev update status missing "branch": "main"',
+    },
+    {
+      name: "empty pinned checkout",
+      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+      target: "a".repeat(40),
+      head: "\r\n",
+      reads: 1,
+      error: `dev update checkout head <empty> did not match ${"a".repeat(40)}`,
+    },
+    {
+      name: "mismatching pinned checkout",
+      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+      target: "a".repeat(40),
+      head: "b".repeat(40),
+      reads: 1,
+      error: `dev update checkout head ${"b".repeat(40)} did not match ${"a".repeat(40)}`,
+    },
+  ])("validates dev updates: $name", ({ status, target, head, reads, error }) => {
+    const readCheckoutHead = vi.fn(() => head);
+    const verify = () => assertDevChannelUpdate(status, target, readCheckoutHead);
+    if (error) {
+      expect(verify).toThrow(new Error(error));
+    } else {
+      expect(verify).not.toThrow();
+    }
+    expect(readCheckoutHead).toHaveBeenCalledTimes(reads);
+  });
+
+  it("preserves a dev checkout reader failure by identity", () => {
+    const failure = new Error("checkout command failed");
+    const readCheckoutHead = vi.fn(() => {
+      throw failure;
+    });
+    let caught: unknown;
+    try {
+      assertDevChannelUpdate(
+        '"installKind": "git", "value": "dev", "branch": "HEAD"',
+        "a".repeat(40),
+        readCheckoutHead,
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(readCheckoutHead).toHaveBeenCalledOnce();
+  });
+
   it("preserves bundled plugin inventory during dev updates", () => {
     const devUpdateLines = [macos, windows].map((script) =>
       script.split("\n").find((line) => line.includes("update --channel dev")),
@@ -2613,9 +2714,10 @@ if (commandArgs[0] === "list") {
     for (const script of [macos, windows]) {
       expect(script).toContain('readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF")');
       expect(script).toContain("OPENCLAW_UPDATE_DEV_TARGET_REF");
-      expect(script).toContain('const expectedBranch = this.devTargetCommit ? "HEAD" : "main"');
-      expect(script).toContain("dev update checkout head");
+      expect(script).toContain("assertDevChannelUpdate(status, this.devTargetCommit, () =>");
     }
+    expect(smokeCommon).toContain('const expectedBranch = targetCommit ? "HEAD" : "main"');
+    expect(smokeCommon).toContain("dev update checkout head");
     expect(macos).toContain("OPENCLAW_UPDATE_DEV_TARGET_REF=${shellQuote(this.devTargetCommit)}");
     expect(windows).toContain(
       "OPENCLAW_UPDATE_DEV_TARGET_REF = ${psSingleQuote(this.devTargetCommit)}",

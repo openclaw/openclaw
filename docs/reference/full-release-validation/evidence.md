@@ -1,6 +1,6 @@
 ---
 doc-schema-version: 1
-summary: "Which Full Release Validation evidence to retain, advisory lane handling, and the backing workflow files"
+summary: "Which Full Release Validation evidence to retain, blocking lane outcomes, and the backing workflow files"
 title: "Evidence to keep"
 read_when:
   - Recording release evidence after a validation pass
@@ -15,11 +15,10 @@ confirmed product failure changes the Code SHA. Use one diagnosis, one fix when
 needed, and one narrow retry, then reassess; do not automatically rerun `all`.
 Narrow evidence is not publish authorization by itself.
 
-Read any **advisory** entries in `release-ci-summary` alongside Release Decision.
-Only an explicit operator lane waiver can keep eligible failed jobs advisory;
-the manifest retains their actual conclusions and waiver reason. Keep those
-diagnostic artifacts for follow-up, and never report waived jobs as passed.
-Selected failures otherwise block validation across all platforms and profiles.
+Linux, Windows, and macOS Gateway cross-OS install and upgrade lanes are
+required for beta, stable, and full validation. The manifest records their
+actual conclusions, and failures block the release decision. Keep diagnostic
+artifacts; never report a failed, omitted, or deferred lane as passed.
 
 For a regular release, record Code SHA and Release SHA even when they are the
 same commit. In that case, retain the successful full validation parent and

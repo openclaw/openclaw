@@ -104,8 +104,12 @@ describe.each(["borrowed", "captured"] as const)(
         };
         const { db, worker } = await setup({ preparation });
         let current = true;
+        const admitted = createDeferredCore();
         const work = worker.run(
-          (scope) => scope.execute({ type: "append", input: { value: "prepared" } }),
+          (scope) => {
+            admitted.resolve();
+            return scope.execute({ type: "append", input: { value: "prepared" } });
+          },
           () => {
             if (!current) {
               throw new Error("fixture authority revoked during preparation");
@@ -114,6 +118,7 @@ describe.each(["borrowed", "captured"] as const)(
         );
         void work.catch(() => undefined);
         try {
+          await Promise.race([admitted.promise, work]);
           await waitForMarker(preparation.codeMarker, work);
           expect(fs.existsSync(preparation.commandMarker)).toBe(false);
           expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([]);
@@ -266,14 +271,14 @@ describe.each(["borrowed", "captured"] as const)(
         let refused = 0;
         const interception = vi
           .spyOn(admission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit) =>
+          .mockImplementation((admit, attachment) =>
             create((request, grant) => {
               if (request.stage === "open") {
                 refused++;
                 throw new Error("controlled opening revocation");
               }
               admit(request, grant);
-            }),
+            }, attachment),
           );
         options = { ...options, path: path.join(root, "refused.sqlite") };
         const openMarker = path.join(root, "factory-entered");
@@ -311,7 +316,7 @@ describe.each(["borrowed", "captured"] as const)(
         let refusals = 0;
         const interception = vi
           .spyOn(admission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit) =>
+          .mockImplementation((admit, attachment) =>
             create((request, grant) => {
               if (refuseCleanup && request.stage === "prepare") {
                 refuseCleanup = false;
@@ -319,7 +324,7 @@ describe.each(["borrowed", "captured"] as const)(
                 throw new Error("controlled publication cleanup admission refusal");
               }
               admit(request, grant);
-            }),
+            }, attachment),
           );
         const first = worker.run(
           async (scope) => {

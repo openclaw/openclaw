@@ -9,6 +9,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import * as userProfileCatalog from "../state/user-profile-list.js";
 import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayDeviceRevocation } from "./device-revocation.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
@@ -95,6 +96,7 @@ describe("createGatewayRequestContext", () => {
       }
       const chatRunState = createChatRunState();
       const subscriptions = startGatewayEventSubscriptions({
+        scheduler: createTestGatewayScheduler(),
         ...broadcaster,
         signal: new AbortController().signal,
         log: params.log,

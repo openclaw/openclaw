@@ -73,8 +73,8 @@ export type CodexApprovalPolicy =
       };
     }
   | "never";
-type CodexApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
-type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+export type CodexApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
+export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 type CodexPersonality = "none" | "friendly" | "pragmatic";
 
 export type CodexAppServerRequestMethod = keyof CodexAppServerRequestResultMap | (string & {});
@@ -692,7 +692,9 @@ type CodexAppServerRequestParamsOverride = {
 };
 
 type CodexAppServerRequestResultMap = {
-  "thread/backgroundTerminals/list": { data: { itemId: string; processId: string }[] };
+  "thread/backgroundTerminals/list": {
+    data: { itemId: string; processId: string; command: string; cwd: string }[];
+  };
   "thread/backgroundTerminals/terminate": { terminated: boolean };
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;

@@ -6,6 +6,7 @@ import { getRuntimeConfig } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -24,7 +25,10 @@ import {
   type SessionStoreEntry,
   type GatewayRequest,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
-import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
+import {
+  createLifecycleAgentCallWaits,
+  createLifecycleWaits,
+} from "./subagent-registry.lifecycle-waits.test-support.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 
 const noop = () => {};
@@ -34,6 +38,7 @@ let lifecycleHandler: Parameters<typeof onAgentEvent>[0] | undefined;
 let agentCallPlan: Array<"ok" | "throw"> = [];
 let agentCallGates = new Map<string, Promise<void>>();
 let releaseAgentCallGate: (() => void) | undefined;
+let agentCallWaits: ReturnType<typeof createLifecycleAgentCallWaits>;
 let chatHistoryBySessionKey = new Map<string, Array<Record<string, unknown>>>();
 let transcriptEventsBySessionKey = new Map<string, unknown[]>();
 let sessionStore: Record<string, SessionStoreEntry> = {};
@@ -52,6 +57,7 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
     };
   }
   if (method === "agent") {
+    agentCallWaits.notifyAgentCall();
     const sourceSessionKey = request.params?.inputProvenance?.sourceSessionKey;
     const gate = sourceSessionKey ? agentCallGates.get(sourceSessionKey) : undefined;
     if (gate) {
@@ -170,6 +176,10 @@ describe("subagent registry lifecycle error grace", () => {
       sessionStore[MAIN_REQUESTER_SESSION_KEY]!,
     );
     vi.useFakeTimers();
+    agentCallWaits = createLifecycleAgentCallWaits(
+      MAIN_REQUESTER_SESSION_KEY,
+      () => getAgentCalls().length,
+    );
     subagentAnnounceTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig: loadConfigMock,
@@ -189,7 +199,7 @@ describe("subagent registry lifecycle error grace", () => {
     subagentAnnounceOutputTesting.setDepsForTest({
       findTranscriptEvent: async ({ sessionKey }, match) => {
         const events = sessionKey ? transcriptEventsBySessionKey.get(sessionKey) : undefined;
-        const event = events?.findLast(match);
+        const event = events?.findLast((candidate) => matchesTranscriptEvent(candidate, match));
         return event === undefined ? undefined : { event };
       },
       findSessionTranscriptArchiveEventReadOnly: async () => undefined,
@@ -207,19 +217,26 @@ describe("subagent registry lifecycle error grace", () => {
     // Failed assertions must also release the delivery owned by this test.
     releaseAgentCallGate?.();
     releaseAgentCallGate = undefined;
-    await vi.advanceTimersByTimeAsync(0);
-    lifecycleHandler = undefined;
-    subagentAnnounceDeliveryTesting.setDepsForTest();
-    subagentAnnounceOutputTesting.setDepsForTest();
-    subagentAnnounceTesting.setDepsForTest();
-    mod.resetSubagentRegistryForTests({ persist: false });
-    vi.useRealTimers();
-    if (previousFastTestEnv === undefined) {
-      delete process.env.OPENCLAW_TEST_FAST;
-    } else {
-      process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+    try {
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        await agentCallWaits.settle();
+      }
+    } finally {
+      lifecycleHandler = undefined;
+      subagentAnnounceDeliveryTesting.setDepsForTest();
+      subagentAnnounceOutputTesting.setDepsForTest();
+      subagentAnnounceTesting.setDepsForTest();
+      mod.resetSubagentRegistryForTests({ persist: false });
+      vi.useRealTimers();
+      if (previousFastTestEnv === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+      }
+      await testState.cleanup();
     }
-    await testState.cleanup();
   });
 
   const {
@@ -230,24 +247,7 @@ describe("subagent registry lifecycle error grace", () => {
     waitForFrozenResultText,
   } = createLifecycleWaits(MAIN_REQUESTER_SESSION_KEY);
 
-  const waitForAgentCallCount = async (expectedCount: number) => {
-    for (let attempt = 0; attempt < 80; attempt += 1) {
-      if (getAgentCalls().length >= expectedCount) {
-        return;
-      }
-      await vi.advanceTimersByTimeAsync(100);
-      await flushAsync();
-    }
-    const pending = mod.listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY).map((run) => ({
-      runId: run.runId,
-      execution: run.execution,
-      delivery: run.delivery,
-      requesterSettleWake: run.requesterSettleWake,
-    }));
-    throw new Error(
-      `expected ${expectedCount} agent call(s), got ${getAgentCalls().length}: ${JSON.stringify(pending)}`,
-    );
-  };
+  const waitForAgentCallCount = (count: number) => agentCallWaits.waitForAgentCallCount(count);
 
   function registerCompletionRun(
     runId: string,
@@ -747,7 +747,6 @@ describe("subagent registry lifecycle error grace", () => {
       { sessionKey: "agent:main:subagent:freeze" },
     );
     const refreshed = await waitForFrozenResultText("run-freeze", "Late reply Y");
-    expect(refreshed.completion?.resultText).toBe("Late reply Y");
     expect(refreshed.completion?.capturedAt).toBeGreaterThanOrEqual(firstCapturedAt ?? 0);
     expect(refreshed.completion?.terminalReply).toEqual({
       disposition: "visible",

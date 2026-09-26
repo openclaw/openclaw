@@ -386,7 +386,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
     await withOAuthLoginAbort(
       ctx.prompter.note(
         [
-          "Authorize eligible Responses API calls using your ChatGPT allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.",
+          "Authorize eligible Responses API calls using your Codex allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.",
           ...(registering
             ? []
             : [
@@ -462,7 +462,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
       ...(sharing ? {} : { configPatch: {} }),
       notes: [
         sharing
-          ? "ChatGPT token sharing is connected. Eligible Responses requests use your ChatGPT allowance."
+          ? "ChatGPT token sharing is connected. Eligible Responses requests use your Codex allowance."
           : "ChatGPT sign-in succeeded, but token sharing is disabled. Sign in again and enable sharing, or explicitly choose another inference credential.",
       ],
     });

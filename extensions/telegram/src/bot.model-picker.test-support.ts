@@ -31,7 +31,7 @@ export function registerTelegramModelPickerCases({
     },
   ) => OpenClawConfig;
   loadConfig: ReturnType<Harness["getLoadConfigMock"]>;
-  createTelegramBot: (options: TelegramBotOptions) => unknown;
+  createTelegramBot: (options: TelegramBotOptions) => Promise<unknown>;
   getTelegramCallbackHandlerForTests: () => (context: Record<string, unknown>) => Promise<void>;
   getTelegramTestState: () => OpenClawTestState;
   readOnlySessionEntry: (
@@ -63,7 +63,7 @@ export function registerTelegramModelPickerCases({
     });
 
     loadConfig.mockReturnValue(config);
-    createTelegramBot({
+    await createTelegramBot({
       token: "tok",
       config,
     });
@@ -138,7 +138,7 @@ export function registerTelegramModelPickerCases({
       authStore: { version: 1, profiles: {} },
     });
     loadConfig.mockReturnValue(config);
-    createTelegramBot({ token: "tok", config });
+    await createTelegramBot({ token: "tok", config });
     await getTelegramCallbackHandlerForTests()(
       createTelegramCallbackContext({
         id: "native-model-only",

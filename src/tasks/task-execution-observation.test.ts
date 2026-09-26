@@ -10,10 +10,17 @@ import { resetProcessRegistryForTests } from "../agents/bash-process-registry.te
 import * as nativeExecution from "../agents/subagents/registry/subagent-execution-observation.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
-import { claimAgentRunContext, resetAgentRunRegistryForTest } from "../infra/agent-run-registry.js";
+import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
+import {
+  claimAgentRunContext,
+  getAgentRunLifecycleGeneration,
+  releaseAgentRunContext,
+  resetAgentRunRegistryForTest,
+} from "../infra/agent-run-registry.js";
 import { createSubagentTaskBackingDetail } from "./task-backing-records.js";
 import { getTaskExecutionObservation } from "./task-execution-observation.js";
-import { clearTaskActivity, recordTaskActivityEvent } from "./task-registry-activity.js";
+import { recordTaskActivityEvent } from "./task-registry-activity.js";
+import { clearTaskActivity } from "./task-registry-state.js";
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 
 const taskIds = new Set<string>();
@@ -91,6 +98,39 @@ it.each(["agent:main:dashboard:stored", "global"])(
     }
   },
 );
+
+it.each([false, true])("reports capacity-waiting subagents as queued (collector=%s)", (collect) => {
+  const record = task("capacity-waiting-child", "running");
+  const run = registerRun(record, { collect });
+  const claim = claimAgentRunContext(
+    run.runId,
+    { sessionKey: run.childSessionKey },
+    { trackOwner: true, ownsContext: true },
+  );
+  recordTaskActivityEvent(record, {
+    runId: run.runId,
+    seq: 1,
+    stream: "tool",
+    ts: 10,
+    data: { phase: "start", name: "previous_tool", toolCallId: "previous-tool" },
+  });
+  const releaseWait = registerAgentRunCapacityWait(run.runId, getAgentRunLifecycleGeneration());
+  try {
+    // Gateway acceptance and old activity do not establish execution while the queue owns a wait.
+    expect(getTaskExecutionObservation(record)).toEqual({ state: "queued", lastActivityAt: 10 });
+    expect(record.status).toBe("running");
+    releaseWait?.();
+    expect(getTaskExecutionObservation(record)).toEqual({
+      state: "running",
+      lastActivityAt: 10,
+      currentTool: { name: "previous_tool", startedAt: 10 },
+    });
+  } finally {
+    releaseWait?.();
+    releaseAgentRunContext(run.runId, claim);
+  }
+  expect(getTaskExecutionObservation(record)).toEqual({ state: "unknown", lastActivityAt: 10 });
+});
 
 it("projects terminal task statuses without observing retained native executions", () => {
   const statuses = ["succeeded", "failed", "timed_out", "cancelled", "lost"] as const;

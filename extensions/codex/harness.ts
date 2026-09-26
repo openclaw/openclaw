@@ -3,7 +3,9 @@
  */
 import type {
   AgentHarnessV2,
+  AgentHarnessCompactParams,
   AgentHarnessNativeCompaction,
+  AgentHarnessNativeCompactionParams,
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -19,6 +21,25 @@ import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-ty
 // `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
 // New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
+
+/** Keep the shipped callback loadable on older hosts without inventing source authority. */
+function requireCodexCompactionCapabilities<T extends AgentHarnessCompactParams>(
+  params: T & Partial<Pick<AgentHarnessCompactParams<2>, "hostCapabilities">>,
+): T & Pick<AgentHarnessCompactParams<2>, "hostCapabilities"> {
+  const capabilities = params.hostCapabilities;
+  if (
+    capabilities?.kind !== "agent-harness-host-capability" ||
+    capabilities.version !== 1 ||
+    typeof capabilities.assertActive !== "function" ||
+    typeof capabilities.retainSourceAuthority !== "function"
+  ) {
+    throw new Error(
+      "This host did not provide compaction source authority. Update OpenClaw before compacting this session.",
+    );
+  }
+  capabilities.assertActive();
+  return { ...params, hostCapabilities: capabilities };
+}
 // Same versioned slot shared-client.ts writes; a bare name would let this harness call
 // another build's disposer after an in-process plugin update.
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = codexBuildSymbol(
@@ -452,8 +473,9 @@ export function createCodexAppServerAgentHarness(
       });
     },
     compact: async (params) => {
+      const admittedParams = requireCodexCompactionCapabilities(params);
       const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
-      return maybeCompactCodexAppServerSession(params, {
+      return maybeCompactCodexAppServerSession(admittedParams, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
       });
@@ -525,12 +547,14 @@ export function createCodexAppServerNativeCompaction(
   >,
 ): AgentHarnessNativeCompaction {
   return async (params) => {
+    const admittedParams: AgentHarnessNativeCompactionParams<2> =
+      requireCodexCompactionCapabilities(params);
     const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
-    return maybeCompactCodexAppServerSession(params, {
+    return maybeCompactCodexAppServerSession(admittedParams, {
       bindingStore: options.bindingStore,
       pluginConfig: options.resolvePluginConfig?.() ?? options.pluginConfig,
       allowNonManualNativeRequest: true,
-      nativeCompactionRequest: params.nativeCompactionRequest,
+      nativeCompactionRequest: admittedParams.nativeCompactionRequest,
     });
   };
 }

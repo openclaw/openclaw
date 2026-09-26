@@ -10,6 +10,7 @@ import {
 } from "../plugins/plugin-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type * as ModelCatalog from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
@@ -163,6 +164,7 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
         modelCatalog: catalog,
         runtimeModels: new Map(),
         providerExpiries: new Map(),
+        hookRows: new Map(),
         configuredRuntimeModels: agentFacts.configuredRuntimeModels,
       };
     },
@@ -225,7 +227,9 @@ vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
   },
 }));
 
-vi.mock("./model-catalog.js", () => ({
+vi.mock("./model-catalog.js", async () => ({
+  loadManifestModelCatalog: (await vi.importActual<typeof ModelCatalog>("./model-catalog.js"))
+    .loadManifestModelCatalog,
   buildPreparedModelCatalogSnapshot: mocks.buildPreparedModelCatalogSnapshot,
 }));
 

@@ -56,7 +56,7 @@ function parseSystemdShow(output: string) {
 
 export async function isSystemdServiceEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
   const env = args.env ?? process.env;
-  const installed = await findInstalledSystemdGatewayScope(env);
+  const installed = await findInstalledSystemdGatewayScope(env, { timeoutMs: args.timeoutMs });
   if (!installed) {
     return false;
   }
@@ -82,7 +82,7 @@ export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
-  const installed = opts?.systemdReadTarget ?? (await findInstalledSystemdGatewayScope(env));
+  const installed = opts?.systemdReadTarget ?? (await findInstalledSystemdGatewayScope(env, opts));
   if (opts?.requireLoaded) {
     return await readLoadedSystemdServiceRuntime(
       env,

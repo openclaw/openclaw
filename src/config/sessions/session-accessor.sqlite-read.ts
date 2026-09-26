@@ -493,14 +493,23 @@ export function loadLatestAssistantText(
 ): LatestTranscriptAssistantText | undefined {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return readLatestAssistantTextFromDatabase(database, resolved, options);
+}
+
+/** Read through an already admitted connection without reopening its physical store. */
+export function readLatestAssistantTextFromDatabase(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  scope: Pick<ResolvedTranscriptReadScope, "agentId" | "sessionId" | "sessionKey">,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
+): LatestTranscriptAssistantText | undefined {
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
-      assertSessionTranscriptHot(database.db, resolved.sessionId);
+      assertSessionTranscriptHot(database.db, scope.sessionId);
       const db = getSessionKysely(database.db);
       const beforeEventSeq = resolveSqliteSessionTranscriptReadFence({
         database,
-        ...resolved,
+        ...scope,
       })?.beforeRawSeq;
       const rows = iterateSqliteQuerySync(
         database.db,
@@ -510,7 +519,7 @@ export function loadLatestAssistantText(
             join.onRef("ti.session_id", "=", "te.session_id").onRef("ti.seq", "=", "te.seq"),
           )
           .select(transcriptEventJsonSql(database.db, "te").as("event_json"))
-          .where("te.session_id", "=", resolved.sessionId)
+          .where("te.session_id", "=", scope.sessionId)
           .where("ti.event_type", "=", "message")
           .$if(beforeEventSeq !== undefined, (query) => query.where("ti.seq", "<", beforeEventSeq!))
           .orderBy("ti.seq", "desc"),
@@ -619,18 +628,6 @@ export async function hasSessionTranscriptMessage(
       },
       { databaseLabel: database.path, operationLabel: "session transcript presence" },
     );
-  });
-}
-
-/** Finds the newest transcript record accepted by the matcher without parsing older rows. */
-export async function findTranscriptEvent(
-  scope: SessionTranscriptReadScope,
-  match: (event: TranscriptEvent) => boolean,
-): Promise<{ event: TranscriptEvent } | undefined> {
-  return readRestoredSessionTranscript(scope, () => {
-    const resolved = resolveSqliteTranscriptReadScope(scope);
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    return findTranscriptEventInDatabase(database, resolved.sessionId, match);
   });
 }
 

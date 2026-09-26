@@ -42,6 +42,7 @@ export type TranscriptArchiveWorkerMessage = {
 };
 
 export type TranscriptArchivePublishPlan = {
+  databaseIdentity?: string;
   agentId: string;
   archiveDirectory: string;
   databasePath: string;

@@ -528,6 +528,7 @@ describe("prepareCodexAttemptConnection", () => {
           Object.freeze({
             credentialScrubEnv: Object.freeze(credentialScrubEnv),
             localIdentityEnv: Object.freeze(localIdentityEnv),
+            localToolEnv: Object.freeze({ PATH: "/fixture/tools:/fixture/system" }),
             managedLocalIdentity: true,
           }),
       });
@@ -568,9 +569,11 @@ describe("prepareCodexAttemptConnection", () => {
       expect(connection.shellEnvironment).toEqual({
         ...credentialScrubEnv,
         ...(location === "local" ? localIdentityEnv : {}),
+        ...(location === "local" ? { PATH: "/fixture/tools:/fixture/system" } : {}),
       });
       expect(connection.appServer.start.env).toMatchObject(connection.shellEnvironment!);
       if (location !== "local") {
+        expect(connection.shellEnvironment).not.toHaveProperty("PATH");
         for (const key of Object.keys(localIdentityEnv)) {
           expect(connection.appServer.start.env).not.toHaveProperty(key);
         }

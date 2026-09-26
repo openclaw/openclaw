@@ -48,6 +48,7 @@ import type {
   BrowserServerState,
   BrowserTab,
   ProfileRuntimeState,
+  ProfileContext,
 } from "./server-context.types.js";
 import { findRetainedBrowserDashboardTab, readBrowserDashboardTabs } from "./session-tab-store.js";
 import {
@@ -63,17 +64,7 @@ type TabOpsDeps = {
   runtime: ProfileRuntimeState;
 };
 
-type ProfileTabOps = {
-  listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
-  openTab: (
-    url: string,
-    opts?: {
-      label?: string;
-      signal?: AbortSignal;
-      timeoutMs?: number;
-      requireDurableOwnership?: boolean;
-    },
-  ) => Promise<BrowserOpenResult>;
+type ProfileTabOps = Pick<ProfileContext, "listTabs" | "openTab"> & {
   labelTab: (
     targetId: string,
     label: string,
@@ -205,15 +196,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       }
     }
 
-    const raw = await fetchJson<
-      Array<{
-        id?: string;
-        title?: string;
-        url?: string;
-        webSocketDebuggerUrl?: string;
-        type?: string;
-      }>
-    >(
+    const raw = await fetchJson<CdpTarget[]>(
       appendCdpPath(cdpHttpBase, "/json/list"),
       options?.timeoutMs,
       options?.signal ? { signal: options.signal } : undefined,
@@ -347,15 +330,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     return { ...tab, ownership };
   };
 
-  const openTab = async (
-    url: string,
-    opts?: {
-      label?: string;
-      signal?: AbortSignal;
-      timeoutMs?: number;
-      requireDurableOwnership?: boolean;
-    },
-  ): Promise<BrowserOpenResult> => {
+  const openTab: ProfileTabOps["openTab"] = async (url, opts) => {
     opts?.signal?.throwIfAborted();
     const normalizedLabel = opts?.label === undefined ? undefined : normalizeTabLabel(opts.label);
     const ssrfPolicyOpts = getNavigationPolicy();
@@ -539,34 +514,21 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           })
         : undefined;
       opts?.signal?.throwIfAborted();
-      if (!committedUrl) {
-        return await withTabOwnership(
-          {
-            targetId: created.id,
-            title: created.title ?? "",
-            url: resolvedUrl,
-            wsUrl,
-            ...(wsPin?.lookup ? { wsLookup: wsPin.lookup } : {}),
-            type: created.type,
-          },
-          opts,
-        );
+      if (committedUrl) {
+        await assertBrowserNavigationResultAllowed({ url: committedUrl, ...ssrfPolicyOpts });
       }
-      await assertBrowserNavigationResultAllowed({ url: committedUrl, ...ssrfPolicyOpts });
-      return adoptValidatedTab(
-        await withTabOwnership(
-          {
-            targetId: created.id,
-            title: created.title ?? "",
-            url: committedUrl,
-            wsUrl,
-            ...(wsPin?.lookup ? { wsLookup: wsPin.lookup } : {}),
-            type: created.type,
-          },
-          opts,
-        ),
-        { ...opts, label: normalizedLabel },
+      const opened = await withTabOwnership(
+        {
+          targetId: created.id,
+          title: created.title ?? "",
+          url: committedUrl || resolvedUrl,
+          wsUrl,
+          ...(wsPin?.lookup ? { wsLookup: wsPin.lookup } : {}),
+          type: created.type,
+        },
+        opts,
       );
+      return committedUrl ? adoptValidatedTab(opened, { ...opts, label: normalizedLabel }) : opened;
     } catch (openError) {
       if (closeCreatedPage) {
         await closeCreatedPage().catch(() => {});

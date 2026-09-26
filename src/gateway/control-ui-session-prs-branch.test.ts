@@ -163,7 +163,7 @@ describe("session branch diff stats", () => {
   });
 
   it.each(["loose", "packed", "detached", "linked"])(
-    "reads %s HEAD metadata without subprocesses and preserves checkout context",
+    "reads %s HEAD and remote refs without probes and preserves checkout context",
     async (layout) => {
       await initializeRepo();
       await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
@@ -204,9 +204,42 @@ describe("session branch diff stats", () => {
           { refresh: true },
         );
         expect(reads.mock.calls.filter(([, args]) => args[0] === "rev-parse")).toHaveLength(0);
+        expect(reads.mock.calls.filter(([, args]) => args[0] === "for-each-ref")).toHaveLength(0);
       } finally {
         reads.mockRestore();
       }
+    },
+  );
+
+  it.each(["loose", "packed", "symbolic", ...(process.platform === "win32" ? [] : ["symlink"])])(
+    "refreshes branch stats after %s remote refs advance and disappear",
+    async (layout) => {
+      await initializeFeatureWork({ trackFeature: true });
+      if (layout === "packed") {
+        await git("pack-refs", "--all", "--prune");
+      } else if (layout === "symbolic") {
+        await git("symbolic-ref", "refs/remotes/origin/main", "refs/heads/main");
+      } else if (layout === "symlink") {
+        const ref = path.join(root, ".git", "refs", "remotes", "origin", "main");
+        await fs.unlink(ref);
+        await fs.symlink("../../heads/main", ref);
+      }
+      const read = () =>
+        runGitReadOperation(
+          {
+            type: "pull-request.branch-facts",
+            input: { root, branch: "feature", defaultBranch: "main", mergedHeads: [] },
+          },
+          { refresh: true },
+        );
+      await expect(read()).resolves.toEqual({
+        creatable: true,
+        stats: { additions: 1, deletions: 0, changedFiles: 1 },
+      });
+      await trackRemote("main");
+      await expect(read()).resolves.toBeUndefined();
+      await git("update-ref", "-d", "refs/remotes/origin/main");
+      await expect(read()).resolves.toEqual({ creatable: true, stats: null });
     },
   );
 
@@ -563,18 +596,23 @@ describe("session branch diff stats", () => {
     });
   });
 
-  it("skips non-regular and binary untracked files without blocking", async () => {
+  it("counts only bounded regular untracked text, including hardlinks", async () => {
     await initializeFeatureWork({ trackFeature: true });
     await writeFile("text.txt", "alpha\nbeta\n");
     await writeFile("blob.bin", Buffer.from([0x50, 0x00, 0x4b, 0x03]));
+    await writeFile("empty.txt", "");
+    await writeFile("oversized.txt", "not counted\n");
+    await fs.truncate(path.join(root, "oversized.txt"), 512 * 1024 + 1);
+    await fs.link(path.join(root, "text.txt"), path.join(root, "hardlink.txt"));
     if (process.platform !== "win32") {
       // A named pipe must not block the stats path until the git timeout.
       await execFileAsync("mkfifo", [path.join(root, "pipe")]);
+      await fs.symlink("text.txt", path.join(root, "symlink.txt"));
     }
 
     const result = await loadBranchState();
-    // 1 committed line + 2 untracked text lines; binary and pipe count 0.
-    expect(result.branch).toMatchObject({ additions: 3, deletions: 0 });
+    // One committed line and two two-line regular files; hardlinks are allowed for counts.
+    expect(result.branch).toMatchObject({ additions: 5, deletions: 0 });
   });
 
   it.each(["none", "uncommitted", "unpushed"])(

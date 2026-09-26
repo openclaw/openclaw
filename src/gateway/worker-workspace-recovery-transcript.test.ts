@@ -228,7 +228,7 @@ describe("worker workspace recovery transcript reporting", () => {
       }
       harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
       harness.markEnvironmentNodeDeviceId("workspace-recovery-worker-node");
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...REQUEST,
         claimId: "workspace-recovery-claim",
         runId: "workspace-recovery-run",

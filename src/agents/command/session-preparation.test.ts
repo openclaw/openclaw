@@ -73,7 +73,6 @@ it.each([
         sessionAgentId: "main",
         lifecycleGeneration,
         runId,
-        workspaceDir: "/workspace",
         executionWorkspaceDir: "/workspace",
         watchSkills: false,
         isNewSession: false,

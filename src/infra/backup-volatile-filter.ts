@@ -122,21 +122,15 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
         return true;
       }
 
-      const sandboxSkillsRoot = path.posix.join(stateDirPosix, "sandbox", "skills-workspaces");
-      if (isUnder(filePosix, sandboxSkillsRoot)) {
-        return true;
-      }
-
-      // Rebuildable, manifest-verified bundles bridge already-open Control UI
-      // documents across updates; restoring them would only copy stale package bytes.
-      const controlUiAssetCacheRoot = path.posix.join(stateDirPosix, "cache", "control-ui-assets");
-      if (isUnder(filePosix, controlUiAssetCacheRoot)) {
-        return true;
-      }
-
-      const pluginCaptureRoot = path.posix.join(stateDirPosix, "tmp", "plugin-captures");
-      if (isUnder(filePosix, pluginCaptureRoot)) {
-        return true;
+      for (const parts of [
+        ["sandbox", "skills-workspaces"],
+        // Rebuildable bundles bridge open Control UI documents across updates.
+        ["cache", "control-ui-assets"],
+        ["tmp", "plugin-captures"],
+      ]) {
+        if (isUnder(filePosix, path.posix.join(stateDirPosix, ...parts))) {
+          return true;
+        }
       }
 
       const sessionsRoot = path.posix.join(stateDirPosix, "sessions");

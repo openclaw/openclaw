@@ -575,6 +575,23 @@ async function consumeChatStream(
     }
   };
 
+  const appendTextDelta = (text: string) => {
+    const textDelta = sanitizeSurrogates(text);
+    if (!currentBlock || currentBlock.type !== "text") {
+      finishCurrentBlock(currentBlock);
+      currentBlock = { type: "text", text: "" };
+      output.content.push(currentBlock);
+      stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+    }
+    currentBlock.text += textDelta;
+    stream.push({
+      type: "text_delta",
+      contentIndex: blockIndex(),
+      delta: textDelta,
+      partial: output,
+    });
+  };
+
   for await (const event of mistralStream) {
     notifyLlmRequestActivity(signal);
     const chunk = event.data;
@@ -621,20 +638,7 @@ async function consumeChatStream(
       const contentItems = typeof delta.content === "string" ? [delta.content] : delta.content;
       for (const item of contentItems) {
         if (typeof item === "string") {
-          const textDelta = sanitizeSurrogates(item);
-          if (!currentBlock || currentBlock.type !== "text") {
-            finishCurrentBlock(currentBlock);
-            currentBlock = { type: "text", text: "" };
-            output.content.push(currentBlock);
-            stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
-          }
-          currentBlock.text += textDelta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: blockIndex(),
-            delta: textDelta,
-            partial: output,
-          });
+          appendTextDelta(item);
           continue;
         }
 
@@ -661,20 +665,7 @@ async function consumeChatStream(
         }
 
         if (item.type === "text") {
-          const textDelta = sanitizeSurrogates(item.text);
-          if (!currentBlock || currentBlock.type !== "text") {
-            finishCurrentBlock(currentBlock);
-            currentBlock = { type: "text", text: "" };
-            output.content.push(currentBlock);
-            stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
-          }
-          currentBlock.text += textDelta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: blockIndex(),
-            delta: textDelta,
-            partial: output,
-          });
+          appendTextDelta(item.text);
         }
       }
     }

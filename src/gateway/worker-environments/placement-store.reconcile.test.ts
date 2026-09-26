@@ -49,14 +49,14 @@ it("filters reconciliation by exact session key across agents while preserving s
       return placement;
     }
 
-    const localClaim = store.claimTurn({
+    const localClaim = await store.claimTurn({
       ...SESSION,
       sessionId: "local",
       owner: { kind: "local" },
       claimId: "local-claim",
       runId: "local-run",
     });
-    store.releaseTurn(localClaim);
+    await store.releaseTurn(localClaim);
     const active = advanceToActive({ ...SESSION, sessionId: "reclaimed" });
     const draining = store.startDrain({
       sessionId: active.sessionId,

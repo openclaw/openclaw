@@ -82,7 +82,7 @@ type Job = {
   if?: string | boolean;
   concurrency?: Concurrency;
   outputs?: Record<string, string>;
-  steps: { id?: string; name?: string; if?: string; with?: { script?: string } }[];
+  steps: { id?: string; name?: string; if?: string; uses?: string; with?: { script?: string } }[];
 };
 type Concurrency = { group: string; "cancel-in-progress": string | boolean };
 type Workflow = {
@@ -187,7 +187,7 @@ function workflowConcurrency(workflow: Workflow): Concurrency {
 
 // Like ci-workflow-guards, this uses VM evaluation, not a general Actions parser.
 // Supported here: typed primitive ==/!=/!/&&/||, parentheses, property lookup,
-// format, JSON/string helpers, always(), and embedded interpolation. Missing
+// format, JSON/string helpers, always()/cancelled(), and embedded interpolation. Missing
 // properties are empty strings; hyphenated property names are single lookups.
 // Expression fixtures avoid coercion/case-folding and escaped strings, where JS
 // differs. Admission separately normalizes concurrency group names to lowercase.
@@ -211,6 +211,7 @@ function expression(source: string, context: Record<string, unknown>): unknown {
       format: (template: string, ...values: unknown[]) =>
         template.replace(/\{(\d+)\}/gu, (_match, index: string) => String(values[Number(index)])),
       always: () => true,
+      cancelled: () => context.cancelled === true,
       fromJSON: JSON.parse,
       contains: (values: string[], value: string) =>
         values.some((item) => item.toLowerCase() === value.toLowerCase()),
@@ -258,8 +259,12 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
         if (!evaluate(step.if ?? true, context, true)) {
           continue;
         }
-        if (step.name === "Checkout") {
+        if (step.uses?.startsWith("actions/checkout@")) {
           checkouts++;
+        }
+        if (step.uses === "./.github/actions/detect-scheduled-changes") {
+          // Admission ordering uses changed inputs; the cost suite owns proof-reuse decisions.
+          outputs.changed = "true";
         }
         if (!step.with?.script) {
           continue;
@@ -409,7 +414,9 @@ function expectDraftSkipped(run: Run) {
   expect(run.state).toBe("skipped");
   expect(run.eligibility).toBeDefined();
   for (const [id, eligible] of Object.entries(run.eligibility!.jobs)) {
-    expect(eligible, id).toBe(id === "scope");
+    if (id !== "scope") {
+      expect(eligible, id).toBe(false);
+    }
   }
   expect(run.eligibility!.diffCalls).toBe(0);
   expect(run.eligibility!.checkouts).toBe(0);
@@ -437,7 +444,11 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       expect(ready.cancelRequested).toBe(false);
       expectDraftSkipped(delayed);
       expect(delayed.group).not.toBe(ready.group);
-      expect(Object.values(ready.eligibility!.jobs).every(Boolean)).toBe(true);
+      for (const [id, eligible] of Object.entries(ready.eligibility!.jobs)) {
+        if (id !== "scope") {
+          expect(eligible, id).toBe(true);
+        }
+      }
     },
   );
 
@@ -630,6 +641,20 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       expectDraftSkipped(converted);
     });
   }
+});
+
+it("honors cancellation after a schedule-only scope job is skipped", () => {
+  const workflow = parse(
+    readFileSync(".github/workflows/plugin-init-scaffold-validation.yml", "utf8"),
+  ) as Workflow;
+  const guard = workflow.jobs["validate-provider-scaffold"]!.if!;
+  const context = {
+    github: pr(workflow, 100, "ready_for_review"),
+    needs: { scope: { result: "skipped", outputs: {} } },
+    vars: {},
+  };
+  expect(evaluate(guard, { ...context, cancelled: false }, true)).toBe(true);
+  expect(evaluate(guard, { ...context, cancelled: true }, true)).toBe(false);
 });
 
 describe("Labeler admission", () => {

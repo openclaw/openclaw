@@ -749,7 +749,7 @@ it("preserves the existing malformed continuation writer refusal before stopping
 
 it("refuses a foreign lifecycle holder before stopping the service", async () => {
   await expect(runDoctorFinishForStoppedUnit("lifecycle-contended")).rejects.toThrow(
-    "another OpenClaw process owns gateway-lifecycle",
+    "OpenClaw state database is busy (gateway-lifecycle)",
   );
   expect(mocks.stops).toBe(0);
 });

@@ -12,6 +12,7 @@ import { publishSessionCostUsageUpdated } from "../infra/session-cost-usage-even
 import {
   bumpSkillsSnapshotVersion,
   getSkillsSnapshotVersion,
+  notifySkillsWatchAvailable,
   registerSkillsChangeListener,
   resetSkillsRefreshStateForTest,
 } from "../skills/runtime/refresh-state.js";
@@ -135,7 +136,12 @@ it.each([false, true])(
 
 it("retires model choices at its config commit before pending metadata settles", async () => {
   const broadcast = vi.fn();
-  const ownedContext = { ...context, broadcast };
+  let committedConfig: OpenClawConfig = {};
+  const ownedContext = {
+    ...context,
+    broadcast,
+    getCommittedRuntimeConfig: () => committedConfig,
+  };
   const entered = createDeferred();
   const release = createDeferred();
   mocks.refresh.mockImplementationOnce(() => {
@@ -149,6 +155,21 @@ it("retires model choices at its config commit before pending metadata settles",
     await entered.promise;
     publishOperatorRoleConfigChange({});
     expect(broadcast).not.toHaveBeenCalled();
+    committedConfig = { auth: { profiles: { account: { provider: "fixture", mode: "api_key" } } } };
+    publishOperatorRoleConfigChange(ownedContext);
+    expect(broadcast).not.toHaveBeenCalled();
+    committedConfig = { ...committedConfig, models: { mode: "replace" } };
+    publishOperatorRoleConfigChange(ownedContext);
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+      "chat.metadata.changed",
+      { modelSelectionChanged: true },
+      { dropIfSlow: true },
+    );
+    broadcast.mockClear();
+    committedConfig = {
+      ...committedConfig,
+      agents: { defaults: { modelPolicy: { allow: ["fixture/allowed"] } } },
+    };
     publishOperatorRoleConfigChange(ownedContext);
     expect(broadcast).toHaveBeenCalledExactlyOnceWith(
       "chat.metadata.changed",
@@ -278,7 +299,7 @@ async function createRealMetadataLifecycle(
       modelEvent({ phase: "invalidated" });
     },
     events: {
-      skills: () => mocks.registerSkillsListener.mock.calls[0]![0](),
+      skills: () => mocks.registerSkillsListener.mock.calls[0]![0]({ reason: "watch" }),
       auth: () => authEvent(),
       catalog: () => modelEvent({ phase: "catalog-published" }),
       catalogFailure: () =>
@@ -311,6 +332,7 @@ describe("gateway chat metadata lifecycle", () => {
       harness.broadcast.mockClear();
       for (let count = 0; count < 3; count += 1) {
         bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+        notifySkillsWatchAvailable({ workspaceDir, sourceScope: {} });
         expect(loadWorkspaceSkills(workspaceDir, loadOptions)).toEqual(entries);
         expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
         expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
@@ -916,7 +938,7 @@ describe("gateway chat metadata lifecycle", () => {
     modelListener({ phase: "catalog-published" });
     modelListener({ phase: "catalog-failed", error: new Error("obsolete catalog failed") });
     authListener();
-    skillsListener();
+    skillsListener({ reason: "watch" });
 
     expect(mocks.refresh).toHaveBeenCalledOnce();
     expect(warn).not.toHaveBeenCalled();
@@ -937,7 +959,7 @@ describe("gateway chat metadata lifecycle", () => {
 
     authListener();
     await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-    skillsListener();
+    skillsListener({ reason: "watch" });
     await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(3));
   });
 

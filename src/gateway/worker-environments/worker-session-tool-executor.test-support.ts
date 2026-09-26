@@ -190,7 +190,7 @@ async function createWorkerSessionToolTestFixture(
   const placements = createWorkerSessionPlacementStore({ database });
   activate(SOURCE);
   activate(TARGET);
-  const sourceClaim = placements.claimTurn({
+  const sourceClaim = await placements.claimTurn({
     sessionId: SOURCE.sessionId,
     agentId: SOURCE.agentId,
     sessionKey: SOURCE.sessionKey,
@@ -433,7 +433,7 @@ async function createWorkerSessionToolTestFixture(
     async dispose() {
       if (placements.validateTurnClaim(sourceClaim)) {
         await placements.closeWorkerTurnToolState(sourceClaim);
-        placements.releaseTurn(sourceClaim);
+        await placements.releaseTurn(sourceClaim);
       }
       for (const authority of delegatedAuthorities) {
         releaseAgentRunDelegatedAuthority(authority);

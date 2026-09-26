@@ -143,7 +143,7 @@ describe("worker turn launcher terminal results", () => {
         prepareInstallation: vi.fn(),
         bootstrapWorker: vi.fn(),
         executeInference: vi.fn(),
-        inferenceStore: createWorkerInferenceStore({ database }),
+        inferenceStore: createWorkerInferenceStore({ path: database.path }),
         placementStore: gate,
         liveEvents,
       });

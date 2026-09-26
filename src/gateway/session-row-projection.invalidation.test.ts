@@ -40,6 +40,7 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import * as projectionWork from "./session-projection-work.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -212,6 +213,48 @@ it("reuses descendants after parent progress while keeping inherited models curr
   });
 });
 
+it("keeps a captured row when another physical store resets the same key and session ID", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { scope: "global" as const },
+    };
+    const query = {
+      agentId: "main",
+      key: "global",
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+    };
+    const otherPath = state.statePath("secondary.sqlite");
+    const entry = { sessionId: "shared-id", lifecycleRevision: "original", updatedAt: 1 };
+    for (const storePath of [query.storePath, otherPath]) {
+      replaceSessionEntrySync({ agentId: query.agentId, sessionKey: query.key, storePath }, entry);
+      registerOpenClawAgentDatabase({ agentId: query.agentId, path: storePath });
+    }
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await projection.ensureMaterialized();
+      const captured = projection.capture(query);
+      expect(captured).toBeDefined();
+      replaceSessionEntrySync(
+        { agentId: query.agentId, sessionKey: query.key, storePath: otherPath },
+        {
+          ...entry,
+          lifecycleRevision: "other-store-reset",
+          updatedAt: 2,
+        },
+      );
+      expect(projection.isCurrent(captured!)).toBe(true);
+      await projection.ensureMaterialized();
+      expect(projection.describe(query, captured)?.entry.lifecycleRevision).toBe("original");
+      expect(projection.describe({ ...query, storePath: otherPath })?.entry.lifecycleRevision).toBe(
+        "other-store-reset",
+      );
+    } finally {
+      projection.dispose();
+    }
+  });
+});
+
 it("hydrates a same-path replacement with a reused inode and retires its previous inventory", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
@@ -285,10 +328,16 @@ it("hydrates a same-path replacement with a reused inode and retires its previou
           ),
         );
       try {
-        expect(projection.snapshot({ agentId: "main", key: "agent:main:new" }).row?.sessionId).toBe(
-          "new",
+        await withReadySessionRows(
+          projection,
+          () => [{ agentId: "main", key: "agent:main:new" }],
+          (read) => {
+            expect(read.describe({ agentId: "main", key: "agent:main:new" })?.entry.sessionId).toBe(
+              "new",
+            );
+            expect(projection.selectEntries().map((row) => row.key)).toEqual(["agent:main:new"]);
+          },
         );
-        expect(projection.selectEntries().map((row) => row.key)).toEqual(["agent:main:new"]);
         await projection.ensureMaterialized();
         expect(projection.selectEntries().map((row) => row.key)).toEqual(["agent:main:new"]);
         expect([...projection.sessionGroupTargets()]).toEqual([

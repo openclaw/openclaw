@@ -1,11 +1,62 @@
 // Native Node callers load this source closure without a TypeScript import resolver.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
+import { createRequire } from "node:module";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.ts";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
 import { readFreeBsdProcessStartTime } from "./freebsd-process-identity.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
+declare const SEALED_RUNTIME_BUILD: boolean;
+let darwinNative:
+  | {
+      library: import("koffi").LibraryHandle;
+      query: ReturnType<import("koffi").LibraryHandle["func"]>;
+    }
+  | undefined;
+
+function readDarwinNativeIdentity(pid: number): { parentPid: number; startedAt: number } | null {
+  if (
+    process.platform !== "darwin" ||
+    (process.arch !== "arm64" && process.arch !== "x64") ||
+    pid > 0x7fffffff ||
+    (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD)
+  ) {
+    return null;
+  }
+  try {
+    if (!darwinNative) {
+      const koffi: typeof import("koffi").default = createRequire(import.meta.url)("koffi");
+      const library = koffi.load("/usr/lib/libproc.dylib");
+      const query = library.func(
+        "int proc_pidinfo(int pid, int flavor, uint64_t arg, _Out_ void *buffer, int buffersize)",
+      );
+      darwinNative = { library, query };
+    }
+    // Darwin's public PROC_PIDTBSDINFO ABI is 136 bytes on arm64 and x86_64.
+    // Query every foreign PID afresh; only the callable and its library are retained.
+    const bytes = Buffer.alloc(136);
+    if (darwinNative.query(pid, 3, 0, bytes, bytes.length) !== bytes.length) {
+      return null;
+    }
+    const parentPid = bytes.readUInt32LE(16);
+    const seconds = bytes.readBigUInt64LE(120);
+    if (
+      bytes.readUInt32LE(12) !== pid ||
+      parentPid > 0x7fffffff ||
+      seconds === 0n ||
+      seconds > BigInt(Number.MAX_SAFE_INTEGER) ||
+      bytes.readBigUInt64LE(128) >= 1_000_000n
+    ) {
+      return null;
+    }
+    // Published Darwin leases use ps lstart's epoch seconds, not microseconds.
+    return { parentPid, startedAt: Number(seconds) };
+  } catch {
+    // Missing native packages and denied queries retain the existing bounded ps path.
+    return null;
+  }
+}
 // Bound corrupted/cyclic ancestry while allowing nested service supervisors.
 export const MAX_ANCESTOR_WALK_DEPTH = 32;
 
@@ -93,15 +144,28 @@ export function isPidDefinitelyDead(pid: number): boolean {
 function getDarwinProcessStartTime(
   pid: number,
   env: NodeJS.ProcessEnv,
-  timeoutMs = PROCESS_START_TIMEOUT_MS,
+  timeoutMs?: number,
 ): number | null {
+  const started = performance.now();
+  const native = readDarwinNativeIdentity(pid);
+  if (native) {
+    return native.startedAt;
+  }
+  // The default bounds ps itself; explicit deadlines also pay for native loading.
+  const remainingMs =
+    timeoutMs === undefined
+      ? PROCESS_START_TIMEOUT_MS
+      : Math.ceil(timeoutMs - (performance.now() - started));
+  if (remainingMs <= 0) {
+    return null;
+  }
   try {
     const startedAt = childProcess
       .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
         env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: timeoutMs,
+        timeout: remainingMs,
         killSignal: "SIGKILL",
       })
       .trim();
@@ -118,9 +182,21 @@ function getDarwinProcessStartTime(
 export function readDarwinProcessIdentity(
   pid: number,
   env: NodeJS.ProcessEnv = process.env,
-  timeoutMs = PROCESS_START_TIMEOUT_MS,
+  timeoutMs?: number,
 ): { parentPid: number; startedAt: number } | null {
   if (process.platform !== "darwin" || !isValidPid(pid)) {
+    return null;
+  }
+  const started = performance.now();
+  const native = readDarwinNativeIdentity(pid);
+  if (native) {
+    return native;
+  }
+  const remainingMs =
+    timeoutMs === undefined
+      ? PROCESS_START_TIMEOUT_MS
+      : Math.ceil(timeoutMs - (performance.now() - started));
+  if (remainingMs <= 0) {
     return null;
   }
   try {
@@ -131,7 +207,7 @@ export function readDarwinProcessIdentity(
         encoding: "utf8",
         env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: timeoutMs,
+        timeout: remainingMs,
         killSignal: "SIGKILL",
         maxBuffer: 4096,
       },

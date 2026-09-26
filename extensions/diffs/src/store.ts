@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
@@ -32,6 +33,8 @@ const MAX_DECODED_HTML_BYTES = 64 * 1024 * 1024;
 const ARTIFACT_ID_ATTEMPTS = 8;
 const VIEWER_PREFIX = "/plugins/diffs/view";
 const EMPTY_BLOB = new Uint8Array();
+const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
 
 type CreateArtifactParams = {
   html: string;
@@ -137,7 +140,7 @@ export class DiffArtifactStore {
     if (!safeEqualSecret(tokenHash, entry.metadata.tokenHash)) {
       return null;
     }
-    const html = await gunzipAsync(entry.bytes, MAX_DECODED_HTML_BYTES);
+    const html = await gunzipAsync(entry.bytes, { maxOutputLength: MAX_DECODED_HTML_BYTES });
     if (html.byteLength !== entry.metadata.decodedBytes) {
       throw new Error(`Diff artifact ${id} decoded size does not match its metadata.`);
     }
@@ -438,30 +441,6 @@ function isArtifactContext(value: unknown): value is DiffArtifactContext | undef
   return Object.entries(context).every(
     ([key, entry]) => allowed.has(key) && (entry === undefined || typeof entry === "string"),
   );
-}
-
-async function gzipAsync(input: Uint8Array): Promise<Uint8Array> {
-  return await new Promise<Buffer>((resolve, reject) => {
-    gzip(input, (error, result) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(result);
-    });
-  });
-}
-
-async function gunzipAsync(input: Uint8Array, maxOutputLength: number): Promise<Uint8Array> {
-  return await new Promise<Buffer>((resolve, reject) => {
-    gunzip(input, { maxOutputLength }, (error, result) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(result);
-    });
-  });
 }
 
 function isFileExists(error: unknown): boolean {

@@ -1,5 +1,6 @@
 // Resolves media paths from reply payloads into runtime attachment metadata.
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
@@ -21,7 +22,6 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { SandboxWorkspaceAccess } from "../../agents/sandbox/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { sanitizeUntrustedFileName } from "../../infra/fs-safe-advanced.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";

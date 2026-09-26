@@ -690,6 +690,72 @@ it("shares only one synchronous metadata snapshot and refreshes committed WAL ne
   });
 });
 
+it.each(["synchronous", "discovery"] as const)(
+  "reads fresh authority without replacing an inherited %s snapshot",
+  async (inherited) => {
+    await withTempDir("openclaw-current-snapshot-", async (root) => {
+      const options = createOptions(root);
+      openOpenClawStateDatabase(options);
+      closeOpenClawStateDatabaseForTest();
+      const writer = new DatabaseSync(options.path);
+      writer.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('first');",
+      );
+      const read = () =>
+        withExistingOpenClawStateDatabaseReadOnly(
+          ({ db }) => db.prepare("SELECT value FROM held").get()?.value,
+          options,
+        );
+      const current = () =>
+        withSynchronousArtifactPreservingStateSnapshot(() => [read(), read()], {
+          current: options,
+        });
+      const artifacts = () =>
+        ["", "-wal", "-shm"].map((suffix) => fs.readFileSync(options.path + suffix));
+      const inspect = () => {
+        expect(read()).toBe("first");
+        writer.exec("UPDATE held SET value='revoked'");
+        const before = artifacts();
+        expect(current()).toEqual(["revoked", "revoked"]);
+        expect(artifacts()).toEqual(before);
+        expect(read()).toBe("first");
+        expect(() =>
+          withSynchronousArtifactPreservingStateSnapshot(
+            () => {
+              expect(read()).toBe("revoked");
+              throw new Error("authority consumer failed");
+            },
+            { current: options },
+          ),
+        ).toThrow("authority consumer failed");
+        expect(read()).toBe("first");
+        writer.exec("UPDATE held SET value='later'");
+        expect(current()).toEqual(["later", "later"]);
+        expect(read()).toBe("first");
+      };
+      try {
+        if (inherited === "synchronous") {
+          withArtifactPreservingStateReads(() =>
+            withSynchronousArtifactPreservingStateSnapshot(inspect),
+          );
+        } else {
+          await withArtifactPreservingStateReads(() =>
+            withOpenClawStateDatabaseReadSnapshot(async () => {
+              inspect();
+              await Promise.resolve();
+              writer.exec("UPDATE held SET value='after-await'");
+              expect(current()).toEqual(["after-await", "after-await"]);
+              expect(read()).toBe("first");
+            }, options),
+          );
+        }
+      } finally {
+        writer.close();
+      }
+    });
+  },
+);
+
 it("rechecks a terminal failure before reusing scoped metadata bytes", async () => {
   await withTempDir("openclaw-metadata-refusal-", async (root) => {
     const options = createOptions(root);

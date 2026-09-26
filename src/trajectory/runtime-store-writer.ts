@@ -244,7 +244,7 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
           if (!grant()) {
             throw new Error("Trajectory append authority expired");
           }
-        });
+        }, binding.attachment);
         return { nativeLocations: binding.nativeLocations, admission };
       };
     },

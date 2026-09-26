@@ -7,7 +7,10 @@ import type { SpawnResult } from "../../process/exec.js";
 import { completeWorkerLaunchDescriptor } from "../../worker/launch-descriptor.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import {
+  createPlacementTurnClaimFixtureOps,
+  seedAttachedPlacementEnvironment,
+} from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { waitForPendingWorkerResult } from "./worker-turn-admission.js";
@@ -60,7 +63,7 @@ describe("worker turn launcher claim admission", () => {
             expect(loadSessionEntry(sessionTarget)).toEqual(entryBefore);
             expect(placements.get(successorId)).toBeUndefined();
           };
-          const localClaim = placements.claimTurn({
+          const localClaim = await placements.claimTurn({
             ...sessionTarget,
             claimId: "local-before-dispatch",
             runId: "run-placement-compaction",
@@ -71,7 +74,7 @@ describe("worker turn launcher claim admission", () => {
           expect(successorGate).not.toHaveBeenCalled();
           await assertRejected();
           expect(placements.validateTurnClaim(localClaim)).toBe(true);
-          placements.releaseTurn(localClaim);
+          await placements.releaseTurn(localClaim);
           seedAttachedPlacementEnvironment(database, {
             environmentId: ENVIRONMENT_ID,
             sessionId: SESSION_ID,
@@ -101,7 +104,7 @@ describe("worker turn launcher claim admission", () => {
           if (placement.state !== "active") {
             throw new Error("expected active placement after dispatch");
           }
-          const workerClaim = placements.claimTurn({
+          const workerClaim = await placements.claimTurn({
             ...sessionTarget,
             claimId: "active-worker-compaction",
             runId: "run-placement-compaction",
@@ -116,7 +119,7 @@ describe("worker turn launcher claim admission", () => {
           });
           await assertRejected();
           expect(placements.validateTurnClaim(workerClaim)).toBe(true);
-          placements.releaseTurn(workerClaim);
+          await placements.releaseTurn(workerClaim);
           const reconciling = placements.startReconcile({
             sessionId: SESSION_ID,
             environmentId: ENVIRONMENT_ID,
@@ -147,7 +150,7 @@ describe("worker turn launcher claim admission", () => {
     if (active?.state !== "active") {
       throw new Error("expected active placement");
     }
-    const priorClaim = placements.claimTurn({
+    const priorClaim = await placements.claimTurn({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
@@ -207,7 +210,7 @@ describe("worker turn launcher claim admission", () => {
     "returns a recovery outcome for restart-cleared claim retry %s",
     async (runId) => {
       seedActivePlacement("remote-exec");
-      const priorClaim = placements.claimTurn({
+      const priorClaim = await placements.claimTurn({
         ...sessionTarget,
         claimId: "restart-result-claim",
         runId: "restart-result-run",
@@ -249,7 +252,7 @@ describe("worker turn launcher claim admission", () => {
     if (active?.state !== "active") {
       throw new Error("expected active placement");
     }
-    const priorClaim = placements.claimTurn({
+    const priorClaim = await placements.claimTurn({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
@@ -261,8 +264,9 @@ describe("worker turn launcher claim admission", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
+    const claimOps = createPlacementTurnClaimFixtureOps(database);
     vi.spyOn(placements, "listPendingWorkspaceResults").mockImplementationOnce(() => {
-      placements.releaseTurn(priorClaim);
+      claimOps.releaseTurn(priorClaim);
       return [];
     });
     const provider = createWorkerSessionTurnPlacementProvider({
@@ -290,7 +294,7 @@ describe("worker turn launcher claim admission", () => {
     if (active?.state !== "active") {
       throw new Error("expected active placement");
     }
-    const priorClaim = placements.claimTurn({
+    const priorClaim = await placements.claimTurn({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",
@@ -336,7 +340,7 @@ describe("worker turn launcher claim admission", () => {
     if (active?.state !== "active") {
       throw new Error("expected active placement");
     }
-    const priorClaim = placements.claimTurn({
+    const priorClaim = await placements.claimTurn({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
       agentId: "main",

@@ -3,8 +3,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "openclaw/plugin-sdk/provider-auth";
@@ -29,8 +35,8 @@ import {
   CODEX_APP_SERVER_BINDING_NAMESPACE,
   createCodexAppServerBindingStore,
   sessionBindingIdentity,
-  type StoredCodexAppServerBinding,
 } from "./session-binding.js";
+import { createCodexRuntimeTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 import { createClientHarness } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
@@ -78,8 +84,14 @@ describe("registered Codex harness model attribution", () => {
         ...options,
         env: { ...process.env, OPENCLAW_STATE_DIR: path.join(tempDir, "plugin-state") },
       });
+    const openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("codex", {
+        ...options,
+        env: { ...process.env, OPENCLAW_STATE_DIR: path.join(tempDir, "plugin-state") },
+      });
+    const stateRuntime = { state: { openSyncKeyedStore, openKeyedStore } };
     const bindingStore = createCodexAppServerBindingStore(
-      openSyncKeyedStore<StoredCodexAppServerBinding>({
+      createCodexRuntimeTestBindingStateStore(stateRuntime, {
         namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
         maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
         overflowPolicy: "reject-new",
@@ -181,7 +193,7 @@ describe("registered Codex harness model attribution", () => {
     const runtime = createPluginRuntimeMock({
       modelAuth: { ensureAuthProfileStore, resolveAuthProfileOrder, resolveProviderIdForAuth },
       config: { current: () => ({ plugins: { entries: { codex: { config: pluginConfig } } } }) },
-      state: { openSyncKeyedStore },
+      state: stateRuntime.state,
     });
     const registerAgentHarness = vi.fn<NonNullable<TestPluginApiInput["registerAgentHarness"]>>();
     plugin.register(

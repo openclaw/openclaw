@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
@@ -10,9 +11,21 @@ import {
 } from "../../state/openclaw-state-db.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
 import { readWorkerEnvironmentFacts } from "./store-row-codec.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
+
+// Synchronous fault injection must remain in the transaction or callback under test.
+export function createPlacementTurnClaimFixtureOps(database: OpenClawStateDatabase) {
+  return createPlacementTurnClaimOps({
+    path: database.path,
+    instanceId: randomUUID(),
+    now: Date.now,
+    read: () => database.db,
+    write: (operation) => runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }),
+  });
+}
 
 export function advancePlacementFixtureToActive(
   store: WorkerSessionPlacementStore,

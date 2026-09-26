@@ -129,28 +129,40 @@ describe("OpenAI plugin manifest", () => {
     }
   });
 
-  it("labels OpenAI API key and Codex auth choices without stale mixed OAuth wording", () => {
+  it("labels and orders OpenAI authentication choices", () => {
     const choices = manifest.providerAuthChoices ?? [];
     const openAiLogin = choices.find((choice) => choice.choiceId === "openai");
     const openAiDeviceCode = choices.find((choice) => choice.choiceId === "openai-device-code");
+    const signInWithChatGpt = choices.find((choice) => choice.choiceId === "openai-token-sharing");
     const apiKey = choices.find(
       (choice) => choice.provider === "openai" && choice.method === "api-key",
     );
 
     expect(openAiLogin?.choiceLabel).toBe("Codex login (browser)");
-    expect(openAiLogin?.choiceHint).toBe("Sign in to Codex with your ChatGPT account");
+    expect(openAiLogin?.choiceHint).toBe("Sign in to Codex locally with your ChatGPT account");
     expect(openAiLogin && "assistantVisibility" in openAiLogin).toBe(false);
     expect(openAiLogin?.groupId).toBe("openai");
     expect(openAiLogin?.groupLabel).toBe("OpenAI");
     expect(openAiLogin?.groupHint).toBe("Codex login, Sign in with ChatGPT, or API key");
     expect(openAiDeviceCode?.choiceLabel).toBe("Codex login (device code)");
-    expect(openAiDeviceCode?.choiceHint).toBe("Approve Codex access using a code in your browser");
+    expect(openAiDeviceCode?.choiceHint).toBe(
+      "Use a browser code when OpenClaw runs on a remote VM",
+    );
     expect(openAiDeviceCode && "assistantVisibility" in openAiDeviceCode).toBe(false);
     expect(openAiDeviceCode?.onboardingFeatured).toBe(true);
     expect(openAiLogin?.onboardingFeatured).not.toBe(true);
     expect(openAiDeviceCode?.groupId).toBe("openai");
     expect(openAiDeviceCode?.groupLabel).toBe("OpenAI");
     expect(openAiDeviceCode?.groupHint).toBe("Codex login, Sign in with ChatGPT, or API key");
+    expect(signInWithChatGpt?.choiceLabel).toBe("Sign in with ChatGPT");
+    expect(signInWithChatGpt?.choiceHint).toBe(
+      "Use your Codex allowance with per-instance usage tracking and token limits",
+    );
+    for (const choice of [openAiDeviceCode, openAiLogin, apiKey]) {
+      expect(signInWithChatGpt?.assistantPriority).toBeLessThan(
+        choice?.assistantPriority ?? Number.NEGATIVE_INFINITY,
+      );
+    }
     expect(apiKey?.choiceLabel).toBe("OpenAI API Key");
     expect(apiKey?.choiceHint).toBe("Use your OpenAI API key directly");
     expect(apiKey?.groupId).toBe("openai");

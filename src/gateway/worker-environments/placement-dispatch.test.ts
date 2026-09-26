@@ -5,10 +5,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { resolveWorkerPlacementDestination } from "./placement-destination.js";
 import {
   type DispatchStage,
@@ -37,7 +37,7 @@ describe("worker placement dispatch", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -169,7 +169,7 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "completed-turn-claim",
       runId: "completed-turn-run",
@@ -231,7 +231,7 @@ describe("worker placement dispatch", () => {
       expectedGeneration: otherPlacement.generation,
       patch: { activeOwnerEpoch: active.activeOwnerEpoch },
     });
-    const otherClaim = placementStore.claimTurn({
+    const otherClaim = await placementStore.claimTurn({
       ...otherRequest,
       claimId: "other-session-claim",
       runId: "other-session-run",
@@ -270,7 +270,7 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "shared-worker-claim",
       runId: "shared-worker-run",
@@ -302,7 +302,7 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "draining-result-claim",
       runId: "draining-result-run",
@@ -343,7 +343,7 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "resume-failure-claim",
       runId: "resume-failure-run",
@@ -372,7 +372,7 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "lost-result-claim",
       runId: "lost-result-run",
@@ -404,7 +404,7 @@ describe("worker placement dispatch", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "accepted-lost-result-claim",
       runId: "accepted-lost-result-run",
@@ -897,7 +897,7 @@ describe("worker placement dispatch", () => {
     });
     harness.placements.seedActive(harness.attached.ownerEpoch);
     harness.markEnvironmentNodeDeviceId("live-worker-node");
-    placementStore.claimTurn({
+    await placementStore.claimTurn({
       ...REQUEST,
       claimId: "claim-1",
       runId: "run-1",
@@ -932,7 +932,7 @@ describe("worker placement dispatch", () => {
       sessionId: REQUEST.sessionId,
     });
     harness.placements.seedActive(harness.attached.ownerEpoch);
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "claim-1",
       runId: "run-1",

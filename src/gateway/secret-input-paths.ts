@@ -49,27 +49,12 @@ export function assignResolvedGatewaySecretInput(params: {
   value: string | undefined;
 }): void {
   const { config, path, value } = params;
-  let assigned = false;
-  if (path === "gateway.auth.token") {
-    if (config.gateway?.auth) {
-      config.gateway.auth.token = value;
-      assigned = true;
-    }
-  } else if (path === "gateway.auth.password") {
-    if (config.gateway?.auth) {
-      config.gateway.auth.password = value;
-      assigned = true;
-    }
-  } else if (path === "gateway.remote.token") {
-    if (config.gateway?.remote) {
-      config.gateway.remote.token = value;
-      assigned = true;
-    }
-  } else if (config.gateway?.remote) {
-    config.gateway.remote.password = value;
-    assigned = true;
-  }
-  if (assigned) {
+  const target =
+    path === "gateway.auth.token" || path === "gateway.auth.password"
+      ? config.gateway?.auth
+      : config.gateway?.remote;
+  if (target) {
+    target[isTokenGatewaySecretInputPath(path) ? "token" : "password"] = value;
     copyConfigResolutionFactsExcept(config, config, [path]);
   }
 }

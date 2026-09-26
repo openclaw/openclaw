@@ -159,7 +159,7 @@ describe("worker placement session evidence", () => {
         sessionId: `session-${kind}`,
         sessionKey: `agent:main:${kind}`,
       }));
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...identities[3]!,
         owner: { kind: "local" },
         claimId: "live-claim",
@@ -393,6 +393,9 @@ describe("worker placement session evidence", () => {
         const read = vi.fn(async () => ({
           result: { status: "unavailable" as const },
           assertCurrent() {},
+          followRegistration() {
+            throw new Error("Unavailable placement registry reads cannot follow registration");
+          },
         }));
         const registry = vi
           .spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead")

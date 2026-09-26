@@ -8,14 +8,12 @@ export const TYPING_PREVIEW_THROTTLE_MS = 250;
 const TYPING_ACTIVE_TTL_MS = 2_500;
 const MAX_TYPING_THROTTLE_KEYS = 2_048;
 type PendingTypingBroadcast = {
-  typing: boolean;
   signature: string;
   intervalMs: number;
   emit: () => boolean;
 };
 type TypingBroadcastState = {
   at: number;
-  typing: boolean;
   signature: string;
   pending?: PendingTypingBroadcast;
   timer?: ReturnType<typeof setTimeout>;
@@ -90,15 +88,10 @@ export function broadcastTypingThrottled(params: {
       clearTimeout(previous.timer);
     }
     const emitted = params.emit();
-    if (emitted) {
-      rememberTypingBroadcast(params.key, {
-        at: params.now,
-        typing: params.typing,
-        signature: params.signature,
-      });
-    } else {
-      typingBroadcastState.delete(params.key);
-    }
+    rememberTypingBroadcast(params.key, {
+      at: params.now,
+      signature: params.signature,
+    });
     return emitted;
   }
 
@@ -119,7 +112,6 @@ export function broadcastTypingThrottled(params: {
     delete previous.timer;
   }
   previous.pending = {
-    typing: params.typing,
     signature: params.signature,
     intervalMs: params.intervalMs,
     emit: params.emit,
@@ -134,14 +126,10 @@ export function broadcastTypingThrottled(params: {
         const pending = current.pending;
         const next = {
           at: Date.now(),
-          typing: pending.typing,
           signature: pending.signature,
         } satisfies TypingBroadcastState;
-        if (pending.emit()) {
-          rememberTypingBroadcast(params.key, next);
-        } else {
-          typingBroadcastState.delete(params.key);
-        }
+        pending.emit();
+        rememberTypingBroadcast(params.key, next);
       },
       params.intervalMs - (params.now - previous.at),
     );

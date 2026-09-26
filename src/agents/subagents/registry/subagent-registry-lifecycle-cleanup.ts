@@ -11,7 +11,7 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
-import { recordSubagentTerminalState } from "../../../sessions/session-state-events.js";
+import { recordSubagentTerminalState } from "../../../sessions/subagent-terminal-state.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
 import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
@@ -393,24 +393,51 @@ export async function completeTerminalEffects(
     releaseSwarmRun(entry.schedulerSlotId ?? entry.runId);
   }
   refreshSessionEffectsSuppression();
-  const isProvisionalKill = entry.killReconciliation !== undefined;
   // Record only the current, non-superseded callback with a committed outcome; the
   // run-terminal dedupe key is first-write-wins, so a provisional/stale status here
   // would permanently mislabel the signal-log terminal kind.
-  const outcomeStatus = entry.execution.outcome?.status;
+  const terminalOutcome = entry.execution.outcome;
+  const outcomeStatus = terminalOutcome?.status;
   if (
     !suppressSessionEffects &&
-    !isProvisionalKill &&
+    entry.killReconciliation === undefined &&
     outcomeStatus &&
     outcomeStatus !== "unknown"
   ) {
-    recordSubagentTerminalState({
+    const signal = {
       childSessionKey: entry.childSessionKey,
       runId: entry.runId,
       requesterSessionKey: entry.requesterSessionKey,
       outcomeStatus,
+    };
+    const terminalEndedAt = entry.execution.endedAt;
+    const hasCurrentTerminalOutcome = () =>
+      entry.killReconciliation === undefined &&
+      entry.execution.status === "terminal" &&
+      entry.execution.outcome === terminalOutcome &&
+      entry.execution.outcome?.status === outcomeStatus &&
+      entry.execution.endedAt === terminalEndedAt &&
+      entry.runId === signal.runId &&
+      entry.childSessionKey === signal.childSessionKey &&
+      entry.requesterSessionKey === signal.requesterSessionKey;
+    await recordSubagentTerminalState(signal, () => {
+      if (!isCurrentSessionEffectsOwner() || !hasCurrentTerminalOutcome()) {
+        throw new Error("Subagent terminal signal owner changed before commit");
+      }
     });
+    if (!isCurrentTerminalCallback()) {
+      return;
+    }
+    refreshSessionEffectsSuppression();
+    if (context.newerGenerationOwnsSession(entry)) {
+      await retireSupersededSession(entry);
+      return;
+    }
+    if (!hasCurrentTerminalOutcome()) {
+      return;
+    }
   }
+  const isProvisionalKill = entry.killReconciliation !== undefined;
 
   if (!suppressSessionEffects) {
     try {

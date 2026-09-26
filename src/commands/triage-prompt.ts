@@ -116,6 +116,7 @@ export function renderTriagePrompt(params: {
   redaction: SupportRedactionContext;
   updateFailure?: TriageUpdateFailure;
   failure?: TriageFailureContext;
+  maintenanceHandoff?: true;
 }): string {
   const { bundle, redaction, failure } = params;
   const findings = params.findings.toSorted((left, right) => {
@@ -124,7 +125,7 @@ export function renderTriagePrompt(params: {
     return severity || left.checkId.localeCompare(right.checkId);
   });
   const lines = [
-    "You are repairing THIS machine's OpenClaw installation. Diagnose the root cause, apply the repair autonomously within your existing permissions, and verify the result. Preserve configuration, history, and databases. Use local `openclaw doctor`, `openclaw doctor --fix`, `openclaw status --all`, and `openclaw logs` as needed. Product documentation: https://docs.openclaw.ai.",
+    "You are repairing THIS machine's OpenClaw installation. Diagnose the root cause, apply the repair autonomously within your existing permissions, and verify the result. Preserve configuration, history, and databases. Use read-only `openclaw doctor --lint --json`, `openclaw status --all`, and `openclaw logs` for diagnostics. Product documentation: https://docs.openclaw.ai.",
     "",
     "## Environment",
     "",
@@ -138,7 +139,9 @@ export function renderTriagePrompt(params: {
     "",
     "## Completion goal",
     "",
-    "Diagnose and repair the original symptom using existing repair commands, including `openclaw doctor --fix` and, for unfinished updates, `openclaw update repair`. Respect installation ownership, locks, schema and capability approval refusals. If maintenance refuses to stop the Gateway from this fixing subtree, use read-only diagnosis or safe offline artifact repair and atomic restart, or report that an independent operator must run maintenance outside triage. Do not bypass the refusal.",
+    params.maintenanceHandoff
+      ? "Diagnose and repair the original symptom. Never run Doctor maintenance or update repair through exec: this turn owns live credential database resources. Call request_update_maintenance with operation doctor-fix or update-repair to end the turn; the update owner will run that fixed command only after agent work and database resources settle. Respect all lease, service, schema, and capability refusals. The tool is a request, not proof of recovery."
+      : "Diagnose and repair the original symptom using existing repair commands, including `openclaw doctor --fix` and, for unfinished updates, `openclaw update repair`. Respect installation ownership, locks, schema and capability approval refusals. If maintenance refuses to stop the Gateway from this fixing subtree, use read-only diagnosis or safe offline artifact repair and atomic restart, or report that an independent operator must run maintenance outside triage. Do not bypass the refusal.",
     failure?.gateway === "preserve"
       ? "Do not start or restart the Gateway: this invocation did not authorize activation. Preserve --no-restart and intentional stops. Use read-only status checks and report live health verification as deferred while it is intentionally stopped."
       : "Only activate a Gateway intended to run. For managed recovery, use atomic `openclaw gateway restart` when needed, never stop then start: an explicit stop after native scope attachment cancels this recovery and its children. Preserve later operator stops and report cancellation or infeasibility instead of claiming recovery.",

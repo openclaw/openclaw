@@ -317,6 +317,8 @@ Agent requests waiting to start pause while plugin hot reload drains the old
 runtime. They continue with the replacement when it is ready, or with the
 previous runtime after a successful rollback. You do not need to resend these
 requests. Failed restoration or Gateway shutdown still reports a failure.
+If a replacement fails before activation, rollback restores the previous configured
+model context limits without waiting for model discovery.
 
 If plugin replacement times out after stopping channels, the plugin lifecycle
 owner retries the admitted-work drain for up to 60 seconds before restoring the

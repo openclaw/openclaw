@@ -498,6 +498,29 @@ function renderIntroSection(props: MemoryImportViewProps) {
 function renderBackfillSection(props: MemoryImportViewProps) {
   const busy = props.backfillBusy !== null || props.applyingProviderId !== null;
   const result = props.backfillPreview;
+  const dateInput = (label: string, value: string, onInput: (value: string) => void) => html`<label>
+    <span>${label}</span>
+    <input
+      class="input"
+      type="date"
+      .value=${value}
+      ?disabled=${busy}
+      @input=${(event: Event) => onInput((event.currentTarget as HTMLInputElement).value)}
+    />
+  </label>`;
+  const actionButton = (
+    action: string,
+    className: string,
+    label: string,
+    onClick: () => void,
+  ) => html`<button
+    class=${className}
+    data-test-id=${`memory-backfill-${action}`}
+    ?disabled=${busy}
+    @click=${onClick}
+  >
+    ${label}
+  </button>`;
   return html`
     <div data-test-id="memory-session-backfill">
       ${renderSettingsSection(
@@ -513,69 +536,16 @@ function renderBackfillSection(props: MemoryImportViewProps) {
                     title: t("memoryImport.backfill.dateRange"),
                     description: t("memoryImport.backfill.dateRangeHint"),
                     control: html`<div class="memory-import__backfill-dates">
-                      <label>
-                        <span>${t("memoryImport.backfill.from")}</span>
-                        <input
-                          class="input"
-                          type="date"
-                          .value=${props.backfillFrom}
-                          ?disabled=${busy}
-                          @input=${(event: Event) =>
-                            props.onBackfillFromChange(
-                              (event.currentTarget as HTMLInputElement).value,
-                            )}
-                        />
-                      </label>
-                      <label>
-                        <span>${t("memoryImport.backfill.to")}</span>
-                        <input
-                          class="input"
-                          type="date"
-                          .value=${props.backfillTo}
-                          ?disabled=${busy}
-                          @input=${(event: Event) =>
-                            props.onBackfillToChange(
-                              (event.currentTarget as HTMLInputElement).value,
-                            )}
-                        />
-                      </label>
+                      ${dateInput(t("memoryImport.backfill.from"), props.backfillFrom, props.onBackfillFromChange)}
+                      ${dateInput(t("memoryImport.backfill.to"), props.backfillTo, props.onBackfillToChange)}
                     </div>`,
                   })}
                   ${renderSettingsRow({
                     title: t("memoryImport.backfill.actions"),
                     control: html`<div class="memory-import__backfill-actions">
-                      <button
-                        class="btn"
-                        data-test-id="memory-backfill-preview"
-                        ?disabled=${busy}
-                        @click=${props.onBackfillPreview}
-                      >
-                        ${
-                          props.backfillBusy === "preview"
-                            ? t("memoryImport.backfill.previewing")
-                            : t("memoryImport.backfill.preview")
-                        }
-                      </button>
-                      <button
-                        class="btn primary"
-                        data-test-id="memory-backfill-apply"
-                        ?disabled=${busy}
-                        @click=${props.onBackfillApply}
-                      >
-                        ${
-                          props.backfillBusy === "apply"
-                            ? t("memoryImport.backfill.applying")
-                            : t("memoryImport.backfill.apply")
-                        }
-                      </button>
-                      <button
-                        class="btn danger"
-                        data-test-id="memory-backfill-rollback"
-                        ?disabled=${busy}
-                        @click=${props.onBackfillRollbackRequest}
-                      >
-                        ${t("memoryImport.backfill.rollback")}
-                      </button>
+                      ${actionButton("preview", "btn", t(props.backfillBusy === "preview" ? "memoryImport.backfill.previewing" : "memoryImport.backfill.preview"), props.onBackfillPreview)}
+                      ${actionButton("apply", "btn primary", t(props.backfillBusy === "apply" ? "memoryImport.backfill.applying" : "memoryImport.backfill.apply"), props.onBackfillApply)}
+                      ${actionButton("rollback", "btn danger", t("memoryImport.backfill.rollback"), props.onBackfillRollbackRequest)}
                     </div>`,
                   })}
                   ${

@@ -343,8 +343,15 @@ export class AcpSessionManager {
       stopping: this.stopping,
       turns: this.acceptedTurns,
       withSessionActor: this.withSessionActor.bind(this),
-      onQueuedCancellation: async () => {
-        recordQueuedBackgroundTaskCancellation({ input, ...target, deps: this.deps, startedAt });
+      onQueuedCancellation: async (assertCurrent) => {
+        await recordQueuedBackgroundTaskCancellation({
+          input,
+          ...target,
+          deps: this.deps,
+          startedAt,
+          assertCurrent,
+        });
+        assertCurrent();
         await emitCancelledAcpTurn(input.onEvent);
         this.recordTurnCompletion({ startedAt });
       },

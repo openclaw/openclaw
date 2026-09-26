@@ -3,21 +3,13 @@ import {
   nodeWakeOwnerBySignal,
   nodeWakeStateByOwner,
   nodeWakeStateKey,
+  type NodeWakeAttempt,
   type NodeWakeOwnerState,
 } from "./node-wake-state-store.js";
 
 export const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
 export const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
 export const NODE_WAKE_RECONNECT_POLL_MS = 150;
-
-export type NodeWakeAttempt = {
-  available: boolean;
-  throttled: boolean;
-  path: "throttled" | "no-registration" | "no-auth" | "sent" | "send-error" | "invalidated";
-  durationMs: number;
-  apnsStatus?: number;
-  apnsReason?: string;
-};
 
 export type NodeWakeNudgeAttempt = {
   sent: boolean;

@@ -3,7 +3,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-compaction-constants.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
@@ -59,7 +58,6 @@ import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveMemoryFlushPlan, type MemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -68,7 +66,6 @@ import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-sess
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatTokenCount } from "../../utils/token-format.js";
-import { isRenderablePayload } from "../reply-payload.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -77,6 +74,12 @@ import {
   resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
+import {
+  buildMemoryFlushErrorPayload,
+  buildVisibleMemoryFlushFailure,
+  resolveVisibleMemoryFlushErrorPayloads,
+  truncateMemoryFlushErrorMessage,
+} from "./memory-flush-errors.js";
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
@@ -94,9 +97,7 @@ import { resolveFollowupAbortSignal } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
-const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 const MAX_FLUSH_FAILURES = 3;
-const MAX_FLUSH_ERROR_LENGTH = 200;
 const preflightCompactionLog = createSubsystemLogger("auto-reply/preflight-compaction");
 const memoryFlushLog = createSubsystemLogger("auto-reply/memory-flush");
 
@@ -258,45 +259,6 @@ function resolveFollowupContextTokens(
     modelContextWindow: catalogModel?.contextWindow,
     modelContextTokens: catalogModel?.contextTokens,
   });
-}
-
-function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
-  return (payloads ?? []).filter(
-    (payload) => payload.isError === true && isRenderablePayload(payload),
-  );
-}
-
-function buildVisibleMemoryFlushFailure(payloads: ReplyPayload[]): Error {
-  const message = payloads
-    .map((payload) => normalizeOptionalString(payload.text))
-    .filter((text): text is string => Boolean(text))
-    .join("\n");
-  return new Error(message || "Memory flush returned an error response");
-}
-
-function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
-  if (isAbortError(err)) {
-    return undefined;
-  }
-  const message = normalizeOptionalString(formatErrorMessage(err));
-  if (!message) {
-    return undefined;
-  }
-  const visibleText = message.startsWith("⚠️") ? message : `⚠️ ${message}`;
-  return {
-    text:
-      visibleText.length > MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS
-        ? `${truncateUtf16Safe(visibleText, MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS - 1)}…`
-        : visibleText,
-    isError: true,
-  };
-}
-
-function truncateMemoryFlushErrorMessage(err: unknown): string {
-  const message = normalizeOptionalString(formatErrorMessage(err)) || String(err);
-  return message.length > MAX_FLUSH_ERROR_LENGTH
-    ? `${truncateUtf16Safe(message, MAX_FLUSH_ERROR_LENGTH - 1)}…`
-    : message;
 }
 
 type SessionTranscriptUsageSnapshot = {
@@ -655,9 +617,10 @@ export async function runSessionCompactionIfNeeded(params: {
   onSessionIdChanged?: (sessionId: string) => void;
   onCompactionNotice?: (phase: CompactionNoticePhase, text?: string) => Promise<void> | void;
 }): Promise<SessionEntry | undefined> {
+  const operatorAuthority = params.followupRun.operatorAuthority;
   const assertActive = () => {
     params.abortSignal?.throwIfAborted();
-    params.followupRun.operatorAuthority?.assertCurrent();
+    operatorAuthority?.assertCurrent();
     if (params.authorize?.() === false) {
       throw new Error("Session compaction maintenance is no longer active");
     }
@@ -1028,6 +991,7 @@ export async function runSessionCompactionIfNeeded(params: {
       },
       {
         assertActive,
+        sourceAuthority: { assertActive, operatorAuthority },
         requestBudget: params.compactionRequestBudget,
         pendingUserEntryId: params.pendingUserEntryId,
         ...(compactionTrigger === "transcript_bytes" && isCodexRuntime

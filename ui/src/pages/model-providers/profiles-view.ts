@@ -377,11 +377,22 @@ function renderProfileIdentity(profile: ProviderProfile, identity: string, showD
   `;
 }
 
-export function renderProviderAccountSummary(cards: ModelProviderCard[]) {
+export function renderProviderAccountSummary(
+  cards: ModelProviderCard[],
+  recovery?: {
+    authProvider: string;
+    disabled: boolean;
+    onUse: (profileId: string) => void;
+  },
+) {
   const profiles = cards.flatMap((card) =>
     card.profiles.map((profile) => ({
       profile,
       authRejected: card.catalogStatus === "auth-rejected",
+      // A display card can combine providers whose credentials are not interchangeable.
+      canUse:
+        card.profileProviderIds[profile.profileId] === recovery?.authProvider &&
+        (profile.source === "saved" || profile.source === "inherited"),
     })),
   );
   const sources = [...new Set(cards.map(apiKeySource).filter(Boolean))];
@@ -396,7 +407,7 @@ export function renderProviderAccountSummary(cards: ModelProviderCard[]) {
           ? html`
               <div role="list">
                 ${profiles.map(
-                  ({ profile, authRejected }, index) => html`
+                  ({ profile, authRejected, canUse }, index) => html`
                     <div
                       class="model-provider-login__account"
                       role="listitem"
@@ -404,6 +415,18 @@ export function renderProviderAccountSummary(cards: ModelProviderCard[]) {
                     >
                       ${renderProfileIdentity(profile, profileIdentity(profile, index), false)}
                       ${profileStatus(profile, authRejected)}
+                      ${
+                        canUse && recovery
+                          ? html`<button
+                              class="btn"
+                              data-models-use-account
+                              ?disabled=${recovery.disabled}
+                              @click=${() => recovery.onUse(profile.profileId)}
+                            >
+                              ${t("modelProviders.login.useAccount")}
+                            </button>`
+                          : nothing
+                      }
                     </div>
                   `,
                 )}

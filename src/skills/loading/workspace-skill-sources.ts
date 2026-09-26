@@ -1,7 +1,7 @@
 import path from "node:path";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
-import { isDefaultStateDir } from "../../config/paths.js";
+import { isDefaultStateDir, resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -141,6 +141,10 @@ export function resolveWorkspaceSkillSourcePlan(
       tier: "workspace" as const,
     })),
   );
+  const worktreeRoot = opts?.config?.worktreeRoot ?? path.join(resolveStateDir(), "worktrees");
+  for (const root of roots) {
+    root.worktree = isPathInside(worktreeRoot, root.dir);
+  }
   return {
     roots,
     allowSymlinkTargets: normalizeTrimmedStringList(

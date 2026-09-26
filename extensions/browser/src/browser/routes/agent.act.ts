@@ -1,11 +1,6 @@
-/**
- * Browser agent action route registration and existing-session execution.
- *
- * Dispatches normalized actions to either Playwright-backed OpenClaw browser
- * control or Chrome MCP existing-session operations with navigation guards.
- */
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveExistingSessionActTimeouts } from "../act-policy.js";
 import {
   clickChromeMcpElement,
@@ -39,13 +34,12 @@ import {
 } from "./agent.act.existing-session.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
-import { type ActKind, isActKind } from "./agent.act.shared.js";
+import { isActKind } from "./agent.act.shared.js";
 import {
   browserNavigationPolicyForProfile,
   readBody,
   requirePwAi,
   resolveProfileContext,
-  resolveTargetIdFromBody,
   resolveSafeRouteTabUrl,
   withRouteTabContext,
   SELECTOR_UNSUPPORTED_MESSAGE,
@@ -54,10 +48,7 @@ import {
   captureBrowserOperationTarget,
   resolveOperationTargetOutcome,
 } from "./agent.snapshot-target.js";
-import {
-  EXISTING_SESSION_LIMITS,
-  getExistingSessionUnsupportedMessage,
-} from "./existing-session-limits.js";
+import { EXISTING_SESSION_LIMITS, admitExistingSessionAction } from "./existing-session-limits.js";
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toStringOrEmpty } from "./utils.js";
@@ -73,30 +64,23 @@ const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
   "wait",
 ]);
 
-function shouldEnforceCurrentUrlForAct(action: BrowserActRequest): boolean {
-  // Batch stays guarded because nested actions can read or return page data.
-  return action.kind !== "resize" && action.kind !== "close";
-}
-
-/** Register browser action endpoints, including hook and download subroutes. */
 export function registerBrowserAgentActRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
 ) {
   app.post("/act", async (req, res) => {
     const body = readBody(req);
-    const kindRaw = toStringOrEmpty(body.kind);
-    if (!isActKind(kindRaw)) {
+    const kind = toStringOrEmpty(body.kind);
+    if (!isActKind(kind)) {
       return jsonActError(res, 400, ACT_ERROR_CODES.kindRequired, "kind is required");
     }
-    const kind: ActKind = kindRaw;
     let action: BrowserActRequest;
     try {
       action = normalizeActRequest(body);
     } catch (err) {
       return jsonActError(res, 400, ACT_ERROR_CODES.invalidRequest, formatErrorMessage(err));
     }
-    const targetId = resolveTargetIdFromBody(body);
+    const targetId = normalizeOptionalString(body.targetId);
     if (Object.hasOwn(body, "selector") && !SELECTOR_ALLOWED_KINDS.has(kind)) {
       return jsonActError(
         res,
@@ -138,7 +122,8 @@ export function registerBrowserAgentActRoutes(
         ctx,
         profileCtx,
         targetId,
-        enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
+        // Batch stays guarded because nested actions can read or return page data.
+        enforceCurrentUrlAllowed: action.kind !== "resize" && action.kind !== "close",
         run: async ({ cdpUrl, tab, signal, resolveTabUrl, assertCurrent }) => {
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
           const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
@@ -215,13 +200,13 @@ export function registerBrowserAgentActRoutes(
             }
             const profileName = profileCtx.profile.name;
             if (isExistingSession) {
-              const unsupportedMessage = getExistingSessionUnsupportedMessage(action);
-              if (unsupportedMessage) {
+              const admission = admitExistingSessionAction(action);
+              if (!admission.ok) {
                 return jsonActError(
                   res,
                   501,
                   ACT_ERROR_CODES.unsupportedForExistingSession,
-                  unsupportedMessage,
+                  admission.error,
                 );
               }
               const existingSessionTarget: ExistingSessionOperation = {
@@ -297,152 +282,108 @@ export function registerBrowserAgentActRoutes(
                 }
                 return outcome.result;
               };
-              switch (action.kind) {
-                case "click":
-                  await runGuardedAction((target) =>
-                    clickChromeMcpElement({
+              const admittedAction = admission.action;
+              const result = await runGuardedAction(async (target, checkDeadline) => {
+                switch (admittedAction.kind) {
+                  case "click":
+                    return await clickChromeMcpElement({
                       ...target,
-                      uid: action.ref!,
-                      doubleClick: action.doubleClick ?? false,
-                    }),
-                  );
-                  return await jsonOk(undefined, { resolveCurrentTarget: true });
-                case "clickCoords":
-                  await runGuardedAction((target) =>
-                    clickChromeMcpCoords({
+                      uid: admittedAction.ref!,
+                      doubleClick: admittedAction.doubleClick ?? false,
+                    });
+                  case "clickCoords":
+                    return await clickChromeMcpCoords({
                       ...target,
-                      x: action.x,
-                      y: action.y,
-                      doubleClick: action.doubleClick ?? false,
-                    }),
-                  );
-                  return await jsonOk(undefined, { resolveCurrentTarget: true });
-                case "type":
-                  await runGuardedAction(async (target, checkDeadline) => {
+                      x: admittedAction.x,
+                      y: admittedAction.y,
+                      doubleClick: admittedAction.doubleClick ?? false,
+                    });
+                  case "type":
                     await fillChromeMcpElement({
                       ...target,
-                      uid: action.ref!,
-                      value: action.text,
+                      uid: admittedAction.ref!,
+                      value: admittedAction.text,
                     });
-                    if (action.submit) {
+                    if (admittedAction.submit) {
                       checkDeadline();
-                      await pressChromeMcpKey({
-                        ...target,
-                        key: "Enter",
-                      });
+                      await pressChromeMcpKey({ ...target, key: "Enter" });
                     }
-                  });
-                  return await jsonOk(undefined, { resolveCurrentTarget: true });
-                case "press":
-                  await runGuardedAction((target) =>
-                    pressChromeMcpKey({
-                      ...target,
-                      key: action.key,
-                    }),
-                  );
-                  return await jsonOk(undefined, { resolveCurrentTarget: true });
-                case "hover":
-                  await runGuardedAction((target) =>
-                    hoverChromeMcpElement({
-                      ...target,
-                      uid: action.ref!,
-                    }),
-                  );
-                  return await jsonOk(undefined, { resolveCurrentTarget: true });
-                case "scrollIntoView":
-                  await runGuardedAction((target) =>
-                    evaluateChromeMcpScript({
+                    return undefined;
+                  case "press":
+                    return await pressChromeMcpKey({ ...target, key: admittedAction.key });
+                  case "hover":
+                    return await hoverChromeMcpElement({ ...target, uid: admittedAction.ref! });
+                  case "scrollIntoView":
+                    return await evaluateChromeMcpScript({
                       ...target,
                       fn: `(el) => { el.scrollIntoView({ block: "center", inline: "center" }); return true; }`,
-                      args: [action.ref!],
-                    }),
-                  );
-                  return await jsonOk(undefined, { resolveCurrentTarget: true });
-                case "drag":
-                  await runGuardedAction((target) =>
-                    dragChromeMcpElement({
+                      args: [admittedAction.ref!],
+                    });
+                  case "drag":
+                    return await dragChromeMcpElement({
                       ...target,
-                      fromUid: action.startRef!,
-                      toUid: action.endRef!,
-                    }),
-                  );
-                  return await jsonOk(undefined, { resolveCurrentTarget: true });
-                case "select":
-                  await runGuardedAction((target) =>
-                    selectChromeMcpOption({
+                      fromUid: admittedAction.startRef!,
+                      toUid: admittedAction.endRef!,
+                    });
+                  case "select":
+                    return await selectChromeMcpOption({
                       ...target,
-                      uid: action.ref!,
-                      value: action.values[0] ?? "",
-                    }),
-                  );
-                  return await jsonOk(undefined, { resolveCurrentTarget: true });
-                case "fill":
-                  await runGuardedAction((target) =>
-                    fillChromeMcpForm({
+                      uid: admittedAction.ref!,
+                      value: admittedAction.values[0] ?? "",
+                    });
+                  case "fill":
+                    return await fillChromeMcpForm({
                       ...target,
-                      elements: action.fields.map((field) => ({
+                      elements: admittedAction.fields.map((field) => ({
                         uid: field.ref,
                         value: String(field.value ?? ""),
                       })),
-                    }),
-                  );
-                  return await jsonOk(undefined, { resolveCurrentTarget: true });
-                case "resize":
-                  await runGuardedAction((target) =>
-                    resizeChromeMcpPage({
+                    });
+                  case "resize":
+                    return await resizeChromeMcpPage({
                       ...target,
-                      width: action.width,
-                      height: action.height,
-                    }),
-                  );
-                  return await jsonOk();
-                case "wait":
-                  await runGuardedAction((target) =>
-                    waitForExistingSessionCondition({
+                      width: admittedAction.width,
+                      height: admittedAction.height,
+                    });
+                  case "wait":
+                    return await waitForExistingSessionCondition({
                       ...target,
-                      timeMs: action.timeMs,
-                      text: action.text,
-                      textGone: action.textGone,
-                      selector: action.selector,
-                      url: action.url,
-                      loadState: action.loadState,
-                      fn: action.fn,
+                      timeMs: admittedAction.timeMs,
+                      text: admittedAction.text,
+                      textGone: admittedAction.textGone,
+                      selector: admittedAction.selector,
+                      url: admittedAction.url,
+                      loadState: admittedAction.loadState,
+                      fn: admittedAction.fn,
                       ...navigationPolicy,
-                    }),
-                  );
-                  return await jsonOk();
-                case "evaluate": {
-                  const result = await runGuardedAction((target) =>
-                    evaluateChromeMcpScript({
+                    });
+                  case "evaluate":
+                    return await evaluateChromeMcpScript({
                       ...target,
                       fn: normalizeBrowserEvaluateFunctionSource(
-                        action.fn,
-                        action.ref ? { argumentName: "el" } : undefined,
+                        admittedAction.fn,
+                        admittedAction.ref ? { argumentName: "el" } : undefined,
                       ),
-                      args: action.ref ? [action.ref] : undefined,
-                    }),
-                  );
-                  return await jsonOk({ result }, { resolveCurrentTarget: true });
-                }
-                case "close":
-                  await runGuardedAction((target) =>
-                    profileCtx.closeTab(tab.targetId, {
+                      args: admittedAction.ref ? [admittedAction.ref] : undefined,
+                    });
+                  case "close":
+                    return await profileCtx.closeTab(tab.targetId, {
                       timeoutMs: target.timeoutMs,
                       signal: target.signal,
                       exactTargetId: true,
-                    }),
-                  );
-                  clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
-                  return await jsonOk();
-                case "insertText":
-                case "batch":
-                  return jsonActError(
-                    res,
-                    501,
-                    ACT_ERROR_CODES.unsupportedForExistingSession,
-                    EXISTING_SESSION_LIMITS.act[action.kind],
-                  );
+                    });
+                }
+                return undefined;
+              });
+              if (admittedAction.kind === "close") {
+                clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
               }
+              return await jsonOk(admittedAction.kind === "evaluate" ? { result } : undefined, {
+                resolveCurrentTarget:
+                  admittedAction.kind !== "resize" &&
+                  admittedAction.kind !== "wait" &&
+                  admittedAction.kind !== "close",
+              });
             }
 
             const pw = await requirePwAi(res, `act:${kind}`);
@@ -493,9 +434,6 @@ export function registerBrowserAgentActRoutes(
                   { result: result.result, ...(downloads ? { downloads } : {}) },
                   resultTargetOptions,
                 );
-              case "click":
-              case "clickCoords":
-                return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
               case "resize":
               case "close":
                 return await jsonOk(downloads ? { downloads } : undefined);
@@ -522,7 +460,7 @@ export function registerBrowserAgentActRoutes(
 
   app.post("/response/body", async (req, res) => {
     const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+    const targetId = normalizeOptionalString(body.targetId);
     const url = toStringOrEmpty(body.url);
     let timeoutMs: number | undefined;
     let maxChars: number | undefined;
@@ -572,7 +510,7 @@ export function registerBrowserAgentActRoutes(
 
   app.post("/highlight", async (req, res) => {
     const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+    const targetId = normalizeOptionalString(body.targetId);
     const ref = toStringOrEmpty(body.ref);
     if (!ref) {
       return jsonError(res, 400, "ref is required");

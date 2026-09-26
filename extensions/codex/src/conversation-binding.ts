@@ -256,7 +256,9 @@ async function runBoundTurn(params: {
             }
             liveThreadOwnership = undefined;
           } else if (binding.threadId !== threadId) {
-            await releaseCodexAppServerBindingSubscription(binding);
+            await releaseCodexAppServerBindingSubscription(binding, {
+              retainedClientId: client.getInstanceId(),
+            });
           }
           const committed = await params.bindingStore.mutate(identity, {
             kind: "set",
@@ -333,7 +335,9 @@ async function runBoundTurn(params: {
           ) {
             // Keep the old physical owner authoritative until unsubscribe succeeds;
             // failed migration then rolls back only the newly resumed connection.
-            await releaseCodexAppServerBindingSubscription(binding);
+            await releaseCodexAppServerBindingSubscription(binding, {
+              retainedClientId: client.getInstanceId(),
+            });
           }
           const committed = await params.bindingStore.mutate(identity, {
             kind: "patch",

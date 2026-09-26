@@ -1,7 +1,7 @@
 // PID liveness tests cover process existence checks across platforms.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   getFileLockProcessStartTime,
@@ -27,7 +27,11 @@ vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
   readWindowsProcessStartTimeSync: readWindowsProcessStartTimeSyncMock,
 }));
 
+// These cases exercise the portable shell fallback, also used by sealed helpers.
+beforeEach(() => vi.stubGlobal("SEALED_RUNTIME_BUILD", true));
+
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   readWindowsProcessStartTimeSyncMock.mockReset();
   readFreeBsdProcessStartTimeMock.mockReset();
@@ -210,9 +214,11 @@ describe("process start times", () => {
         expect.objectContaining({
           encoding: "utf8",
           env: expect.objectContaining({ LC_ALL: "C", TZ: "UTC" }),
-          timeout: 1000,
+          timeout: expect.any(Number),
         }),
       );
+      expect(execSpy.mock.calls[0]?.[2]?.timeout).toBeGreaterThan(0);
+      expect(execSpy.mock.calls[0]?.[2]?.timeout).toBeLessThanOrEqual(1000);
     });
   });
 
@@ -325,8 +331,14 @@ describe("Darwin combined process identity", () => {
     expect(read).toHaveBeenCalledExactlyOnceWith(
       "/bin/ps",
       ["-o", "pid=,ppid=,lstart=", "-p", "42"],
-      expect.objectContaining({ timeout: 1000, maxBuffer: 4096, killSignal: "SIGKILL" }),
+      expect.objectContaining({
+        timeout: expect.any(Number),
+        maxBuffer: 4096,
+        killSignal: "SIGKILL",
+      }),
     );
+    expect(read.mock.calls[0]?.[2]?.timeout).toBeGreaterThan(0);
+    expect(read.mock.calls[0]?.[2]?.timeout).toBeLessThanOrEqual(1000);
   });
 
   it.each([

@@ -1,4 +1,5 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { SessionPermissionMode } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
@@ -20,6 +21,8 @@ export type TrustedSessionCreation = {
   completionOwnerSessionKey?: string;
   /** Prepared parent selection; never accepted from public creation parameters. */
   resolvedModel?: ProviderModelRef;
+  /** Effective host-prepared permission mode, not a public permission-change request. */
+  inheritedPermissionMode?: SessionPermissionMode;
   /** Effective caller tool-policy snapshot for an in-process visible spawn. */
   inheritedToolPolicy?: {
     version: 1;
@@ -66,6 +69,12 @@ export function resolveOperatorSessionCreation(
           }
         : {}),
       inheritedToolPolicy: agentRuntimeIdentity.sessionSpawnContext.inheritedToolPolicy,
+      ...(agentRuntimeIdentity.sessionSpawnContext.inheritedPermissionMode
+        ? {
+            inheritedPermissionMode:
+              agentRuntimeIdentity.sessionSpawnContext.inheritedPermissionMode,
+          }
+        : {}),
       ...(agentRuntimeIdentity.sessionSpawnContext.resolvedModel
         ? { resolvedModel: agentRuntimeIdentity.sessionSpawnContext.resolvedModel }
         : {}),

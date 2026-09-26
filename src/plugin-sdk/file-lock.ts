@@ -1,5 +1,4 @@
 // File lock helpers serialize plugin writes that share a filesystem-backed state file.
-import "../infra/fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import {
   acquireFileLock as acquireFsSafeFileLock,

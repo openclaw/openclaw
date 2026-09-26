@@ -30,13 +30,14 @@ import {
 import { readSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
-import { buildDashboardSessionKey } from "../session-create-service.js";
+import { buildDashboardSessionKey } from "../session-create-key.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
+import { resolveSessionWorkerPlacementMutationError } from "../worker-environments/session-placement-lifecycle.js";
 import { forkSessionRepositoryWorkspace } from "../worker-environments/session-repository-checkpoints.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -47,11 +48,7 @@ import {
   createUpstreamForkCurrentGuard,
   resolveUpstreamForkHarness,
 } from "./sessions-fork-runtime-guard.js";
-import {
-  loadAccessorSessionEntryForGatewayTarget,
-  resolveSessionWorkerPlacementMutationError,
-  respondSessionWorkerPlacementMutationError,
-} from "./sessions-shared.js";
+import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -267,7 +264,11 @@ async function mutateSessionAtMessage(
     sessionId: initial.entry.sessionId,
   });
   if (initialPlacementError) {
-    respondSessionWorkerPlacementMutationError(initialPlacementError, respond);
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, initialPlacementError.message),
+    );
     return;
   }
 
@@ -372,7 +373,7 @@ async function mutateSessionAtMessage(
         sessionId: current.entry.sessionId,
       });
       if (placementError) {
-        respondSessionWorkerPlacementMutationError(placementError, respond);
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, placementError.message));
         return;
       }
       const targetKey =

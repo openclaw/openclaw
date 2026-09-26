@@ -345,7 +345,7 @@ function resolveActiveStatusModelIdentity(params: {
   activeModelProvider?: string;
   isImplicitCurrentRequest: boolean;
   isSemanticCurrentRequest: boolean;
-  liveSessionKeys: Iterable<string | undefined>;
+  liveSessionKeys: ReadonlySet<string>;
   modelRaw?: string;
   resolvedKey: string;
   resolvedAgentId: string;
@@ -361,13 +361,7 @@ function resolveActiveStatusModelIdentity(params: {
   if (params.resolvedAgentId !== params.requesterAgentId) {
     return undefined;
   }
-  const resolvedKey = params.resolvedKey.trim();
-  const liveSessionKeys = new Set(
-    Array.from(params.liveSessionKeys, (value) => value?.trim()).filter((value): value is string =>
-      Boolean(value),
-    ),
-  );
-  if (!liveSessionKeys.has(resolvedKey)) {
+  if (!params.liveSessionKeys.has(params.resolvedKey.trim())) {
     return undefined;
   }
   const activeModelProvider = params.activeModelProvider?.trim();
@@ -615,18 +609,21 @@ export function createSessionStatusTool(opts?: {
         mainKey,
       });
 
+      const readStatusEntry = (keyRaw: string, includeAliasFallback?: boolean) =>
+        resolveSessionStatusEntry({
+          cfg,
+          agentId,
+          keyRaw,
+          alias,
+          mainKey,
+          requesterInternalKey: storeScopedRequesterKey,
+          includeAliasFallback,
+        });
+
       // Resolve against the requester-scoped store first to avoid leaking default agent data.
       let resolved = deferTargetOwnerResolution
         ? undefined
-        : resolveSessionStatusEntry({
-            cfg,
-            agentId,
-            keyRaw: requestedKeyRaw,
-            alias,
-            mainKey,
-            requesterInternalKey: storeScopedRequesterKey,
-            includeAliasFallback: requestedKeyInput !== "current",
-          });
+        : readStatusEntry(requestedKeyRaw, requestedKeyInput !== "current");
 
       if (
         !resolved &&
@@ -694,14 +691,7 @@ export function createSessionStatusTool(opts?: {
             agentId,
             mainKey,
           });
-          resolved = resolveSessionStatusEntry({
-            cfg,
-            agentId,
-            keyRaw: requestedKeyRaw,
-            alias,
-            mainKey,
-            requesterInternalKey: storeScopedRequesterKey,
-          });
+          resolved = readStatusEntry(requestedKeyRaw);
         } else if (
           !resolvedSession.ok &&
           (!resolvedSession.notFound || resolvedSession.status === "forbidden")
@@ -711,27 +701,11 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved && requestedKeyInput === "current" && effectiveRequesterLookupKey) {
-        resolved = resolveSessionStatusEntry({
-          cfg,
-          agentId,
-          keyRaw: effectiveRequesterLookupKey,
-          alias,
-          mainKey,
-          requesterInternalKey: storeScopedRequesterKey,
-          includeAliasFallback: false,
-        });
+        resolved = readStatusEntry(effectiveRequesterLookupKey, false);
       }
 
       if (!resolved && requestedKeyInput === "current") {
-        resolved = resolveSessionStatusEntry({
-          cfg,
-          agentId,
-          keyRaw: requestedKeyRaw,
-          alias,
-          mainKey,
-          requesterInternalKey: storeScopedRequesterKey,
-          includeAliasFallback: true,
-        });
+        resolved = readStatusEntry(requestedKeyRaw, true);
       }
 
       if (!resolved && requestedKeyParam === undefined) {
@@ -739,15 +713,7 @@ export function createSessionStatusTool(opts?: {
           keyRaw: requestedKeyRaw,
           mainKey,
         })) {
-          resolved = resolveSessionStatusEntry({
-            cfg,
-            agentId,
-            keyRaw: fallbackKey,
-            alias,
-            mainKey,
-            requesterInternalKey: storeScopedRequesterKey,
-            includeAliasFallback: true,
-          });
+          resolved = readStatusEntry(fallbackKey, true);
           if (resolved) {
             resolvedViaImplicitCurrentFallback = true;
             break;
@@ -836,12 +802,16 @@ export function createSessionStatusTool(opts?: {
           const activeModelId = opts?.activeModelId?.trim();
           const activeModelProvider = opts?.activeModelProvider?.trim();
           const isImplicitCurrentRequest = requestedKeyParam === undefined;
-          const liveSessionKeys = [
-            opts?.runSessionKey,
-            storeScopedRequesterKey,
-            effectiveRequesterKey,
-            visibilityRequesterKey,
-          ];
+          const liveSessionKeys = new Set(
+            [
+              opts?.runSessionKey,
+              storeScopedRequesterKey,
+              effectiveRequesterKey,
+              visibilityRequesterKey,
+            ]
+              .map((value) => value?.trim())
+              .filter((value): value is string => Boolean(value)),
+          );
           const activeModelIdentity = resolveActiveStatusModelIdentity({
             activeModelId,
             activeModelProvider,
@@ -946,15 +916,10 @@ export function createSessionStatusTool(opts?: {
             taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
           const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
           const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
-          const liveSessionKeySet = new Set(
-            liveSessionKeys
-              .map((value) => value?.trim())
-              .filter((value): value is string => Boolean(value)),
-          );
           const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
           const isLiveRouteSession = activeRouteRunSessionKey
             ? agentId === requesterAgentId && scopedResolved.key.trim() === activeRouteRunSessionKey
-            : agentId === requesterAgentId && liveSessionKeySet.has(scopedResolved.key.trim());
+            : agentId === requesterAgentId && liveSessionKeys.has(scopedResolved.key.trim());
           const routeDetails = buildSessionStatusRouteDetails({
             entry: statusSessionEntry,
             sessionKey: scopedResolved.key,

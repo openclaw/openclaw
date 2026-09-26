@@ -9,7 +9,7 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   classifyToolUseResultPairing,
-  makeMissingToolResult as makePairingMissingToolResult,
+  makeMissingToolResult,
   normalizeLegacyToolResultId,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
@@ -76,19 +76,8 @@ function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
   // trusted-operator transcript state per SECURITY.md, so do not redact or
   // rewrite sessions_spawn arguments here.
   const rawName = readStringValue(block.name);
-  const trimmedName = rawName?.trim();
-  const hasTrimmedName = typeof trimmedName === "string" && trimmedName.length > 0;
-  const normalizedName = hasTrimmedName ? trimmedName : undefined;
-  const nameChanged = hasTrimmedName && rawName !== trimmedName;
-
-  if (!nameChanged) {
-    return block;
-  }
-  const next = { ...(block as Record<string, unknown>) };
-  if (nameChanged && normalizedName) {
-    next.name = normalizedName;
-  }
-  return next as RawToolCallBlock;
+  const name = rawName?.trim();
+  return name && name !== rawName ? { ...block, name } : block;
 }
 
 function countRawToolCallBlocks(content: unknown[]): number {
@@ -146,14 +135,6 @@ function hasSessionsSpawnAttachmentToolCall(content: unknown[]): boolean {
     }
   }
   return false;
-}
-
-function makeMissingToolResult(params: {
-  toolCallId: string;
-  toolName?: string;
-  text?: string;
-}): Extract<AgentMessage, { role: "toolResult" }> {
-  return makePairingMissingToolResult(params);
 }
 
 export { makeMissingToolResult };

@@ -1020,7 +1020,7 @@ export function buildAgentSystemPrompt(params: {
       hasOpenClaw
         ? "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`."
         : hasGateway
-          ? "Config read: `gateway` (`config.get|config.schema.lookup`) only when those actions are exposed by its schema. Write/restart unavailable; ask human."
+          ? "Config read: `gateway` (`config.get|config.schema.lookup`) only when those actions are exposed by its schema. Config writes and restarts need the `openclaw` tool; the owner can send `/restart` in chat."
           : "",
       [
         "For the Gateway hosting this session:",

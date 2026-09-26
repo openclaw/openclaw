@@ -54,7 +54,6 @@ import {
   resolveMediaToolSandboxConfig,
   resolveMediaToolInboundRoots,
   resolveMediaToolReferenceAccess,
-  resolveRemoteMediaSsrfPolicy,
   resolvePromptAndModelOverride,
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
@@ -73,17 +72,10 @@ import {
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
 
-type ImageToolLoadWebMediaOptions = {
-  maxBytes?: number;
-  sandboxValidated?: boolean;
-  readFile?: (filePath: string) => Promise<Buffer>;
-  imageCompression?: ImageCompressionPolicy;
-  localRoots?: readonly string[] | "any";
-  inboundRoots?: readonly string[];
-  ssrfPolicy?: ReturnType<typeof resolveRemoteMediaSsrfPolicy>;
-  readIdleTimeoutMs?: number;
-  requestInit?: RequestInit;
-};
+type ImageToolLoadWebMediaOptions = Exclude<
+  Parameters<typeof import("../../media/web-media.js").loadWebMedia>[1],
+  number | undefined
+>;
 
 type ImageWebMediaRuntime = {
   loadWebMedia: (
@@ -115,7 +107,7 @@ function resolveRegisteredMediaUnderstandingProvider(params: {
   });
 }
 
-const imageToolProviderDeps = {
+const defaultImageToolProviderDeps = {
   buildProviderRegistry,
   getMediaUnderstandingProvider,
   describeImageWithModel,
@@ -127,6 +119,8 @@ const imageToolProviderDeps = {
   resolveImageCompressionPolicy,
   loadImageWebMediaRuntime,
 };
+
+const imageToolProviderDeps = { ...defaultImageToolProviderDeps };
 
 function resolveImageCompressionPolicy(
   params: Parameters<typeof prepareImageCompressionPolicy>[0],
@@ -184,39 +178,12 @@ const testing = {
   hasImageReasoningOnlyResponse,
   resolveImageToolMaxTokens,
   resolveImageCompressionPolicy,
-  setProviderDepsForTest(overrides?: {
-    buildProviderRegistry?: typeof buildProviderRegistry;
-    getMediaUnderstandingProvider?: typeof getMediaUnderstandingProvider;
-    describeImageWithModel?: typeof describeImageWithModel;
-    describeImagesWithModel?: typeof describeImagesWithModel;
-    resolveAutoMediaKeyProviders?: typeof resolveAutoMediaKeyProviders;
-    resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
-    resolveModelAsync?: ResolveModelAsync;
-    resolveRegisteredMediaUnderstandingProvider?: typeof resolveRegisteredMediaUnderstandingProvider;
-    resolveImageCompressionPolicy?: typeof resolveImageCompressionPolicy;
-    loadImageWebMediaRuntime?: typeof loadImageWebMediaRuntime;
-  }) {
-    imageToolProviderDeps.buildProviderRegistry =
-      overrides?.buildProviderRegistry ?? buildProviderRegistry;
-    imageToolProviderDeps.getMediaUnderstandingProvider =
-      overrides?.getMediaUnderstandingProvider ?? getMediaUnderstandingProvider;
-    imageToolProviderDeps.describeImageWithModel =
-      overrides?.describeImageWithModel ?? describeImageWithModel;
-    imageToolProviderDeps.describeImagesWithModel =
-      overrides?.describeImagesWithModel ?? describeImagesWithModel;
-    imageToolProviderDeps.resolveAutoMediaKeyProviders =
-      overrides?.resolveAutoMediaKeyProviders ?? resolveAutoMediaKeyProviders;
-    imageToolProviderDeps.resolveDefaultMediaModel =
-      overrides?.resolveDefaultMediaModel ?? resolveDefaultMediaModel;
-    imageToolProviderDeps.resolveModelAsync =
-      overrides?.resolveModelAsync ?? resolveModelAsyncDefault;
-    imageToolProviderDeps.resolveRegisteredMediaUnderstandingProvider =
-      overrides?.resolveRegisteredMediaUnderstandingProvider ??
-      resolveRegisteredMediaUnderstandingProvider;
-    imageToolProviderDeps.resolveImageCompressionPolicy =
-      overrides?.resolveImageCompressionPolicy ?? resolveImageCompressionPolicy;
-    imageToolProviderDeps.loadImageWebMediaRuntime =
-      overrides?.loadImageWebMediaRuntime ?? loadImageWebMediaRuntime;
+  setProviderDepsForTest(overrides?: Partial<typeof defaultImageToolProviderDeps>) {
+    Object.assign(
+      imageToolProviderDeps,
+      defaultImageToolProviderDeps,
+      Object.fromEntries(Object.entries(overrides ?? {}).filter(([, value]) => value != null)),
+    );
   },
 } as const;
 
@@ -391,8 +358,6 @@ function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undef
   return undefined;
 }
 
-type ImageSandboxConfig = MediaToolSandbox;
-
 export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -400,7 +365,7 @@ export function createImageTool(options?: {
   authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
-  sandbox?: ImageSandboxConfig;
+  sandbox?: MediaToolSandbox;
   cwd?: string;
   fsPolicy?: ToolFsPolicy;
   agentChannel?: string | null;
@@ -444,7 +409,7 @@ export function createImageTool(options?: {
   if (!modelHasVision && !resolvedImageModelConfig && !options?.deferAutoModelResolution) {
     return null;
   }
-  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
+  const remoteMediaSsrfPolicy = options?.config?.tools?.web?.fetch?.ssrfPolicy;
 
   const description = modelHasVision
     ? "Load image(s) into private model context for inspection: path accepts one local image path or permitted URL; paths accepts up to maxImages entries (20 by default). Does not display, attach, or send files to the user. Prompt images are already visible."

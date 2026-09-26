@@ -264,6 +264,28 @@ describe("npm onboarding fixture consent", () => {
     expect(events).toEqual([]);
   });
 
+  it("does not load the redactor for empty failure logs", () => {
+    const root = tempDirs.make("openclaw-onboard-empty-log-");
+    const logPath = join(root, "onboard.json");
+    const redactorPath = join(root, "redactor.mjs");
+    writeFileSync(logPath, "");
+    writeFileSync(redactorPath, 'throw new Error("empty logs must not load redaction");\n');
+    const result = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        'source "$1"; openclaw_e2e_print_log "$2"',
+        "fixture",
+        "scripts/lib/openclaw-e2e-instance.sh",
+        logPath,
+      ],
+      { encoding: "utf8", env: { ...process.env, OPENCLAW_E2E_REDACTOR_MODULE: redactorPath } },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe(`--- ${logPath} ---\n`);
+  });
+
   it.each([false, true])("selects the reviewed Codex source with registry=%s", (registry) => {
     const { result, events, installs, detail } = runScenario({ registry });
     expect(result.status, detail).toBe(0);

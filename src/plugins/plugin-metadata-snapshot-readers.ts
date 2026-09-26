@@ -10,12 +10,7 @@ export type SnapshotLoaderModule = Pick<
   "resolvePluginMetadataSnapshot" | "loadPluginMetadataSnapshot"
 >;
 
-type SnapshotReaderSlot = {
-  adoptCurrentPluginMetadataSnapshotIfAbsent?: CurrentSnapshotModule["adoptCurrentPluginMetadataSnapshotIfAbsent"];
-  getCurrentPluginMetadataSnapshot?: CurrentSnapshotModule["getCurrentPluginMetadataSnapshot"];
-  resolvePluginMetadataSnapshot?: SnapshotLoaderModule["resolvePluginMetadataSnapshot"];
-  loadPluginMetadataSnapshot?: SnapshotLoaderModule["loadPluginMetadataSnapshot"];
-};
+type SnapshotReaderSlot = Partial<CurrentSnapshotModule & SnapshotLoaderModule>;
 
 // globalThis-keyed so a require-loaded second module instance shares the slot.
 export const snapshotReaderSlot = resolveGlobalSingleton<SnapshotReaderSlot>(

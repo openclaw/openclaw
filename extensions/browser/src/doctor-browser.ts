@@ -33,10 +33,6 @@ type ExistingSessionProfile = {
   userDataDir?: string;
 };
 
-type ManagedProfile = {
-  name: string;
-};
-
 /** Legacy managed clawd profile paths that can be archived by doctor --fix. */
 export type LegacyClawdBrowserProfileResidue = {
   legacyProfileDir: string;
@@ -50,63 +46,28 @@ type BrowserDoctorFilesystemDeps = {
   movePathToTrash?: (targetPath: string) => Promise<string>;
 };
 
-function collectChromeMcpProfiles(cfg: OpenClawConfig): ExistingSessionProfile[] {
+function collectBrowserDoctorProfiles(cfg: OpenClawConfig) {
   const browser = asNullableRecord(cfg.browser);
-  if (!browser) {
-    return [];
+  const managed = new Map<string, ExistingSessionProfile>();
+  const chromeMcp = new Map<string, ExistingSessionProfile>();
+  const defaultProfile = normalizeOptionalString(browser?.defaultProfile);
+  if (defaultProfile) {
+    (defaultProfile === "user" ? chromeMcp : managed).set(defaultProfile, {
+      name: defaultProfile,
+    });
   }
-
-  const profiles = new Map<string, ExistingSessionProfile>();
-  const defaultProfile = normalizeOptionalString(browser.defaultProfile) ?? "";
-  if (defaultProfile === "user") {
-    profiles.set("user", { name: "user" });
-  }
-
-  const configuredProfiles = asNullableRecord(browser.profiles);
-  if (!configuredProfiles) {
-    return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
-  }
-
-  for (const [profileName, rawProfile] of Object.entries(configuredProfiles)) {
+  for (const [name, rawProfile] of Object.entries(asNullableRecord(browser?.profiles) ?? {})) {
     const profile = asNullableRecord(rawProfile);
-    const driver = normalizeOptionalString(profile?.driver) ?? "";
-    if (driver === "existing-session") {
-      profiles.set(profileName, {
-        name: profileName,
-        userDataDir: normalizeOptionalString(profile?.userDataDir),
-      });
+    if (normalizeOptionalString(profile?.driver) === "existing-session") {
+      chromeMcp.set(name, { name, userDataDir: normalizeOptionalString(profile?.userDataDir) });
+    } else {
+      managed.set(name, { name });
     }
   }
-
-  return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
-}
-
-function collectManagedProfiles(cfg: OpenClawConfig): ManagedProfile[] {
-  const browser = asNullableRecord(cfg.browser);
-  if (!browser) {
-    return [];
-  }
-
-  const profiles = new Map<string, ManagedProfile>();
-  const defaultProfile = normalizeOptionalString(browser.defaultProfile) ?? "";
-  if (defaultProfile && defaultProfile !== "user") {
-    profiles.set(defaultProfile, { name: defaultProfile });
-  }
-
-  const configuredProfiles = asNullableRecord(browser.profiles);
-  if (!configuredProfiles) {
-    return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
-  }
-
-  for (const [profileName, rawProfile] of Object.entries(configuredProfiles)) {
-    const profile = asNullableRecord(rawProfile);
-    const driver = normalizeOptionalString(profile?.driver) ?? "openclaw";
-    if (driver !== "existing-session") {
-      profiles.set(profileName, { name: profileName });
-    }
-  }
-
-  return [...profiles.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+  return {
+    managed: [...managed.values()].toSorted((a, b) => a.name.localeCompare(b.name)),
+    chromeMcp: [...chromeMcp.values()].toSorted((a, b) => a.name.localeCompare(b.name)),
+  };
 }
 
 function resolveManagedBrowserProfileDir(configDir: string, profileName: string): string {
@@ -220,7 +181,7 @@ export async function noteChromeMcpBrowserReadiness(
   const resolveChromeExecutable =
     deps?.resolveChromeExecutable ?? resolveGoogleChromeExecutableForPlatform;
   const readVersion = deps?.readVersion ?? readBrowserVersion;
-  const managedProfiles = collectManagedProfiles(cfg);
+  const { managed: managedProfiles, chromeMcp: profiles } = collectBrowserDoctorProfiles(cfg);
   const managedProfileLabel = managedProfiles.map((profile) => profile.name).join(", ");
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   if (resolved.enabled && resolved.extensionRelay.allowLegacyAuth) {
@@ -302,7 +263,6 @@ export async function noteChromeMcpBrowserReadiness(
     noteFn(lines.join("\n"), "Browser");
   }
 
-  const profiles = collectChromeMcpProfiles(cfg);
   if (profiles.length === 0) {
     return;
   }

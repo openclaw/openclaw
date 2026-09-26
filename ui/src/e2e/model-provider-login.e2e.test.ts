@@ -8,7 +8,10 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { pickerValue as modelPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import {
+  openChatModelPicker,
+  pickerValue as modelPickerValue,
+} from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -29,6 +32,93 @@ async function captureProviderProof(fileName: string, content: Locator): Promise
 }
 
 suite.define(() => {
+  it.each(["chat", "new"])(
+    "opens existing provider settings from %s without starting a connection",
+    async (origin) => {
+      await suite.withPage(
+        {
+          locale: "en-US",
+          reducedMotion: "reduce",
+          serviceWorkers: "block",
+          viewport: { width: 1280, height: 900 },
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            assistantAgentId: "main",
+            defaultAgentId: "main",
+            sessionKey: "agent:writer:main",
+            models: [
+              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
+              {
+                id: "claude-sonnet-4-6",
+                name: "Claude Sonnet 4.6",
+                provider: "anthropic",
+                available: true,
+              },
+            ],
+            methodResponses: {
+              "agents.list": {
+                defaultId: "main",
+                mainKey: "main",
+                scope: "per-sender",
+                agents: [
+                  { id: "main", name: "Main" },
+                  { id: "writer", name: "Writer" },
+                ],
+              },
+              "models.authStatus": {
+                ts: 1,
+                providers: [
+                  {
+                    provider: "openai",
+                    displayName: "OpenAI",
+                    status: "ok",
+                    profiles: [
+                      {
+                        profileId: "openai:saved",
+                        type: "oauth",
+                        status: "ok",
+                        source: "saved",
+                        email: "alex@example.invalid",
+                        displayName: "Sign in with ChatGPT",
+                      },
+                    ],
+                  },
+                  { provider: "anthropic", status: "ok", profiles: [] },
+                ],
+                providerCapabilities: [
+                  { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+                  { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+                ],
+              },
+            },
+          });
+          const query = origin === "chat" ? "session=agent:writer:main" : "agent=writer";
+          await page.goto(`${suite.server.baseUrl}${origin}?${query}`);
+          await openChatModelPicker(page);
+          await page
+            .locator('[data-chat-model-provider="openai"] [data-chat-model-provider-settings]')
+            .click();
+          await page.waitForURL("**/settings/model-providers*");
+          const search = new URL(page.url()).searchParams;
+          expect(search.get("provider")).toBe("openai");
+          expect(search.has("connect")).toBe(false);
+          await gateway.waitForRequest("models.authStatus", { match: { agentId: "writer" } });
+          const card = page.locator('[data-provider-id="openai"]');
+          await card.getByText("alex@example.invalid", { exact: true }).waitFor();
+          expect(await page.locator('[data-provider-id="anthropic"]').count()).toBe(0);
+          expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+          await captureProviderProof(`provider-settings-${origin}.png`, card);
+          await page.locator("[data-models-connect]").click();
+          const dialog = page.locator("openclaw-modal-dialog");
+          await dialog.getByRole("heading", { name: "Connect a provider", exact: true }).waitFor();
+          await dialog.locator('[data-models-login-provider="openai"]').waitFor();
+          expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
+        },
+      );
+    },
+  );
+
   it("keeps browser sign-in available while an OAuth callback is pending", async () => {
     await suite.withPage(
       {
@@ -360,11 +450,19 @@ suite.define(() => {
                   quickApiKeySetup: true,
                   loginOptions: [
                     {
+                      id: "openai-token-sharing",
+                      brandId: "openai",
+                      label: "Sign in with ChatGPT",
+                      hint: "Use your Codex allowance with per-instance usage tracking and token limits",
+                      kind: "oauth",
+                      featured: false,
+                    },
+                    {
                       id: "openai-device-code",
                       brandId: "openai",
                       groupLabel: "OpenAI",
                       label: "Codex login (device code)",
-                      hint: "Approve Codex access using a code in your browser",
+                      hint: "Use a browser code when OpenClaw runs on a remote VM",
                       kind: "device-code",
                       featured: true,
                       docsUrl: "https://docs.openclaw.ai/providers/openai/authentication",
@@ -373,15 +471,7 @@ suite.define(() => {
                       id: "openai",
                       brandId: "openai",
                       label: "Codex login (browser)",
-                      hint: "Sign in to Codex with your ChatGPT account",
-                      kind: "oauth",
-                      featured: false,
-                    },
-                    {
-                      id: "openai-token-sharing",
-                      brandId: "openai",
-                      label: "Sign in with ChatGPT",
-                      hint: "Use your ChatGPT allowance through the Responses API",
+                      hint: "Sign in to Codex locally with your ChatGPT account",
                       kind: "oauth",
                       featured: false,
                     },
@@ -434,13 +524,9 @@ suite.define(() => {
           dialog.getByRole("button").filter({
             has: page.locator("strong").filter({ hasText: label }),
           });
-        for (const method of [
-          "Codex login (device code)",
-          "Codex login (browser)",
-          "Sign in with ChatGPT",
-        ]) {
-          await connectionMethod(method).waitFor();
-        }
+        expect(await dialog.locator("[data-models-login-choice] strong").allTextContents()).toEqual(
+          ["Sign in with ChatGPT", "Codex login (device code)", "Codex login (browser)"],
+        );
         expect(await dialog.locator("[data-models-login-api-key]").isVisible()).toBe(true);
         expect(await dialog.locator("select, openclaw-select-picker").count()).toBe(0);
         await dialog

@@ -5,9 +5,9 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as doctorConfigPreflight from "../../commands/doctor-config-preflight.js";
 import { createDoctorConfigSnapshot } from "../../commands/doctor-config-snapshot.test-helpers.js";
 import { noteStaleUpdateRuns } from "../../commands/doctor-update-run.js";
+import * as startupConfigPreflight from "../../commands/startup-config-preflight.js";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { isVerbose, setVerbose } from "../../globals.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -138,9 +138,9 @@ describe("transcripts CLI", () => {
       const snapshot = createDoctorConfigSnapshot();
       // Keep real note emission and guard suppression; state migration is outside this output test.
       const preflight = vi
-        .spyOn(doctorConfigPreflight, "runDoctorConfigPreflight")
+        .spyOn(startupConfigPreflight, "runStartupConfigPreflight")
         .mockImplementation(async () => {
-          await noteStaleUpdateRuns({});
+          await noteStaleUpdateRuns();
           return { snapshot, baseConfig: snapshot.config };
         });
       const originalArgv = process.argv;
@@ -150,7 +150,7 @@ describe("transcripts CLI", () => {
         await withEnvAsync(
           { OPENCLAW_SUPPRESS_NOTES: undefined, NODE_NO_WARNINGS: process.env.NODE_NO_WARNINGS },
           async () => {
-            expect(await captureStdout(() => noteStaleUpdateRuns({}))).toContain(warning);
+            expect(await captureStdout(() => noteStaleUpdateRuns())).toContain(warning);
             for (const [commandArgs, expectedOutput] of [
               [args, expected],
               [jsonArgs, expectedJson],
@@ -168,7 +168,7 @@ describe("transcripts CLI", () => {
             expect(getUpdateRun(run.runId)?.steps).toContainEqual(
               expect.objectContaining(warningStep),
             );
-            expect(await captureStdout(() => noteStaleUpdateRuns({}))).toContain(warning);
+            expect(await captureStdout(() => noteStaleUpdateRuns())).toContain(warning);
           },
         );
       } finally {

@@ -595,9 +595,10 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
       : hasComposedContent
         ? null
         : t("chat.composer.emptyHint"));
-  // Send holds the trailing edge whatever the draft is. During an active run the
-  // same slot shows stop while empty, then becomes the follow-up action as soon
-  // as the operator composes content; two competing primary buttons never render.
+  const hasSendableContent =
+    hasComposedContent && props.canSend && !props.sending && !sendDisabledReason;
+  // A held draft must not replace Stop with a disabled Send. Only an available
+  // follow-up action takes that slot during an abortable run.
   const sendAction = html`
     <openclaw-tooltip
       .content=${props.preparingAttachments ? t("chat.composer.preparingAttachments") : (sendStatus ?? activeRunActionTooltip)}
@@ -606,7 +607,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         class="chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}"
         @pointerdown=${props.onPrimaryActionPointerDown}
         @click=${send}
-        ?disabled=${!props.canSend || props.sending || Boolean(sendDisabledReason) || !hasComposedContent}
+        ?disabled=${!hasSendableContent}
         aria-label=${sendStatus ?? activeRunActionDescription}
         aria-busy=${sendBusy || props.preparingAttachments ? "true" : "false"}
       >
@@ -625,17 +626,15 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
       : sendAction;
   const desktopPrimaryAction = props.dictation?.active
     ? dictationSendAction
-    : props.canAbort
-      ? hasComposedContent
-        ? sendAction
-        : abortAction
+    : props.canAbort && !hasSendableContent
+      ? abortAction
       : sendAction;
   const mobilePrimaryAction = props.dictation?.active
     ? dictationSendAction
-    : hasComposedContent
-      ? sendAction
-      : props.canAbort
-        ? abortAction
+    : props.canAbort && !hasSendableContent
+      ? abortAction
+      : hasComposedContent
+        ? sendAction
         : props.onToggleVoice
           ? mobileTalkAction
           : sendAction;

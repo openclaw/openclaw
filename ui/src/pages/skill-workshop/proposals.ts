@@ -21,12 +21,7 @@ import {
 } from "../../lib/skill-workshop/index.ts";
 import { parseDateMs, proposalFromInspect, proposalFromManifest } from "./proposal-records.ts";
 import type { SkillWorkshopState } from "./state.ts";
-export {
-  createSkillWorkshopState,
-  skillWorkshopRouteData,
-  type SkillWorkshopRouteData,
-  type SkillWorkshopState,
-} from "./state.ts";
+export { createSkillWorkshopState, type SkillWorkshopState } from "./state.ts";
 
 export type SkillWorkshopLoadOptions = {
   force?: boolean;

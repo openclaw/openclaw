@@ -64,16 +64,7 @@ describe("elevenlabs tts diagnostics", () => {
     );
   });
 
-  it("falls back to raw body text when the error body is non-JSON", async () => {
-    const fetchMock = vi.fn<typeof fetch>(
-      async () => new Response("service unavailable", { status: 503 }),
-    );
-    globalThis.fetch = fetchMock;
-
-    await expectDefaultTtsRequestToThrow("ElevenLabs API error (503): service unavailable");
-  });
-
-  it("caps streamed non-JSON error reads instead of consuming full response bodies", async () => {
+  it("includes raw non-JSON error detail while capping streamed body reads", async () => {
     const streamed = createStreamingErrorResponse({
       status: 503,
       chunkCount: 200,
@@ -83,7 +74,7 @@ describe("elevenlabs tts diagnostics", () => {
     const fetchMock = vi.fn<typeof fetch>(async () => streamed.response);
     globalThis.fetch = fetchMock;
 
-    await expectDefaultTtsRequestToThrow("ElevenLabs API error (503)");
+    await expectDefaultTtsRequestToThrow("ElevenLabs API error (503): yyyy");
 
     expect(streamed.getReadCount()).toBeLessThan(200);
   });

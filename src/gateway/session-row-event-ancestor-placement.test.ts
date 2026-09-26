@@ -5,6 +5,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
@@ -120,7 +121,11 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
       modelCatalog: [],
       placementFactsReader: placements,
     });
-    const connection = createGatewayConnectionState({ bootId: "ancestor-placement", cfg });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "ancestor-placement",
+      cfg,
+    });
     const context = requestContext(cfg);
     context.chatAbortControllers = connection.chatAbortControllers;
     context.broadcastToConnIds = connection.broadcastToConnIds;

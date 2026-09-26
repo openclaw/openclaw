@@ -1,3 +1,5 @@
+import { settlesWithin } from "../shared/settle-within.js";
+
 const terminalPersistenceErrorByEntry = new WeakMap<object, unknown>();
 export type ChatAbortTerminalDispatch = {
   settled: Promise<void>;
@@ -99,22 +101,12 @@ export async function waitForChatAbortControllerRemoval<
   if (removals.length === 0) {
     return terminalOwnersSettled();
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const removed = await Promise.race([
-      Promise.all(removals).then(() => true),
-      new Promise<false>((resolve) => {
-        timer = setTimeout(() => resolve(false), Math.max(0, params.timeoutMs));
-        timer.unref?.();
-      }),
-    ]);
+    const removed = await settlesWithin(Promise.all(removals), Math.max(0, params.timeoutMs));
     // Maintenance may retire a registration before its write settles. Registry
     // removal alone must not let a lifecycle mutation bypass that terminal owner.
     return removed && terminalOwnersSettled();
   } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
     for (const { entry, resolve } of registeredWaiters) {
       const waiters = removalWaitersByEntry.get(entry);
       waiters?.delete(resolve);

@@ -36,7 +36,6 @@ const mocks = vi.hoisted(() => ({
     | { request: (method: string, params?: unknown) => Promise<unknown> }
     | undefined,
   closeMcpManager: vi.fn(async () => undefined),
-  runStartupMigrations: vi.fn(async () => undefined),
   loadNodeHostConfig: vi.fn<() => Promise<NodeHostConfig | null>>(async () => null),
   loadDeviceAuthTokenReadOnly: vi.fn<typeof loadDeviceAuthTokenReadOnly>(async () => null),
   configureNodeHost: vi.fn(async (params: Parameters<typeof configureNodeHost>[0]) => {
@@ -190,8 +189,8 @@ vi.mock("./skills.js", () => ({
   scanNodeHostedSkills: vi.fn(() => mocks.nodeSkillDescriptors),
 }));
 
-vi.mock("./startup-state-migrations.js", () => ({
-  runStartupMigrations: mocks.runStartupMigrations,
+vi.mock("./startup-state-readiness.js", () => ({
+  ensureNodeHostStateReady: () => {},
 }));
 
 vi.mock("./runtime.js", async (importOriginal) => {

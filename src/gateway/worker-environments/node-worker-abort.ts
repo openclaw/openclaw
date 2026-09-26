@@ -9,7 +9,8 @@ export function raceNodeWorkerOperation<T>(
   const abortError = () =>
     signal.reason instanceof Error ? signal.reason : new Error(messages.aborted);
   if (signal.aborted) {
-    return Promise.reject(abortError());
+    // The source is already running; observe its rejection even when abort wins.
+    return Promise.race([Promise.reject(abortError()), operation]);
   }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {

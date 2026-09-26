@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runNodeMain } from "../../../scripts/run-node.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
@@ -20,6 +21,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { createUpdateCommandFailureResult } from "./update-command-result.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { withGatewayRuntimeArtifactPublication } from "./update-command-service-maintenance.js";
 
@@ -97,6 +99,30 @@ async function withRuntimePublicationFixture(
     expect(service.install).not.toHaveBeenCalled();
   });
 }
+
+it("keeps Task Scheduler timeout details in the source-build failure report", () =>
+  withRuntimePublicationFixture(async ({ root, env, service }) => {
+    vi.mocked(service.readCommand).mockRejectedValue(
+      new ServiceInspectionError("windows-task-inspection-failed", {
+        kind: "timeout",
+        timeoutMs: 731,
+      }),
+    );
+    const spawn = vi.fn();
+    const error = await runNodeMain({ cwd: root, args: ["--version"], env, spawn }).catch(
+      (caughtError: unknown) => caughtError,
+    );
+    const result = createUpdateCommandFailureResult({
+      mode: "git",
+      root,
+      durationMs: 0,
+      failure: { cause: error },
+    });
+    expect(result.reason).toBe("runtime-artifact-publication");
+    expect(service.readCommand).toHaveBeenCalled();
+    expect(result.failedStep.failureFacts?.[0]?.message).toContain("timed out after 731 ms");
+    expect(spawn).not.toHaveBeenCalled();
+  }));
 
 it.each([undefined, "stale-profile"])(
   "preserves the serving installation when a source command requests an automatic rebuild (profile=%s)",

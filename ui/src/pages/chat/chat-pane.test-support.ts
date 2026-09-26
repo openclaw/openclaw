@@ -230,11 +230,13 @@ type FixtureContextServices =
   | "agentIdentity"
   | "agents"
   | "sessions"
-  | "connectionBootstrap";
+  | "connectionBootstrap"
+  | "chatAttachmentHandoff";
 
 function withLiveCapabilities(
   context: Omit<ApplicationContext, FixtureContextServices> & { sessions?: SessionCapability },
 ): ApplicationContext {
+  const chatAttachmentHandoff = createChatAttachmentHandoff(context.gateway);
   const connectionBootstrap = createConnectionBootstrapCoordinator();
   const synchronizeBootstrap = (snapshot: ApplicationContext["gateway"]["snapshot"]) =>
     connectionBootstrap.synchronize({
@@ -253,6 +255,7 @@ function withLiveCapabilities(
     createSessionCapability(context.gateway, context.agentSelection, { connectionBootstrap });
   onTestFinished(() => {
     stopBootstrap();
+    chatAttachmentHandoff.dispose();
     connectionBootstrap.reset();
     if (!context.sessions) {
       sessions.dispose();
@@ -262,6 +265,7 @@ function withLiveCapabilities(
   });
   return {
     ...context,
+    chatAttachmentHandoff,
     connectionBootstrap,
     theme,
     agents,
@@ -327,7 +331,6 @@ export function createInitializationContext(client?: GatewayBrowserClient): Appl
     },
     navigate: () => undefined,
     chatSubmissions: createChatSubmissions(),
-    chatAttachmentHandoff: createChatAttachmentHandoff(),
   } as unknown as Omit<ApplicationContext, FixtureContextServices>);
 }
 
@@ -436,7 +439,6 @@ export function createSessionContext(
       },
     },
     chatSubmissions: createChatSubmissions(),
-    chatAttachmentHandoff: createChatAttachmentHandoff(),
     nativeChatDrafts: { subscribe: () => () => undefined },
     placementStartup: { get: vi.fn(() => null), hasPendingTurn: () => false, pause: vi.fn() },
     sessions,

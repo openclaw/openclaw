@@ -461,7 +461,8 @@ export function listChangedPathsFromGit(params: {
 }
 
 function runGitNameOnlyDiff(extraArgs: string[], cwd = process.cwd()): string[] {
-  const output = execFileSync("git", ["diff", "--name-only", "-z", ...extraArgs], {
+  // Keep rename sources so checks still cover the removed path's consumers.
+  const output = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", ...extraArgs], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",

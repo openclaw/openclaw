@@ -1,0 +1,153 @@
+name: iOS Release E2E
+
+on:
+  workflow_call:
+    inputs:
+      target_sha:
+        type: string
+        required: true
+      mode:
+        type: string
+        default: stock
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Stock qualification or four matched stock/SimSlim pairs
+        type: choice
+        options: [stock, compare]
+        default: stock
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: xcode-27
+    timeout-minutes: 240
+    env:
+      TARGET_SHA: ${{ inputs.target_sha || github.sha }}
+      E2E_MODE: ${{ inputs.mode }}
+    steps:
+      - name: Initialize failure proof and validate inputs
+        id: start
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PROOF_PATH="$RUNNER_TEMP/ios-release-e2e-proof.json"
+          echo "PROOF_PATH=$PROOF_PATH" >> "$GITHUB_ENV"
+          echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import json, os, re
+          sha = os.environ["TARGET_SHA"]
+          mode = os.environ["E2E_MODE"]
+          with open(os.environ["PROOF_PATH"], "w") as out:
+              json.dump({"schema": 1, "status": "failed", "trials": [],
+                         "targetSha": sha if re.fullmatch(r"[a-f0-9]{40}", sha) else None,
+                         "harnessSha": None,
+                         "mode": mode if mode in ("stock", "compare") else None,
+                         "errors": ["workflow-setup-incomplete"]}, out)
+          PY
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$E2E_MODE" == stock || "$E2E_MODE" == compare ]] || exit 1
+          # Only the protected beta caller admits a separately authorized release target.
+          # Other callers must execute their own revision in their own cache context.
+          if [[ "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
+            [[ "$GITHUB_REPOSITORY" == openclaw/openclaw ]] || exit 1
+            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] || exit 1
+            [[ "$GITHUB_REF" == refs/heads/main ]] || exit 1
+            [[ "$GITHUB_WORKFLOW_REF" == "$GITHUB_REPOSITORY/.github/workflows/ios-beta-release.yml@refs/heads/main" ]] || exit 1
+          fi
+          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact qualification target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.start.outputs.target_sha }}
+          persist-credentials: false
+
+      - name: Verify target and require target-owned harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || exit 1
+          test -f scripts/ios-release-e2e.ts
+          test -f scripts/lib/ios-release-e2e-native.ts
+          test -f test/helpers/openclaw-test-instance.ts
+
+      - name: Start shared toolchain installation clock
+        id: install-start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.19.0"
+          install-bun: "false"
+          cache-mode: "off"
+
+      - name: Select Xcode 27 and install pinned native tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain 27.0
+          swift_tools_dir="$RUNNER_TEMP/ios-release-e2e-tools"
+          ./scripts/install-xcodegen.sh "$swift_tools_dir"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$watch_toolchain"
+          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned comparison meter
+        id: simslim
+        if: inputs.mode == 'compare'
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="$RUNNER_TEMP/ios-release-e2e-simslim"
+          ./scripts/install-simslim.sh "$install_dir"
+          echo "binary=$install_dir/simslim" >> "$GITHUB_OUTPUT"
+
+      - name: Finish shared toolchain installation clock
+        id: install-end
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Qualify native pairing and chat
+        env:
+          OPENCLAW_CI_SIMSLIM_BINARY: ${{ steps.simslim.outputs.binary }}
+        run: |
+          node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
+            --mode "$E2E_MODE" --target-sha "$TARGET_SHA" --output "$PROOF_PATH"
+
+      - name: Complete sanitized timing proof
+        if: always()
+        env:
+          START_EPOCH: ${{ steps.start.outputs.epoch }}
+          INSTALL_START: ${{ steps.install-start.outputs.epoch }}
+          INSTALL_END: ${{ steps.install-end.outputs.epoch }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          python3 - <<'PY'
+          import json, os, time
+          path = os.environ["PROOF_PATH"]
+          with open(path) as source:
+              proof = json.load(source)
+          proof["workflowSha"] = os.environ["WORKFLOW_SHA"]
+          proof["overallMs"] = round((time.time() - int(os.environ["START_EPOCH"])) * 1000)
+          start, end = os.environ["INSTALL_START"], os.environ["INSTALL_END"]
+          proof["sharedInstallerMs"] = (int(end) - int(start)) * 1000 if start and end else None
+          with open(path, "w") as out:
+              json.dump(proof, out, indent=2)
+          PY
+
+      - name: Upload sanitized proof only
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-release-e2e-${{ inputs.mode }}
+          path: ${{ runner.temp }}/ios-release-e2e-proof.json
+          if-no-files-found: error
+          retention-days: 14

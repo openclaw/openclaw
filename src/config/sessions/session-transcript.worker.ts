@@ -154,6 +154,27 @@ serveOwnedWorkerTasks(
           return { kind: "historical-eviction-candidates" as const, sessionIds: result.value };
         });
       }
+      if (request.kind === "session-pending-archives") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { runSqliteDeferredTransactionSync } =
+          await import("../../infra/sqlite-transaction.js");
+        const { hasPendingSessionTranscriptArchives } =
+          await import("./session-accessor.sqlite-archive-store-kernel.js");
+        return await withHistoryDatabase(request.database, request.kind, () => {
+          const result = withOpenClawAgentDatabaseReadOnly(
+            (database) =>
+              runSqliteDeferredTransactionSync(database.db, () =>
+                hasPendingSessionTranscriptArchives(database),
+              ),
+            { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
+          );
+          return {
+            kind: "session-pending-archives" as const,
+            pending: result.found && result.value,
+          };
+        });
+      }
       if (request.kind === "session-archive-pruning") {
         const { readSessionArchivePruningInWorker } =
           await import("./session-history-archive-pruning.worker.js");
@@ -173,6 +194,25 @@ serveOwnedWorkerTasks(
           return {
             kind: "cold-metadata" as const,
             archive: result.found ? result.value : undefined,
+          };
+        });
+      }
+      if (request.kind === "transcript-match") {
+        const { findTranscriptEventMatchingInDatabase } =
+          await import("./session-transcript-match.js");
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        return await withHistoryDatabase(request.database, request.kind, () => {
+          const opened = withOpenClawAgentDatabaseReadOnly(
+            (database) => findTranscriptEventMatchingInDatabase(database, request.request),
+            {
+              ...request.database,
+              env: cloneEnvWithPlatformSemantics(request.request.target.env ?? process.env),
+            },
+          );
+          return {
+            kind: "transcript-match" as const,
+            result: opened.found ? opened.value : undefined,
           };
         });
       }
@@ -251,6 +291,12 @@ serveOwnedWorkerTasks(
           return { kind: "session-identity-evidence" as const, evidence };
         });
       }
+      if (request.kind === "session-diagnostic-text") {
+        const { readSessionDiagnosticText } = await import("./session-entry-read.worker.js");
+        return await withHistoryDatabase(request.database, request.kind, () =>
+          readSessionDiagnosticText(request),
+        );
+      }
       if (request.kind === "session-entry-read") {
         const { loadSessionEntryReadOnlyResultInScope } =
           await import("./session-accessor.sqlite-entry.js");
@@ -328,6 +374,32 @@ serveOwnedWorkerTasks(
           return result.found
             ? result.value
             : { kind: "session-membership-facts" as const, facts: [] };
+        });
+      }
+      if (request.kind === "projection-status") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { runSqliteDeferredTransactionSync } =
+          await import("../../infra/sqlite-transaction.js");
+        const {
+          hasSessionsNeedingTranscriptIndexReconcile,
+          hasOrphanedTranscriptIndexRows,
+          sessionTranscriptIndexNeedsReconcile,
+        } = await import("./session-transcript-index.js");
+        return await withHistoryDatabase(request.database, request.kind, () => {
+          const result = withOpenClawAgentDatabaseReadOnly(
+            ({ db }) =>
+              runSqliteDeferredTransactionSync(db, () =>
+                request.sessionId !== undefined
+                  ? sessionTranscriptIndexNeedsReconcile(db, request.sessionId)
+                  : hasSessionsNeedingTranscriptIndexReconcile(db) ||
+                    hasOrphanedTranscriptIndexRows(db),
+              ),
+            { ...request.database, env: request.env },
+          );
+          return result.found
+            ? result.value
+            : request.sessionId === undefined && result.reason === "schema-missing";
         });
       }
       if (request.kind === "session-members") {
@@ -454,87 +526,16 @@ serveOwnedWorkerTasks(
             };
           }
           if (request.kind === "history-page") {
+            const { readSessionHistoryRequest } =
+              await import("../../gateway/session-history-worker-reader.js");
             return await withHistoryDatabase<SessionHistoryWorkerResult>(
               request.database,
               request.kind,
-              async () => {
-                const { createReadonlySessionHistoryReader } =
-                  await import("../../gateway/session-history-readonly-reader.js");
-                const options = {
-                  readers: createReadonlySessionHistoryReader({
-                    ...request.target,
-                    database: request.database,
-                  }),
-                  readOnly: true,
-                  deferProfileDisplay: true,
-                  resolveCronJobName: () => undefined,
-                };
-                if (request.request.kind === "transcript-binding") {
-                  return {
-                    kind: "transcript-binding",
-                    binding: options.readers.readTranscriptBinding(request.request.params.run),
-                  };
-                }
-                if (request.request.kind === "message-by-id") {
-                  const { target, messageId, options: lookupOptions } = request.request.params;
-                  return {
-                    kind: "message-by-id",
-                    result: await options.readers.readSessionMessageByIdAsync(
-                      target,
-                      messageId,
-                      lookupOptions,
-                    ),
-                  };
-                }
-                if (request.request.kind === "message-count") {
-                  return {
-                    kind: "message-count",
-                    count: await options.readers.readSessionMessageCountAsync(
-                      request.request.params.target,
-                    ),
-                  };
-                }
-                if (request.request.kind === "message-lookup") {
-                  return {
-                    kind: "message-lookup",
-                    messages: await options.readers.readSessionMessagesMatchingIdAsync(
-                      request.request.params.target,
-                      request.request.params.messageId,
-                    ),
-                  };
-                }
-                if (request.request.kind === "recent") {
-                  const { target, ...limits } = request.request.params;
-                  const { messages } =
-                    await options.readers.readRecentSessionMessagesWithStatsAsync(target, limits);
-                  return { kind: "recent", messages };
-                }
-                if (request.request.kind === "delta") {
-                  const { prepareSessionHistoryDelta } =
-                    await import("../../gateway/session-history-delta-visibility.js");
-                  return {
-                    kind: "delta",
-                    ...prepareSessionHistoryDelta(
-                      options.readers.readTranscriptDisplayDelta(request.request.params.limits),
-                      options.readers.subagentCoordination,
-                    ),
-                  };
-                }
-                if (request.request.kind === "rpc") {
-                  const { readChatHistoryPageKernel } =
-                    await import("../../gateway/server-methods/chat-history-page-kernel.js");
-                  return {
-                    kind: "rpc",
-                    page: await readChatHistoryPageKernel(request.request.params, options),
-                  };
-                }
-                const { readSessionHistorySnapshotKernel } =
-                  await import("../../gateway/session-history-snapshot.js");
-                return {
-                  kind: "http",
-                  snapshot: await readSessionHistorySnapshotKernel(request.request.params, options),
-                };
-              },
+              () =>
+                readSessionHistoryRequest(request.request, {
+                  ...request.target,
+                  database: request.database,
+                }),
             );
           }
           if (request.kind === "session-reset-recall") {
@@ -582,7 +583,12 @@ serveOwnedWorkerTasks(
         request.kind === "history-page" &&
         (request.request.kind === "message-lookup" ||
           request.request.kind === "message-by-id" ||
-          request.request.kind === "message-count")
+          request.request.kind === "message-count" ||
+          request.request.kind === "artifacts" ||
+          request.request.kind === "message-page" ||
+          request.request.kind === "around-id" ||
+          request.request.kind === "source-messages" ||
+          request.request.kind === "recent-page")
       ) {
         return { ok: false, error: { kind: "syntax", message: error.message } };
       }

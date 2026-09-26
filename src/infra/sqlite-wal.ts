@@ -183,21 +183,10 @@ function parseProcMountInfoEntries(contents: string): MountEntry[] {
 function parseMountCommandEntries(contents: string): MountEntry[] {
   const entries: MountEntry[] = [];
   for (const line of contents.split("\n")) {
-    const linuxMatch = /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line);
-    if (linuxMatch) {
-      const source = linuxMatch[1];
-      const mountPoint = linuxMatch[2];
-      const fsType = linuxMatch[3];
-      if (source && mountPoint && fsType) {
-        entries.push({ source, mountPoint, fsType });
-      }
-      continue;
-    }
-    const bsdMatch = /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
-    if (bsdMatch) {
-      const source = bsdMatch[1];
-      const mountPoint = bsdMatch[2];
-      const fsType = bsdMatch[3];
+    const match =
+      /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line) ?? /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
+    if (match) {
+      const [, source, mountPoint, fsType] = match;
       if (source && mountPoint && fsType) {
         entries.push({ source, mountPoint, fsType });
       }
@@ -500,14 +489,8 @@ export function configureSqliteWalMaintenance(
   }
   if (journalPolicy === "rollback") {
     requireRollbackJournalMode(db, options);
-    return {
-      checkpoint: () => true,
-      reclaimFreePages: (reclaimOptions = {}) =>
-        reclaimSqliteWalFreePages(db, () => true, reclaimOptions),
-      close: () => true,
-    };
   }
-  if (!enableWalJournalMode(db, busyTimeoutMs, options)) {
+  if (journalPolicy === "rollback" || !enableWalJournalMode(db, busyTimeoutMs, options)) {
     return {
       checkpoint: () => true,
       reclaimFreePages: (reclaimOptions = {}) =>

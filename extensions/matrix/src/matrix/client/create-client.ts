@@ -62,10 +62,7 @@ export async function createMatrixClient(params: {
     : null;
 
   if (storagePaths) {
-    await maybeMigrateLegacyStorage({
-      storagePaths,
-      env: process.env,
-    });
+    await maybeMigrateLegacyStorage({ storagePaths });
     fs.mkdirSync(storagePaths.rootDir, { recursive: true });
     await writeStorageMeta({
       storagePaths,

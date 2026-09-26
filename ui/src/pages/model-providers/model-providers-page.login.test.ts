@@ -14,8 +14,11 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { ModelProviderLoginController } from "./login-controller.ts";
 import {
   appendPage,
+  clickLoginChoice,
   createHarness,
   type ModelProvidersPageTestElement,
+  startSelectedLogin,
+  submitCredential,
 } from "./model-providers-page.test-support.ts";
 
 afterEach(() => {
@@ -60,6 +63,13 @@ function loginHarness(
         quickApiKeySetup: true,
         loginOptions: [
           {
+            id: "example-browser",
+            brandId: "example",
+            label: "Example browser sign-in",
+            kind: "oauth",
+            featured: true,
+          },
+          {
             id: "example-secret",
             brandId: "example",
             label: "Example API key",
@@ -67,13 +77,6 @@ function loginHarness(
             hint: "Use your Example account key",
             kind: "secret",
             featured: false,
-          },
-          {
-            id: "example-browser",
-            brandId: "example",
-            label: "Example browser sign-in",
-            kind: "oauth",
-            featured: true,
           },
         ],
       },
@@ -130,29 +133,10 @@ async function selectProvider(page: ModelProvidersPageTestElement, provider: str
   await page.updateComplete;
 }
 
-function clickLoginChoice(page: ModelProvidersPageTestElement, choice: string) {
-  const option = page.data?.authStatus?.providerCapabilities
-    ?.flatMap((provider) => provider.loginOptions ?? [])
-    .find((candidate) => candidate.id === choice);
-  expect(option).toBeDefined();
-  const button = [
-    ...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button"),
-  ].find((candidate) => candidate.querySelector("strong")?.textContent === option!.label);
-  expect(button).toBeDefined();
-  button!.click();
-}
-
 async function chooseLogin(page: ModelProvidersPageTestElement, choice = "example-secret") {
   await openPicker(page);
   await selectProvider(page, "example");
   clickLoginChoice(page, choice);
-}
-
-async function startSelectedLogin(page: ModelProvidersPageTestElement, choice: string) {
-  clickLoginChoice(page, choice);
-  await waitForFast(() =>
-    expect(page.querySelector<HTMLInputElement>('input[name="wizard-text"]')?.disabled).toBe(false),
-  );
 }
 
 async function openLogin(page: ModelProvidersPageTestElement, choice = "example-secret") {
@@ -174,21 +158,44 @@ function providerChoices(page: Element) {
   );
 }
 
-async function submitCredential(page: ModelProvidersPageTestElement) {
-  const manual = page.querySelector<HTMLDetailsElement>(".wizard-step__manual-entry");
-  if (manual && !manual.open) {
-    manual.querySelector<HTMLElement>("summary")!.click();
-    expect(manual.open).toBe(true);
-  }
-  const input = page.querySelector<HTMLInputElement>('input[name="wizard-text"]')!;
-  input.value = "synthetic-test-credential";
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  await page.updateComplete;
-  page.querySelector<HTMLButtonElement>('.wizard-step__form button[type="submit"]')!.click();
-  await waitForFast(() => expect(input.disabled).toBe(true));
-}
-
 describe("Models provider login", () => {
+  it("shows the provider's first login method first and focuses it", async () => {
+    const { context } = loginHarness({
+      capabilities: [
+        {
+          provider: "openai",
+          apiKeySupported: false,
+          quickApiKeySetup: false,
+          loginOptions: [
+            {
+              id: "openai/siwc",
+              brandId: "openai",
+              label: "Sign in with ChatGPT",
+              kind: "oauth",
+              featured: false,
+            },
+            {
+              id: "openai/device-code",
+              brandId: "openai",
+              label: "Codex login (device code)",
+              kind: "device-code",
+              featured: true,
+            },
+          ],
+        },
+      ],
+    });
+    const page = appendPage(context);
+    await openPicker(page);
+    await selectProvider(page, "openai");
+    const options = [...page.querySelectorAll("[data-models-login-choice] button")];
+    expect(options.map((option) => option.textContent?.trim())).toEqual([
+      "Sign in with ChatGPT",
+      "Codex login (device code)",
+    ]);
+    expect(document.activeElement).toBe(options[0]);
+  });
+
   it.each([
     { kind: "oauth", cancel: false, submit: false, callbackOnly: false },
     { kind: "oauth", cancel: false, submit: false, callbackOnly: true },

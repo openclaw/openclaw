@@ -198,6 +198,7 @@ function expectPluginAutoEnableFor(config: OpenClawConfig) {
   expect(applyPluginAutoEnable).toHaveBeenCalledWith({
     config,
     env: process.env,
+    ambientEnvTriggers: "suppress",
     manifestRegistry: pluginManifestRegistry,
   });
 }
@@ -277,6 +278,7 @@ function loadTestStartup(params: {
 }) {
   return loadGatewayStartupConfigSnapshot({
     minimalTestGateway: params.minimalTestGateway ?? true,
+    ambientEnvTriggers: "suppress",
     log: params.log ?? testStartupLog(),
     initialSnapshotRead: params.initialSnapshotRead,
   });

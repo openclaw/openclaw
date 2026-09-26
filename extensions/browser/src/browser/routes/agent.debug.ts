@@ -11,13 +11,7 @@ import { DEFAULT_TRACE_DIR } from "../paths.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import {
-  readBody,
-  resolveProfileContext,
-  resolveTargetIdFromBody,
-  resolveTargetIdFromQuery,
-  withPlaywrightRouteContext,
-} from "./agent.shared.js";
+import { readBody, resolveProfileContext, withPlaywrightRouteContext } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { readRoutePositiveInteger } from "./route-numeric.js";
@@ -73,7 +67,7 @@ export function registerBrowserAgentDebugRoutes(
   ctx: BrowserRouteContext,
 ) {
   app.get("/console", async (req, res) => {
-    const targetId = resolveTargetIdFromQuery(req.query);
+    const targetId = normalizeOptionalString(req.query.targetId);
     const level = typeof req.query.level === "string" ? req.query.level : "";
 
     await sendPlaywrightDebugResult({
@@ -94,7 +88,7 @@ export function registerBrowserAgentDebugRoutes(
   });
 
   app.get("/errors", async (req, res) => {
-    const targetId = resolveTargetIdFromQuery(req.query);
+    const targetId = normalizeOptionalString(req.query.targetId);
     const clear = toBoolean(req.query.clear) ?? false;
 
     await sendPlaywrightDebugResult({
@@ -114,7 +108,7 @@ export function registerBrowserAgentDebugRoutes(
   });
 
   app.get("/requests", async (req, res) => {
-    const targetId = resolveTargetIdFromQuery(req.query);
+    const targetId = normalizeOptionalString(req.query.targetId);
     const filter = typeof req.query.filter === "string" ? req.query.filter : "";
     const clear = toBoolean(req.query.clear) ?? false;
 
@@ -136,7 +130,7 @@ export function registerBrowserAgentDebugRoutes(
   });
 
   app.get("/text", async (req, res) => {
-    const targetId = resolveTargetIdFromQuery(req.query);
+    const targetId = normalizeOptionalString(req.query.targetId);
     const selector = normalizeOptionalString(req.query.selector);
     let maxChars: number | undefined;
     try {
@@ -163,7 +157,7 @@ export function registerBrowserAgentDebugRoutes(
   });
 
   app.get("/dialogs", async (req, res) => {
-    const targetId = resolveTargetIdFromQuery(req.query);
+    const targetId = normalizeOptionalString(req.query.targetId);
 
     await sendPlaywrightDebugResult({
       req,
@@ -184,7 +178,7 @@ export function registerBrowserAgentDebugRoutes(
 
   app.post("/trace/start", async (req, res) => {
     const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+    const targetId = normalizeOptionalString(body.targetId);
     const screenshots = toBoolean(body.screenshots) ?? undefined;
     const snapshots = toBoolean(body.snapshots) ?? undefined;
     const sources = toBoolean(body.sources) ?? undefined;
@@ -210,7 +204,7 @@ export function registerBrowserAgentDebugRoutes(
 
   app.post("/trace/stop", async (req, res) => {
     const body = readBody(req);
-    const targetId = resolveTargetIdFromBody(body);
+    const targetId = normalizeOptionalString(body.targetId);
     const out = toStringOrEmpty(body.path) || "";
 
     await sendPlaywrightDebugResult({

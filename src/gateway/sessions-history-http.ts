@@ -1,5 +1,3 @@
-// Gateway HTTP session history endpoint.
-// Serves JSON and SSE history snapshots backed by session transcripts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
@@ -11,6 +9,8 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { PaginatedSessionHistory } from "../config/sessions/session-history-types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -35,6 +35,7 @@ import {
   type AuthorizedGatewayHttpRequest,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { resolveSessionHistoryUnavailableMessage } from "./session-history-error.js";
 import { resolveCursorSeq } from "./session-history-snapshot.js";
@@ -57,6 +58,16 @@ import {
 const log = createSubsystemLogger("gateway/sessions-history-sse");
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
+type HistoryPresentation = ReturnType<typeof prepareOperatorModelPresentation>;
+
+function projectHistory(snapshot: PaginatedSessionHistory, presentation: HistoryPresentation) {
+  if (!presentation) {
+    return snapshot;
+  }
+  const messages = snapshot.messages.map(presentation.message);
+  // Both wire aliases share one projection; retained SSE state stays caller-neutral.
+  return { ...snapshot, items: messages, messages };
+}
 
 // Route misses must remain distinct from matched-invalid keys so fallback
 // stages cannot claim malformed session-history requests.
@@ -78,10 +89,6 @@ function resolveSessionHistoryPath(url: URL): SessionHistoryPathResolution {
   } catch {
     return { error: "invalid-session-key", matched: true };
   }
-}
-
-function shouldStreamSse(req: IncomingMessage): boolean {
-  return hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
 }
 
 function resolveLimit(url: URL): Result<number | undefined, string> {
@@ -132,7 +139,7 @@ function resolveSessionHistoryHttpClient(
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: GatewayHttpRequestAuthOptions,
+  opts: GatewayHttpRequestAuthOptions & { getCommittedRuntimeConfig?: () => OpenClawConfig },
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const sessionKeyResolution = resolveSessionHistoryPath(url);
@@ -224,7 +231,9 @@ export async function handleSessionHistoryHttpRequest(
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   };
-  const publishAuthorizedHistory = async (publish: () => void): Promise<boolean> => {
+  const publishAuthorizedHistory = async (
+    publish: (presentation: HistoryPresentation) => void,
+  ): Promise<boolean> => {
     const cfgLocal = getRuntimeConfig();
     const currentRequestAuth = await checkGatewayHttpRequestAuth({
       ...opts,
@@ -277,7 +286,13 @@ export async function handleSessionHistoryHttpRequest(
       return false;
     }
     // Keep the final owner check and publication in the same synchronous continuation.
-    publish();
+    publish(
+      prepareOperatorModelPresentation({
+        cfg: currentConfig,
+        policyConfig: opts.getCommittedRuntimeConfig?.() ?? currentConfig,
+        client: currentClient,
+      }),
+    );
     return true;
   };
 
@@ -306,13 +321,13 @@ export async function handleSessionHistoryHttpRequest(
     });
     return true;
   }
-  const stream = shouldStreamSse(req);
+  const stream = hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
   if (
-    !(await publishAuthorizedHistory(() => {
+    !(await publishAuthorizedHistory((presentation) => {
       if (!stream) {
         sendJson(res, 200, {
           sessionKey: target.canonicalKey,
-          ...historySnapshot.history,
+          ...projectHistory(historySnapshot.history, presentation),
         });
       }
     }))
@@ -354,20 +369,23 @@ export async function handleSessionHistoryHttpRequest(
     unsubscribe?: () => void;
   } = {};
 
-  function writeStreamHistory(snapshot: ReturnType<SessionHistorySseState["snapshot"]>) {
+  function writeStreamHistory(
+    snapshot: PaginatedSessionHistory,
+    presentation: HistoryPresentation,
+  ) {
     sseWrite(res, "history", {
       sessionKey: target.canonicalKey,
-      ...snapshot,
+      ...projectHistory(snapshot, presentation),
     });
     // Send the entire requested page before bounding private live state.
     // Cursor refreshes reread SQLite, so their next page remains complete.
     sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
   }
 
-  async function publishStream(publish: () => void) {
-    const authorized = await publishAuthorizedHistory(() => {
+  async function publishStream(publish: (presentation: HistoryPresentation) => void) {
+    const authorized = await publishAuthorizedHistory((presentation) => {
       if (!isStreamClosed()) {
-        publish();
+        publish(presentation);
       }
     });
     if (!authorized) {
@@ -383,17 +401,7 @@ export async function handleSessionHistoryHttpRequest(
     if (streamResources.heartbeat) {
       clearInterval(streamResources.heartbeat);
     }
-    if (streamResources.unsubscribe) {
-      streamResources.unsubscribe();
-    }
-  }
-
-  function detachStreamListeners() {
-    req.off("close", handleRequestStreamClose);
-    req.off("error", handleRequestStreamError);
-    res.off("close", handleResponseStreamClose);
-    res.off("finish", handleResponseStreamFinish);
-    res.off("error", handleResponseStreamError);
+    streamResources.unsubscribe?.();
   }
 
   function closeStream() {
@@ -425,7 +433,11 @@ export async function handleSessionHistoryHttpRequest(
 
   function handleResponseStreamClose() {
     releaseStreamResources();
-    detachStreamListeners();
+    req.off("close", handleRequestStreamClose);
+    req.off("error", handleRequestStreamError);
+    res.off("close", handleResponseStreamClose);
+    res.off("finish", handleResponseStreamFinish);
+    res.off("error", handleResponseStreamError);
   }
 
   function handleResponseStreamError(error: Error) {
@@ -472,7 +484,7 @@ export async function handleSessionHistoryHttpRequest(
       });
       if (!isStreamClosed()) {
         const snapshot = await sseState.refreshAsync();
-        await publishStream(() => writeStreamHistory(snapshot));
+        await publishStream((presentation) => writeStreamHistory(snapshot, presentation));
       }
     };
     pendingRefresh = refresh;
@@ -485,7 +497,7 @@ export async function handleSessionHistoryHttpRequest(
     if (snapshotVersion !== readSessionTranscriptUpdateVersion()) {
       await sseState.refreshAsync();
     }
-    await publishStream(() => writeStreamHistory(sseState.snapshot()));
+    await publishStream((presentation) => writeStreamHistory(sseState.snapshot(), presentation));
   });
 
   streamResources.heartbeat = setInterval(() => {
@@ -539,7 +551,7 @@ export async function handleSessionHistoryHttpRequest(
     pendingRefresh = undefined;
     queueStreamWork(async () => {
       let refresh = false;
-      await publishStream(() => {
+      await publishStream((presentation) => {
         refresh = sseState.shouldRefreshForTranscriptPath(updatePath);
         if (refresh) {
           return;
@@ -556,14 +568,14 @@ export async function handleSessionHistoryHttpRequest(
         sseState.retainRecentMessages(MAX_SESSION_HISTORY_LIMIT);
         sseWrite(res, "message", {
           sessionKey: target.canonicalKey,
-          message: nextEvent.message,
+          message: presentation ? presentation.message(nextEvent.message) : nextEvent.message,
           ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
           messageSeq: nextEvent.messageSeq,
         });
       });
       if (refresh && !isStreamClosed()) {
         const snapshot = await sseState.refreshAsync();
-        await publishStream(() => writeStreamHistory(snapshot));
+        await publishStream((presentation) => writeStreamHistory(snapshot, presentation));
       }
     });
   });

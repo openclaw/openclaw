@@ -1,5 +1,10 @@
 import { globSync } from "node:fs";
-import { matchesVitestGlob } from "../../test/vitest/vitest.pattern-file.ts";
+import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
+import {
+  matchesVitestCliSelection,
+  matchesVitestGlob,
+  relativizeScopedPatterns,
+} from "../../test/vitest/vitest.pattern-file.ts";
 import { controlUiE2eTestGlobs, controlUiTestGlobs } from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastIsolatedTestFiles,
@@ -21,6 +26,7 @@ type TestSelection = {
 type TestShard = TestSelection & { groups?: readonly TestSelection[] };
 export type CiTestRuntimeSelection = {
   runtime: TestRuntime;
+  configs?: string[];
   includePatterns?: string[];
   includeAfterShard?: true;
   env?: Readonly<Record<string, string>>;
@@ -35,7 +41,14 @@ export const BUN_UI_TEST_ENV = {
   MIMALLOC_PURGE_HOLES_MIN_INTERVAL: "1000",
 } as const;
 
-const bunCompatibleConfigs = new Set(["test/vitest/vitest.unit-fast-fake-timers.config.ts"]);
+const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
+const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
+const bunCompatibleConfigs = new Set([
+  "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+  gatewayClientConfig,
+]);
+// Measured whole-file admission; the rest of agents-support retains Node.
+const bunCompatibleAgentSupportFiles = ["src/agents/worktrees/service.removal-recovery.test.ts"];
 // TypeScript's synchronous native API uses Node child-process pipe handles.
 // Keep these compiler assertions on Node, including those in mixed runtime suites.
 const nativeCompilerTestFiles = [
@@ -70,7 +83,6 @@ const runtimePartitions = new Map<
         "packages/markdown-core/src/render-aware-chunking.test.ts",
         // Bun skips a sibling diagnostics subscriber when warm-worker cleanup unsubscribes.
         "src/agents/code-mode-node.test.ts",
-        "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts",
         "src/cli/cli-process-diagnostics.test.ts",
         // Native heap accounting, GC, and Worker limits require V8.
         "src/infra/worker-task-pool.memory.test.ts",
@@ -102,11 +114,8 @@ const runtimePartitions = new Map<
         globSync(controlUiTestGlobs, { cwd, exclude: controlUiE2eTestGlobs })
           .map((file) => file.replaceAll("\\", "/"))
           .toSorted(),
-      // These whole files retain their GC assertions on Node; Bun runs every other UI file.
-      nodeRequired: new Set([
-        "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
-        "ui/src/pages/usage/usage-page-details.test.ts",
-      ]),
+      // Overview identity replacement still retains its payload under Bun GC.
+      nodeRequired: new Set(["ui/src/pages/usage/usage-page-details.test.ts"]),
       includeAfterShard: true,
     },
   ],
@@ -223,6 +232,12 @@ export function resolveCiTestRuntimeSelections(
     if (plans.every((plan) => bunCompatibleConfigs.has(plan.config))) {
       return completeBun();
     }
+    if (
+      plans.every((plan) => plan.config === agentVitestProjectOwners.support.config) &&
+      selection.targets.every((file) => bunCompatibleAgentSupportFiles.includes(file))
+    ) {
+      return completeBun();
+    }
     const config = plans[0]!.config;
     const partition = runtimePartitions.get(config);
     if (
@@ -239,12 +254,48 @@ export function resolveCiTestRuntimeSelections(
       ? completeBun()
       : node;
   }
+  if (
+    selection.configs?.length === 2 &&
+    selection.configs[0] === gatewayCoreConfig &&
+    selection.configs[1] === gatewayClientConfig
+  ) {
+    const parallelProjects = selection.env?.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    if (typeof parallelProjects === "string" && parallelProjects.trim() !== "1") {
+      return node;
+    }
+    // These leaf configs already run sequentially and intersect the shared
+    // include envelope with their own inventories. Keep that ownership intact.
+    return [
+      ...(policy === "dual" ? node : [{ runtime: "node" as const, configs: [gatewayCoreConfig] }]),
+      { runtime: "bun", configs: [gatewayClientConfig] },
+    ];
+  }
   if (selection.configs?.length !== 1) {
     return node;
   }
   const config = selection.configs[0]!;
   if (bunCompatibleConfigs.has(config)) {
     return completeBun();
+  }
+  if (config === agentVitestProjectOwners.support.config) {
+    const owner = agentVitestProjectOwners.support;
+    const includePatterns = selection.includePatterns?.length ? selection.includePatterns : null;
+    const qualifiedPatterns = relativizeScopedPatterns(bunCompatibleAgentSupportFiles, owner.dir);
+    if (
+      includePatterns &&
+      relativizeScopedPatterns(includePatterns, owner.dir).every((pattern) =>
+        qualifiedPatterns.includes(pattern),
+      )
+    ) {
+      return completeBun();
+    }
+    const bunFiles =
+      policy === "dual"
+        ? bunCompatibleAgentSupportFiles.filter((file) =>
+            matchesVitestCliSelection(file, owner.include, [], owner.dir, {}, includePatterns),
+          )
+        : [];
+    return bunFiles.length ? [...node, { runtime: "bun", includePatterns: bunFiles }] : node;
   }
   const partition = runtimePartitions.get(config);
   if (!partition || (partition.includeAfterShard && !uiPartition)) {
@@ -298,7 +349,18 @@ export function ciTestShardRequiresBun(
   const selections = shard.targets?.length
     ? shard.targets.map((target) => ({ ...shard, targets: [target] }))
     : shard.groups?.length
-      ? shard.groups.map((group) => ({ ...group, env: { ...shard.env, ...group.env } }))
+      ? shard.groups.map((group) => ({
+          ...group,
+          env: {
+            ...shard.env,
+            ...group.env,
+            // The runner replaces inherited project parallelism before applying group overrides.
+            OPENCLAW_TEST_PROJECTS_PARALLEL:
+              typeof group.env?.OPENCLAW_TEST_PROJECTS_PARALLEL === "string"
+                ? group.env.OPENCLAW_TEST_PROJECTS_PARALLEL
+                : "1",
+          },
+        }))
       : [shard];
   return selections.some((selection) =>
     resolveCiTestRuntimeSelections(selection, policy, cwd).some(({ runtime }) => runtime === "bun"),

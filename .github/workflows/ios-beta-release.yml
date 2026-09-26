@@ -35,7 +35,7 @@ permissions: {}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   authorize:
@@ -93,9 +93,19 @@ jobs:
           actor: ${{ github.actor }}
           triggering-actor: ${{ github.triggering_actor }}
 
+  qualify:
+    needs: authorize
+    if: inputs.operation == 'upload-and-record' && needs.authorize.outputs.approved == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ios-release-e2e.yml
+    with:
+      target_sha: ${{ needs.authorize.outputs.target_sha }}
+      mode: stock
+
   release:
     name: Upload and record iOS beta
-    needs: authorize
+    needs: [authorize, qualify]
     if: inputs.operation == 'upload-and-record' && needs.authorize.outputs.approved == 'true'
     permissions:
       actions: read
@@ -200,7 +210,7 @@ jobs:
         uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
         with:
           ruby-version: "3.4.10"
-          bundler: "2.6.9"
+          bundler: "4.0.21"
           bundler-cache: false
           working-directory: apps/ios
 
@@ -208,9 +218,9 @@ jobs:
         working-directory: apps/ios
         run: |
           set -euo pipefail
-          bundle _2.6.9_ install --jobs 4 --retry 3
-          bundle _2.6.9_ check
-          test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          bundle _4.0.21_ install --jobs 4 --retry 3
+          bundle _4.0.21_ check
+          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
       - name: Select Xcode 27
         run: |
@@ -439,7 +449,7 @@ jobs:
         uses: ruby/setup-ruby@984c0c890880bbf811283d6f09c4607c62d210a4 # v1.323.0
         with:
           ruby-version: "3.4.10"
-          bundler: "2.6.9"
+          bundler: "4.0.21"
           bundler-cache: false
           working-directory: apps/ios
 
@@ -447,9 +457,9 @@ jobs:
         working-directory: apps/ios
         run: |
           set -euo pipefail
-          bundle _2.6.9_ install --jobs 4 --retry 3
-          bundle _2.6.9_ check
-          test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          bundle _4.0.21_ install --jobs 4 --retry 3
+          bundle _4.0.21_ check
+          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
       - name: Revalidate inspection authority immediately before credential access
         id: inspection-authority

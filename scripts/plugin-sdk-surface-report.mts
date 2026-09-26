@@ -408,7 +408,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved canonical resolveConfigPath export for pre-config native browser admission.
       // +1: supported read-only admitted operator scopes for tool presentation.
       // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
-      4572,
+      // +5: approved meeting participation contract: four types and one callable (#152327).
+      // +2: shared workspace context preparation and bounded instruction snapshots.
+      4579,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -569,7 +571,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved canonical resolveConfigPath callable for pre-config native browser admission.
       // +1: supported read-only readGatewayToolOperatorScopes callable.
       // +2: canonical OAuth refresh fence and generation checks for managed runtimes.
-      2684,
+      // +1: approved runMeetingParticipationWithBrowser callable (#152327).
+      // +2: shared workspace context preparation and bounded instruction snapshots.
+      2687,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -599,7 +603,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: infra-runtime re-exports number coercion directly from its canonical owner.
       // -1: channel-message pins its published compatibility exports explicitly.
       // -1: infra-runtime pins its existing diagnostics type-query surface.
-      48,
+      // -1: infra-runtime pins its existing local-file-access exports.
+      47,
       env,
     ),
   };

@@ -3,16 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
 import { readRegistryWorktree } from "./registry-read.js";
 import {
-  abortWorktreeRemovalRow,
   admitWorktreeRunLeaseRow,
   claimWorktreeRemovalRow,
-  finalizeWorktreeRemovalRows,
   getRegistryWorktree,
   hasLiveWorktreeRunLeaseRow,
   listRegistryWorktrees,
@@ -21,6 +20,11 @@ import {
 import type { RunLeaseOwnerChecks } from "./run-lease-owner.js";
 import { releaseWorktreeRunLeaseRowAsync } from "./run-lease-store.js";
 import type { ManagedWorktreeRecord } from "./types.js";
+
+export {
+  abortWorktreeRemovalRow as abortWorktreeRemoval,
+  finalizeWorktreeRemovalRows as finalizeWorktreeRemoval,
+} from "./registry.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -58,23 +62,8 @@ type LeaseCleanup = {
 const pendingLeaseCleanups = new Set<LeaseCleanup>();
 let exitCleanupRegistered = false;
 
-async function withGitLockTransition<T>(id: string, operation: () => Promise<T>): Promise<T> {
-  const previous = gitLockTransitionTails.get(id) ?? Promise.resolve();
-  let finish!: () => void;
-  const current = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  const tail = previous.then(() => current);
-  gitLockTransitionTails.set(id, tail);
-  await previous;
-  try {
-    return await operation();
-  } finally {
-    finish();
-    if (gitLockTransitionTails.get(id) === tail) {
-      gitLockTransitionTails.delete(id);
-    }
-  }
+function withGitLockTransition<T>(id: string, task: () => Promise<T>): Promise<T> {
+  return enqueueKeyedTask({ tails: gitLockTransitionTails, key: id, task });
 }
 
 async function retainGitLock(context: OpenClawStateWorkerContext, id: string): Promise<void> {
@@ -322,18 +311,6 @@ export function claimWorktreeRemoval(
     now: Date.now(),
     checks: ownerChecks,
   });
-}
-
-export function finalizeWorktreeRemoval(env: NodeJS.ProcessEnv, worktreeId: string): void {
-  finalizeWorktreeRemovalRows(env, worktreeId);
-}
-
-export function abortWorktreeRemoval(
-  env: NodeJS.ProcessEnv,
-  worktreeId: string,
-  token: string,
-): void {
-  abortWorktreeRemovalRow(env, worktreeId, token);
 }
 
 export function hasLiveWorktreeRunLease(env: NodeJS.ProcessEnv, worktreeId: string): boolean {

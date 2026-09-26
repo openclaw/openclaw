@@ -1,4 +1,7 @@
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionEntry } from "./types.js";
+
+export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
 export type SessionEntryCacheReadOptions = {
   cache: boolean;
@@ -22,11 +25,27 @@ export type SessionSharingEntry = Pick<
   | "sessionId"
   | "updatedAt"
   | "lifecycleRevision"
+  | "archivedAt"
   | "visibility"
   | "incognito"
   | "createdActor"
   | "sandbox"
+  | "spawnedBy"
 >;
+
+export function projectSessionSharingEntry(entry: SessionEntry): SessionSharingEntry {
+  return {
+    sessionId: entry.sessionId,
+    updatedAt: entry.updatedAt,
+    lifecycleRevision: entry.lifecycleRevision,
+    archivedAt: entry.archivedAt,
+    visibility: entry.visibility,
+    incognito: entry.incognito,
+    createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
+    sandbox: entry.sandbox,
+    spawnedBy: entry.spawnedBy,
+  };
+}
 
 export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
 

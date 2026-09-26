@@ -338,7 +338,8 @@ vi.mock("./media.js", () => ({
   saveMessageResourceFeishu: mockDownloadMessageResourceFeishu,
 }));
 
-vi.mock("./audio-preflight.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   transcribeFirstAudio: mockTranscribeFirstAudio,
 }));
 
@@ -386,8 +387,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
         },
       };
     },
-    ensureConfiguredBindingRouteReady: (params: unknown) =>
-      mockEnsureConfiguredBindingRouteReady(params),
+    ensureConfiguredBindingRouteReady: mockEnsureConfiguredBindingRouteReady,
     getSessionBindingService: () => ({
       resolveByConversation: mockResolveBoundConversation,
       touch: mockTouchBinding,

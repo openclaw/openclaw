@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   ChatSendIntent,
@@ -82,15 +83,9 @@ export function resolveDisplayedLeafEntryId(state: ChatState): string | null | u
 const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
 export function isActiveLeafChangedError(err: unknown): err is GatewayRequestError {
-  if (!(err instanceof GatewayRequestError)) {
-    return false;
-  }
-  const details = err.details;
   return (
-    typeof details === "object" &&
-    details !== null &&
-    !Array.isArray(details) &&
-    (details as { reason?: unknown }).reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
+    err instanceof GatewayRequestError &&
+    asOptionalRecord(err.details)?.reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
   );
 }
 

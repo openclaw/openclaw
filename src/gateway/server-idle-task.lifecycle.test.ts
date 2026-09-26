@@ -8,7 +8,6 @@ import {
 } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
-import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 
 afterEach(() => {
@@ -16,7 +15,7 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
-it.each(["idle", "handler", "context"] as const)(
+it.each(["idle", "handler"] as const)(
   "joins started %s work before the Gateway sidecar owner closes",
   async (kind) => {
     vi.useFakeTimers();
@@ -40,30 +39,19 @@ it.each(["idle", "handler", "context"] as const)(
             log,
             errorMessage: "idle lifecycle test failed",
           })
-        : kind === "handler"
-          ? scheduleGatewayHandlerPrewarm({
-              cfgAtStart: {},
-              log,
-              items: [
-                { name: "first", load: run },
-                { name: "later", load: later },
-              ],
-            })
-          : scheduleContextCachePrewarm({
-              getConfig: () => ({}),
-              log,
-              startupTrace: {
-                measure: async (_name, warm) => {
-                  await run();
-                  return warm();
-                },
-              },
-            });
+        : scheduleGatewayHandlerPrewarm({
+            getConfig: () => ({}),
+            log,
+            items: [
+              { name: "first", load: run },
+              { name: "later", load: later },
+            ],
+          });
     const owner = createGatewaySidecarStopOwner();
     owner.publish(handle);
     let stopping: Promise<void> | undefined;
     try {
-      await vi.advanceTimersByTimeAsync(kind === "context" ? 5_000 : 0);
+      await vi.advanceTimersByTimeAsync(0);
       expect([...events]).toEqual(["started"]);
       owner.beginClose();
       stopping = owner.stop().then(() => {
@@ -138,7 +126,7 @@ it("joins the outgoing handler when shutdown begins in its warning callback", as
     });
   });
   const sidecar = scheduleGatewayHandlerPrewarm({
-    cfgAtStart: {},
+    getConfig: () => ({}),
     log: { warn },
     items: [
       {

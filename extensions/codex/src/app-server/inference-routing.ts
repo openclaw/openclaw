@@ -6,6 +6,16 @@ import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
   readCodexEffectiveConfig,
 } from "./config-layer-policy.js";
+import {
+  configuredProviders,
+  hasProviderAws,
+  projectProviderRoutes,
+  providerKind,
+  readProviderBaseUrl,
+  readProviderField,
+  withProviderBaseUrl,
+  type ProviderKind,
+} from "./inference-provider-config.js";
 import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 import { isJsonObject, type CodexConfigReadResponse, type JsonObject } from "./protocol.js";
@@ -20,7 +30,6 @@ type ThreadRoutes = {
   providers: CodexInferenceProviderRoutes;
   qualification?: CodexInferenceThreadQualification;
 };
-type ProviderKind = "openai" | "azure" | "other";
 
 type Owner = {
   closed: boolean;
@@ -600,100 +609,6 @@ export function assertCodexInferenceRouteConfig(
     }
     sibling.assertCurrent();
   }
-}
-
-function providerKind(name: unknown): ProviderKind | undefined {
-  if (name === "Amazon Bedrock" || name === "Amazon Bedrock Runtime") {
-    return undefined;
-  }
-  return name === "OpenAI"
-    ? "openai"
-    : typeof name === "string" && name.toLowerCase() === "azure"
-      ? "azure"
-      : "other";
-}
-
-function hasProviderAws(config: JsonObject | undefined, provider: string): boolean {
-  return (
-    readProviderField(config, provider, "aws") != null ||
-    Object.keys(config ?? {}).some((key) => key.startsWith(`model_providers.${provider}.aws.`))
-  );
-}
-
-function configuredProviders(...configs: (JsonObject | undefined)[]): Set<string> {
-  const providers = new Set(["openai"]);
-  for (const config of configs) {
-    for (const provider of Object.keys(
-      isJsonObject(config?.model_providers) ? config.model_providers : {},
-    )) {
-      providers.add(provider);
-    }
-    for (const key of Object.keys(config ?? {})) {
-      const provider = /^model_providers\.([^.]+)(?:\.|$)/.exec(key)?.[1];
-      if (provider) {
-        providers.add(provider);
-      }
-    }
-  }
-  return providers;
-}
-
-function projectProviderRoutes(
-  config: JsonObject | undefined,
-  providers: CodexInferenceProviderRoutes,
-): JsonObject {
-  let projected = config ?? {};
-  for (const [provider, route] of providers) {
-    projected = withProviderBaseUrl(projected, provider, route.baseUrl);
-  }
-  return projected;
-}
-
-function readProviderBaseUrl(config: JsonObject | undefined, provider: string): unknown {
-  if (provider === "openai") {
-    return config?.openai_base_url;
-  }
-  return readProviderField(config, provider, "base_url");
-}
-
-function readProviderField(
-  config: JsonObject | undefined,
-  provider: string,
-  field: string,
-): unknown {
-  const providers = isJsonObject(config?.model_providers) ? config.model_providers : undefined;
-  const selected = providers?.[provider];
-  const flat = config?.[`model_providers.${provider}`];
-  return (
-    config?.[`model_providers.${provider}.${field}`] ??
-    (isJsonObject(flat) ? flat[field] : undefined) ??
-    (isJsonObject(selected) ? selected[field] : undefined)
-  );
-}
-
-function withProviderBaseUrl(
-  config: JsonObject | undefined,
-  provider: string,
-  baseUrl: string,
-): JsonObject {
-  if (provider === "openai") {
-    return { ...config, openai_base_url: baseUrl };
-  }
-  const providers = isJsonObject(config?.model_providers) ? config.model_providers : {};
-  const selected = providers[provider];
-  const providerKey = `model_providers.${provider}`;
-  const baseUrlKey = `${providerKey}.base_url`;
-  const flat = config?.[providerKey];
-  // A sparse native table overlay changes only this URL; native still owns auth and headers.
-  return {
-    ...config,
-    model_providers: {
-      ...providers,
-      [provider]: { ...(isJsonObject(selected) ? selected : {}), base_url: baseUrl },
-    },
-    ...(isJsonObject(flat) ? { [providerKey]: { ...flat, base_url: baseUrl } } : {}),
-    ...(config?.[baseUrlKey] !== undefined ? { [baseUrlKey]: baseUrl } : {}),
-  };
 }
 
 export function bindCodexInferenceThread(

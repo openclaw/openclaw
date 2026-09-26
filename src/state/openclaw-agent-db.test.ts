@@ -14,6 +14,7 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { VERSION } from "../version.js";
@@ -25,6 +26,7 @@ import {
   updateAgentDeletionJournalDatabasePaths,
   updateAgentDeletionJournalCleanupPaths,
 } from "./agent-deletion-journal.js";
+import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
@@ -581,24 +583,23 @@ function launchAgentSchemaOpener(params: {
   databasePath: string;
   stateDir: string;
 }) {
-  const agentModuleUrl = new URL("./openclaw-agent-db.ts", import.meta.url).href;
-  const stateModuleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
-  const sqliteModuleUrl = new URL("../infra/node-sqlite.ts", import.meta.url).href;
+  const agentModuleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.agentDatabase);
+  const stateModuleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase);
+  const sqliteModuleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.nodeSqlite);
   const child = spawn(
     process.execPath,
     [
-      "--import",
-      "tsx",
+      ...resolveRuntimeWorkerArgv(agentModuleUrl).slice(0, -1),
       "--input-type=module",
       "-e",
       `
-        import { openNodeSqliteDatabase } from ${JSON.stringify(sqliteModuleUrl)};
+        import { openNodeSqliteDatabase } from ${JSON.stringify(sqliteModuleUrl.href)};
         import {
           ensureOpenClawAgentDatabaseSchema,
-        } from ${JSON.stringify(agentModuleUrl)};
+        } from ${JSON.stringify(agentModuleUrl.href)};
         import {
           closeOpenClawStateDatabaseForTest,
-        } from ${JSON.stringify(stateModuleUrl)};
+        } from ${JSON.stringify(stateModuleUrl.href)};
 
         const db = openNodeSqliteDatabase(process.env.OPENCLAW_AGENT_DB_RACE_PATH);
         db.exec("PRAGMA busy_timeout = 5000;");
@@ -2794,13 +2795,12 @@ describe("openclaw agent database", () => {
   });
 
   it("keys explicit relative paths by resolved database pathname", () => {
-    const agentModuleUrl = new URL("./openclaw-agent-db.ts", import.meta.url).href;
-    const stateModuleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
+    const agentModuleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.agentDatabase);
+    const stateModuleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase);
     const output = execFileSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
+        ...resolveRuntimeWorkerArgv(agentModuleUrl).slice(0, -1),
         "--input-type=module",
         "-e",
         `
@@ -2811,10 +2811,10 @@ describe("openclaw agent database", () => {
             closeOpenClawAgentDatabasesForTest,
             listOpenClawRegisteredAgentDatabases,
             openOpenClawAgentDatabase,
-          } from ${JSON.stringify(agentModuleUrl)};
+          } from ${JSON.stringify(agentModuleUrl.href)};
           import {
             closeOpenClawStateDatabaseForTest,
-          } from ${JSON.stringify(stateModuleUrl)};
+          } from ${JSON.stringify(stateModuleUrl.href)};
 
           const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-db-state-"));
           const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -5215,17 +5215,16 @@ describe("openclaw agent database", () => {
 
   it("closes cached handles on normal process exit so no stale WAL remains", () => {
     const stateDir = createTempStateDir();
-    const agentModuleUrl = new URL("./openclaw-agent-db.ts", import.meta.url).href;
+    const agentModuleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.agentDatabase);
     const output = execFileSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
+        ...resolveRuntimeWorkerArgv(agentModuleUrl).slice(0, -1),
         "--input-type=module",
         "-e",
         `
           import fs from "node:fs";
-          import { openOpenClawAgentDatabase } from ${JSON.stringify(agentModuleUrl)};
+          import { openOpenClawAgentDatabase } from ${JSON.stringify(agentModuleUrl.href)};
 
           const database = openOpenClawAgentDatabase({
             agentId: "worker-1",

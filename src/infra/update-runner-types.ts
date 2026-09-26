@@ -1,5 +1,8 @@
 import type { z } from "zod";
-import type { PluginUpdateOutcome } from "../plugins/update.js";
+import type {
+  PluginUpdateIntegrityDriftParams,
+  PluginUpdateSummary,
+} from "../plugins/update-source.js";
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
@@ -60,19 +63,10 @@ export type UpdateRunResult = {
         warnings: string[];
         errors: string[];
       };
-      npm: {
-        changed: boolean;
-        outcomes: PluginUpdateOutcome[];
-      };
-      integrityDrifts: Array<{
-        pluginId: string;
-        spec: string;
-        expectedIntegrity: string;
-        actualIntegrity: string;
-        resolvedSpec?: string;
-        resolvedVersion?: string;
-        action: "aborted";
-      }>;
+      npm: Pick<PluginUpdateSummary, "changed" | "outcomes">;
+      integrityDrifts: Array<
+        Omit<PluginUpdateIntegrityDriftParams, "dryRun"> & { action: "aborted" }
+      >;
     };
   };
 };

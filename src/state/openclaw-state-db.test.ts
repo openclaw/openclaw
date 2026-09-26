@@ -52,6 +52,11 @@ import {
   FIRST_USE_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
+import {
+  createCorruptionRefusalStateDatabaseFixture,
+  createDanglingSkillWorkshopReviewIndex,
+  readDanglingSkillWorkshopReviewIndex,
+} from "./openclaw-state-db-corruption.test-support.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
 import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-journal.test-support.js";
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
@@ -93,6 +98,7 @@ import {
 import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
 import {
   collectSqliteSchemaShape,
+  hashSqliteSchema,
   normalizeSqliteSchemaShapeSql,
   replaceNamedIndexesWithNoncanonicalIndexes,
 } from "./sqlite-schema-shape.test-support.js";
@@ -117,6 +123,9 @@ type StateDbTestDatabase = Pick<
 
 const stateDbTempDirs: string[] = [];
 let canonicalStateDatabaseTemplatePath: string | undefined;
+const materializeCorruptionRefusalStateDatabase = createCorruptionRefusalStateDatabaseFixture(() =>
+  materializeCurrentStateDatabase(createTempStateDir()),
+);
 
 const V2026_7_1_2_STATE_FIXTURE_URL = new URL(
   "../../test/fixtures/sqlite/openclaw-state-v2026.7.1-2.sqlite.gz",
@@ -135,18 +144,6 @@ function createTempStateDir(): string {
 
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-function hashSqliteSchema(database: DatabaseSync): string {
-  const schema = database
-    .prepare(
-      `SELECT type, name, tbl_name, sql
-         FROM sqlite_schema
-        WHERE name NOT LIKE 'sqlite_%'
-        ORDER BY type, name`,
-    )
-    .all();
-  return sha256(JSON.stringify(schema));
 }
 
 function materializeV2026_7_1_2StateDatabase(stateDir: string): {
@@ -726,58 +723,6 @@ function materializeCurrentStateDatabase(stateDir: string): string {
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   fs.copyFileSync(canonicalStateDatabaseTemplatePath, databasePath);
   return databasePath;
-}
-
-function createDanglingSkillWorkshopReviewIndex(databasePath: string): number {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec(
-      "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
-    );
-    const index = database
-      .prepare(
-        "SELECT rootpage FROM sqlite_schema WHERE type = 'index' AND name = 'idx_skill_workshop_collection_reviews_workspace_time'",
-      )
-      .get() as { rootpage?: number } | undefined;
-    if (typeof index?.rootpage !== "number") {
-      throw new Error("failed to create legacy Skill Workshop review index fixture");
-    }
-    database.enableDefensive?.(false);
-    database.exec("PRAGMA writable_schema = ON;");
-    database
-      .prepare(
-        `UPDATE sqlite_schema
-            SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
-                         ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
-          WHERE type = 'index'
-            AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
-      )
-      .run();
-    const schemaVersion = readSqliteNumberPragma(database, "schema_version");
-    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
-    return index.rootpage;
-  } finally {
-    database.close();
-  }
-}
-
-function readDanglingSkillWorkshopReviewIndex(
-  databasePath: string,
-): { rootpage: number; sql: string } | undefined {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    database.enableDefensive?.(false);
-    database.exec("PRAGMA writable_schema = ON;");
-    return database
-      .prepare(
-        "SELECT rootpage, sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_skill_workshop_collection_reviews_workspace_time'",
-      )
-      .get() as { rootpage: number; sql: string } | undefined;
-  } finally {
-    database.close();
-  }
 }
 
 function downgradeWorkerPlacementsToV7(db: DatabaseSync): void {
@@ -1656,11 +1601,9 @@ describe("openclaw state database", () => {
     ({ refusal, generationBound }) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const sourcePath = materializeCurrentStateDatabase(
+      const sourcePath = materializeCorruptionRefusalStateDatabase(
         generationBound ? createTempStateDir() : stateDir,
       );
-      createUnsafeIndexDrift(sourcePath);
-      createDanglingSkillWorkshopReviewIndex(sourcePath);
       const databasePath = resolveOpenClawStateSqlitePath(options.env);
       if (generationBound) {
         const { DatabaseSync } = requireNodeSqlite();
@@ -6554,7 +6497,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     },
   );
 
-  it.each(["unrelated foreign key", "trigger", "generated column"])(
+  it.each(["unrelated foreign key", "trigger", "generated column", "foreign role"])(
     "refuses orphan delivery recovery with %s without changing data",
     (variant) => {
       const stateDir = createTempStateDir();
@@ -6573,6 +6516,8 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
           seed.exec(
             "CREATE TRIGGER unknown_delivery_cleanup AFTER DELETE ON task_delivery_state BEGIN DELETE FROM task_runs; END",
           );
+        } else if (variant === "foreign role") {
+          seed.exec("UPDATE schema_meta SET role = 'agent' WHERE meta_key = 'primary'");
         } else {
           seed.exec(
             "ALTER TABLE task_delivery_state ADD COLUMN extra TEXT GENERATED ALWAYS AS (task_id) VIRTUAL",
@@ -6584,7 +6529,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         expect(result.warnings.join("\n")).toMatch(
           variant === "unrelated foreign key"
             ? /foreign_key_check failed/
-            : /refused an unrecognized/,
+            : variant === "foreign role"
+              ? /schema role agent; expected global/
+              : /refused an unrecognized/,
         );
         expect(
           seed

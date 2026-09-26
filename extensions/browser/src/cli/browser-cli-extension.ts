@@ -5,6 +5,9 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Command } from "commander";
+import { runCommandWithRuntime, theme } from "openclaw/plugin-sdk/cli-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { defaultRuntime, info } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveBrowserConfig,
   resolveFirstExtensionProfileName,
@@ -36,13 +39,6 @@ import {
   runBrowserExtensionSetup,
 } from "../browser/extension-setup.js";
 import { runBrowserCliCommand, type BrowserParentOpts } from "./browser-cli-shared.js";
-import {
-  defaultRuntime,
-  getRuntimeConfig,
-  info,
-  runCommandWithRuntime,
-  theme,
-} from "./core-api.js";
 
 /** Absolute path to the bundled unpacked Chrome extension directory. */
 function resolveChromeExtensionDir(pluginRoot?: string): string {

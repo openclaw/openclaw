@@ -5,6 +5,11 @@ export const stateNativeProcessEntrypoints = {
     sourceWorkerName: "claw-package-lifecycle-lease",
     distWorkerPath: "state/claw-package-lifecycle-lease.js",
   },
+  agentDatabase: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "openclaw-agent-db",
+    distWorkerPath: "state/openclaw-agent-db.js",
+  },
   stateDatabase: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "openclaw-state-db",

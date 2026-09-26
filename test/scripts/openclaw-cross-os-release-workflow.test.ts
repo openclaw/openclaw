@@ -893,12 +893,7 @@ describe("cross-OS release checks workflow", () => {
     // Lane tooling has no installed packages. Keep the fixture outside the checkout
     // so a developer's node_modules cannot satisfy an accidental runtime import.
     const fixture = tempDirs.make("cross-os-no-packages-");
-    for (const source of [
-      "package.json",
-      "scripts",
-      "packages/normalization-core",
-      "src/infra/file-read.ts",
-    ]) {
+    for (const source of ["package.json", "scripts", "packages/normalization-core"]) {
       const target = join(fixture, source);
       mkdirSync(dirname(target), { recursive: true });
       cpSync(source, target, { recursive: true });

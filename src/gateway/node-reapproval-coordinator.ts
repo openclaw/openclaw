@@ -14,7 +14,7 @@ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL,
   buildRateLimitIdentityKey,
-  createAuthRateLimiter,
+  createGatewayAuthRateLimiter,
   type RateLimitConfig,
 } from "./auth-rate-limit.js";
 
@@ -84,7 +84,7 @@ export function createNodeReapprovalCoordinator(
 ): NodeReapprovalCoordinator & {
   updateConfig: (config?: GatewayAuthRateLimitConfig) => void;
 } {
-  const limiter = createAuthRateLimiter({
+  const limiter = createGatewayAuthRateLimiter({
     ...config,
     exemptLoopback: false,
   });

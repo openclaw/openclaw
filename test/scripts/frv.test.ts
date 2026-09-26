@@ -887,24 +887,21 @@ describe("FRV same-parent recovery", () => {
         _deadline?: number,
         attempts?: Record<string, number>,
       ) => {
-        // The advisory Telegram child is not rerun; only blocking children get a second attempt.
-        expect(attempts?.["505"]).toBe(1);
+        expect(attempts?.["505"]).toBe(2);
         events.push("verify");
         return "{}";
       },
     };
     const result = await continueFailed(selectedPlan, "77", client);
     expect(result).toMatchObject({ action: "reran-parent", finalRunId: "77" });
-    expect(events.slice(0, 2).toSorted()).toEqual(["child:101", "child:202"]);
-    expect(events).not.toContain("child:505");
+    expect(events.slice(0, 3).toSorted()).toEqual(["child:101", "child:202", "child:505"]);
     expect(events).not.toContain("child:303");
-    // The advisory Telegram child passes on its first attempt without a rerun.
     expect(result.status.children).toContainEqual(
       expect.objectContaining({
         key: "npmTelegram",
-        conclusion: "failure",
+        conclusion: "success",
         passed: true,
-        effectiveRunAttempt: 1,
+        effectiveRunAttempt: 2,
       }),
     );
     expect(events.indexOf("parent")).toBeGreaterThan(events.indexOf("child:202"));

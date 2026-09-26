@@ -349,6 +349,7 @@ describe("ChatGPT token-sharing authorization", () => {
         .digest("hex"),
     );
     expect(await (await callbackResponse!).text()).toContain("token sharing is connected");
+    expect(result.notes?.[0]).toContain("Eligible Responses requests use your Codex allowance.");
   });
 
   it("retains identity when sharing is declined without choosing a model or another funding source", async () => {

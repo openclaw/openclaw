@@ -16,13 +16,13 @@ import {
 import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
   adoptTailscaleProfileAvatar,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
   formatUserProfileAvatarEtag,
-  getProfileAvatar,
   getUserProfileDisplay,
   getUserProfileListItem,
   getUserProfileRole,

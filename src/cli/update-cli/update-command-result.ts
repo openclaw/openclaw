@@ -18,6 +18,7 @@ import {
   writeControlPlaneUpdateRestartSentinel,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
+import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import {
   createUpdateErrorFact,
@@ -114,9 +115,11 @@ export function collectServiceInspectionFailureFacts(
         createUpdateFailureFact({
           check: "managed-service",
           code: verdict.inspectionReason ?? "service-inspection-unavailable",
-          message: verdict.inspectionReason
-            ? formatServiceInspectionReason(verdict.inspectionReason)
-            : verdict.message,
+          message:
+            verdict.inspectionReason &&
+            verdict.inspectionReason !== "windows-task-inspection-failed"
+              ? formatServiceInspectionReason(verdict.inspectionReason)
+              : verdict.message,
         }),
       ]
     : undefined;
@@ -224,6 +227,7 @@ export type MutableUpdateExecutionResult = {
   ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
   recoveryEnv: NodeJS.ProcessEnv | undefined;
   packageTransaction?: PackageUpdateTransaction;
+  databaseBackup?: UpdateDatabaseBackup;
   schemaVersions?: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>>;
   candidateSchemaVersions?: OpenClawSchemaVersions;
   previousSchemaVersions?: OpenClawSchemaVersions;

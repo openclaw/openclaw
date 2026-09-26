@@ -15,13 +15,17 @@ import {
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeCronJobScratch } from "../cron/scratch-store.js";
-import { CronService } from "../cron/service.js";
-import { resolveCronJobsStorePath } from "../cron/store.js";
+import { createJob } from "../cron/service/jobs.js";
+import { createCronServiceState } from "../cron/service/state.js";
+import { resolveCronJobsStorePath, saveCronJobsStoreWithRevisionNative } from "../cron/store.js";
+import { cronStoreKey } from "../cron/store/key.js";
+import { loadCronStoreFromDatabase } from "../cron/store/load.kernel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -80,19 +84,25 @@ export async function seedHeartbeatScratchForTest(params: {
 }): Promise<string> {
   const agentId = params.agentId ?? "main";
   const storePath = params.storePath ?? resolveCronJobsStorePath();
-  const noop = () => {};
-  const cron = new CronService({
-    storePath,
-    cronEnabled: false,
-    defaultAgentId: "main",
-    log: { debug: noop, info: noop, warn: noop, error: noop },
-    enqueueSystemEvent: () => false,
-    requestHeartbeat: noop,
-    runIsolatedAgentJob: async () => ({ status: "skipped", error: "test" }),
-  });
-  const result = await cron.add(
-    {
-      declarationKey: `heartbeat:${agentId}`,
+  const store = loadCronStoreFromDatabase(
+    openOpenClawStateDatabase().db,
+    cronStoreKey(storePath),
+  ).store;
+  const declarationKey = `heartbeat:${agentId}`;
+  let job = store.jobs.find((entry) => entry.declarationKey === declarationKey);
+  if (!job) {
+    const noop = () => {};
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: false,
+      defaultAgentId: "main",
+      log: { debug: noop, info: noop, warn: noop, error: noop },
+      enqueueSystemEvent: () => false,
+      requestHeartbeat: noop,
+      runIsolatedAgentJob: async () => ({ status: "skipped", error: "test" }),
+    });
+    job = createJob(state, {
+      declarationKey,
       displayName: `Heartbeat (${agentId})`,
       name: `heartbeat-${agentId}`,
       agentId,
@@ -101,10 +111,10 @@ export async function seedHeartbeatScratchForTest(params: {
       payload: { kind: "heartbeat" },
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
-    },
-    { enabledExplicit: true, systemOwned: true },
-  );
-  const job = "job" in result ? result.job : result;
+    });
+    // Fixture preparation needs persisted rows, not a cold scheduler worker per case.
+    saveCronJobsStoreWithRevisionNative(storePath, { ...store, jobs: [...store.jobs, job] });
+  }
   writeCronJobScratch({ storePath, jobId: job.id, content: params.content });
   return job.id;
 }

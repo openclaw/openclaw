@@ -185,12 +185,13 @@ async function convergePluginReleaseCohortWithLease(
     })
   ).filter((entry) => !operatorManagedIds.has(entry.pluginId));
   const repairedMissingPayloadIds = new Set(missingPayloads.map((entry) => entry.pluginId));
-  let repairOutcomes: PluginUpdateOutcome[] = [];
-  if (repairedMissingPayloadIds.size > 0) {
-    const repair = await updateNpmInstalledPlugins({
+  const updateInstalled = async (
+    selection: Pick<Parameters<typeof updateNpmInstalledPlugins>[0], "pluginIds" | "skipIds">,
+  ) => {
+    const result = await updateNpmInstalledPlugins({
       config,
       npmInstallSpecOverrides,
-      pluginIds: [...repairedMissingPayloadIds],
+      ...selection,
       timeoutMs: params.timeoutMs,
       workTimeoutMs: params.workTimeoutMs,
       updateChannel: params.channel,
@@ -205,20 +206,17 @@ async function convergePluginReleaseCohortWithLease(
       beforePersistentEffect: params.beforePersistentEffect,
     });
     params.beforePersistentEffect?.();
-    config = repair.config;
-    changed ||= repair.changed;
-    npmChanged ||= repair.changed;
-    repairOutcomes = repair.outcomes;
-    Object.assign(installOwnerMigrations, resolvePluginInstallOwnerMigrations(repair));
-  }
+    config = result.config;
+    changed ||= result.changed;
+    npmChanged ||= result.changed;
+    Object.assign(installOwnerMigrations, resolvePluginInstallOwnerMigrations(result));
+    return result.outcomes;
+  };
+  const repairOutcomes = repairedMissingPayloadIds.size
+    ? await updateInstalled({ pluginIds: [...repairedMissingPayloadIds] })
+    : [];
 
-  const update = await updateNpmInstalledPlugins({
-    config,
-    npmInstallSpecOverrides,
-    timeoutMs: params.timeoutMs,
-    workTimeoutMs: params.workTimeoutMs,
-    updateChannel: params.channel,
-    coreVersion: params.coreVersion,
+  const updateOutcomes = await updateInstalled({
     skipIds: new Set([
       ...operatorManagedIds,
       ...sync.summary.switchedToClawHub,
@@ -226,20 +224,7 @@ async function convergePluginReleaseCohortWithLease(
       ...repairedMissingPayloadIds,
       ...Object.values(installOwnerMigrations),
     ]),
-    versionBoundPluginIds: params.versionBoundPluginIds,
-    skipDisabledPlugins: true,
-    syncOfficialPluginInstalls: true,
-    retainOnUnavailable: true,
-    logger: params.logger,
-    onIntegrityDrift: params.onIntegrityDrift,
-    onCapabilityConsent: params.onCapabilityConsent,
-    beforePersistentEffect: params.beforePersistentEffect,
   });
-  params.beforePersistentEffect?.();
-  config = update.config;
-  changed ||= update.changed;
-  npmChanged ||= update.changed;
-  Object.assign(installOwnerMigrations, resolvePluginInstallOwnerMigrations(update));
 
   if (beforeIndex && packageUpdateSnapshot) {
     // Reinstall can restore the same path. Reconciliation needs new filesystem facts,
@@ -277,7 +262,7 @@ async function convergePluginReleaseCohortWithLease(
     repairOutcomes,
     updateOutcomes: [
       ...operatorManaged,
-      ...update.outcomes.filter(
+      ...updateOutcomes.filter(
         (outcome) =>
           !operatorManagedIds.has(outcome.pluginId) &&
           (outcome.status !== "skipped" || !repairedMissingPayloadIds.has(outcome.pluginId)),

@@ -131,14 +131,17 @@ async function updatePluginsAfterCoreUpdateWithLease(
   const runtime = params.runtime ?? defaultRuntime;
   const requirements = { ...params.pluginRequirements };
   if (!params.configSnapshot.valid) {
-    const invalid = buildInvalidConfigPostCoreUpdateResult();
+    const invalid = buildInvalidConfigPostCoreUpdateResult(params.configSnapshot);
     if (!params.json) {
       runtime.log(theme.error(invalid.message));
       for (const line of invalid.guidance) {
         runtime.log(theme.muted(`  ${line}`));
       }
     }
-    return { ...invalid.result, assessment: { kind: "core-critical", reason: "invalid-config" } };
+    return {
+      ...invalid.result,
+      assessment: { kind: "core-critical", reason: invalid.result.reason },
+    };
   }
 
   const referenceSource = prepareDoctorConfigReferenceSource(params.configSnapshot);

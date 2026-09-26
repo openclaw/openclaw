@@ -1142,10 +1142,10 @@ type MutateConfigFileParams<T> = Omit<TransformConfigFileParams<T>, "transform" 
   mutate: (draft: OpenClawConfig, context: ConfigMutationContext) => Promise<T | void> | T | void;
 };
 
-export async function mutateConfigFile<T = void>(
+function configMutationTransform<T>(
   params: MutateConfigFileParams<T>,
-): Promise<ConfigMutationResult<T>> {
-  return await transformConfigFile<T>({
+): TransformConfigFileParams<T> {
+  return {
     base: params.base,
     baseHash: params.baseHash,
     afterWrite: params.afterWrite,
@@ -1156,24 +1156,21 @@ export async function mutateConfigFile<T = void>(
       const result = (await params.mutate(draft, context)) as T | undefined;
       return { nextConfig: draft, result };
     },
-  });
+  };
+}
+
+export async function mutateConfigFile<T = void>(
+  params: MutateConfigFileParams<T>,
+): Promise<ConfigMutationResult<T>> {
+  return await transformConfigFile(configMutationTransform(params));
 }
 
 export async function mutateConfigFileWithRetry<T = void>(
   params: MutateConfigFileParams<T> & { maxAttempts?: number },
 ): Promise<ConfigMutationResult<T>> {
   return await transformConfigFileWithRetry<T>({
-    base: params.base,
-    baseHash: params.baseHash,
+    ...configMutationTransform(params),
     maxAttempts: params.maxAttempts,
-    afterWrite: params.afterWrite,
-    writeOptions: params.writeOptions,
-    io: params.io,
-    transform: async (currentConfig, context) => {
-      const draft = structuredClone(currentConfig);
-      const result = (await params.mutate(draft, context)) as T | undefined;
-      return { nextConfig: draft, result };
-    },
   });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

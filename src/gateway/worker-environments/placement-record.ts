@@ -34,6 +34,12 @@ export type WorkerSessionTurnOwner =
   | { kind: "local"; environmentId?: string; ownerEpoch?: number }
   | { kind: "worker"; environmentId: string; ownerEpoch: number };
 
+export type WorkerTurnClaimInput = WorkerSessionPlacementIdentity & {
+  owner: WorkerSessionTurnOwner;
+  claimId: string;
+  runId: string;
+};
+
 export type WorkerSessionTurnClaim = {
   sessionId: string;
   claimId: string;

@@ -709,7 +709,7 @@ describe("dedicated worker websocket protocol", () => {
       sessionKey: "agent:main:worker-suspension",
     };
     const active = advancePlacementFixtureToActive(placements, database, session);
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       ...session,
       claimId: templateClaim.claimId,
       runId: templateClaim.runId,
@@ -754,7 +754,7 @@ describe("dedicated worker websocket protocol", () => {
       if (fence === "run") {
         preparedRunAdmission.close();
       } else if (fence === "placement") {
-        placements.releaseTurn(claim);
+        await placements.releaseTurn(claim);
       } else if (fence === "restart") {
         restartSignal = beginGatewayRestartSignalAdmission();
         expect(restartSignal).not.toBeNull();
@@ -781,7 +781,7 @@ describe("dedicated worker websocket protocol", () => {
       restartSignal?.rollback();
       suspension?.release();
       if (placements.validateTurnClaim(claim)) {
-        placements.releaseTurn(claim);
+        await placements.releaseTurn(claim);
       }
       preparedRunAdmission.close();
       rootAdmission.release();

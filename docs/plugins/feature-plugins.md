@@ -76,14 +76,14 @@ openclaw plugins install .
 
 The scaffold includes a draft-analysis operation, an agent tool, a native page,
 and a composer replacement. Open Draft Review from the Control UI sidebar, or
-open **Plugins → Customize UI** and choose Draft composer. Choose Built-in to
+open **Plugins → Advanced → Customize UI** and choose Draft composer. Choose Built-in to
 restore a view. Replacement selection belongs to the current browser runtime;
 it is not a persistent configuration setting.
 
-Customization controls live on the Plugins page. There is no floating
-customization button. If a workspace replacement hides navigation, open
-`/plugins` under your Control UI base URL to choose Built-in; the Plugins page
-always uses the built-in workspace.
+Customization controls are the first section in **Plugins → Advanced**. If a
+workspace replacement hides navigation, open
+`/settings/plugins?tab=advanced` under your Control UI base URL to choose Built-in; plugin settings
+always use the built-in workspace.
 
 The project has three public SDK imports:
 
@@ -262,7 +262,7 @@ limits. TypeScript sources, source maps, and hidden files are excluded. Keep all
 dependencies inside that directory; traversal is limited to eight nested directory
 levels and 128 entries, counting both files and directories.
 
-After browser-only edits, rebuild the installed plugin and open **Plugins →
+After browser-only edits, rebuild the installed plugin and open **Plugins → Advanced →
 Customize UI → Reload plugin UI** as an administrator. The Gateway captures a fresh asset revision and
 notifies connected browsers. Asset loading or activation failures are reported
 in the UI customization controls; the previous working activation is retained

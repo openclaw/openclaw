@@ -45,6 +45,7 @@ describe("worker live event write settlement", () => {
           { liveEvents: receiver },
           target,
         );
+      await workerService.ready();
       const sourceOwnerClaims = new Set(
         expectDefined(getAgentRunContextOwnership(identity.runId!), "source run owner").claimIds,
       );

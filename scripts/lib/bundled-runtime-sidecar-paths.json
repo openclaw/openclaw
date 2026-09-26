@@ -10,6 +10,5 @@
   "dist/extensions/reef/runtime-api.js",
   "dist/extensions/telegram/runtime-api.js",
   "dist/extensions/telegram/runtime-setter-api.js",
-  "dist/extensions/webhooks/runtime-api.js",
   "dist/extensions/workboard/runtime-api.js"
 ]

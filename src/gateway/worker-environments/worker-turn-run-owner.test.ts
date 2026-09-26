@@ -5,10 +5,8 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunOwner,
 } from "../../agents/embedded-agent-runner/runs.js";
-import {
-  createReplyOperation,
-  isReplyRunEvidenceStale,
-} from "../../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -267,7 +265,7 @@ describe("cloud worker run ownership", () => {
         runId,
         owner: { kind: "worker" as const, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
       };
-      const firstClaim = placements.claimTurn({ ...claimInput, claimId: "first-claim" });
+      const firstClaim = await placements.claimTurn({ ...claimInput, claimId: "first-claim" });
       const first = createWorkerTurnRunOwner({
         placements,
         claim: firstClaim,
@@ -304,9 +302,12 @@ describe("cloud worker run ownership", () => {
           expect(resolveActiveEmbeddedRunOwner(SESSION_ID)).toBeUndefined();
           expect(first.signal.aborted).toBe(true);
         } else {
-          placements.releaseTurn(firstClaim);
+          await placements.releaseTurn(firstClaim);
           if (closure === "replacement") {
-            const nextClaim = placements.claimTurn({ ...claimInput, claimId: "replacement-claim" });
+            const nextClaim = await placements.claimTurn({
+              ...claimInput,
+              claimId: "replacement-claim",
+            });
             replacement = createWorkerTurnRunOwner({
               placements,
               claim: nextClaim,

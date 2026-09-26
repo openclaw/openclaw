@@ -1,5 +1,6 @@
 // Shared schedule option resolver for cron create/edit commands.
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronSchedule } from "../../cron/types.js";
 import { CronCliError } from "./cron-cli-error.js";
@@ -25,10 +26,6 @@ type ScheduleOptionInput = {
   exact?: unknown;
   stagger?: unknown;
   tz?: unknown;
-};
-
-type PositionalScheduleInput = {
-  positionalSchedule?: unknown;
 };
 
 type NormalizedScheduleOptions = {
@@ -64,9 +61,22 @@ type CronEditScheduleRequest =
     }
   | { kind: "none" };
 
-/** A single normalized creation selector resolves or throws during validation. */
-function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSchedule {
+/** Resolve cron creation schedule from either a positional shorthand or explicit flags. */
+export function resolveCronCreateScheduleFromArgs(
+  options: ScheduleOptionInput & { positionalSchedule?: unknown },
+): CronSchedule {
+  const positionalSchedule = normalizeOptionalString(options.positionalSchedule);
   const normalized = normalizeScheduleOptions(options);
+  if (positionalSchedule) {
+    if (countChosenSchedules(normalized) > 0) {
+      throw new CronCliError(
+        "Choose a positional schedule or one of --at, --every, --cron, --on-exit, or --stream-command.",
+      );
+    }
+    normalized.every = parseEverySchedule(positionalSchedule) ?? "";
+    normalized.cronExpr = looksLikeCronExpression(positionalSchedule) ? positionalSchedule : "";
+    normalized.at = normalized.every || normalized.cronExpr ? "" : positionalSchedule;
+  }
   if (normalized.onExitCwd && !normalized.onExitCommand) {
     throw new CronCliError("--on-exit-cwd requires --on-exit.");
   }
@@ -77,33 +87,6 @@ function resolveCronCreateSchedule(options: ScheduleOptionInput): CronSchedule {
     );
   }
   return expectDefined(resolveDirectSchedule(normalized), "created cron schedule");
-}
-
-/** Resolve cron creation schedule from either a positional shorthand or explicit flags. */
-export function resolveCronCreateScheduleFromArgs(
-  options: ScheduleOptionInput & PositionalScheduleInput,
-): CronSchedule {
-  const positionalSchedule = normalizeOptionalString(options.positionalSchedule);
-  if (!positionalSchedule) {
-    return resolveCronCreateSchedule(options);
-  }
-  const normalized = normalizeScheduleOptions(options);
-  if (countChosenSchedules(normalized) > 0) {
-    throw new CronCliError(
-      "Choose a positional schedule or one of --at, --every, --cron, --on-exit, or --stream-command.",
-    );
-  }
-  const every = parseEverySchedule(positionalSchedule);
-  return resolveCronCreateSchedule({
-    ...options,
-    at: every
-      ? undefined
-      : looksLikeCronExpression(positionalSchedule)
-        ? undefined
-        : positionalSchedule,
-    cron: looksLikeCronExpression(positionalSchedule) ? positionalSchedule : undefined,
-    every,
-  });
 }
 
 /** Resolve a cron edit request, allowing at most one direct schedule replacement. */
@@ -225,18 +208,12 @@ function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedSched
     throw new CronCliError("--stream-mode must be line or match");
   }
   const parsePositiveInteger = (value: unknown, flag: string): number | undefined => {
-    if (value === undefined) {
-      return undefined;
-    }
-    if (typeof value !== "string" && typeof value !== "number") {
-      throw new CronCliError(`${flag} must be a positive integer`);
-    }
-    const text = String(value).trim();
-    if (!/^\d+$/u.test(text)) {
-      throw new CronCliError(`${flag} must be a positive integer`);
-    }
-    const parsed = Number(text);
-    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    const parsed =
+      (typeof value === "string" || typeof value === "number") &&
+      /^\d+$/u.test(String(value).trim())
+        ? parseStrictPositiveInteger(value)
+        : undefined;
+    if (value !== undefined && parsed === undefined) {
       throw new CronCliError(`${flag} must be a positive integer`);
     }
     return parsed;

@@ -245,7 +245,7 @@ describe("getStatusSummary", () => {
       label: "OpenClaw Default",
     });
     vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/sessions.json");
-    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+    vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
       defaultId: "main",
       ownership: "sole",
       selectionRequired: false,
@@ -269,7 +269,7 @@ describe("getStatusSummary", () => {
     "summarizes every configured agent's pending events without an ambient owner (%s)",
     async (scope) => {
       const agents = [{ id: "research" }, { id: "ops" }];
-      vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+      vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
         defaultId: "research",
         mainKey: "inbox",
         scope,
@@ -738,7 +738,7 @@ describe("getStatusSummary", () => {
   });
 
   it("passes agent scope when listing configured agent session stores", async () => {
-    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
+    vi.mocked(listGatewayAgentsBasic).mockResolvedValue({
       defaultId: "main",
       ownership: "sole",
       selectionRequired: false,

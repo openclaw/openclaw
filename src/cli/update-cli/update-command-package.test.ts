@@ -263,6 +263,50 @@ it.each(["package", "git"] as const)(
   },
 );
 
+it("admits a matching staged artifact without retaining or replacing the running package", async () => {
+  await withTestDir({ prefix: "update-admitted-noop-" }, async (base) => {
+    const { root, target, installedPrefixes, expectOriginalInstallation } =
+      await createPackageInstallFixture(base, "1.0.0", "same-build");
+    const params = {
+      root,
+      installKind: "package" as const,
+      tag: "https://example.invalid/candidate.tgz",
+      timeoutMs: 1000,
+      startedAt: Date.now(),
+      progress: {},
+      installEnv: {},
+      installTarget: target,
+    };
+    const staged = await stagePackageInstallUpdate({ ...params, pauseBeforeVerification: true });
+    const validateCandidate = vi.fn(async () => []);
+    const beforeActivate = vi.fn(async () => {});
+    const onTransaction = vi.fn();
+    try {
+      const result = await staged.run({
+        ...params,
+        validateCandidate,
+        beforeActivate,
+        onTransaction,
+      });
+      expect(result).toMatchObject({
+        status: "skipped",
+        reason: "already-current",
+        after: { version: "1.0.0" },
+      });
+      expect(validateCandidate).not.toHaveBeenCalled();
+      expect(beforeActivate).not.toHaveBeenCalled();
+      expect(onTransaction).not.toHaveBeenCalled();
+      await expectOriginalInstallation();
+      expect(installedPrefixes).toHaveLength(1);
+      for (const prefix of installedPrefixes) {
+        await expect(fs.stat(prefix)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    } finally {
+      await staged.close();
+    }
+  });
+});
+
 it.each(
   [
     { name: "new version", candidateVersion: "2.0.0", tag: "2.0.0", buildId: undefined },

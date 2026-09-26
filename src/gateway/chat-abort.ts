@@ -647,6 +647,13 @@ export function abortChatRunById(
       ...(active.toolErrorSummary ? { toolErrorSummary: active.toolErrorSummary } : {}),
       // Pre-execution admission time is not an execution start.
       startedAt: active.executionStarted === false ? undefined : active.startedAtMs,
+      ...(active.executionStarted === false
+        ? {
+            executionStarted: false,
+            providerStarted: false,
+            ...(stopReason === "timeout" ? { timeoutPhase: "queue" } : {}),
+          }
+        : {}),
       endedAt: Date.now(),
     },
   });

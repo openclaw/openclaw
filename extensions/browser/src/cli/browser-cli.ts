@@ -6,19 +6,16 @@ import {
   registerCommandGroups,
   shouldEagerRegisterSubcommands,
   type CommandGroupPlaceholder,
+  formatCliCommand,
+  formatHelpExamples,
+  theme,
 } from "openclaw/plugin-sdk/cli-runtime";
+import { addGatewayClientOptions } from "openclaw/plugin-sdk/gateway-runtime";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveBrowserLazySubcommand } from "../../cli-output-mode.js";
 import { browserActionExamples, browserCoreExamples } from "./browser-cli-examples.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
-import {
-  addGatewayClientOptions,
-  danger,
-  defaultRuntime,
-  formatCliCommand,
-  formatDocsLink,
-  formatHelpExamples,
-  theme,
-} from "./core-api.js";
 
 type BrowserCommandRegistrar = (args: {
   browser: Command;
@@ -108,7 +105,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
       command("batch", "Run a batch of browser actions in one call"),
     ],
     register: async (args) => {
-      const module = await import("./browser-cli-actions-input.js");
+      const module = await import("./browser-cli-actions-input/register.js");
       module.registerBrowserActionInputCommands(args.browser, args.parentOpts);
     },
   },

@@ -44,6 +44,12 @@ OpenClaw picks the first configured provider in registry auto-select order.
 The built-in `tts` agent tool is explicit-intent only: ordinary chat stays
 text unless the user asks for audio, uses `/tts`, or enables Auto-TTS/directive
 speech.
+
+Feishu and WhatsApp voice notes need `ffmpeg` on the Gateway host when the
+channel must convert the provider's audio to Ogg/Opus. Already-compatible
+audio skips this conversion. If conversion fails, Feishu sends the original
+audio as a file attachment; the WhatsApp send fails. See
+[TTS output](/tools/tts/output) for the transcoding rules.
 </Note>
 
 ## Supported providers

@@ -1,11 +1,24 @@
+import type { CommandOwnerReference } from "../state/user-channel-identities.js";
+
 const COMMAND_OWNER_AUTHORITY = Symbol("openclaw.commandOwnerAuthority");
-type CommandOwnerAuthority = Readonly<{ isCurrent: () => boolean }>;
+type CommandOwnerAuthority = Readonly<{
+  isCurrent: () => boolean;
+  recoveryReference?: CommandOwnerReference;
+}>;
+export type CommandOwnerAssertion = (() => void) & {
+  readonly recoveryReference?: CommandOwnerReference | null;
+};
+
+export class CommandOwnerRevokedError extends Error {}
 
 class CommandOwnerCapability implements CommandOwnerAuthority {
   readonly #checkCurrent: () => boolean;
+  readonly recoveryReference?: CommandOwnerReference;
 
   constructor(authority: CommandOwnerAuthority) {
     this.#checkCurrent = authority.isCurrent.bind(authority);
+    this.recoveryReference =
+      authority.recoveryReference && Object.freeze({ ...authority.recoveryReference });
     Object.setPrototypeOf(this, null);
     Object.freeze(this);
   }
@@ -31,14 +44,19 @@ export function getCommandOwnerAuthority(context: object): CommandOwnerAuthority
 }
 
 /** Fence a turn that admitted owner tools against later identity or role revocation. */
-export function captureCommandOwnerAssertion(context: object): (() => void) | undefined {
+export function captureCommandOwnerAssertion(context: object): CommandOwnerAssertion | undefined {
   const authority = getCommandOwnerAuthority(context);
   if (!authority) {
     return undefined;
   }
-  return () => {
-    if (!authority.isCurrent()) {
-      throw new Error("Channel operator authority changed; send a new request.");
-    }
-  };
+  return Object.assign(
+    () => {
+      if (!authority.isCurrent()) {
+        throw new CommandOwnerRevokedError(
+          "Channel operator authority changed; send a new request.",
+        );
+      }
+    },
+    { recoveryReference: authority.recoveryReference ?? null },
+  );
 }

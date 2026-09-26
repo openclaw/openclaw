@@ -2,11 +2,7 @@ import { Writable } from "node:stream";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
-import {
-  readGatewayServiceState,
-  resolveGatewayService,
-  type GatewayService,
-} from "../../daemon/service.js";
+import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
 import { getUpdateRun, recordUpdateRunRepairAttempt } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -41,7 +37,7 @@ import {
   type PreManagedServiceStop,
 } from "./update-command-service-maintenance.js";
 import {
-  assertGatewayServiceManagementAllowedForUpdate,
+  readGatewayServiceStateForUpdate,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
 
@@ -57,6 +53,7 @@ type PostUpdateGatewayHealthRecoveryDeps = {
 };
 
 export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
+  onGatewayStartAttempted?: () => void;
   updateRun?: UpdateCommandOptions["run"];
   assertCurrent?: () => void;
   preserveDefinition?: boolean;
@@ -95,6 +92,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
       };
       assertRecovery();
       const recovery = await recoverLaunchAgent({
+        onGatewayStartAttempted: params.onGatewayStartAttempted,
         service: params.service,
         env: params.env,
         assertCurrent: assertRecovery,
@@ -147,16 +145,16 @@ function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string 
   const restartCommand = formatCliCommand("openclaw gateway restart");
   const installCommand = formatCliCommand("openclaw gateway install --force");
   const statusCommand = formatCliCommand("openclaw gateway status --deep");
-  if (platform === "darwin") {
-    return `Recovery: run \`${restartCommand}\`; if the LaunchAgent is installed but not loaded, run \`${installCommand}\` from the logged-in macOS user session, then rerun \`${statusCommand}\`.`;
-  }
-  if (platform === "linux") {
-    return `Recovery: run \`${restartCommand}\`; if the systemd user service is missing, stale, or not active, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
-  }
-  if (platform === "win32") {
-    return `Recovery: run \`${restartCommand}\`; if the gateway Scheduled Task or Windows login item is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
-  }
-  return `Recovery: run \`${restartCommand}\`; if the local service manager reports the gateway service is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
+  const condition =
+    platform === "darwin"
+      ? "LaunchAgent is installed but not loaded"
+      : platform === "linux"
+        ? "systemd user service is missing, stale, or not active"
+        : platform === "win32"
+          ? "gateway Scheduled Task or Windows login item is missing, stale, or not running"
+          : "local service manager reports the gateway service is missing, stale, or not running";
+  const session = platform === "darwin" ? "logged-in macOS user session" : "same user account";
+  return `Recovery: run \`${restartCommand}\`; if the ${condition}, run \`${installCommand}\` from the ${session}, then rerun \`${statusCommand}\`.`;
 }
 
 export function formatPostUpdateGatewayRecoveryInstructions(
@@ -174,6 +172,7 @@ export function formatPostUpdateGatewayRecoveryInstructions(
 }
 
 export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
+  onGatewayStartAttempted?: () => void;
   updateRun?: UpdateCommandOptions["run"];
   preManagedServiceStop: PreManagedServiceStop | undefined;
   recovery?: UpdateRunResult["recovery"];
@@ -233,6 +232,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       await restoreOriginalManagedServiceDefinition({
         original,
         run,
+        onGatewayStartAttempted: params.onGatewayStartAttempted,
         assertCurrent: assertOriginal,
         stdout: params.jsonMode ? QUIET_SERVICE_STDOUT : process.stdout,
         timeoutMs: params.timeoutMs,
@@ -246,13 +246,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     > = original?.service ?? before;
     const readCurrentService = async () => {
       assertCurrent();
-      const state = await readGatewayServiceState(service, {
-        env: serviceEnv,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-        timeoutMs: params.timeoutMs,
-      });
+      const state = await readGatewayServiceStateForUpdate(service, serviceEnv, params.timeoutMs);
       assertCurrent();
       const inspection = await revalidateManagedGatewayServiceAfterUpdate({
         state,
@@ -285,6 +279,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     // under its final native-operation lock while retaining both A/B authorities.
     if (original && run) {
       const restart = await restartRetainedUpdateGatewayService({
+        onGatewayStartAttempted: params.onGatewayStartAttempted,
         run,
         root: original.root,
         env: serviceEnv,
@@ -306,6 +301,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     } else {
       await runUpdatedInstallGatewayCommand(
         {
+          onGatewayStartAttempted: params.onGatewayStartAttempted,
           result: { root: original?.root ?? verdict.root },
           opts: { json: params.jsonMode, run },
           invocationEnv: serviceEnv,
@@ -349,8 +345,6 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       if (!ready) {
         throw new Error("Original service independent readiness was not verified.");
       }
-    }
-    if (original) {
       try {
         // Settle A's native restoration independently of B's failed activation.
         await before.windowsTaskAutoStartRecovery?.complete(true);
@@ -392,6 +386,7 @@ export async function compensateOriginalManagedService(
     preManagedServiceStop?: PreManagedServiceStop;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
     allowGatewayRestart?: boolean;
+    onGatewayStartAttempted?: () => void;
     timeoutMs: number;
     invocationCwd?: string;
   },
@@ -413,6 +408,7 @@ export async function compensateOriginalManagedService(
     params.allowGatewayRestart === false
       ? undefined
       : await maybeRestartServiceAfterFailedMutableUpdate({
+          onGatewayStartAttempted: params.onGatewayStartAttempted,
           updateRun: run,
           preManagedServiceStop: before,
           originalManagedServiceRuntime: original,
@@ -421,6 +417,15 @@ export async function compensateOriginalManagedService(
           invocationCwd: params.invocationCwd,
         });
   assertCurrent();
+  const healthy = service === "healthy";
+  const summary = [
+    healthy
+      ? `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`
+      : "Original managed service compensation was not verified; package and current state were retained.",
+    original.packageFingerprintWarning,
+  ]
+    .filter(Boolean)
+    .join("\n");
   return {
     result: {
       ...result,
@@ -439,28 +444,12 @@ export async function compensateOriginalManagedService(
           command: "openclaw gateway restart --preserve-definition",
           cwd: original.root,
           durationMs: 0,
-          exitCode: service === "healthy" ? 0 : 1,
-          ...(service === "healthy"
-            ? {
-                stdoutTail: [
-                  `Original managed service ${original.version} is healthy. Requested package activation was not verified; package and state were retained.`,
-                  original.packageFingerprintWarning,
-                ]
-                  .filter(Boolean)
-                  .join("\n"),
-              }
-            : {
-                stderrTail: [
-                  "Original managed service compensation was not verified; package and current state were retained.",
-                  original.packageFingerprintWarning,
-                ]
-                  .filter(Boolean)
-                  .join("\n"),
-              }),
+          exitCode: healthy ? 0 : 1,
+          ...(healthy ? { stdoutTail: summary } : { stderrTail: summary }),
         },
       ],
     },
     rolledBack: false,
-    originalServiceRecovery: service === "healthy" ? "healthy" : "failed",
+    originalServiceRecovery: healthy ? "healthy" : "failed",
   };
 }

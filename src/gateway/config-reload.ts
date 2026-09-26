@@ -234,12 +234,8 @@ export function startGatewayConfigReloader(opts: {
   let currentRuntimeEnvSourceConfig = initialSourceConfig;
   let currentReapplyRuntimeOverlays = (config: OpenClawConfig) => config;
   let currentRuntimeRefresh: RuntimeConfigSnapshotRefreshOptions | undefined;
-  const resolveSettings = (config: OpenClawConfig) => {
-    const resolved = resolveGatewayReloadSettings(config);
-    return opts.testDebounceMs === undefined
-      ? resolved
-      : { ...resolved, debounceMs: opts.testDebounceMs };
-  };
+  const resolveSettings = (config: OpenClawConfig) =>
+    resolveGatewayReloadSettings(config, opts.testDebounceMs);
   let settings = resolveSettings(currentConfig);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pending = false;
@@ -1243,6 +1239,8 @@ export function startGatewayConfigReloader(opts: {
         throw new Error("Gateway plugin lifecycle is stopped.");
       }
       running = true;
+      // The operation may consume a real observation, but failure must not discard its timer.
+      pending ||= debounceTimer !== null;
       clearReloadTimer();
       let candidate = pendingInProcessConfig ?? retryWriteCandidate;
       let committed = false;
@@ -1250,7 +1248,8 @@ export function startGatewayConfigReloader(opts: {
         const expectedSourceConfig = params.write
           ? params.write.persistedSourceConfig
           : params.config;
-        source.observe();
+        // Refresh identity and bytes without inventing independent passive reload work.
+        source.observe(undefined, false);
         const epoch = source.observation.revision;
         const snapshot = await source.readSnapshot();
         params.assertInvokerOwned?.();

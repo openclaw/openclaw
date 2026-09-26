@@ -109,14 +109,14 @@ describe("worker session tool send delivery", () => {
       setEntry(SOURCE.sessionKey, SOURCE.sessionId, relation === "parent" ? PARENT : TARGET);
       setEntry(PARENT.sessionKey, PARENT.sessionId, relation === "sibling" ? TARGET : undefined);
       if (placement === "local") {
-        const claim = placements.claimTurn({
+        const claim = await placements.claimTurn({
           ...PARENT,
           agentId: SOURCE.agentId,
           claimId: "gateway-target-claim",
           runId: "gateway-target-run",
           owner: { kind: "local" },
         });
-        placements.releaseTurn(claim);
+        await placements.releaseTurn(claim);
         expect(placements.get(PARENT.sessionId)?.state).toBe("local");
       } else {
         expect(placements.get(PARENT.sessionId)).toBeUndefined();
@@ -367,7 +367,7 @@ describe("worker session tool send delivery", () => {
     expect(first.resultJson).toContain("outcome is unknown");
     expect(replay.resultJson).toContain("prior operation outcome is unknown");
     expect(delivered).toHaveBeenCalledTimes(2);
-    expect(() => placements.releaseTurn(sourceClaim)).not.toThrow();
+    await expect(placements.releaseTurn(sourceClaim)).resolves.toMatchObject({ turnClaim: null });
   });
 
   it("denies stale parent incarnations, parent-key reuse, self-send, and cross-tree targets", async () => {

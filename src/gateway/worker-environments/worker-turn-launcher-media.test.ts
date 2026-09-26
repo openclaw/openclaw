@@ -578,7 +578,7 @@ describe("cloud turn media boundary", () => {
           if (!claim) {
             throw new Error("missing active claim");
           }
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         }
         cancelledAtBoundary = request.signal?.aborted;
         request.signal?.throwIfAborted();

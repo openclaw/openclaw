@@ -463,7 +463,7 @@ async function command() {
   }
   if (mode === "observe") {
     await boundary(args[0]);
-    if (args[0] === "backoff-ready" && options.cancelDuringBackoff && !options.performance) {
+    if (args[0] === "backoff-ready" && options.cancelDuringBackoff) {
       publish("backoff-ready.json", true);
       await until(
         () => fs.existsSync(path.join(root, "backoff-release.json")),
@@ -1448,7 +1448,7 @@ async function supervise() {
       process.kill(owner.pid, "SIGTERM");
       report.cancelledDuringCleanup = true;
     }
-    if (options.cancelDuringBackoff && !options.performance) {
+    if (options.cancelDuringBackoff) {
       try {
         await until(
           () =>
@@ -1466,19 +1466,6 @@ async function supervise() {
       } finally {
         publish("backoff-release.json", true);
       }
-    } else if (
-      options.cancelDuringBackoff &&
-      (await waitForReady(
-        () =>
-          options.performance
-            ? fs.readFileSync(eventsFile, "utf8").includes('"name":"backoff"')
-            : fs.readFileSync(path.join(root, "workflow.log"), "utf8").includes("; retrying"),
-        shell,
-        () => Boolean(stopping),
-      ))
-    ) {
-      await boundary("backoff-cancel");
-      shell.kill("SIGTERM");
     }
     const code = await closed;
     if (stopping) {

@@ -10,13 +10,14 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { threadStartResult } from "./codex-app-server.test-fixtures.js";
-import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
 import {
+  compactCodexSessionWithTestHost as maybeCompactCodexAppServerSessionImpl,
   maybeCompactCodexAppServerSession,
   resetCodexAppServerClientFactoryForTest,
   writeCompactionTestBinding,
   writeSupervisedTestBinding,
 } from "./compact.test-support.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
   createCodexTestBindingStore,
@@ -346,6 +347,12 @@ describe("maybeCompactCodexAppServerSession", () => {
           turn: { id: "completed-turn", status: "inProgress" },
         },
       });
+      const unrelatedCapture = codexNativeSubagentMonitorRuntime.captureModelSource({
+        client: harness.client,
+        threadId: "thread-1",
+        turnId: "unrelated-turn",
+        signal: abortController.signal,
+      });
       for (const method of ["item/started", "item/completed"]) {
         harness.send({
           method,
@@ -355,6 +362,21 @@ describe("maybeCompactCodexAppServerSession", () => {
             item: { id: "completed-item", type: "contextCompaction" },
           },
         });
+        if (method === "item/started") {
+          const capture = await codexNativeSubagentMonitorRuntime.captureModelSource({
+            client: harness.client,
+            threadId: "thread-1",
+            turnId: "completed-turn",
+            signal: abortController.signal,
+          });
+          try {
+            expect(capture).toBeDefined();
+            capture?.assertCurrent();
+            await expect(unrelatedCapture).resolves.toBeUndefined();
+          } finally {
+            capture?.release();
+          }
+        }
       }
       harness.send({
         method: "turn/completed",
@@ -367,6 +389,13 @@ describe("maybeCompactCodexAppServerSession", () => {
       harness.send({ id: requestId, result: {} });
 
       await expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
+      await expect(
+        codexNativeSubagentMonitorRuntime.captureModelSource({
+          client: harness.client,
+          threadId: "thread-1",
+          turnId: "completed-turn",
+        }),
+      ).resolves.toBeUndefined();
       expect(closeAndWait).not.toHaveBeenCalled();
       expect(harness.client.getCloseError()).toBeUndefined();
       await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({

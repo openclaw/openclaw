@@ -1504,6 +1504,16 @@ export interface UserPreferences {
   value_json: string;
 }
 
+export interface UserProfileIdentities {
+  authorization_basis_json: string | null;
+  authorization_id: string | null;
+  canonical_login: string | null;
+  created_at: number;
+  profile_id: string;
+  provider: string;
+  subject: string;
+}
+
 export interface WebPushApprovalDeliveries {
   approval_id: string;
   device_id: string;
@@ -1884,6 +1894,7 @@ export interface DB {
   task_runs: TaskRuns;
   update_runs: UpdateRuns;
   user_preferences: UserPreferences;
+  user_profile_identities: UserProfileIdentities;
   web_push_approval_deliveries: WebPushApprovalDeliveries;
   web_push_subscriptions: WebPushSubscriptions;
   worker_environment_credentials: WorkerEnvironmentCredentials;

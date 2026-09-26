@@ -689,15 +689,6 @@ export async function reconcileAuthProfileQuotaBlocks(params: {
   });
 }
 
-function updateUsageStatsEntry(
-  store: AuthProfileStore,
-  profileId: string,
-  updater: (existing: ProfileUsageStats | undefined) => ProfileUsageStats,
-): void {
-  store.usageStats = store.usageStats ?? {};
-  store.usageStats[profileId] = updater(store.usageStats[profileId]);
-}
-
 /**
  * Mark a profile as failed for a specific reason. Billing and permanent-auth
  * failures are treated as "disabled" (longer backoff) vs the regular cooldown
@@ -786,7 +777,8 @@ export async function markAuthProfileFailure(params: {
             whamResult: currentWhamResult,
           })
         : computed;
-      updateUsageStatsEntry(freshStore, profileId, () => nextStats ?? computed);
+      freshStore.usageStats ??= {};
+      freshStore.usageStats[profileId] = nextStats;
       return true;
     },
   });
@@ -892,7 +884,8 @@ export async function markAuthProfileBlockedUntil(params: {
         modelId,
         now,
       });
-      updateUsageStatsEntry(freshStore, profileId, () => nextStats as ProfileUsageStats);
+      freshStore.usageStats ??= {};
+      freshStore.usageStats[profileId] = nextStats;
       return true;
     },
   });

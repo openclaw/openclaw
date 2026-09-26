@@ -3,6 +3,8 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { CoreConfig } from "../../types.js";
 import {
   resolveMatrixAccountAllowlistConfig,
@@ -12,7 +14,6 @@ import {
   resolveMatrixMonitorLiveUserAllowlist,
   type MatrixResolvedAllowlistEntry,
 } from "./config.js";
-import type { PluginRuntime, RuntimeEnv } from "./runtime-api.js";
 
 const ALLOW_FROM_STORE_CACHE_TTL_MS = 30_000;
 const PAIRING_REPLY_COOLDOWN_MS = 5 * 60_000;

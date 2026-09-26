@@ -71,6 +71,9 @@ vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
   agentDatabaseLifecycle: boundary.cache,
   retainAgentDatabase: vi.fn(() => vi.fn()),
 }));
+vi.mock("./agent-database-admission.js", () => ({
+  assertAgentDatabaseAdmitted: vi.fn(),
+}));
 vi.mock("./agent-deletion-cleanup.js", () => ({
   assertAgentDeletionDatabaseCleanupAccess: vi.fn(),
   getAgentDeletionDatabaseCleanup: () => undefined,

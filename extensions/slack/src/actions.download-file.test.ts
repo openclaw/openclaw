@@ -430,9 +430,13 @@ describe("downloadSlackFile", () => {
       channelId: "C123",
     });
 
-    expect(createSlackLookupClientMock).toHaveBeenCalledWith("xoxb-from-cfg", {
-      teamId: undefined,
-    });
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith(
+      "xoxb-from-cfg",
+      {
+        teamId: undefined,
+      },
+      undefined,
+    );
     expect(resolveSlackMedia).toHaveBeenCalledWith({
       files: [
         {

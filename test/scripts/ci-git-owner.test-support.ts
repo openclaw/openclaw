@@ -350,7 +350,7 @@ def main():`,
                     "observe", os.environ["TMPDIR"], "linux:configured", "backoff"], check=True)`,
           );
         }
-        if (action === "git-owner" && options.cancelDuringBackoff && !options.performance) {
+        if (action === "git-owner" && options.cancelDuringBackoff) {
           if (!options.realClock || options.virtualBackoff) {
             throw new Error("Backoff cancellation requires the real owner clock");
           }

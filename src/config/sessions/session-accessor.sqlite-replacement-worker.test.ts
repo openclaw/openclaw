@@ -1,8 +1,12 @@
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  observeSqliteReadSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   isSqliteWorkerError,
   type SqliteWorkerOperations,
@@ -23,6 +27,8 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as configEnv from "../config-env-vars.js";
@@ -42,9 +48,44 @@ import {
 } from "./session-accessor.sqlite-replacement-projection.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 
+it("does not probe archive recovery during ordinary replacements", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const maintenance = createOpenClawDatabaseMaintenanceScope(() => undefined);
+    try {
+      // The native maintenance path exposes SQL from the same replacement kernel.
+      await maintenance.run(async () => {
+        const database = openOpenClawAgentDatabase({ agentId: "main" });
+        const sessionKey = "agent:main:replacement-no-archive";
+        writeSessionEntry(database, sessionKey, { sessionId: "replacement", updatedAt: 1 });
+        ensureSessionTranscriptArchiveSchema(database.db);
+        const sql = observeSqliteReadSql(StatementSync.prototype);
+        try {
+          await applySessionEntryExactReplacements({
+            storePath: database.path,
+            sessionKeys: [sessionKey],
+            update: ([row]) => ({
+              result: undefined,
+              replacements: [{ sessionKey, entry: { ...row!.entry, label: "committed" } }],
+            }),
+          });
+          expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("committed");
+          expect(
+            sql.queries.filter((query) => /from "session_transcript_archives"/i.test(query)),
+          ).toEqual([]);
+        } finally {
+          sql.restore();
+        }
+      });
+    } finally {
+      await maintenance.close();
+    }
+  });
+});
+
 it("commits platform-normalized replacements without entering a caller-thread SQLite write transaction", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const file = statSync(database.path, { bigint: true });
     const sessionKey = "agent:main:replacement-worker";
     writeSessionEntry(database, sessionKey, {
       sessionId: "replacement",
@@ -90,6 +131,7 @@ it("commits platform-normalized replacements without entering a caller-thread SQ
       expect(mutations).toEqual([
         {
           agentId: "main",
+          databaseIdentity: `${file.dev}:${file.ino}`,
           kind: "reset",
           previous: { sessionId: "replacement", sessionKeys: [sessionKey] },
           current: { sessionId: "replacement", sessionKeys: [sessionKey] },
@@ -157,13 +199,13 @@ it("publishes committed sharing and reader invalidation before observers, and ro
       let current = true;
       const admitted = vi
         .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback) =>
+        .mockImplementation((callback, attachment) =>
           createAdmission((request, grant) => {
             if (request.stage === "commit") {
               current = false;
             }
             return callback(request, grant);
-          }),
+          }, attachment),
         );
       const followup = vi.fn();
       const move = () =>
@@ -335,13 +377,13 @@ it("suppresses follow-up for no-write and transaction-revoked replacements", asy
     let current = true;
     const hook = vi
       .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback) =>
+      .mockImplementation((callback, attachment) =>
         createAdmission((request, grant) => {
           if (request.stage === "transaction") {
             current = false;
           }
           callback(request, grant);
-        }),
+        }, attachment),
       );
     try {
       await expect(

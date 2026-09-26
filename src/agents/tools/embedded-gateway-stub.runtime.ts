@@ -28,5 +28,5 @@ export { readChatHistoryPage } from "../../gateway/server-methods/chat-history-p
 export { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 export { listProjectedSessions } from "../../gateway/session-utils-list.js";
 export { loadGatewaySessionEntryReadOnly as loadSessionEntry } from "../../gateway/session-utils-store.js";
-export { resolveSessionKeyFromResolveParams } from "../../gateway/sessions-resolve.js";
+export { withPreparedSessionResolve } from "../../gateway/sessions-resolve.js";
 export type { SessionsListResult } from "../../gateway/session-utils.types.js";

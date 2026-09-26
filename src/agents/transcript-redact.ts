@@ -56,6 +56,7 @@ type TranscriptAssistantRoute = {
 
 const GOOGLE_REASONING_APIS = new Set([
   "google-generative-ai",
+  "google-interactions",
   "google-vertex",
   "google-gemini-cli",
   "openclaw-google-generative-ai-transport",

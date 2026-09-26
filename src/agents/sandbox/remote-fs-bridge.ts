@@ -4,11 +4,11 @@
  * Resolves sandbox paths against uploaded remote mounts and performs guarded operations through backend shell commands.
  */
 import path from "node:path";
-import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import {
   GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE,
   GUEST_FILESYSTEM_READ_NOT_FOUND_EXIT_CODE,
-} from "../../infra/guest-filesystem.js";
+} from "@openclaw/fs-safe/guest";
+import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,

@@ -364,15 +364,17 @@ export async function readBranchName(
   return branch || null;
 }
 
-async function listGitTags(
+async function resolveChannelTag(
   runCommand: CommandRunner,
   root: string,
   timeoutMs: number,
-): Promise<string[]> {
+  channel: Exclude<UpdateChannel, "dev">,
+): Promise<string | null> {
   const result = await runCommand(["git", "-C", root, "tag", "--list", "v*", "--sort=-v:refname"], {
     timeoutMs,
   }).catch(() => null);
-  return result?.code === 0 ? normalizeStringEntries(result.stdout.split("\n")) : [];
+  const tags = result?.code === 0 ? normalizeStringEntries(result.stdout.split("\n")) : [];
+  return selectChannelTag(tags, channel);
 }
 
 /**
@@ -533,16 +535,6 @@ export async function fetchGitUpdateTarget(params: {
     ),
   );
   return result(tags.exitCode === 0 && !isFailedUpdateStep(tags));
-}
-
-async function resolveChannelTag(
-  runCommand: CommandRunner,
-  root: string,
-  timeoutMs: number,
-  channel: Exclude<UpdateChannel, "dev">,
-): Promise<string | null> {
-  const tags = await listGitTags(runCommand, root, timeoutMs);
-  return selectChannelTag(tags, channel);
 }
 
 export function selectChannelTag(

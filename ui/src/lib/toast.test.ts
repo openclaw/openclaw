@@ -136,7 +136,7 @@ describe("shared toast", () => {
     },
   );
 
-  it("reconciles focus in the new root after relocation out of a shadow root", async () => {
+  it("resumes remaining time when relocation out of a shadow root drops focus", async () => {
     vi.useFakeTimers();
     const host = await mountHost();
     const shadowOwner = document.createElement("div");
@@ -155,10 +155,7 @@ describe("shared toast", () => {
     expect(onDismiss).not.toHaveBeenCalled();
     document.body.append(host);
     await host.updateComplete;
-    expect(host.contains(document.activeElement)).toBe(true);
-    await vi.advanceTimersByTimeAsync(200);
-    expect(onDismiss).not.toHaveBeenCalled();
-    host.querySelector<HTMLButtonElement>(".app-toast__dismiss")!.blur();
+    expect(host.contains(document.activeElement)).toBe(false);
     await vi.advanceTimersByTimeAsync(59);
     expect(onDismiss).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);

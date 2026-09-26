@@ -89,24 +89,10 @@ describe("UI protocol freshness health mapping", () => {
     { kind: "missing-assets", field: "message" },
     { kind: "stale-assets", field: "fixHint" },
   ] as const)(
-    "runs the $kind manual repair in its source root, not cwd",
+    "passes the source root as one argument in the $kind manual repair",
     async ({ kind, field }) => {
       const root = await createOpenClawRoot("openclaw-doctor-ui-owner's source-");
       const unrelated = await createOpenClawRoot();
-      for (const directory of [root, unrelated]) {
-        await fs.writeFile(
-          path.join(directory, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            private: true,
-            scripts: { "ui:build": "node build.cjs" },
-          }),
-        );
-        await fs.writeFile(
-          path.join(directory, "build.cjs"),
-          'require("node:fs").writeFileSync("built-root.txt", process.cwd());\n',
-        );
-      }
       await touch(path.join(root, "ui/package.json"), new Date("2026-01-01"));
       if (kind === "stale-assets") {
         await touch(path.join(root, "dist/control-ui/index.html"), new Date("2026-01-01"));
@@ -123,20 +109,20 @@ describe("UI protocol freshness health mapping", () => {
       expect(command).toBeDefined();
 
       const windows = process.platform === "win32";
-      execFileSync(
+      const captureArguments = windows
+        ? `function pnpm { [Console]::Write(($args -join [char]0) + [char]0) }
+${command!}`
+        : `pnpm() { printf '%s\\0' "$@"; }
+${command!}`;
+      const output = execFileSync(
         windows ? "powershell.exe" : "/bin/sh",
         windows
-          ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command!]
-          : ["-c", command!],
-        { cwd: unrelated, timeout: 10_000, stdio: "pipe" },
+          ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", captureArguments]
+          : ["-c", captureArguments],
+        { cwd: unrelated, timeout: 10_000, encoding: "utf8" },
       );
 
-      await expect(
-        fs.readFile(path.join(unrelated, "built-root.txt"), "utf8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      await expect(fs.readFile(path.join(root, "built-root.txt"), "utf8")).resolves.toBe(root);
+      expect(output.split("\0")).toEqual(["--dir", root, "ui:build", ""]);
     },
   );
 

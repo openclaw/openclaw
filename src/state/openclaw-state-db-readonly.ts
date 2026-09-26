@@ -35,6 +35,7 @@ import {
   openClawStateDatabaseCache,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
+import { readAdmittedStateContentVersion } from "./openclaw-state-db-content-version.js";
 import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateDatabase,
@@ -64,6 +65,7 @@ import {
   bindRetainedReadScope,
   createRetainedReadScope,
   runRetainedReadScope,
+  runSynchronousReadScope,
 } from "./openclaw-state-read-scope.js";
 import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.js";
 import type {
@@ -76,7 +78,6 @@ import type {
   RetainedReadScope,
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 const artifactPreservingReads = resolveGlobalSingleton(
   Symbol.for("openclaw.artifactPreservingStateReads"),
@@ -214,47 +215,39 @@ const synchronousReadSnapshots = resolveGlobalSingleton(
 );
 
 /** One synchronous metadata operation shares private bytes, never later admission reads. */
-export function withSynchronousArtifactPreservingStateSnapshot<T>(operation: () => T): T {
+export function withSynchronousArtifactPreservingStateSnapshot<T>(
+  operation: () => T,
+  options?: { current?: OpenClawStateDatabaseOptions },
+): T {
+  if (options?.current) {
+    // Check inherited admission before selecting fresh bytes for this assertion.
+    resolveReadOnlyPath(options.current);
+    const inherited = synchronousReadSnapshots.current;
+    return stateSnapshotReads.exit(() => {
+      synchronousReadSnapshots.current = undefined;
+      try {
+        return withArtifactPreservingStateReads(() =>
+          withSynchronousArtifactPreservingStateSnapshot(operation),
+        );
+      } finally {
+        synchronousReadSnapshots.current = inherited;
+      }
+    });
+  }
   if (!isArtifactPreservingStateRead() || synchronousReadSnapshots.current) {
     return operation();
   }
   const readers = new Map<string, ScopedRead>();
   synchronousReadSnapshots.current = readers;
-  let result!: T;
-  let failed = false;
-  let failure: unknown;
-  const cleanupErrors: unknown[] = [];
-  try {
-    result = operation();
-    if (isPromiseLike(result)) {
-      throw new SqliteCoordinatorError("SQLite metadata snapshot scope must remain synchronous");
-    }
-  } catch (error) {
-    failed = true;
-    failure = error;
-  } finally {
-    synchronousReadSnapshots.current = undefined;
-    for (const reader of readers.values()) {
-      try {
-        if (!reader.close()) {
-          cleanupErrors.push(new Error("Shared-state metadata snapshot cleanup is incomplete."));
-        }
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-    }
-    readers.clear();
-  }
-  if (cleanupErrors.length) {
-    throw new AggregateError(
-      failed ? [failure, ...cleanupErrors] : cleanupErrors,
-      "Shared-state metadata snapshot cleanup failed.",
-    );
-  }
-  if (failed) {
-    throw failure;
-  }
-  return result;
+  return runSynchronousReadScope(
+    {
+      readers,
+      leave: () => {
+        synchronousReadSnapshots.current = undefined;
+      },
+    },
+    operation,
+  );
 }
 
 function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
@@ -391,14 +384,13 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
 export function executeExistingOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
-  { context, current, mapError }: OpenClawStateReadOptions = {},
+  { context, current, mapError, signal }: OpenClawStateReadOptions = {},
 ): Promise<OpenClawStateReadReply | undefined> {
   return mapOpenClawStateReadError(mapError, (receipt) => {
     context?.admission.assertCurrent();
-    const read = () => {
-      const execute = () => executeRetainedOpenClawStateRead(options, command, receipt, context);
-      return current ? stateSnapshotReads.exit(execute) : execute();
-    };
+    const execute = () =>
+      executeRetainedOpenClawStateRead(options, command, receipt, context, signal);
+    const read = current ? () => stateSnapshotReads.exit(execute) : execute;
     const run = () =>
       context
         ? withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, read)
@@ -411,7 +403,8 @@ function executeRetainedOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
   receipt: OpenClawStateReadReceipt,
-  capturedContext?: OpenClawStateWorkerContext,
+  capturedContext?: OpenClawStateReadOptions["context"],
+  signal?: AbortSignal,
 ): Promise<OpenClawStateReadReply | undefined> {
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();
@@ -434,6 +427,7 @@ function executeRetainedOpenClawStateRead(
   const excluded = hasStateDatabaseSourceExclusion(pathname);
   const preserveArtifacts = requiresArtifactPreservingSnapshot(pathname);
   const controller = new AbortController();
+  const readSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   const run = async (): Promise<OpenClawStateReadReply | undefined> => {
     const producerSettled = createDeferredCore();
     const transport = createOpenClawStateReadTransport(command);
@@ -448,9 +442,9 @@ function executeRetainedOpenClawStateRead(
     let expectedIdentity: string | undefined;
     let releasePreparedSource: (() => void) | undefined;
     const authority: OpenClawStateReadAuthority = {
-      signal: controller.signal,
+      signal: readSignal,
       assertCurrent() {
-        controller.signal.throwIfAborted();
+        readSignal.throwIfAborted();
         context.maintenanceScope?.assertAdmission();
         context.admission.assertCurrent();
         if (excluded && !hasStateDatabaseSourceExclusion(pathname)) {
@@ -738,4 +732,12 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
     }
     return withOpenClawStateReadOnlyLocation(operation, pathname, prepared);
   });
+}
+
+export function readCurrentOpenClawStateDatabaseContentVersion(
+  options: OpenClawStateDatabaseOptions = {},
+): string | undefined {
+  const pathname = resolveReadOnlyPath(options);
+  const env = options.env ?? process.env;
+  return stateSnapshotReads.exit(() => readAdmittedStateContentVersion(pathname, env));
 }

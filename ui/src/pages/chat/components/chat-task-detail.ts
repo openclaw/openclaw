@@ -9,6 +9,7 @@ import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-backgro
 import { uiConversationMatches } from "../../../lib/sessions/session-key.ts";
 import {
   isActiveTask,
+  newestTaskSnapshot,
   taskDetail,
   taskRuntimeLabel,
   taskTimestampMs,
@@ -21,7 +22,6 @@ import {
   backgroundTaskStatusLabel,
   backgroundTaskIsExecuting,
   backgroundTaskDeliveryLabel,
-  newestTaskSnapshot,
   STATUS_TONES,
 } from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";

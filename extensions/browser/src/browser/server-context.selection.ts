@@ -22,6 +22,7 @@ import type {
   BrowserOperationOptions,
   BrowserTabTargetOptions,
   EnsureTabAvailableOptions,
+  ProfileContext,
   ProfileRuntimeState,
 } from "./server-context.types.js";
 import { assertBrowserDashboardTabCanClose } from "./session-tab-store.js";
@@ -35,14 +36,7 @@ type SelectionDeps = {
   openTab: (url: string, options?: BrowserOperationOptions) => Promise<BrowserTab>;
 };
 
-type SelectionOps = {
-  ensureTabAvailable: (
-    targetId?: string,
-    options?: EnsureTabAvailableOptions,
-  ) => Promise<BrowserTab>;
-  focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
-  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<string>;
-};
+type SelectionOps = Pick<ProfileContext, "ensureTabAvailable" | "focusTab" | "closeTab">;
 
 function mergeOpenedTabSnapshot(
   tabs: BrowserTab[],

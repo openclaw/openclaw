@@ -622,6 +622,7 @@ async function planWorkflowAdmission(input) {
   const fsSafeNative = selections.some((selection) => selection.fsSafeNative);
   if (fsSafeNative && allow) {
     sourcePaths.add("package.json");
+    // Older frozen contracts still inspect this retired shim; absent paths need no hydration.
     sourcePaths.add("src/infra/fs-safe-defaults.ts");
   }
   // The recorded inventory stays optional: targets predating it keep the postbuild check.

@@ -2,6 +2,7 @@
  * Shared helpers for Browser CLI action subcommands.
  */
 import fs from "node:fs/promises";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { asRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserActRequestTimeoutMs } from "../../browser/act-policy.js";
@@ -13,7 +14,6 @@ import {
   printBrowserJsonResult,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
-import { danger, defaultRuntime } from "../core-api.js";
 
 type BrowserActionResult = Awaited<ReturnType<typeof browserAct>>;
 

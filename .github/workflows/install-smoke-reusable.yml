@@ -44,7 +44,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 jobs:
   preflight:
@@ -1550,7 +1550,7 @@ jobs:
             --source-archive-sha256 "$SOURCE_ARCHIVE_SHA256"
 
       - name: Install Bun for global smoke
-        run: npm install -g bun@1.4.0
+        run: npm install -g bun@1.4.2
 
       - name: Run Bun global install candidate-payload smoke
         working-directory: .release-harness

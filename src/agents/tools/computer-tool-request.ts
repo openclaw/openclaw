@@ -169,10 +169,24 @@ function copyOptionalBooleanParam(
   target[key] = value;
 }
 
-function copyBrowserRefs(target: Record<string, unknown>, input: Record<string, unknown>): void {
-  target.browserRef = readToolStringParam(input, "browserRef", { required: true });
-  target.pageRef = readToolStringParam(input, "pageRef", { required: true });
-}
+const BROWSER_REFS = ["browserRef", "pageRef"] as const;
+const BROWSER_ELEMENT_REFS = [...BROWSER_REFS, "observationId", "elementRef"] as const;
+const REQUIRED_STRING_PARAMS: Partial<Record<ComputerToolAction, readonly string[]>> = {
+  launch_app: ["app"],
+  kill_app: ["app"],
+  bring_to_front: ["windowRef"],
+  set_value: ["windowRef", "elementRef", "observationId"],
+  invoke_menu: ["windowRef"],
+  zoom: ["windowRef", "observationId"],
+  browser_prepare: ["windowRef"],
+  browser_navigate: [...BROWSER_REFS, "url"],
+  browser_click: [...BROWSER_REFS, "observationId"],
+  browser_type: BROWSER_ELEMENT_REFS,
+  browser_dialog: [...BROWSER_REFS, "dialogAction"],
+  browser_set_input_files: BROWSER_ELEMENT_REFS,
+  browser_download: BROWSER_ELEMENT_REFS,
+  browser_pointer: [...BROWSER_REFS, "observationId", "pointerAction"],
+};
 
 /** Builds the computer.act wire params for one tool input action. */
 export function buildComputerActParams(params: {
@@ -210,6 +224,9 @@ export function buildComputerActParams(params: {
   const modifiers = readModifiers(input, action);
   if (modifiers) {
     wire.modifiers = modifiers;
+  }
+  for (const key of REQUIRED_STRING_PARAMS[action] ?? []) {
+    wire[key] = readToolStringParam(input, key, { required: true });
   }
   switch (action) {
     case "left_click_drag": {
@@ -275,27 +292,12 @@ export function buildComputerActParams(params: {
       copyOptionalIntegerParam(wire, input, "maxElements", { min: 1, max: 2_000 });
       break;
     }
-    case "launch_app":
-    case "kill_app": {
-      wire.app = readToolStringParam(input, "app", { required: true });
-      break;
-    }
-    case "bring_to_front": {
-      wire.windowRef = readToolStringParam(input, "windowRef", { required: true });
-      break;
-    }
     case "set_value": {
-      for (const key of ["windowRef", "elementRef", "observationId", "value"] as const) {
-        wire[key] = readToolStringParam(input, key, {
-          required: true,
-          allowEmpty: key === "value",
-        });
-      }
+      wire.value = readToolStringParam(input, "value", { required: true, allowEmpty: true });
       copyDeliveryMode(wire, input);
       break;
     }
     case "invoke_menu": {
-      wire.windowRef = readToolStringParam(input, "windowRef", { required: true });
       const path = input.path;
       if (
         !Array.isArray(path) ||
@@ -310,8 +312,6 @@ export function buildComputerActParams(params: {
       break;
     }
     case "zoom": {
-      wire.windowRef = readToolStringParam(input, "windowRef", { required: true });
-      wire.observationId = readToolStringParam(input, "observationId", { required: true });
       for (const key of ["x1", "y1", "x2", "y2"] as const) {
         const value = readFiniteNumberParam(input, key, { min: 0 });
         if (value === undefined) {
@@ -327,7 +327,9 @@ export function buildComputerActParams(params: {
         wire.windowRef = windowRef;
         break;
       }
-      copyBrowserRefs(wire, input);
+      for (const key of BROWSER_REFS) {
+        wire[key] = readToolStringParam(input, key, { required: true });
+      }
       for (const key of [
         "snapshotFormat",
         "elementRef",
@@ -341,19 +343,11 @@ export function buildComputerActParams(params: {
       break;
     }
     case "browser_prepare": {
-      wire.windowRef = readToolStringParam(input, "windowRef", { required: true });
       copyOptionalStringParam(wire, input, "profile");
       copyOptionalStringParam(wire, input, "profileName");
       break;
     }
-    case "browser_navigate": {
-      copyBrowserRefs(wire, input);
-      wire.url = readToolStringParam(input, "url", { required: true });
-      break;
-    }
     case "browser_click": {
-      copyBrowserRefs(wire, input);
-      wire.observationId = readToolStringParam(input, "observationId", { required: true });
       copyOptionalStringParam(wire, input, "elementRef");
       copyOptionalStringParam(wire, input, "inputRoute");
       const coordinate = readCoordinate(input, "coordinate");
@@ -364,28 +358,18 @@ export function buildComputerActParams(params: {
       break;
     }
     case "browser_type": {
-      copyBrowserRefs(wire, input);
-      for (const key of ["observationId", "elementRef"] as const) {
-        wire[key] = readToolStringParam(input, key, { required: true });
-      }
       wire.text = readToolStringParam(input, "text", { required: true, allowEmpty: true });
       copyOptionalStringParam(wire, input, "mode");
       copyOptionalBooleanParam(wire, input, "replace");
       break;
     }
     case "browser_dialog": {
-      copyBrowserRefs(wire, input);
-      wire.dialogAction = readToolStringParam(input, "dialogAction", { required: true });
       copyOptionalStringParam(wire, input, "dialogRef");
       copyOptionalStringParam(wire, input, "promptText");
       copyDeliveryMode(wire, input);
       break;
     }
     case "browser_set_input_files": {
-      copyBrowserRefs(wire, input);
-      for (const key of ["observationId", "elementRef"] as const) {
-        wire[key] = readToolStringParam(input, key, { required: true });
-      }
       const resourceHandles = input.resourceHandles;
       if (
         !Array.isArray(resourceHandles) ||
@@ -398,17 +382,7 @@ export function buildComputerActParams(params: {
       wire.resourceHandles = resourceHandles;
       break;
     }
-    case "browser_download": {
-      copyBrowserRefs(wire, input);
-      for (const key of ["observationId", "elementRef"] as const) {
-        wire[key] = readToolStringParam(input, key, { required: true });
-      }
-      break;
-    }
     case "browser_pointer": {
-      copyBrowserRefs(wire, input);
-      wire.observationId = readToolStringParam(input, "observationId", { required: true });
-      wire.pointerAction = readToolStringParam(input, "pointerAction", { required: true });
       for (const key of ["inputRoute", "elementRef", "destinationElementRef"] as const) {
         copyOptionalStringParam(wire, input, key);
       }

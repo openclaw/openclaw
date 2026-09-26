@@ -1,4 +1,5 @@
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
+import type { UpdateDatabaseGenerations } from "../../infra/update-database-generations.js";
 import type {
   UpdateRequester,
   UpdateRequesterAuthority,
@@ -20,10 +21,14 @@ export type UpdateDoctorInput = {
   yes?: boolean;
   workspaceSuggestions?: boolean;
   postCoreSchemaRepair?: true;
+  databaseGenerations?: UpdateDatabaseGenerations;
 };
 
 export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
-  params: Omit<FinishUpdateParams, "packageTransaction" | "preManagedServiceStop" | "opts"> & {
+  params: Omit<
+    FinishUpdateParams,
+    "packageTransaction" | "databaseBackup" | "preManagedServiceStop" | "opts"
+  > & {
     opts: Omit<FinishUpdateParams["opts"], "run" | "recovery"> & {
       run?: Omit<
         NonNullable<FinishUpdateParams["opts"]["run"]>,
@@ -47,6 +52,8 @@ export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
 export type MigratedUpdateFinalizationResult = {
   result: UpdateRunResult;
   exitCode: number;
+  /** Missing on older workers; only explicit false permits pre-start database restoration. */
+  candidateStartAttempted?: boolean;
   executorDelegation?: "pid-start-v1";
   automaticTriage?: TriageFailureContext;
 } & (

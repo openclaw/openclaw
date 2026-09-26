@@ -7,16 +7,14 @@ import {
   OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
   OUTBOUND_EXECUTABLE_QUEUE_NAMES,
-  SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME,
 } from "./delivery-queue-namespaces.js";
 
 const OUTBOUND_DELIVERY_NAMESPACE_DESCRIPTORS = [
-  { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, namespace: "prepared", retired: false },
-  {
-    queueName: SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME,
-    namespace: "prepared",
+  ...OUTBOUND_EXECUTABLE_QUEUE_NAMES.map((queueName) => ({
+    queueName,
+    namespace: "prepared" as const,
     retired: false,
-  },
+  })),
   { queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME, namespace: "preparing", retired: true },
   { queueName: OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME, namespace: "migration", retired: true },
   {
@@ -54,7 +52,9 @@ export function findDeliveryIntentOwnersInDatabase(
   );
   return params.ids.map((id) => {
     const namespaces = owners.get(id);
-    if (OUTBOUND_EXECUTABLE_QUEUE_NAMES.every((queueName) => namespaces?.has(queueName))) {
+    if (
+      OUTBOUND_EXECUTABLE_QUEUE_NAMES.filter((queueName) => namespaces?.has(queueName)).length > 1
+    ) {
       throw new Error(`Ambiguous outbound delivery custody: ${id}`);
     }
     for (const descriptor of OUTBOUND_DELIVERY_NAMESPACE_DESCRIPTORS) {

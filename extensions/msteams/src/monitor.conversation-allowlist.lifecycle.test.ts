@@ -88,12 +88,13 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
     app: {
       on: vi.fn(),
       event: vi.fn(),
-      onTokenExchange: vi.fn(async () => ({ status: 200 })),
-      onVerifyState: vi.fn(async () => ({ status: 200 })),
+      process: vi.fn(async () => ({ status: 200 })),
       initialize: vi.fn(async () => {}),
-      tokenManager: {
-        getBotToken: vi.fn(async () => ({ toString: (): string => "bot-token" })),
-        getGraphToken: vi.fn(async () => ({ toString: (): string => "graph-token" })),
+      tokenProvider: {
+        getAppToken: vi.fn(async (scope: string) => ({
+          toString: (): string =>
+            scope === "https://graph.microsoft.com/.default" ? "graph-token" : "bot-token",
+        })),
       },
     },
   })),

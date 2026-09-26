@@ -235,9 +235,7 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
     }
     return getSlackWriteClient(token, { teamId: opts.teamId });
   }
-  return opts.assertDirectAdapterHandoff
-    ? createSlackLookupClient(token, { teamId: opts.teamId }, opts.assertDirectAdapterHandoff)
-    : createSlackLookupClient(token, { teamId: opts.teamId });
+  return createSlackLookupClient(token, { teamId: opts.teamId }, opts.assertDirectAdapterHandoff);
 }
 
 async function resolveBotUserId(client: WebClient) {

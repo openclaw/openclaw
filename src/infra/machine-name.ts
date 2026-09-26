@@ -1,6 +1,5 @@
-// Resolves a human-readable machine name for gateway display.
 import os from "node:os";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { runExec } from "../process/exec.js";
 
 // Prefer macOS ComputerName/LocalHostName with hostname fallback; machine
@@ -13,15 +12,14 @@ async function tryScutil(key: "ComputerName" | "LocalHostName") {
       logOutput: false,
       timeoutMs: 1000,
     });
-    const value = normalizeOptionalString(stdout) ?? "";
-    return value.length > 0 ? value : null;
+    return normalizeNullableString(stdout);
   } catch {
     return null;
   }
 }
 
 function fallbackHostName() {
-  const trimmed = normalizeOptionalString(os.hostname()) ?? "";
+  const trimmed = normalizeNullableString(os.hostname()) ?? "";
   return trimmed.replace(/\.local$/i, "") || "openclaw";
 }
 

@@ -157,8 +157,6 @@ export type NodeEventTransport = {
   checkConnectivity?: (timeoutMs: number) => Promise<NodeConnectivityResult>;
 };
 
-type PairedDeviceNodeBindingSnapshot = PairedDeviceNodeBinding;
-
 type NodeSessionRegistrationOptions = {
   remoteIp?: string | undefined;
   pairingIdentity: string;
@@ -171,9 +169,7 @@ export type NodeRegistryOptions = {
     | (() => readonly RegisteredNodePluginToolCommand[] | undefined)
     | undefined;
   getConfig?: () => OpenClawConfig;
-  resolveCurrentPairingState?: (
-    nodeId: string,
-  ) => Promise<PairedDeviceNodeBindingSnapshot | undefined>;
+  resolveCurrentPairingState?: (nodeId: string) => Promise<PairedDeviceNodeBinding | undefined>;
   isPairingStateCurrent?: (nodeId: string, expected: PairedDeviceNodeBinding) => boolean;
   onPairingGenerationChanged?: (params: {
     nodeId: string;
@@ -245,23 +241,16 @@ export class NodeRegistry {
       }
     },
     disconnectPending: (pending) => {
-      if (pending.command === NODE_MCP_TOOLS_CALL_COMMAND) {
-        pending.resolve({
-          ok: false,
-          error: {
-            code: "MCP_SERVER_UNAVAILABLE",
-            message: "node host disconnected during MCP tool call",
-          },
-        });
-      } else {
-        pending.resolve({
-          ok: false,
-          error: {
-            code: "DISCONNECTED",
-            message: `node disconnected (${pending.command})`,
-          },
-        });
-      }
+      pending.resolve({
+        ok: false,
+        error:
+          pending.command === NODE_MCP_TOOLS_CALL_COMMAND
+            ? {
+                code: "MCP_SERVER_UNAVAILABLE",
+                message: "node host disconnected during MCP tool call",
+              }
+            : { code: "DISCONNECTED", message: `node disconnected (${pending.command})` },
+      });
     },
   });
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
@@ -359,7 +348,7 @@ export class NodeRegistry {
         ? { status: "current", session: current }
         : { status: "stale", presenceInvalidated: false };
     }
-    let currentPairingState: PairedDeviceNodeBindingSnapshot | undefined;
+    let currentPairingState: PairedDeviceNodeBinding | undefined;
     try {
       currentPairingState = await resolveCurrentPairingState(lease.nodeId);
     } catch {
@@ -637,7 +626,7 @@ export class NodeRegistry {
 
   /** Filter connected sessions against an already-loaded pairing-state snapshot. */
   listConnectedForPairingStates(
-    currentPairingStates: ReadonlyMap<string, PairedDeviceNodeBindingSnapshot>,
+    currentPairingStates: ReadonlyMap<string, PairedDeviceNodeBinding>,
   ): NodeSession[] {
     return this.listConnectedSessions().filter((node) => {
       const current = currentPairingStates.get(node.nodeId);
@@ -651,8 +640,7 @@ export class NodeRegistry {
     if (!isPairingStateCurrent) {
       return this.listConnected();
     }
-    const connected: NodeSession[] = [];
-    let invalidatedPresence = false;
+    const resolved: PairingLeaseResolution[] = [];
     for (const candidate of this.listConnectedSessions()) {
       const lease = this.capturePairingLease(candidate);
       let isCurrent: boolean;
@@ -661,21 +649,9 @@ export class NodeRegistry {
       } catch {
         continue;
       }
-      const resolution = this.settlePairingLease({
-        lease,
-        isCurrent,
-        invalidateStale: true,
-      });
-      if (resolution.status === "current") {
-        connected.push(resolution.session);
-      } else if (resolution.status === "stale") {
-        invalidatedPresence ||= resolution.presenceInvalidated;
-      }
+      resolved.push(this.settlePairingLease({ lease, isCurrent, invalidateStale: true }));
     }
-    if (invalidatedPresence) {
-      this.publishActiveNodeContext();
-    }
-    return connected;
+    return this.projectPairingLeaseResolutions(resolved);
   }
 
   /** Resolve persistent pairing state before projecting connected sessions. */
@@ -698,6 +674,12 @@ export class NodeRegistry {
         this.resolvePairingLease(this.capturePairingLease(node), { invalidateStale: true }),
       ),
     );
+    return this.projectPairingLeaseResolutions(resolved);
+  }
+
+  private projectPairingLeaseResolutions(
+    resolved: readonly PairingLeaseResolution[],
+  ): NodeSession[] {
     const connected: NodeSession[] = [];
     let invalidatedPresence = false;
     for (const result of resolved) {
@@ -1403,18 +1385,7 @@ export class NodeRegistry {
     if (eventTransport) {
       return eventTransport.send(event, payload);
     }
-    if (!this.isNodeWebSocketOpen(node)) {
-      return false;
-    }
-    if (this.rejectSlowNodeSocket(node)) {
-      return false;
-    }
-    try {
-      node.client.socket.send(serializeNodeEvent(event, payload));
-      return true;
-    } catch {
-      return false;
-    }
+    return this.sendWebSocketEvent(node, () => serializeNodeEvent(event, payload));
   }
 
   private sendEventRawInternal(
@@ -1439,6 +1410,13 @@ export class NodeRegistry {
     if (eventTransport) {
       return eventTransport.sendRaw(event, payloadJSON);
     }
+    return this.sendWebSocketEvent(node, () => {
+      const payloadFragment = payloadJSON ? `,"payload":${payloadJSON.json}` : "";
+      return `{"type":"event","event":${JSON.stringify(event)}${payloadFragment}}`;
+    });
+  }
+
+  private sendWebSocketEvent(node: NodeSession, serialize: () => string): boolean {
     if (!this.isNodeWebSocketOpen(node)) {
       return false;
     }
@@ -1446,10 +1424,7 @@ export class NodeRegistry {
       return false;
     }
     try {
-      const payloadFragment = payloadJSON ? `,"payload":${payloadJSON.json}` : "";
-      node.client.socket.send(
-        `{"type":"event","event":${JSON.stringify(event)}${payloadFragment}}`,
-      );
+      node.client.socket.send(serialize());
       return true;
     } catch {
       return false;

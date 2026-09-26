@@ -180,7 +180,7 @@ export async function createBoundWorker(
   if (placement.state !== "active") {
     throw new Error("expected the active worker placement");
   }
-  const claim = store.claimTurn({
+  const claim = await store.claimTurn({
     ...session,
     owner: placementTurnOwner(placement),
     claimId: "queued-worker-claim",

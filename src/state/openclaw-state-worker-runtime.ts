@@ -48,6 +48,10 @@ import {
   isOperatorApprovalCommand,
 } from "../gateway/operator-approval-store.worker.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
+import { isWorkerInferenceStoreCommand } from "../gateway/worker-environments/inference-store.worker-contract.js";
+import { executeWorkerInferenceStoreCommand } from "../gateway/worker-environments/inference-store.worker.js";
+import { isPlacementTurnClaimCommand } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
+import { executePlacementTurnClaimCommand } from "../gateway/worker-environments/placement-turn-claims.worker.js";
 import { isWorkerEnvironmentCommand } from "../gateway/worker-environments/store-worker-contract.js";
 import { executeWorkerEnvironmentCommand } from "../gateway/worker-environments/store.worker.js";
 import { readDeferredPluginMigrationsInWorker } from "../infra/deferred-plugin-migrations.worker.js";
@@ -172,6 +176,12 @@ export function executeSharedStateCommand(
   }
   if (isDevicePairingMutationCommand(command)) {
     return executeDevicePairingMutationInWorker(command, open());
+  }
+  if (isWorkerInferenceStoreCommand(command)) {
+    return executeWorkerInferenceStoreCommand(command, open());
+  }
+  if (isPlacementTurnClaimCommand(command)) {
+    return executePlacementTurnClaimCommand(command, open());
   }
   if (isWorkerEnvironmentCommand(command)) {
     return executeWorkerEnvironmentCommand(command, open());

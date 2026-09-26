@@ -219,6 +219,12 @@ Doctor-owned migration inputs. Stop the node host and run
 `openclaw doctor --fix`; Doctor imports and verifies their rows in SQLite before
 removing the old files.
 
+The headless node and macOS app worker check this state before preparing
+capabilities. Pending device auth, exec approvals, or a missing canonical
+identity with retired identity data requires Doctor; startup preserves the
+inputs and does not create replacement keys or import execution policy. A valid
+canonical identity keeps precedence over stale `identity/device.json` data.
+
 ## System commands (node host / mac node)
 
 The macOS node and headless node host both expose `system.run.prepare`, `system.run`, `system.which`, and `system.execApprovals.get/set`; the macOS node also exposes `system.notify`.

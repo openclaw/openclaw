@@ -139,7 +139,7 @@ export function repairOpenClawStateDatabaseIndexesForDoctor(
   return repairDoctorStateDatabase(options, "indexes", "Doctor state index repair");
 }
 
-/** Make exact legacy catalog damage readable before Doctor loads config-dependent state. */
+/** Repair known catalog damage and preserve orphan rows before Doctor backs up or loads state. */
 export function repairOpenClawStateDatabaseReadabilityForDoctor(
   options: OpenClawStateDatabaseOptions = {},
 ): { changes: string[]; warnings: string[] } {

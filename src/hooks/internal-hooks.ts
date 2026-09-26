@@ -1,10 +1,3 @@
-/**
- * Hook system for OpenClaw agent events
- *
- * Provides an extensible event-driven hook system for agent events
- * like command processing, session lifecycle, etc.
- */
-
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
@@ -53,14 +46,9 @@ export type GatewayStartupHookEvent = InternalHookEvent & {
   context: GatewayStartupHookContext;
 };
 
-// ============================================================================
-// Message Hook Events
-// ============================================================================
-
 export type MessageReceivedHookContext = {
   /** Sender identifier (e.g., phone number, user ID) */
   from: string;
-  /** Message content */
   content: string;
   /** Unix timestamp when the message was received */
   timestamp?: number;
@@ -68,7 +56,6 @@ export type MessageReceivedHookContext = {
   channelId: string;
   /** Provider account ID for multi-account setups */
   accountId?: string;
-  /** Conversation/chat ID */
   conversationId?: string;
   /** Message ID from the provider */
   messageId?: string;
@@ -86,9 +73,7 @@ export type MessageSentHookContext = Pick<
   MessageReceivedHookContext,
   "content" | "channelId" | "accountId" | "conversationId" | "messageId"
 > & {
-  /** Recipient identifier */
   to: string;
-  /** Whether the message was sent successfully */
   success: boolean;
   /** Error message if sending failed */
   error?: string;
@@ -110,21 +95,15 @@ type MessageEnrichedBodyHookContext = Pick<
 > & {
   /** Sender identifier (e.g., phone number, user ID) */
   from?: string;
-  /** Recipient identifier */
   to?: string;
   /** Original raw message body (e.g., "🎤 [Audio]") */
   body?: string;
   /** Enriched body shown to the agent, including transcript */
   bodyForAgent?: string;
-  /** Sender user ID */
   senderId?: string;
-  /** Sender display name */
   senderName?: string;
-  /** Sender username */
   senderUsername?: string;
-  /** Provider name */
   provider?: string;
-  /** Surface name */
   surface?: string;
   /** @deprecated Use `media?.[0]?.path`. */
   mediaPath?: string;
@@ -158,16 +137,7 @@ export type SessionPatchHookEvent = InternalHookEvent & {
   context: SessionPatchHookContext;
 };
 
-/**
- * Registry of hook handlers by event key.
- *
- * Uses a globalThis singleton so that registerInternalHook and
- * triggerInternalHook always share the same Map even when the bundler
- * emits multiple copies of this module into separate chunks (bundle
- * splitting). Without the singleton, handlers registered in one chunk
- * are invisible to triggerInternalHook in another chunk, causing hooks
- * to silently fire with zero handlers.
- */
+// Share registrations across copies of this module emitted into separate bundle chunks.
 const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
 const handlers = resolveGlobalSingleton<Map<string, InternalHookHandler[]>>(
   INTERNAL_HOOK_HANDLERS_KEY,
@@ -180,25 +150,7 @@ const internalHooksEnabledState = resolveGlobalSingleton<{ enabled: boolean }>(
 );
 const log = createSubsystemLogger("internal-hooks");
 
-/**
- * Register a hook handler for a specific event type or event:action combination
- *
- * @param eventKey - Event type (e.g., 'command') or specific action (e.g., 'command:new')
- * @param handler - Function to call when the event is triggered
- *
- * @example
- * ```ts
- * // Listen to all command events
- * registerInternalHook('command', async (event) => {
- *   console.log('Command:', event.action);
- * });
- *
- * // Listen only to /new commands
- * registerInternalHook('command:new', async (event) => {
- *   await saveSessionToMemory(event);
- * });
- * ```
- */
+/** Register for a family (e.g. "command") or an exact action (e.g. "command:new"). */
 export function registerInternalHook(eventKey: string, handler: InternalHookHandler): void {
   if (!handlers.has(eventKey)) {
     handlers.set(eventKey, []);
@@ -206,12 +158,6 @@ export function registerInternalHook(eventKey: string, handler: InternalHookHand
   handlers.get(eventKey)!.push(handler);
 }
 
-/**
- * Unregister a specific hook handler
- *
- * @param eventKey - Event key the handler was registered for
- * @param handler - The handler function to remove
- */
 export function unregisterInternalHook(eventKey: string, handler: InternalHookHandler): void {
   const eventHandlers = handlers.get(eventKey);
   if (!eventHandlers) {
@@ -223,15 +169,11 @@ export function unregisterInternalHook(eventKey: string, handler: InternalHookHa
     eventHandlers.splice(index, 1);
   }
 
-  // Clean up empty handler arrays
   if (eventHandlers.length === 0) {
     handlers.delete(eventKey);
   }
 }
 
-/**
- * Clear all registered hooks (useful for testing)
- */
 export function clearInternalHooks(): void {
   handlers.clear();
   clearLegacyPluginInternalHooks();
@@ -241,9 +183,6 @@ export function setInternalHooksEnabled(enabled: boolean): void {
   internalHooksEnabledState.enabled = enabled;
 }
 
-/**
- * Get all registered event keys (useful for debugging)
- */
 export function getRegisteredEventKeys(): string[] {
   return [...new Set([...handlers.keys(), ...listLegacyPluginInternalHookEventKeys()])];
 }
@@ -257,18 +196,7 @@ export function hasInternalHookListeners(type: InternalHookEventType, action: st
   );
 }
 
-/**
- * Trigger a hook event
- *
- * Calls all handlers registered for:
- * 1. The general event type (e.g., 'command')
- * 2. The specific event:action combination (e.g., 'command:new')
- *
- * Handlers are called in registration order. Errors are caught and logged
- * but don't prevent other handlers from running.
- *
- * @param event - The event to trigger
- */
+/** Dispatch family handlers before exact-action handlers, in registration order; isolate errors. */
 export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
   if (!internalHooksEnabledState.enabled) {
     return;
@@ -292,14 +220,6 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
   }
 }
 
-/**
- * Create a hook event with common fields filled in
- *
- * @param type - The event type
- * @param action - The action within that type
- * @param sessionKey - The session key
- * @param context - Additional context
- */
 export function createInternalHookEvent(
   type: InternalHookEventType,
   action: string,

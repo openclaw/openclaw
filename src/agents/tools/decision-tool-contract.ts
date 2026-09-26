@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import type { DecisionBatch, DecisionOutcome } from "../../decisions/types.js";
 import { validateDecisionBatch } from "../../decisions/validation.js";
 import type { DecisionProviderCapabilities } from "../../plugins/manifest-types.js";
+import { textResult } from "./tool-results.js";
 
 const entry = {
   anyOf: [
@@ -194,8 +195,5 @@ export function decisionToolResult(
               : ""),
         }
       : outcome;
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(details) }],
-    details,
-  };
+  return textResult(JSON.stringify(details), details);
 }

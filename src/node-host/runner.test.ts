@@ -27,24 +27,12 @@ import {
 describe("runNodeHost", () => {
   beforeEach(resetRunnerTestState);
 
-  it("runs startup state migrations before constructing node-host state", async () => {
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
-    );
-
-    expect(mocks.runStartupMigrations).toHaveBeenCalledTimes(1);
-    expect(mocks.runStartupMigrations.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.configureNodeHost.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
-  it("keeps managed runtime startup on existing state without rerunning legacy migrations", async () => {
+  it("keeps managed runtime startup on its admitted existing state", async () => {
     await withExistingOpenClawStateSchema({ path: resolveOpenClawStateSqlitePath() }, async () => {
       await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
         "event loop readiness timeout",
       );
     });
-    expect(mocks.runStartupMigrations).not.toHaveBeenCalled();
     expect(mocks.configureNodeHost).toHaveBeenCalledOnce();
     expect(mocks.capturedGatewayClients[0]?.stopAndWait).toHaveBeenCalledOnce();
   });

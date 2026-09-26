@@ -575,8 +575,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         if (!older) {
           this.catalogLoading = false;
           state.chatLoading = false;
-        }
-        if (!older) {
           state.requestUpdate();
         }
       }

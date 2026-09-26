@@ -5,7 +5,6 @@ import android.Manifest
 import android.content.Context
 import android.provider.CallLog
 import androidx.core.content.ContextCompat
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -227,12 +226,7 @@ class CallLogHandler private constructor(
       )
     }
 
-    val params =
-      try {
-        Json.parseToJsonElement(paramsJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return null
+    val params = parseJsonParamsObject(paramsJson) ?: return null
 
     val limit =
       ((params["limit"] as? JsonPrimitive)?.content?.toIntOrNull() ?: DEFAULT_CALL_LOG_LIMIT)

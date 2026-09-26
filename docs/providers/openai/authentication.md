@@ -10,39 +10,48 @@ sidebarTitle: "Authentication"
 
 Choose your OpenAI authentication method based on the access you need:
 
-- **Codex login:** use your ChatGPT account for Codex models and OpenAI-hosted
-  plugins. Choose browser OAuth locally or device code on a remote machine.
-- **Sign in with ChatGPT (SIWC):** use your ChatGPT allowance with OpenAI-native
-  usage monitoring and app-specific permissions. Model calls use the Responses
-  API; OpenAI-hosted plugins are not supported yet.
+- **Codex login:** use your ChatGPT account for Codex models. Choose browser
+  OAuth locally or device code on a remote machine. OpenAI-hosted plugins require
+  a grant with connector scopes.
+- **Sign in with ChatGPT (SIWC):** use your Codex allowance for eligible Responses
+  API calls, with per-instance usage tracking and token limits plus app-specific
+  permissions. OpenAI-hosted plugins are not supported yet.
 - **API key:** use OpenAI Platform models with your project's permissions and
   API billing.
 
 ## Compare capabilities
 
-|                                                        | Codex login (browser OAuth or device code)                 | Sign in with ChatGPT (SIWC preview)                     | OpenAI Platform API key                                    |
-| ------------------------------------------------------ | ---------------------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------- |
-| Identity                                               | Your ChatGPT account and workspace using the Codex product | Your ChatGPT account and workspace authorizing OpenClaw | The API key's Platform project and permissions             |
-| Model access                                           | Models available to your Codex account                     | Eligible Responses models when token sharing is granted | Models permitted for your Platform project                 |
-| Usage allowance                                        | Your Codex allowance                                       | Your eligible ChatGPT allowance                         | Platform API billing                                       |
-| OpenAI-hosted plugins and connected apps through Codex | Supported; plugin setup and workspace policy apply         | Not supported yet                                       | Not provided by API-key authentication                     |
-| OpenClaw tools and locally configured plugins          | Supported                                                  | Supported                                               | Supported                                                  |
-| Web search                                             | Supported where enabled                                    | Supported                                               | Supported where enabled                                    |
-| Monitoring and analytics                               | Codex usage and quota reporting                            | OpenAI usage tracking across connected apps             | Platform project usage and billing                         |
-| Permission control                                     | Codex product permissions and workspace policy             | App-specific OAuth grants and workspace policy          | API-key and project permissions                            |
-| Default model endpoint                                 | `https://chatgpt.com/backend-api/codex/responses`          | `https://api.openai.com/v1/responses`                   | `https://api.openai.com/v1/responses` for Responses models |
+|                                                        | Sign in with ChatGPT (SIWC preview)                     | Codex login (browser OAuth or device code)                           | OpenAI Platform API key                                    |
+| ------------------------------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Identity                                               | Your ChatGPT account and workspace authorizing OpenClaw | Your ChatGPT account and workspace using the Codex product           | The API key's Platform project and permissions             |
+| Model access                                           | Eligible Responses models when token sharing is granted | Models available to your Codex account                               | Models permitted for your Platform project                 |
+| Usage allowance                                        | Your Codex allowance                                    | Your Codex allowance                                                 | Platform API billing                                       |
+| Usage limits                                           | Customize token limits on each OpenClaw instance        | —                                                                    | —                                                          |
+| OpenAI-hosted plugins and connected apps through Codex | Not supported yet                                       | Requires connector scopes; device code lacks `api.connectors.invoke` | Not provided by API-key authentication                     |
+| OpenClaw tools and locally configured plugins          | Supported                                               | Supported                                                            | Supported                                                  |
+| Web search                                             | Supported                                               | Supported where enabled                                              | Supported where enabled                                    |
+| Monitoring and analytics                               | Usage tracking on each OpenClaw instance                | Codex usage and quota reporting                                      | Platform project usage and billing                         |
+| Permission control                                     | App-specific OAuth grants and workspace policy          | Codex product permissions and workspace policy                       | API-key and project permissions                            |
+| Default model endpoint                                 | `https://api.openai.com/v1/responses`                   | `https://chatgpt.com/backend-api/codex/responses`                    | `https://api.openai.com/v1/responses` for Responses models |
 
-**Choose SIWC for a connection with its own permissions and OpenAI usage tracking.**
+The Usage limits row describes SIWC's per-instance control; it does not compare
+limit settings for Codex login or API keys.
+
+**Choose SIWC for app-specific permissions and usage tracking per OpenClaw instance.**
 You authorize OpenClaw as its own application, with consent for basic identity
-and eligible model use. Monitor subscription usage across connected applications
-in [ChatGPT Settings → Usage](https://chatgpt.com/#settings/Usage), and manage the
+and eligible model use. Monitor each OpenClaw instance's usage in
+[ChatGPT Usage](https://app.chatgpt.com/usage), and manage the
 connection in [ChatGPT login connections](https://chatgpt.com/#settings/Security/linked-apps).
 OpenClaw does not yet display SIWC quota in its own usage panel.
 
-**Choose Codex login if OpenAI-hosted plugins are part of your workflow.**
-It supplies the Codex account authentication that those services require. You may
-still need to install or enable a plugin, connect its external account, and get
-workspace permission. SIWC model access does not grant access to those services.
+**OpenAI-hosted plugins through Codex require a grant with connector scopes.**
+Device-code login does not grant `api.connectors.invoke`, and OpenClaw's browser
+OAuth flow does not request that scope. For the native Codex harness, use a
+[native Codex browser sign-in or imported credential](/plugins/codex-harness-reference/auth#auth-and-environment-isolation)
+whose grant includes `api.connectors.invoke`, then follow
+[native plugin setup](/plugins/codex-native-plugins). You may still need to
+connect the external account and get workspace permission. SIWC model access
+does not grant access to those services.
 
 OpenClaw tools and locally configured plugins have their own permissions and
 external-service credentials. They can work with any of these model-auth methods.
@@ -108,10 +117,10 @@ openclaw models auth login --provider openai --method siwc
 openclaw models auth login --provider openai --method api-key
 ```
 
-Browser OAuth and device code provide the same type of Codex access. Device code
-lets you approve the login in a browser on another machine; it does not create a
-separate kind of permanent credential. Without `--method`, OpenAI login defaults
-to Codex browser OAuth.
+Browser OAuth and device code both provide Codex model access, but their grants
+can differ. Device code lets you approve the login in a browser on another
+machine; it does not create a separate kind of permanent credential. Without
+`--method`, OpenAI login defaults to Codex browser OAuth.
 
 Use `--agent <agentId>` to target a configured agent and `--profile-id <profileId>`
 to name the saved credential. Login saves and prioritizes that credential for the

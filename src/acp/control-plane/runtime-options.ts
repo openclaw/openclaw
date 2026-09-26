@@ -338,57 +338,32 @@ export function buildRuntimeConfigOptionPairs(
 ): Array<[string, string]> {
   const normalized = normalizeRuntimeOptions(options);
   const pairs = new Map<string, string>();
+  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
+  const resolveKey = (key: string) => resolveRuntimeConfigOptionKeyFromMap(key, advertisedKeys);
+  const shouldEmit = (aliases: readonly string[]) =>
+    advertisedKeys.size === 0 || aliases.some((alias) => advertisedKeys.has(alias));
   if (normalized.model) {
-    pairs.set(resolveRuntimeConfigOptionKey("model", advertisedConfigOptionKeys), normalized.model);
+    pairs.set(resolveKey("model"), normalized.model);
   }
-  if (normalized.thinking && shouldEmitThinkingConfigOption(advertisedConfigOptionKeys)) {
-    pairs.set(
-      resolveRuntimeConfigOptionKey("thinking", advertisedConfigOptionKeys),
-      normalized.thinking,
-    );
+  if (normalized.thinking && shouldEmit(RUNTIME_CONFIG_OPTION_ALIASES.thinking)) {
+    pairs.set(resolveKey("thinking"), normalized.thinking);
   }
   if (normalized.permissionProfile) {
-    pairs.set(
-      resolveRuntimeConfigOptionKey("approval_policy", advertisedConfigOptionKeys),
-      normalized.permissionProfile,
-    );
+    pairs.set(resolveKey("approval_policy"), normalized.permissionProfile);
   }
   if (
     typeof normalized.timeoutSeconds === "number" &&
-    shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys)
+    shouldEmit(RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds)
   ) {
-    pairs.set(
-      resolveRuntimeConfigOptionKey("timeout", advertisedConfigOptionKeys),
-      String(normalized.timeoutSeconds),
-    );
+    pairs.set(resolveKey("timeout"), String(normalized.timeoutSeconds));
   }
   for (const [key, value] of Object.entries(normalized.backendExtras ?? {})) {
-    const wireKey = resolveRuntimeConfigOptionKey(key, advertisedConfigOptionKeys);
+    const wireKey = resolveKey(key);
     if (!pairs.has(wireKey)) {
       pairs.set(wireKey, value);
     }
   }
   return [...pairs.entries()];
-}
-
-function shouldEmitThinkingConfigOption(advertisedConfigOptionKeys?: readonly string[]): boolean {
-  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
-  return (
-    advertisedKeys.size === 0 ||
-    RUNTIME_CONFIG_OPTION_ALIASES.thinking.some((alias) =>
-      advertisedKeys.has(normalizeLowercaseStringOrEmpty(alias)),
-    )
-  );
-}
-
-function shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys?: readonly string[]): boolean {
-  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
-  return (
-    advertisedKeys.size === 0 ||
-    RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds.some((alias) =>
-      advertisedKeys.has(normalizeLowercaseStringOrEmpty(alias)),
-    )
-  );
 }
 
 function buildAdvertisedConfigOptionKeyMap(
@@ -419,9 +394,18 @@ export function resolveRuntimeConfigOptionKey(
   key: string,
   advertisedConfigOptionKeys?: readonly string[],
 ): string {
+  return resolveRuntimeConfigOptionKeyFromMap(
+    key,
+    buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys),
+  );
+}
+
+function resolveRuntimeConfigOptionKeyFromMap(
+  key: string,
+  advertisedKeys: ReadonlyMap<string, string>,
+): string {
   const normalizedKey = normalizeText(key) ?? "";
   const normalizedLookupKey = normalizeLowercaseStringOrEmpty(normalizedKey);
-  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
   if (!normalizedKey || advertisedKeys.size === 0) {
     return normalizedKey;
   }

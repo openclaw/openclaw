@@ -51,7 +51,7 @@ function createController(options: {
   trigger?: LaneParams["trigger"];
   abortSignal?: AbortSignal;
   runId?: string;
-  params?: Pick<LaneParams, "agentId" | "sessionKey">;
+  params?: Pick<LaneParams, "agentId" | "sessionKey" | "swarmExecutionLane">;
   inputProvenance?: LaneParams["inputProvenance"];
 }) {
   let lifecycleGeneration = options.lifecycleGeneration;
@@ -114,6 +114,29 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
     await controller.enqueueSession(async () => undefined);
 
     expect(priorities).toEqual([expected]);
+  });
+
+  it("applies the current swarm capacity only to global execution admission", async () => {
+    const capacities: Array<number | undefined> = [];
+    let maxConcurrent = 32;
+    const { controller } = createController({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      enqueue: async (task, options) => {
+        capacities.push(options?.maxConcurrent);
+        return await task();
+      },
+      params: {
+        swarmExecutionLane: {
+          lane: "subagent:swarm:group",
+          get maxConcurrent() {
+            return maxConcurrent;
+          },
+        },
+      },
+    });
+    maxConcurrent = 8;
+    await controller.enqueueSession(() => controller.enqueueGlobal(async () => completedResult));
+    expect(capacities).toEqual([undefined, 8]);
   });
 
   it("preserves the selected agent for sessionless admitted runtime events", async () => {

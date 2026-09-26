@@ -161,15 +161,6 @@ async function resolveSlackHandleAction() {
   );
 }
 
-function shouldTreatSlackDeliveredTextAsVisible(params: {
-  kind: "tool" | "block" | "final";
-  text?: string;
-}): boolean {
-  return (
-    params.kind === "block" && typeof params.text === "string" && params.text.trim().length > 0
-  );
-}
-
 const loadSlackDirectoryConfigModule = createLazyRuntimeModule(
   () => import("./directory-config.js"),
 );
@@ -180,7 +171,7 @@ const loadSlackResolveUsersModule = createLazyRuntimeModule(() => import("./reso
 
 const loadSlackActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.runtime.js"));
 
-const loadSlackSendRuntime = createLazyRuntimeModule(() => import("./send.runtime.js"));
+const loadSlackSendRuntime = createLazyRuntimeModule(() => import("./send.js"));
 
 const loadSlackProbeModule = createLazyRuntimeModule(() => import("./probe.js"));
 
@@ -281,18 +272,6 @@ function matchSlackAcpConversation(params: {
     return { conversationId: parentConversationId, matchPriority: 1 };
   }
   return null;
-}
-
-function shouldRecoverSlackThreadFromCurrentSession(params: {
-  cfg: OpenClawConfig;
-  peerKind: RoutePeer["kind"];
-}): boolean {
-  // Shared DM sessions (dmScope="main") do not encode the DM peer in the base key,
-  // so inheriting a prior thread can bleed across unrelated direct-message targets.
-  if (params.peerKind === "direct" && (params.cfg.session?.dmScope ?? "main") === "main") {
-    return false;
-  }
-  return true;
 }
 
 async function resolveSlackOutboundSessionRoute(params: {
@@ -399,11 +378,9 @@ async function resolveSlackOutboundSessionRoute(params: {
     replyToId: params.replyToId,
     threadId: params.threadId,
     currentSessionKey: params.currentSessionKey,
+    // Shared DM sessions do not encode the peer, so prior threads can belong to another DM.
     canRecoverCurrentThread: () =>
-      shouldRecoverSlackThreadFromCurrentSession({
-        cfg: params.cfg,
-        peerKind,
-      }),
+      peerKind !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",
   });
 }
 
@@ -452,14 +429,10 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       messageSendingHooks: true,
     },
   },
-  shouldTreatDeliveredTextAsVisible: shouldTreatSlackDeliveredTextAsVisible,
+  shouldTreatDeliveredTextAsVisible: ({ kind, text }) =>
+    kind === "block" && typeof text === "string" && text.trim().length > 0,
   preferFinalAssistantVisibleText: true,
-  shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
-    shouldSuppressLocalSlackExecApprovalPrompt({
-      cfg,
-      accountId,
-      payload,
-    }),
+  shouldSuppressLocalPayloadPrompt: shouldSuppressLocalSlackExecApprovalPrompt,
   // Core sees this facade, not its lazy owner; forward finalization or question cards stay live.
   afterDeliverPayload: async (ctx) => {
     const { slackOutbound } = await loadSlackOutboundAdapterModule();
@@ -681,24 +654,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     }),
     message: slackMessageAdapter,
     heartbeat: {
-      sendTyping: async ({ cfg, to, accountId, threadId }) => {
-        await setSlackHeartbeatThreadStatus({
-          cfg,
-          to,
-          accountId,
-          threadId,
-          status: "processing",
-        });
-      },
-      clearTyping: async ({ cfg, to, accountId, threadId }) => {
-        await setSlackHeartbeatThreadStatus({
-          cfg,
-          to,
-          accountId,
-          threadId,
-          status: "active",
-        });
-      },
+      sendTyping: (params) => setSlackHeartbeatThreadStatus({ ...params, status: "processing" }),
+      clearTyping: (params) => setSlackHeartbeatThreadStatus({ ...params, status: "active" }),
     },
     status: createComputedAccountStatusAdapter<ResolvedSlackAccount, SlackProbe>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
@@ -759,26 +716,17 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       buildCapabilitiesDiagnostics: async ({ account, timeoutMs }) => {
         const lines = [];
         const details: Record<string, unknown> = {};
-        const botToken = account.botToken?.trim();
         const userToken = account.userToken?.trim();
         const { fetchSlackScopes } = await loadSlackScopesModule();
-        if (account.identity === "user") {
-          const userScopes: SlackScopesResult = userToken
-            ? await fetchSlackScopes(userToken, timeoutMs)
-            : { ok: false, error: "Slack user token missing." };
-          lines.push(formatSlackScopeDiagnostic({ tokenType: "user", result: userScopes }));
-          details.userScopes = userScopes;
-        } else {
-          const botScopes: SlackScopesResult = botToken
-            ? await fetchSlackScopes(botToken, timeoutMs)
-            : { ok: false, error: "Slack bot token missing." };
-          lines.push(formatSlackScopeDiagnostic({ tokenType: "bot", result: botScopes }));
-          details.botScopes = botScopes;
-        }
-        if (account.identity !== "user" && userToken) {
-          const userScopes = await fetchSlackScopes(userToken, timeoutMs);
-          lines.push(formatSlackScopeDiagnostic({ tokenType: "user", result: userScopes }));
-          details.userScopes = userScopes;
+        const tokenTypes: Array<"bot" | "user"> =
+          account.identity === "user" ? ["user"] : userToken ? ["bot", "user"] : ["bot"];
+        for (const tokenType of tokenTypes) {
+          const token = tokenType === "user" ? userToken : account.botToken?.trim();
+          const result: SlackScopesResult = token
+            ? await fetchSlackScopes(token, timeoutMs)
+            : { ok: false, error: `Slack ${tokenType} token missing.` };
+          lines.push(formatSlackScopeDiagnostic({ tokenType, result }));
+          details[`${tokenType}Scopes`] = result;
         }
         return { lines, details };
       },
@@ -875,7 +823,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       slackContextTargetsMatch(target, toolContext),
     scopedAccountReplyToMode: {
       resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
-      resolveReplyToMode: (account, chatType) => resolveSlackReplyToMode(account, chatType),
+      resolveReplyToMode: resolveSlackReplyToMode,
     },
     allowExplicitReplyTagsWhenOff: false,
     buildToolContext: buildSlackThreadingToolContext,

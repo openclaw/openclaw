@@ -69,7 +69,7 @@ it("publishes row changes after the complete entry transaction and discards roll
       );
       expect(seen).toEqual(
         Array.from({ length: 2 }, () => ({
-          change: { ...scope, storePath: database.path },
+          change: { ...scope, storePath: database.path, scope: "session-entry" },
           label: "committed",
           transaction: false,
           prepared: ["committed", "committed"],
@@ -118,7 +118,13 @@ it.each(["delete", "retain-windows", "first-transcript"] as const)(
           }
           expect(changes).toEqual([]);
         }, scope);
-        expect(changes).toEqual([{ ...scope, storePath: database.path }]);
+        expect(changes).toEqual([
+          {
+            ...scope,
+            storePath: database.path,
+            ...(operation !== "first-transcript" ? { scope: "session-entry" } : {}),
+          },
+        ]);
       } finally {
         unsubscribe();
       }
@@ -204,10 +210,11 @@ it("keeps Incognito publications committed and free of connection capabilities",
       expect(projections).toEqual([
         {
           ...scope,
+          scope: "session-entry",
           facts: expect.objectContaining({ kind: "entry", sessionId: entry.sessionId }),
         },
       ]);
-      expect(notifications).toEqual([scope]);
+      expect(notifications).toEqual([{ ...scope, scope: "session-entry" }]);
     } finally {
       stopProjection();
       stopNotification();

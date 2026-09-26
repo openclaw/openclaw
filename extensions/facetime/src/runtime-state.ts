@@ -201,13 +201,3 @@ export function updateCallStatus(call: ActiveFaceTimeCall, event: FaceTimeCallSt
     );
   }
 }
-
-export function createManagedCall(params: {
-  callUUID: string;
-  phase: "ringing" | "active";
-  owner: AuthenticatedFaceTimeOwner;
-  handle?: string;
-  peer?: FaceTimeHelperPeer;
-}): ActiveFaceTimeCall {
-  return new ActiveFaceTimeCall(params);
-}

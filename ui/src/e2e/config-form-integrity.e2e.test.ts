@@ -281,7 +281,7 @@ suite.define(() => {
     );
   });
 
-  it("matches rejected Settings-save errors to visible one-based model rows", async () => {
+  it("explains rejected Settings-save errors and discards the draft", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -295,12 +295,7 @@ suite.define(() => {
           models: {
             providers: {
               [providerId]: {
-                models: [
-                  { name: "First" },
-                  { name: "Second" },
-                  { name: "Third" },
-                  { name: "Fourth" },
-                ],
+                models: [{ name: "First" }, { name: "Second" }, { name: "Third" }, {}],
               },
             },
           },
@@ -409,6 +404,16 @@ suite.define(() => {
             await status.ariaSnapshot(),
           );
         }
+
+        await status.getByRole("button", { name: "Discard draft and reload", exact: true }).click();
+        await status.waitFor({ state: "hidden" });
+        expect(await panel.getByRole("textbox", { name: "Model name" }).nth(3).inputValue()).toBe(
+          "",
+        );
+        await page.getByRole("button", { name: "Raw", exact: true }).click();
+        const restored = await page.locator(".config-raw-field textarea").inputValue();
+        expect(JSON.parse(restored)).toEqual(config);
+        expect(await gateway.getRequests("config.set")).toHaveLength(1);
       },
     );
   });

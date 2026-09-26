@@ -177,6 +177,22 @@ describe("google provider plugin hooks", () => {
     ).toBe("native");
   });
 
+  it("keeps google-interactions hook aliases on native reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-interactions");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-interactions",
+        modelApi: "google-interactions",
+        modelId: "gemini-3.8-flash",
+      } as never),
+    ).toBe("native");
+  });
+
   it("resolves Google Vertex ADC auth evidence to the config marker", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-config-key-"));
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");

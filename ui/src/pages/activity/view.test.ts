@@ -145,16 +145,45 @@ describe("renderActivity", () => {
     },
   );
 
-  it("renders the summary from localized labels", async () => {
-    await i18n.setLocale("de");
+  it("renders localized summaries and timestamps across locale changes", async () => {
+    const previousLocale = i18n.getLocale();
     const container = document.createElement("div");
     document.body.append(container);
-
-    render(renderActivity(createProps()), container);
-
-    expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(
-      "0 Argumente ausgeblendet",
-    );
+    const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
+    const props = createProps({
+      entries: [0, timestamp, Number.NaN, Number.POSITIVE_INFINITY, 8_640_000_000_000_001].map(
+        (updatedAt, index) => createEntry({ id: `time-${index}`, updatedAt }),
+      ),
+    });
+    const options: Intl.DateTimeFormatOptions = {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    };
+    try {
+      for (const [locale, summary] of [
+        ["en", "0 arguments hidden"],
+        ["de", "0 Argumente ausgeblendet"],
+      ] as const) {
+        await i18n.setLocale(locale);
+        render(renderActivity(props), container);
+        expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(summary);
+        expect(
+          Array.from(
+            container.querySelectorAll(".activity-entry__meta > span:first-child"),
+            (element) => element.textContent,
+          ),
+        ).toEqual([
+          new Date(0).toLocaleTimeString(locale, options),
+          new Date(timestamp).toLocaleTimeString(locale, options),
+          "",
+          "",
+          "",
+        ]);
+      }
+    } finally {
+      await i18n.setLocale(previousLocale);
+    }
   });
 
   it("groups the named activity stream without overriding native disclosure semantics", async () => {

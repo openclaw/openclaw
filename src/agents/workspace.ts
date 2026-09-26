@@ -129,39 +129,31 @@ function sha256Hex(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-async function loadTemplate(name: string): Promise<string> {
-  const cached = workspaceTemplateCache.get(name);
-  if (cached) {
-    return cached;
-  }
-
-  const pending = (async () => {
-    const templateDirs = await resolveWorkspaceTemplateSearchDirs();
-    const triedPaths: string[] = [];
-    for (const templateDir of templateDirs) {
-      const templatePath = path.join(templateDir, name);
-      triedPaths.push(templatePath);
-      try {
-        const content = await fs.readFile(templatePath, "utf-8");
-        return stripFrontMatter(content);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
-          throw error;
+function loadTemplate(name: string): Promise<string> {
+  return getOrCreatePromise(
+    workspaceTemplateCache,
+    name,
+    async () => {
+      const templateDirs = await resolveWorkspaceTemplateSearchDirs();
+      const triedPaths: string[] = [];
+      for (const templateDir of templateDirs) {
+        const templatePath = path.join(templateDir, name);
+        triedPaths.push(templatePath);
+        try {
+          const content = await fs.readFile(templatePath, "utf-8");
+          return stripFrontMatter(content);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+            throw error;
+          }
         }
       }
-    }
-    throw new Error(
-      `Missing workspace template: ${name} (${triedPaths.join(", ")}). Ensure workspace templates are packaged.`,
-    );
-  })();
-
-  workspaceTemplateCache.set(name, pending);
-  try {
-    return await pending;
-  } catch (error) {
-    workspaceTemplateCache.delete(name);
-    throw error;
-  }
+      throw new Error(
+        `Missing workspace template: ${name} (${triedPaths.join(", ")}). Ensure workspace templates are packaged.`,
+      );
+    },
+    { cacheRejections: false },
+  );
 }
 
 export type ExtraBootstrapLoadDiagnosticCode =
@@ -361,10 +353,6 @@ async function workspaceAttestedGeneratedFilesIntact(
   return true;
 }
 
-async function workspaceHasBootstrapCompletionEvidence(params: { dir: string }): Promise<boolean> {
-  return await workspaceProfileLooksConfigured(params);
-}
-
 type WorkspaceBootstrapCompletionReconcileResult = {
   repaired: boolean;
   bootstrapExists: boolean;
@@ -400,7 +388,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
 
   if (
     !bootstrapExists ||
-    !(await workspaceHasBootstrapCompletionEvidence({
+    !(await workspaceProfileLooksConfigured({
       dir: params.dir,
     }))
   ) {
@@ -807,6 +795,16 @@ export async function ensureAgentWorkspace(params?: {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
   const beforePersistentApply = params?.beforePersistentApply;
+  const clearExpiredState = async () => {
+    beforePersistentApply?.();
+    if (
+      !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
+        assertCurrent: beforePersistentApply,
+      }))
+    ) {
+      throw new WorkspaceVanishedError({ workspaceDir: dir });
+    }
+  };
   const purpose = params?.purpose?.trim();
   if (purpose && (params?.templates || getAgentWorkspaceAccess(dir))) {
     throw new WorkspaceBootstrapSeedConflictError(
@@ -843,14 +841,7 @@ export async function ensureAgentWorkspace(params?: {
     // Old setup state lived inside the workspace and disappeared with it.
     // Expired SQLite evidence must preserve that reseed contract. The write
     // transaction also catches a concurrent attestation refresh.
-    beforePersistentApply?.();
-    if (
-      !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
-        assertCurrent: beforePersistentApply,
-      }))
-    ) {
-      throw new WorkspaceVanishedError({ workspaceDir: dir });
-    }
+    await clearExpiredState();
   }
 
   beforePersistentApply?.();
@@ -875,14 +866,7 @@ export async function ensureAgentWorkspace(params?: {
       if (recentSetupState) {
         throw new WorkspaceVanishedError({ workspaceDir: dir });
       }
-      beforePersistentApply?.();
-      if (
-        !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
-          assertCurrent: beforePersistentApply,
-        }))
-      ) {
-        throw new WorkspaceVanishedError({ workspaceDir: dir });
-      }
+      await clearExpiredState();
     }
     if (purpose) {
       await publishAgentInstructions(
@@ -926,14 +910,7 @@ export async function ensureAgentWorkspace(params?: {
     reseedingExpiredWorkspaceState = initialState.setupExists || Boolean(initialState.attestation);
     // A wiped workspace can leave its directory (or only .git) behind. Clear
     // expired SQLite evidence before deciding whether setup already completed.
-    beforePersistentApply?.();
-    if (
-      !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
-        assertCurrent: beforePersistentApply,
-      }))
-    ) {
-      throw new WorkspaceVanishedError({ workspaceDir: dir });
-    }
+    await clearExpiredState();
   }
 
   if (initialState.attestation && !isBrandNewWorkspace) {
@@ -950,14 +927,7 @@ export async function ensureAgentWorkspace(params?: {
       reseedingExpiredWorkspaceState = true;
       // The transaction rejects a concurrent refresh. Only the expired
       // snapshot we just inspected may be cleared before reseeding.
-      beforePersistentApply?.();
-      if (
-        !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
-          assertCurrent: beforePersistentApply,
-        }))
-      ) {
-        throw new WorkspaceVanishedError({ workspaceDir: dir });
-      }
+      await clearExpiredState();
     }
   } else if (
     hasWorkspaceSetupStateMarker(initialState.setup) &&
@@ -976,14 +946,7 @@ export async function ensureAgentWorkspace(params?: {
       throw new WorkspaceVanishedError({ workspaceDir: dir });
     }
     reseedingExpiredWorkspaceState = true;
-    beforePersistentApply?.();
-    if (
-      !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
-        assertCurrent: beforePersistentApply,
-      }))
-    ) {
-      throw new WorkspaceVanishedError({ workspaceDir: dir });
-    }
+    await clearExpiredState();
   }
 
   const defaultAgentsTemplate =

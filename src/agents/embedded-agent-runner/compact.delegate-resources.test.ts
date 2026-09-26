@@ -712,15 +712,20 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 }
                 const compact = () =>
                   mode === "reload-queued"
-                    ? compactEmbeddedAgentSession({
-                        ...target,
-                        sessionTarget: target,
-                        sessionFile: target.sessionKey,
-                        ...runtimeContext,
-                        trigger: "manual",
-                        abortSignal: controller.signal,
-                        enqueue: async (task) => await task(),
-                      })
+                    ? compactEmbeddedAgentSession(
+                        {
+                          ...target,
+                          sessionTarget: target,
+                          sessionFile: target.sessionKey,
+                          ...runtimeContext,
+                          trigger: "manual",
+                          abortSignal: controller.signal,
+                          enqueue: async (task) => await task(),
+                        },
+                        {
+                          sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined },
+                        },
+                      )
                     : delegateCompactionToRuntime({
                         sessionId: target.sessionId,
                         sessionKey: target.sessionKey,

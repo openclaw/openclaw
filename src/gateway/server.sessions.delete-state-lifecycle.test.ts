@@ -27,6 +27,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
 import type { SessionCompanionAskDeps } from "./session-companion-ask.js";
@@ -308,7 +309,7 @@ test("sessions.delete accepts placement retirement by the absent-session reconci
   const sessionId = "postcommit-retirement-session";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const claim = placementStore.claimTurn({
+  const claim = await placementStore.claimTurn({
     sessionId,
     sessionKey,
     agentId: "main",
@@ -316,7 +317,7 @@ test("sessions.delete accepts placement retirement by the absent-session reconci
     claimId: "postcommit-claim",
     runId: "postcommit-run",
   });
-  placementStore.releaseTurn(claim);
+  await placementStore.releaseTurn(claim);
   let retired = false;
   const publish = sessionArchiveStore.publishSessionStateArchives;
   vi.spyOn(sessionArchiveStore, "publishSessionStateArchives").mockImplementation(
@@ -349,6 +350,7 @@ async function createCompanion(runModel?: SessionCompanionAskDeps["run"]) {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const run = vi.fn(runModel ?? (async () => "Synthetic answer from the selected session."));
   const service = createSessionCompanion({
+    scheduler: createTestGatewayScheduler(),
     getConfig: getRuntimeConfig,
     contextReader: defaultSessionCompanionContextReader,
     sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },

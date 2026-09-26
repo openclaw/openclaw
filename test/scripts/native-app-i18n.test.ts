@@ -366,6 +366,34 @@ describe("native app i18n inventory", () => {
     ).toBe(false);
   });
 
+  it("preserves Kotlin return order, locations, and complete literal values", () => {
+    const repoPath = "apps/android/Fixture.kt";
+    const source = [
+      "fun statusText(mode: Int, detail: String): String {",
+      '  if (mode == 0) { return "Gateway " + "ready" }',
+      '  if (mode == 1) return "Gateway " + detail',
+      '  if (mode == 2) return "Gateway waiting"',
+      '  if (mode == 3) return "Gateway ready"',
+      '  return "Gateway closed"',
+      "}",
+    ].join("\n");
+
+    expect(extractNativeI18nCandidates("android", repoPath, source)).toEqual(
+      [
+        { value: "Gateway ready", line: 5 },
+        { value: "Gateway waiting", line: 4 },
+        { value: "Gateway closed", line: 6 },
+      ].map(({ value, line }) => ({
+        kind: "conditional-branch",
+        line,
+        path: repoPath,
+        source: value,
+        sourceContext: source,
+        surface: "android",
+      })),
+    );
+  });
+
   it("ignores generated Android resource entries", () => {
     const entries = extractNativeI18nCandidates(
       "android",

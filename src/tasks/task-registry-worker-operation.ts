@@ -29,11 +29,20 @@ export async function runTaskRegistryWorkerOperation<Key extends keyof Operation
       createAdmission(retained) {
         settlement = retained.settled;
         assertCurrent();
+        let retentionStage: "transaction" | "commit" | "completed" = "transaction";
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           assertCurrent();
           const facts = request.facts;
           if (
-            request.stage !== "transaction" ||
+            (command.type === "tasks.applyRetention"
+              ? request.stage !== retentionStage
+              : request.stage !== "transaction" &&
+                !(
+                  request.stage === "commit" &&
+                  (command.type === "tasks.bindRunOwner" ||
+                    command.type === "tasks.finalizeActive" ||
+                    command.type === "tasks.settleUnstarted")
+                )) ||
             !isRecord(facts) ||
             facts.kind !== "task-registry-mutation" ||
             facts.operation !== command.type ||
@@ -44,7 +53,12 @@ export async function runTaskRegistryWorkerOperation<Key extends keyof Operation
           if (!grant()) {
             throw new Error("Task mutation admission expired");
           }
-          onGranted?.(admission);
+          if (command.type === "tasks.applyRetention") {
+            retentionStage = request.stage === "transaction" ? "commit" : "completed";
+          }
+          if (request.stage === "transaction") {
+            onGranted?.(admission);
+          }
         });
         return {
           nativeLocations: [context.admission.databasePath],

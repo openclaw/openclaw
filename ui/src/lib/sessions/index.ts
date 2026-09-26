@@ -312,6 +312,7 @@ export function createSessionCapability(
     redecorateLists: roster.redecorateLists,
     notifyCreated,
     clearThink: thinkingClaims.clear,
+    suspendThink: thinkingClaims.suspend,
     claimPermissionProjection: permissions.claim,
     capturePatchFields: (target) => capturePatchFields(target),
     retirePullRequestSummary,

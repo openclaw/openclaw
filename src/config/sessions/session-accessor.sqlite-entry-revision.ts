@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { getNodeSqliteKysely, prepareSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
@@ -18,6 +18,8 @@ const sessionNodesGenerationTrackerSchemaVersions = new WeakMap<DatabaseSync, nu
 type SessionEntryRevisionDatabase = {
   openclaw_session_nodes_cache_generation: { id: number; generation: unknown };
 };
+
+const generationQueries = new WeakMap<DatabaseSync, () => { generation: unknown } | undefined>();
 
 function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
   const schema = getAdmittedSqliteSchemaFacts(database);
@@ -77,14 +79,18 @@ function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
 
 export function readSessionNodesGeneration(database: DatabaseSync): number {
   ensureSessionNodesGenerationTracker(database);
-  const row = executeSqliteQueryTakeFirstSync(
-    database,
-    getNodeSqliteKysely<SessionEntryRevisionDatabase>(database)
-      .withSchema("temp")
-      .selectFrom("openclaw_session_nodes_cache_generation")
-      .select("generation")
-      .where("id", "=", 1),
-  );
+  let query = generationQueries.get(database);
+  if (!query) {
+    query = prepareSqliteQueryTakeFirstSync<void, { generation: unknown }>(database, () =>
+      getNodeSqliteKysely<SessionEntryRevisionDatabase>(database)
+        .withSchema("temp")
+        .selectFrom("openclaw_session_nodes_cache_generation")
+        .select("generation")
+        .where("id", "=", 1),
+    );
+    generationQueries.set(database, query);
+  }
+  const row = query();
   if (typeof row?.generation !== "number") {
     throw new Error("SQLite session_nodes cache generation is unavailable");
   }

@@ -244,7 +244,7 @@ async function scenario(
     runId: createUpdateRun({ trigger: "cli" }, { env: process.env }).runId,
     env: { ...process.env },
   };
-  const rm = fs.rm.bind(fs);
+  const rmdir = fs.rmdir.bind(fs);
   const rename = fs.rename.bind(fs);
   const unlink = fs.unlink.bind(fs);
   const readlink = fs.readlink.bind(fs);
@@ -287,15 +287,16 @@ async function scenario(
     );
     injected = true;
   }
-  vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+  vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
     if (String(args[0]) === swap.transaction.backupRoot) {
       if (kind === "renamed" || kind === "retained") {
+        expect(await fs.readdir(swap.transaction.backupRoot)).toEqual([]);
         injected = true;
         throw Object.assign(new Error("fixture obsolete backup deletion denied"), {
           code: "EACCES",
         });
       }
-      await rm(...args);
+      await rmdir(...args);
       if (kind === "cleanup-read") {
         failNextLeaseRead = true;
       }
@@ -312,7 +313,7 @@ async function scenario(
       }
       return;
     }
-    await rm(...args);
+    await rmdir(...args);
     if (kind === "last-cleanup-read" && String(args[0]) === finalCleanupRoot) {
       failNextLeaseRead = true;
     }
@@ -651,6 +652,7 @@ describe("composed cleanup and terminal outcome", () => {
     "keeps repeated completion truthful for %s backup",
     async (kind) => {
       const value = await scenario(kind, true, true);
+      expect(value.injected).toBe(true);
       expect(value.retainedExists).toBe(true);
       expect(value.repeatedCompletion).toMatchObject({
         exitCode: 1,
@@ -753,6 +755,7 @@ describe("composed cleanup and terminal outcome", () => {
   );
   it("preserves foreign terminal history and emits only the pending failure", async () => {
     const value = await scenario("foreign-revoked", true);
+    expect(value.injected).toBe(true);
     expect(value.exitCode).toBe(1);
     expect(value.jsonOutput).toHaveLength(1);
     expect(value.jsonOutput[0]).toMatchObject({ status: "error" });

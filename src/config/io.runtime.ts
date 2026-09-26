@@ -298,21 +298,16 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
 export async function readConfigFileSnapshot(
   options: ConfigSnapshotReadOptions = {},
 ): Promise<ConfigFileSnapshot> {
-  const pluginValidation =
-    options.pluginValidation ?? (options.skipPluginValidation ? "skip" : undefined);
   return await createConfigIO({
-    ...(options.deferredPluginMigrations
-      ? { deferredPluginMigrations: options.deferredPluginMigrations }
-      : {}),
-    ...(options.measure ? { measure: options.measure } : {}),
-    ...(options.observe === false ? { observe: false } : {}),
-    ...(options.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
-    ...(options.lowerPrecedenceEnv ? { lowerPrecedenceEnv: options.lowerPrecedenceEnv } : {}),
-    ...(pluginValidation ? { pluginValidation } : {}),
-    ...(options.suppressFutureVersionWarning ? { suppressFutureVersionWarning: true } : {}),
-    ...(options.preservedLegacyRootKeys
-      ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
-      : {}),
+    deferredPluginMigrations: options.deferredPluginMigrations,
+    measure: options.measure,
+    observe: options.observe === false ? false : undefined,
+    env: options.isolateEnv ? cloneEnvWithPlatformSemantics(process.env) : undefined,
+    lowerPrecedenceEnv: options.lowerPrecedenceEnv,
+    pluginValidation:
+      options.pluginValidation ?? (options.skipPluginValidation ? "skip" : undefined),
+    suppressFutureVersionWarning: options.suppressFutureVersionWarning || undefined,
+    preservedLegacyRootKeys: options.preservedLegacyRootKeys,
   }).readConfigFileSnapshot({
     recoverSuspicious: options.recoverSuspicious === true,
     allowSuspiciousRecovery: options.allowSuspiciousRecovery,
@@ -335,14 +330,12 @@ export async function readConfigFileSnapshotWithPluginMetadata(
   >,
 ): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
   return await createConfigIO({
-    ...(options?.deferredPluginMigrations
-      ? { deferredPluginMigrations: options.deferredPluginMigrations }
-      : {}),
-    ...(options?.measure ? { measure: options.measure } : {}),
-    ...(options?.observe === false ? { observe: false } : {}),
-    ...(options?.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
-    ...(options?.lowerPrecedenceEnv ? { lowerPrecedenceEnv: options.lowerPrecedenceEnv } : {}),
-    ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+    deferredPluginMigrations: options?.deferredPluginMigrations,
+    measure: options?.measure,
+    observe: options?.observe === false ? false : undefined,
+    env: options?.isolateEnv ? cloneEnvWithPlatformSemantics(process.env) : undefined,
+    lowerPrecedenceEnv: options?.lowerPrecedenceEnv,
+    pluginValidation: options?.skipPluginValidation ? "skip" : undefined,
   }).readConfigFileSnapshotWithPluginMetadata({
     prepareValidation: options?.prepareValidation,
     allowCurrentPluginMetadata: options?.allowCurrentPluginMetadata,

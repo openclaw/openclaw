@@ -28,7 +28,7 @@ import { buildAssistantMediaContentDisposition } from "./assistant-media-content
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-  createAuthRateLimiter,
+  createGatewayAuthRateLimiter,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -37,7 +37,6 @@ import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
-import { resolveOpenedControlUiRepresentation } from "./control-ui-static.js";
 import {
   handleControlUiAssistantMediaRequest,
   handleControlUiAvatarRequest,
@@ -49,11 +48,6 @@ import { makeMockHttpResponse } from "./test-http-response.js";
 type PlaybackTranscodeResolution = Awaited<
   ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
 >;
-type PlaybackModeForSourceResolver = (
-  ...args: Parameters<
-    (typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]
-  >
-) => ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]>;
 type FileHandleRead = (
   target: Uint8Array,
   offset: number,
@@ -64,26 +58,16 @@ type FileHandleRead = (
 // Keeps bootstrap payload tests deterministic: the real resolver reports the
 // git branch of this checkout, which varies across CI and dev machines.
 const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
-const runFfprobeMock = vi.hoisted(() => vi.fn(async () => "{}"));
-const resolvePlaybackModeForSourceMock = vi.hoisted(() => vi.fn<PlaybackModeForSourceResolver>());
 const resolvePlaybackTranscodeMock = vi.hoisted(() =>
   vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" })),
 );
 vi.mock("../infra/dev-install-branch.js", () => ({
   resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
 }));
-vi.mock("../media/ffmpeg-exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../media/ffmpeg-exec.js")>()),
-  runFfprobe: runFfprobeMock,
-}));
 vi.mock("../media/playback-transcode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/playback-transcode.js")>();
-  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
-    mimeType === "audio/x-caf" ? "transcode" : "native",
-  );
   return {
     ...actual,
-    resolvePlaybackModeForSource: resolvePlaybackModeForSourceMock,
     resolvePlaybackTranscode: resolvePlaybackTranscodeMock,
   };
 });
@@ -117,12 +101,6 @@ function createAuthRateLimiterSpy() {
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
-  runFfprobeMock.mockReset();
-  runFfprobeMock.mockResolvedValue("{}");
-  resolvePlaybackModeForSourceMock.mockReset();
-  resolvePlaybackModeForSourceMock.mockImplementation(async ({ mimeType }) =>
-    mimeType === "audio/x-caf" ? "transcode" : "native",
-  );
   resolvePlaybackTranscodeMock.mockReset();
   resolvePlaybackTranscodeMock.mockResolvedValue({ kind: "passthrough" });
 });
@@ -1015,59 +993,6 @@ describe("handleControlUiHttpRequest", () => {
         expect(res.statusCode).toBe(200);
         expect(setHeader).toHaveBeenCalledWith("Content-Type", "image/png");
         expect(readSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-      },
-    });
-  });
-
-  it("reports assistant audio size, type, and probed duration metadata", async () => {
-    runFfprobeMock.mockResolvedValueOnce(JSON.stringify({ format: { duration: "2.345" } }));
-    await withAllowedAssistantMediaRoot({
-      prefix: "ui-media-audio-meta-",
-      fn: async (tmpRoot) => {
-        const filePath = path.join(tmpRoot, "voice.mp3");
-        const contents = Buffer.from("ID3audio-fixture");
-        await fs.writeFile(filePath, contents);
-        const { res, handled, end } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
-          method: "GET",
-          auth: { mode: "token", token: "test-token", allowTailscale: false },
-        });
-
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(200);
-        expect(responseJson(end)).toMatchObject({
-          available: true,
-          mimeType: "audio/mpeg",
-          playback: "native",
-          sizeBytes: contents.byteLength,
-          durationMs: 2345,
-        });
-        expect(runFfprobeMock).toHaveBeenCalledWith(expect.any(Array), {
-          stdinFileDescriptor: expect.any(Number),
-        });
-      },
-    });
-  });
-
-  it("marks exotic assistant media metadata for playback transcoding", async () => {
-    await withAllowedAssistantMediaRoot({
-      prefix: "ui-media-transcode-meta-",
-      fn: async (tmpRoot) => {
-        const filePath = path.join(tmpRoot, "voice.caf");
-        await fs.writeFile(filePath, Buffer.from("caff-original"));
-        const { res, handled, end } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
-          method: "GET",
-          auth: { mode: "token", token: "test-token", allowTailscale: false },
-        });
-
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(200);
-        expect(responseJson(end)).toMatchObject({
-          available: true,
-          mimeType: "audio/x-caf",
-          playback: "transcode",
-        });
       },
     });
   });
@@ -2408,7 +2333,7 @@ describe("handleControlUiHttpRequest", () => {
   });
 
   it("rejects unattributable proxy ingress before bootstrap device-token fallback", async () => {
-    const rateLimiter = createAuthRateLimiter({
+    const rateLimiter = createGatewayAuthRateLimiter({
       maxAttempts: 2,
       windowMs: 60_000,
       lockoutMs: 60_000,
@@ -3055,63 +2980,6 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it.each(["/", "/settings", "/assets/actual.txt"])(
-    "serves a pinned small file in one asynchronous filesystem operation at %s",
-    async (url) => {
-      await withControlUiRoot({
-        fn: async (tmp) => {
-          await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
-          const read = vi.spyOn(fsSync, "read");
-          const stat = vi.spyOn(fsSync, "stat");
-          const fstat = vi.spyOn(fsSync, "fstat");
-          const lstat = vi.spyOn(fsSync, "lstat");
-          try {
-            const { res, end, handled } = await runControlUiRequest({
-              url,
-              method: "GET",
-              rootPath: tmp,
-            });
-            expect(handled).toBe(true);
-            expect(res.statusCode).toBe(200);
-            expect(responseBody(end)).toContain(url.startsWith("/assets/") ? "inside-ok" : "<html");
-            // Safe open already captured stat; a second queued metadata read adds
-            // another event-loop wait before these bytes can reach the browser.
-            expect(read).toHaveBeenCalledOnce();
-            expect(stat).not.toHaveBeenCalled();
-            expect(fstat).not.toHaveBeenCalled();
-            expect(lstat).not.toHaveBeenCalled();
-          } finally {
-            read.mockRestore();
-            stat.mockRestore();
-            fstat.mockRestore();
-            lstat.mockRestore();
-          }
-        },
-      });
-    },
-  );
-
-  it("bounds a static response by the size captured with its pinned descriptor", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const { filePath } = await writeAssetFile(tmp, "actual.txt", "original");
-        const fstat = fsSync.fstatSync;
-        vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd) => {
-          const stat = fstat(fd);
-          fsSync.appendFileSync(filePath, "-appended-after-open");
-          return stat;
-        });
-        const { res, end } = await runControlUiRequest({
-          url: "/assets/actual.txt",
-          method: "GET",
-          rootPath: tmp,
-        });
-        expect(res.statusCode).toBe(200);
-        expect(responseBody(end)).toBe("original");
-      },
-    });
-  });
-
   it("serves static assets without synchronous file reads", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -3172,34 +3040,25 @@ describe("handleControlUiHttpRequest", () => {
         const { filePath } = await writeAssetFile(tmp, "app-AbCd1234.js", source);
         await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
         await fs.writeFile(`${filePath}.gz`, gzipSync(source));
-        const closeSync = vi.spyOn(fsSync, "closeSync");
+        const { res, end, setHeader, handled } = await runControlUiRequest({
+          url: "/assets/app-AbCd1234.js",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+          headers: { "accept-encoding": "gzip;q=0.5, br, identity;q=0.1" },
+        });
 
-        try {
-          const { res, end, setHeader, handled } = await runControlUiRequest({
-            url: "/assets/app-AbCd1234.js",
-            method: "GET",
-            rootPath: tmp,
-            rootKind: "bundled",
-            headers: { "accept-encoding": "gzip;q=0.5, br, identity;q=0.1" },
-          });
-
-          expect(handled).toBe(true);
-          expect(res.statusCode).toBe(200);
-          expect(setHeader).toHaveBeenCalledWith(
-            "Cache-Control",
-            "public, max-age=31536000, immutable",
-          );
-          expect(setHeader).toHaveBeenCalledWith("Vary", "Accept-Encoding");
-          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "br");
-          const compressed = end.mock.calls[0]?.[0];
-          expect(Buffer.isBuffer(compressed)).toBe(true);
-          expect(brotliDecompressSync(compressed as Buffer).toString()).toBe(source);
-          expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
-            end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-          );
-        } finally {
-          closeSync.mockRestore();
-        }
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith(
+          "Cache-Control",
+          "public, max-age=31536000, immutable",
+        );
+        expect(setHeader).toHaveBeenCalledWith("Vary", "Accept-Encoding");
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "br");
+        const compressed = end.mock.calls[0]?.[0];
+        expect(Buffer.isBuffer(compressed)).toBe(true);
+        expect(brotliDecompressSync(compressed as Buffer).toString()).toBe(source);
       },
     });
   });
@@ -3344,40 +3203,6 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
         expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
-      },
-    });
-  });
-
-  it("closes the source descriptor when opening a sidecar fails", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const { filePath } = await writeAssetFile(tmp, "app-MnOp3456.js", "source\n");
-        const fd = fsSync.openSync(filePath, "r");
-        const openError = Object.assign(new Error("descriptor limit"), { code: "EMFILE" });
-        const closeSync = vi.spyOn(fsSync, "closeSync");
-
-        try {
-          expect(() =>
-            resolveOpenedControlUiRepresentation({
-              req: {
-                headers: { "accept-encoding": "br, identity;q=0" },
-              } as IncomingMessage,
-              sourceFile: { path: filePath, fd, size: fsSync.fstatSync(fd).size },
-              contentPath: filePath,
-              precompressed: true,
-              openPrecompressedFile: () => {
-                throw openError;
-              },
-            }),
-          ).toThrow(openError);
-          expect(closeSync).toHaveBeenCalledWith(fd);
-        } finally {
-          const sourceWasClosed = closeSync.mock.calls.some(([closedFd]) => closedFd === fd);
-          closeSync.mockRestore();
-          if (!sourceWasClosed) {
-            fsSync.closeSync(fd);
-          }
-        }
       },
     });
   });
@@ -3584,35 +3409,27 @@ describe("handleControlUiHttpRequest", () => {
   it.each([
     ["index", "/"],
     ["SPA fallback", "/chat"],
-  ])("compresses %s HTML after closing its descriptor", async (_name, url) => {
+  ])("compresses prepared %s HTML", async (_name, url) => {
     const html = `<html><body>${"hello ".repeat(200)}</body></html>\n`;
     await withControlUiRoot({
       indexHtml: html,
       fn: async (tmp) => {
         const { res, end, setHeader } = makeMockHttpResponse();
-        const closeSync = vi.spyOn(fsSync, "closeSync");
-        try {
-          await handleControlUiHttpRequest(
-            {
-              url,
-              method: "GET",
-              headers: { "accept-encoding": "gzip" },
-            } as IncomingMessage,
-            res,
-            { root: { kind: "resolved", path: tmp } },
-          );
+        await handleControlUiHttpRequest(
+          {
+            url,
+            method: "GET",
+            headers: { "accept-encoding": "gzip" },
+          } as IncomingMessage,
+          res,
+          { root: { kind: "resolved", path: tmp } },
+        );
 
-          expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
-          expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
-          expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
-            '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true">',
-          );
-          expect(closeSync.mock.invocationCallOrder.at(-1)).toBeLessThan(
-            end.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-          );
-        } finally {
-          closeSync.mockRestore();
-        }
+        expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toContain(
+          '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true">',
+        );
       },
     });
   });

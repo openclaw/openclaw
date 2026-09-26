@@ -13,6 +13,7 @@ import {
   installUnhandledRejectionHandler,
   isUncaughtExceptionHandled,
   registerUncaughtExceptionHandler,
+  registerUnhandledRejectionHandler,
 } from "./unhandled-rejections.js";
 
 describe("installUnhandledRejectionHandler - fatal detection", () => {
@@ -20,11 +21,20 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
   let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
   let originalExit: typeof process.exit;
+  let rejectionListener: (reason: unknown, promise: Promise<unknown>) => void;
   const originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
 
   beforeAll(() => {
     originalExit = process.exit.bind(process);
+    const listeners = new Set(process.listeners("unhandledRejection"));
     installUnhandledRejectionHandler();
+    const installed = process
+      .listeners("unhandledRejection")
+      .find((entry) => !listeners.has(entry));
+    if (!installed) {
+      throw new Error("Expected the installed unhandled rejection listener");
+    }
+    rejectionListener = installed;
   });
 
   beforeEach(() => {
@@ -50,6 +60,7 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
   afterAll(() => {
     process.exit = originalExit;
+    process.removeListener("unhandledRejection", rejectionListener);
   });
 
   function emitUnhandled(reason: unknown): void {
@@ -148,6 +159,148 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
 
       cleanup();
       expect(isUncaughtExceptionHandled(new Error("known dependency assertion"))).toBe(false);
+    });
+  });
+
+  describe.each(["rejection", "exception"] as const)("%s handler registry", (kind) => {
+    const register =
+      kind === "rejection" ? registerUnhandledRejectionHandler : registerUncaughtExceptionHandler;
+    const failureMessage =
+      kind === "rejection"
+        ? "[openclaw] Unhandled rejection handler failed:"
+        : "[openclaw] Uncaught exception handler failed:";
+    const dispatch = (error: unknown) => {
+      if (kind === "rejection") {
+        rejectionListener(error, Promise.resolve());
+      } else {
+        isUncaughtExceptionHandled(error);
+      }
+    };
+
+    it("shares duplicate registrations across module copies while keeping buckets separate", async () => {
+      const key = Symbol.for(
+        `openclaw.${kind === "rejection" ? "unhandledRejection" : "uncaughtException"}.handlers`,
+      );
+      const originalSet = Reflect.get(globalThis, key);
+      vi.resetModules();
+      const copy = await import("./unhandled-rejections.js");
+      const registerCopy =
+        kind === "rejection"
+          ? copy.registerUnhandledRejectionHandler
+          : copy.registerUncaughtExceptionHandler;
+      const registerOther =
+        kind === "rejection"
+          ? copy.registerUncaughtExceptionHandler
+          : copy.registerUnhandledRejectionHandler;
+      expect(registerCopy).not.toBe(register);
+      expect(Reflect.get(globalThis, key)).toBe(originalSet);
+      const error = new Error("registry input");
+      const handler = vi.fn(() => true);
+      const other = vi.fn(() => true);
+      const dispose = register(handler);
+      const duplicateDispose = registerCopy(handler);
+      const otherDispose = registerOther(other);
+      try {
+        dispatch(error);
+        expect(handler.mock.calls).toEqual([[error]]);
+        expect(other).not.toHaveBeenCalled();
+        expect(exitCalls).toEqual([]);
+        expect(duplicateDispose()).toBeUndefined();
+        expect(duplicateDispose()).toBeUndefined();
+        dispatch(error);
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(other).not.toHaveBeenCalled();
+        expect(exitCalls).toEqual(kind === "rejection" ? [1] : []);
+        if (kind === "exception") {
+          expect(copy.isUncaughtExceptionHandled(error)).toBe(false);
+        }
+      } finally {
+        dispose();
+        duplicateDispose();
+        otherDispose();
+      }
+    });
+
+    it("logs thrown values, preserves order, and stops at the first handled result", () => {
+      const error = new Error("registry input");
+      const withoutStack = new Error("message fallback");
+      delete withoutStack.stack;
+      const thrown = [new Error("stack detail"), withoutStack, { detail: "non-Error" }];
+      const calls: string[] = [];
+      const disposers = [
+        register((value) => {
+          expect(value).toBe(error);
+          calls.push("false");
+          return false;
+        }),
+      ];
+      try {
+        for (const [index, failure] of thrown.entries()) {
+          disposers.push(
+            register((value) => {
+              expect(value).toBe(error);
+              calls.push(`throw-${index}`);
+              // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error throws from registered handlers.
+              throw failure;
+            }),
+          );
+        }
+        disposers.push(
+          register((value) => {
+            expect(value).toBe(error);
+            calls.push("handled");
+            return "handled" as never;
+          }),
+        );
+        disposers.push(
+          register(() => {
+            calls.push("unreached");
+            return true;
+          }),
+        );
+        dispatch(error);
+        expect(calls).toEqual(["false", "throw-0", "throw-1", "throw-2", "handled"]);
+        expect(consoleErrorSpy.mock.calls).toEqual(
+          thrown.map((failure) => [
+            failureMessage,
+            failure instanceof Error ? (failure.stack ?? failure.message) : failure,
+          ]),
+        );
+        expect(exitCalls).toEqual([]);
+      } finally {
+        for (const dispose of disposers) {
+          dispose();
+        }
+      }
+    });
+
+    it("visits additions and skips removals during live iteration", () => {
+      const calls: string[] = [];
+      let removeNext = () => {};
+      let removeAdded = () => {};
+      const removeFirst = register(() => {
+        calls.push("first");
+        removeNext();
+        removeAdded = register(() => {
+          calls.push("added");
+          return true;
+        });
+        return false;
+      });
+      removeNext = register(() => {
+        calls.push("removed");
+        return true;
+      });
+      try {
+        dispatch(new Error("registry input"));
+        expect(calls).toEqual(["first", "added"]);
+        expect(exitCalls).toEqual([]);
+      } finally {
+        for (const dispose of [removeFirst, removeNext, removeAdded]) {
+          expect(dispose()).toBeUndefined();
+          expect(dispose()).toBeUndefined();
+        }
+      }
     });
   });
 

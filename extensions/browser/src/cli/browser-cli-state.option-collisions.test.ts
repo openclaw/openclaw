@@ -1,7 +1,7 @@
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliResizeModule from "./browser-cli-resize.js";
 import { mockBrowserGateway } from "./browser-cli.test-support.js";
-import * as cliCoreApiModule from "./core-api.js";
 
 const mocks = vi.hoisted(() => ({
   runBrowserResizeWithOutput: vi.fn(async (_params: unknown) => {}),
@@ -18,12 +18,10 @@ const {
   getBrowserCliRuntimeCapture,
 } = await import("./browser-cli.test-support.js");
 const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
-  browserCliRuntime.writeJson,
-);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
+vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
+vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
+vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
 const { registerBrowserStateCommands } = await import("./browser-cli-state.js");
 

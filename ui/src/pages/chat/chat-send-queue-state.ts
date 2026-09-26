@@ -30,11 +30,7 @@ import type {
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
 import { chatProviderReviewRow, holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
-import {
-  readQueuedMessageById,
-  updateQueuedMessage,
-  updateVolatileQueuedMessage,
-} from "./chat-queue.ts";
+import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
 import { restoreRejectedChatDelivery } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { isActiveLeafChangedError, resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
@@ -45,7 +41,7 @@ import {
   UNCONFIRMED_CHAT_SEND_ERROR,
 } from "./chat-send-support.ts";
 import { recordChatSendTiming, schedulePendingSendPaintTiming } from "./chat-send-timing.ts";
-import { getPendingChatPickerPatch } from "./chat-session.ts";
+import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   captureOutboxPayloadOwner,
@@ -223,7 +219,7 @@ export function updateQueuedSendItem(
   update: (item: ChatQueueItem) => ChatQueueItem,
 ): ChatQueueItem | null {
   return storageMode === "memory"
-    ? updateVolatileQueuedMessage(host, id, update, { retryable: true })
+    ? chatOutboxOwner(host).change(host, id, update, true)
     : updateQueuedMessage(host, id, update);
 }
 

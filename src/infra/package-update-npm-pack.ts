@@ -4,7 +4,7 @@ import path from "node:path";
 import type { PackageUpdateStepRunner } from "./package-update-lifecycle.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
 

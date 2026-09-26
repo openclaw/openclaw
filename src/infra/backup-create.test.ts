@@ -329,24 +329,6 @@ describe("sanitizeOpenClawGlobalStateSnapshot", () => {
 });
 
 describe("writeTarArchiveWithRetry", () => {
-  it("retries a truncated source with the walker's EOF code", async () => {
-    const error = Object.assign(new Error("encountered unexpected EOF"), { code: "EOF" });
-    const runTar = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(error)
-      .mockResolvedValueOnce();
-    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
-
-    await writeTarArchiveWithRetry({
-      tempArchivePath: "/tmp/backup.tar.gz.tmp",
-      runTar,
-      sleepMs: sleep,
-    });
-
-    expect(runTar).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledOnce();
-  });
-
   it.each([
     new Error("TAR_BAD_ARCHIVE: Unrecognized archive format"),
     new Error("EOF occurred in violation of protocol"),
@@ -407,7 +389,6 @@ describe("writeTarArchiveWithRetry", () => {
   it("retries on EOF-class errors and eventually succeeds", async () => {
     const eofErr = Object.assign(new Error("encountered unexpected EOF"), {
       code: "EOF",
-      path: "/state/sessions/s-abc/transcript.jsonl",
     });
     const runTar = vi
       .fn<() => Promise<void>>()
@@ -452,9 +433,11 @@ describe("writeTarArchiveWithRetry", () => {
         sleepMs: sleep,
       });
 
+      expect(runTar).toHaveBeenCalledTimes(2);
       expect(runTar).toHaveBeenNthCalledWith(1, tempArchivePath);
       expect(runTar).toHaveBeenNthCalledWith(2, `${tempArchivePath}.retry-2`);
       expect(result).toBe("complete");
+      expect(sleep).toHaveBeenCalledOnce();
       expect(rmSpy).not.toHaveBeenCalled();
       expect(log).toHaveBeenCalledOnce();
     } finally {
@@ -2268,7 +2251,7 @@ describe("createBackupArchive", () => {
         const databasePaths = [
           state.statePath("browser", "foreign-browser.sqlite"),
           state.statePath("plugins", "dedicated", "foreign-plugin.sqlite"),
-          state.statePath("agents", "Main", "agent", "openclaw-agent.sqlite"),
+          state.statePath("agents", "Main", "agent", "foreign-agent.sqlite"),
         ];
         const sourcePath = expectDefined(databasePaths[0], "foreign SQLite source");
         await fs.mkdir(path.dirname(sourcePath), { recursive: true });

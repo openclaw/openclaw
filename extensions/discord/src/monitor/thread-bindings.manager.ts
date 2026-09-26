@@ -1,7 +1,8 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
-// Discord plugin module implements thread bindings.manager behavior.
 import {
   registerSessionBindingAdapter,
+  resolveThreadBindingFarewellText,
+  resolveThreadBindingThreadName,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
@@ -13,6 +14,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   asOptionalObjectRecord,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { getChannel } from "../internal/discord.js";
@@ -26,10 +28,6 @@ import {
   resolveChannelIdForBinding,
   summarizeDiscordError,
 } from "./thread-bindings.discord-api.js";
-import {
-  resolveThreadBindingFarewellText,
-  resolveThreadBindingThreadName,
-} from "./thread-bindings.messages.js";
 import {
   commitBindingRecord,
   updateBindingRecordSync,
@@ -51,7 +49,6 @@ import {
   rememberThreadBindingToken,
   normalizeTargetKind,
   normalizeThreadBindingDurationMs,
-  normalizeThreadId,
   refreshUnboundThreadWebhookIdentity,
   resolveBindingIdsForSession,
   resolveBindingRecordKey,
@@ -402,7 +399,7 @@ function createLoadedThreadBindingManager(
         const assertCurrent = bindParams.assertCurrent;
         assertCurrent?.();
         const cfg = resolveCurrentCfg();
-        let threadId = normalizeThreadId(bindParams.threadId);
+        let threadId = normalizeOptionalStringifiedId(bindParams.threadId);
         let channelId = normalizeOptionalString(bindParams.channelId) ?? "";
         const directConversationBinding =
           isDirectConversationBindingId(threadId) || isDirectConversationBindingId(channelId);

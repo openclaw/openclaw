@@ -6,9 +6,9 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError } from "./errors.js";
 import { discardIgnoredResponseBody } from "./ignored-response-body.js";
+import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { waitForQaHttpReady } from "./suite-http-readiness.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
-import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 
@@ -230,7 +230,7 @@ async function runConfigMutation(params: {
   skipRestartDeferral?: boolean;
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
-  const timeoutMs = liveTurnTimeoutMs(params.env, 180_000);
+  const timeoutMs = resolveQaLiveTurnTimeoutMs(params.env, 180_000);
   let lastConflict: unknown = null;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
@@ -335,49 +335,24 @@ async function runConfigMutation(params: {
   );
 }
 
-async function patchConfig(params: {
-  env: QaGatewayMutationEnv;
-  patch: Record<string, unknown>;
-  sessionKey?: string;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  note?: string;
-  restartDelayMs?: number;
-  restartSettleBufferMs?: number;
-  replacePaths?: readonly string[];
-  skipRestartDeferral?: boolean;
-}) {
+async function patchConfig(
+  params: Omit<Parameters<typeof runConfigMutation>[0], "action" | "raw"> & {
+    patch: Record<string, unknown>;
+  },
+) {
   return await runConfigMutation({
-    env: params.env,
+    ...params,
     action: "config.patch",
     raw: JSON.stringify(params.patch, null, 2),
-    sessionKey: params.sessionKey,
-    deliveryContext: params.deliveryContext,
-    note: params.note,
-    restartDelayMs: params.restartDelayMs,
-    restartSettleBufferMs: params.restartSettleBufferMs,
-    replacePaths: params.replacePaths,
-    skipRestartDeferral: params.skipRestartDeferral,
   });
 }
 
-async function applyConfig(params: {
-  env: QaGatewayMutationEnv;
-  nextConfig: Record<string, unknown>;
-  sessionKey?: string;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  note?: string;
-  restartDelayMs?: number;
-}) {
+async function applyConfig(
+  params: Omit<
+    Parameters<typeof runConfigMutation>[0],
+    "action" | "raw" | "restartSettleBufferMs" | "replacePaths" | "skipRestartDeferral"
+  > & { nextConfig: Record<string, unknown> },
+) {
   return await runConfigMutation({
     env: params.env,
     action: "config.apply",

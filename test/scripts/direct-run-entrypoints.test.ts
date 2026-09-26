@@ -32,6 +32,7 @@ import {
   withShimFixture,
   writeEsmPluginFixture,
 } from "./direct-run-entrypoints.test-support.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
 const DIRECT_RUN_SCRIPTS = [
   "scripts/android-app-i18n.ts",
@@ -451,30 +452,25 @@ process.exitCode = child.status ?? 1;
     expect(output).toContain(entrypoint.output);
   });
 
-  it.runIf(process.platform === "win32")(
-    "runs the checked-out Crabbox wrapper through its Windows Job child",
-    async () => {
-      await withShimFixture("scripts/crabbox-wrapper.mjs", async ({ fixtureRoot, runNode }) => {
-        const fixtureVersion = "0.56.0";
-        const binDir = path.join(fixtureRoot, "fake bin");
-        const home = path.join(fixtureRoot, "home");
-        const state = path.join(fixtureRoot, "state");
-        const invocationLog = path.join(fixtureRoot, "invocations.jsonl");
-        mkdirSync(binDir);
-        mkdirSync(state);
-        // A failed version probe must fail before managed installation can download anything.
-        writeFileSync(
-          path.join(state, "tools"),
-          "managed installation disabled for this fixture\n",
-        );
-        const responses = {
-          "--version": `crabbox ${fixtureVersion}`,
-          "run --help": "provider: ssh\n  -provider string\n",
-          "config show --json": JSON.stringify({ provider: "ssh" }),
-        };
-        writeFileSync(
-          path.join(binDir, "crabbox.cjs"),
-          String.raw`
+  it("runs the checked-out Crabbox wrapper through its managed child", async () => {
+    await withShimFixture("scripts/crabbox-wrapper.mjs", async ({ fixtureRoot, runNode }) => {
+      const fixtureVersion = "0.56.0";
+      const binDir = path.join(fixtureRoot, "fake bin");
+      const home = path.join(fixtureRoot, "home");
+      const state = path.join(fixtureRoot, "state");
+      const invocationLog = path.join(fixtureRoot, "invocations.jsonl");
+      mkdirSync(binDir);
+      mkdirSync(state);
+      // A failed version probe must fail before managed installation can download anything.
+      writeFileSync(path.join(state, "tools"), "managed installation disabled for this fixture\n");
+      const responses = {
+        "--version": `crabbox ${fixtureVersion}`,
+        "run --help": "provider: ssh\n  -provider string\n",
+        "config show --json": JSON.stringify({ provider: "ssh" }),
+      };
+      writeFileSync(
+        path.join(binDir, process.platform === "win32" ? "crabbox.cjs" : "crabbox"),
+        String.raw`#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 const record = (stage, details = {}) => fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ stage, args, pid: process.pid, atMs: Date.now(), ...details }) + "\n");
@@ -487,84 +483,90 @@ if (response === undefined) throw new Error("Unexpected fixture command: " + JSO
 process.stdout.write(response + "\n");
 record("stdout-write-returned");
 `,
-        );
-        writeFileSync(
-          path.join(binDir, "crabbox.cmd"),
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        path.join(binDir, "crabbox.cmd"),
+        [
+          "@echo off",
+          `"${process.execPath}" "%~dp0crabbox.cjs" %*`,
+          "exit /b %errorlevel%",
+          "",
+        ].join("\r\n"),
+      );
+      const env: NodeJS.ProcessEnv = {
+        SystemRoot: process.env.SystemRoot,
+        ComSpec: process.env.ComSpec,
+        PATH: [binDir, path.dirname(process.execPath), process.env.PATH ?? ""].join(path.delimiter),
+        HOME: home,
+        USERPROFILE: home,
+        APPDATA: path.join(home, "AppData", "Roaming"),
+        LOCALAPPDATA: path.join(home, "AppData", "Local"),
+        XDG_CONFIG_HOME: path.join(home, "config"),
+        XDG_STATE_HOME: path.join(home, "state"),
+        OPENCLAW_STATE_DIR: state,
+        TMPDIR: fixtureRoot,
+        TMP: fixtureRoot,
+        TEMP: fixtureRoot,
+        CRABBOX_PROVIDER: "ssh",
+        OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
+      };
+      // Preserve the real wrapper and Job lifecycle; compile its graph before the deadline.
+      const result = await runNode(
+        [path.resolve("scripts/crabbox-wrapper.mjs"), "--version"],
+        preparedScriptWrapperEnv(
           [
-            "@echo off",
-            `"${process.execPath}" "%~dp0crabbox.cjs" %*`,
-            "exit /b %errorlevel%",
-            "",
-          ].join("\r\n"),
-        );
-        const env: NodeJS.ProcessEnv = {
-          SystemRoot: process.env.SystemRoot,
-          ComSpec: process.env.ComSpec,
-          PATH: [binDir, path.dirname(process.execPath), process.env.PATH ?? ""].join(
-            path.delimiter,
-          ),
-          HOME: home,
-          USERPROFILE: home,
-          APPDATA: path.join(home, "AppData", "Roaming"),
-          LOCALAPPDATA: path.join(home, "AppData", "Local"),
-          XDG_CONFIG_HOME: path.join(home, "config"),
-          XDG_STATE_HOME: path.join(home, "state"),
-          OPENCLAW_STATE_DIR: state,
-          TMPDIR: fixtureRoot,
-          TMP: fixtureRoot,
-          TEMP: fixtureRoot,
-          CRABBOX_PROVIDER: "ssh",
-          OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
-        };
-        // Keep the checked-out implementation and its Windows worker/native imports intact.
-        const result = await runNode(
-          [path.resolve("scripts/crabbox-wrapper.mjs"), "--version"],
+            [
+              new URL("../../scripts/crabbox-wrapper.mts", import.meta.url),
+              resolveRuntimeWorkerUrl(scriptModuleEntrypoints.crabboxWrapper),
+            ],
+          ],
           env,
-          process.cwd(),
-        );
-        // Read before asserting: joined timeout cleanup removes the fixture even on failure.
-        // A returned stdout write records progress, not completed pipe drainage.
-        const trace = existsSync(invocationLog) ? readFileSync(invocationLog, "utf8") : "";
-        const details = `${formatShimResult(result)}\nfixture stages:\n${trace || "no invocation recorded"}`;
-        expect(result.error, details).toBeUndefined();
-        expect(result.status, details).toBe(0);
-        expect(result.stdout, details).toBe(`crabbox ${fixtureVersion}\n`);
-        const invocations = trace
-          .trim()
-          .split("\n")
-          .map(
-            (line) =>
-              JSON.parse(line) as {
-                stage: string;
-                args: string[];
-                pid: number;
-                startTimeMs?: number | null;
-              },
-          )
-          .filter(({ stage }) => stage === "identity-read");
-        expect(invocations.map(({ args }) => args)).toEqual([
-          ["--version"],
-          ["run", "--help"],
-          ["config", "show", "--json"],
-          ["--version"],
-        ]);
-        for (const invocation of invocations) {
-          const alive = isProcessAlive(invocation.pid);
-          expect(
-            alive,
-            alive
-              ? `${JSON.stringify({
-                  invocation,
-                  observedStartTimeMs: readWindowsProcessStartTimeSync(invocation.pid, 0),
-                  invocations,
-                })}\n${formatShimResult(result)}`
-              : undefined,
-          ).toBe(false);
-        }
-        expect(readdirSync(state)).toEqual(["tools"]);
-      });
-    },
-  );
+        ),
+        process.cwd(),
+      );
+      // Read before asserting: joined timeout cleanup removes the fixture even on failure.
+      // A returned stdout write records progress, not completed pipe drainage.
+      const trace = existsSync(invocationLog) ? readFileSync(invocationLog, "utf8") : "";
+      const details = `${formatShimResult(result)}\nfixture stages:\n${trace || "no invocation recorded"}`;
+      expect(result.error, details).toBeUndefined();
+      expect(result.status, details).toBe(0);
+      expect(result.stdout, details).toBe(`crabbox ${fixtureVersion}\n`);
+      const invocations = trace
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              stage: string;
+              args: string[];
+              pid: number;
+              startTimeMs?: number | null;
+            },
+        )
+        .filter(({ stage }) => stage === "identity-read");
+      expect(invocations.map(({ args }) => args)).toEqual([
+        ["--version"],
+        ["run", "--help"],
+        ["config", "show", "--json"],
+        ["--version"],
+      ]);
+      for (const invocation of invocations) {
+        const alive = isProcessAlive(invocation.pid);
+        expect(
+          alive,
+          alive
+            ? `${JSON.stringify({
+                invocation,
+                observedStartTimeMs: readWindowsProcessStartTimeSync(invocation.pid, 0),
+                invocations,
+              })}\n${formatShimResult(result)}`
+            : undefined,
+        ).toBe(false);
+      }
+      expect(readdirSync(state)).toEqual(["tools"]);
+    });
+  });
 
   it.each([
     {

@@ -17,19 +17,7 @@ import { readWorkspaceMemoryRequest } from "../shared/workspace-memory-request.j
 import { readWorkspaceSkillsRequest } from "../shared/workspace-skills-request.js";
 
 /** Run the same packaged file worker used by SSH adapters; never run arbitrary argv. */
-export function createWorkspaceMemoryCommand(
-  api: OpenClawPluginApi,
-): OpenClawPluginNodeHostCommand {
-  return createWorkspaceCommand(api, "memory");
-}
-
-export function createWorkspaceSkillsCommand(
-  api: OpenClawPluginApi,
-): OpenClawPluginNodeHostCommand {
-  return createWorkspaceCommand(api, "skills");
-}
-
-function createWorkspaceCommand(
+export function createWorkspaceCommand(
   api: OpenClawPluginApi,
   kind: "memory" | "skills",
 ): OpenClawPluginNodeHostCommand {

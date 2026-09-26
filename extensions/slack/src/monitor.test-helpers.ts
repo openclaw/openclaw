@@ -18,8 +18,8 @@ import {
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
-import type { sendMessageSlack } from "./monitor/send.runtime.js";
 import { setSlackRuntime } from "./runtime.js";
+import type { sendMessageSlack } from "./send.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
 type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unknown>) => unknown;
@@ -396,13 +396,12 @@ export async function resetSlackTestState(
   getSlackHandlers()?.clear();
 }
 
-vi.mock("./monitor/config.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor/config.runtime.js")>(
-    "./monitor/config.runtime.js",
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+    "openclaw/plugin-sdk/session-store-runtime",
   );
   return {
     ...actual,
-    loadConfig: () => slackTestState.config,
     readSessionUpdatedAt: vi.fn(() => undefined),
     getSessionEntry: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
@@ -443,16 +442,16 @@ vi.mock("./client.js", async () => {
   };
 });
 
-vi.mock("./monitor/send.runtime.js", () => {
+vi.mock("./send.js", () => {
   return {
     sendMessageSlack: (...args: Parameters<typeof sendMessageSlack>) =>
       slackTestState.sendMock(...args),
   };
 });
 
-vi.mock("./monitor/conversation.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor/conversation.runtime.js")>(
-    "./monitor/conversation.runtime.js",
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
   );
   return {
     ...actual,

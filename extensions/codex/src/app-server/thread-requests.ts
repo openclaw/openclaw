@@ -183,6 +183,7 @@ type CodexThreadConfigurationOptions = {
   hostSystemAgentActive?: boolean;
   restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
   shellEnvironment?: Readonly<Record<string, string>>;
+  shellPathPrepend?: readonly string[];
   disableLoginShell?: boolean;
 };
 
@@ -213,6 +214,7 @@ export function buildCodexThreadConfiguration(
       restrictedToolSurfaceInheritedMcpServerNames:
         options.restrictedToolSurfaceInheritedMcpServerNames,
       shellEnvironment: options.shellEnvironment,
+      shellPathPrepend: options.shellPathPrepend,
       disableLoginShell: options.disableLoginShell,
     }),
     // Catalog-owned collaboration messages replace caller collaboration instructions
@@ -412,6 +414,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     hostSystemAgentActive?: boolean;
     restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
     shellEnvironment?: Readonly<Record<string, string>>;
+    shellPathPrepend?: readonly string[];
     disableLoginShell?: boolean;
   } = {},
 ): JsonObject {
@@ -495,6 +498,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     contextConfig,
     options.shellEnvironment,
     options.disableLoginShell,
+    options.shellPathPrepend,
   );
 }
 

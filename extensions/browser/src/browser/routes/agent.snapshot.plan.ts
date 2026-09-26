@@ -16,11 +16,7 @@ import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
 } from "../constants.js";
 import { resolveBrowserEngine } from "../engines/registry.js";
-import {
-  resolveDefaultSnapshotFormat,
-  shouldUsePlaywrightForAriaSnapshot,
-  shouldUsePlaywrightForScreenshot,
-} from "../profile-capabilities.js";
+import { resolveDefaultSnapshotFormat } from "../profile-capabilities.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import { toBoolean, toStringOrEmpty } from "./utils.js";
 
@@ -119,5 +115,3 @@ export function resolveSnapshotPlan(params: {
       Boolean(frameSelectorValue),
   };
 }
-
-export { shouldUsePlaywrightForAriaSnapshot, shouldUsePlaywrightForScreenshot };

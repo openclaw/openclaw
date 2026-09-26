@@ -26,6 +26,18 @@ case "$OUTPUT_DIR" in
 esac
 OUTPUT_DIR_CONTAINER_RELATIVE=".artifacts/qa-e2e/npm-telegram-live-output"
 OUTPUT_DIR_CONTAINER="/app/$OUTPUT_DIR_CONTAINER_RELATIVE"
+upgrade_scenario="telegram-published-upgrade-bindings"
+upgrade_selected=0
+selected_scenarios="${OPENCLAW_NPM_TELEGRAM_SCENARIOS:-}"
+case ",${selected_scenarios//[[:space:]]/,}," in
+  *",$upgrade_scenario,"*)
+    if [ "${OPENCLAW_NPM_TELEGRAM_SCENARIOS:-}" != "$upgrade_scenario" ]; then
+      echo "$upgrade_scenario must run alone against one published baseline" >&2
+      exit 1
+    fi
+    upgrade_selected=1
+    ;;
+esac
 
 resolve_credential_source() {
   if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-}" ]; then
@@ -174,6 +186,30 @@ if [ -z "$PACKAGE_LABEL" ]; then
   fi
 fi
 
+upgrade_mount_args=()
+upgrade_candidate=""
+package_install_label="$PACKAGE_LABEL"
+if [ "$upgrade_selected" = "1" ]; then
+  if [ "${OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE:-mock-openai}" != "mock-openai" ]; then
+    echo "$upgrade_scenario requires the deterministic mock-openai provider" >&2
+    exit 1
+  fi
+  if [ -z "$resolved_package_tgz" ] || [ -n "$resolved_package_dir" ]; then
+    echo "$upgrade_scenario requires one candidate tarball, not a package set" >&2
+    exit 1
+  fi
+  if [[ ! "$PACKAGE_SPEC" =~ ^openclaw@[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?$ ]]; then
+    echo "$upgrade_scenario requires package_spec to name an exact published baseline" >&2
+    exit 1
+  fi
+  # Install the published driver before credentials enter the runtime container.
+  # The candidate remains immutable until that driver's normal update command.
+  upgrade_candidate="$package_install_source"
+  upgrade_mount_args=("${package_mount_args[@]}")
+  package_install_source="$PACKAGE_SPEC"
+  package_install_label="$PACKAGE_SPEC (published upgrade baseline)"
+fi
+
 credential_source="$(resolve_credential_source)"
 credential_role="$(resolve_credential_role)"
 if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then
@@ -250,6 +286,7 @@ docker_env=(
   -e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"
   -e OPENCLAW_QA_RUNNER="${OPENCLAW_QA_RUNNER:-docker}"
   -e OPENCLAW_NPM_TELEGRAM_FAST="${OPENCLAW_NPM_TELEGRAM_FAST:-1}"
+  -e OPENCLAW_NPM_TELEGRAM_UPGRADE_CANDIDATE="$upgrade_candidate"
 )
 
 forward_env_if_set() {
@@ -309,7 +346,8 @@ run_logged_print_heartbeat "npm-telegram-package-install" 60 docker_e2e_docker_r
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" \
   -e OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE="$package_install_source" \
-  -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL" \
+  -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$package_install_label" \
+  -e OPENCLAW_NPM_TELEGRAM_INSTALL_PUBLISHED_BASELINE="$upgrade_selected" \
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SET="$([ -n "$resolved_package_dir" ] && printf 1 || printf 0)" \
   ${package_mount_args[@]+"${package_mount_args[@]}"} \
   ${registry_helper_mount_args[@]+"${registry_helper_mount_args[@]}"} \
@@ -318,6 +356,9 @@ run_logged_print_heartbeat "npm-telegram-package-install" 60 docker_e2e_docker_r
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 
+if [ "${OPENCLAW_NPM_TELEGRAM_INSTALL_PUBLISHED_BASELINE:-0}" = "1" ]; then
+  source /opt/openclaw-e2e/scripts/e2e/lib/prepublish-plugin-registry.sh
+fi
 export HOME="$(mktemp -d "/tmp/openclaw-npm-telegram-install.XXXXXX")"
 export NPM_CONFIG_PREFIX="/npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
@@ -421,7 +462,11 @@ run_npm_install() {
     "$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
   fi
 }
-run_npm_install
+if [ "${OPENCLAW_NPM_TELEGRAM_INSTALL_PUBLISHED_BASELINE:-0}" = "1" ]; then
+  openclaw_prepublish_plugin_registry_run_published run_npm_install
+else
+  run_npm_install
+fi
 
 command -v openclaw
 openclaw --version
@@ -451,6 +496,7 @@ run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harn
   -v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro" \
   -v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro" \
   ${command_scenario_mount_args[@]+"${command_scenario_mount_args[@]}"} \
+  ${upgrade_mount_args[@]+"${upgrade_mount_args[@]}"} \
   ${prepublish_registry_mount_args[@]+"${prepublish_registry_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
@@ -536,6 +582,18 @@ for workspace_dir in /app/packages/* /app/extensions/*; do
   link_harness_dependency "$workspace_dir" "$workspace_name"
 done
 link_harness_dependency /app openclaw
+
+if [ -n "${OPENCLAW_NPM_TELEGRAM_UPGRADE_CANDIDATE:-}" ]; then
+  # The mounted-registry entrypoint already owns this container's registry.
+  # The upgrade command preserves its npm settings through the normal updater.
+  trap - ERR
+  node .agents/skills/telegram-e2e-userbot/scripts/run-published-upgrade-user-e2e.mjs \
+    --candidate "$OPENCLAW_NPM_TELEGRAM_UPGRADE_CANDIDATE" \
+    --baseline "$sut_command" \
+    --baseline-spec "$OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC" \
+    --output "$OPENCLAW_NPM_TELEGRAM_REPO_ROOT/$OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR"
+  exit 0
+fi
 
 if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
   OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_REQUIRED_PACKAGES_JSON='["@openclaw/codex"]' \

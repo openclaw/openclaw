@@ -5,7 +5,7 @@ import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/rec
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { createCronJobNameResolver } from "../cron/store/job-name.js";
+import { createCronJobNameResolver, prepareCronJobNameResolver } from "../cron/store/job-name.js";
 import {
   isCompletionReportInputProvenance,
   isSubagentCoordinationInputProvenance,
@@ -605,21 +605,30 @@ function resolveForwardedSenderSession(
     : undefined;
 }
 
+function readForwardedCronJobIds(messages: readonly unknown[]) {
+  return messages.flatMap((value) => {
+    const message = readRecord(value);
+    if (!message || (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message))) {
+      return [];
+    }
+    const jobId = readForwardedSender(message).jobId;
+    return jobId ? [jobId] : [];
+  });
+}
+
+export async function prepareForwardedMessageCronJobNameResolver(
+  messages: readonly unknown[],
+  storePath?: string,
+) {
+  return await prepareCronJobNameResolver(readForwardedCronJobIds(messages), storePath);
+}
+
 export function projectForwardedMessages(
   messages: Array<Record<string, unknown>>,
   resolveCronJobName?: (jobId: string) => string | undefined,
 ): Array<Record<string, unknown>> {
   const resolve =
-    resolveCronJobName ??
-    createCronJobNameResolver(
-      messages.flatMap((message) => {
-        if (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message)) {
-          return [];
-        }
-        const jobId = readForwardedSender(message).jobId;
-        return jobId ? [jobId] : [];
-      }),
-    );
+    resolveCronJobName ?? createCronJobNameResolver(readForwardedCronJobIds(messages));
   const names = new Map<string, string | undefined>();
   const resolveName = (jobId: string) => {
     if (!names.has(jobId)) {

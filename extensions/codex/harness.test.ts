@@ -19,7 +19,10 @@ vi.mock("./src/app-server/run-attempt.js", () => ({
   runCodexAppServerAttempt,
 }));
 
-import { createCodexAppServerAgentHarness } from "./harness.js";
+import {
+  createCodexAppServerAgentHarness,
+  createCodexAppServerNativeCompaction,
+} from "./harness.js";
 import codexPluginPackage from "./package.json" with { type: "json" };
 import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import {
@@ -70,6 +73,27 @@ describe("Codex agent harness supports()", () => {
   const harness = createCodexAppServerAgentHarness({
     bindingStore: testCodexAppServerBindingStore,
   });
+
+  it.each(["manual", "native-preflight"] as const)(
+    "rejects legacy %s compaction input without inventing System authority",
+    async (entry) => {
+      const params = {
+        sessionId: "legacy-compact",
+        sessionFile: "/tmp/legacy-compact.jsonl",
+        workspaceDir: "/tmp/workspace",
+        trigger: "manual" as const,
+      };
+      const operation =
+        entry === "manual"
+          ? harness.compact?.(params)
+          : createCodexAppServerNativeCompaction({
+              bindingStore: testCodexAppServerBindingStore,
+            })({ ...params, nativeCompactionRequest: "required_preflight" });
+      await expect(operation).rejects.toThrow(
+        "This host did not provide compaction source authority",
+      );
+    },
+  );
 
   it("runs isolated completion through the prepared zero-tool transport", async () => {
     const assistant = {

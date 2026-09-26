@@ -219,7 +219,7 @@ describe("visitor access admitted caller", () => {
                       };
                       const intercept = vi
                         .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
-                        .mockImplementation((admit) =>
+                        .mockImplementation((admit, attachment) =>
                           createAdmission((request, grant) => {
                             stages.push(request.stage);
                             if (
@@ -242,7 +242,7 @@ describe("visitor access admitted caller", () => {
                             ) {
                               revokeSource();
                             }
-                          }),
+                          }, attachment),
                         );
                       try {
                         [renewal] = await Promise.allSettled([invite(2)]);

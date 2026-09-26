@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import OpenAI from "openai";
-import type { AgentReasoningParam, AgentSessionEvent } from "openai/resources/beta/agents/agents";
+import type {
+  AgentReasoningParam,
+  AgentSessionEvent,
+  HostedEnvironmentFileParam,
+} from "openai/resources/beta/agents/agents";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -39,6 +43,15 @@ const sessionSchema = z.looseObject({
       z.looseObject({ type: z.literal("environment_connection"), environment_id: z.string() }),
     ]),
   ),
+});
+const artifactSchema = z.looseObject({
+  id: z.string().min(1),
+  object: z.literal("agent.session.artifact"),
+  session_id: z.string(),
+  environment_id: z.string(),
+  turn_id: z.string(),
+  path: z.string(),
+  size_bytes: z.number().int().nonnegative().safe(),
 });
 const textPartSchema = z.looseObject({ type: z.string(), text: z.string().optional() });
 // Validate native correlation and projection fields while retaining complete payloads.
@@ -114,19 +127,30 @@ const eventSchema = z.looseObject({
 });
 export type AgentsApiEvent = z.infer<typeof eventSchema>;
 export type AgentsApiItem = z.infer<typeof itemSchema>;
-export type AgentsApiReasoning = {
-  effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
-  summary?: "concise" | "detailed" | "auto" | null;
+export type AgentsApiFunctionCall = z.infer<typeof functionCallSchema>;
+export type AgentsApiFunctionDeclaration = {
+  type: "function";
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  defer_loading?: boolean;
 };
+export type AgentsApiInputFile = HostedEnvironmentFileParam.HostedEnvironmentFileParamInline;
+export type AgentsApiArtifact = z.infer<typeof artifactSchema>;
+export type AgentsApiFunctionResult =
+  | { success: true; output: string }
+  | { success: false; error: string };
+
 /** The SDK owns the wire protocol; OpenClaw retains native session authority. */
 export class AgentsApiClient {
   private readonly sessions: OpenAI["beta"]["agents"]["sessions"];
+  private readonly environments: OpenAI["beta"]["agents"]["environments"];
 
   constructor(
     apiKey: string,
     private readonly assertCurrent: () => void,
   ) {
-    this.sessions = new OpenAI({
+    const agents = new OpenAI({
       apiKey,
       // Ignore OPENAI_BASE_URL while retaining the SDK's official endpoint default.
       baseURL: null,
@@ -154,16 +178,19 @@ export class AgentsApiClient {
         }
         return response;
       },
-    }).beta.agents.sessions;
+    }).beta.agents;
+    this.sessions = agents.sessions;
+    this.environments = agents.environments;
   }
 
   async create(
     signal: AbortSignal,
     instructions: string,
     model: string,
-    reasoningEffort?: AgentReasoningParam["effort"],
-    extras?: {
-      reasoning?: AgentsApiReasoning;
+    options?: {
+      functions?: AgentsApiFunctionDeclaration[];
+      files?: AgentsApiInputFile[];
+      reasoning?: AgentReasoningParam;
     },
   ): Promise<string> {
     const session = await this.sessions.create(
@@ -171,15 +198,11 @@ export class AgentsApiClient {
         agent: {
           model,
           instructions,
-          reasoning: extras?.reasoning
-            ? { ...extras.reasoning, effort: reasoningEffort }
-            : reasoningEffort === undefined
-              ? undefined
-              : { effort: reasoningEffort },
+          reasoning: options?.reasoning,
           multi_agent: { enabled: false },
-          tools: [{ type: "web_search", mode: "live" }],
+          tools: [{ type: "web_search", mode: "live" }, ...(options?.functions ?? [])],
         },
-        environment: { type: "openai_hosted" },
+        environment: { type: "openai_hosted", files: options?.files ?? [] },
       },
       { signal, headers: { "Idempotency-Key": randomUUID() } },
     );
@@ -227,6 +250,185 @@ export class AgentsApiClient {
       throw new Error("Agents API returned a different session");
     }
     return session;
+  }
+
+  async pendingFunctionCalls(
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<AgentsApiFunctionCall[]> {
+    const session = sessionSchema.parse(await this.session(sessionId, signal));
+    if (session.status === "failed") {
+      throw new Error(session.error ?? "Agents API session failed");
+    }
+    if (session.status !== "requires_action") {
+      return [];
+    }
+    const calls: AgentsApiFunctionCall[] = [];
+    for (const action of session.required_actions) {
+      if (action.type !== "function_call") {
+        throw new Error("Agents API hosted prototype cannot reconnect an environment_connection");
+      }
+      calls.push(action);
+    }
+    return calls;
+  }
+
+  async toolResult(
+    sessionId: string,
+    call: AgentsApiFunctionCall,
+    result: AgentsApiFunctionResult,
+    signal: AbortSignal,
+  ): Promise<void> {
+    await this.sessions.events.create(
+      sessionId,
+      {
+        events: [
+          {
+            type: "agent.session.input.tool_result",
+            turn_id: call.turn_id,
+            call_id: call.call_id,
+            ...(result.success
+              ? { success: true, output: result.output }
+              : { success: false, error: result.error }),
+          },
+        ],
+        "Idempotency-Key": randomUUID(),
+      },
+      { signal },
+    );
+    this.assertCurrent();
+  }
+
+  async turn(sessionId: string, turnId: string, signal: AbortSignal): Promise<Turn> {
+    const turn = await this.sessions.turns.retrieve(turnId, { session_id: sessionId }, { signal });
+    this.assertCurrent();
+    if (turn.id !== turnId || turn.session_id !== sessionId || turn.subagent_id !== null) {
+      throw new Error("Agents API returned a turn outside the requested root session");
+    }
+    return turn;
+  }
+
+  async uploadFile(
+    sessionId: string,
+    file: AgentsApiInputFile,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const session = await this.session(sessionId, signal);
+    if (session.environment.type !== "openai_hosted") {
+      throw new Error("Agents API file upload requires the session's connected hosted environment");
+    }
+    const retrieved = await this.environments.retrieve(session.environment.id, { signal });
+    const environment = z
+      .object({ id: z.string(), type: z.literal("openai_hosted"), status: z.string() })
+      .parse(retrieved);
+    this.assertCurrent();
+    if (environment.id !== session.environment.id || environment.status !== "connected") {
+      throw new Error("Agents API file upload requires the session's connected hosted environment");
+    }
+    const uploaded = await this.environments.files.create(session.environment.id, file, {
+      signal,
+      headers: { "Idempotency-Key": randomUUID() },
+    });
+    const saved = z
+      .object({ environment_id: z.string(), path: z.string(), size_bytes: z.number() })
+      .parse(uploaded);
+    this.assertCurrent();
+    if (
+      saved.environment_id !== session.environment.id ||
+      saved.path !== file.path ||
+      saved.size_bytes !== Buffer.from(file.data, "base64").byteLength
+    ) {
+      throw new Error(
+        "Agents API uploaded file did not match the requested environment, path, or size",
+      );
+    }
+  }
+
+  async artifacts(
+    sessionId: string,
+    turnId: string,
+    signal: AbortSignal,
+  ): Promise<AgentsApiArtifact[]> {
+    const artifacts: AgentsApiArtifact[] = [];
+    const seen = new Set<string>();
+    let after: string | undefined;
+    for (let pages = 0; pages < 100; pages++) {
+      const listed = await this.sessions.artifacts.list(
+        sessionId,
+        { order: "asc", limit: 100, after },
+        { signal },
+      );
+      const page = z
+        .object({
+          data: z.array(artifactSchema),
+          has_more: z.boolean(),
+        })
+        .parse(listed);
+      this.assertCurrent();
+      if (page.data.some((artifact) => artifact.session_id !== sessionId)) {
+        throw new Error("Agents API returned an artifact outside the requested session");
+      }
+      artifacts.push(...page.data.filter((artifact) => artifact.turn_id === turnId));
+      if (!page.has_more) {
+        return artifacts;
+      }
+      const lastId = page.data.at(-1)?.id;
+      if (!lastId || seen.has(lastId)) {
+        throw new Error("Agents API artifacts page has no valid continuation cursor");
+      }
+      after = lastId;
+      seen.add(after);
+    }
+    throw new Error("Agents API artifact listing exceeded the pagination limit");
+  }
+
+  async artifactContent(
+    sessionId: string,
+    artifact: AgentsApiArtifact,
+    maxBytes: number,
+    signal: AbortSignal,
+  ): Promise<Buffer> {
+    if (
+      artifact.session_id !== sessionId ||
+      !Number.isSafeInteger(maxBytes) ||
+      maxBytes < 0 ||
+      artifact.size_bytes > maxBytes
+    ) {
+      throw new Error("Agents API artifact download exceeds its session or byte bounds");
+    }
+    const response = await this.sessions.artifacts.content(
+      artifact.id,
+      { session_id: sessionId },
+      { signal },
+    );
+    if (!response.body) {
+      throw new Error("Agents API artifact returned no content body");
+    }
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        signal.throwIfAborted();
+        this.assertCurrent();
+        const chunk = await reader.read();
+        this.assertCurrent();
+        if (chunk.done) {
+          break;
+        }
+        bytes += chunk.value.byteLength;
+        if (bytes > maxBytes || bytes > artifact.size_bytes) {
+          throw new Error("Agents API artifact content exceeded its immutable size or byte limit");
+        }
+        chunks.push(chunk.value);
+      }
+      if (bytes !== artifact.size_bytes) {
+        throw new Error("Agents API artifact content did not match its immutable size");
+      }
+      return Buffer.concat(chunks, bytes);
+    } finally {
+      await closeResponseReader(reader, signal);
+    }
   }
 
   async turns(sessionId: string, signal: AbortSignal, after?: string, latestOnly = false) {
@@ -340,6 +542,10 @@ export class AgentsApiError extends Error {
   }
 }
 
+export function isAgentsApiTerminalTurn(status?: string): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
 async function* observeEvents(
   stream: AsyncIterable<AgentSessionEvent>,
   signal: AbortSignal,
@@ -358,6 +564,22 @@ async function* observeEvents(
       throw new Error("Agents API returned an event outside the requested session");
     }
     yield event;
+  }
+  signal.throwIfAborted();
+}
+
+async function closeResponseReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal,
+): Promise<void> {
+  try {
+    await reader.cancel();
+  } catch (error) {
+    if (!signal.aborted) {
+      throw error;
+    }
+  } finally {
+    reader.releaseLock();
   }
   signal.throwIfAborted();
 }

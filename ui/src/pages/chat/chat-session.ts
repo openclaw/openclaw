@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   readAgentRuntimeRestrictionErrorDetails,
   type AgentRuntimeRestrictionErrorDetails,
@@ -31,8 +30,7 @@ import {
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
-import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
-export { getPendingChatPickerPatch };
+import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 
 registerModelControlsEnglish();
 
@@ -93,11 +91,8 @@ export function retireChatModelSelectionOwnership(
   host.requestUpdate?.();
 }
 
-function buildChatSessionListOptions(
-  state: ChatSessionListHost,
-  options: { offset?: number; append?: boolean; search?: string | null } = {},
-): SessionListOptions {
-  const result: SessionListOptions = {
+function buildChatSessionListOptions(state: ChatSessionListHost): SessionListOptions {
+  return {
     ...DEFAULT_SESSION_LIST_QUERY,
     includeGlobal: true,
     includeUnknown: true,
@@ -105,21 +100,6 @@ function buildChatSessionListOptions(
     includeDerivedTitles: true,
     archivedFilter: state.sessionsArchivedFilter ?? "active",
   };
-  const search = normalizeOptionalString(options.search ?? undefined);
-  if (search) {
-    result.search = search;
-  }
-  const offset =
-    typeof options.offset === "number" && Number.isFinite(options.offset)
-      ? Math.max(0, Math.floor(options.offset))
-      : 0;
-  if (offset > 0) {
-    result.offset = offset;
-  }
-  if (options.append === true) {
-    result.append = true;
-  }
-  return result;
 }
 
 export function refreshCurrentChatSessionList(host: ChatSessionRefreshHost): Promise<void> {
@@ -525,14 +505,9 @@ export async function switchChatModel(
         expectedSessionId: selection.expectedSessionId,
         ownsModelOverride,
         canDispatch,
-        reconcile: async () => {
-          await refreshCurrentChatSessionList(host);
-        },
+        reconcile: () => refreshCurrentChatSessionList(host),
       });
-      if (!patched) {
-        return false;
-      }
-      return true;
+      return patched !== null;
     } catch (err) {
       if (!ownsSelection()) {
         return false;

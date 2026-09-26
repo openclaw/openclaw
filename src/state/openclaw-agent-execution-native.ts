@@ -23,6 +23,7 @@ import {
   runSqliteWorkerStoreOperation,
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
+import { captureAgentDatabasePreparationJournal } from "./agent-database-admission.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import { captureOpenClawAgentDatabaseRegistration } from "./openclaw-agent-db-registry-listing.js";
 import {
@@ -134,6 +135,9 @@ export function createAgentDatabaseNativeGeneration(
       assertCallerCurrent?: () => void,
     ): SqliteWorkerAdmissionFactory =>
     (operation) => {
+      const assertPreparationJournal = captureAgentDatabasePreparationJournal(agentId, {
+        env: context.environment,
+      });
       const nativeLocations = [
         pathname,
         ...(nativeIdentity ? [nativeIdentity.nativeLocation] : []),
@@ -266,6 +270,9 @@ export function createAgentDatabaseNativeGeneration(
             birthtime: receivedIdentity.birthtime,
             nativeLocation: receivedIdentity.nativeLocation,
           });
+          assertPreparationJournal?.(
+            isRecord(facts) ? facts.agentDeletionJournalPresent : undefined,
+          );
           assertCallerCurrent?.();
           nativeIdentity ??= receivedIdentity;
         }
@@ -279,6 +286,10 @@ export function createAgentDatabaseNativeGeneration(
         }
       };
       return source.createAdmission({
+        attachment: {
+          kind: "agent-execution",
+          startupJournal: assertPreparationJournal !== undefined,
+        },
         nativeLocations,
         assertCurrent,
         authorize(request) {
@@ -308,6 +319,7 @@ export function createAgentDatabaseNativeGeneration(
             agentId,
             agentPath: pathname,
             admission: context.admission,
+            onRegistryChange: source.onRegistryChange,
           })
         : undefined;
       const openStore = () =>
@@ -382,6 +394,7 @@ export function createAgentDatabaseNativeGeneration(
         agentId,
         agentPath: pathname,
         admission: context.admission,
+        onRegistryChange: source.onRegistryChange,
       });
       await settleAgentRegistration(registration, async () => {
         await runSqliteWorkerStoreOperation(
@@ -443,7 +456,10 @@ export function createAgentDatabaseNativeGeneration(
           try {
             await opening.then(
               (store) => store?.close(),
-              () => closeUnclaimedSharedStateSqliteWorkers(pathname),
+              () =>
+                openedStore
+                  ? openedStore.close()
+                  : closeUnclaimedSharedStateSqliteWorkers(pathname),
             );
           } catch (error) {
             errors.push(error);

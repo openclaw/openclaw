@@ -1,18 +1,23 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import { readUserProfileVersion } from "./user-profile-events.js";
 import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import { createProfileAvatarReader } from "./user-profiles-avatar.js";
+import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import {
   adoptTailscaleProfileAvatar,
   ensureProfileForEmail,
-  getProfileAvatar,
+  setAvatar,
   setDisplayName,
 } from "./user-profiles.js";
 
@@ -80,3 +85,30 @@ it.each([false, true])(
     }
   },
 );
+
+it("refreshes foreign avatar commits through the originally selected database", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-avatar-read-owner-") };
+  const profile = ensureProfileForEmail("avatar-reader@example.test", { env });
+  expect(setAvatar(profile.id, new Uint8Array([1]), "image/png", { env }).ok).toBe(true);
+  const reader = createProfileAvatarReader(profile.id, { env });
+  const { path } = openOpenClawStateDatabase({ env });
+  const prepared = await reader.inspect();
+  const revision = readUserProfileVersion();
+  const bytes = new Uint8Array([2, 3]);
+  const foreign = new (requireNodeSqlite().DatabaseSync)(path);
+  try {
+    foreign
+      .prepare("UPDATE user_profiles SET avatar = ?, avatar_sha256 = ? WHERE id = ?")
+      .run(bytes, createHash("sha256").update(bytes).digest("hex"), profile.id);
+    expect(readUserProfileVersion()).toBe(revision);
+    expect(prepared.isCurrent()).toBe(true);
+    env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-avatar-read-other-");
+    await expect(prepared.loadBytes()).resolves.toBeUndefined();
+    const refreshed = await reader.inspect();
+    expect(refreshed.profile?.id).toBe(profile.id);
+    expect(refreshed.avatar?.byteLength).toBe(bytes.byteLength);
+    await expect(refreshed.loadBytes()).resolves.toMatchObject({ bytes });
+  } finally {
+    foreign.close();
+  }
+});

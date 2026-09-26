@@ -18,6 +18,7 @@ import { validateActiveExtendedStableLine } from "../../scripts/openclaw-npm-ext
 import { createStablePluginNpmBootstrapApproval } from "../../scripts/plugin-npm-bootstrap-approval.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
+import { evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const workflowPath = ".github/workflows/plugin-npm-release.yml";
 const metaPackagePath = "extensions/meta/package.json";
@@ -221,11 +222,11 @@ describe("plugin npm extended-stable workflow", () => {
     ["beta publication", "beta", "beta", "full-release-validation", false],
     ["focused beta evidence", "beta", "latest", "authorized-beta-focused-v1", false],
     [
-      "waived stable publication",
+      "retired waiver cannot qualify stable publication",
       "beta",
       "latest",
       "full-release-validation",
-      true,
+      false,
       "Operator approved soak waiver",
     ],
     ["unwaived stable publication", "beta", "latest", "full-release-validation", false],
@@ -291,17 +292,9 @@ describe("plugin npm extended-stable workflow", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "round-trips attested stable/full and waived beta bootstrap approvals and retains beta",
+    "round-trips attested stable/full bootstrap approvals and retains beta publication",
     () => {
-      for (const input of [
-        { releaseProfile: "stable" },
-        { releaseProfile: "full" },
-        {
-          releaseProfile: "beta",
-          stableSoakWaiver: 'Operator approved "stable" publication.\nSoak waived.',
-          stableSoakWaiverSource: "explicit",
-        },
-      ]) {
+      for (const input of [{ releaseProfile: "stable" }, { releaseProfile: "full" }]) {
         const result = runStableBootstrapAdmission({ input });
         expect(result.status, result.stderr).toBe(0);
       }
@@ -323,6 +316,16 @@ describe("plugin npm extended-stable workflow", () => {
       { approval: { releaseTag: "v2026.9.33" }, env: { PACKAGE_VERSION: "2026.9.33" } },
     ],
     ["profile", { approval: { releaseProfile: "beta" } }],
+    [
+      "retired waiver",
+      {
+        approval: {
+          releaseProfile: "beta",
+          stableSoakWaiver: "2026.9.3 approved",
+          stableSoakWaiverSource: "explicit",
+        },
+      },
+    ],
     ["empty waiver", { approval: { releaseProfile: "beta", stableSoakWaiver: "" } }],
     [
       "blank waiver",
@@ -440,7 +443,7 @@ describe("plugin npm extended-stable workflow", () => {
       type: "boolean",
     });
     expect(inputs?.ref?.description).toBe(
-      "Exact commit SHA; preflight accepts main/release ancestry, while publish mode also supports canonical extended-stable or matching Tideclaw alpha branches",
+      "Exact commit SHA reachable from main/release ancestry or the canonical extended-stable branch",
     );
     expect(inputs?.release_candidate_branch).toEqual({
       description:
@@ -686,7 +689,7 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
     },
   );
 
-  it("admits exact monthly tips for recovery or canonical candidates from protected tooling", () => {
+  it("admits canonical candidates from protected tooling and retains monthly-tip preflight", () => {
     const trusted = step(
       workflow().jobs?.preview_plugins_npm,
       "Validate ref is on a trusted publish branch",
@@ -713,7 +716,7 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
         workflow().jobs?.preview_plugins_npm,
         "Verify trusted preflight or recovery tooling identity",
       ).if,
-    ).toContain("inputs.release_candidate_branch != ''");
+    ).toBe("github.event_name == 'workflow_dispatch'");
   });
 
   it("binds preflight to an exact source SHA without release-publish approval", () => {
@@ -753,8 +756,8 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
     for (const [preflight, distTag, ref, candidateBranch, expected] of [
       [true, "default", "refs/heads/main", "", true],
       [false, "extended-stable", "refs/heads/main", "", true],
-      [false, "extended-stable", "refs/heads/extended-stable/2026.8.33", "", false],
-      [false, "default", "refs/heads/main", "", false],
+      [false, "extended-stable", "refs/heads/extended-stable/2026.8.33", "", true],
+      [false, "default", "refs/heads/main", "", true],
       [
         false,
         "extended-stable",
@@ -828,10 +831,107 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
     const preflightBranchRejection = trusted.run?.indexOf(
       "Plugin npm preflight target must be reachable from main or release/*.",
     );
-    const tideclawBranch = trusted.run?.indexOf('r"refs/heads/tideclaw/alpha/');
     expect(preflightBranchRejection).toBeGreaterThan(-1);
-    expect(tideclawBranch).toBeGreaterThan(preflightBranchRejection ?? Number.MAX_SAFE_INTEGER);
+    expect(trusted.run).not.toContain("refs/heads/tideclaw/alpha/");
+    expect(trusted.run).toContain("if not preflight:");
+    expect(trusted.run).toContain(
+      "Extended-stable plugin publication requires release_candidate_branch=",
+    );
+    const requirement = trusted.env?.REQUIRE_NPM_PUBLISH_ENVIRONMENT;
+    if (requirement === undefined) {
+      throw new Error("npm-publish tag requirement is missing.");
+    }
+    for (const [preflight, oidc, required] of [
+      [false, false, true],
+      [true, true, true],
+      [true, false, false],
+    ]) {
+      expect(
+        runInNewContext(requirement.replace(/^\$\{\{|\}\}$/gu, ""), {
+          github: { event_name: "workflow_dispatch" },
+          inputs: { preflight_only: preflight, trusted_publisher_preflight: oidc },
+        }),
+      ).toBe(required);
+    }
   });
+
+  it.each([
+    { ref: "refs/heads/main", preflight: false, oidc: false, admitted: false },
+    {
+      ref: "refs/heads/release/2026.9.1",
+      preflight: false,
+      oidc: false,
+      admitted: false,
+    },
+    {
+      ref: "refs/heads/tideclaw/alpha/2026-09-25-1200Z",
+      preflight: false,
+      oidc: false,
+      admitted: false,
+    },
+    {
+      ref: "refs/tags/release-publish/bbbbbbbbbbbb-123",
+      preflight: false,
+      oidc: false,
+      admitted: true,
+    },
+    { ref: "refs/heads/main", preflight: true, oidc: false, admitted: true },
+    { ref: "refs/heads/main", preflight: true, oidc: true, admitted: false },
+    {
+      ref: "refs/tags/release-publish/bbbbbbbbbbbb-123",
+      preflight: true,
+      oidc: true,
+      admitted: true,
+    },
+  ])(
+    "enforces npm-publish tag admission before planning: $ref/$preflight/$oidc",
+    ({ ref, preflight, oidc, admitted }) => {
+      const guard = step(
+        workflow().jobs?.preview_plugins_npm,
+        "Validate ref is on a trusted publish branch",
+      );
+      const policy = guard.run!.split("<<'PYTHON'\n")[1]!.split("\nPYTHON")[0];
+      const result = spawnSync(
+        "python3",
+        [
+          "-c",
+          `
+import sys, types
+class GitFailure(Exception):
+    pass
+sys.modules["ci_git_owner"] = types.SimpleNamespace(
+    GitFailure=GitFailure,
+    git_output=lambda *args: "${"a".repeat(40)}",
+    run_git=lambda *args, **kwargs: None,
+)
+${policy}`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: process.env.PATH,
+            GITHUB_WORKSPACE: process.cwd(),
+            REQUIRE_NPM_PUBLISH_ENVIRONMENT: String(!preflight || oidc),
+            WORKFLOW_REF: ref,
+            WORKFLOW_SHA: "b".repeat(40),
+            PREFLIGHT_ONLY: String(preflight),
+            TRUSTED_PUBLISHER_PREFLIGHT: String(oidc),
+            PREPARED_ARTIFACT: "",
+            RELEASE_PUBLISH_RUN_ID: "",
+            RELEASE_PUBLISH_RUN_ATTEMPT: "",
+            RELEASE_CANDIDATE_BRANCH: "",
+            SOURCE_REF: "a".repeat(40),
+            NPM_DIST_TAG: "default",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(admitted ? 0 : 1);
+      if (!admitted) {
+        expect(result.stderr).toContain("--ref release-publish/");
+        expect(result.stderr).toContain("ensureReleasePublishToolingTag");
+      }
+    },
+  );
 
   it("prepares and independently reads back immutable package evidence", () => {
     const parsed = workflow();
@@ -1005,8 +1105,8 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
     expect(oidc?.if).toContain("inputs.preflight_only");
     expect(oidc?.if).toContain("inputs.trusted_publisher_preflight");
     expect(oidc?.if).toContain("has_selection == 'true'");
-    expect(oidc?.environment).toBe("npm-release");
-    expect(oidc?.["runs-on"]).toBe("ubuntu-latest");
+    expect(oidc?.environment).toBe("npm-publish");
+    expect(evaluateWorkflowRunner(oidc?.["runs-on"])).toBe("ubuntu-latest");
     expect(oidc?.permissions).toEqual({ contents: "read", "id-token": "write" });
     expect(oidc?.strategy).toBeUndefined();
     expect(step(oidc, "Checkout trusted OIDC preflight tooling").with).toMatchObject({

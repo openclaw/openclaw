@@ -670,7 +670,7 @@ describe("prepared worker reserve lifecycle", () => {
           ...lifecycleOptions,
           prepareInstallation,
           now: () => fixture.nowMs,
-          cancelInferenceEnvironment: () => {},
+          cancelInferenceEnvironment: async () => {},
         }),
         callBootstrap: unexpectedLifecycleOperation,
         bootstrapWorker: unexpectedLifecycleOperation,

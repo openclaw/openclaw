@@ -1,5 +1,5 @@
-import "../../styles/config.css";
 import { consume } from "@lit/context";
+import "../../styles/config.css";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
@@ -72,7 +72,7 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
-import { renderMcp } from "./mcp.ts";
+import { renderMcp, renderMcpIntro } from "./mcp.ts";
 import { renderMeetingCapture } from "./meeting-capture.ts";
 import { renderMemoryPage } from "./memory-page.ts";
 import { narrowMemorySchema } from "./memory-schema.ts";
@@ -163,7 +163,7 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
       return html`${t("configView.appearance.intro")}
       ${renderLearnMoreLink("https://docs.openclaw.ai/web/control-ui")}`;
     case "mcp":
-      return html`${t("mcpPage.intro")} ${renderLearnMoreLink("https://docs.openclaw.ai/tools/mcp")}`;
+      return renderMcpIntro();
     case "security":
       return html`${t("quickSettings.security.intro")}
       ${renderLearnMoreLink("https://docs.openclaw.ai/gateway/security")}`;

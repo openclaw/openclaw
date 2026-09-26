@@ -62,7 +62,7 @@ describe("reconciliation continuation authority", () => {
       if (active?.state !== "active") {
         throw new Error("expected active placement");
       }
-      const prior = placements.claimTurn({
+      const prior = await placements.claimTurn({
         ...sessionTarget,
         claimId: "prior-result",
         runId: "prior-run",

@@ -27,10 +27,6 @@ type BoundDeliveryRouter = {
   resolveDestination: (input: BoundDeliveryRouterInput) => Promise<BoundDeliveryRouterResult>;
 };
 
-function isActiveBinding(record: SessionBindingRecord): boolean {
-  return record.status === "active";
-}
-
 function resolveBindingForRequester(
   requester: ConversationRef,
   bindings: SessionBindingRecord[],
@@ -78,7 +74,9 @@ export function createBoundDeliveryRouter(
         };
       }
 
-      const activeBindings = (await listBySession(targetSessionKey)).filter(isActiveBinding);
+      const activeBindings = (await listBySession(targetSessionKey)).filter(
+        (record) => record.status === "active",
+      );
       if (activeBindings.length === 0) {
         return {
           binding: null,

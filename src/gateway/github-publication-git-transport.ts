@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
 import { runCommandBuffered } from "../process/exec.js";
@@ -17,6 +18,19 @@ type GitCommandOptions = {
   beforeRun?: () => void;
 };
 type GitCommandResult = { code: number | null; stdout: Buffer };
+
+export function githubPublicationApiArgs(endpoint: string, method = "GET"): string[] {
+  return [
+    "gh",
+    "api",
+    "--hostname",
+    "github.com",
+    "--method",
+    method,
+    endpoint,
+    ...(method === "GET" ? [] : ["--input", "-"]),
+  ];
+}
 
 export async function runPublicationCommand(argv: string[], options: GitCommandOptions = {}) {
   return await withGitNetworkRetry(
@@ -177,9 +191,7 @@ async function readOptionalAttributeFile(file: string): Promise<Buffer | undefin
   try {
     return await fs.readFile(file);
   } catch (error) {
-    const code =
-      typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-    if (code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;

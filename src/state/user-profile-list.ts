@@ -38,6 +38,7 @@ import {
 import type { UserProfileEmailBindingChange } from "./user-profile-mutation.js";
 import {
   applyUserProfileEmailBinding,
+  bindPreparedUserProfileIdentity,
   projectUserProfileDisplay,
   projectCatalogUserProfileIdentity,
   matchUserProfileReference,
@@ -485,11 +486,7 @@ export function retainUserProfileCatalog(options: OpenClawStateDatabaseOptions =
   return () => releaseProfileCatalog(catalog, lease);
 }
 
-/** Prepare once off-thread; execution reads only committed facts retained by this owner. */
-export async function prepareUserProfileIdentity(
-  profileId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): Promise<PreparedUserProfileIdentity> {
+async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}) {
   const context = captureOpenClawStateWorkerContext(options);
   const authority = await captureUserProfileAuthorityRead(context.admission);
   const pathname = context.admission.databasePath;
@@ -570,63 +567,24 @@ export async function prepareUserProfileIdentity(
   const identity = retained.identity.key;
   const rows = retained.rows;
   const bindings = profileBindings.get(rows)!;
-  const initial = [...bindings.byEmail.values()].filter(
-    (binding) => binding.profileId === profileId,
-  );
-  const ids = Object.freeze(
-    initial.flatMap((binding) => (binding.bindingId ? [binding.bindingId] : [])).toSorted(),
-  );
-  const lease = Symbol("prepared profile identity");
+  const lease = Symbol("prepared profile catalog");
   retained.leases.add(lease);
   let active = true;
-  const assertCurrent = (requiredEmailBindingIds: readonly string[] = []) => {
-    context.admission.assertCurrent();
-    if (
-      !active ||
-      !retained.valid ||
-      context.admission.identity.key !== identity ||
-      retained.identity.key !== identity ||
-      retained.rows !== rows
-    ) {
-      throw new UserProfileNotFoundError(profileId);
-    }
-    authority.assertSettled(profileId);
-    if (
-      resolveCatalogProfile(rows, profileId)?.id !== profileId ||
-      requiredEmailBindingIds.some((id) => bindings.byId.get(id) !== profileId)
-    ) {
-      throw new UserProfileNotFoundError(profileId);
-    }
-  };
-  function readCurrentProfile(this: void, requiredEmailBindingIds?: readonly string[]) {
-    assertCurrent(requiredEmailBindingIds);
-    return { profileId, assignedRole: rows.get(profileId)?.role || null };
-  }
   return {
-    readCurrentProfile,
-    get emailBindingIds() {
-      assertCurrent();
-      if (initial.some((binding) => binding.bindingId === null)) {
+    rows,
+    bindings,
+    assertCurrent(profileId: string) {
+      context.admission.assertCurrent();
+      if (
+        !active ||
+        !retained.valid ||
+        context.admission.identity.key !== identity ||
+        retained.identity.key !== identity ||
+        retained.rows !== rows
+      ) {
         throw new UserProfileNotFoundError(profileId);
       }
-      return ids;
-    },
-    readCurrentFacts(this: void, requiredEmailBindingIds) {
-      const profile = readCurrentProfile(requiredEmailBindingIds);
-      const aliases = new Set([profileId]);
-      for (const row of rows.values()) {
-        if (row.merged_into === profileId) {
-          aliases.add(row.id);
-        }
-      }
-      return {
-        profile: {
-          profileId: profile.profileId,
-          emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
-          assignedRole: profile.assignedRole,
-        },
-        aliases,
-      };
+      authority.assertSettled(profileId);
     },
     release(this: void) {
       if (active) {
@@ -635,6 +593,30 @@ export async function prepareUserProfileIdentity(
       }
     },
   };
+}
+
+/** Retain one off-thread preparation for a synchronous batch of current canonical identities. */
+export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}) {
+  const catalog = await acquireUserProfileCatalog(options);
+  return {
+    readCurrentIdentity(this: void, profileId: string) {
+      catalog.assertCurrent(profileId);
+      const profile = projectCatalogUserProfileIdentity(catalog.rows, profileId);
+      if (profile && profile.profileId !== profileId) {
+        catalog.assertCurrent(profile.profileId);
+      }
+      return profile;
+    },
+    release: catalog.release,
+  };
+}
+
+/** Prepare once off-thread; execution reads only committed facts retained by this owner. */
+export async function prepareUserProfileIdentity(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<PreparedUserProfileIdentity> {
+  return bindPreparedUserProfileIdentity(profileId, await acquireUserProfileCatalog(options));
 }
 
 /** Stage exact changed keys before commit so observers always see the whole committed catalog. */

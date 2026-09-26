@@ -75,28 +75,18 @@ export function isSafeOAuthPostClaimSettlement(
   );
 }
 
-// Different adoption paths have different safety thresholds. Bootstrap can
-// adopt missing identities, while stored overwrite requires an identity match.
-type OAuthIdentitySafetyPolicy = {
-  whenExistingCredentialMissing: boolean;
-  whenExistingIdentityMissing: boolean;
-};
-
 function isSafeOAuthIdentityTransition(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
-  policy: OAuthIdentitySafetyPolicy,
+  allowMissingCredential: boolean,
 ): boolean {
   if (!existing || existing.type !== "oauth") {
-    return policy.whenExistingCredentialMissing;
+    return allowMissingCredential;
   }
   if (existing.provider !== incoming.provider) {
     return false;
   }
-  return (
-    isSafeToCopyOAuthIdentity(existing, incoming) &&
-    (hasOAuthIdentity(existing) || policy.whenExistingIdentityMissing)
-  );
+  return isSafeToCopyOAuthIdentity(existing, incoming);
 }
 
 /** Returns true when bootstrap may adopt an external OAuth identity. */
@@ -104,10 +94,7 @@ export function isSafeToAdoptBootstrapOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
-  return isSafeOAuthIdentityTransition(existing, incoming, {
-    whenExistingCredentialMissing: true,
-    whenExistingIdentityMissing: true,
-  });
+  return isSafeOAuthIdentityTransition(existing, incoming, true);
 }
 
 /** Returns true when agent-local state may adopt a main-store OAuth identity. */
@@ -115,10 +102,7 @@ export function isSafeToAdoptMainStoreOAuthIdentity(
   existing: OAuthCredential | undefined,
   incoming: OAuthCredential,
 ): boolean {
-  return isSafeOAuthIdentityTransition(existing, incoming, {
-    whenExistingCredentialMissing: false,
-    whenExistingIdentityMissing: true,
-  });
+  return isSafeOAuthIdentityTransition(existing, incoming, false);
 }
 
 /** Returns true when an external CLI credential should bootstrap stored OAuth. */

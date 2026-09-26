@@ -429,14 +429,16 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
 
 ## Sign in with ChatGPT (preview)
 
-Use Sign in with ChatGPT (SIWC) for app-specific permissions and OpenAI-native
-usage tracking while eligible Responses API requests use your ChatGPT allowance.
+Use Sign in with ChatGPT (SIWC) for app-specific permissions, usage tracking,
+and token limits per OpenClaw instance while eligible Responses API requests use
+your Codex allowance.
 Your account and workspace must have SIWC registration and token sharing enabled
 by OpenAI.
 
-Choose **Codex login** instead if you need OpenAI-hosted plugins or connected
-apps. SIWC does not support those services yet; OpenClaw tools and locally
-configured plugins can still use their own credentials. See
+SIWC does not support OpenAI-hosted plugins or connected apps yet. Those require
+a Codex credential with connector invocation scope, which device-code login does
+not grant. OpenClaw tools and locally configured plugins can still use their own
+credentials. See
 [OpenAI authentication](/providers/openai/authentication) to compare the methods.
 
 Run this on the computer running OpenClaw:

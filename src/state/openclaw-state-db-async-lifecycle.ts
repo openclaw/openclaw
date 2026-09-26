@@ -331,10 +331,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   const attempts = new Map<IdentityRecord | undefined, CloseAttempt>();
   let tail = Promise.resolve();
 
-  const known = (pathname: string) => {
-    const resolvedPath = path.resolve(pathname);
-    return [...records.values()].find((record) => record.paths.has(resolvedPath));
-  };
+  // Internal lookups reuse the path normalized at the lifecycle boundary.
+  const known = (resolvedPath: string) =>
+    [...records.values()].find((record) => record.paths.has(resolvedPath));
   const overlaps = (left: IdentityRecord, right: IdentityRecord) =>
     left.identity.key === right.identity.key ||
     [...left.paths].some((pathname) => right.paths.has(pathname));
@@ -370,8 +369,10 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     forget(record);
     return undefined;
   };
-  const resolve = (pathname: string, preparedIdentity?: DatabasePathIdentity): IdentityRecord => {
-    const resolvedPath = path.resolve(pathname);
+  const resolve = (
+    resolvedPath: string,
+    preparedIdentity?: DatabasePathIdentity,
+  ): IdentityRecord => {
     const cached = known(resolvedPath);
     if (cached && (!preparedIdentity || cached.identity.key === preparedIdentity.key)) {
       // Resolve first creation without replacing an established file's admission.
@@ -411,13 +412,13 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     record.paths.add(resolvedPath).add(identity.canonicalPath);
     return record;
   };
-  const resolveForNative = (pathname: string): IdentityRecord | undefined => {
-    const cached = known(pathname);
+  const resolveForNative = (resolvedPath: string): IdentityRecord | undefined => {
+    const cached = known(resolvedPath);
     if (cached) {
       return cached;
     }
-    const identity = inspectDatabasePathIdentitySync(pathname);
-    return identity ? resolve(pathname, identity) : undefined;
+    const identity = inspectDatabasePathIdentitySync(resolvedPath);
+    return identity ? resolve(resolvedPath, identity) : undefined;
   };
   const invalidate = (record?: IdentityRecord) => {
     for (const current of record ? [record] : records.values()) {
@@ -438,10 +439,10 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
 
   return {
     identity(pathname: string): DatabasePathIdentity | undefined {
-      return known(pathname)?.identity ?? inspectDatabasePathIdentitySync(pathname);
+      return known(path.resolve(pathname))?.identity ?? inspectDatabasePathIdentitySync(pathname);
     },
     knownIdentity(this: void, pathname: string): DatabasePathIdentity | undefined {
-      return known(pathname)?.identity;
+      return known(path.resolve(pathname))?.identity;
     },
     publish(pathname: string): DatabasePathIdentity {
       const resolvedPath = path.resolve(pathname);
@@ -470,7 +471,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       if (pathname === undefined) {
         invalidate();
       } else {
-        const record = known(pathname);
+        const record = known(path.resolve(pathname));
         if (record) {
           invalidate(record);
         }
@@ -506,7 +507,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       };
     },
     holdExclusion(pathname: string): () => void {
-      const record = resolve(pathname);
+      const record = resolve(path.resolve(pathname));
       const held = seal(record);
       return () => {
         seals.delete(held);
@@ -522,7 +523,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       pathname: string | undefined,
       retireNative: (identity?: DatabasePathIdentity) => boolean,
     ): Promise<boolean> {
-      const record = pathname === undefined ? undefined : resolveForNative(pathname);
+      const record = pathname === undefined ? undefined : resolveForNative(path.resolve(pathname));
       if (pathname !== undefined && !record) {
         // No worker could enter a non-file target. Retire only the caller's exact
         // native path; undefined must not reach resource.close as a global drain.

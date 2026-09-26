@@ -21,12 +21,14 @@ export function makeRelayTransport<
   };
 }
 
-export function createIdleRelayProvider(): RealtimeVoiceProviderPlugin {
+export function createIdleRelayProvider(
+  createBridge: RealtimeVoiceProviderPlugin["createBridge"] = () => makeRelayTransport(),
+): RealtimeVoiceProviderPlugin {
   return {
     id: "relay-test",
     label: "Relay Test",
     isConfigured: () => true,
-    createBridge: () => makeRelayTransport(),
+    createBridge,
   };
 }
 

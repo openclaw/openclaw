@@ -208,7 +208,7 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
                 if (!grant()) {
                   throw new Error("Agent publication authority expired");
                 }
-              }),
+              }, binding.attachment),
             };
           };
         },
@@ -227,7 +227,7 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
               if (!grant()) {
                 throw new Error("Agent publication cleanup authority expired");
               }
-            }),
+            }, binding.attachment),
           });
         },
       };

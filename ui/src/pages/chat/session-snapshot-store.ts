@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import { requestResult } from "../../lib/chat/control-ui-database.runtime.ts";
 import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,
@@ -100,15 +101,6 @@ function transactionDone(transaction: IDBTransaction): Promise<void> {
     );
     transaction.addEventListener("abort", () =>
       reject(transaction.error ?? new Error("IndexedDB aborted")),
-    );
-  });
-}
-
-function requestResult<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () =>
-      reject(request.error ?? new Error("IndexedDB request failed")),
     );
   });
 }

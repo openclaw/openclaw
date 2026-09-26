@@ -13,14 +13,20 @@ import {
 } from "../prepared-model-catalog-worker.test-support.js";
 import {
   getPreparedModelRuntimeSnapshot,
+  publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "../prepared-model-runtime.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 
 export function createCatalogFleetFixture(makeTempDir: (prefix: string) => string) {
   return async function createFleetFixture(
     onBeforePublication?: (fixture: ReturnType<typeof createCatalogFixture>) => void,
     stableCatalog = false,
-    options: { asyncSyntheticAuth?: boolean; agentCount?: number } = {},
+    options: {
+      asyncSyntheticAuth?: boolean;
+      agentCount?: number;
+      publication?: "individual";
+    } = {},
   ) {
     const fixture = createCatalogFixture(
       makeTempDir,
@@ -82,7 +88,10 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
             id,
             {
               agentDir: path.join(fixture.env.OPENCLAW_STATE_DIR!, "agents", id, "agent"),
-              workspace: path.join(fixture.root, `${id}-workspace`),
+              workspace:
+                options.publication === "individual"
+                  ? fixture.workspaceDir
+                  : path.join(fixture.root, `${id}-workspace`),
             },
           ] as const,
       ),
@@ -117,23 +126,45 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       );
     }
     onBeforePublication?.(fixture);
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      allowGatewaySubagentBinding: true,
-      catalogMode: "static",
-      pluginMetadataSnapshot: loadPluginMetadataSnapshot({
-        config,
-        env: process.env,
-        workspaceDir: fixture.workspaceDir,
-      }),
-    });
-    const snapshots = agentIds.map((agentId) =>
-      getPreparedModelRuntimeSnapshot({
-        agentId,
-        agentDir: entries[agentId]!.agentDir,
-        config,
-      })!,
-    );
+    const snapshots: PreparedModelRuntimeSnapshot[] = [];
+    if (options.publication === "individual") {
+      // Fleet refresh deliberately renews every credentialed provider after publication.
+      // Cold scoped tests use the individual lifecycle publisher and one loader workspace.
+      for (const agentId of agentIds) {
+        snapshots.push(
+          await publishPreparedModelRuntimeSnapshot(
+            {
+              agentId,
+              agentDir: entries[agentId]!.agentDir,
+              workspaceDir: entries[agentId]!.workspace,
+              config,
+              allowGatewaySubagentBinding: true,
+            },
+            { provenance: "configured", catalogMode: "static" },
+          ),
+        );
+      }
+    } else {
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        allowGatewaySubagentBinding: true,
+        catalogMode: "static",
+        pluginMetadataSnapshot: loadPluginMetadataSnapshot({
+          config,
+          env: process.env,
+          workspaceDir: fixture.workspaceDir,
+        }),
+      });
+      for (const agentId of agentIds) {
+        snapshots.push(
+          getPreparedModelRuntimeSnapshot({
+            agentId,
+            agentDir: entries[agentId]!.agentDir,
+            config,
+          })!,
+        );
+      }
+    }
     return { ...fixture, config, entries, snapshots, agentIds };
   };
 }

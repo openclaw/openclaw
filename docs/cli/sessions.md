@@ -180,8 +180,10 @@ Both lifecycle commands:
 - emit one stable JSON envelope with `ok`, `operation`, `dryRun`, and `results`
   when `--json` is set.
 
-Dry-run uses the Gateway's session list to report protected agent-main sessions
-as failed, even when the CLI uses different local session settings. Already
+Lifecycle commands look up each requested key directly, including cron run sessions
+hidden from the Gateway's general session list. Dry-run uses those Gateway facts to
+report protected agent-main sessions as failed, even when the CLI uses different
+local session settings. Already
 archived sessions remain successful archive no-ops. Dry-run does not execute all
 Gateway lifecycle checks: `global` previews can still show an archive or delete
 action that the Gateway refuses. Explicitly selected non-default global deletion

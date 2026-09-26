@@ -48,6 +48,8 @@ export type PluginCatalogResultsProps = {
   query: string;
   iconUrls: Readonly<Record<string, string>>;
   pluginIconUrls: Readonly<Record<string, string>>;
+  iconLoading?: (url: string) => boolean;
+  pluginIconLoading?: (pluginId: string) => boolean;
   canInstall: boolean;
   busy?: Readonly<Record<string, PluginMutationAction>>;
   installProgress?: ReadonlyMap<string, PluginInstallProgress>;
@@ -145,11 +147,13 @@ function renderCatalogIcon(
     },
     props,
   );
-  return renderArtTile(
-    plugin.local.pluginId ?? plugin.id,
-    plugin.catalog.name,
-    iconUrl ?? undefined,
-  );
+  return renderArtTile(plugin.local.pluginId ?? plugin.id, plugin.catalog.name, {
+    iconUrl: iconUrl ?? undefined,
+    loading: Boolean(
+      (plugin.local.pluginId && props.pluginIconLoading?.(plugin.local.pluginId)) ||
+      (plugin.catalog.imageUrl && props.iconLoading?.(plugin.catalog.imageUrl)),
+    ),
+  });
 }
 
 export function formatCompactCount(value: number): string {
@@ -218,7 +222,7 @@ function renderCatalogCard(
             ? renderPluginStateStatus(installedState, "plugin-catalog-card__status")
             : html`<openclaw-plugin-install-action
                 .buttonClass=${"btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"}
-                .label=${t("pluginsPage.installNamed", { name: plugin.catalog.name })}
+                .pluginName=${plugin.catalog.name}
                 .busy=${busy}
                 .disabled=${!canInstall}
                 .progress=${progress}

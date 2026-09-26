@@ -36,7 +36,6 @@ export type SystemAgentOperationResult = {
   nextInput?: string;
   /** Agent TUI exited via /openclaw: re-enter the shell even without a request. */
   returnToShell?: boolean;
-  followUp?: Extract<SystemAgentOperation, { kind: "model-setup" }>;
 };
 
 /** Injectable command dependencies used by tests and alternate runners. */

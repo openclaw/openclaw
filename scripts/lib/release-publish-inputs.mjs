@@ -23,11 +23,6 @@ function selectedPackages(manifest) {
   return source.projection.packages.filter((pkg) => pkg.targets.includes("npm"));
 }
 
-function waiver(value) {
-  requireValue(typeof value === "string" && value.length <= 4096, "stable soak waiver");
-  return value.trim() ? value : "";
-}
-
 /** Reads authenticated manifest facts; explicit nonempty operator inputs take precedence. */
 export function resolveReleasePublishInputs(manifest, overrides = {}) {
   const overrideAcknowledgement = (overrides.pluginSdkApiAcknowledgement ?? "").trim();
@@ -35,12 +30,15 @@ export function resolveReleasePublishInputs(manifest, overrides = {}) {
     overrideAcknowledgement === "" || /^[a-f0-9]{8}$/u.test(overrideAcknowledgement),
     "SDK override",
   );
-  const overrideWaiver = waiver(overrides.stableSoakWaiver ?? "");
   const sealed = manifest?.publishInputs;
+  if (sealed?.stableSoakWaiver || manifest?.validationInputs?.laneWaiver) {
+    throw new Error(
+      "Release waivers are no longer supported; rerun Full Release Validation without waivers.",
+    );
+  }
   if (sealed === undefined) {
     return {
       pluginSdkApiAcknowledgement: overrideAcknowledgement,
-      stableSoakWaiver: overrideWaiver,
       npmDecisions: undefined,
     };
   }
@@ -63,7 +61,6 @@ export function resolveReleasePublishInputs(manifest, overrides = {}) {
         sealed.pluginSdkApiAcknowledgement === sealed.pluginSdkApiEvidenceDigest.slice(0, 8)),
     "SDK acknowledgement digest mismatch",
   );
-  waiver(sealed.stableSoakWaiver);
   const packages = selectedPackages(manifest);
   requireValue(
     Array.isArray(sealed.npmDecisions) &&
@@ -95,21 +92,14 @@ export function resolveReleasePublishInputs(manifest, overrides = {}) {
   }
   const acknowledgement = overrideAcknowledgement || sealed.pluginSdkApiAcknowledgement;
   requireValue(acknowledgement === "" || /^[a-f0-9]{8}$/u.test(acknowledgement), "SDK override");
-  const sealedWaiver = waiver(sealed.stableSoakWaiver);
-  // A sealed waiver stays authoritative only while the repository variable
-  // still holds the same text; clearing it before publication revokes it.
-  const current = overrides.currentStableSoakWaiver;
-  const defaultWaiver =
-    current === undefined || waiver(current) === sealedWaiver ? sealedWaiver : "";
   return {
     ...sealed,
     pluginSdkApiAcknowledgement: acknowledgement,
-    stableSoakWaiver: overrideWaiver || defaultWaiver,
   };
 }
 
 /** Seal fresh registry planning facts without granting publication authority. */
-export async function createReleasePublishInputs({ manifest, npmManifest, stableSoakWaiver = "" }) {
+export async function createReleasePublishInputs({ manifest, npmManifest }) {
   const packages = selectedPackages(manifest);
   const npmDistTag = manifest.sourceAdmission.publicationSelection.npmDistTag;
   requireValue(npmManifest.releaseSha === manifest.targetSha, "npm artifact target mismatch");
@@ -192,7 +182,6 @@ export async function createReleasePublishInputs({ manifest, npmManifest, stable
       // operator-supplied acknowledgement at publication.
       pluginSdkApiAcknowledgement: "",
       pluginSdkApiEvidenceDigest: sdk.digest,
-      stableSoakWaiver,
       npmDecisions,
     },
   });
