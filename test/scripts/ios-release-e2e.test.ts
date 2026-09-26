@@ -534,6 +534,7 @@ describe("native command adapter", () => {
     "setup-code-rpc-timeout",
     "test-unjoined",
     "test-exit",
+    "test-timeout-output",
   ])("owns admission, build, test and cleanup for %s", async (scenario) => {
     const temp = tempDirs.make("ios-release-e2e-adapter-");
     vi.spyOn(os, "tmpdir").mockReturnValue(temp);
@@ -691,6 +692,16 @@ describe("native command adapter", () => {
           return 65;
         }
       } else if (args.includes("test-without-building")) {
+        if (scenario === "test-timeout-output") {
+          stdout.write(
+            "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' started.\n" +
+              "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: private assertion details\n" +
+              "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: repeated private details\n" +
+              "/private/Other.swift:42: error: private details\n" +
+              "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' failed (39.615 seconds).\n",
+          );
+          throw Object.assign(new Error("private timeout diagnostics"), { code: "ETIMEDOUT" });
+        }
         if (scenario === "test-unjoined") {
           throw Object.assign(new Error("private test termination failure"), {
             code: "ETIMEDOUT",
@@ -698,6 +709,10 @@ describe("native command adapter", () => {
           });
         }
         if (scenario === "test-exit") {
+          stdout.write(
+            "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: private assertion details\n" +
+              "private teardown details\n".repeat(256),
+          );
           stderr.write("TEST FAILED: private setup code and private path\n");
           return 65;
         }
@@ -780,6 +795,26 @@ describe("native command adapter", () => {
     });
     try {
       const report = await runTrials("stock", native.dependencies);
+      if (scenario === "test-timeout-output") {
+        expect(report.complete).toBe(true);
+        for (const trial of report.trials) {
+          expect(trial).toMatchObject({
+            status: "failed",
+            errors: ["test-timeout"],
+            diagnostics: [
+              {
+                operation: "native-test",
+                code: "timeout",
+                errorCode: "ETIMEDOUT",
+                context: ["xctest-started", "xctest-failed", "xctest-line:1904"],
+              },
+            ],
+          });
+        }
+        expect(instances.every((instance) => instance.cleanup.mock.calls.length === 1)).toBe(true);
+        expect(JSON.stringify(report)).not.toContain("private");
+        return;
+      }
       if (scenario === "setup-code-timeout" || scenario === "setup-code-rpc-timeout") {
         expect(report.complete).toBe(true);
         for (const trial of report.trials) {
@@ -819,7 +854,7 @@ describe("native command adapter", () => {
             operation: "native-test",
             code: "exit",
             exitCode: 65,
-            context: ["test-failed"],
+            context: ["test-failed", "xctest-line:1904"],
           },
         ]);
         expect(JSON.stringify(report)).not.toContain("private");

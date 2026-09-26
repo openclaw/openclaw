@@ -72,10 +72,10 @@ export async function createNativeDependencies(options: {
       if (hasUnjoinedWork(error)) {
         preserveResources();
       }
-      throw operationError(operation, error);
+      throw operationError(operation, error, `${stderr}\n${stdout}`);
     }
     if (code !== 0) {
-      throw new OperationError(operation, "exit", code, `${stderr}\n${stdout.slice(-4096)}`);
+      throw new OperationError(operation, "exit", code, `${stderr}\n${stdout}`);
     }
     return stdout.trim();
   };

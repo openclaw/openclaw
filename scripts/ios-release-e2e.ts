@@ -82,10 +82,31 @@ export class OperationError extends Error {
         .filter(([match]) => output.toLowerCase().includes(match))
         .map(([, tag]) => tag),
     };
+    if (operation === "native-test") {
+      for (const status of ["started", "passed", "failed"] as const) {
+        if (
+          IOS_RELEASE_TESTS.some((test) => {
+            const [bundle, suite, name] = test.split("/");
+            return output.includes(`Test Case '-[${bundle}.${suite} ${name}]' ${status}`);
+          })
+        ) {
+          this.diagnostic.context.push(`xctest-${status}`);
+        }
+      }
+      // Keep failure locations actionable without exporting assertion text, paths, or credentials.
+      const lines = [
+        ...output.matchAll(
+          /(?:^|\/)OpenClawSnapshotUITests\.swift:([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu,
+        ),
+      ].map((match) => match[1]);
+      this.diagnostic.context.push(
+        ...[...new Set(lines)].slice(0, 8).map((line) => `xctest-line:${line}`),
+      );
+    }
   }
 }
 
-export function operationError(operation: Operation, error: unknown): OperationError {
+export function operationError(operation: Operation, error: unknown, output = ""): OperationError {
   const code = collectNestedErrorCandidates(error)
     .map(extractErrorCodeOrErrno)
     .find(
@@ -104,6 +125,8 @@ export function operationError(operation: Operation, error: unknown): OperationE
           : code === "EACCES"
             ? "permission-denied"
             : "failed",
+    undefined,
+    output,
   );
   if (code) {
     failure.diagnostic.errorCode = code;
