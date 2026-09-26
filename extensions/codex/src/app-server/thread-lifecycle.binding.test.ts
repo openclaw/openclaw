@@ -6104,5 +6104,46 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding.authProfileId).toBe("openai:bound");
     expect(binding.modelProvider).toBeUndefined();
   });
+
+  it("names the incompatible setting when a binding refuses rotation", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    // Native model ownership refuses any replacement. Only the persisted
+    // dynamic-tool loading mode drifts here, so the refusal has exactly one
+    // possible cause to name out of the nine rotation checks on this path.
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-owned",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      dynamicToolsFingerprint: JSON.stringify([{ name: "message" }]),
+      dynamicToolsContainDeferred: false,
+    });
+    params.expectedSessionRuntimeOwnership = {
+      model: "native",
+      auth: "host",
+      modelRef: { model: "gpt-5.4-codex", provider: "openai" },
+    };
+    const appServer = createThreadLifecycleAppServerOptions();
+    const fixture = await createSequentialLifecycleHarness(() => threadStartResult("thread-1"));
+    const { client, request } = fixture;
+
+    await expect(
+      startOrResumeThread({
+        client,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [createDeferredNamedDynamicTool("message")],
+        appServer,
+      }),
+    ).rejects.toThrow(
+      "Codex native model ownership prevents changing its dynamic tool loading mode.",
+    );
+    // The binding must survive and no thread may be started.
+    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-owned");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("thread/start");
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
