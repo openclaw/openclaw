@@ -33,6 +33,7 @@ type ManagedProcessGroupChild = {
 };
 type ManagedProcessGroupOptions = {
   deadlineAt?: number;
+  onProbe?: (result: string) => void;
   errorPolicy: ManagedProcessGroupErrorPolicy;
   inspectLeaderWhenNoGroup?: boolean;
   platform?: NodeJS.Platform;
@@ -345,6 +346,7 @@ export function inspectManagedProcessGroup(
   child: ManagedProcessGroupChild,
   {
     deadlineAt,
+    onProbe,
     errorPolicy,
     inspectLeaderWhenNoGroup = false,
     platform = process.platform,
@@ -368,6 +370,7 @@ export function inspectManagedProcessGroup(
   }
   try {
     process.kill(-pid, 0);
+    onProbe?.("present");
     if (platform === "linux" && (child.exitCode != null || child.signalCode != null)) {
       if (isLinuxZombieProcessGroup(pid, deadlineAt)) {
         return "dead";
@@ -378,6 +381,11 @@ export function inspectManagedProcessGroup(
     }
     return "live";
   } catch (error) {
+    onProbe?.(
+      error && typeof error === "object" && "code" in error && typeof error.code === "string"
+        ? error.code
+        : "unknown",
+    );
     if (isMissingProcessError(error)) {
       return "dead";
     }
@@ -698,6 +706,83 @@ export async function finalizeManagedChild(
   // POSIX normal exit has no grace period: surviving group members are a failure.
   const startedAt = Date.now();
   const forceDelay = signal ? forceKillDelayMs : 0;
+  // Temporary branch-only diagnosis: no command arguments, paths, or environment values.
+  const diagnostic =
+    platform === "darwin" && !signal && child.spawnfile === "/usr/bin/lipo"
+      ? { events: [] as Array<Record<string, unknown>>, omitted: 0 }
+      : undefined;
+  const recordDiagnostic = (event: Record<string, unknown>) => {
+    if (!diagnostic) return;
+    if (diagnostic.events.length < 256) {
+      diagnostic.events.push({ elapsedMs: Date.now() - startedAt, ...event });
+    } else {
+      diagnostic.omitted++;
+    }
+  };
+  const diagnosticCode = (error: unknown) =>
+    error && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code
+      : "unknown";
+  let snapshotTaken = false;
+  const captureDarwinSnapshot = () => {
+    if (!diagnostic || snapshotTaken || !child.pid) return;
+    snapshotTaken = true;
+    try {
+      const snapshotDeadline = Math.min(startedAt + forceDelay + drainTimeoutMs, Date.now() + 500);
+      const read = (kind: "processes" | "threads", args: string[]) => {
+        const remaining = Math.floor(snapshotDeadline - Date.now());
+        if (remaining <= 0) {
+          recordDiagnostic({ kind, outcome: "deadline-exhausted" });
+          return [];
+        }
+        const result = spawnSync("/bin/ps", args, {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: Math.min(250, remaining),
+          killSignal: "SIGKILL",
+          maxBuffer: 1024 * 1024,
+        });
+        const rows: Array<{ pid: number; ppid: number; pgid: number; uid: number; state: string }> =
+          [];
+        let malformedRows = 0;
+        for (const line of (result.stdout ?? "").split("\n")) {
+          if (!line.trim()) continue;
+          const fields = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(\S+)\s*$/u.exec(line);
+          if (!fields) {
+            malformedRows++;
+          } else if (Number(fields[3]) === child.pid) {
+            rows.push({
+              pid: Number(fields[1]),
+              ppid: Number(fields[2]),
+              pgid: Number(fields[3]),
+              uid: Number(fields[4]),
+              state: fields[5]!,
+            });
+          }
+        }
+        recordDiagnostic({
+          kind,
+          exitCode: result.status,
+          signalCode: result.signal,
+          errorCode: result.error ? diagnosticCode(result.error) : null,
+          malformedRows,
+          rows: rows.slice(0, 64),
+          omittedRows: Math.max(0, rows.length - 64),
+        });
+        return rows;
+      };
+      const fields = "pid=,ppid=,pgid=,uid=,stat=";
+      const rows = read("processes", ["-A", "-o", fields]);
+      const pids = [...new Set(rows.map(({ pid }) => pid))].slice(0, 16);
+      if (pids.length) {
+        read("threads", ["-M", "-p", pids.join(","), "-o", fields]);
+      } else {
+        recordDiagnostic({ kind: "threads", outcome: "no-observed-owned-pids" });
+      }
+    } catch (error) {
+      recordDiagnostic({ kind: "snapshot-error", errorCode: diagnosticCode(error) });
+    }
+  };
   const signalErrors: unknown[] = [];
   const recordSignalError = (error: unknown) => {
     if (!isMissingProcessError(error)) {
@@ -707,8 +792,20 @@ export async function finalizeManagedChild(
   const terminationOptions = {
     platform,
     runTaskkill,
-    onChildSignalError: recordSignalError,
-    onProcessGroupSignalError: recordSignalError,
+    onChildSignalError: (error: unknown) => {
+      recordSignalError(error);
+      recordDiagnostic({
+        kind: "signal-error",
+        target: "leader",
+        errorCode: diagnosticCode(error),
+      });
+      captureDarwinSnapshot();
+    },
+    onProcessGroupSignalError: (error: unknown) => {
+      recordSignalError(error);
+      recordDiagnostic({ kind: "signal-error", target: "group", errorCode: diagnosticCode(error) });
+      captureDarwinSnapshot();
+    },
   };
   const job = windowsJobs.get(child);
   const normalJobExit = !signal && job !== undefined;
@@ -731,15 +828,35 @@ export async function finalizeManagedChild(
         child.once("close", finish);
       });
     }
+    const initialGroupState = !signal
+      ? inspectManagedProcessGroup(child, {
+          deadlineAt: startedAt + forceDelay + drainTimeoutMs,
+          errorPolicy: "indeterminate",
+          platform,
+          onProbe: diagnostic
+            ? (result) => recordDiagnostic({ kind: "initial-probe", result })
+            : undefined,
+        })
+      : undefined;
+    if (diagnostic)
+      recordDiagnostic({
+        kind: "initial-state",
+        groupState: initialGroupState,
+        exitCode: child.exitCode,
+        signalCode: child.signalCode,
+        outputClosed: outputClosed(),
+      });
     const termination: ManagedChildTermination | undefined =
-      !signal &&
-      inspectManagedProcessGroup(child, {
-        deadlineAt: startedAt + forceDelay + drainTimeoutMs,
-        errorPolicy: "indeterminate",
-        platform,
-      }) === "dead"
+      initialGroupState === "dead"
         ? { processTreeState: "terminated" }
         : terminateManagedChild(child, signal ?? "SIGKILL", terminationOptions);
+    recordDiagnostic({
+      kind: "termination-result",
+      signal: signal ?? "SIGKILL",
+      attempted: initialGroupState !== "dead",
+      processTreeState: termination?.processTreeState ?? null,
+      errorCode: termination?.error ? diagnosticCode(termination.error) : null,
+    });
     if (platform === "win32" && termination?.processTreeState !== "terminated" && !job) {
       throw createManagedCommandCleanupError(
         "Windows taskkill could not verify managed process tree exit",
@@ -792,8 +909,13 @@ export async function finalizeManagedChild(
           deadlineAt: probeDeadline,
           errorPolicy: "indeterminate",
           platform,
+          onProbe: diagnostic
+            ? (result) => recordDiagnostic({ kind: "drain-probe", result })
+            : undefined,
         });
       }
+      if (diagnostic)
+        recordDiagnostic({ kind: "drain-state", groupState, exited, outputClosed: outputClosed() });
       if (groupState === "dead" && exited && outputClosed()) {
         joined = true;
         // A missing group at signal time supersedes the earlier racy liveness probe.
@@ -854,6 +976,7 @@ export async function finalizeManagedChild(
     }
   } catch (error) {
     failures.push(error);
+    captureDarwinSnapshot();
   }
   if (job) {
     // Closing a kill-on-close Job is recovery, not proof that its members exited.
@@ -902,6 +1025,26 @@ export async function finalizeManagedChild(
   }
   if (joined) {
     onTerminated();
+  }
+  if (diagnostic && (failures.length || snapshotTaken)) {
+    try {
+      console.error(
+        `[darwin-managed-cleanup] ${JSON.stringify({
+          pid: child.pid,
+          processGroupId: child.pid,
+          exitCode: child.exitCode,
+          signalCode: child.signalCode,
+          joined,
+          outputClosed: outputClosed(),
+          processTreeState: joined ? "terminated" : "indeterminate",
+          failureCount: failures.length,
+          elapsedMs: Date.now() - startedAt,
+          ...diagnostic,
+        })}`,
+      );
+    } catch {
+      // Diagnostic output must not replace the managed command's original outcome.
+    }
   }
   if (failures.length === 1) {
     throw failures[0];

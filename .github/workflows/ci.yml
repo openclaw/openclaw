@@ -1438,6 +1438,7 @@ jobs:
           OPENCLAW_CI_WORKFLOW_REVISION: ${{ github.workflow_sha }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
+          OPENCLAW_CI_DISPATCH_ID: ${{ inputs.dispatch_id }}
           OPENCLAW_CI_RUNNER_PROFILE: ${{ steps.runner_profile.outputs.runner_profile }}
           OPENCLAW_CI_NODE_RUNNER_BACKEND: ${{ steps.runner_profile.outputs.node_runner_backend }}
           OPENCLAW_CI_QUALIFICATION: ${{ steps.runner_profile.outputs.ci_qualification }}
@@ -2418,6 +2419,37 @@ jobs:
                 : [],
             ),
           };
+
+          // Temporary branch-only diagnosis; this run is not ordinary or release CI proof.
+          const presenceDiagnostic = workflowEventName === "workflow_dispatch" &&
+            process.env.OPENCLAW_CI_DISPATCH_ID === "l72-mac-presence-diagnostic";
+          if (presenceDiagnostic) {
+            if (process.env.GITHUB_REF !== "refs/heads/deslop/l72-mac-presence-diagnostic" ||
+              checkoutRevision !== workflowRevision || validationTier !== "main" ||
+              releaseScope !== "full" || releaseGate || ciQualification || compatibilityTarget ||
+              process.env.OPENCLAW_CI_PULL_REQUEST_NUMBER) {
+              throw new Error("Presence diagnosis requires its exact same-revision diagnostic branch dispatch");
+            }
+            for (const key of Object.keys(manifest)) {
+              if (key.startsWith("run_")) manifest[key] = false;
+            }
+            const macosNode2 = manifest.macos_node_matrix.include.filter(
+              (row) => row.check_name === "macos-node-2",
+            );
+            if (macosNode2.length !== 1 || macosNode2[0].runtime !== "node" ||
+              macosNode2[0].task !== "test-2") {
+              throw new Error("Mac diagnostics require the canonical macos-node-2 descriptor");
+            }
+            manifest.macos_node_matrix.include = macosNode2;
+            manifest.run_macos = true;
+            manifest.run_macos_swift = true;
+            manifest.run_macos_node = true;
+            console.log("DIAGNOSTIC ONLY: five default-profile native runs, canonical Mac Node 2 once, and twenty focused elevation runs.");
+            if (process.env.GITHUB_STEP_SUMMARY) {
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+                "### Mac diagnostics only\n\nFive prescribed default-profile native runs; canonical Mac Node 2 once, then twenty focused elevation runs. Not full CI or release validation.\n\n");
+            }
+          }
 
           // Routing belongs to this workflow, not the frozen target's test planners.
           // Only automatic hybrid first attempts can add optional hosted rows.
@@ -5832,10 +5864,76 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
           OPENCLAW_VITEST_MAX_WORKERS: 2
           TASK: ${{ matrix.task }}
+          OPENCLAW_MACOS_NODE_DIAGNOSTIC: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id == 'l72-mac-presence-diagnostic' }}
+          OPENCLAW_MACOS_NODE_EXPECTED_SHA: ${{ needs.preflight.outputs.checkout_revision }}
         shell: bash
         run: |
           set -euo pipefail
           node -e 'const os = require("node:os"); console.log("Native OS resources: " + JSON.stringify({ logicalCpuCount: os.cpus().length, availableParallelism: os.availableParallelism(), osTotalMemoryBytes: os.totalmem(), osFreeMemoryBytes: os.freemem() }));'
+          if [[ "$OPENCLAW_MACOS_NODE_DIAGNOSTIC" == "true" ]]; then
+            [[ "$TASK" == "test-2" && "$(git rev-parse HEAD)" == "$OPENCLAW_MACOS_NODE_EXPECTED_SHA" ]]
+            source .ci-harness/scripts/lib/swift-toolchain.sh
+            node_diagnostic_logs="$RUNNER_TEMP/openclaw-macos-node2-diagnostic-logs"
+            mkdir -p "$node_diagnostic_logs"
+            node_receipts="$node_diagnostic_logs/receipts.log"
+            printf 'diagnostic_only=true\nhead=%s\nexpected_full_runs=1\nexpected_focused_runs=20\n' "$OPENCLAW_MACOS_NODE_EXPECTED_SHA" > "$node_receipts"
+            uname -r >> "$node_receipts"
+            sw_vers >> "$node_receipts"
+            node --version >> "$node_receipts"
+            pnpm --version >> "$node_receipts"
+            printf 'phase\texit\tstartedUTC\tendedUTC\tlog\n' >> "$node_receipts"
+            node_diagnostic_failed=0
+            node_diagnostic_completed=0
+            run_mac_node_diagnostic_phase() {
+              local label="$1" log_path started code=0
+              shift
+              log_path="$node_diagnostic_logs/$label.log"
+              started="$(date -u +%FT%TZ)"
+              printf 'phase=%s command=' "$label" >> "$node_diagnostic_logs/commands.log"
+              printf '%q ' "$@" >> "$node_diagnostic_logs/commands.log"
+              printf '\n' >> "$node_diagnostic_logs/commands.log"
+              run_apple_command_logged "$log_path" "$@" || code=$?
+              printf '%s\t%s\t%s\t%s\t%s\n' "$label" "$code" "$started" "$(date -u +%FT%TZ)" "$log_path" >> "$node_receipts"
+              node_diagnostic_completed=$((node_diagnostic_completed + 1))
+              if [[ "$code" == 0 ]]; then return; fi
+              node_diagnostic_failed=1
+              if [[ "$code" -ge 128 ]]; then
+                echo "Mac Node command interrupted; remaining diagnostic phases are unexecuted." >&2
+                exit 1
+              fi
+              # Inspect only a nonzero invocation; passing negative controls may log errors.
+              node --input-type=module - "$log_path" <<'NODE'
+          import fs from "node:fs";
+          import { stripVTControlCharacters } from "node:util";
+          const text = stripVTControlCharacters(fs.readFileSync(process.argv[2], "utf8"));
+          if (text.includes("Fixture cleanup unverified; retained") ||
+            text.includes("[vitest] retained temporary namespace") ||
+            text.includes("descendant completion is unverified")) {
+            throw new Error("Failed invocation retained unverified resources; no next phase admitted");
+          }
+          const marker = "[darwin-managed-cleanup] ";
+          const reports = text.split("\n").flatMap((line) => {
+            const index = line.indexOf(marker);
+            return index < 0 ? [] : [JSON.parse(line.slice(index + marker.length))];
+          });
+          if (reports.length === 0 || reports.some((report) =>
+            report.joined !== true || report.outputClosed !== true ||
+            report.processTreeState !== "terminated")) {
+            throw new Error("Failed invocation lacks complete joined native cleanup observations; stopping diagnosis");
+          }
+          console.log(`Preserving failed phase with ${reports.length} joined native cleanup observations.`);
+          NODE
+            }
+            run_mac_node_diagnostic_phase original-macos-node-2 pnpm test:macos:ci:2
+            for ((node_iteration=1; node_iteration<=20; node_iteration++)); do
+              printf -v node_label 'focused-elevation-%02d' "$node_iteration"
+              run_mac_node_diagnostic_phase "$node_label" node scripts/run-vitest.mjs test/scripts/mac-elevation-artifact.test.ts -t 'rejects mismatched worker commit' --maxWorkers=2 --reporter=verbose
+            done
+            printf 'completed_phases=%s\nany_failure=%s\n' "$node_diagnostic_completed" "$node_diagnostic_failed" >> "$node_receipts"
+            cat "$node_receipts"
+            [[ "$node_diagnostic_completed" == 21 ]]
+            exit "$node_diagnostic_failed"
+          fi
           case "$TASK" in
             test-[123])
               pnpm "test:macos:ci:${TASK#test-}"
@@ -5851,6 +5949,15 @@ jobs:
               ;;
           esac
 
+      - name: Upload Mac Node 2 diagnostic logs
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.dispatch_id == 'l72-mac-presence-diagnostic' && matrix.task == 'test-2' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-node2-diagnostic-logs
+          path: ${{ runner.temp }}/openclaw-macos-node2-diagnostic-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
   macos-swift:
     permissions:
       contents: read
@@ -5863,7 +5970,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests","packages"]' || '["tests","packages"]') }}
+        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.dispatch_id == 'l72-mac-presence-diagnostic' && '["tests"]' || github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests","packages"]' || '["tests","packages"]') }}
     # Keep hosted admission and the existing budget while validating Xcode 27.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('xcode-27'))) || ('xcode-27') }}
     timeout-minutes: 30
@@ -6135,6 +6242,9 @@ jobs:
       - name: Swift test
         id: swift-test
         if: matrix.phase == 'tests'
+        env:
+          OPENCLAW_PRESENCE_DIAGNOSTIC: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id == 'l72-mac-presence-diagnostic' }}
+          OPENCLAW_PRESENCE_EXPECTED_SHA: ${{ needs.preflight.outputs.checkout_revision }}
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
@@ -6160,12 +6270,43 @@ jobs:
             # Rendered Quick Chat keeps its former XCTest process isolation from executor-changing tests;
             # parallel suites take key status and dismiss its panel. Frozen targets without the suite skip the lane.
             if [[ "$HISTORICAL_TARGET" != "true" || -f apps/macos/Tests/OpenClawIPCTests/QuickChatCatalogPresentationTests.swift ]]; then
-              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
+              if [[ "$OPENCLAW_PRESENCE_DIAGNOSTIC" == "true" ]]; then
+                [[ "$(git rev-parse HEAD)" == "$OPENCLAW_PRESENCE_EXPECTED_SHA" ]]
+                presence_receipts="$native_test_log_dir/presence-diagnostic-$native_test_log_id.log"
+                printf 'diagnostic_only=true\nhead=%s\nexpected_runs=5\n' "$OPENCLAW_PRESENCE_EXPECTED_SHA" > "$presence_receipts"
+                printf 'iteration\texit\tstartedUTC\tendedUTC\tlog\n' >> "$presence_receipts"
+                presence_failed=0
+                presence_completed=0
+                for ((presence_iteration=1; presence_iteration<=5; presence_iteration++)); do
+                  presence_log="$native_test_log_dir/default-presence-$presence_iteration-$native_test_log_id.log"
+                  presence_started="$(date -u +%FT%TZ)"
+                  presence_code=0
+                  run_apple_command_logged "$presence_log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests" || presence_code=$?
+                  presence_completed=$((presence_completed + 1))
+                  printf '%s\t%s\t%s\t%s\t%s\n' "$presence_iteration" "$presence_code" "$presence_started" "$(date -u +%FT%TZ)" "$presence_log" >> "$presence_receipts"
+                  if [[ "$presence_code" != 0 ]]; then presence_failed=1; fi
+                  if [[ "$presence_code" -ge 128 ]] || {
+                    [[ "$presence_code" != 0 ]] && grep -Eq '\[macos-native\] retained resources after incomplete launch/cleanup:|Managed command cleanup could not verify child, process group, and output closure' "$presence_log"
+                  }; then
+                    echo "Native lifetime is interrupted or uncertain; remaining diagnostic runs are unexecuted." >&2
+                    exit 1
+                  fi
+                done
+                printf 'completed_runs=%s\nany_failure=%s\n' "$presence_completed" "$presence_failed" >> "$presence_receipts"
+                cat "$presence_receipts"
+                [[ "$presence_completed" == 5 ]]
+              else
+                run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
+              fi
               run_apple_command_logged "$native_test_log_dir/default-rendered-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --filter "QuickChatCatalogPresentationTests"
             else
               run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
             fi
             run_apple_command_logged "$native_test_log_dir/named-$native_test_log_id.log" node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
+            if [[ "${presence_failed:-0}" != 0 ]]; then
+              echo "At least one prescribed presence diagnostic run failed." >&2
+              exit 1
+            fi
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets predate the resource-owner script and its tests.
             # Their original suite still runs only on this disposable macOS worker.

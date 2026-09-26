@@ -369,6 +369,8 @@ private final class PresenceSenderRecorder {
 
 @MainActor
 private final class PresenceClearRecorder {
+    private let diagnosticStart = ContinuousClock.now
+    private var observations: [String] = []
     private var outcomes: [MacNodePresenceReporter.ClearDeliveryResult]
     private(set) var calls = 0
     private(set) var unsupportedCalls = 0
@@ -379,7 +381,10 @@ private final class PresenceClearRecorder {
 
     func clear() async -> MacNodePresenceReporter.ClearDeliveryResult {
         self.calls += 1
-        return self.outcomes.isEmpty ? .cleared : self.outcomes.removeFirst()
+        let outcome: MacNodePresenceReporter.ClearDeliveryResult =
+            self.outcomes.isEmpty ? .cleared : self.outcomes.removeFirst()
+        self.recordObservation("clear call=\(self.calls) outcome=\(outcome)")
+        return outcome
     }
 
     func handleUnsupported() {
@@ -389,12 +394,23 @@ private final class PresenceClearRecorder {
     func waitForCallCount(_ expected: Int) async {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(4))
+        self.recordObservation(
+            "wait-start expected=\(expected) deadline=\(self.diagnosticStart.duration(to: deadline))")
         while clock.now < deadline {
             if self.calls >= expected { return }
             try? await Task.sleep(for: .milliseconds(10))
         }
         // The final suspension may have completed the work before this waiter resumes.
+        if self.calls < expected {
+            self.recordObservation("wait-deadline expected=\(expected) calls=\(self.calls)")
+            print("[presence-clear diagnostic] \(self.observations.joined(separator: " | "))")
+        }
         #expect(self.calls >= expected, "timed out waiting for \(expected) presence clear calls")
+    }
+
+    private func recordObservation(_ event: String) {
+        let elapsed = self.diagnosticStart.duration(to: .now)
+        self.observations.append("elapsed=\(elapsed) cancelled=\(Task.isCancelled) \(event)")
     }
 }
 
