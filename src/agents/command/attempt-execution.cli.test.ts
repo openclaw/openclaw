@@ -65,7 +65,7 @@ import {
   COMMAND_REPLY_EXPECTATION_CASES,
   createSubagentAnnounceHandoffOptions,
   createSubagentAnnounceSessionStore,
-  SUBAGENT_ANNOUNCE_DELIVERY_CASES,
+  SUBAGENT_ANNOUNCE_CLI_DELIVERY_CASES,
   SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES,
   type SubagentAnnounceDeliveryCase,
 } from "./attempt-execution.announce.test-support.js";
@@ -3291,27 +3291,17 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it.each(SUBAGENT_ANNOUNCE_DELIVERY_CASES)(
+  it.each(SUBAGENT_ANNOUNCE_CLI_DELIVERY_CASES)(
     "bounds CLI subagent completion handoff tools for $name",
-    async ({
-      sourceReplyDeliveryMode,
-      disableMessageTool,
-      requireExplicitMessageTarget,
-      inheritedToolAllow,
-      inheritedToolDeny,
-      runtimeToolsAllow,
-      operatorTools,
-      sandboxMode,
-      trustedInternalHandoff,
-      expectedDisableTools,
-      expectedToolsAllow,
-    }) => {
-      const sessionKey = "agent:main:direct:claude-announce";
-      const sessionEntry = makeSessionEntry("openclaw-session-cli-announce");
-      const sessionStore = createSubagentAnnounceSessionStore(sessionKey, sessionEntry, {
-        inheritedToolAllow,
-        inheritedToolDeny,
-      });
+    async (testCase) => {
+      const { sourceReplyDeliveryMode, requireExplicitMessageTarget, operatorTools, sandboxMode } =
+        testCase;
+      const sessionKey = testCase.requesterSessionKey ?? "agent:main:direct:claude-announce";
+      const sessionEntry = makeSessionEntry(
+        "openclaw-session-cli-announce",
+        testCase.requesterSessionEntry,
+      );
+      const sessionStore = createSubagentAnnounceSessionStore(sessionKey, sessionEntry, testCase);
       await writeSessionStoreSeed(sessionStore);
       runCliAgentMock.mockResolvedValueOnce(makeCliResult("completion announce"));
 
@@ -3328,15 +3318,11 @@ describe("CLI attempt execution", () => {
         body: "A background task finished. Process the completion update now.",
         runId: "run-cli-announce",
         opts: createSubagentAnnounceHandoffOptions({
-          sourceReplyDeliveryMode,
+          ...testCase,
           targetSessionKey: sessionKey,
           targetSessionId: sessionEntry.sessionId,
           provider: "claude-cli",
           model: "opus",
-          disableMessageTool,
-          requireExplicitMessageTarget,
-          runtimeToolsAllow,
-          trustedInternalHandoff,
         }),
         messageChannel: "telegram",
         sessionStore,
@@ -3345,9 +3331,10 @@ describe("CLI attempt execution", () => {
       expectMockArgFields(runCliAgentMock, {
         provider: "claude-cli",
         sourceReplyDeliveryMode,
-        requireExplicitMessageTarget: requireExplicitMessageTarget === true,
-        toolsAllow: expectedToolsAllow,
-        disableTools: expectedDisableTools,
+        requireExplicitMessageTarget:
+          requireExplicitMessageTarget ?? isSubagentSessionKey(sessionKey),
+        toolsAllow: testCase.expectedToolsAllow,
+        disableTools: testCase.expectedDisableTools,
         allowEmptyAssistantReplyAsSilent: true,
       });
       expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
@@ -3358,6 +3345,7 @@ describe("CLI attempt execution", () => {
     "bounds embedded subagent completion handoff tools for $name",
     async ({
       sourceReplyDeliveryMode,
+      deliver,
       disableMessageTool,
       requireExplicitMessageTarget,
       modelRun,
@@ -3389,6 +3377,7 @@ describe("CLI attempt execution", () => {
           targetSessionId: sessionId,
           provider: "openai",
           model: "gpt-5.4",
+          deliver,
           disableMessageTool,
           requireExplicitMessageTarget,
           modelRun,

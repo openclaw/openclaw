@@ -25,7 +25,6 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
-import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -68,8 +67,6 @@ import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
-import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
-import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
@@ -84,6 +81,7 @@ import {
 } from "../subagents/announce/subagent-announce-handoff.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
+import { resolveAttemptCliRuntime } from "./attempt-cli-runtime.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -313,11 +311,31 @@ export function runAgentAttempt(params: {
       modelProvider: params.providerOverride,
       modelId: params.modelOverride,
     });
+  const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
+  const { sessionRuntimeOverride, pinnedHarnessId, cliExecutionProvider, isCliExecutionProvider } =
+    resolveAttemptCliRuntime({
+      isRawModelRun,
+      providerOverride: params.providerOverride,
+      modelOverride: params.modelOverride,
+      cfg: params.cfg,
+      sessionEntry: params.sessionEntry,
+      sessionAgentId: params.sessionAgentId,
+      agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+      authProfileId: selectedAuthProfile?.id,
+    });
+  // A private parent completion runs with delivery disabled, so its final reply
+  // stays internal and the requester must use `message` for any user-facing
+  // update. CLI handoffs never retain the requester tool surface, so they get
+  // only the policy-checked message capability instead of running tool-free.
+  const privateCliCompletionNeedsMessageTool =
+    isCliExecutionProvider &&
+    params.opts.deliver === false &&
+    params.opts.sourceReplyDeliveryMode === "automatic";
   const completionRequestsMessageDelivery =
     trustedSubagentAnnounceHandoff &&
     !isRawModelRun &&
     params.opts.disableMessageTool !== true &&
-    messageToolOwnsVisibleReply(params.opts);
+    (messageToolOwnsVisibleReply(params.opts) || privateCliCompletionNeedsMessageTool);
   const completionSandboxStatus = completionRequestsMessageDelivery
     ? resolveSandboxRuntimeStatus({
         cfg: params.cfg,
@@ -391,35 +409,6 @@ export function runAgentAttempt(params: {
     params.sessionEntry?.systemPromptReport,
   );
   const bootstrapPromptWarningSignature = bootstrapPromptWarningSignaturesSeen.at(-1);
-  const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
-  const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
-  const pinnedHarnessId = isRawModelRun
-    ? undefined
-    : resolveSessionPinnedHarnessId(params.sessionEntry);
-  const locksSessionRuntimeOverride =
-    pinnedHarnessId !== undefined && sessionRuntimeOverride === pinnedHarnessId;
-  const sessionCliRuntime =
-    sessionRuntimeOverride &&
-    !locksSessionRuntimeOverride &&
-    isCliProvider(sessionRuntimeOverride, params.cfg)
-      ? sessionRuntimeOverride
-      : undefined;
-  const configuredCliRuntime =
-    !isRawModelRun && !sessionRuntimeOverride
-      ? resolveCliRuntimeExecutionProvider({
-          provider: params.providerOverride,
-          cfg: params.cfg,
-          agentId: params.sessionAgentId,
-          modelId: params.modelOverride,
-          authProfileId: selectedAuthProfile?.id,
-        })
-      : undefined;
-  const cliExecutionProvider = isRawModelRun
-    ? params.providerOverride
-    : (sessionCliRuntime ?? configuredCliRuntime ?? params.providerOverride);
-  const isCliExecutionProvider = sessionRuntimeOverride
-    ? sessionCliRuntime !== undefined
-    : isCliProvider(cliExecutionProvider, params.cfg);
   const completionRetainsRequesterTools =
     trustedSubagentAnnounceHandoff &&
     !isRawModelRun &&

@@ -53,6 +53,7 @@ export function createSubagentAnnounceHandoffOptions(params: {
   targetSessionId: string;
   provider: string;
   model: string;
+  deliver?: boolean;
   disableMessageTool?: boolean;
   requireExplicitMessageTarget?: boolean;
   modelRun?: boolean;
@@ -62,6 +63,7 @@ export function createSubagentAnnounceHandoffOptions(params: {
 }): Partial<AgentCommandOpts> {
   return {
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    ...(params.deliver !== undefined ? { deliver: params.deliver } : {}),
     ...(params.disableMessageTool ? { disableMessageTool: true } : {}),
     ...(params.requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     ...(params.modelRun ? { modelRun: true } : {}),
@@ -105,7 +107,10 @@ export function createSubagentAnnounceHandoffOptions(params: {
 
 export type SubagentAnnounceDeliveryCase = {
   name: string;
+  requesterSessionKey?: string;
+  requesterSessionEntry?: Partial<SessionEntry>;
   sourceReplyDeliveryMode: "automatic" | "message_tool_only";
+  deliver?: boolean;
   disableMessageTool: boolean;
   requireExplicitMessageTarget?: boolean;
   modelRun?: boolean;
@@ -120,7 +125,7 @@ export type SubagentAnnounceDeliveryCase = {
   expectedToolsAllow?: readonly string[];
 };
 
-export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
+const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
   {
     name: "automatic source replies",
     sourceReplyDeliveryMode: "automatic" as const,
@@ -245,6 +250,69 @@ export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDelivery
   },
 ];
 
+// completionTarget "parent" hands off with delivery disabled and automatic
+// replies, so the requester's final text stays internal.
+const PRIVATE_PARENT_COMPLETION = {
+  sourceReplyDeliveryMode: "automatic",
+  deliver: false,
+  disableMessageTool: false,
+} as const;
+
+export const SUBAGENT_ANNOUNCE_CLI_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
+  ...SUBAGENT_ANNOUNCE_DELIVERY_CASES,
+  {
+    name: "a delivered automatic completion",
+    sourceReplyDeliveryMode: "automatic",
+    deliver: true,
+    disableMessageTool: false,
+    expectedDisableTools: true,
+  },
+  {
+    name: "a private parent completion",
+    ...PRIVATE_PARENT_COMPLETION,
+    expectedDisableTools: false,
+    expectedToolsAllow: ["message"],
+  },
+  {
+    name: "a private parent completion with an explicitly disabled message tool",
+    ...PRIVATE_PARENT_COMPLETION,
+    disableMessageTool: true,
+    expectedDisableTools: true,
+  },
+  {
+    name: "a private parent completion with a current operator message deny",
+    ...PRIVATE_PARENT_COMPLETION,
+    operatorTools: { deny: ["message"] },
+    expectedDisableTools: true,
+  },
+  {
+    name: "a private parent completion with a runtime allowlist excluding message",
+    ...PRIVATE_PARENT_COMPLETION,
+    runtimeToolsAllow: ["read", "exec"],
+    expectedDisableTools: true,
+  },
+  {
+    name: "an untrusted private parent completion",
+    ...PRIVATE_PARENT_COMPLETION,
+    trustedInternalHandoff: false,
+    expectedDisableTools: true,
+  },
+  {
+    // Subagent policy always denies `message`; the private grant must not bypass it.
+    name: "a private parent completion for a nested subagent requester",
+    ...PRIVATE_PARENT_COMPLETION,
+    requesterSessionKey: "agent:main:subagent:claude-private-parent",
+    requesterSessionEntry: {
+      spawnedBy: "agent:main:direct:root",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
+    },
+    expectedDisableTools: true,
+  },
+];
+
 function createEmbeddedSubagentAnnounceDeliveryCases(): SubagentAnnounceDeliveryCase[] {
   const cases: SubagentAnnounceDeliveryCase[] = [];
   for (const testCase of SUBAGENT_ANNOUNCE_DELIVERY_CASES) {
@@ -278,6 +346,12 @@ function createEmbeddedSubagentAnnounceDeliveryCases(): SubagentAnnounceDelivery
       promptMode: "none",
       expectedDisableTools: true,
     },
+    {
+      name: "a private parent completion",
+      ...PRIVATE_PARENT_COMPLETION,
+      expectedDisableTools: false,
+      expectedToolsAllow: SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
+    },
   );
   return cases;
 }
@@ -296,7 +370,7 @@ export function createSubagentAnnounceSessionStore(
       sessionId: "subagent-announce-child",
       updatedAt: Date.now(),
       spawnedBy: requesterSessionKey,
-      spawnDepth: 1,
+      spawnDepth: (requesterSessionEntry.spawnDepth ?? 0) + 1,
       subagentRole: "leaf",
       subagentControlScope: "none",
       inheritedToolPolicyVersion: 1,
