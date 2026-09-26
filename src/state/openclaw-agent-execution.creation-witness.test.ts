@@ -80,18 +80,43 @@ it.each(["missing", "schema-missing"] as const)(
       const unrelatedInitialization = vi.fn(() => {
         throw new Error("A warm borrower must not recapture initialization configuration");
       });
-      const warm = captureOpenClawAgentDatabaseExecution({
-        ...options,
-        env: Object.defineProperty({ ...options.env }, "UNRELATED_INITIALIZATION", {
+      const env = { ...options.env };
+      if (process.platform !== "win32") {
+        Object.defineProperty(env, "UNRELATED_INITIALIZATION", {
           enumerable: true,
           get: unrelatedInitialization,
-        }),
+        });
+      }
+      const warm = captureOpenClawAgentDatabaseExecution({
+        ...options,
+        env,
       });
       try {
         await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
         expect(unrelatedInitialization).not.toHaveBeenCalled();
       } finally {
         await warm.release();
+      }
+      const windows = (() => {
+        const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        try {
+          return captureOpenClawAgentDatabaseExecution({
+            ...options,
+            env: {
+              HOME: options.env.OPENCLAW_STATE_DIR,
+              OpenClaw_State_Dir: options.env.OPENCLAW_STATE_DIR,
+            },
+          });
+        } finally {
+          platform.mockRestore();
+        }
+      })();
+      try {
+        await expect(windows.runExisting(source(), async () => "same owner")).resolves.toBe(
+          "same owner",
+        );
+      } finally {
+        await windows.release();
       }
       const stale = captureOpenClawAgentDatabaseExecution(options, {
         expectedIdentity: {

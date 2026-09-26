@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
 import {
@@ -137,7 +138,11 @@ export function captureOpenClawAgentDatabaseExecution(
         `OpenClaw agent database ${pathname} is already open for agent ${existing.agentId}; requested agent ${agentId}.`,
       );
     }
-    const state = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(options.env));
+    const env =
+      process.platform === "win32"
+        ? cloneEnvWithPlatformSemantics(options.env ?? process.env)
+        : options.env;
+    const state = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(env));
     if (existing.sharedDatabaseKey !== state.admission.identity.key) {
       throw new Error(
         "Agent database execution belongs to another shared-state database; drain its existing resources before changing the state directory.",
