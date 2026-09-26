@@ -34,6 +34,163 @@ async function addComment(page: Page, source: Locator, comment: string) {
 }
 
 suite.define(() => {
+  it("sends comments without a painted bubble while preserving identity and preview access", async () => {
+    await suite.withPage(
+      { viewport: { width: 1440, height: 900 }, reducedMotion: "reduce", locale: "en-US" },
+      async ({ page }) => {
+        const comment = "Confirm the rollback checklist.";
+        const gateway = await installMockGateway(page, {
+          presenceUsers: [
+            {
+              self: true,
+              id: "profile-riley",
+              identity: { type: "profile", id: "profile-riley" },
+              name: "Riley",
+              email: "riley@example.test",
+            },
+          ],
+          historyMessages: [{ role: "assistant", content: passage }],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const composer = page.locator(".agent-chat__composer-shell textarea");
+        const source = page.locator(".chat-bubble .chat-text p").filter({ hasText: passage });
+        await selectText(source);
+        await page
+          .getByRole("toolbar", { name: "Selection actions" })
+          .getByRole("button", { name: "Add to chat", exact: true })
+          .click();
+        const editor = page.getByRole("dialog", { name: "Comment", exact: true });
+        await editor.getByRole("textbox").fill(comment);
+        await editor.getByRole("textbox").press("Enter");
+        expect(await composer.inputValue()).toBe("");
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        const request = await gateway.waitForRequest("chat.send");
+        expect(request.params).toMatchObject({ message: "", attachments: [expect.any(Object)] });
+
+        const group = page.locator(".chat-group.user").filter({
+          has: page.locator(".chat-selection-annotations__chip"),
+        });
+        const bubble = group.locator(".chat-bubble");
+        const chip = group.locator(".chat-selection-annotations__chip");
+        await chip.waitFor({ state: "visible" });
+        await expect
+          .poll(() =>
+            bubble.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return { background: style.backgroundColor, padding: style.padding };
+            }),
+          )
+          .toEqual({ background: "rgba(0, 0, 0, 0)", padding: "0px" });
+        expect(await group.locator(".chat-avatar:visible").count()).toBe(1);
+        expect(
+          await group.evaluate((element) => {
+            const body = element.querySelector(".chat-bubble")!.getBoundingClientRect();
+            return element.getBoundingClientRect().bottom - body.bottom;
+          }),
+        ).toBe(28);
+        await page.keyboard.press("Tab");
+        await chip.focus();
+        await chip.press("Enter");
+        const preview = page.getByRole("region", { name: "Comments", exact: true });
+        await preview.getByText(comment, { exact: true }).waitFor({ state: "visible" });
+        await group.locator(".chat-group-footer").waitFor({ state: "visible" });
+        await page.keyboard.press("Escape");
+        await preview.getByText(comment, { exact: true }).waitFor({ state: "hidden" });
+        await chip.click();
+        await preview.getByText(comment, { exact: true }).waitFor({ state: "visible" });
+      },
+    );
+  });
+
+  it.each([
+    [true, false],
+    [false, false],
+    [true, true],
+  ])(
+    "anchors one avatar to the last grouped item (own=%s, text last=%s)",
+    async (self, textLast) => {
+      await suite.withPage(
+        { viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" },
+        async ({ page }) => {
+          const identity = { type: "profile" as const, id: self ? "alex" : "riley" };
+          const comments = Array.from({ length: 3 }, (_, index) => ({
+            id: `comment-${index}`,
+            role: "user",
+            timestamp: 1_789_707_600_000 + index * 1_000,
+            __openclaw: { senderIdentity: identity, senderName: self ? "Alex" : "Riley" },
+            content: [
+              {
+                type: "attachment",
+                attachment: {
+                  kind: "document",
+                  label: "selection-comment.txt",
+                  mimeType: "text/plain",
+                  url: `data:text/plain;base64,${Buffer.from(`Selected text:\nChecklist\n\nUser comment:\nReview step ${index + 1}.`).toString("base64")}`,
+                },
+              },
+            ],
+          }));
+          await installMockGateway(page, {
+            hasMultipleSessionSharingIdentities: true,
+            sessions: [
+              {
+                key: "agent:main:main",
+                visibility: "shared",
+                sharingRole: "owner",
+                participants: [{ identity: { type: "profile", id: "riley" }, label: "Riley" }],
+              },
+            ],
+            presenceUsers: [
+              { identity: { type: "profile", id: "alex" }, id: "alex", name: "Alex", self: true },
+            ],
+            historyMessages: [
+              ...comments,
+              ...(textLast
+                ? [{ ...comments[0], id: "last-text", timestamp: 1_789_707_603_000, content: "OK" }]
+                : []),
+            ],
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const group = page.locator(".chat-group.user");
+          await group.locator(".chat-bubble").last().waitFor();
+          expect(await group.count()).toBe(1);
+          expect(await group.locator(".chat-bubble").count()).toBe(textLast ? 4 : 3);
+          expect(await group.locator(".chat-avatar:visible").count()).toBe(1);
+          await group.locator(".chat-sender-name").waitFor();
+          expect(await group.locator(".chat-sender-name").count()).toBe(1);
+          const avatar = group.locator(".chat-avatar:visible");
+          const metrics = await avatar.evaluate((element) => {
+            const groupElement = element.closest(".chat-group")!;
+            const bubbles = [...groupElement.querySelectorAll(".chat-bubble")];
+            const last = bubbles.at(-1)!.getBoundingClientRect();
+            const avatarBounds = element.getBoundingClientRect();
+            return {
+              offset: avatarBounds.top - last.top,
+              gap: groupElement.getBoundingClientRect().bottom - last.bottom,
+              internal: bubbles
+                .slice(1)
+                .map(
+                  (bubble, index) =>
+                    bubble.getBoundingClientRect().top -
+                    bubbles[index]!.getBoundingClientRect().bottom,
+                ),
+              comments: bubbles.slice(0, 3).map((bubble) => ({
+                background: getComputedStyle(bubble).backgroundColor,
+                padding: getComputedStyle(bubble).padding,
+              })),
+            };
+          });
+          expect(Math.abs(metrics.offset)).toBeLessThanOrEqual(1);
+          expect(metrics.gap).toBe(28);
+          expect(metrics.internal).toEqual(Array(textLast ? 3 : 2).fill(32));
+          expect(metrics.comments).toEqual(
+            Array.from({ length: 3 }, () => ({ background: "rgba(0, 0, 0, 0)", padding: "0px" })),
+          );
+        },
+      );
+    },
+  );
+
   it.each(["delegated-composer", "failing-composer"])(
     "shows one usable comment chip when %s restores the built-in composer",
     async (replacement) => {
