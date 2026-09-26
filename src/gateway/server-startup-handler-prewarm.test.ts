@@ -8,6 +8,10 @@ import {
   tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
@@ -126,6 +130,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     };
 
     const sidecar = scheduleGatewayHandlerPrewarm({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       getConfig: () => cfg,
       log: { warn: vi.fn() },
     });
@@ -185,6 +190,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       vi.useFakeTimers();
       mocks.getMemoryCapabilityRegistration.mockReturnValue(pluginId ? { pluginId } : undefined);
       const sidecar = scheduleGatewayHandlerPrewarm({
+        scheduler: createTestGatewayScheduler("fake-timers"),
         getConfig: () => ({ agents: { entries: {} } }),
         log: { warn: vi.fn() },
       });
@@ -202,12 +208,55 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     },
   );
 
+  it("does not wait again when earlier work passes a later item's startup deadline", async () => {
+    const clock = createGatewaySchedulerClock(1_000);
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const firstArmed = createDeferred();
+    const nextArmed = createDeferred<number>();
+    let arms = 0;
+    const scheduler = createTestGatewayScheduler({
+      ...clock.clock,
+      arm: (run, delayMs) => {
+        const cancel = clock.clock.arm(run, delayMs);
+        if (arms++ === 0) {
+          firstArmed.resolve();
+        } else {
+          nextArmed.resolve(delayMs);
+        }
+        return cancel;
+      },
+    });
+    const later = vi.fn(async () => {});
+    const sidecar = scheduleGatewayHandlerPrewarm({
+      scheduler,
+      getConfig: () => ({}),
+      log: { warn: vi.fn() },
+      items: [
+        { name: "earlier", load: async () => clock.advanceBy(6_000) },
+        { name: "later", notBeforeMs: 5_000, load: later },
+      ],
+    });
+    try {
+      await firstArmed.promise;
+      await clock.wake();
+      await expect(nextArmed.promise).resolves.toBe(0);
+      expect(later).not.toHaveBeenCalled();
+      await clock.wake();
+      expect(later).toHaveBeenCalledOnce();
+    } finally {
+      await sidecar.stop();
+      await scheduler.stop();
+      dateNow.mockRestore();
+    }
+  });
+
   it("waits for gateway readiness before warming handler data", async () => {
     vi.useFakeTimers();
     const { promise: gatewayReady, resolve: releaseGatewayReady } = createDeferred();
     const load = vi.fn(async () => {});
 
     const sidecar = scheduleGatewayHandlerPrewarm({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       getConfig: () => ({}),
       log: { warn: vi.fn() },
       items: [{ name: "sessions", load }],
@@ -231,6 +280,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     }
     const load = vi.fn(async () => {});
     const sidecar = scheduleGatewayHandlerPrewarm({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       getConfig: () => ({}),
       log: { warn: vi.fn() },
       items: [{ name: "sessions", load }],
@@ -253,6 +303,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     const load = vi.fn(async () => {});
 
     const sidecar = scheduleGatewayHandlerPrewarm({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       getConfig: () => ({}),
       log: { warn: vi.fn() },
       items: [{ name: "sessions", load }],
@@ -277,6 +328,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
       .mockResolvedValue("request result");
 
     scheduleGatewayHandlerPrewarm({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       getConfig: () => ({}),
       log: { warn },
       items: [
@@ -309,6 +361,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     );
     const second = vi.fn(async () => {});
     const sidecar = scheduleGatewayHandlerPrewarm({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       getConfig: () => ({}),
       log: { warn: vi.fn() },
       items: [
@@ -333,6 +386,7 @@ it("keeps the context cache delayed and uses current config after foreground wor
   const initial: OpenClawConfig = { agents: { entries: {} } };
   let current = initial;
   const handle = scheduleGatewayHandlerPrewarm({
+    scheduler: createTestGatewayScheduler("fake-timers"),
     getConfig: () => current,
     log: { warn: vi.fn() },
   });
@@ -362,6 +416,7 @@ it("skips optional discovery when foreground work arrives after idle admission",
   vi.useFakeTimers();
   mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
   const handle = scheduleGatewayHandlerPrewarm({
+    scheduler: createTestGatewayScheduler("fake-timers"),
     getConfig: () => ({ agents: { entries: { main: { workspace: workspaces.main } } } }),
     log: { warn: vi.fn() },
     startupTrace: {

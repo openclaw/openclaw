@@ -1,28 +1,41 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 
-afterEach(() => {
-  vi.useRealTimers();
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let scheduler: GatewayScheduler;
+beforeEach(() => {
+  clock = createGatewaySchedulerClock();
+  scheduler = createTestGatewayScheduler(clock.clock);
+});
+
+afterEach(async () => {
+  await scheduler.stop();
   resetGatewayWorkAdmission();
 });
 
 it.each(["idle", "handler"] as const)(
   "joins started %s work before the Gateway sidecar owner closes",
   async (kind) => {
-    vi.useFakeTimers();
     const released = createDeferred();
+    const started = createDeferred();
     const events: string[] = [];
     const run = async () => {
       events.push("started");
+      started.resolve();
       await released.promise;
       events.push("finished");
     };
@@ -31,6 +44,8 @@ it.each(["idle", "handler"] as const)(
     const handle =
       kind === "idle"
         ? scheduleGatewayIdleTask({
+            id: "test:idle",
+            scheduler,
             delayMs: 0,
             retryDelayMs: 1,
             isClosing: () => false,
@@ -40,6 +55,7 @@ it.each(["idle", "handler"] as const)(
             errorMessage: "idle lifecycle test failed",
           })
         : scheduleGatewayHandlerPrewarm({
+            scheduler,
             getConfig: () => ({}),
             log,
             items: [
@@ -51,13 +67,15 @@ it.each(["idle", "handler"] as const)(
     owner.publish(handle);
     let stopping: Promise<void> | undefined;
     try {
-      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      void clock.advanceBy(0);
+      await started.promise;
       expect([...events]).toEqual(["started"]);
       owner.beginClose();
       stopping = owner.stop().then(() => {
         events.push("closed");
       });
-      await vi.advanceTimersByTimeAsync(0);
+      await clock.advanceBy(0);
       expect([...events]).toEqual(["started"]);
     } finally {
       owner.beginClose();
@@ -75,12 +93,13 @@ it.each(["idle", "handler"] as const)(
 it.each(["suspension", "restart signal"] as const)(
   "stops idle work without reopening the %s fence",
   async (kind) => {
-    vi.useFakeTimers();
     const suspension = kind === "suspension" ? tryBeginGatewaySuspendAdmission(() => {}) : null;
     const restart = kind === "restart signal" ? beginGatewayRestartSignalAdmission() : null;
     expect(suspension?.commit() ?? Boolean(restart)).toBe(true);
     const run = vi.fn(async () => {});
     const handle = scheduleGatewayIdleTask({
+      id: "test:idle",
+      scheduler,
       delayMs: 0,
       retryDelayMs: 10,
       isClosing: () => false,
@@ -91,12 +110,12 @@ it.each(["suspension", "restart signal"] as const)(
     });
     let stopping: Promise<void> | undefined;
     try {
-      await vi.advanceTimersByTimeAsync(0);
+      await clock.advanceBy(0);
       let closed = false;
       stopping = Promise.resolve(handle.stop()).then(() => {
         closed = true;
       });
-      await vi.advanceTimersByTimeAsync(0);
+      await clock.advanceBy(0);
       expect(closed).toBe(true);
       expect(run).not.toHaveBeenCalled();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -107,13 +126,12 @@ it.each(["suspension", "restart signal"] as const)(
       await closing;
       await stopping;
     }
-    await vi.advanceTimersByTimeAsync(10);
+    await clock.advanceBy(10);
     expect(run).not.toHaveBeenCalled();
   },
 );
 
 it("joins the outgoing handler when shutdown begins in its warning callback", async () => {
-  vi.useFakeTimers();
   const events: string[] = [];
   const later = vi.fn(async () => {});
   let rootsAfterStop: number | undefined;
@@ -126,6 +144,7 @@ it("joins the outgoing handler when shutdown begins in its warning callback", as
     });
   });
   const sidecar = scheduleGatewayHandlerPrewarm({
+    scheduler,
     getConfig: () => ({}),
     log: { warn },
     items: [
@@ -140,7 +159,8 @@ it("joins the outgoing handler when shutdown begins in its warning callback", as
     ],
   });
   try {
-    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+    await clock.advanceBy(0);
     await stopping;
     expect(warn).toHaveBeenCalledOnce();
     expect(events).toEqual(["started", "warning", "closed"]);
