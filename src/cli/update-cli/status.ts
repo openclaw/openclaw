@@ -318,6 +318,9 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       }
     }
     if (run) {
+      if (!activeRun) {
+        defaultRuntime.log(`Last recorded update (${new Date(run.createdAtMs).toISOString()}):`);
+      }
       if (staleRun) {
         defaultRuntime.log(`Update ${run.runId}: ${staleRun.guidance}`);
       }

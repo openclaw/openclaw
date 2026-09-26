@@ -1,49 +1,24 @@
 // Memory Core tests cover manager sync control plugin behavior.
-import type {
-  MemorySessionSyncTarget,
-  MemorySyncParams,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
-import { enqueueMemoryTargetedSessionSync } from "./manager-sync-control.js";
+import { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 
 function createQueuedSyncHarness(params: { syncing: Promise<void>; archiveFiles?: string[] }) {
   let closed = false;
-  const queuedArchiveFiles = new Set(params.archiveFiles);
-  const queuedSessions = new Map<string, MemorySessionSyncTarget>();
-  let queuedForce = false;
-  const queuedProgressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
-  let queuedSessionSync: Promise<void> | null = null;
   const sync = vi.fn(async (_params?: MemorySyncParams) => {});
-  const state = {
+  const queue = new MemoryTargetedSessionSyncQueue({
     isClosed: () => closed,
     getSyncing: () => params.syncing,
-    getQueuedArchiveFiles: () => queuedArchiveFiles,
-    getQueuedSessions: () => queuedSessions,
-    getQueuedForce: () => queuedForce,
-    setQueuedForce: (value: boolean) => {
-      queuedForce = value;
-    },
-    getQueuedProgressCallbacks: () => queuedProgressCallbacks,
-    getQueuedSessionSync: () => queuedSessionSync,
-    setQueuedSessionSync: (value: Promise<void> | null) => {
-      queuedSessionSync = value;
-    },
     sync,
-  };
+  });
+  for (const file of params.archiveFiles ?? []) {
+    queue.archiveFiles.add(file);
+  }
   return {
-    queuedArchiveFiles,
-    queuedSessions,
-    queuedProgressCallbacks,
-    get queuedForce() {
-      return queuedForce;
-    },
-    get queuedSessionSync() {
-      return queuedSessionSync;
-    },
+    queue,
     setClosed(value: boolean) {
       closed = value;
     },
-    state,
     sync,
   };
 }
@@ -56,7 +31,7 @@ describe("memory manager sync control", () => {
     });
     const harness = createQueuedSyncHarness({ syncing: pendingSync });
 
-    const queued = enqueueMemoryTargetedSessionSync(harness.state, {
+    const queued = harness.queue.enqueue({
       archiveFiles: ["  /tmp/first.jsonl ", "", "/tmp/second.jsonl"],
     });
 
@@ -70,7 +45,7 @@ describe("memory manager sync control", () => {
       sessions: [],
       archiveFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
     });
-    expect(harness.queuedSessionSync).toBeNull();
+    expect(harness.queue.pending).toBeNull();
   });
 
   it("merges repeated queued requests while the active sync is still running", async () => {
@@ -80,10 +55,10 @@ describe("memory manager sync control", () => {
     });
     const harness = createQueuedSyncHarness({ syncing: pendingSync });
 
-    const first = enqueueMemoryTargetedSessionSync(harness.state, {
+    const first = harness.queue.enqueue({
       archiveFiles: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
     });
-    const second = enqueueMemoryTargetedSessionSync(harness.state, {
+    const second = harness.queue.enqueue({
       archiveFiles: ["/tmp/second.jsonl", "/tmp/third.jsonl"],
     });
 
@@ -106,7 +81,7 @@ describe("memory manager sync control", () => {
     });
     const harness = createQueuedSyncHarness({ syncing: pendingSync });
 
-    const queued = enqueueMemoryTargetedSessionSync(harness.state, {
+    const queued = harness.queue.enqueue({
       archiveFiles: ["", "   "],
     });
 
@@ -128,7 +103,7 @@ describe("memory manager sync control", () => {
       params?.progress?.(progressUpdate);
     });
 
-    const queued = enqueueMemoryTargetedSessionSync(harness.state, {
+    const queued = harness.queue.enqueue({
       sessions: [{ agentId: "main", sessionId: "targeted", sessionKey: "agent:main:targeted" }],
       force: true,
       progress,
@@ -160,7 +135,7 @@ describe("memory manager sync control", () => {
     harness.sync.mockReturnValueOnce(queuedSync).mockResolvedValueOnce(undefined);
 
     const firstProgress = vi.fn();
-    const first = enqueueMemoryTargetedSessionSync(harness.state, {
+    const first = harness.queue.enqueue({
       sessions: [{ agentId: "main", sessionId: "first", sessionKey: "agent:main:first" }],
       archiveFiles: ["/tmp/first.jsonl"],
       force: true,
@@ -174,7 +149,7 @@ describe("memory manager sync control", () => {
     });
 
     const concurrentProgress = vi.fn();
-    const concurrent = enqueueMemoryTargetedSessionSync(harness.state, {
+    const concurrent = harness.queue.enqueue({
       sessions: [{ agentId: "main", sessionId: "second", sessionKey: "agent:main:second" }],
       archiveFiles: ["/tmp/second.jsonl"],
       progress: concurrentProgress,
@@ -184,16 +159,16 @@ describe("memory manager sync control", () => {
     rejectQueuedSync?.(new Error("transient sqlite failure"));
     await firstRejection;
 
-    expect(harness.queuedArchiveFiles).toEqual(new Set(["/tmp/second.jsonl", "/tmp/first.jsonl"]));
-    expect(Array.from(harness.queuedSessions.values())).toEqual([
+    expect(harness.queue.archiveFiles).toEqual(new Set(["/tmp/second.jsonl", "/tmp/first.jsonl"]));
+    expect(Array.from(harness.queue.sessions.values())).toEqual([
       { agentId: "main", sessionId: "second", sessionKey: "agent:main:second" },
       { agentId: "main", sessionId: "first", sessionKey: "agent:main:first" },
     ]);
-    expect(harness.queuedSessionSync).toBeNull();
-    expect(harness.queuedProgressCallbacks.size).toBe(0);
-    expect(harness.queuedForce).toBe(true);
+    expect(harness.queue.pending).toBeNull();
+    expect(harness.queue.progressCallbacks.size).toBe(0);
+    expect(harness.queue.force).toBe(true);
 
-    await enqueueMemoryTargetedSessionSync(harness.state);
+    await harness.queue.enqueue();
 
     expect(harness.sync).toHaveBeenCalledTimes(2);
     expect(harness.sync).toHaveBeenLastCalledWith({
@@ -205,10 +180,10 @@ describe("memory manager sync control", () => {
       ],
       archiveFiles: ["/tmp/second.jsonl", "/tmp/first.jsonl"],
     });
-    expect(harness.queuedArchiveFiles.size).toBe(0);
-    expect(harness.queuedSessions.size).toBe(0);
-    expect(harness.queuedSessionSync).toBeNull();
-    expect(harness.queuedForce).toBe(false);
+    expect(harness.queue.archiveFiles.size).toBe(0);
+    expect(harness.queue.sessions.size).toBe(0);
+    expect(harness.queue.pending).toBeNull();
+    expect(harness.queue.force).toBe(false);
   });
 
   it("clears queued state when the manager closes while the queue waits", async () => {
@@ -222,7 +197,7 @@ describe("memory manager sync control", () => {
     });
     const progress = vi.fn();
 
-    const queued = enqueueMemoryTargetedSessionSync(harness.state, {
+    const queued = harness.queue.enqueue({
       sessions: [{ agentId: "main", sessionId: "close", sessionKey: "agent:main:close" }],
       force: true,
       progress,
@@ -233,10 +208,10 @@ describe("memory manager sync control", () => {
     await queued;
 
     expect(harness.sync).not.toHaveBeenCalled();
-    expect(harness.queuedArchiveFiles.size).toBe(0);
-    expect(harness.queuedSessions.size).toBe(0);
-    expect(harness.queuedProgressCallbacks.size).toBe(0);
-    expect(harness.queuedForce).toBe(false);
-    expect(harness.queuedSessionSync).toBeNull();
+    expect(harness.queue.archiveFiles.size).toBe(0);
+    expect(harness.queue.sessions.size).toBe(0);
+    expect(harness.queue.progressCallbacks.size).toBe(0);
+    expect(harness.queue.force).toBe(false);
+    expect(harness.queue.pending).toBeNull();
   });
 });

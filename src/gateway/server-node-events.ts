@@ -45,6 +45,7 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../process/gatewa
 import { isUnscopedSessionKeySentinel, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_HOST_STATS_EVENT } from "../shared/node-host-stats.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
@@ -206,19 +207,14 @@ function reserveVoiceTranscript(params: {
 } {
   // Resolve reservations in receipt order so delayed currentness checks cannot
   // change the dedupe window, while rejected connections leave no committed state.
-  let resolveDecision: (admission: VoiceTranscriptReservationAdmission) => void = () => {};
-  let rejectDecision: (reason: unknown) => void = () => {};
-  const decision = new Promise<VoiceTranscriptReservationAdmission>((resolve, reject) => {
-    resolveDecision = resolve;
-    rejectDecision = reject;
-  });
+  const decision = createDeferredCore<VoiceTranscriptReservationAdmission>();
   const reservation: VoiceTranscriptReservation = {
     fingerprint: params.fingerprint,
     receivedAt: params.receivedAt,
     status: "pending",
-    resolve: resolveDecision,
-    rejectDecision,
-    decision,
+    resolve: decision.resolve,
+    rejectDecision: decision.reject,
+    decision: decision.promise,
   };
   const queue = pendingVoiceTranscriptReservations.get(params.sessionKey) ?? [];
   queue.push(reservation);
@@ -327,18 +323,11 @@ function shouldDropDuplicateExecFinished(params: {
   }
 
   recentExecFinishedRuns.set(fingerprint, params.now);
-  if (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
-    const cutoff = params.now - EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS;
-    for (const [key, ts] of recentExecFinishedRuns) {
-      if (ts < cutoff) {
-        recentExecFinishedRuns.delete(key);
-      }
-      if (recentExecFinishedRuns.size <= MAX_RECENT_EXEC_FINISHED_RUNS) {
-        break;
-      }
-    }
-    pruneMapToMaxSize(recentExecFinishedRuns, MAX_RECENT_EXEC_FINISHED_RUNS);
-  }
+  pruneBoundedTimestampMap(recentExecFinishedRuns, {
+    now: params.now,
+    ttlMs: EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS,
+    maxEntries: MAX_RECENT_EXEC_FINISHED_RUNS,
+  });
 
   return false;
 }
@@ -945,23 +934,19 @@ export const handleNodeEvent = async (
       }
       return undefined;
     }
-    case "chat.subscribe": {
-      const sessionKey = normalizeOptionalString(parsePayloadObject(evt.payloadJSON)?.sessionKey);
-      if (!sessionKey) {
-        return undefined;
-      }
-      const { canonicalKey } = loadSessionEntry(sessionKey);
-      // Fanout is keyed by the canonical session; retain the connection owner for safe reconnect.
-      await ctx.nodeSubscribe(nodeId, canonicalKey, opts?.connId);
-      return undefined;
-    }
+    case "chat.subscribe":
     case "chat.unsubscribe": {
       const sessionKey = normalizeOptionalString(parsePayloadObject(evt.payloadJSON)?.sessionKey);
       if (!sessionKey) {
         return undefined;
       }
       const { canonicalKey } = loadSessionEntry(sessionKey);
-      await ctx.nodeUnsubscribe(nodeId, canonicalKey, opts?.connId);
+      // Fanout is keyed by the canonical session; retain the connection owner for safe reconnect.
+      if (evt.event === "chat.subscribe") {
+        await ctx.nodeSubscribe(nodeId, canonicalKey, opts?.connId);
+      } else {
+        await ctx.nodeUnsubscribe(nodeId, canonicalKey, opts?.connId);
+      }
       return undefined;
     }
     case "exec.started":

@@ -30,6 +30,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_STATE_SCHEMA_VERSION,
+  STATE_WAL_COORDINATOR_WAIT_MS,
   type OpenClawStateDatabase,
 } from "./openclaw-state-db-contract.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
@@ -142,7 +143,7 @@ export function openUnpublishedStateDatabase(params: {
               acquireStateDatabaseCoordinator({
                 databasePath: params.pathname,
                 runtimeDirectory,
-                busyTimeoutMs: 0,
+                busyTimeoutMs: STATE_WAL_COORDINATOR_WAIT_MS,
               }),
               "shared-state WAL maintenance",
               operation,

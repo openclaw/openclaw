@@ -1,4 +1,3 @@
-// Discord API module exposes the plugin public contract.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -39,16 +38,11 @@ export function isThreadArchived(raw: unknown): boolean {
     thread_metadata?: { archived?: unknown };
     threadMetadata?: { archived?: unknown };
   };
-  if (asRecord.archived === true) {
-    return true;
-  }
-  if (asRecord.thread_metadata?.archived === true) {
-    return true;
-  }
-  if (asRecord.threadMetadata?.archived === true) {
-    return true;
-  }
-  return false;
+  return (
+    asRecord.archived === true ||
+    asRecord.thread_metadata?.archived === true ||
+    asRecord.threadMetadata?.archived === true
+  );
 }
 
 function normalizeDiscordBindingChannelId(raw?: string | null): string | null {
@@ -81,10 +75,6 @@ export function summarizeDiscordError(err: unknown): string {
   return "error";
 }
 
-function extractNumericDiscordErrorValue(value: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(value);
-}
-
 function extractDiscordErrorStatus(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -95,9 +85,9 @@ function extractDiscordErrorStatus(err: unknown): number | undefined {
     response?: { status?: unknown };
   };
   return (
-    extractNumericDiscordErrorValue(candidate.status) ??
-    extractNumericDiscordErrorValue(candidate.statusCode) ??
-    extractNumericDiscordErrorValue(candidate.response?.status)
+    parseStrictNonNegativeInteger(candidate.status) ??
+    parseStrictNonNegativeInteger(candidate.statusCode) ??
+    parseStrictNonNegativeInteger(candidate.response?.status)
   );
 }
 
@@ -112,11 +102,11 @@ function extractDiscordErrorCode(err: unknown): number | undefined {
     response?: { body?: { code?: unknown }; data?: { code?: unknown } };
   };
   return (
-    extractNumericDiscordErrorValue(candidate.code) ??
-    extractNumericDiscordErrorValue(candidate.rawError?.code) ??
-    extractNumericDiscordErrorValue(candidate.body?.code) ??
-    extractNumericDiscordErrorValue(candidate.response?.body?.code) ??
-    extractNumericDiscordErrorValue(candidate.response?.data?.code)
+    parseStrictNonNegativeInteger(candidate.code) ??
+    parseStrictNonNegativeInteger(candidate.rawError?.code) ??
+    parseStrictNonNegativeInteger(candidate.body?.code) ??
+    parseStrictNonNegativeInteger(candidate.response?.body?.code) ??
+    parseStrictNonNegativeInteger(candidate.response?.data?.code)
   );
 }
 

@@ -261,6 +261,9 @@ describe("worktrees cli", () => {
       issues: [],
       issueCount: 0,
       protectedCount: 0,
+      protectionReasons: {},
+      orphansRetired: 0,
+      retiredCheckoutPaths: [],
       limitsSatisfied: true,
     });
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
@@ -271,6 +274,7 @@ describe("worktrees cli", () => {
 
     expect(gc).toHaveBeenCalledWith({
       limits: { maxCount: 100 },
+      retryDeferred: true,
       shouldProtectOwner: expect.any(Function),
       shouldRemoveOwner: expect.any(Function),
     });
@@ -293,6 +297,9 @@ describe("worktrees cli", () => {
       ],
       issueCount: 1,
       protectedCount: 0,
+      protectionReasons: {},
+      orphansRetired: 0,
+      retiredCheckoutPaths: [],
       limitsSatisfied: false,
     };
     vi.spyOn(managedWorktrees, "gc").mockResolvedValue(result);

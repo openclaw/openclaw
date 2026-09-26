@@ -1,4 +1,3 @@
-// Mattermost plugin module implements directory behavior.
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectMattermostAccount, listMattermostAccountIds } from "./accounts.js";
@@ -131,22 +130,15 @@ export async function listMattermostDirectoryGroups(
 export async function listMattermostDirectoryPeers(
   params: MattermostDirectoryParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const clients = buildClients(params);
-  if (!clients.length) {
-    return [];
-  }
   // All bots see the same user list, so one client suffices (unlike channels
   // where private channel membership varies per bot).
-  const client = clients[0];
+  const client = buildClients(params)[0];
   if (!client) {
     return [];
   }
   try {
     const me = await fetchMattermostMe(client);
     const teams = await client.request<{ id: string }[]>("/users/me/teams");
-    if (!teams.length) {
-      return [];
-    }
     // Uses first team — multi-team setups may need iteration in the future
     const team = teams[0];
     if (!team) {

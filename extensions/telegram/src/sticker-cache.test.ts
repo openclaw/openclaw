@@ -10,10 +10,6 @@ import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import * as stickerCache from "./sticker-cache-store.js";
-import {
-  TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
-  TELEGRAM_STICKER_CACHE_NAMESPACE,
-} from "./sticker-cache-store.legacy-state.js";
 
 vi.mock("openclaw/plugin-sdk/state-paths", () => ({
   resolveStateDir: () => "/tmp/openclaw-test-sticker-cache",
@@ -37,8 +33,8 @@ describe("sticker-cache", () => {
     resetPluginStateStoreForTests({ closeDatabase: false });
     installStore(
       createPluginStateKeyedStoreForTests("telegram", {
-        namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
-        maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+        namespace: "telegram.sticker-cache",
+        maxEntries: 10_000,
       }),
     );
     await store.clear();
@@ -134,8 +130,8 @@ describe("sticker-cache", () => {
       resetPluginStateStoreForTests();
       installStore(
         createPluginStateKeyedStoreForTests("telegram", {
-          namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
-          maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+          namespace: "telegram.sticker-cache",
+          maxEntries: 10_000,
         }),
       );
       expect(await stickerCache.getCachedSticker("delayed-unique")).toStrictEqual({

@@ -34,6 +34,11 @@ const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
 
 type MemoryReadTarget = { databasePath: string; agentId: string };
 
+export async function prewarmMemorySearchWorker(): Promise<void> {
+  ensureSqliteLibrarySelected();
+  await retrieval.run({ kind: "prewarm" }, {});
+}
+
 export async function runMemoryIndexState(target: MemoryReadTarget, signal?: AbortSignal) {
   ensureSqliteLibrarySelected();
   const result = await retrieval.run({ ...target, kind: "index-state" }, { signal });

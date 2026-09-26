@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { sha256File } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveMacOSDesktopCodexAppPathCandidates,
@@ -18,14 +19,21 @@ export async function readMacOSDesktopGenerationFingerprint(
   ),
 ): Promise<string> {
   const entries: string[] = [];
+  const bundles = new Set<string>();
   for (const candidate of candidates) {
     const command = await statFingerprint(candidate.appServerCommandPath);
     entries.push(`candidate:${candidate.appName}:${candidate.appServerCommandPath}:${command}`);
+    // Executable layouts share one bundle's Computer Use assets.
+    if (bundles.has(candidate.appBundlePath)) {
+      continue;
+    }
+    bundles.add(candidate.appBundlePath);
     for (const artifactPath of resolveMacOSDesktopGenerationPaths(candidate)) {
       entries.push(`${artifactPath}\0${await statFingerprint(artifactPath)}`);
     }
-    const pluginRoot = resolveComputerUsePluginRoot(candidate);
-    entries.push(`${pluginRoot}\0${await directoryTreeFingerprint(pluginRoot)}`);
+    for (const pluginRoot of resolveComputerUseArtifactRoots(candidate)) {
+      entries.push(`${pluginRoot}\0${await readCodexDesktopArtifactTreeFingerprint(pluginRoot)}`);
+    }
   }
   return createHash("sha256").update(entries.join("\0")).digest("hex");
 }
@@ -36,6 +44,8 @@ function resolveMacOSDesktopGenerationPaths(
   return [
     candidate.appBundlePath,
     path.join(candidate.bundledMarketplacePath, ".agents", "plugins", "marketplace.json"),
+    path.join(candidate.appBundlePath, "Contents", "Resources", "cua_node", "bin", "node"),
+    path.join(candidate.appBundlePath, "Contents", "Resources", "cua_node", "bin", "node_repl"),
     ...candidate.computerUseServiceAppPaths.flatMap((servicePath) => [
       servicePath,
       path.join(servicePath, "Contents", "Info.plist"),
@@ -52,8 +62,23 @@ function resolveMacOSDesktopGenerationPaths(
   ];
 }
 
-function resolveComputerUsePluginRoot(candidate: MacOSDesktopCodexAppPathCandidate): string {
-  return path.join(candidate.bundledMarketplacePath, "plugins", "computer-use");
+function resolveComputerUseArtifactRoots(candidate: MacOSDesktopCodexAppPathCandidate): string[] {
+  const modules = path.join(
+    candidate.appBundlePath,
+    "Contents",
+    "Resources",
+    "cua_node",
+    "lib",
+    "node_modules",
+    "@oai",
+  );
+  return [
+    path.join(candidate.bundledMarketplacePath, "plugins", "computer-use"),
+    path.join(candidate.bundledMarketplacePath, "plugins", "unified-computer-use"),
+    path.join(modules, "cua-repl"),
+    path.join(modules, "cua"),
+    path.join(modules, "sky", "dist"),
+  ];
 }
 
 /** Stable roots that cover bundle replacement and recursive artifact updates. */
@@ -69,12 +94,13 @@ export function resolveMacOSDesktopGenerationWatchPaths(
   return [...watched];
 }
 
-async function directoryTreeFingerprint(root: string): Promise<string> {
+export async function readCodexDesktopArtifactTreeFingerprint(root: string): Promise<string> {
   let rootStat: BigIntStats;
   try {
     rootStat = await fs.lstat(root, { bigint: true });
   } catch (error) {
-    if (isNodeError(error, "ENOENT") || isNodeError(error, "ENOTDIR")) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
       return "missing";
     }
     throw error;
@@ -137,7 +163,8 @@ async function statFingerprint(filePath: string): Promise<string> {
     const content = target.isFile() ? await readFileFingerprint(filePath, target, true) : "";
     return `${type}:${own}:${link}:${realPath}:${statTuple(target)}:${content}`;
   } catch (error) {
-    if (isNodeError(error, "ENOENT") || isNodeError(error, "ENOTDIR")) {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
       return "missing";
     }
     throw error;
@@ -175,8 +202,4 @@ function sameStat(left: BigIntStats, right: BigIntStats): boolean {
 
 function statTuple(stat: BigIntStats): string {
   return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
-}
-
-function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
 }

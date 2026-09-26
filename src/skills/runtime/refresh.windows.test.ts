@@ -7,7 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { getSkillsSourceVersion } from "./refresh-state.js";
 import { createSkillsWatcherMock } from "./refresh.watcher.test-support.js";
 
-const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
+const { createdWatchers, watchMock, nativeWatchMock, nativeContentWatchMock, watchForSkillRoot } =
   createSkillsWatcherMock();
 let refreshModule: typeof import("./refresh.js");
 let fixtureRoot: string;
@@ -16,6 +16,9 @@ let fixtureWorkspaceDir: string;
 vi.mock("chokidar", () => ({ default: { watch: watchMock } }));
 vi.mock("./refresh-ancestor-native.js", () => ({
   createNativeSkillsAncestorWatcher: nativeWatchMock,
+}));
+vi.mock("./refresh-content-native.js", () => ({
+  createNativeSkillsContentWatcher: nativeContentWatchMock,
 }));
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: vi.fn(() => []),
@@ -62,7 +65,8 @@ describe("Windows skills watcher paths", () => {
         const shared = watchForSkillRoot(siblingRoot).watcher;
         const emitRawAndDrain = async (rawPath: string) => {
           shared.emit("raw", "rename", rawPath, { watchedPath: root });
-          await Promise.resolve();
+          // Promotion waits for the prior logical owner's joined retirement.
+          await vi.advanceTimersByTimeAsync(0);
         };
         if (phase === "reconciliation") {
           refreshModule.ensureSkillsWatcher({ workspaceDir, config });

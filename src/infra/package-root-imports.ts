@@ -112,8 +112,7 @@ export function collectPackageRootImports(
   onImport?: (specifier: string, start: number, kind: "static" | "runtime") => void,
 ): string[] {
   const { parse }: typeof import("@babel/parser") = require("@babel/parser");
-  // SAFETY: Babel 7 exposes its typed traversal API as the default CommonJS export.
-  const { default: traverse } = require("@babel/traverse") as typeof import("@babel/traverse");
+  const { default: traverse }: typeof import("@babel/traverse") = require("@babel/traverse");
   const file = parse(source, {
     sourceType: "unambiguous",
     allowUndeclaredExports: true,

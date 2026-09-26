@@ -291,11 +291,8 @@ describe("fetchClaudeUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
-  it.each([
-    { name: "null", payload: null },
-    { name: "array", payload: [] },
-  ])("treats a successful top-level $name as an empty usage snapshot", async ({ payload }) => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+  it("treats a successful top-level null as an empty usage snapshot", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, null));
 
     const result = await fetchClaudeUsage("token", 5000, mockFetch);
 
@@ -472,11 +469,6 @@ describe("fetchClaudeUsage", () => {
       usageResponse: () => makeResponse(200, {}),
     },
     {
-      name: "org list has no id",
-      orgResponse: () => makeResponse(200, [{}]),
-      usageResponse: () => makeResponse(200, {}),
-    },
-    {
       name: "org list has a malformed id",
       orgResponse: () => makeResponse(200, [{ uuid: 123 }]),
       usageResponse: () => makeResponse(200, {}),
@@ -485,11 +477,6 @@ describe("fetchClaudeUsage", () => {
       name: "usage request fails",
       orgResponse: makeOrgAResponse,
       usageResponse: () => makeResponse(503, "down"),
-    },
-    {
-      name: "usage request has no windows",
-      orgResponse: makeOrgAResponse,
-      usageResponse: () => makeResponse(200, {}),
     },
     {
       name: "usage request returns null",

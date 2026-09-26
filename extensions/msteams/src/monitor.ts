@@ -444,37 +444,31 @@ export async function monitorMSTeamsProvider(
     void runMSTeamsFileConsentInvokeHandler(adaptSdkContext(ctx, app), log);
   });
 
-  const handleSdkSigninInvoke = async (
-    ctx: unknown,
-    delegateName: "onTokenExchange" | "onVerifyState",
-  ) => {
-    const adaptedCtx = adaptSdkContext(ctx, app);
-    if (!(await isSigninInvokeAuthorized(adaptedCtx, handlerDeps))) {
+  // The SDK transport calls this public operation after validating the request token.
+  // Its system SSO routes precede user middleware, so authorization must run before process.
+  const processActivity = app.process.bind(app);
+  app.process = async (event) => {
+    const activity = event.body;
+    if (
+      activity.type !== "invoke" ||
+      !("name" in activity) ||
+      (activity.name !== "signin/tokenExchange" && activity.name !== "signin/verifyState")
+    ) {
+      return processActivity(event);
+    }
+    const context = { activity: { ...activity, type: activity.type, name: activity.name } };
+    if (!(await isSigninInvokeAuthorized(context, handlerDeps))) {
       return { status: 200, body: {} };
     }
     if (!ssoDeps) {
       log.debug?.("signin invoke received but msteams.sso is not configured", {
-        name: adaptedCtx.activity?.name,
+        name: activity.name,
       });
       return { status: 200, body: {} };
     }
 
-    const sdkSigninApp = app as MSTeamsApp & {
-      onTokenExchange?: (ctx: unknown) => Promise<unknown>;
-      onVerifyState?: (ctx: unknown) => Promise<unknown>;
-    };
-    const delegate = sdkSigninApp[delegateName];
-    if (typeof delegate !== "function") {
-      throw new Error(`Teams SDK ${delegateName} handler is unavailable`);
-    }
-    return delegate.call(sdkSigninApp, ctx);
+    return processActivity(event);
   };
-
-  // Replace the SDK's default sign-in invoke routes with an authz gate that
-  // delegates to the same SDK handlers only after sender policy passes. Registering
-  // a user route with the same name intentionally replaces the SDK system route.
-  app.on("signin.token-exchange", (ctx) => handleSdkSigninInvoke(ctx, "onTokenExchange"));
-  app.on("signin.verify-state", (ctx) => handleSdkSigninInvoke(ctx, "onVerifyState"));
 
   // The delegated SDK sign-in handlers emit `signin` only after a successful
   // token exchange/lookup. Persist that token for later OpenClaw use.

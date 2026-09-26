@@ -1,5 +1,8 @@
 // Gateway request scope tracks request-local plugin runtime context across async work.
-import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestContext,
+} from "../../gateway/server-methods/types.js";
 import {
   getPluginExecutionFrame,
   pluginInstanceInvocation,
@@ -199,4 +202,15 @@ export function getPluginRegistryForContext(): PluginRegistry | null {
     state?.activeRegistry ??
     null
   );
+}
+
+/** Live request context for trusted built-in tools that need direct runtime state. */
+export function getInProcessGatewayRequestContext(
+  resolveGatewayContext?: GatewayContextResolver,
+): GatewayRequestContext | undefined {
+  if (resolveGatewayContext) {
+    return resolveGatewayContext();
+  }
+  const scope = getPluginRuntimeGatewayRequestScope();
+  return scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context;
 }

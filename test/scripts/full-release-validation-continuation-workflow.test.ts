@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
+  chmodSync,
   cpSync,
   mkdirSync,
   mkdtempSync,
@@ -12,6 +13,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const source = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
@@ -208,6 +210,161 @@ describe("full release metadata checkouts", () => {
 });
 
 describe("full release same-parent recovery workflow", () => {
+  it.each([
+    "ci",
+    "plugin-prerelease",
+    "openclaw-release-checks",
+    "openclaw-performance",
+    "npm-telegram-beta-e2e",
+  ])(
+    "includes every declared default in %s reuse identity without installing dependencies",
+    (name) => {
+      const contents = readFileSync(`.github/workflows/${name}.yml`, "utf8");
+      const declared = parse(contents).on.workflow_dispatch.inputs as Record<
+        string,
+        { type: string; default?: unknown }
+      >;
+      const expected = Object.fromEntries(
+        Object.entries(declared)
+          .filter(([key]) => key !== "dispatch_id")
+          .map(([key, value]) => {
+            const defaultValue =
+              value.default ??
+              (value.type === "boolean" ? false : value.type === "number" ? 0 : "");
+            if (
+              typeof defaultValue !== "string" &&
+              typeof defaultValue !== "number" &&
+              typeof defaultValue !== "boolean"
+            ) {
+              throw new Error("Expected a scalar workflow dispatch default");
+            }
+            return [key, String(defaultValue)];
+          }),
+      );
+      expect(releaseChildDispatchInputs(contents, [])).toEqual(expected);
+      const key = Object.keys(expected)[0]!;
+      expect(
+        releaseChildDispatchInputs(contents, [
+          "-f",
+          `${key}=exact=bytes`,
+          "-f",
+          "dispatch_id=ignored",
+        ]),
+      ).toEqual({ ...expected, [key]: "exact=bytes" });
+      expect(() => releaseChildDispatchInputs(contents, ["-f", "unknown=true"])).toThrow(
+        "argument",
+      );
+      expect(() =>
+        releaseChildDispatchInputs(contents.replace("    inputs:", "    inputs: &defaults"), []),
+      ).toThrow();
+    },
+  );
+
+  it("adopts only a matched child and still dispatches an unmatched sibling", () => {
+    const root = tempDirs.make("release-child-dispatch-");
+    const bin = join(root, "bin");
+    const tooling = join(root, "workflow/scripts");
+    mkdirSync(bin);
+    mkdirSync(tooling, { recursive: true });
+    const output = join(root, "outputs");
+    const calls = join(root, "calls");
+    const sha = "a".repeat(40);
+    writeFileSync(
+      join(tooling, "find-reusable-release-child.mjs"),
+      `
+import {appendFileSync} from 'node:fs';
+appendFileSync(process.env.CALLS, JSON.stringify(process.argv.slice(2)) + '\\n');
+if (process.env.CHILD_WORKFLOW_KIND === 'ci') {
+  appendFileSync(process.env.GITHUB_OUTPUT, 'run_id=101\\nrun_attempt=1\\nchild_reuse={"role":"normalCi"}\\n');
+} else process.exitCode = 3;
+`,
+    );
+    const gh = join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}
+import {appendFileSync} from 'node:fs';
+const args=process.argv.slice(2);
+appendFileSync(process.env.CALLS, JSON.stringify(args)+'\\n');
+if (args[0] === 'workflow') console.log('https://github.com/openclaw/openclaw/actions/runs/202');
+else if (args[1].includes('/commits/')) console.log('${sha}');
+else if (args[1].includes('/actions/workflows/')) console.log('88');
+else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:'workflow_dispatch',display_title:'OpenClaw Performance full-release-validation-77-1',head_sha:'${sha}',run_attempt:1,html_url:'https://github.com/openclaw/openclaw/actions/runs/202'}));
+`,
+    );
+    chmodSync(gh, 0o755);
+    const env = {
+      ...process.env,
+      PATH: `${bin}${delimiter}${process.env.PATH}`,
+      CALLS: calls,
+      GITHUB_OUTPUT: output,
+      GITHUB_STEP_SUMMARY: join(root, "summary"),
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_RUN_ID: "77",
+      GITHUB_RUN_ATTEMPT: "1",
+      CHILD_EVIDENCE_REUSE: "true",
+      CHILD_WORKFLOW_REF: "main",
+      PARENT_WORKFLOW_SHA: sha,
+      TARGET_REF: "main",
+      TARGET_SHA: sha,
+      TARGET_CONTEXT_REF: "",
+      RELEASE_PROFILE: "stable",
+    };
+    for (const kind of ["ci", "performance"]) {
+      execFileSync("bash", ["-c", String(step("normal_ci", "Dispatch CI").run)], {
+        cwd: root,
+        env: { ...env, CHILD_WORKFLOW_KIND: kind },
+        timeout: 10_000,
+      });
+    }
+    const recorded = readFileSync(calls, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(recorded.filter((args) => args[0] === "workflow")).toEqual([
+      expect.arrayContaining(["run", "openclaw-performance.yml", "publish_reports=false"]),
+    ]);
+    expect(recorded[0]).toEqual(expect.arrayContaining(["ci.yml", `target_ref=${sha}`]));
+    expect(readFileSync(output, "utf8")).toContain('child_reuse={"role":"normalCi"}');
+    expect(readFileSync(output, "utf8")).toContain("run_id=202");
+  });
+
+  it("starts source validation with artifact producers and releases candidate consumers immediately", () => {
+    for (const job of [
+      "normal_ci",
+      "plugin_prerelease_independent",
+      "release_checks_independent",
+      "performance",
+      "prepare_npm_package",
+      "prepare_docker_release",
+    ]) {
+      expect(workflow.jobs[job], job).toHaveProperty("needs", [
+        "resolve_target",
+        "plugin_compatibility_readiness",
+        "evidence_reuse",
+      ]);
+    }
+    expect(workflow.jobs.candidate_acquisition).toHaveProperty("needs", [
+      "resolve_target",
+      "evidence_reuse",
+      "prepare_npm_package",
+    ]);
+    expect(step("prepare_npm_package", "Wait for publishable npm package").env).toMatchObject({
+      ARTIFACT_OUTPUT: "raw",
+    });
+    expect(workflow.jobs.plugin_prerelease_candidate).toHaveProperty("needs", [
+      "resolve_target",
+      "evidence_reuse",
+      "candidate_acquisition",
+    ]);
+    expect(workflow.jobs.release_checks_candidate).toHaveProperty("needs", [
+      "resolve_target",
+      "plugin_compatibility_readiness",
+      "evidence_reuse",
+      "candidate_acquisition",
+    ]);
+  });
+
   it.each(["failure", "success", "missing"])(
     "reports %s locale diagnostics without changing validation evidence",
     (conclusion) => {

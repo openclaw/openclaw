@@ -1,4 +1,3 @@
-// Mattermost plugin module implements client behavior.
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -43,6 +42,11 @@ const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type MattermostRequestInit = RequestInit & {
   timeoutMs?: number;
+  /**
+   * The caller discards the success receipt of this mutation. Once Mattermost
+   * accepted it, a lost or unreadable body must not report the mutation failed.
+   */
+  discardResponse?: boolean;
   /** Internal dispatch evidence; never forwarded to the HTTP transport. */
   isMessagePost?: boolean;
 };
@@ -301,13 +305,14 @@ export function createMattermostClient(params: {
 
   const request = async <T>(path: string, init?: MattermostRequestInit): Promise<T> => {
     const url = buildMattermostApiUrl(baseUrl, path);
-    const headers = new Headers(init?.headers);
+    const { discardResponse, ...requestInit } = init ?? {};
+    const headers = new Headers(requestInit.headers);
     headers.set("Authorization", `Bearer ${token}`);
-    if (typeof init?.body === "string" && !headers.has("Content-Type")) {
+    if (typeof requestInit.body === "string" && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
     const isMessagePost = path === "/posts" && init?.method?.toUpperCase() === "POST";
-    const res = await fetchImpl(url, { ...init, headers, isMessagePost });
+    const res = await fetchImpl(url, { ...requestInit, headers, isMessagePost });
     if (!res.ok) {
       const detail = await readMattermostError(res, headers);
       throw new Error(
@@ -319,13 +324,13 @@ export function createMattermostClient(params: {
       return undefined as T;
     }
 
-    if (path === "/reactions" && init?.method?.toUpperCase() === "POST") {
+    if (discardResponse) {
       try {
         await res.body?.cancel();
       } catch {
         // Ignore cancellation failures.
       }
-      // SAFETY: Reaction creation is a no-result mutation; its caller discards the receipt.
+      // SAFETY: The caller declared a no-result mutation and discards the receipt.
       return undefined as T;
     }
 
@@ -443,9 +448,10 @@ export async function sendMattermostTyping(
   if (parentId) {
     payload.parent_id = parentId;
   }
-  await client.request<Record<string, unknown>>("/users/me/typing", {
+  await client.request<void>("/users/me/typing", {
     method: "POST",
     body: JSON.stringify(payload),
+    discardResponse: true,
   });
 }
 
@@ -756,6 +762,7 @@ export async function deleteMattermostPost(
 ): Promise<void> {
   await client.request<void>(`/posts/${postId}`, {
     method: "DELETE",
+    discardResponse: true,
   });
 }
 

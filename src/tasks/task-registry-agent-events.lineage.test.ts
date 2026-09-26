@@ -40,13 +40,18 @@ beforeEach(() => {
   deliveries = captureTaskDeliveryWork();
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
-  resetAgentEventsForTest({ preserveListeners: true });
-  resetGatewayWorkAdmission();
-  resetSystemEventsForTest();
+afterEach(async () => {
+  try {
+    await deliveries.settle();
+  } finally {
+    deliveries[Symbol.dispose]();
+    vi.restoreAllMocks();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
+    resetAgentEventsForTest({ preserveListeners: true });
+    resetGatewayWorkAdmission();
+    resetSystemEventsForTest();
+  }
 });
 
 async function joinEvents() {

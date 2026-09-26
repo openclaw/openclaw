@@ -88,7 +88,7 @@ suite.define(() => {
           const suffix =
             "the project plan and leave the rest of this prompt unchanged while checking every detail";
           await input.fill(prefix + suffix);
-          await input.press("Control+Home");
+          await input.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
           for (const key of Array.from(prefix, () => "ArrowRight")) {
             await input.press(key);
           }
@@ -99,7 +99,7 @@ suite.define(() => {
             params: { query: "" },
           });
 
-          await input.press("Control+End");
+          await input.press(process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End");
           await menu.waitFor({ state: "detached" });
           await input.pressSequentially(" with next steps");
           await page.clock.fastForward(500);

@@ -24,6 +24,7 @@ import {
   MATURITY_SCORECARD_WORKFLOW,
   TSX_IMPORT,
   UPLOAD_ARTIFACT_V7,
+  evaluateWorkflowRunner,
   quoteShell,
   readMaturityScorecardWorkflow,
   readReleaseChecksWorkflow,
@@ -1064,7 +1065,7 @@ describe("ci workflow guards", () => {
     expect(qaValidateJob.steps[0]).toEqual({
       name: "Setup supported Node runtime",
       uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-      with: { "node-version": "24.19.0", "package-manager-cache": false },
+      with: { "node-version": "24.21.0", "package-manager-cache": false },
     });
     const workflowIdentityStep = qaValidateJob.steps[1];
     expect(workflowIdentityStep).toMatchObject({
@@ -1719,7 +1720,8 @@ fi
     expect(renderArtifactStep.run).toContain("QA failures allowed:");
 
     expect(publishPrJob.needs).toEqual(["validate_selected_ref", "publisher_preflight", "publish"]);
-    expect(publishPrJob["runs-on"]).toBe("ubuntu-24.04");
+    // Routed through the optional release runner group; the baseline label is unchanged.
+    expect(evaluateWorkflowRunner(publishPrJob["runs-on"])).toBe("ubuntu-24.04");
     expect(publishPrJob.permissions).toEqual({ actions: "read", contents: "read" });
     for (const fragment of [
       "needs.publisher_preflight.result == 'success'",

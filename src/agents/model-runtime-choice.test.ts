@@ -8,7 +8,7 @@ import { prepareModelChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import {
   getPreparedModelRuntimeAuthStore,
-  setPreparedModelRuntimeAuthStore,
+  bindPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
@@ -281,9 +281,11 @@ describe("prepared model support admission", () => {
             ],
           }),
         });
-        setPreparedModelRuntimeAuthStore(owner, {
-          version: 1,
-          profiles: { personal: { provider: "personal", type: "api_key", key: "synthetic-key" } },
+        bindPreparedModelRuntimeAuth(owner, {
+          store: {
+            version: 1,
+            profiles: { personal: { provider: "personal", type: "api_key", key: "synthetic-key" } },
+          },
         });
         const callGateway = vi.fn(async () => {
           throw new Error("Reached session creation");
@@ -804,15 +806,17 @@ describe("prepared model support admission", () => {
     const owner = publish(() => true, config, {
       modelCatalog: { entries: [row], routeVariants: [row] },
     });
-    setPreparedModelRuntimeAuthStore(owner, {
-      version: 1,
-      profiles: {
-        oauth: {
-          provider: "openai",
-          type: "oauth",
-          access: "synthetic-access",
-          refresh: "synthetic-refresh",
-          expires: 9_999_999_999_999,
+    bindPreparedModelRuntimeAuth(owner, {
+      store: {
+        version: 1,
+        profiles: {
+          oauth: {
+            provider: "openai",
+            type: "oauth",
+            access: "synthetic-access",
+            refresh: "synthetic-refresh",
+            expires: 9_999_999_999_999,
+          },
         },
       },
     });
@@ -876,7 +880,7 @@ describe("prepared model support admission", () => {
         },
       ],
     });
-    setPreparedModelRuntimeAuthStore(owner, { version: 1, profiles: {} });
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
     expect(
       await prepareModelChoice({ ...selection, cfg: config, raw: "fixture/native" }),
     ).toMatchObject({ kind: "resolved", ref: { provider: "fixture", model: "native" } });

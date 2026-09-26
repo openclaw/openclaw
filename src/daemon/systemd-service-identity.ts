@@ -1,4 +1,5 @@
 /** Capture and revalidate the native owner across a stopped-service repair. */
+import os from "node:os";
 import {
   findServiceOwnershipRefusal,
   ServiceInspectionError,
@@ -11,9 +12,20 @@ import type {
 } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { openSystemdBroker, openSystemdMachineBroker } from "./systemd-peer-native.js";
-import { assertSystemdServiceAccount } from "./systemd-service-files.js";
 import { SYSTEMD_DEFAULT_STOP_TIMEOUT_MS } from "./systemd-time-span.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
+
+export function assertSystemdServiceAccount(user: string) {
+  const account = os.userInfo();
+  if (
+    user !== account.username &&
+    user !== String(account.uid) &&
+    !(user === "" && account.uid === 0)
+  ) {
+    throw new ServiceOwnershipRefusalError("systemd-account-refused");
+  }
+  return account;
+}
 
 const MANAGER = "org.freedesktop.systemd1";
 const MANAGER_PATH = "/org/freedesktop/systemd1";

@@ -36,6 +36,7 @@ const CHAT_ATTACHMENT_ACCEPT =
 const LARGE_PASTE_TEXT_THRESHOLD = 1000;
 const LARGE_PASTE_TEXT_MIME_TYPE = "text/plain";
 const LARGE_PASTE_TEXT_FILE_PREFIX = "pasted-text-";
+const CHAT_ATTACHMENT_READ_TIMEOUT_MS = 15_000;
 
 function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
@@ -181,11 +182,22 @@ function readAttachmentFile(
   }
   const reader = new FileReader();
   let settled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cancel = (outcome: "error" | "aborted") => {
+    finish(outcome);
+    try {
+      reader.abort();
+    } catch {
+      // Ignore reader abort errors on stalled handles.
+    }
+  };
   const finish = (outcome: "ready" | "error" | "aborted") => {
     if (settled) {
       return;
     }
     settled = true;
+    clearTimeout(timer);
+    timer = undefined;
     signal.removeEventListener("abort", abort);
     entry.cancel = undefined;
     if (outcome === "ready" && typeof reader.result === "string" && !signal.aborted) {
@@ -203,18 +215,16 @@ function readAttachmentFile(
           .filter(({ attachment }) => readyIds.has(attachment.id))
           .map(({ attachment }) => attachment),
       );
-      reads.complete(entry);
+      reads.settle(entry, "ready");
     } else if (outcome === "aborted" || signal.aborted) {
       reads.remove(entry);
     } else {
-      reads.fail(entry);
+      reads.settle(entry, "error");
     }
     entry.destination.onPendingReadsChange?.(-1);
   };
-  const abort = () => {
-    finish("aborted");
-    reader.abort();
-  };
+  const abort = () => cancel("aborted");
+  const onTimeout = () => cancel("error");
   entry.cancel = abort;
   signal.addEventListener("abort", abort, { once: true });
   reader.addEventListener("error", () => finish("error"), { once: true });
@@ -223,9 +233,14 @@ function readAttachmentFile(
   reader.addEventListener("progress", (event) => {
     if (!settled && event.lengthComputable && event.total > 0) {
       reads.updateProgress(entry, Math.min(1, Math.max(0, event.loaded / event.total)));
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = setTimeout(onTimeout, CHAT_ATTACHMENT_READ_TIMEOUT_MS);
+      }
     }
   });
   entry.destination.onPendingReadsChange?.(1);
+  timer = setTimeout(onTimeout, CHAT_ATTACHMENT_READ_TIMEOUT_MS);
   try {
     reader.readAsDataURL(file);
   } catch {
@@ -308,11 +323,6 @@ function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsP
   appendChatAttachmentFiles(files, props);
 }
 
-function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentControlsProps) {
-  e.preventDefault();
-  appendChatAttachmentFiles([...(e.dataTransfer?.files ?? [])], props);
-}
-
 type ChatAttachmentDropProps = ChatAttachmentControlsProps & {
   canCompose: boolean;
 };
@@ -383,7 +393,7 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
       event.stopPropagation();
       clearActive(event);
       if (props.canCompose) {
-        handleChatAttachmentDrop(event, props);
+        appendChatAttachmentFiles([...(event.dataTransfer?.files ?? [])], props);
       }
     },
   };

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Control UI module implements user identity behavior.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isRenderableControlUiAvatarUrl, resolveChatAvatarRenderUrl } from "../lib/avatar.ts";
 
@@ -58,7 +57,7 @@ export function resolveLocalUserAvatarText(
   input?: Partial<LocalUserIdentity> | null,
 ): string | null {
   const normalized = normalizeLocalUserIdentity(input);
-  const avatar = normalizeOptionalString(normalized.avatar);
+  const avatar = normalized.avatar;
   if (!avatar) {
     return null;
   }

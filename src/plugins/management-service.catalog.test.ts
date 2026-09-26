@@ -104,6 +104,7 @@ describe("managed plugin catalog", () => {
         version: "2.0.0",
         featured: true,
         order: 40,
+        clawhubPackage: "@openclaw/diffs",
         install: { source: "clawhub", packageName: "@openclaw/diffs" },
       }),
     ]);
@@ -121,6 +122,7 @@ describe("managed plugin catalog", () => {
         installed: false,
         featured: true,
         order: 40,
+        clawhubPackage: "@openclaw/diffs",
         install: { source: "official", pluginId: "diffs" },
       }),
     ]);
@@ -328,6 +330,57 @@ describe("managed plugin catalog", () => {
       }),
     ]);
     expect(catalog.mutationAllowed).toBe(true);
+  });
+
+  it("joins the trusted bundled CUA identity with its published computer-use card", async () => {
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", undefined);
+    vi.stubEnv("CLAWHUB_URL", undefined);
+    const packageName = "@openclaw/cua-computer";
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        enabled: false,
+        id: "cua-computer",
+        name: "CUA Computer",
+        categories: ["computer-use"],
+      }),
+    );
+
+    const local = await listManagedPlugins({
+      config: {},
+      env: {},
+      officialCatalog: { entries: [] },
+    });
+    expect(local.plugins[0]?.clawhubPackage).toBe(packageName);
+
+    const entries = joinClawHubPluginCatalog({
+      local,
+      remote: [
+        {
+          packageName,
+          displayName: "CUA Computer",
+          family: "code-plugin",
+          isOfficial: true,
+          categories: ["computer-use"],
+        },
+      ],
+      categories: [
+        {
+          slug: "computer-use",
+          label: "Computer use",
+          description: "Computer and browser control",
+          icon: "monitor",
+          order: 0,
+          pinnedPackages: [packageName],
+        },
+      ],
+      intent: "all",
+      includeBundledOnly: true,
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      catalog: { packageName, categories: ["computer-use"], categoryRanks: { "computer-use": 0 } },
+      local: { pluginId: "cua-computer", installed: true, action: "manage" },
+    });
   });
 
   const privateRegistry = "https://private.example/clawhub";

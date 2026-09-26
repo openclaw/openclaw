@@ -12,8 +12,9 @@ import {
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
 import { assertNoCmdLineBreak, parseCmdSetAssignment, renderCmdSetAssignment } from "./cmd-set.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";
-import { resolveGatewayTaskScriptPath } from "./paths.js";
-import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { resolveGatewayTaskScriptPath as resolveTaskScriptPath } from "./paths.js";
+import { probeScheduledTaskState } from "./schtasks-state-probe.js";
+import { ServiceInspectionError } from "./service-inspection-error.js";
 import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceCommandConfig,
@@ -149,10 +150,6 @@ export function shouldFallbackToStartupEntry(params: { code: number; detail: str
     /schtasks timed out/i.test(params.detail) ||
     /schtasks produced no output/i.test(params.detail)
   );
-}
-
-export function resolveTaskScriptPath(env: GatewayServiceEnv): string {
-  return resolveGatewayTaskScriptPath(env);
 }
 
 function resolveWindowsStartupDir(env: GatewayServiceEnv): string {
@@ -325,6 +322,8 @@ export async function readScheduledTaskCommand(
   env: GatewayServiceEnv,
   options?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceCommandConfig | null> {
+  const deadline =
+    options?.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs;
   const scriptPath = resolveTaskScriptPath(env);
   try {
     const content = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
@@ -392,9 +391,17 @@ export async function readScheduledTaskCommand(
     if (!options?.requireEffective) {
       return null;
     }
+    const remaining = deadline === undefined ? undefined : deadline - performance.now();
     if (
       hasErrnoCode(error, "ENOENT") &&
-      (await isScheduledTaskDefinitionAbsent(env, options.timeoutMs).catch(() => false))
+      (remaining === undefined || remaining > 0) &&
+      (await isScheduledTaskDefinitionAbsent(env, remaining).catch((inspectionError: unknown) => {
+        if (inspectionError instanceof ServiceInspectionError) {
+          throw inspectionError;
+        }
+        return false;
+      })) &&
+      (deadline === undefined || performance.now() < deadline)
     ) {
       return null;
     }
@@ -408,7 +415,11 @@ async function isScheduledTaskDefinitionAbsent(
   timeoutMs?: number,
 ): Promise<boolean> {
   // A missing script can still belong to a registered task or Startup login item.
-  if (probeScheduledTaskExists(resolveTaskName(env), timeoutMs) !== false) {
+  const probe = probeScheduledTaskState(resolveTaskName(env), timeoutMs);
+  if (probe.status === "unknown") {
+    throw new ServiceInspectionError("windows-task-inspection-failed", probe.diagnostic);
+  }
+  if (probe.status !== "missing") {
     return false;
   }
   for (const pathname of [resolveTaskScriptPath(env), ...resolveStartupEntryPaths(env)]) {
@@ -493,10 +504,6 @@ function quoteVbsString(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
 
-function quoteVbsRunCommand(scriptPath: string): string {
-  return quoteVbsString(`"${scriptPath}"`);
-}
-
 export function buildHiddenLauncherScript(params: {
   description?: string;
   scriptPath: string;
@@ -514,8 +521,8 @@ export function buildHiddenLauncherScript(params: {
       `shell.Environment("Process")("${WINDOWS_TASK_LAUNCHER_ENV}") = "${WINDOWS_TASK_LAUNCHER_ACTIVE}"`,
     );
   }
-  lines.push(`WScript.Quit shell.Run(${quoteVbsRunCommand(params.scriptPath)}, 0, True)`);
+  lines.push(`WScript.Quit shell.Run(${quoteVbsString(`"${params.scriptPath}"`)}, 0, True)`);
   return `${lines.join("\r\n")}\r\n`;
 }
 
-export { encodeWindowsLauncherScript };
+export { encodeWindowsLauncherScript, resolveTaskScriptPath };

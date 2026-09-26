@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
@@ -9,6 +10,7 @@ import {
   type MockServer,
   QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
   createMockServerTestHarness,
+  guestCodeModeExecTool,
   requireRecord,
   postJson,
   expectOk,
@@ -361,11 +363,7 @@ const CODEX_CUSTOM_PATCH_NAMESPACE = {
 const ANTHROPIC_GUEST_CODE_MODE_TOOLS = [
   {
     name: "exec",
-    input_schema: {
-      type: "object",
-      properties: { code: { type: "string" } },
-      required: ["code"],
-    },
+    input_schema: guestCodeModeExecTool.parameters,
   },
   {
     name: "wait",
@@ -6404,13 +6402,7 @@ Update and merge these partial structured summaries.`,
     const tools = [
       {
         name: "exec",
-        input_schema: {
-          type: "object",
-          properties: {
-            code: { type: "string" },
-          },
-          required: ["code"],
-        },
+        input_schema: guestCodeModeExecTool.parameters,
       },
       {
         name: "wait",
@@ -6479,7 +6471,14 @@ Update and merge these partial structured summaries.`,
 
     const readAgent = readToolUse(await request());
     expect(readAgent.name).toBe("exec");
-    expect(readAgent.input).toEqual({ code: expect.any(String) });
+    const readAgentArgs = requireRecord(readAgent.input, "exec input");
+    validateToolArguments(guestCodeModeExecTool, {
+      type: "toolCall",
+      id: String(readAgent.id),
+      name: "exec",
+      arguments: readAgentArgs,
+    });
+    expect(readAgentArgs).toEqual({ title: expect.any(String), code: expect.any(String) });
     const readAgentCode = String(requireRecord(readAgent.input, "exec input").code);
     expect(readAgentCode).toContain("await catalog.search(targetName)");
     expect(readAgentCode).toContain("await target(targetArgs)");

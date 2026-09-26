@@ -12,6 +12,7 @@ import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js"
 import {
   areAgentRunModelsEqual,
   buildAgentRunProjectionIndex,
+  mergeProjectedAgentRunStates,
   projectedAgentRunInputKey,
   projectedRunIdentity,
 } from "./agent-run-projection.js";
@@ -631,13 +632,7 @@ export function resolveProjectedAgentRunProgressState(params: {
       statuses.push(index.ownerlessSessionIds.get(params.sessionId));
     }
   }
-  return statuses.includes("running")
-    ? "running"
-    : statuses.includes("queued")
-      ? "queued"
-      : statuses.includes("capacity-wait")
-        ? "capacity-wait"
-        : undefined;
+  return statuses.reduce(mergeProjectedAgentRunStates, undefined);
 }
 
 /** Clears context state for a run that has ended or been discarded. */

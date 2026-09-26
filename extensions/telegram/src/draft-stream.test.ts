@@ -746,67 +746,34 @@ describe("createTelegramDraftStream", () => {
     expect(stream.lastDeliveredText?.()).toBe("Hello again");
   });
 
-  it("suspends preview edits for retry_after during flood control", async () => {
-    vi.useFakeTimers();
-    try {
-      const api = createMockDraftApi();
-      api.editMessageText.mockRejectedValueOnce(
-        Object.assign(
-          new Error("Call to 'editMessageText' failed! (429: Too Many Requests: retry after 1)"),
-          { error_code: 429, parameters: { retry_after: 1 } },
-        ),
-      );
-      const stream = createDraftStream(api);
+  it("keeps the newest preview pending when the account limiter skips a flooded edit", async () => {
+    const api = createMockDraftApi();
+    const warn = vi.fn();
+    const flooded = () =>
+      Object.assign(new Error("429: Too Many Requests: retry after 5"), {
+        error_code: 429,
+        parameters: { retry_after: 5 },
+      });
+    api.editMessageText
+      .mockRejectedValueOnce(flooded())
+      .mockRejectedValueOnce(flooded())
+      .mockRejectedValueOnce(flooded())
+      .mockRejectedValueOnce(flooded());
+    const stream = createDraftStream(api, { warn });
 
-      stream.update("Hello");
+    stream.update("Hello");
+    await stream.flush();
+    for (const text of ["one", "two", "three", "four"]) {
+      stream.update(`Hello ${text}`);
       await stream.flush();
-      stream.update("Hello again");
-      await stream.flush();
-      stream.update("Hello more");
-      await stream.flush();
-      expect(api.editMessageText).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(1100);
-      await stream.flush();
-
-      expect(api.editMessageText).toHaveBeenCalledTimes(2);
-      expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello more");
-    } finally {
-      vi.useRealTimers();
     }
-  });
+    stream.update("Hello final");
+    await stream.stop();
 
-  it("gates stop's initial final flush on an existing retry_after window", async () => {
-    vi.useFakeTimers();
-    try {
-      const api = createMockDraftApi();
-      api.editMessageText.mockRejectedValueOnce(
-        Object.assign(new Error("429: retry after 1"), {
-          error_code: 429,
-          parameters: { retry_after: 1 },
-        }),
-      );
-      const stream = createDraftStream(api);
-
-      stream.update("Hello");
-      await stream.flush();
-      stream.update("Hello again");
-      await stream.flush();
-      stream.update("Hello final");
-      await stream.flush();
-      expect(api.editMessageText).toHaveBeenCalledTimes(1);
-
-      const stopPromise = stream.stop();
-      await vi.advanceTimersByTimeAsync(999);
-      expect(api.editMessageText).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      await stopPromise;
-
-      expect(api.editMessageText).toHaveBeenCalledTimes(2);
-      expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello final");
-    } finally {
-      vi.useRealTimers();
-    }
+    // Skipped previews do not spend the failure budget that stops the stream.
+    expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello final");
+    expect(stream.lastDeliveredText()).toBe("Hello final");
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("preview failed"));
   });
 
   it("stops the preview after repeated retryable edit failures", async () => {
@@ -1195,13 +1162,7 @@ describe("createTelegramDraftStream", () => {
       });
 
       stream.update("1234567890ABCDEFGHIJKLMNOPQRST");
-      const stopPromise = stream.stop();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(attempts).toEqual(["1234567890", "ABCDEFGHIJ"]);
-      await vi.advanceTimersByTimeAsync(999);
-      expect(attempts).toEqual(["1234567890", "ABCDEFGHIJ"]);
-      await vi.advanceTimersByTimeAsync(1);
-      await stopPromise;
+      await stream.stop();
 
       expect(attempts).toEqual(["1234567890", "ABCDEFGHIJ", "ABCDEFGHIJ", "KLMNOPQRST"]);
       expect(accepted).toEqual(["1234567890", "ABCDEFGHIJ", "KLMNOPQRST"]);

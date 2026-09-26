@@ -11,7 +11,7 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { createCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
-import { registerComputerUseProvider } from "../../plugins/computer-use-contract.js";
+import { registerComputerUseProvider } from "../../plugins/computer-use-registration.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { computerUseSdkEntrypoint } from "../../plugins/loader-sdk-bridge-artifacts.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";

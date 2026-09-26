@@ -177,11 +177,7 @@ function collectSqliteSchemaIssuesInSnapshot(
       ) {
         continue;
       }
-      if (
-        !actualTable.triggers.some((actualTrigger) =>
-          isEqualTrigger(actualTrigger, expectedTrigger),
-        )
-      ) {
+      if (!containsTrigger(actualTable.triggers, expectedTrigger)) {
         add("missing-or-drifted-trigger", expectedTrigger.name);
       }
     }
@@ -195,23 +191,15 @@ function collectSqliteSchemaIssuesInSnapshot(
         continue;
       }
       for (const canonicalTrigger of triggerGroup.triggers) {
-        if (
-          !actualTable.triggers.some((actualTrigger) =>
-            isEqualTrigger(actualTrigger, canonicalTrigger),
-          )
-        ) {
+        if (!containsTrigger(actualTable.triggers, canonicalTrigger)) {
           add("missing-or-drifted-trigger", canonicalTrigger.name);
         }
       }
     }
     for (const actualTrigger of actualTable.triggers) {
       if (
-        !expectedTable.triggers.some((expectedTrigger) =>
-          isEqualTrigger(actualTrigger, expectedTrigger),
-        ) &&
-        !optionalCanonicalTriggers.some((canonicalTrigger) =>
-          isEqualTrigger(actualTrigger, canonicalTrigger),
-        )
+        !containsTrigger(expectedTable.triggers, actualTrigger) &&
+        !containsTrigger(optionalCanonicalTriggers, actualTrigger)
       ) {
         add("unexpected-trigger", actualTrigger.name);
       }
@@ -644,8 +632,8 @@ function collectSqliteIndexContract(
   return createSqliteIndexContract(index, typeof row?.sql === "string" ? row.sql : null, terms);
 }
 
-function isEqualTrigger(left: SqliteSchemaRow, right: SqliteSchemaRow): boolean {
-  return left.name === right.name && left.sql === right.sql;
+function containsTrigger(triggers: SqliteSchemaRow[], expected: SqliteSchemaRow): boolean {
+  return triggers.some((trigger) => trigger.name === expected.name && trigger.sql === expected.sql);
 }
 
 function compareJson(left: unknown, right: unknown): number {

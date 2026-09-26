@@ -16,7 +16,6 @@ export function createSessionRowProjectionArchive(params: {
   enqueue: (id: string, change?: SessionRowChange) => void;
   put: (row: records.Row) => void;
   release: (id: string) => void;
-  prepare: (row: records.Row) => records.Row | undefined;
   config: () => records.Inputs["cfg"];
   context: () => Parameters<typeof records.readSessionRowLineage>[3];
   referenced: NonNullable<Parameters<typeof records.readSessionRowLineage>[4]>;
@@ -189,7 +188,7 @@ export function createSessionRowProjectionArchive(params: {
       if (initial?.entry?.archivedAt === undefined) {
         return initial;
       }
-      const row = records.ready(initial) ? initial : params.prepare(initial);
+      const row = initial;
       if (records.ready(row) && row.entry.archivedAt !== undefined) {
         const id = records.identity(row);
         materialized.delete(id);

@@ -6,6 +6,7 @@ import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { isJavaScriptModulePath } from "./native-module-require.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "./plugin-cache.js";
 import { withProfile } from "./plugin-load-profile.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
@@ -102,6 +103,8 @@ function loadProviderDiscoveryProviders(manifest: PluginManifestRecord): Provide
       Object.assign({}, provider, { pluginId: manifest.id, pluginRoot: rootDir }),
     );
   if (
+    // Native bundled libraries do not bind callbacks; their setup inventory owns SDK resolution.
+    !(manifest.origin === "bundled" && isJavaScriptModulePath(source)) &&
     registry &&
     getPluginRegistryForContext() === registry &&
     resolvePluginRuntimeRecord({ pluginRoot: rootDir, pluginId: manifest.id })?.status === "loaded"

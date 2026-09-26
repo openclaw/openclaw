@@ -448,7 +448,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   const canRelayToUser =
     visibility.showAlerts &&
     ((delivery.channel !== "none" && Boolean(delivery.to)) || internalProjection !== undefined);
-  let useHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
+  const useHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
     cfg,
     agentId,
     heartbeat,
@@ -456,16 +456,18 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     sessionKey,
     chatType: delivery.chatType,
   });
-  let heartbeatRunPrompt = resolveHeartbeatRunPrompt({
-    cfg,
-    heartbeat,
-    preflight,
-    canRelayToUser,
-    startedAt,
-    scheduledTasks,
-    heartbeatScratchContent: preflight.heartbeatScratchContent,
-    useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
-  });
+  const resolveRunPrompt = (useHeartbeatResponseTool: boolean) =>
+    resolveHeartbeatRunPrompt({
+      cfg,
+      heartbeat,
+      preflight,
+      canRelayToUser,
+      startedAt,
+      scheduledTasks,
+      heartbeatScratchContent: preflight.heartbeatScratchContent,
+      useHeartbeatResponseTool,
+    });
+  let heartbeatRunPrompt = resolveRunPrompt(useHeartbeatResponseToolPrompt);
 
   const runSessionKey = run.sessionKey;
   let runSessionEntry = entry;
@@ -562,17 +564,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       chatType: delivery.chatType,
     });
     if (actualUseHeartbeatResponseToolPrompt !== useHeartbeatResponseToolPrompt) {
-      useHeartbeatResponseToolPrompt = actualUseHeartbeatResponseToolPrompt;
-      heartbeatRunPrompt = resolveHeartbeatRunPrompt({
-        cfg,
-        heartbeat,
-        preflight,
-        canRelayToUser,
-        startedAt,
-        scheduledTasks,
-        heartbeatScratchContent: preflight.heartbeatScratchContent,
-        useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
-      });
+      heartbeatRunPrompt = resolveRunPrompt(actualUseHeartbeatResponseToolPrompt);
     }
   }
   return {

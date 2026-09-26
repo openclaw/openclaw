@@ -346,8 +346,13 @@ Examples of non-Plan consumers:
   seam for async output reducers such as tokenjuice.
 
 Plugins must declare `contracts.agentToolResultMiddleware` for each targeted
-runtime, for example `["openclaw", "codex"]`. Installed plugins without that
-contract, or without explicit enablement, cannot register this middleware; keep
+runtime. Supported ids are `agentsapi`, `codex`, and `openclaw`; for example,
+`["agentsapi", "codex", "openclaw"]`. Omitting registration `runtimes` uses
+all supported runtimes declared in the manifest. An explicit registration scope
+can select a subset of those declared runtimes.
+
+Installed plugins without that contract, or without explicit enablement, cannot
+register this middleware; keep
 normal OpenClaw plugin hooks for work that does not need pre-model tool-result
 timing. The old
 embedded-runner-only extension factory registration path has been removed.
@@ -490,7 +495,11 @@ and request parameters. Ordinary modified clicks, downloads, unsupported links,
 and explicit external actions keep their native destination.
 
 The exported passive models include a source `url`, `title`, optional subtitle,
-author, dates, badge, and label/value metadata. A document adds Markdown `body`,
+author, dates, badge, and label/value metadata. A badge can include an optional
+`timestamp` for its status event (for example, a merge or closure). The reader
+displays that timestamp beside the badge in the browser's local time, falling
+back to `createdAt` when it is absent. Keep `createdAt` as the original creation
+time; the plugin owns selecting the event timestamp. A document adds Markdown `body`,
 optional comments and changed-file patches, totals, and explicit partial or
 truncated flags. Comment IDs and source links, review context labels, and badge
 text come from the plugin rather than service-specific conditions in core.

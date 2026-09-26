@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import {
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
   SKILL_LIBRARY_MAX_FILE_BYTES,
@@ -9,7 +10,6 @@ import {
   type SkillsLibraryReceipt,
   type SkillsLibraryUploadResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { readRegularFile } from "../infra/regular-file.js";
 import { callGatewayFromCliWithTransport, type GatewayRpcOpts } from "./gateway-rpc.js";
 
 export async function readLibraryInput(input: string): Promise<{

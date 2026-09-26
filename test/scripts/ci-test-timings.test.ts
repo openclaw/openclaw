@@ -1233,7 +1233,7 @@ it.todo("retains todo coverage");
         ...baseline,
         compactGroupSeconds: {
           blacksmith: { observed: 20, deleted: 30 },
-          github: { observed: 20, deleted: 40 },
+          github: { observed: 20, deleted: 40, "release-full-fixture": 900 },
         },
         uiE2e: {
           ...baseline.uiE2e,
@@ -1259,7 +1259,9 @@ it.todo("retains todo coverage");
       const { timings, changes } = refitTestTimings(runs, previous);
       expect(timings.compactGroupSeconds.blacksmith).toEqual({ observed: 20 });
       expect(timings.compactGroupSeconds.github).toEqual(
-        count >= 3 ? { observed: 20 } : previous.compactGroupSeconds.github,
+        count >= 3
+          ? { observed: 20, "release-full-fixture": 900 }
+          : previous.compactGroupSeconds.github,
       );
       expect(timings.uiE2e.fileSeconds).toEqual(
         count >= 3 ? { [measuredFile]: 100 } : previous.uiE2e.fileSeconds,

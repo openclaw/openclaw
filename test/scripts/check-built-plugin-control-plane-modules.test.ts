@@ -199,7 +199,7 @@ try {
 
 describe("built doctor contract closures", () => {
   it.each([".js", ".cjs"])(
-    "follows %s chunk edges to a forbidden runtime dependency",
+    "checks shared and cyclic %s chunks once while reporting each doctor contract",
     (extension) => {
       const rootDir = makeRoot(extension);
       write(
@@ -218,18 +218,26 @@ describe("built doctor contract closures", () => {
       );
       write(
         rootDir,
+        `dist/extensions/other/doctor-contract-api${extension}`,
+        extension === ".cjs"
+          ? 'module.exports = require("../../token-chunk.cjs");'
+          : 'export * from "../../token-chunk.js";',
+      );
+      write(
+        rootDir,
         `dist/exec-chunk${extension}`,
         extension === ".cjs"
-          ? 'const exec = require("execa"); exports.rule = exec;'
-          : 'import "execa"; export const rule = 1;',
+          ? 'require("./token-chunk.cjs"); const exec = require("execa"); exports.rule = exec;'
+          : 'import "./token-chunk.js"; import "execa"; export const rule = 1;',
       );
-
-      expect(
-        collectBuiltDoctorContractClosureViolations(
-          listBuiltPluginControlPlaneModules({ rootDir }),
-          { rootDir },
-        ),
-      ).toEqual([
+      // Both formats use the same closure check; select the synthetic second plugin explicitly.
+      const modules = ["demo", "other"].map((pluginId) => ({
+        pluginId,
+        kind: "doctor-contract",
+        relativePath: `dist/extensions/${pluginId}/doctor-contract-api${extension}`,
+      }));
+      const readFile = vi.spyOn(fs, "readFileSync");
+      expect(collectBuiltDoctorContractClosureViolations(modules, { rootDir })).toEqual([
         {
           pluginId: "demo",
           kind: "doctor-contract",
@@ -237,7 +245,23 @@ describe("built doctor contract closures", () => {
           dependency: "execa",
           importerPath: `dist/exec-chunk${extension}`,
         },
+        {
+          pluginId: "other",
+          kind: "doctor-contract",
+          relativePath: `dist/extensions/other/doctor-contract-api${extension}`,
+          dependency: "execa",
+          importerPath: `dist/exec-chunk${extension}`,
+        },
       ]);
+      for (const chunk of ["token-chunk", "exec-chunk"]) {
+        expect(
+          readFile.mock.calls.filter(
+            ([file]) => file === path.join(rootDir, `dist/${chunk}${extension}`),
+          ),
+        ).toHaveLength(1);
+      }
+      write(rootDir, `dist/exec-chunk${extension}`, "");
+      expect(collectBuiltDoctorContractClosureViolations(modules, { rootDir })).toEqual([]);
     },
   );
 

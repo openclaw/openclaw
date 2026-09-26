@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { acquireDistArtifactOwnership } from "../../../scripts/lib/dist-artifact-lock.mts";
 import {
   createPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
@@ -54,6 +55,66 @@ async function withTempDir(): Promise<string> {
 }
 
 describe("continuePostCoreUpdateInFreshProcess", () => {
+  it.each([false, true])(
+    "releases artifact ownership only for a target without the prepared-fact consumer (modern=%s)",
+    async (modern) => {
+      const root = await withTempDir();
+      const observation = path.join(root, "ownership.txt");
+      await fs.mkdir(path.join(root, "dist"));
+      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "9999.0.0" }));
+      if (modern) {
+        await fs.mkdir(path.join(root, "scripts", "lib"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "scripts", "lib", "source-update-artifact-preflight.mts"),
+          "export {};\n",
+        );
+      }
+      const lockModule = new URL("../../../scripts/lib/dist-artifact-lock.mts", import.meta.url)
+        .href;
+      await fs.writeFile(
+        path.join(root, "dist", "entry.mjs"),
+        `import fs from "node:fs/promises";
+import { acquireDistArtifactOwnership } from ${JSON.stringify(lockModule)};
+let observed;
+try {
+  const lock = await acquireDistArtifactOwnership(${JSON.stringify(root)});
+  await lock.release();
+  observed = "child-acquired";
+} catch (error) {
+  if (!String(error).includes(${JSON.stringify(`retained by PID ${process.pid}`)})) throw error;
+  observed = "parent-held";
+}
+await fs.writeFile(${JSON.stringify(observation)}, observed);
+await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.stringify(JSON.stringify(pluginUpdate))});
+`,
+      );
+      const sourceArtifactLock = await acquireDistArtifactOwnership(root);
+      try {
+        const result = await continuePostCoreUpdateInFreshProcess({
+          root,
+          sourceRuntimePrepared: true,
+          channel: "dev",
+          requestedChannel: null,
+          opts: {
+            json: true,
+            run: { runId: "fixture-source-lock", env: {}, sourceArtifactLock },
+          },
+          pluginInstallRecords: {},
+          updateStartedAtMs: Date.now(),
+          timeoutMs: 5000,
+          nodeRunner: process.execPath,
+        });
+        expect(result).toEqual({ resumed: true, pluginUpdate });
+        expect(await fs.readFile(observation, "utf8")).toBe(
+          modern ? "parent-held" : "child-acquired",
+        );
+        expect(await sourceArtifactLock.verifyStillHeld()).toBe(modern);
+      } finally {
+        await sourceArtifactLock.release();
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32").each([true, false])(
     "waits for a committed child's shutdown before returning its result (cooperative=%s)",
     async (cooperative) => {
@@ -104,6 +165,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       try {
         result = await continuePostCoreUpdateInFreshProcess({
           root,
+          sourceRuntimePrepared: true,
           channel: "stable",
           requestedChannel: null,
           opts: { json: true, yes: true, timeout: cooperative ? undefined : "3600" },
@@ -142,6 +204,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         mode: 0o700,
         marker: {
           completionOwner: "parent",
+          sourceRuntimePrepared: true,
           timeout: {
             version: 1,
             serialized: cooperative ? "5" : "3600",
@@ -351,10 +414,10 @@ describe("shouldResumePostCoreUpdateInFreshProcess", () => {
     ).toBe(true);
   });
 
-  it("keeps a metadata-identical git update in process when the install kind is unchanged", () => {
+  it("does not resume a skipped git update with unchanged metadata", () => {
     expect(
       shouldResumePostCoreUpdateInFreshProcess({
-        result: unchangedGitResult,
+        result: { ...unchangedGitResult, status: "skipped" },
         downgradeRisk: false,
         installKindChanged: false,
       }),

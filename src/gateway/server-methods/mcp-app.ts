@@ -19,7 +19,7 @@ import {
 import { createMcpAppStandaloneTicket } from "../mcp-app-standalone.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
 function requireString(params: Record<string, unknown>, key: string): string {
   const value = params[key];
@@ -51,17 +51,21 @@ function resolveMcpAppSessionOwner(params: Record<string, unknown>, cfg: OpenCla
   return owner.agentId;
 }
 
-async function runOperation(
-  params: Record<string, unknown>,
-  operation: McpAppOperation,
-  cfg: OpenClawConfig,
-): Promise<unknown> {
-  const active = await resolveMcpAppActiveView({
-    sessionKey: requireString(params, "sessionKey"),
-    agentId: resolveMcpAppSessionOwner(params, cfg),
-    viewId: requireString(params, "viewId"),
-  });
-  return await executeMcpAppOperation(active, operation);
+function operationHandler(
+  buildOperation: (params: Record<string, unknown>) => McpAppOperation,
+): GatewayRequestHandler {
+  return async ({ respond, params, context }) => {
+    await handle(respond, async () => {
+      const operation = buildOperation(params);
+      const cfg = context.getRuntimeConfig();
+      const active = await resolveMcpAppActiveView({
+        sessionKey: requireString(params, "sessionKey"),
+        agentId: resolveMcpAppSessionOwner(params, cfg),
+        viewId: requireString(params, "viewId"),
+      });
+      return await executeMcpAppOperation(active, operation);
+    });
+  };
 }
 
 async function handle(
@@ -163,74 +167,27 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
       });
     });
   },
-  "mcp.app.callTool": async ({ respond, params, context }) => {
-    await handle(
-      respond,
-      async () =>
-        await runOperation(
-          params,
-          {
-            method: "tools/call",
-            params: {
-              name: requireString(params, "toolName"),
-              arguments: (params.arguments ?? {}) as Record<string, unknown>,
-            },
-          },
-          context.getRuntimeConfig(),
-        ),
-    );
-  },
-  "mcp.app.listTools": async ({ respond, params, context }) => {
-    await handle(
-      respond,
-      async () =>
-        await runOperation(
-          params,
-          { method: "tools/list", params: optionalCursor(params) ?? {} },
-          context.getRuntimeConfig(),
-        ),
-    );
-  },
-  "mcp.app.listResources": async ({ respond, params, context }) => {
-    await handle(
-      respond,
-      async () =>
-        await runOperation(
-          params,
-          {
-            method: "resources/list",
-            params: optionalCursor(params) ?? {},
-          },
-          context.getRuntimeConfig(),
-        ),
-    );
-  },
-  "mcp.app.listResourceTemplates": async ({ respond, params, context }) => {
-    await handle(
-      respond,
-      async () =>
-        await runOperation(
-          params,
-          {
-            method: "resources/templates/list",
-            params: optionalCursor(params) ?? {},
-          },
-          context.getRuntimeConfig(),
-        ),
-    );
-  },
-  "mcp.app.readResource": async ({ respond, params, context }) => {
-    await handle(
-      respond,
-      async () =>
-        await runOperation(
-          params,
-          {
-            method: "resources/read",
-            params: { uri: requireString(params, "uri") },
-          },
-          context.getRuntimeConfig(),
-        ),
-    );
-  },
+  "mcp.app.callTool": operationHandler((params) => ({
+    method: "tools/call",
+    params: {
+      name: requireString(params, "toolName"),
+      arguments: (params.arguments ?? {}) as Record<string, unknown>,
+    },
+  })),
+  "mcp.app.listTools": operationHandler((params) => ({
+    method: "tools/list",
+    params: optionalCursor(params) ?? {},
+  })),
+  "mcp.app.listResources": operationHandler((params) => ({
+    method: "resources/list",
+    params: optionalCursor(params) ?? {},
+  })),
+  "mcp.app.listResourceTemplates": operationHandler((params) => ({
+    method: "resources/templates/list",
+    params: optionalCursor(params) ?? {},
+  })),
+  "mcp.app.readResource": operationHandler((params) => ({
+    method: "resources/read",
+    params: { uri: requireString(params, "uri") },
+  })),
 };

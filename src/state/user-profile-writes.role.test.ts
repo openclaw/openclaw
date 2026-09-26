@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -131,20 +132,14 @@ it("keeps all six host SQLite methods idle and publishes the role before observe
     stop = onUserProfilesChanged(() => {
       observed.push(readUserProfileIdentity(profile.id)?.role);
     });
-    const { DatabaseSync, StatementSync } = requireNodeSqlite();
-    const calls = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
     await expect(setCanonicalUserProfileRole(profile.id, "guest")).resolves.toMatchObject({
       id: profile.id,
       role: "guest",
     });
     expect(observed).toEqual(["guest"]);
-    expect(calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
   } finally {
     vi.restoreAllMocks();
     stop();

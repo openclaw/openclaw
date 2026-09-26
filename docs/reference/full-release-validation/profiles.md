@@ -33,7 +33,7 @@ These suites are skipped by `stable` and included by `full`:
 | Area                             | Full-only coverage                                                                                                          |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | Docker live models               | OpenCode Go, OpenRouter, xAI, Z.ai, and Fireworks.                                                                          |
-| Docker live gateway              | Advisory providers split into DeepSeek/Fireworks, OpenCode Go/OpenRouter, and xAI/Z.ai shards.                              |
+| Docker live gateway              | Additional providers split into DeepSeek/Fireworks, OpenCode Go/OpenRouter, and xAI/Z.ai shards.                            |
 | Native gateway provider profiles | Full Anthropic Opus and Sonnet/Haiku shards, Fireworks, DeepSeek, full OpenCode Go model shards, OpenRouter, xAI, and Z.ai. |
 | Native plugin live shards        | Plugins A-K, L-N, O-Z other, Moonshot, and xAI.                                                                             |
 | Native media live shards         | Audio, Google music, MiniMax music, and video groups A-D.                                                                   |
@@ -88,20 +88,16 @@ three provider shards, so it still fans out to all additional Docker gateway job
 Use `cross_os_suite_filter` with `rerun_group=cross-os` when one cross-OS lane
 failed. The filter accepts comma-separated OS ids, suite ids, or OS/suite pairs,
 for example `windows/packaged-upgrade`, `windows`, or `packaged-fresh`.
-All-group filters must retain `packaged-fresh`, `installer-fresh`, and
-`packaged-upgrade` on Linux (`ubuntu`), Windows, and macOS. All nine OS/suite
-pairs are required for `npm-stable-v1` and `npm-beta-v1`; a filter such as
-`ubuntu,macos` is rejected because it omits required Windows proof. Focused
-reruns remain focused evidence, not publication authorization. Cross-OS
-summaries include per-phase timings for packaged upgrade lanes, and long-running
-commands print heartbeat lines so a stuck update is visible before the job
-timeout.
+All-group runs must keep every OS/suite pair: `-f cross_os_suite_filter=ubuntu,windows,macos`
+or `packaged-fresh,installer-fresh,packaged-upgrade` are accepted, while any all-group
+filter that omits one of the nine Linux/Windows/macOS install and upgrade pairs is
+rejected before scheduling. All selected cross-OS outcomes block on failure. Every all-group run must retain
+all nine install/upgrade combinations. Every selected CI, plugin, QA, Telegram,
+and performance lane must succeed; no operator waiver can authorize publication
+with failed selected tests. Stable publication requires stable/full evidence,
+soak, and blocking performance.
 
-Selected QA, source and package Telegram, live-provider, cross-OS, and performance
-failures block validation across beta, stable, full, and Tideclaw alpha profiles.
-Beta no-soak deferrals and reviewed version-specific omissions remain separate
-selection policies. Failed, skipped, or deferred attempts are never reported as
-passed. When
+Skipped or deferred attempts are never reported as passed. When
 `live_suite_filter` explicitly requests a gated QA live lane such as Discord,
 WhatsApp, or Slack, the matching `OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED` repo
 variable must be enabled; otherwise input capture fails instead of silently skipping the lane.

@@ -104,38 +104,42 @@ function renderSignIn(step: WizardStep) {
   `;
 }
 
-export function renderWizardSingleChoice(props: {
-  options: WizardStepOption[];
-  busy: boolean;
-  label: string;
-  value?: unknown;
-  validationErrorId?: string;
-  onAnswer: (value: unknown) => void;
-}) {
-  if (props.options.length <= 2) {
+function renderWizardSingleChoice(props: WizardStepControlsProps, options: WizardStepOption[]) {
+  const label = stepLabel(props.step);
+  if (props.presentation !== "channels" && options.length <= 2) {
     return html`<div
       class="wizard-step__actions"
       role="group"
-      aria-label=${props.label}
+      aria-label=${label}
       aria-describedby=${props.validationErrorId ?? nothing}
     >
-      ${props.options.map((option, index) => html`<button type="button" class=${index === 0 ? "btn primary" : "btn"} ?disabled=${props.busy} @click=${() => props.onAnswer(option.value)}>${renderOptionBody(option)}</button>`)}
+      ${options.map((option, index) => html`<button type="button" class=${index === 0 ? "btn primary" : "btn"} ?disabled=${props.busy} @click=${() => props.onAnswer(option.value)}>${renderOptionBody(option)}</button>`)}
     </div>`;
   }
-  const selectedIndex = props.options.findIndex((option) => Object.is(option.value, props.value));
-  return renderPicker({
-    label: props.label,
-    value: selectedIndex < 0 ? null : String(selectedIndex),
-    options: props.options.map((option, index) => ({
-      value: String(index),
+  const selectedIndex = options.findIndex((option) => Object.is(option.value, props.value));
+  const channels =
+    props.presentation === "channels" &&
+    props.channelSelect &&
+    options.every((option) => typeof option.value === "string");
+  const picker = channels ? renderChannelPicker : renderPicker;
+  return picker({
+    label,
+    value:
+      selectedIndex < 0
+        ? null
+        : channels
+          ? String(options[selectedIndex]?.value)
+          : String(selectedIndex),
+    options: options.map((option, index) => ({
+      value: channels ? String(option.value) : String(index),
       label: option.label,
       description: option.hint,
-      kind: "neutral",
+      kind: channels ? "channel" : "neutral",
     })),
     disabled: props.busy,
     invalid: Boolean(props.validationErrorId),
     describedBy: props.validationErrorId,
-    onChange: (value) => props.onAnswer(props.options[Number(value)]?.value),
+    onChange: (value) => props.onAnswer(channels ? value : options[Number(value)]?.value),
   });
 }
 
@@ -321,37 +325,13 @@ function renderOptionsStep(props: WizardStepControlsProps) {
   const multiple = props.step.type === "multiselect";
   if (!multiple && props.presentation !== "channels") {
     return html`
-      ${renderMessage(props)}
-      ${renderWizardSingleChoice({ options, busy: props.busy, label: stepLabel(props.step), value: props.value, validationErrorId: props.validationErrorId, onAnswer: props.onAnswer })}
+      ${renderMessage(props)} ${renderWizardSingleChoice(props, options)}
       ${props.leadingAction ?? nothing}
     `;
   }
   if (props.presentation === "channels" && !multiple) {
-    const selectedIndex = options.findIndex((option) => Object.is(option.value, props.value));
-    const channels =
-      props.channelSelect && options.every((option) => typeof option.value === "string");
-    const picker = channels ? renderChannelPicker : renderPicker;
     return html`
-      ${renderMessage(props)}
-      ${picker({
-        label: stepLabel(props.step),
-        value:
-          selectedIndex < 0
-            ? null
-            : channels
-              ? String(options[selectedIndex]?.value)
-              : String(selectedIndex),
-        options: options.map((option, index) => ({
-          value: channels ? String(option.value) : String(index),
-          label: option.label,
-          description: option.hint,
-          kind: channels ? "channel" : "neutral",
-        })),
-        disabled: props.busy,
-        invalid: Boolean(props.validationErrorId),
-        describedBy: props.validationErrorId,
-        onChange: (value) => props.onAnswer(channels ? value : options[Number(value)]?.value),
-      })}
+      ${renderMessage(props)} ${renderWizardSingleChoice(props, options)}
       ${
         props.busy
           ? renderAnswerButton(props, t("modelSetup.wizard.continue"), undefined, true)
@@ -431,8 +411,11 @@ export function renderWizardStepControls(
       return props.step.executor === "gateway"
         ? renderProgressStep(props)
         : renderContinueStep(props);
-    // These show whatever the step supplies behind a single Continue.
     case "note":
+      return props.busy && (props.step.externalUrl || props.step.deviceCode)
+        ? renderProgressStep(props)
+        : renderContinueStep(props);
+    // Actions require the user's acknowledgement even when they open a browser.
     case "action":
       return renderContinueStep(props);
   }

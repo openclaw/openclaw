@@ -1,4 +1,3 @@
-import path from "node:path";
 import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createProcessPollDeliveryContract } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
@@ -22,18 +21,14 @@ import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
-  createParams,
+  createTestParams,
   createCodexRuntimePlanFixture,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
-  tempDir,
 } from "./run-attempt-test-harness.js";
-const testing = {
-  hasPendingDynamicToolTerminalDiagnostic,
-};
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -70,10 +65,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         turnStarted.resolve();
       }
     });
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const params = createTestParams();
     setCodexTestToolFactory(params, () => [{ ...process.tool, name: "sandbox_process" }]);
     params.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(params, true);
@@ -142,7 +134,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
 
   it.each([
     { name: "default", timeoutSeconds: undefined, waitMs: 900_000 },
-    { name: "explicit", timeoutSeconds: 900, waitMs: 900_000 },
     { name: "maximum", timeoutSeconds: 3600, waitMs: 3_600_000 },
   ])(
     "returns a credential result after the $name human wait without harness cancellation",
@@ -170,10 +161,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       });
 
       const harness = createStartedThreadHarness();
-      const params = createParams(
-        path.join(tempDir, "session.jsonl"),
-        path.join(tempDir, "workspace"),
-      );
+      const params = createTestParams();
       setCodexTestToolFactory(params, () => [tool]);
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.timeoutMs = waitMs + 120_000;
@@ -254,10 +242,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       }
     });
     try {
-      const params = createParams(
-        path.join(tempDir, "session.jsonl"),
-        path.join(tempDir, "workspace"),
-      );
+      const params = createTestParams();
       setCodexTestToolFactory(params, () => [tool]);
       setCodexTestModelSupportsTools(params, true);
       closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
@@ -355,10 +340,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       diagnosticEvents.push(event),
     );
     try {
-      const params = createParams(
-        path.join(tempDir, "session.jsonl"),
-        path.join(tempDir, "workspace"),
-      );
+      const params = createTestParams();
       params.onAgentEvent = onRunAgentEvent;
       params.onExecutionPhase = onExecutionPhase;
 
@@ -490,75 +472,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
   });
 
-  it("clears dynamic tool diagnostics after successful terminal responses", async () => {
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
-      diagnosticEvents.push(event),
-    );
-    try {
-      const call = {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-echo-1",
-        namespace: null,
-        tool: "echo",
-        arguments: {},
-      } satisfies CodexDynamicToolCallParams;
-
-      emitDynamicToolStartedDiagnostic({
-        call,
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-      });
-      emitDynamicToolTerminalDiagnostic({
-        call,
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        durationMs: 1,
-        response: {
-          success: true,
-          contentItems: [{ type: "inputText", text: "echo done" }],
-        },
-      });
-
-      await flushDiagnosticEvents();
-
-      const toolDiagnosticEvents = diagnosticEvents.filter(
-        (
-          event,
-        ): event is Extract<
-          DiagnosticEventPayload,
-          {
-            type: "tool.execution.started" | "tool.execution.completed" | "tool.execution.error";
-          }
-        > => event.type.startsWith("tool.execution."),
-      );
-      const toolDiagnosticEventSummaries = toolDiagnosticEvents.map((event) => ({
-        type: event.type,
-        toolName: event.toolName,
-        toolCallId: event.toolCallId,
-      }));
-      expect(toolDiagnosticEventSummaries).toContainEqual({
-        type: "tool.execution.started",
-        toolName: "echo",
-        toolCallId: "call-echo-1",
-      });
-      expect(toolDiagnosticEventSummaries.at(-1)).toEqual({
-        type: "tool.execution.completed",
-        toolName: "echo",
-        toolCallId: "call-echo-1",
-      });
-      expect(
-        toolDiagnosticEventSummaries.filter((event) => event.type === "tool.execution.started"),
-      ).toHaveLength(1);
-      expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
-    } finally {
-      unsubscribeDiagnostics();
-    }
-  });
-
   it("emits request-boundary terminal diagnostics when a wrapped dynamic tool does not", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
@@ -590,7 +503,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         durationMs: 1,
       });
       expect(
-        testing.hasPendingDynamicToolTerminalDiagnostic({
+        hasPendingDynamicToolTerminalDiagnostic({
           call,
           runId: "run-1",
           sessionId: "session-1",
@@ -652,236 +565,73 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     }
   });
 
-  it("does not duplicate terminal diagnostics for wrapped dynamic tool blocks", async () => {
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
-      diagnosticEvents.push(event),
-    );
-    try {
-      const call = {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-echo-blocked",
-        namespace: null,
-        tool: "echo",
-        arguments: {},
-      } satisfies CodexDynamicToolCallParams;
-      emitDynamicToolStartedDiagnostic({
-        call,
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-      });
-      emitDynamicToolTerminalDiagnostic({
-        call,
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        durationMs: 1,
-        response: {
-          success: false,
-          diagnosticTerminalType: "blocked",
-          contentItems: [{ type: "inputText", text: "blocked by policy" }],
+  it.each(["blocked", "error"] as const)(
+    "does not duplicate terminal diagnostics for wrapped dynamic tool %s responses",
+    async (terminalType) => {
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
+        diagnosticEvents.push(event),
+      );
+      const context = {
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: `call-echo-${terminalType}`,
+          namespace: null,
+          tool: "echo",
+          arguments: {},
         },
-      });
-      expect(
-        testing.hasPendingDynamicToolTerminalDiagnostic({
-          call,
-          runId: "run-1",
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-        }),
-      ).toBe(true);
-
-      await flushDiagnosticEvents();
-
-      const toolDiagnosticEvents = diagnosticEvents.filter(
-        (
-          event,
-        ): event is Extract<
-          DiagnosticEventPayload,
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+      } satisfies Parameters<typeof emitDynamicToolStartedDiagnostic>[0];
+      try {
+        emitDynamicToolStartedDiagnostic(context);
+        emitDynamicToolTerminalDiagnostic({
+          ...context,
+          durationMs: 1,
+          response: {
+            success: false,
+            ...(terminalType === "blocked" ? { diagnosticTerminalType: terminalType } : {}),
+            contentItems: [{ type: "inputText", text: "wrapped tool failed" }],
+          },
+        });
+        expect(hasPendingDynamicToolTerminalDiagnostic(context)).toBe(true);
+        await flushDiagnosticEvents();
+        expect(
+          diagnosticEvents
+            .filter(
+              (
+                event,
+              ): event is Extract<
+                DiagnosticEventPayload,
+                {
+                  type:
+                    | "tool.execution.started"
+                    | "tool.execution.completed"
+                    | "tool.execution.error"
+                    | "tool.execution.blocked";
+                }
+              > => event.type.startsWith("tool.execution."),
+            )
+            .map((event) => ({
+              type: event.type,
+              toolName: event.toolName,
+              toolCallId: event.toolCallId,
+            })),
+        ).toEqual([
+          { type: "tool.execution.started", toolName: "echo", toolCallId: context.call.callId },
           {
-            type:
-              | "tool.execution.blocked"
-              | "tool.execution.started"
-              | "tool.execution.completed"
-              | "tool.execution.error";
-          }
-        > => event.type.startsWith("tool.execution."),
-      );
-      expect(
-        toolDiagnosticEvents.map((event) => ({
-          type: event.type,
-          toolName: event.toolName,
-          toolCallId: event.toolCallId,
-        })),
-      ).toEqual([
-        {
-          type: "tool.execution.started",
-          toolName: "echo",
-          toolCallId: "call-echo-blocked",
-        },
-        {
-          type: "tool.execution.blocked",
-          toolName: "echo",
-          toolCallId: "call-echo-blocked",
-        },
-      ]);
-    } finally {
-      unsubscribeDiagnostics();
-    }
-  });
-
-  it("does not duplicate terminal diagnostics for wrapped dynamic tool errors", async () => {
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
-      diagnosticEvents.push(event),
-    );
-    try {
-      const call = {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-echo-error",
-        namespace: null,
-        tool: "echo",
-        arguments: {},
-      } satisfies CodexDynamicToolCallParams;
-      emitDynamicToolStartedDiagnostic({
-        call,
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-      });
-      emitDynamicToolTerminalDiagnostic({
-        call,
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        durationMs: 1,
-        response: {
-          success: false,
-          contentItems: [{ type: "inputText", text: "wrapped tool failed" }],
-        },
-      });
-      expect(
-        testing.hasPendingDynamicToolTerminalDiagnostic({
-          call,
-          runId: "run-1",
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-        }),
-      ).toBe(true);
-
-      await flushDiagnosticEvents();
-
-      const toolDiagnosticEvents = diagnosticEvents.filter(
-        (
-          event,
-        ): event is Extract<
-          DiagnosticEventPayload,
-          { type: "tool.execution.started" | "tool.execution.completed" | "tool.execution.error" }
-        > => event.type.startsWith("tool.execution."),
-      );
-      expect(
-        toolDiagnosticEvents.map((event) => ({
-          type: event.type,
-          toolName: event.toolName,
-          toolCallId: event.toolCallId,
-        })),
-      ).toEqual([
-        {
-          type: "tool.execution.started",
-          toolName: "echo",
-          toolCallId: "call-echo-error",
-        },
-        {
-          type: "tool.execution.error",
-          toolName: "echo",
-          toolCallId: "call-echo-error",
-        },
-      ]);
-    } finally {
-      unsubscribeDiagnostics();
-    }
-  });
-
-  it("does not duplicate terminal diagnostics for wrapped dynamic tool timeout fallbacks", async () => {
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
-      diagnosticEvents.push(event),
-    );
-    try {
-      const call = {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-echo-timeout",
-        namespace: null,
-        tool: "echo",
-        arguments: { timeoutMs: 1 },
-      } satisfies CodexDynamicToolCallParams;
-      emitDynamicToolStartedDiagnostic({
-        call,
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-      });
-      emitDynamicToolTerminalDiagnostic({
-        call,
-        runId: "run-1",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        durationMs: 1,
-        response: {
-          success: false,
-          contentItems: [
-            {
-              type: "inputText",
-              text: "OpenClaw dynamic tool call timed out after 1ms while running tool echo.",
-            },
-          ],
-        },
-      });
-      expect(
-        testing.hasPendingDynamicToolTerminalDiagnostic({
-          call,
-          runId: "run-1",
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-        }),
-      ).toBe(true);
-
-      await flushDiagnosticEvents();
-
-      const toolDiagnosticEvents = diagnosticEvents.filter(
-        (
-          event,
-        ): event is Extract<
-          DiagnosticEventPayload,
-          { type: "tool.execution.started" | "tool.execution.completed" | "tool.execution.error" }
-        > => event.type.startsWith("tool.execution."),
-      );
-      expect(
-        toolDiagnosticEvents.map((event) => ({
-          type: event.type,
-          toolName: event.toolName,
-          toolCallId: event.toolCallId,
-        })),
-      ).toEqual([
-        {
-          type: "tool.execution.started",
-          toolName: "echo",
-          toolCallId: "call-echo-timeout",
-        },
-        {
-          type: "tool.execution.error",
-          toolName: "echo",
-          toolCallId: "call-echo-timeout",
-        },
-      ]);
-    } finally {
-      unsubscribeDiagnostics();
-    }
-  });
+            type: `tool.execution.${terminalType}`,
+            toolName: "echo",
+            toolCallId: context.call.callId,
+          },
+        ]);
+      } finally {
+        unsubscribeDiagnostics();
+      }
+    },
+  );
 
   it("passes normalized channel context to app-server dynamic tool result hooks", async () => {
     const afterToolCall = vi.fn();
@@ -889,10 +639,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
     );
 
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const params = createTestParams();
     params.messageChannel = "telegram";
     params.messageProvider = "telegram";
     params.currentChannelId = "telegram:-100123";

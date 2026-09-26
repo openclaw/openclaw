@@ -1,23 +1,102 @@
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
+import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
 import {
   cloneSessionEntry,
   resolveSqliteScope,
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
+import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
-import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
+import {
+  assertCanonicalSqliteSessionKeysCurrent,
+  canonicalSessionKeyMigrationRequiredError,
+  hasCanonicalSessionValidationProjection,
+  readWithCanonicalSessionReaderContinuation,
+  type CanonicalSessionReaderContinuation,
+} from "./session-canonical-key.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
+
+/** Select listing facts without hydrating the store; creation retains only its target payloads. */
+export function readSelectedSessionEntriesInDatabase(
+  database: OpenClawAgentReadOnlyDatabase,
+  sessionKeys: readonly string[],
+  options: {
+    continuation?: CanonicalSessionReaderContinuation;
+    fullEntryKeys?: readonly string[];
+    label?: string;
+  } = {},
+): SessionEntrySummary[] {
+  return readWithCanonicalSessionReaderContinuation(database, options.continuation, () => {
+    assertCanonicalSqliteSessionKeysCurrent(database);
+    const keys = new Set(sessionKeys);
+    const fullEntryKeys = new Set(options.fullEntryKeys);
+    const query = selectSessionEntryRows(database, "list", options.fullEntryKeys).select(
+      "updated_at",
+    );
+    const db = getNodeSqliteKysely<DB>(database.db);
+    const pending = db.selectFrom("session_canonical_validation_pending").select("session_key");
+    let selected = db
+      .selectFrom("session_nodes")
+      .select("session_key")
+      .where("session_key", "in", sqliteStringSet(sessionKeys));
+    if (options.label !== undefined) {
+      selected = selected.union(
+        db
+          .selectFrom("session_nodes")
+          .select("session_key")
+          .where("label", "=", options.label.trim()),
+      );
+    }
+    // Warm admission permits raw metadata changes. The listing contract still
+    // rejects delivery-canonical sibling drift, so include its existing dirty set.
+    // Older readers have no dirty set and retain their full validation inventory.
+    const rows = executeSqliteQuerySync(
+      database.db,
+      hasCanonicalSessionValidationProjection(database)
+        ? query.where("session_key", "in", pending.union(selected))
+        : query,
+    ).rows;
+    const entries: SessionEntrySummary[] = [];
+    for (const row of rows) {
+      if (isInternalSessionEffectsKey(row.session_key)) {
+        continue;
+      }
+      const entry = parseSessionEntryJson(
+        row,
+        fullEntryKeys.has(row.session_key) ? "full" : "list",
+      );
+      if (!entry) {
+        continue;
+      }
+      validateDeliveryCanonicalSessionEntry(row.session_key, entry);
+      if (
+        keys.has(row.session_key) ||
+        (options.label !== undefined && entry.label === options.label)
+      ) {
+        entries.push({ sessionKey: row.session_key, entry });
+      }
+    }
+    return entries;
+  });
+}
 
 /**
  * Lists session entries without opening the agent database writable.
@@ -87,7 +166,7 @@ export function listSqliteSessionEntriesFromDatabase(
 }
 
 /** Applies the listing visibility and canonical-key contract to an owned snapshot. */
-export function* iterateSessionEntriesForListing(
+function* iterateSessionEntriesForListing(
   snapshot: SessionEntryCacheSnapshot,
   cloneEntries = false,
   sessionKeys?: ReadonlySet<string>,

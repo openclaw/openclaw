@@ -20,7 +20,7 @@ import {
   withMSTeamsSqliteMutationLock,
 } from "./sqlite-state.js";
 
-export type MSTeamsSsoStoredToken = {
+type MSTeamsSsoStoredToken = {
   /** Connection name from the Bot Framework OAuth connection setting. */
   connectionName: string;
   /** Stable user identifier (AAD object ID preferred). */
@@ -39,21 +39,12 @@ type MSTeamsSsoTokenStore = {
   remove(params: { connectionName: string; userId: string }): Promise<boolean>;
 };
 
-type SsoStoreData = {
-  version: 1;
-  // Keyed by `${connectionName}::${userId}` for a simple flat map on disk.
-  tokens: Record<string, MSTeamsSsoStoredToken>;
-};
-
-type MSTeamsSsoStoreData = SsoStoreData;
-
-export const MSTEAMS_SSO_TOKENS_LEGACY_FILENAME = "msteams-sso-tokens.json";
-export const MSTEAMS_SSO_TOKENS_NAMESPACE = "sso-tokens";
+const MSTEAMS_SSO_TOKENS_NAMESPACE = "sso-tokens";
 const SSO_TOKEN_MUTATION_KEY = "sso-tokens";
-export const MSTEAMS_MAX_SSO_TOKENS = 5000;
+const MSTEAMS_MAX_SSO_TOKENS = 5000;
 const STORE_KEY_VERSION_PREFIX = "v2:";
 
-export function makeMSTeamsSsoTokenStoreKey(connectionName: string, userId: string): string {
+function makeMSTeamsSsoTokenStoreKey(connectionName: string, userId: string): string {
   return `${STORE_KEY_VERSION_PREFIX}${createHash("sha256")
     .update(JSON.stringify([connectionName, userId]))
     .digest("hex")}`;
@@ -70,40 +61,6 @@ function createTokenStore(params?: {
     maxEntries: MSTEAMS_MAX_SSO_TOKENS,
     env: resolveMSTeamsSqliteStateEnv(params),
   });
-}
-
-export function normalizeMSTeamsSsoStoredToken(value: unknown): MSTeamsSsoStoredToken | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const token = value as Partial<MSTeamsSsoStoredToken>;
-  if (
-    typeof token.connectionName !== "string" ||
-    !token.connectionName ||
-    typeof token.userId !== "string" ||
-    !token.userId ||
-    typeof token.token !== "string" ||
-    !token.token ||
-    typeof token.updatedAt !== "string" ||
-    !token.updatedAt
-  ) {
-    return null;
-  }
-  return {
-    connectionName: token.connectionName,
-    userId: token.userId,
-    token: token.token,
-    ...(typeof token.expiresAt === "string" ? { expiresAt: token.expiresAt } : {}),
-    updatedAt: token.updatedAt,
-  };
-}
-
-export function isMSTeamsSsoStoreData(value: unknown): value is MSTeamsSsoStoreData {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const obj = value as Record<string, unknown>;
-  return obj.version === 1 && typeof obj.tokens === "object" && obj.tokens !== null;
 }
 
 export function createMSTeamsSsoTokenStoreFs(params?: {

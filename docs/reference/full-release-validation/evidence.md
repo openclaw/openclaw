@@ -1,6 +1,6 @@
 ---
 doc-schema-version: 1
-summary: "Which Full Release Validation evidence to retain, advisory lane handling, and the backing workflow files"
+summary: "Which Full Release Validation evidence to retain, blocking lane outcomes, and the backing workflow files"
 title: "Evidence to keep"
 read_when:
   - Recording release evidence after a validation pass

@@ -8,9 +8,11 @@ import { expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import * as stateCache from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -18,12 +20,17 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as sqliteArchive from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { loadSessionEntry } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
+import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
+import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation.js";
 import {
   createSessionEntryReclamationPlan,
   runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
+import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 test("binds first shared-state creation without host SQL and reuses reclamation until thirty idle minutes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -262,6 +269,90 @@ test("logs a native reclamation Worker throw with its cause, first frame and has
       } finally {
         await worker.terminate();
         vi.restoreAllMocks();
+        await flushLogger();
+        setLoggerOverride(null);
+      }
+    },
+  );
+});
+
+test("reschedules maintenance superseded by a write during Worker planning without a Worker failure warning", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_FILE_LOG: "1" } },
+    async (state) => {
+      const sessionKey = "agent:main:synthetic-maintenance-race";
+      const scope = { agentId: "main", env: state.env, sessionKey, sessionId: "maintenance-race" };
+      ensureSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+      const database = openOpenClawAgentDatabase(scope);
+      const request = {
+        activeSessionKey: sessionKey,
+        archiveDirectory: state.path("archives"),
+        maintenanceConfig: { ...resolveMaintenanceConfigFromInput(), mode: "enforce" as const },
+        scope: { agentId: scope.agentId, env: state.env, path: database.path },
+        storePath: database.path,
+      };
+      const file = state.path("maintenance-race.log");
+      await fs.writeFile(file, "");
+      setLoggerOverride({ level: "debug", consoleLevel: "silent", file });
+      vi.spyOn(performance, "now").mockReturnValue(0);
+      const plans = vi.spyOn(reclamation, "createSessionMaintenancePlanningOperation");
+      const runs: Promise<unknown>[] = [];
+      const firstRun = createDeferredCore();
+      const run = reclamation.runSqliteSessionReclamation;
+      vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation((params) => {
+        const operation = run(params);
+        runs.push(operation);
+        firstRun.resolve();
+        return operation;
+      });
+      const spawn = sqliteArchive.createSqliteTranscriptArchiveWorker;
+      let raced = false;
+      vi.spyOn(sqliteArchive, "createSqliteTranscriptArchiveWorker").mockImplementation((data) => {
+        const worker = spawn(data);
+        worker.prependListener("message", (message: { type: string }) => {
+          if (message.type !== "admission-request" || raced) {
+            return;
+          }
+          // The Worker planned from older inputs; an ordinary write lands before its commit.
+          raced = true;
+          runOpenClawAgentWriteTransaction((owner) => {
+            writeSessionEntry(owner, sessionKey, {
+              sessionId: scope.sessionId,
+              updatedAt: Date.now(),
+              label: "concurrent-write",
+            });
+          }, scope);
+          kickSessionEntryMaintenanceAfterWrite(request);
+        });
+        return worker;
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        kickSessionEntryMaintenanceAfterWrite(request);
+        await firstRun.promise;
+        await expect(runs[0]).rejects.toThrow(SqliteReclamationInputsChangedError);
+        expect(raced).toBe(true);
+        await flushLogger();
+        const records: unknown[] = (await fs.readFile(file, "utf8"))
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
+        const logged = (message: string) => expect.objectContaining({ message });
+        expect(records).toContainEqual(
+          logged("SQLite reclamation Worker superseded by newer inputs"),
+        );
+        expect(records).not.toContainEqual(logged("SQLite reclamation Worker failed"));
+        expect(records).not.toContainEqual(logged("SQLite automatic session maintenance failed"));
+
+        // The maintenance owner retries once writes stay quiet.
+        expect(plans).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(plans).toHaveBeenCalledTimes(2);
+        await expect(runs[1]).resolves.toMatchObject({ kind: "maintenance-plan" });
+      } finally {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+        await closeOpenClawAgentDatabasesAsync(state.stateDir);
         await flushLogger();
         setLoggerOverride(null);
       }

@@ -14,7 +14,7 @@ import {
   buildMSTeamsPollCard,
   createMSTeamsPollStoreState,
   extractMSTeamsPollVote,
-  type MSTeamsPoll,
+  type MSTeamsPollStore,
 } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
@@ -265,14 +265,13 @@ describe("state poll store", () => {
     async ({ existing, expired, removed, scans }) => {
       const stateDir = tempDirs.make("openclaw-msteams-polls-");
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const metadataStore = createPluginStateKeyedStoreForTests<Omit<MSTeamsPoll, "votes">>(
-        "msteams",
-        {
-          namespace: "polls",
-          maxEntries: 2000,
-          env,
-        },
-      );
+      const metadataStore = createPluginStateKeyedStoreForTests<
+        Omit<Parameters<MSTeamsPollStore["createPoll"]>[0], "votes">
+      >("msteams", {
+        namespace: "polls",
+        maxEntries: 2000,
+        env,
+      });
       const voteBucketStore = createPluginStateKeyedStoreForTests<{
         pollId: string;
         bucket: string;

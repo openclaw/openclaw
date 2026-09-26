@@ -190,6 +190,38 @@ describe("checkBrowserOrigin", () => {
 });
 
 describe("resolveAcceptedBrowserOrigin", () => {
+  it.each([
+    { allowedOrigins: undefined, origin: "https://gateway.example.com", accepted: true },
+    { allowedOrigins: undefined, origin: "https://other.example.com", accepted: false },
+    { allowedOrigins: [], origin: "https://gateway.example.com", accepted: false },
+    {
+      allowedOrigins: ["https://other.example.com"],
+      origin: "https://gateway.example.com",
+      accepted: false,
+    },
+    {
+      allowedOrigins: ["https://other.example.com"],
+      origin: "https://other.example.com",
+      accepted: true,
+    },
+  ])("uses the effective configured origin policy: %j", ({ allowedOrigins, origin, accepted }) => {
+    const req = {
+      headers: { host: "127.0.0.1:18789", origin },
+      socket: { remoteAddress: "203.0.113.10" },
+    } as IncomingMessage;
+    expect(
+      resolveAcceptedBrowserOrigin({
+        req,
+        cfg: {
+          gateway: {
+            publicOrigin: "https://GATEWAY.example.com:443/",
+            controlUi: { allowedOrigins },
+          },
+        },
+      }),
+    ).toBe(accepted ? origin : undefined);
+  });
+
   it("applies the configured Host-header fallback through the canonical request resolver", () => {
     const origin = "https://gateway.example.com:18789";
     const req = {

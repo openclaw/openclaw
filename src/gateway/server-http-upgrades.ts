@@ -6,6 +6,7 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { isGatewaySuspendControlAvailable } from "../infra/gateway-suspend-coordinator.js";
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import {
   getGatewaySuspendAdmissionPhase,
@@ -126,10 +127,7 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   if (
     isGatewayWorkAdmissionClosed() &&
     !allowsRestartStartupPreauth &&
-    (ingressName === "Worker" ||
-      isGatewayRestartDraining() ||
-      (getGatewaySuspendAdmissionPhase() !== "draining" &&
-        getGatewaySuspendAdmissionPhase() !== "prepared"))
+    (ingressName === "Worker" || !isGatewaySuspendControlAvailable())
   ) {
     rejectGatewayUpgradeServiceUnavailable(socket, `${ingressName} websocket admission closed`);
     return;
@@ -382,7 +380,7 @@ export function attachGatewayUpgradeHandler(opts: {
         rejectUpgradeAuth(socket, { ok: false, reason: ingressAttribution.reason });
         return;
       }
-      if (requestPath === "/desktop/observe") {
+      if (requestPath === "/desktop/observe" || requestPath === "/desktop/audio") {
         if (!opts.desktopSessionRegistry) {
           rejectGatewayUpgradeServiceUnavailable(socket, "desktop observe unavailable");
           return;
@@ -392,6 +390,11 @@ export function attachGatewayUpgradeHandler(opts: {
         // drained Gateway would keep accepting new desktop streams.
         if (isGatewayWorkAdmissionClosed()) {
           rejectGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
+          return;
+        }
+        if (requestPath === "/desktop/audio") {
+          const { handleDesktopAudioUpgrade } = await import("./desktop/audio-bridge.js");
+          handleDesktopAudioUpgrade(req, socket, head);
           return;
         }
         const { handleDesktopObserveUpgrade } = await import("./desktop/observe-bridge.js");

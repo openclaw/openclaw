@@ -1,5 +1,7 @@
 /** Sanitizes replayed tool calls and provider-specific transcript structure. */
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { hasNonEmptyString as replayToolCallNonEmptyString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -37,14 +39,6 @@ type ReplayToolCallSanitizeReport = {
   droppedAssistantMessages: number;
 };
 
-type AnthropicToolResultContentBlock = {
-  type?: unknown;
-  toolUseId?: unknown;
-  toolCallId?: unknown;
-  tool_use_id?: unknown;
-  tool_call_id?: unknown;
-};
-
 function isReplaySafeThinkingTurn(
   content: unknown[],
   allowedToolNames: Set<string> | undefined,
@@ -55,19 +49,18 @@ function isReplaySafeThinkingTurn(
     if (!isRunnerToolCallBlock(block)) {
       continue;
     }
-    const replayBlock = block;
-    const toolCallId = typeof replayBlock.id === "string" ? replayBlock.id.trim() : "";
-    if (!hasToolCallInput(replayBlock) || !toolCallId || seenToolCallIds.has(toolCallId)) {
+    const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
+    if (!hasToolCallInput(block) || !toolCallId || seenToolCallIds.has(toolCallId)) {
       return false;
     }
     seenToolCallIds.add(toolCallId);
-    const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
+    const rawName = typeof block.name === "string" ? block.name : "";
     const resolvedName = resolveReplayToolCallName(
       rawName,
       toolCallId,
-      isCompleted(replayBlock) ? undefined : allowedToolNames,
+      isCompleted(block) ? undefined : allowedToolNames,
     );
-    if (!resolvedName || replayBlock.name !== resolvedName) {
+    if (!resolvedName || block.name !== resolvedName) {
       return false;
     }
   }
@@ -147,11 +140,7 @@ function sanitizeReplayToolCallInputs(
       out.push(message);
       continue;
     }
-    if (
-      allowProviderOwnedThinkingReplay &&
-      message.content.some((block) => isThinkingLikeBlock(block)) &&
-      message.content.some((block) => isRunnerToolCallBlock(block))
-    ) {
+    if (allowProviderOwnedThinkingReplay && isSignedThinkingReplayAssistantSpan(message)) {
       const replaySafeToolCalls = extractToolCallsFromAssistant(message);
       const followingToolResults = collectFollowingToolResults(messages, index);
       if (
@@ -184,53 +173,43 @@ function sanitizeReplayToolCallInputs(
         nextContent.push(block);
         continue;
       }
-      const replayBlock = block;
 
-      if (!hasToolCallInput(replayBlock) || !replayToolCallNonEmptyString(replayBlock.id)) {
-        changed = true;
+      if (!hasToolCallInput(block) || !replayToolCallNonEmptyString(block.id)) {
         messageChanged = true;
         continue;
       }
 
-      const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
+      const rawName = typeof block.name === "string" ? block.name : "";
       const resolvedName = resolveReplayToolCallName(
         rawName,
-        replayBlock.id,
-        isCompleted(replayBlock) ? undefined : allowedToolNames,
+        block.id,
+        isCompleted(block) ? undefined : allowedToolNames,
       );
       if (!resolvedName) {
-        changed = true;
         messageChanged = true;
         continue;
       }
 
-      if (replayBlock.name !== resolvedName) {
+      if (block.name !== resolvedName) {
         nextContent.push({ ...block, name: resolvedName });
-        changed = true;
         messageChanged = true;
         continue;
       }
       nextContent.push(block);
     }
 
-    if (messageChanged) {
-      changed = true;
-      if (nextContent.length > 0) {
-        const nextMessage = replaceCompactionReplayOwnerContent(message, nextContent);
-        for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
-          priorToolCallIds.add(toolCall.id);
-        }
-        out.push(nextMessage);
-      } else {
-        droppedAssistantMessages += 1;
-      }
+    changed ||= messageChanged;
+    if (nextContent.length === 0 && messageChanged) {
+      droppedAssistantMessages += 1;
       continue;
     }
-
-    for (const toolCall of extractToolCallsFromAssistant(message)) {
+    const nextMessage = messageChanged
+      ? replaceCompactionReplayOwnerContent(message, nextContent)
+      : message;
+    for (const toolCall of extractToolCallsFromAssistant(nextMessage)) {
       priorToolCallIds.add(toolCall.id);
     }
-    out.push(message);
+    out.push(nextMessage);
   }
 
   return {
@@ -239,32 +218,10 @@ function sanitizeReplayToolCallInputs(
   };
 }
 
-function extractAnthropicReplayToolResultIds(block: AnthropicToolResultContentBlock): string[] {
-  const ids: string[] = [];
-  for (const value of [block.toolUseId, block.toolCallId, block.tool_use_id, block.tool_call_id]) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const trimmed = value.trim();
-    if (!trimmed || ids.includes(trimmed)) {
-      continue;
-    }
-    ids.push(trimmed);
-  }
-  return ids;
-}
-
 function isSignedThinkingReplayAssistantSpan(message: AgentMessage | undefined): boolean {
-  if (!message || typeof message !== "object" || message.role !== "assistant") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
   return (
-    content.some((block) => isThinkingLikeBlock(block)) &&
-    content.some((block) => isRunnerToolCallBlock(block))
+    assistantTurnHasReplayToolCall(message) &&
+    message.content.some((block) => isThinkingLikeBlock(block))
   );
 }
 
@@ -314,18 +271,20 @@ function sanitizeAnthropicReplayToolResults(
     }
 
     const nextContent = message.content.filter((block) => {
-      if (!block || typeof block !== "object") {
-        return true;
-      }
-      const typedBlock = block as AnthropicToolResultContentBlock;
-      if (typedBlock.type !== "toolResult" && typedBlock.type !== "tool") {
+      const typedBlock = asOptionalObjectRecord(block);
+      if (typedBlock?.type !== "toolResult" && typedBlock?.type !== "tool") {
         return true;
       }
       if (shouldStripEmbeddedToolResults) {
         changed = true;
         return false;
       }
-      const resultIds = extractAnthropicReplayToolResultIds(typedBlock);
+      const resultIds = normalizeUniqueTrimmedStringList([
+        typedBlock.toolUseId,
+        typedBlock.toolCallId,
+        typedBlock.tool_use_id,
+        typedBlock.tool_call_id,
+      ]);
       if (resultIds.length === 0) {
         changed = true;
         return false;
@@ -353,15 +312,15 @@ function sanitizeAnthropicReplayToolResults(
   return changed ? out : messages;
 }
 
-function assistantTurnHasReplayToolCall(message: AgentMessage): boolean {
+function assistantTurnHasReplayToolCall(
+  message: AgentMessage | undefined,
+): message is Extract<AgentMessage, { role: "assistant" }> {
   if (!message || typeof message !== "object" || message.role !== "assistant") {
     return false;
   }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some((block) => isRunnerToolCallBlock(block));
+  return (
+    Array.isArray(message.content) && message.content.some((block) => isRunnerToolCallBlock(block))
+  );
 }
 
 function stripTrailingAssistantPrefillTurns(messages: AgentMessage[]): AgentMessage[] {

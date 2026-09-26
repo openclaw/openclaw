@@ -8,7 +8,7 @@ import {
 } from "../../chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
-import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
 import type { InFlightRunSnapshot } from "../chat-abort.js";
 import {
@@ -82,6 +82,27 @@ export function chatHistoryActivityBytes(activity: readonly AgentHistoryActivity
   return activity.length > 0 ? jsonUtf8Bytes({ activity }) - 1 : 0;
 }
 
+/** Delta envelopes share one prepared plain-data snapshot throughout their synchronous projection. */
+export function createChatHistoryDeltaByteCounter(sessionSnapshot: Record<string, unknown>) {
+  let snapshot: { bytes: number; keys: Set<string> } | undefined;
+  return (envelope: Record<string, unknown>): number => {
+    snapshot ??= {
+      bytes: jsonUtf8BytesOrInfinity(sessionSnapshot),
+      keys: new Set(Object.keys(sessionSnapshot)),
+    };
+    const fields: Record<string, unknown> = {};
+    for (const key in envelope) {
+      // The snapshot is the final writer, including keys whose undefined value omits a field.
+      if (!snapshot.keys.has(key) && Object.hasOwn(envelope, key)) {
+        fields[key] = envelope[key];
+      }
+    }
+    const fieldsBytes = jsonUtf8BytesOrInfinity(fields);
+    // Merge the object bodies with one brace pair and, when both have fields, one comma.
+    return snapshot.bytes + fieldsBytes - 2 + (snapshot.bytes > 2 && fieldsBytes > 2 ? 1 : 0);
+  };
+}
+
 function hasHistoryToolPresentation(
   message: Record<string, unknown>,
   inheritedError?: boolean,
@@ -134,7 +155,7 @@ function isChatHistoryActivity(message: unknown): boolean {
     return false;
   }
   const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role === "toolresult" || role === "tool_result" || role === "tool" || role === "function") {
+  if (isToolResultContentType(role) || role === "tool" || role === "function") {
     return isPlainHistoryToolResult(entry);
   }
   if (
@@ -181,7 +202,7 @@ export function trimChatHistoryActivity(params: {
   });
 }
 
-function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
+export function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   return {
     role: "assistant",
     timestamp: Date.now(),
@@ -308,12 +329,16 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
     ...(params.snapshot.events ? { events: [] } : {}),
     ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
   };
+  const retainIfWithinBudget = (candidate: InFlightRunSnapshot): boolean => {
+    if (!(messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes)) {
+      return false;
+    }
+    bounded = candidate;
+    return true;
+  };
 
   if (params.snapshot.startedAt !== undefined) {
-    const candidate = { ...bounded, startedAt: params.snapshot.startedAt };
-    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-      bounded = candidate;
-    }
+    retainIfWithinBudget({ ...bounded, startedAt: params.snapshot.startedAt });
   }
 
   if (params.snapshot.events) {
@@ -323,9 +348,7 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
     // Try all progress first, then search suffixes instead of serializing each eviction.
     let middle = 0;
     while (start < end) {
-      const candidate = { ...bounded, events: events.slice(middle) };
-      if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-        bounded = candidate;
+      if (retainIfWithinBudget({ ...bounded, events: events.slice(middle) })) {
         end = middle;
       } else {
         start = middle + 1;
@@ -335,17 +358,11 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   }
 
   if (params.snapshot.plan) {
-    const candidate = { ...bounded, plan: params.snapshot.plan };
-    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-      bounded = candidate;
-    }
+    retainIfWithinBudget({ ...bounded, plan: params.snapshot.plan });
   }
 
   if (params.snapshot.text) {
-    const candidate = { ...bounded, text: params.snapshot.text };
-    if (messagesBytes + jsonUtf8Bytes(candidate) <= params.maxBytes) {
-      bounded = candidate;
-    }
+    retainIfWithinBudget({ ...bounded, text: params.snapshot.text });
   }
   return bounded;
 }

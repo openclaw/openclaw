@@ -4,7 +4,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { collectInstalledSkillsCodeSafetyFindings } from "./audit-extra.async.js";
+import { collectInstalledSkillsCodeSafetyFindings } from "./audit.deep.runtime.js";
 
 async function writeAuditSkill(root: string, unsafe: boolean, name = "shared-procedure") {
   const dir = path.join(root, name);

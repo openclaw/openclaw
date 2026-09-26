@@ -29,13 +29,12 @@ pnpm frv status --run <parent-run-id> --json
 pnpm frv rerun --run <parent-run-id> --job "normalCi:checks-node-agentic-control-plane-agent-chat"
 pnpm frv continue --failed --run <parent-run-id>
 pnpm frv verify --run <successful-parent-run-id>
-pnpm frv prioritize --run <parent-run-id> [--out <record>] [--dry-run]
 pnpm frv prioritize --restore <record> [--dry-run]
 ```
 
-`prioritize` gives an active parent hosted-runner priority (see
-[Release priority](/reference/RELEASING#release-priority)); `continue --failed`
-and `verify` release it once the parent seals.
+`prioritize --restore` recovers runs deferred by the former release-priority gate
+(see [Release priority](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)). Active validation
+no longer pauses CI or supporting workflows.
 
 `rerun --job` selects an exact executed, terminal job name inside a child key shown by
 `status --json` (for example, `normalCi`, `pluginPrerelease`, or
@@ -136,9 +135,9 @@ operations and never run as an automatic response to a test outcome.
 
 Published artifacts may contain empty `knownFlakyJobs` and `automaticRetries`
 fields. Readers retain their original plan digest and reject nonempty allowances
-or retry records. Historical advisory descriptions must match the recorded child
-jobs; current qualification still requires passing outcomes or the existing
-explicit operator waiver.
+or retry records. Current qualification requires successful selected child
+results. Evidence carrying retired waivers or advisory failure allowances must
+be replaced with a fresh qualifying run; it cannot authorize publication.
 
 ### Read publication observations
 

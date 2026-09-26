@@ -5,6 +5,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { waitForActiveCronTaskRuns } from "./service/active-run-cancellation.js";
@@ -17,7 +18,6 @@ import { findCronTaskRunRecoveryInDatabase } from "./service/task-runs.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
-import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-recovery-identity-" });
 let uuidCounter = 0xffffffffffff;
@@ -103,7 +103,7 @@ describe("cron recovery run identity", () => {
         state: { triggerState: { owner: "initial" } },
       });
       const readJob = async () => (await loadCronStore(storePath)).jobs[0]!;
-      const readHistory = () => readCronTaskRunHistoryPage({ storeKey, jobId: job.id }).entries;
+      const readHistory = () => readCronRunHistoryPageForTests({ storeKey, jobId: job.id }).entries;
       const recoveryState = createCronServiceState(deps);
 
       await cron.update(job.id, { state: { nextRunAtMs: firstStartedAt } });

@@ -1233,6 +1233,11 @@
   .agent-chat__input--mobile-toolbar .agent-chat__composer-footer svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
+  }
+
+  /* Keep the muted default below action-specific foregrounds regardless of
+     lazy stylesheet order. */
+  .agent-chat__input--mobile-toolbar :where(.agent-chat__composer-footer) svg {
     color: var(--muted);
   }
 

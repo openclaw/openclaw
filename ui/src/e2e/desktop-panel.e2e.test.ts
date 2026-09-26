@@ -293,6 +293,7 @@ suite.define(() => {
       const [session] = sessions.sessions;
       const gateway = await installMockGateway(page, {
         featureMethods: ["desktop.observe", "environments.list"],
+        deferredMethods: ["environments.status"],
         methodResponses: {
           "sessions.list": {
             ...sessions,
@@ -315,6 +316,14 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
+      // Settle automatic discovery of the chat's worker before opening another target.
+      await gateway.waitForRequest("environments.status", {
+        match: { environmentId: "other-worker" },
+      });
+      await gateway.rejectDeferred("environments.status", {
+        code: "UNAVAILABLE",
+        message: "session desktop is unavailable",
+      });
       await openDirectDesktop(page, "worker-desktop-1");
 
       const panel = page.locator("openclaw-desktop-panel");
@@ -329,7 +338,14 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Retry", exact: true }).click();
 
       await expect
-        .poll(async () => (await gateway.getRequests("environments.status")).length)
+        .poll(
+          async () =>
+            (
+              await gateway.getRequests("environments.status", {
+                environmentId: "worker-desktop-1",
+              })
+            ).length,
+        )
         .toBe(2);
       const observeRequest = await gateway.waitForRequest("desktop.observe");
       expect(observeRequest.params).toEqual({

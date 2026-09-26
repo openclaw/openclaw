@@ -9,10 +9,7 @@ import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
-import {
-  personActivityRouting,
-  type PersonActivityRouting,
-} from "../../components/person-activity-link.ts";
+import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
@@ -78,11 +75,6 @@ import {
 registerBackgroundTasksEnglish();
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
-  /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
-  private personActivityRouting(): PersonActivityRouting {
-    return personActivityRouting(this.context);
-  }
-
   private resolveWorkspaceIcon(sessionKey: string | undefined) {
     if (!sessionKey) {
       return null;
@@ -490,7 +482,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       this.context.sessions?.state?.result?.sessions ?? [],
     );
     const showOwnerChip = (result?.owners?.length ?? 0) >= 2 || (row?.participantCount ?? 0) > 0;
-    const personActivity = this.personActivityRouting();
+    const personActivity = personActivityRouting(this.context);
     const renderedOwnerIdentity = showOwnerChip ? row?.owner?.actor.identity : undefined;
     const viewers = catalog
       ? undefined
@@ -549,7 +541,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
-      title: (catalog ? this.catalogSession?.name?.trim() : undefined) || this.paneTitle,
+      title:
+        (catalog ? this.catalogSession?.name?.trim() : undefined) ||
+        this.resolveHeaderSessionTitle(row),
       session: row,
       showOwnerChip,
       ownerViewing,

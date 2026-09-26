@@ -1,7 +1,7 @@
 /** Doctor repair for broken session transcript branches and legacy OpenAI Codex metadata. */
-import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   repairAcpSessionMetaKeysForDoctor,
@@ -127,16 +127,12 @@ async function inspectSessionTranscriptFile(params: {
 async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string[]> {
   const files: string[] = [];
   for (const sessionsDir of sessionDirs) {
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(sessionsDir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
+    const { entries } = await walkDirectory(sessionsDir, {
+      maxDepth: 1,
+      include: (entry) => entry.kind === "file" && entry.name.endsWith(".jsonl"),
+    });
     for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-        files.push(path.join(sessionsDir, entry.name));
-      }
+      files.push(path.join(sessionsDir, entry.name));
     }
   }
   return files.toSorted((a, b) => a.localeCompare(b));
@@ -352,7 +348,10 @@ export async function noteSessionTranscriptHealth(options?: {
             }
           : {}),
         ...(params.postSessionPluginMigration
-          ? { plannedActions: params.postSessionPluginMigration.plannedActions }
+          ? {
+              plannedActions: params.postSessionPluginMigration.plannedActions,
+              inventory: params.postSessionPluginMigration.inventory,
+            }
           : {}),
       });
     } catch (error) {

@@ -6,7 +6,11 @@ import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatSlackError } from "../../errors.js";
 import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
-import { prepareSlackReply, resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
+import {
+  prepareSlackReply,
+  resolveSlackReplyBlocks,
+  resolveSlackReplyRenderPlan,
+} from "../../reply-blocks.js";
 import {
   appendSlackStream,
   markSlackStreamFallbackDelivered,
@@ -17,7 +21,7 @@ import {
 } from "../../streaming.js";
 import { resolveSlackReplyThreadTs } from "../../thread-ts.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
-import { deliverReplies, readSlackReplyBlocks } from "../replies.js";
+import { deliverReplies } from "../replies.js";
 import {
   createSlackEventDeliveryTracker,
   buildSlackEventDeliveryKey,
@@ -309,7 +313,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       renderPlan.mode !== "split" &&
       !renderPlan.textIsSlackPlainText &&
       !plannedBlocks?.length &&
-      !readSlackReplyBlocks(payload)?.length &&
+      !resolveSlackReplyBlocks(payload)?.length &&
       reply.hasText &&
       (!options?.maxTextBytes || countSlackTextUtf8Bytes(reply.trimmedText) <= options.maxTextBytes)
     );

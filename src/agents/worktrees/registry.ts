@@ -83,6 +83,7 @@ function recordToRow(
     created_at: record.createdAt,
     last_active_at: record.lastActiveAt,
     removed_at: record.removedAt ?? null,
+    gc_protection_json: null,
     provisioned_paths_json:
       provisionedPaths === undefined ? null : JSON.stringify(provisionedPaths),
     run_end_cleanup_json:
@@ -429,53 +430,6 @@ export function deleteRegistryWorktree(
           .where("worktree_id", "=", id),
       );
       executeSqliteQuerySync(db, kyselyFor(db).deleteFrom("worktrees").where("id", "=", id));
-    },
-    { env },
-  );
-}
-
-export function retireMissingRegistryWorktree(
-  env: NodeJS.ProcessEnv,
-  observed: Pick<
-    ManagedWorktreeRecord,
-    "id" | "path" | "lastActiveAt" | "repoRoot" | "repoFingerprint"
-  >,
-  removedAt: number,
-): ManagedWorktreeRecord | undefined {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // A path probe cannot retire a restored lifecycle or a rebound repository.
-      const retired = executeSqliteQuerySync(
-        db,
-        kyselyFor(db)
-          .updateTable("worktrees")
-          .set({ removed_at: removedAt })
-          .where("id", "=", observed.id)
-          .where("removed_at", "is", null)
-          // A private exact-state retirement path may still hold the complete
-          // source. Only its explicit recovery owner can finalize that lifecycle.
-          .where((eb) =>
-            eb.or([
-              eb("snapshot_ref", "is", null),
-              eb("snapshot_ref", "not like", "refs/openclaw/snapshots/exact-%"),
-            ]),
-          )
-          .where("path", "=", observed.path)
-          .where("last_active_at", "=", observed.lastActiveAt)
-          .where("repo_root", "=", observed.repoRoot)
-          .where("repo_fingerprint", "=", observed.repoFingerprint)
-          .returning(WORKTREE_RECORD_COLUMNS),
-      ).rows[0];
-      const current =
-        retired ??
-        executeSqliteQuerySync(
-          db,
-          kyselyFor(db)
-            .selectFrom("worktrees")
-            .select(WORKTREE_RECORD_COLUMNS)
-            .where("id", "=", observed.id),
-        ).rows[0];
-      return current ? rowToRecord(current) : undefined;
     },
     { env },
   );

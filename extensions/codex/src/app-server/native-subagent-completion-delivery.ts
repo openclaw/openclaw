@@ -4,6 +4,7 @@ import {
   AgentHarnessTaskAssignmentUnsupportedError,
   isDurableAgentHarnessCompletionDelivery,
   matchesAgentHarnessTaskAssignment,
+  type AgentHarnessTaskRecord,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import {
   readCodexNativeSubagentHistoryOwner,
@@ -35,17 +36,59 @@ const DEFAULT_COMPLETION_DELIVERY_RETRY_DELAYS_MS = [
   5_000, 15_000, 30_000, 60_000, 120_000, 300_000,
 ];
 const completionDeliveryOwners = new Map<string, ChildState>();
+type CompletionAttemptTrigger = "delivery" | "receipt";
+type CompletionAttemptRequest = { deliver: boolean };
 
 export class CodexNativeSubagentCompletionDelivery {
   private readonly retryDelaysMs: readonly number[];
   private readonly maxRetries: number;
+  private readonly attempts = new Map<
+    ChildState,
+    { promise: Promise<void>; request: CompletionAttemptRequest }
+  >();
+  private readonly receiptRetryTimers = new Set<ChildState>();
+  private readonly pendingReceipts = new Map<ChildState, Set<ParentState["historyOwner"]>>();
+  private readonly exhausted = new Map<ChildState, string>();
 
   constructor(private readonly dependencies: CompletionDeliveryDependencies) {
     this.retryDelaysMs = dependencies.retryDelaysMs ?? DEFAULT_COMPLETION_DELIVERY_RETRY_DELAYS_MS;
     this.maxRetries = dependencies.maxRetries ?? this.retryDelaysMs.length;
   }
 
-  async deliverPending(state: ParentState, childState: ChildState): Promise<void> {
+  deliverPending(
+    state: ParentState,
+    childState: ChildState,
+    trigger: CompletionAttemptTrigger = "delivery",
+  ): Promise<void> {
+    if (trigger === "delivery" && this.receiptRetryTimers.delete(childState)) {
+      clearTimeout(childState.completionDeliveryTimer);
+      childState.completionDeliveryTimer = undefined;
+    }
+    const existing = this.attempts.get(childState);
+    if (existing) {
+      if (trigger === "delivery" && !childState.completionDeliveryTimer) {
+        existing.request.deliver = true;
+      }
+      return existing.promise;
+    }
+    const request = { deliver: trigger === "delivery" };
+    const promise = this.deliverAttempt(state, childState, request);
+    const attempt = { promise, request };
+    this.attempts.set(childState, attempt);
+    const release = () => {
+      if (this.attempts.get(childState) === attempt) {
+        this.attempts.delete(childState);
+      }
+    };
+    void promise.then(release, release);
+    return promise;
+  }
+
+  private async deliverAttempt(
+    state: ParentState,
+    childState: ChildState,
+    request: CompletionAttemptRequest,
+  ): Promise<void> {
     const completion = childState.pendingCompletion;
     if (
       !completion ||
@@ -55,13 +98,73 @@ export class CodexNativeSubagentCompletionDelivery {
     ) {
       return;
     }
-    if (childState.deliveringCompletion || childState.completionDeliveryTimer) {
+    if (
+      childState.deliveringCompletion ||
+      (childState.completionDeliveryTimer && request.deliver)
+    ) {
       return;
     }
     childState.deliveringCompletion = true;
     let deferredToForeground = false;
     try {
-      if (!this.persistPending(state, childState)) {
+      const read = state.taskRuntime?.prepareTaskRunRead
+        ? await state.taskRuntime.prepareTaskRunRead(childState.runId)
+        : () =>
+            state.taskRuntime
+              ?.listTaskRecords()
+              .filter((task) => task.runId === childState.runId) ?? [];
+      if (!this.isCurrent(state, childState)) {
+        return;
+      }
+      this.applyPendingReceipts(state, childState, read);
+      // An observer receipt grants no delivery authority until its saved owner matches.
+      // A real retry that arrives during the read promotes this same owned attempt.
+      if (!request.deliver && !childState.nativeCompletionDelivered) {
+        return;
+      }
+      if (childState.nativeCompletionDelivered && childState.completionDeliveryTimer) {
+        clearTimeout(childState.completionDeliveryTimer);
+        childState.completionDeliveryTimer = undefined;
+        this.receiptRetryTimers.delete(childState);
+      }
+      if (!(await this.persistPending(state, childState, read))) {
+        return;
+      }
+      const exhaustedError = this.exhausted.get(childState);
+      if (exhaustedError !== undefined) {
+        const params = {
+          runId: childState.runId,
+          expectedTask: childState.expectedTask,
+          completionCustody: childState.completionCustody,
+          deliveryStatus: "failed" as const,
+          error: exhaustedError,
+        };
+        const updated = state.taskRuntime?.setDetachedTaskDeliveryStatusByRunIdAsync
+          ? await state.taskRuntime.setDetachedTaskDeliveryStatusByRunIdAsync(params)
+          : state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId(params);
+        if (!this.isCurrent(state, childState)) {
+          return;
+        }
+        this.applyPendingReceipts(state, childState, read);
+        if (childState.nativeCompletionDelivered) {
+          childState.completionTaskPhase = "delivery";
+          await this.persistPending(state, childState, read);
+          return;
+        }
+        if (
+          state.taskRuntime &&
+          !updated?.some(
+            (task) =>
+              task.runId === childState.runId &&
+              (!childState.expectedTask ||
+                matchesAgentHarnessTaskAssignment(task, childState.expectedTask)),
+          )
+        ) {
+          if (this.claim(state, childState, read)) {
+            throw new Error("Codex native subagent failed delivery status was not persisted.");
+          }
+        }
+        this.dependencies.unregisterChild(childState);
         return;
       }
       // Foreground parents already receive native completion input. Persist the
@@ -70,9 +173,7 @@ export class CodexNativeSubagentCompletionDelivery {
         deferredToForeground = state.owners.size > 0;
         return;
       }
-      const task = state.taskRuntime
-        ?.listTaskRecords()
-        .find((record) => record.runId === childState.runId);
+      const task = read()[0];
       const historyOwner = readCodexNativeSubagentHistoryOwner(task?.detail);
       const delivery = await this.dependencies.deliver({
         scope: state.taskRuntimeScope,
@@ -90,7 +191,7 @@ export class CodexNativeSubagentCompletionDelivery {
           this.dependencies.isCurrentChild(childState) &&
           this.dependencies.isCurrentParent(state) &&
           !this.dependencies.isRetiredParent(state) &&
-          this.claim(state, childState),
+          this.claim(state, childState, read),
         childSessionKey: childState.runId,
         childSessionId: completion.childThreadId,
         announceId: `codex-native:${childState.nativeParentThreadId}:${readCodexNativeSubagentRunId(childState.runId)?.turnId ? childState.runId : completion.childThreadId}:${completion.status}`,
@@ -108,14 +209,18 @@ export class CodexNativeSubagentCompletionDelivery {
       ) {
         return;
       }
-      if (!this.claim(state, childState)) {
-        this.dependencies.unregisterChild(childState);
-        return;
-      }
+      // Retain an accepted delivery before any fallible persistence or read.
+      // A status-write retry must never send that result a second time.
       if (isDurableAgentHarnessCompletionDelivery(delivery)) {
         childState.nativeCompletionDelivered = true;
+      }
+      if (childState.nativeCompletionDelivered) {
         childState.completionTaskPhase = "delivery";
-        this.persistPending(state, childState);
+        await this.persistPending(state, childState, read);
+        return;
+      }
+      if (!this.claim(state, childState, read)) {
+        this.dependencies.unregisterChild(childState);
         return;
       }
       if (delivery.recoveryBlocked) {
@@ -131,13 +236,18 @@ export class CodexNativeSubagentCompletionDelivery {
         return;
       }
       const error = delivery.error ?? "completion delivery did not produce a parent response";
-      state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
+      const params = {
         runId: childState.runId,
         expectedTask: childState.expectedTask,
         completionCustody: childState.completionCustody,
-        deliveryStatus: "pending",
+        deliveryStatus: "pending" as const,
         error,
-      });
+      };
+      if (state.taskRuntime?.setDetachedTaskDeliveryStatusByRunIdAsync) {
+        await state.taskRuntime.setDetachedTaskDeliveryStatusByRunIdAsync(params);
+      } else {
+        state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId(params);
+      }
       this.scheduleRetry(childState, error);
     } catch (error) {
       if (
@@ -156,28 +266,22 @@ export class CodexNativeSubagentCompletionDelivery {
       ) {
         return;
       }
-      if (!this.claim(state, childState)) {
-        this.dependencies.unregisterChild(childState);
-        return;
-      }
+      // Storage may be the failed dependency. Keep custody and schedule using
+      // resident state only; the next attempt revalidates the exact assignment.
       const message = formatErrorMessage(error);
-      if (!childState.completionTaskPhase) {
-        state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
-          runId: childState.runId,
-          expectedTask: childState.expectedTask,
-          completionCustody: childState.completionCustody,
-          deliveryStatus: "pending",
-          error: message,
-        });
-      }
-      this.scheduleRetry(childState, message);
+      const receiptOnly = !request.deliver && !childState.nativeCompletionDelivered;
+      this.scheduleRetry(childState, message, !receiptOnly, receiptOnly ? "receipt" : "delivery");
       embeddedAgentLog.warn("Failed to deliver Codex native subagent completion", {
         parentThreadId: state.parentThreadId,
         childThreadId: completion.childThreadId,
         error: message,
       });
     } finally {
-      if (!childState.completionTaskPhase && !deferredToForeground) {
+      if (
+        (request.deliver || childState.nativeCompletionDelivered) &&
+        !childState.completionTaskPhase &&
+        !deferredToForeground
+      ) {
         // Keep the root through the first handoff, including a foreground parent's
         // pending unregister. Once attempted, sleeping retries retain only delivery authority.
         childState.completionCustody?.settleExecution();
@@ -191,6 +295,7 @@ export class CodexNativeSubagentCompletionDelivery {
     if (child.completionDeliveryTimer) {
       clearTimeout(child.completionDeliveryTimer);
       child.completionDeliveryTimer = undefined;
+      this.receiptRetryTimers.delete(child);
     }
     void this.deliverPending(state, child);
   }
@@ -221,26 +326,19 @@ export class CodexNativeSubagentCompletionDelivery {
         ) {
           continue;
         }
-        const task = deliveryParent.taskRuntime
-          ?.listTaskRecords()
-          .find((record) => record.runId === runId);
-        try {
-          // A rotated observer can receive an earlier assignment's result, but
-          // its saved physical requester must match the observer and delivery owner.
-          assertHistoryOwnerMatchesRegistration(
-            readCodexNativeSubagentHistoryOwner(task?.detail),
-            state.historyOwner,
-            child.nativeParentThreadId,
-            true,
-          );
-        } catch {
-          continue;
+        const receipts = this.pendingReceipts.get(child) ?? new Set<ParentState["historyOwner"]>();
+        receipts.add(state.historyOwner);
+        this.pendingReceipts.set(child, receipts);
+        if (child.pendingCompletion && !child.deliveringCompletion) {
+          void this.deliverPending(deliveryParent, child, "receipt");
         }
-        if (!this.claim(deliveryParent, child)) {
-          continue;
-        }
+        continue;
+      } else {
+        child.nativeCompletionDelivered = true;
       }
-      child.nativeCompletionDelivered = true;
+      if (child.pendingCompletion && child.nativeCompletionDelivered) {
+        child.completionTaskPhase ??= "delivery";
+      }
       if (child.pendingCompletion && !child.deliveringCompletion) {
         this.finish(deliveryParent, child);
       }
@@ -256,6 +354,9 @@ export class CodexNativeSubagentCompletionDelivery {
   }
 
   release(childState: ChildState): void {
+    this.receiptRetryTimers.delete(childState);
+    this.pendingReceipts.delete(childState);
+    this.exhausted.delete(childState);
     childState.completionCustody?.release();
     if (childState.completionDeliveryTimer) {
       clearTimeout(childState.completionDeliveryTimer);
@@ -267,22 +368,64 @@ export class CodexNativeSubagentCompletionDelivery {
     childState.deliveryOwnerKey = undefined;
   }
 
-  private persistPending(state: ParentState, child: ChildState): boolean {
+  private isCurrent(state: ParentState, child: ChildState): boolean {
+    return (
+      this.dependencies.isCurrentChild(child) &&
+      this.dependencies.isCurrentParent(state) &&
+      !this.dependencies.isRetiredParent(state)
+    );
+  }
+
+  private applyPendingReceipts(
+    state: ParentState,
+    child: ChildState,
+    read: () => AgentHarnessTaskRecord[],
+  ): void {
+    const receipts = this.pendingReceipts.get(child);
+    if (!receipts) {
+      return;
+    }
+    const task = read()[0];
+    for (const historyOwner of receipts) {
+      try {
+        assertHistoryOwnerMatchesRegistration(
+          readCodexNativeSubagentHistoryOwner(task?.detail),
+          historyOwner,
+          child.nativeParentThreadId,
+          true,
+        );
+      } catch {
+        continue;
+      }
+      if (this.claim(state, child, read)) {
+        child.nativeCompletionDelivered = true;
+        if (child.pendingCompletion) {
+          child.completionTaskPhase ??= "delivery";
+        }
+        break;
+      }
+    }
+    this.pendingReceipts.delete(child);
+  }
+
+  private async persistPending(
+    state: ParentState,
+    child: ChildState,
+    read: () => AgentHarnessTaskRecord[],
+  ): Promise<boolean> {
     const completion = child.pendingCompletion;
     if (!completion) {
       return false;
     }
     const runId = child.runId;
-    if (!this.claim(state, child)) {
+    if (!this.isCurrent(state, child) || !this.claim(state, child, read)) {
       this.dependencies.unregisterChild(child);
       return false;
     }
     if (child.completionTaskPhase === "finalize") {
       const eventAt = completion.completedAt ?? this.dependencies.now();
-      const currentRecord = state.taskRuntime
-        ?.listTaskRecords()
-        .find((record) => record.runId === runId);
-      const updated = state.taskRuntime?.finalizeTaskRunByRunId({
+      const currentRecord = read()[0];
+      const params = {
         runId,
         expectedTask: child.expectedTask,
         completionCustody: child.completionCustody,
@@ -300,7 +443,13 @@ export class CodexNativeSubagentCompletionDelivery {
               },
             }
           : {}),
-      });
+      };
+      const updated = state.taskRuntime?.finalizeTaskRunByRunIdAsync
+        ? await state.taskRuntime.finalizeTaskRunByRunIdAsync(params)
+        : state.taskRuntime?.finalizeTaskRunByRunId(params);
+      if (!this.isCurrent(state, child)) {
+        return false;
+      }
       if (
         state.taskRuntime &&
         !updated?.some(
@@ -309,10 +458,11 @@ export class CodexNativeSubagentCompletionDelivery {
             (!child.expectedTask || matchesAgentHarnessTaskAssignment(task, child.expectedTask)),
         )
       ) {
-        const current = state.taskRuntime.listTaskRecords().find((task) => task.runId === runId);
+        const current = read()[0];
         // Recovery can rewrite an already-terminal outcome still awaiting delivery.
-        // Only absence or a conflicting terminal decision retires this projection.
+        // Lost assignment ownership or a conflicting terminal decision retires this projection.
         if (
+          !this.claim(state, child, read) ||
           !current ||
           (current.status !== completion.status &&
             current.status !== "queued" &&
@@ -329,13 +479,22 @@ export class CodexNativeSubagentCompletionDelivery {
       this.dependencies.unregisterChild(child);
       return false;
     }
+    this.applyPendingReceipts(state, child, read);
     if (child.completionTaskPhase === "delivery") {
-      const updated = state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
+      const params = {
         runId,
         expectedTask: child.expectedTask,
         completionCustody: child.completionCustody,
-        deliveryStatus: child.nativeCompletionDelivered ? "delivered" : "pending",
-      });
+        deliveryStatus: child.nativeCompletionDelivered
+          ? ("delivered" as const)
+          : ("pending" as const),
+      };
+      const updated = state.taskRuntime?.setDetachedTaskDeliveryStatusByRunIdAsync
+        ? await state.taskRuntime.setDetachedTaskDeliveryStatusByRunIdAsync(params)
+        : state.taskRuntime?.setDetachedTaskDeliveryStatusByRunId(params);
+      if (!this.isCurrent(state, child)) {
+        return false;
+      }
       if (
         state.taskRuntime &&
         !updated?.some(
@@ -344,11 +503,16 @@ export class CodexNativeSubagentCompletionDelivery {
             (!child.expectedTask || matchesAgentHarnessTaskAssignment(task, child.expectedTask)),
         )
       ) {
-        if (!state.taskRuntime.listTaskRecords().some((task) => task.runId === runId)) {
+        if (!this.claim(state, child, read)) {
           this.dependencies.unregisterChild(child);
           return false;
         }
         throw new Error("Codex native subagent task delivery status was not persisted.");
+      }
+      this.applyPendingReceipts(state, child, read);
+      if (params.deliveryStatus === "pending" && child.nativeCompletionDelivered) {
+        // Native delivery can arrive while the pending-status worker is settling.
+        return this.persistPending(state, child, read);
       }
       child.completionTaskPhase = undefined;
       child.completionDeliveryAttempt = 0;
@@ -362,7 +526,12 @@ export class CodexNativeSubagentCompletionDelivery {
     return true;
   }
 
-  private scheduleRetry(childState: ChildState, error: string, chargeAttempt = true): void {
+  private scheduleRetry(
+    childState: ChildState,
+    error: string,
+    chargeAttempt = true,
+    trigger: CompletionAttemptTrigger = "delivery",
+  ): void {
     if (
       !childState.pendingCompletion ||
       childState.completionDeliveryTimer ||
@@ -375,35 +544,38 @@ export class CodexNativeSubagentCompletionDelivery {
       !childState.completionTaskPhase &&
       childState.completionDeliveryAttempt >= this.maxRetries
     ) {
-      const state = this.dependencies.getParent(childState.parentThreadId);
-      state?.taskRuntime?.setDetachedTaskDeliveryStatusByRunId({
-        runId: childState.runId,
-        expectedTask: childState.expectedTask,
-        completionCustody: childState.completionCustody,
-        deliveryStatus: "failed",
-        error,
-      });
-      this.dependencies.unregisterChild(childState);
-      return;
+      // Exhaustion settles through the same owned attempt. A failed status write
+      // remains pending without starting another delivery or escaping this timer.
+      if (!this.exhausted.has(childState)) {
+        this.exhausted.set(childState, error);
+      }
     }
     const delayMs = delayForAttempt(
       this.retryDelaysMs,
       chargeAttempt ? childState.completionDeliveryAttempt++ : childState.completionDeliveryAttempt,
     );
+    if (trigger === "receipt") {
+      this.receiptRetryTimers.add(childState);
+    }
     childState.completionDeliveryTimer = setTimeout(() => {
+      this.receiptRetryTimers.delete(childState);
       childState.completionDeliveryTimer = undefined;
       if (!this.dependencies.isCurrentChild(childState)) {
         return;
       }
       const state = this.dependencies.getParent(childState.parentThreadId);
       if (state) {
-        void this.deliverPending(state, childState);
+        void this.deliverPending(state, childState, trigger);
       }
     }, delayMs);
     childState.completionDeliveryTimer.unref();
   }
 
-  private claim(state: ParentState, childState: ChildState): boolean {
+  private claim(
+    state: ParentState,
+    childState: ChildState,
+    read: () => AgentHarnessTaskRecord[],
+  ): boolean {
     if (childState.completionCustody && !childState.completionCustody.isCurrent()) {
       return false;
     }
@@ -412,9 +584,7 @@ export class CodexNativeSubagentCompletionDelivery {
       return true;
     }
     const key = `${requesterSessionKey}\0${childState.runId}`;
-    const runId = childState.runId;
-    const tasks =
-      state.taskRuntime?.listTaskRecords().filter((record) => record.runId === runId) ?? [];
+    const tasks = read();
     const task = tasks[0];
     if (
       tasks.length > 1 ||

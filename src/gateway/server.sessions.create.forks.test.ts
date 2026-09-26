@@ -260,6 +260,7 @@ test("sessions.create forks the parent transcript into the new session", async (
   }>("sessions.create", {
     agentId: "main",
     parentSessionKey: "main",
+    key: "agent:main:dashboard:fork-publication",
     fork: true,
   });
 
@@ -483,7 +484,14 @@ test("sessions.create clamps configured capacity to the selected child model win
       }),
     },
   });
-  const cfg = getRuntimeConfig();
+  const cfg = {
+    ...getRuntimeConfig(),
+    models: {
+      providers: {
+        openai: { models: [{ id: "gpt-selectable", contextTokens: 1_000_000 }] },
+      },
+    },
+  };
 
   const created = await directSessionReq(
     "sessions.create",
@@ -496,14 +504,7 @@ test("sessions.create clamps configured capacity to the selected child model win
     },
     {
       context: {
-        getRuntimeConfig: () => ({
-          ...cfg,
-          models: {
-            providers: {
-              openai: { models: [{ id: "gpt-selectable", contextTokens: 1_000_000 }] },
-            },
-          },
-        }),
+        getRuntimeConfig: () => cfg,
       },
     },
   );

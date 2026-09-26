@@ -1,5 +1,5 @@
+import type { GatewayRequestHandlers } from "openclaw/plugin-sdk/gateway-runtime";
 import type { PlaywrightOwnedPage } from "./browser/pw-session-page.types.js";
-import type { GatewayRequestHandlers } from "./sdk-node-runtime.js";
 
 export type BrowserDashboardRequest = {
   sessionKey: string;

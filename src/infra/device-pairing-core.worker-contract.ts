@@ -51,7 +51,7 @@ export type DevicePairingCoreWorkerOperations = {
     output: { deviceId: string; role: string; removedDevice: boolean } | null;
   };
   "devicePairing.updateMetadata": {
-    input: { deviceId: string; patch: Partial<PairedDeviceMetadataPatch>; nowMs: number };
+    input: { deviceId: string; patch: Partial<PairedDeviceMetadataPatch> };
     output: boolean;
   };
   "devicePairing.updatePresence": {

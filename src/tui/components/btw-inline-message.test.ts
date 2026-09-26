@@ -1,7 +1,25 @@
 // BTW inline message tests cover compact inline status message rendering.
+import {
+  getCapabilities,
+  getOsc8LinkAtColumn,
+  setCapabilities,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { BtwInlineMessage } from "./btw-inline-message.js";
+
+function expectUrlLink(lines: string[], url: string) {
+  const line = lines.find((entry) => normalizeTestText(entry).includes(url));
+  expect(line).toBeDefined();
+  const visible = normalizeTestText(line!);
+  const start = visibleWidth(visible.slice(0, visible.indexOf(url)));
+  for (let column = start; column < start + url.length; column++) {
+    expect(getOsc8LinkAtColumn(line!, column)).toBe(url);
+  }
+  expect(getOsc8LinkAtColumn(line!, start - 1)).toBeUndefined();
+  expect(getOsc8LinkAtColumn(line!, start + url.length)).toBeUndefined();
+}
 
 describe("btw inline message", () => {
   it("renders the BTW question, answer, and dismiss hint inline", () => {
@@ -19,46 +37,56 @@ describe("btw inline message", () => {
     ]);
   });
 
-  it("sanitizes the question and successful Markdown result on every update", () => {
-    const firstQuestionAttack = "\x1b[3Jquestion";
-    const firstTextAttack = "\x1b]52;c;T08_BTW_CLIPBOARD\x07";
-    const nextQuestionAttack = "\u009b3Jquestion";
-    const nextTextAttack = "\u009d0;T08_BTW_TITLE\u009c";
-    const url = "https://example.test/tui/btw?copy=caf%C3%A9";
-    const message = new BtwInlineMessage({
-      question: `first ${firstQuestionAttack}\r\nمرحبا\tשלום`,
-      text: `${firstTextAttack}**first café**\nsecond body ${url}`,
-    });
+  it.each([true, false])(
+    "sanitizes questions and Markdown updates with native hyperlinks=%s",
+    (hyperlinks) => {
+      const capabilities = getCapabilities();
+      setCapabilities({ ...capabilities, hyperlinks });
+      try {
+        const firstQuestionAttack = "\x1b[3Jquestion";
+        const firstTextAttack = "\x1b]52;c;T08_BTW_CLIPBOARD\x07";
+        const nextQuestionAttack = "\u009b3Jquestion";
+        const nextTextAttack = "\u009d0;T08_BTW_TITLE\u009c";
+        const url = "https://example.test/tui/btw?copy=caf%C3%A9";
+        const message = new BtwInlineMessage({
+          question: `first ${firstQuestionAttack}\r\nمرحبا\tשלום`,
+          text: `${firstTextAttack}**first café**\nsecond body ${url}`,
+        });
 
-    let lines = message.render(140);
-    let raw = lines.join("\n");
-    let rendered = normalizeTestText(raw);
-    expect(rendered).toContain("BTW: \u2067first question مرحبا שלום\u2069");
-    expect(rendered).toContain("مرحبا שלום");
-    expect(rendered).toContain("first café");
-    expect(rendered).toContain("second body");
-    expect(lines[1]).not.toMatch(/[\r\n\t]/u);
-    expect(raw).toContain(`\x1b]8;;${url}\x07`);
-    expect(raw).not.toContain(firstQuestionAttack);
-    expect(raw).not.toContain(firstTextAttack);
+        let lines = message.render(140);
+        let raw = lines.join("\n");
+        let rendered = normalizeTestText(raw);
+        expect(rendered).toContain("BTW: \u2067first question مرحبا שלום\u2069");
+        expect(rendered).toContain("مرحبا שלום");
+        expect(rendered).toContain("first café");
+        expect(rendered).toContain("second body");
+        expect(lines[1]).not.toMatch(/[\r\n\t]/u);
+        expectUrlLink(lines, url);
+        expect(raw).not.toContain(firstQuestionAttack);
+        expect(raw).not.toContain(firstTextAttack);
 
-    message.setResult({
-      question: `next ${nextQuestionAttack}\r\nשלום\tمرحبا`,
-      text: `${nextTextAttack}**next 東京** ${url}`,
-    });
+        message.setResult({
+          question: `next ${nextQuestionAttack}\r\nשלום\tمرحبا`,
+          text: `${nextTextAttack}**next 東京** ${url}`,
+        });
 
-    lines = message.render(140);
-    raw = lines.join("\n");
-    rendered = normalizeTestText(raw);
-    expect(rendered).toContain("BTW: \u2067next question שלום مرحبا\u2069");
-    expect(rendered).toContain("שלום مرحبا");
-    expect(rendered).toContain("next 東京");
-    expect(rendered).not.toContain("first question");
-    expect(rendered).not.toContain("first café");
-    expect(raw).not.toContain(nextQuestionAttack);
-    expect(raw).not.toContain(nextTextAttack);
-    expect(lines[1]).not.toMatch(/[\r\n\t]/u);
-  });
+        lines = message.render(140);
+        raw = lines.join("\n");
+        rendered = normalizeTestText(raw);
+        expect(rendered).toContain("BTW: \u2067next question שלום مرحبا\u2069");
+        expect(rendered).toContain("שלום مرحبا");
+        expect(rendered).toContain("next 東京");
+        expect(rendered).not.toContain("first question");
+        expect(rendered).not.toContain("first café");
+        expectUrlLink(lines, url);
+        expect(raw).not.toContain(nextQuestionAttack);
+        expect(raw).not.toContain(nextTextAttack);
+        expect(lines[1]).not.toMatch(/[\r\n\t]/u);
+      } finally {
+        setCapabilities(capabilities);
+      }
+    },
+  );
 
   it("passes sanitized RTL source through Markdown exactly once", () => {
     const message = new BtwInlineMessage({

@@ -4,7 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 export { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 export { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
-export { getSessionBindingService };
+export { listSessionBindingsBySessionAsync } from "../../infra/outbound/session-binding-service.js";
 
 const ACP_STALE_BINDING_UNBIND_REASON = "acp-session-init-failed";
 

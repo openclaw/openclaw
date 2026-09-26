@@ -60,7 +60,7 @@ const SLACK_REACTION_RESULT_LIMIT = 100;
 const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.js"));
 const bindSlackAction = createLazyRuntimeMethodBinder(loadSlackActionsRuntime);
 
-const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
+const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.js"));
 const loadSlackChannelTypeRuntime = createLazyRuntimeModule(() => import("./channel-type.js"));
 const bindSlackChannelType = createLazyRuntimeMethodBinder(loadSlackChannelTypeRuntime);
 

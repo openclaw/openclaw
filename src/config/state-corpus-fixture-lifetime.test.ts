@@ -241,12 +241,12 @@ it.skipIf(process.platform === "win32")(
       expect(fs.existsSync(path.join(home, ".openclaw", "openclaw.json"))).toBe(true);
       expect(stages.filter((stage) => stage === "database-integrity")).toEqual([]);
       expect(stages.filter((stage) => stage === "doctor-repair")).toHaveLength(1);
-      expect(preflight).toHaveBeenCalledTimes(2);
+      expect(preflight).toHaveBeenCalledTimes(1);
       release.resolve();
       await body;
       expect(stages.filter((stage) => stage === "database-integrity")).toHaveLength(2);
       expect(stages.filter((stage) => stage === "doctor-repair")).toHaveLength(2);
-      expect(preflight).toHaveBeenCalledTimes(4);
+      expect(preflight).toHaveBeenCalledTimes(2);
       await fixture.cleanup();
       expect(fs.existsSync(home)).toBe(false);
       expect(captureEnv()).toEqual(originalEnv);

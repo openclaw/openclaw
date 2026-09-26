@@ -289,10 +289,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/node.json",
       hasLegacy: false,
     },
-    subagentRegistry: {
-      sourcePath: "/tmp/state/subagents/runs.json",
-      hasLegacy: false,
-    },
     rescuePending: {
       sourcePaths: ["/tmp/state/crestodian/rescue-pending", "/tmp/state/openclaw/rescue-pending"],
       hasLegacy: false,
@@ -542,7 +538,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
 vi.mock("../runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
   return {
-    ExitError: actual.ExitError,
+    ...actual,
     defaultRuntime: {
       log: () => {},
       error: () => {},

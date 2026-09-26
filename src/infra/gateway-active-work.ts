@@ -161,22 +161,14 @@ export function createGatewayActiveWorkSnapshot(
   const blockers: GatewayActiveWorkBlocker[] = [];
   const add = (count: number, kind: GatewayActiveWorkBlocker["kind"], message: string) => {
     if (count > 0) {
-      blockers.push({ kind, count, message });
+      blockers.push({ kind, count, message: `${count} ${message}` });
     }
   };
-  add(counts.queueSize, "queue", `${counts.queueSize} queued or active operation(s)`);
-  add(
-    counts.pendingReplies,
-    "reply",
-    `${counts.pendingReplies} pending reply delivery operation(s)`,
-  );
-  add(counts.embeddedRuns, "embedded-run", `${counts.embeddedRuns} active embedded run(s)`);
-  add(
-    counts.backgroundExecSessions,
-    "background-exec",
-    `${counts.backgroundExecSessions} active background exec session(s)`,
-  );
-  add(counts.cronRuns, "cron-run", `${counts.cronRuns} active cron run(s)`);
+  add(counts.queueSize, "queue", "queued or active operation(s)");
+  add(counts.pendingReplies, "reply", "pending reply delivery operation(s)");
+  add(counts.embeddedRuns, "embedded-run", "active embedded run(s)");
+  add(counts.backgroundExecSessions, "background-exec", "active background exec session(s)");
+  add(counts.cronRuns, "cron-run", "active cron run(s)");
   const rootRequestHolders =
     inspectors.getRootRequests && !inspectors.getRootRequestHolders
       ? []
@@ -190,31 +182,15 @@ export function createGatewayActiveWorkSnapshot(
   add(
     counts.rootRequests,
     "root-request",
-    `${counts.rootRequests} active gateway request(s)${rootRequestHolderNames.length > 0 ? `: ${rootRequestHolderNames.join(", ")}` : ""}`,
+    `active gateway request(s)${rootRequestHolderNames.length > 0 ? `: ${rootRequestHolderNames.join(", ")}` : ""}`,
   );
-  add(
-    counts.sessionAdmissions,
-    "session-admission",
-    `${counts.sessionAdmissions} admitted session turn(s)`,
-  );
-  add(
-    counts.sessionMutations,
-    "session-mutation",
-    `${counts.sessionMutations} active session lifecycle mutation(s)`,
-  );
-  add(counts.chatRuns, "chat-run", `${counts.chatRuns} active chat run(s)`);
-  add(counts.queuedTurns, "queued-turn", `${counts.queuedTurns} queued chat turn(s)`);
-  add(
-    counts.terminalPersistence,
-    "terminal-persistence",
-    `${counts.terminalPersistence} pending terminal session write(s)`,
-  );
+  add(counts.sessionAdmissions, "session-admission", "admitted session turn(s)");
+  add(counts.sessionMutations, "session-mutation", "active session lifecycle mutation(s)");
+  add(counts.chatRuns, "chat-run", "active chat run(s)");
+  add(counts.queuedTurns, "queued-turn", "queued chat turn(s)");
+  add(counts.terminalPersistence, "terminal-persistence", "pending terminal session write(s)");
   if (!options.ignoreTerminalSessions) {
-    add(
-      counts.terminalSessions,
-      "terminal-session",
-      `${counts.terminalSessions} open terminal session(s)`,
-    );
+    add(counts.terminalSessions, "terminal-session", "open terminal session(s)");
   }
 
   if (counts.activeTasks > 0) {

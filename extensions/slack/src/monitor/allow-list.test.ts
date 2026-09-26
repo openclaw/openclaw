@@ -1,8 +1,10 @@
+import {
+  normalizeStringEntries as normalizeAllowList,
+  normalizeStringEntriesLower as normalizeAllowListLower,
+} from "openclaw/plugin-sdk/string-normalization-runtime";
 // Slack tests cover allow list plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  normalizeAllowList,
-  normalizeAllowListLower,
   normalizeSlackSlug,
   resolveSlackAllowListMatch,
   resolveSlackUserAllowListForTeam,

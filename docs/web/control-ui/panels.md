@@ -160,6 +160,9 @@ entered in the address bar navigate the current tab, with independent Back and
 Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
 including their loaded documents while you switch between them.
 
+Opening or loading an item keeps keyboard focus where you are typing. The
+**+** button focuses the address bar so you can enter a new URL.
+
 The reader shows descriptions, issue and pull-request discussion comments,
 commit comments, published inline PR review comments with file/line and diff
 context, and expandable file diffs. Comment timestamps link to their source on

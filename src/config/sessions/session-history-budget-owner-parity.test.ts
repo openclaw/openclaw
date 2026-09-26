@@ -386,6 +386,7 @@ describe("budget cap-entry logical ownership", () => {
     "deletes the matching receipt for $name in a shared physical main store",
     async (scenario) => {
       const f = await fixture("shared", scenario.bare);
+      const file = fs.statSync(f.databasePath, { bigint: true });
       const facts = observeVictim(f);
       await expect(enforce(f, scenario.explicit ? "secondary" : undefined)).resolves.toMatchObject({
         removedEntries: 1,
@@ -413,6 +414,7 @@ describe("budget cap-entry logical ownership", () => {
         {
           mutation: {
             agentId: scenario.expectedAgent,
+            databaseIdentity: `${file.dev}:${file.ino}`,
             kind: "delete",
             previous: { sessionId: f.victimId, sessionKeys: [f.victimKey] },
           },

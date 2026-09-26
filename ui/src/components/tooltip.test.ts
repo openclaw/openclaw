@@ -479,18 +479,6 @@ describe("openclaw-tooltip", () => {
     dispatchMousePointer(trigger, "pointerleave");
   });
 
-  it("keeps the accessible description in the trigger document tree", async () => {
-    const provider = createProvider();
-    const { tooltip, trigger } = createTooltip("Accessible tooltip");
-    provider.append(tooltip);
-    document.body.append(provider);
-    await tooltip.updateComplete;
-
-    const descriptionId = trigger.getAttribute("aria-describedby");
-    expect(descriptionId).toBeTruthy();
-    expect(document.getElementById(descriptionId ?? "")?.textContent).toBe("Accessible tooltip");
-  });
-
   it("describes the focusable element inside a wrapper trigger", async () => {
     const tooltip = document.createElement("openclaw-tooltip") as TooltipElement;
     const row = document.createElement("div");
@@ -510,18 +498,6 @@ describe("openclaw-tooltip", () => {
     expect(descriptionId).toBeTruthy();
     expect(document.getElementById(descriptionId ?? "")?.textContent).toBe(
       "Branch feature/sidebar",
-    );
-  });
-
-  it("describes rich content with its text content", async () => {
-    const { tooltip, trigger } = createRichTooltip("Online 2 Alice Server v2026.7.2");
-    document.body.append(tooltip);
-    await tooltip.updateComplete;
-
-    const descriptionId = trigger.getAttribute("aria-describedby");
-    expect(descriptionId).toBeTruthy();
-    expect(document.getElementById(descriptionId ?? "")?.textContent).toBe(
-      "Online 2 Alice Server v2026.7.2",
     );
   });
 

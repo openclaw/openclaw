@@ -130,7 +130,9 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3 tini",
     );
-    expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
+    expect(dockerfile).toContain(
+      'ENTRYPOINT ["tini", "-s", "--", "node", "/app/docker-entrypoint.mjs"]',
+    );
   });
 
   it.runIf(process.platform !== "win32").each([

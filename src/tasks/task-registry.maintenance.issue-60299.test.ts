@@ -183,7 +183,8 @@ describe("task-registry maintenance issue #60299", () => {
       sessionStore: { [childSessionKey]: { sessionId: childSessionKey, updatedAt: Date.now() } },
     });
 
-    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
     expectTaskStatus(currentTasks, task.taskId, "lost");
   });
 
@@ -646,13 +647,18 @@ describe("task-registry maintenance issue #60299", () => {
     expect(recoveredTask).not.toHaveProperty("error");
   });
 
-  it("does not recover terminal lost cron tasks without a backing-session error", async () => {
+  it.each([
+    { name: "without a backing-session error", error: undefined },
+    { name: "with a non-backing-session error", error: "operator marked lost" },
+  ])("does not recover terminal lost cron tasks $name", async ({ error }) => {
     const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const sourceId = "cron-job-terminal-lost-unrelated-error";
     const task = makeStaleTask({
       runtime: "cron",
-      sourceId: "cron-job-terminal-lost-no-error",
-      runId: `cron:cron-job-terminal-lost-no-error:${startedAt}`,
+      sourceId,
+      runId: `cron:${sourceId}:${startedAt}`,
       status: "lost",
+      error,
       startedAt,
       endedAt: startedAt + 60_000,
       lastEventAt: startedAt + 60_000,
@@ -662,44 +668,7 @@ describe("task-registry maintenance issue #60299", () => {
     const { currentTasks } = createTaskRegistryMaintenanceHarness({
       tasks: [task],
       durableCronTaskRows: {
-        "cron-job-terminal-lost-no-error": [
-          {
-            ...task,
-            status: "succeeded",
-            endedAt: startedAt + 1250,
-            lastEventAt: startedAt + 1250,
-            terminalSummary: "done",
-            detail: { kind: "cron-run", status: "ok" },
-          },
-        ],
-      },
-    });
-
-    expect(previewTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
-    expect(await runTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({
-      status: "lost",
-    });
-  });
-
-  it("does not recover terminal lost cron tasks with non-backing-session errors", async () => {
-    const startedAt = Date.now() - GRACE_EXPIRED_MS;
-    const task = makeStaleTask({
-      runtime: "cron",
-      sourceId: "cron-job-terminal-lost-other-error",
-      runId: `cron:cron-job-terminal-lost-other-error:${startedAt}`,
-      status: "lost",
-      error: "operator marked lost",
-      startedAt,
-      endedAt: startedAt + 60_000,
-      lastEventAt: startedAt + 60_000,
-      cleanupAfter: Date.now() + 60_000,
-    });
-
-    const { currentTasks } = createTaskRegistryMaintenanceHarness({
-      tasks: [task],
-      durableCronTaskRows: {
-        "cron-job-terminal-lost-other-error": [
+        [sourceId]: [
           {
             ...task,
             status: "succeeded",
@@ -715,27 +684,7 @@ describe("task-registry maintenance issue #60299", () => {
 
     expect(previewTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
     expect(await runTaskRegistryMaintenance()).toMatchObject({ recovered: 0 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({
-      status: "lost",
-      error: "operator marked lost",
-    });
-  });
-
-  it("does not recover cron tasks from cron job state without a terminal ledger row", async () => {
-    const startedAt = Date.now() - GRACE_EXPIRED_MS;
-    const task = makeStaleTask({
-      runtime: "cron",
-      sourceId: "cron-job-state-error",
-      runId: `cron:cron-job-state-error:${startedAt}`,
-      startedAt,
-      lastEventAt: startedAt,
-    });
-
-    const { currentTasks } = createTaskRegistryMaintenanceHarness({ tasks: [task] });
-
-    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
-    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
-    expectTaskStatus(currentTasks, task.taskId, "lost");
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost", error });
   });
 
   it("marks chat-backed cli tasks lost after the owning run context disappears", async () => {

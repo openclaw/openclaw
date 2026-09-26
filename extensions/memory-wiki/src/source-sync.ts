@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements source sync behavior.
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
 import {

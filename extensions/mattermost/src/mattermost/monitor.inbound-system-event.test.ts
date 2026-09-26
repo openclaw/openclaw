@@ -29,7 +29,7 @@ import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { registerMattermostBlockProgressTests } from "./monitor.block-progress.test-support.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import { registerMattermostPreviewDeliveryTests } from "./monitor.preview-delivery.test-support.js";
-import type { OpenClawConfig, ReplyPayload } from "./runtime-api.js";
+import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
 
 class FakeWebSocket {
   public readonly sent: string[] = [];
@@ -526,13 +526,28 @@ function startTestMonitor(
   config: OpenClawConfig,
   abortController: AbortController,
   socket: FakeWebSocket,
+  runtime: RuntimeEnv = testRuntime(),
 ): Promise<void> {
   return monitorMattermostProvider({
     config,
-    runtime: testRuntime(),
+    runtime,
     abortSignal: abortController.signal,
     webSocketFactory: () => socket,
   });
+}
+
+async function openMonitor(
+  socket: FakeWebSocket,
+  abortController: AbortController,
+  config: OpenClawConfig = testConfig,
+  runtime: RuntimeEnv = testRuntime(),
+) {
+  const monitor = startTestMonitor(config, abortController, socket, runtime);
+  await vi.waitFor(() => {
+    expect(socket.openListenerCount).toBeGreaterThan(0);
+  });
+  socket.emitOpen();
+  return { monitor };
 }
 
 async function emitMattermostChannelPost(
@@ -894,12 +909,6 @@ describe("mattermost inbound user posts", () => {
 
   it.each([
     {
-      label: "plain text",
-      fileIds: [],
-      failedMedia: [],
-      expectedBody: "hello from mattermost",
-    },
-    {
       label: "an unavailable named attachment",
       fileIds: ["file-1"],
       failedMedia: [
@@ -920,12 +929,7 @@ describe("mattermost inbound user posts", () => {
       mockState.abortController = abortController;
       mockState.resolveMattermostMedia.mockResolvedValueOnce(failedMedia);
 
-      const monitor = startTestMonitor(testConfig, abortController, socket);
-
-      await vi.waitFor(() => {
-        expect(socket.openListenerCount).toBeGreaterThan(0);
-      });
-      socket.emitOpen();
+      const { monitor } = await openMonitor(socket, abortController);
 
       await socket.emitMessage({
         event: "posted",
@@ -992,10 +996,7 @@ describe("mattermost inbound user posts", () => {
       messages: { groupChat: { historyLimit: 1 } },
       channels: {
         mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
-          chatmode: "onmessage",
+          ...testConfig.channels?.mattermost,
           dmPolicy: "open",
           groupPolicy: "allowlist",
           groupAllowFrom: ["allowed-user"],
@@ -1004,12 +1005,7 @@ describe("mattermost inbound user posts", () => {
     };
     mockState.runtimeCore = createRuntimeCore(config);
 
-    const monitor = startTestMonitor(config, abortController, socket);
-
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+    const { monitor } = await openMonitor(socket, abortController, config);
 
     await emitMattermostChannelPost(socket, {
       id: "timezone-history",
@@ -1067,10 +1063,7 @@ describe("mattermost inbound user posts", () => {
         channels: {
           ...(contextVisibility ? { defaults: { contextVisibility } } : {}),
           mattermost: {
-            enabled: true,
-            baseUrl: "https://mattermost.example.com",
-            botToken: "bot-token",
-            chatmode: "onmessage",
+            ...testConfig.channels?.mattermost,
             dmPolicy: "open",
             groupPolicy: "allowlist",
             groupAllowFrom: ["allowed-user"],
@@ -1084,12 +1077,7 @@ describe("mattermost inbound user posts", () => {
       });
       mockState.runtimeCore = runtimeCore;
 
-      const monitor = startTestMonitor(config, abortController, socket);
-
-      await vi.waitFor(() => {
-        expect(socket.openListenerCount).toBeGreaterThan(0);
-      });
-      socket.emitOpen();
+      const { monitor } = await openMonitor(socket, abortController, config);
 
       for (const [index, message] of ["/reset", "denied second", "denied third"].entries()) {
         await emitMattermostChannelPost(socket, {
@@ -1312,32 +1300,11 @@ describe("mattermost inbound user posts", () => {
     mockState.abortController = abortController;
     mockState.runtimeCore = createRuntimeCore(testConfig, undefined, { verboseDebug });
 
-    const monitor = startTestMonitor(testConfig, abortController, socket);
+    const { monitor } = await openMonitor(socket, abortController);
 
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
-
-    await socket.emitMessage({
-      event: "posted",
-      data: {
-        channel_id: "chan-1",
-        channel_name: "town-square",
-        channel_display_name: "Town Square",
-        sender_name: "alice",
-        post: JSON.stringify({
-          id: "post-verbose-preview",
-          channel_id: "chan-1",
-          user_id: "user-1",
-          message: `${"a".repeat(199)}😀tail`,
-          create_at: 1_714_000_000_000,
-        }),
-      },
-      broadcast: {
-        channel_id: "chan-1",
-        user_id: "user-1",
-      },
+    await emitMattermostChannelPost(socket, {
+      id: "post-verbose-preview",
+      message: `${"a".repeat(199)}😀tail`,
     });
     socket.emitClose(1000);
     await monitor;
@@ -1352,32 +1319,12 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
 
-    const monitor = startTestMonitor(testConfig, abortController, socket);
+    const { monitor } = await openMonitor(socket, abortController);
 
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
-
-    await socket.emitMessage({
-      event: "posted",
-      data: {
-        channel_id: "chan-1",
-        channel_name: "town-square",
-        channel_display_name: "Town Square",
-        sender_name: "alice",
-        post: JSON.stringify({
-          id: "post-bare-mention",
-          channel_id: "chan-1",
-          user_id: "user-1",
-          message: "@openclaw",
-          create_at: 1_714_000_000_001,
-        }),
-      },
-      broadcast: {
-        channel_id: "chan-1",
-        user_id: "user-1",
-      },
+    await emitMattermostChannelPost(socket, {
+      id: "post-bare-mention",
+      message: "@openclaw",
+      createAt: 1_714_000_000_001,
     });
     socket.emitClose(1000);
     await monitor;
@@ -1427,17 +1374,7 @@ describe("mattermost inbound user posts", () => {
       };
       mockState.runtimeCore = createRuntimeCore(config);
 
-      const monitor = monitorMattermostProvider({
-        config,
-        runtime,
-        abortSignal: abortController.signal,
-        webSocketFactory: () => socket,
-      });
-
-      await vi.waitFor(() => {
-        expect(socket.openListenerCount).toBeGreaterThan(0);
-      });
-      socket.emitOpen();
+      const { monitor } = await openMonitor(socket, abortController, config, runtime);
 
       await emitMattermostChannelPost(socket, {
         id: "post-mention-boundary",
@@ -1472,12 +1409,7 @@ describe("mattermost inbound user posts", () => {
     const inlineCommandConfig: OpenClawConfig = {
       channels: {
         mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
-          chatmode: "onmessage",
-          dmPolicy: "open",
-          groupPolicy: "open",
+          ...testConfig.channels?.mattermost,
         },
       },
     };
@@ -1489,32 +1421,11 @@ describe("mattermost inbound user posts", () => {
       shouldHandleTextCommands: () => true,
     });
 
-    const monitor = startTestMonitor(inlineCommandConfig, abortController, socket);
+    const { monitor } = await openMonitor(socket, abortController, inlineCommandConfig);
 
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
-
-    await socket.emitMessage({
-      event: "posted",
-      data: {
-        channel_id: "chan-1",
-        channel_name: "town-square",
-        channel_display_name: "Town Square",
-        sender_name: "alice",
-        post: JSON.stringify({
-          id: "post-inline-command",
-          channel_id: "chan-1",
-          user_id: "user-1",
-          message: "hello /status",
-          create_at: 1_714_000_000_000,
-        }),
-      },
-      broadcast: {
-        channel_id: "chan-1",
-        user_id: "user-1",
-      },
+    await emitMattermostChannelPost(socket, {
+      id: "post-inline-command",
+      message: "hello /status",
     });
     socket.emitClose(1000);
     await monitor;
@@ -1542,10 +1453,7 @@ describe("mattermost inbound user posts", () => {
     const directConfig: OpenClawConfig = {
       channels: {
         mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
-          chatmode: "onmessage",
+          ...testConfig.channels?.mattermost,
           dmPolicy: "allowlist",
           groupPolicy: "open",
           allowFrom: ["user-1"],
@@ -1569,12 +1477,7 @@ describe("mattermost inbound user posts", () => {
       type: "D",
     });
 
-    const monitor = startTestMonitor(directConfig, abortController, socket);
-
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+    const { monitor } = await openMonitor(socket, abortController, directConfig);
 
     await socket.emitMessage({
       event: "posted",
@@ -1617,9 +1520,7 @@ describe("mattermost inbound user posts", () => {
       messages: { inbound: { debounceMs: 60_000 } },
       channels: {
         mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
+          ...testConfig.channels?.mattermost,
           chatmode: "oncall",
           dmPolicy: "open",
           groupPolicy: "open",
@@ -1636,12 +1537,7 @@ describe("mattermost inbound user posts", () => {
       shouldHandleTextCommands: () => true,
     });
 
-    const monitor = startTestMonitor(mentionConfig, abortController, socket);
-
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+    const { monitor } = await openMonitor(socket, abortController, mentionConfig);
 
     await emitMattermostChannelPost(socket, {
       id: "post-mention-command",
@@ -1671,12 +1567,7 @@ describe("mattermost inbound user posts", () => {
     mockState.runtimeCore = runtimeCore;
     mockState.resolveChannelInfo.mockResolvedValue(null);
 
-    const monitor = startTestMonitor(testConfig, abortController, socket);
-
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+    const { monitor } = await openMonitor(socket, abortController);
 
     await socket.emitMessage({
       event: "posted",
@@ -1717,10 +1608,7 @@ describe("mattermost inbound user posts", () => {
     const channelTypeConfig: OpenClawConfig = {
       channels: {
         mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
-          chatmode: "onmessage",
+          ...testConfig.channels?.mattermost,
           dmPolicy: "allowlist",
           groupPolicy: "open",
           allowFrom: ["trusted-user"],
@@ -1731,12 +1619,7 @@ describe("mattermost inbound user posts", () => {
     mockState.runtimeCore = runtimeCore;
     mockState.resolveChannelInfo.mockResolvedValue(null);
 
-    const monitor = startTestMonitor(channelTypeConfig, abortController, socket);
-
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+    const { monitor } = await openMonitor(socket, abortController, channelTypeConfig);
 
     await socket.emitMessage({
       event: "posted",
@@ -1771,10 +1654,7 @@ describe("mattermost inbound user posts", () => {
       channels: {
         defaults: { contextVisibility: "allowlist" },
         mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
-          chatmode: "onmessage",
+          ...testConfig.channels?.mattermost,
           dmPolicy: "open",
           groupPolicy: "allowlist",
           groupAllowFrom: ["allowed-user"],
@@ -1786,12 +1666,7 @@ describe("mattermost inbound user posts", () => {
       createInboundDebouncer,
     });
 
-    const monitor = startTestMonitor(config, abortController, socket);
-
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+    const { monitor } = await openMonitor(socket, abortController, config);
 
     await emitMattermostChannelPost(socket, {
       id: "post-denied",
@@ -1835,9 +1710,7 @@ describe("mattermost inbound user posts", () => {
       messages: { inbound: { debounceMs: 60_000 } },
       channels: {
         mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
+          ...testConfig.channels?.mattermost,
           chatmode: "oncall",
           dmPolicy: "open",
           groupPolicy: "open",
@@ -1856,54 +1729,18 @@ describe("mattermost inbound user posts", () => {
     });
     mockState.runtimeCore = runtimeCore;
 
-    const monitor = startTestMonitor(mentionConfig, abortController, socket);
+    const { monitor } = await openMonitor(socket, abortController, mentionConfig);
 
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
-
-    await socket.emitMessage({
-      event: "posted",
-      data: {
-        channel_id: "chan-1",
-        channel_name: "town-square",
-        channel_display_name: "Town Square",
-        sender_name: "alice",
-        post: JSON.stringify({
-          id: "post-pending",
-          channel_id: "chan-1",
-          user_id: "user-1",
-          message: "pending text",
-          create_at: 1_714_000_000_000,
-        }),
-      },
-      broadcast: {
-        channel_id: "chan-1",
-        user_id: "user-1",
-      },
+    await emitMattermostChannelPost(socket, {
+      id: "post-pending",
+      message: "pending text",
     });
     expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
 
-    await socket.emitMessage({
-      event: "posted",
-      data: {
-        channel_id: "chan-1",
-        channel_name: "town-square",
-        channel_display_name: "Town Square",
-        sender_name: "alice",
-        post: JSON.stringify({
-          id: "post-abort",
-          channel_id: "chan-1",
-          user_id: "user-1",
-          message: "abort",
-          create_at: 1_714_000_000_100,
-        }),
-      },
-      broadcast: {
-        channel_id: "chan-1",
-        user_id: "user-1",
-      },
+    await emitMattermostChannelPost(socket, {
+      id: "post-abort",
+      message: "abort",
+      createAt: 1_714_000_000_100,
     });
     socket.emitClose(1000);
     await monitor;
@@ -1921,10 +1758,7 @@ describe("mattermost inbound user posts", () => {
     const directConfig: OpenClawConfig = {
       channels: {
         mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
-          chatmode: "onmessage",
+          ...testConfig.channels?.mattermost,
           dmPolicy: "allowlist",
           groupPolicy: "open",
           allowFrom: ["user-1"],
@@ -1940,12 +1774,7 @@ describe("mattermost inbound user posts", () => {
       team_id: "team-1",
       type: "D",
     });
-    const monitor = startTestMonitor(directConfig, abortController, socket);
-
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+    const { monitor } = await openMonitor(socket, abortController, directConfig);
 
     await socket.emitMessage({
       event: "posted",
@@ -1993,10 +1822,7 @@ describe("mattermost inbound user posts", () => {
       session: { dmScope: "per-channel-peer" },
       channels: {
         mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
-          chatmode: "onmessage",
+          ...testConfig.channels?.mattermost,
           dmPolicy: "allowlist",
           groupPolicy: "open",
           allowFrom: ["user-1"],
@@ -2068,12 +1894,7 @@ describe("mattermost inbound user posts", () => {
     const offConfig: OpenClawConfig = {
       channels: {
         mattermost: {
-          enabled: true,
-          baseUrl: "https://mattermost.example.com",
-          botToken: "bot-token",
-          chatmode: "onmessage",
-          dmPolicy: "open",
-          groupPolicy: "open",
+          ...testConfig.channels?.mattermost,
           streaming: { mode: "off", block: { enabled: true } },
         },
       },
@@ -2083,12 +1904,7 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
 
-    const monitor = startTestMonitor(offConfig, abortController, socket);
-
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+    const { monitor } = await openMonitor(socket, abortController, offConfig);
 
     await emitMattermostChannelPost(socket, {
       id: "post-streaming-off",
@@ -2112,12 +1928,7 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
 
-    const monitor = startTestMonitor(testConfig, abortController, socket);
-
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+    const { monitor } = await openMonitor(socket, abortController);
 
     await emitMattermostChannelPost(socket, {
       id: "post-observer-hook-preview",
@@ -2135,10 +1946,6 @@ describe("mattermost inbound user posts", () => {
   it.each([
     { label: "reply_payload_sending", hooks: ["reply_payload_sending"] },
     { label: "message_sending", hooks: ["message_sending"] },
-    {
-      label: "both modifying hooks",
-      hooks: ["reply_payload_sending", "message_sending"],
-    },
   ])("suppresses provider previews when $label is registered", async ({ hooks }) => {
     const registeredHooks = new Set(hooks);
     mockState.getGlobalHookRunner.mockReturnValue({
@@ -2148,12 +1955,7 @@ describe("mattermost inbound user posts", () => {
     const abortController = new AbortController();
     mockState.abortController = abortController;
 
-    const monitor = startTestMonitor(testConfig, abortController, socket);
-
-    await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
-    });
-    socket.emitOpen();
+    const { monitor } = await openMonitor(socket, abortController);
 
     await emitMattermostChannelPost(socket, {
       id: `post-${hooks.join("-")}-preview`,

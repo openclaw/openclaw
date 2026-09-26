@@ -670,19 +670,22 @@ both fields absent because its parent cannot measure the callback itself.
 
 SQLite reclamation Workers also emit `slow SQLite reclamation Worker operation`
 at `warn` when their joined operation takes at least one second. The record is
-emitted after Worker exit and parent admission settlement. It includes the
+emitted after a settled Worker result or native exit and parent admission settlement. It includes the
 parent's `pid`, `threadId` and `isMainThread`, the actual Node `workerThreadId`,
 `reclamationKind`, `elapsedMs`, terminal `outcome` (`resolved` or `rejected`), and
 `exitCode`. Timing starts after admission to the archive Worker queue and includes
 startup, validation, admission waits, work, and cleanup. It does not measure CPU
-time or isolate a validation phase. Short writer sections can therefore remain
+time, isolate a validation phase, or establish that the emitting parent thread blocked. Short writer sections can therefore remain
 quiet while this whole-operation warning exposes slow preparation between them.
 The record inherits an existing parent trace when available. Failed retained
 reclamation operations also include `sessionIdHash` (when targeting one session),
 `error` (the redacted message and causes), and `errorFrame` (the first stack frame).
 These failures emit one warning even below one second, named
 `SQLite reclamation Worker failed`; slower failures use the existing slow-operation
-warning. Session identifiers use the same hash as other session SQLite diagnostics;
+warning. Automatic maintenance that a newer session write supersedes before commit
+is not a Worker failure: maintenance retries after the write quiet window, and a
+fast superseded Worker logs `SQLite reclamation Worker superseded by newer inputs`
+at debug level. Session identifiers use the same hash as other session SQLite diagnostics;
 the failure fields are redacted and bounded to 2,048 characters each.
 Cold-storage operations use the same warning with `reclamationKind` set to
 `cold-batch` (archive or externalize), `cold-maintain` (reclaim free pages), or
@@ -712,10 +715,10 @@ and scheduling delays; they do not establish lock contention. The separate
 errors. These elapsed durations do not measure SQL CPU time or establish a
 causal link to a nearby request.
 
-The operation `session.reclamation.commit-settlement` identifies the parent's
-synchronous join after it authorizes a reclamation Worker to commit. Its lock
-wait is separate from the Worker's integrity scan and deletion work. This label
-also applies to cold-storage operations using that commit boundary.
+Older builds report `session.reclamation.commit-settlement` for a parent-side
+synchronous SQLite probe after authorizing a reclamation or cold-storage commit.
+The parent now atomically accepts the commit after checking live authority and
+awaits settlement asynchronously, without that probe or its lock wait.
 
 Hot transcript reads identify their purpose in `operation`: `session transcript
 <purpose> read`, where `<purpose>` is `identity`, `header`, `tail`, `incremental`,

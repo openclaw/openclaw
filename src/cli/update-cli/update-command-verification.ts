@@ -12,7 +12,8 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -119,28 +120,21 @@ export async function verifyPreviousManagedGatewayForUpdate(
   }
   // Recovery retains the observed verdict even if its receipt cannot be written.
   params.assertCurrent?.();
-  recordPreviousGatewayVerification(params.opts.run, verified);
-}
-
-function recordPreviousGatewayVerification(
-  run: UpdateCommandOptions["run"],
-  verified: boolean,
-): void {
-  if (!run) {
-    return;
+  const run = params.opts.run;
+  if (run) {
+    recordUpdateRunStep(
+      run.runId,
+      {
+        step: "previous gateway verification",
+        status: "completed",
+        detail: verified
+          ? "Previous package is running and ready."
+          : "Previous gateway was not verified; automatic rollback cannot restart it.",
+        endedAtMs: Date.now(),
+      },
+      { env: run.env },
+    );
   }
-  recordUpdateRunStep(
-    run.runId,
-    {
-      step: "previous gateway verification",
-      status: "completed",
-      detail: verified
-        ? "Previous package is running and ready."
-        : "Previous gateway was not verified; automatic rollback cannot restart it.",
-      endedAtMs: Date.now(),
-    },
-    { env: run.env },
-  );
 }
 
 export function recordUpdateGatewayHealth(
@@ -351,19 +345,17 @@ export async function verifyUpdatedGateway(
               ? "service-not-running"
               : (health.waitOutcome ?? "restart-unhealthy");
   const facts: UpdateFailureFact[] = [];
-  if (health.versionMismatch) {
-    facts.push({
-      check: "versionMatch",
-      code: "version-mismatch",
-      message: `Expected Gateway version ${health.versionMismatch.expected}; observed ${health.versionMismatch.actual ?? "unavailable"}.`,
-    });
-  }
-  if (health.buildIdMismatch) {
-    facts.push({
-      check: "versionMatch",
-      code: "build-id-mismatch",
-      message: `Expected Gateway build ${health.buildIdMismatch.expected}; observed ${health.buildIdMismatch.actual ?? "unavailable"}.`,
-    });
+  for (const [mismatch, label, code] of [
+    [health.versionMismatch, "version", "version-mismatch"],
+    [health.buildIdMismatch, "build", "build-id-mismatch"],
+  ] as const) {
+    if (mismatch) {
+      facts.push({
+        check: "versionMatch",
+        code,
+        message: `Expected Gateway ${label} ${mismatch.expected}; observed ${mismatch.actual ?? "unavailable"}.`,
+      });
+    }
   }
   if (httpFailed) {
     facts.push({
@@ -379,21 +371,13 @@ export async function verifyUpdatedGateway(
       message: `Managed Gateway service status: ${health.runtime.status ?? "unknown"}.`,
     });
   }
-  for (const error of health.activatedPluginErrors ?? []) {
-    facts.push({
-      check: "pluginErrors",
-      code: "plugin-errors",
-      pluginId: error.id,
-      message: error.error,
-    });
-  }
-  for (const error of health.channelProbeErrors ?? []) {
-    facts.push({
-      check: "channelsReady",
-      code: "channel-errors",
-      pluginId: error.id,
-      message: error.error,
-    });
+  for (const [errors, check, code] of [
+    [health.activatedPluginErrors, "pluginErrors", "plugin-errors"],
+    [health.channelProbeErrors, "channelsReady", "channel-errors"],
+  ] as const) {
+    for (const error of errors ?? []) {
+      facts.push({ check, code, pluginId: error.id, message: error.error });
+    }
   }
   if (!facts.length) {
     facts.push({

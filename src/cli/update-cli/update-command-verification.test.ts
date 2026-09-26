@@ -160,7 +160,7 @@ describe("update readiness generation", () => {
   );
 
   it.each([30 * 60_000, 100])(
-    "bounds a stalled foreground HTTP observation within probe and operator limits (%ims)",
+    "bounds foreground verification when HTTP readiness cannot complete (%ims)",
     async (timeoutMs) => {
       const service = makeGatewayService({ status: "stopped" });
       vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
@@ -174,13 +174,11 @@ describe("update readiness generation", () => {
       callGateway.mockImplementation(
         gatewayHealthResponse({ server: { version: "2026.9.5", bootId: "foreground-boot" } }),
       );
-      const requests: string[] = [];
       server = createServer((req, res) => {
-        requests.push(req.url ?? "");
         if (req.url === "/healthz") {
           res.writeHead(200).end();
         }
-        // The accepted readiness request deliberately never produces a response.
+        // Leave readiness requests unanswered if they reach the listener.
       });
       server.listen(0, "127.0.0.1");
       await once(server, "listening");
@@ -204,7 +202,13 @@ describe("update readiness generation", () => {
       pendingVerification = verification;
       await expect(verification).resolves.toMatchObject({ ok: false, summary: "readyz-unhealthy" });
       expect(Date.now() - startedAt).toBeLessThan(timeoutMs === 100 ? 1_000 : 5_000);
-      expect(requests.toSorted()).toEqual(["/healthz", "/readyz"]);
+      expect(result.verification).toMatchObject({ readyz: false, settled: false });
+      expect(result.steps[0]).toMatchObject({
+        exitCode: 1,
+        failureFacts: expect.arrayContaining([
+          expect.objectContaining({ check: "readyz", code: "readyz-unhealthy" }),
+        ]),
+      });
       expect(sleep).not.toHaveBeenCalled();
       expect(result.steps[0]?.termination).toBeUndefined();
       expect(result.steps[0]?.advisory).toBeUndefined();

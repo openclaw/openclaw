@@ -1,4 +1,3 @@
-// Diagnostic support redaction helpers scrub support bundle files and paths.
 import path from "node:path";
 import { getSystemErrorMap } from "node:util";
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
@@ -13,7 +12,6 @@ import { parseRedactPatternSource, replaceRedactPattern } from "./redact-pattern
 import { AWS_SECRET_ACCESS_KEY_MATCHER, VENDOR_TOKEN_REDACT_PATTERNS } from "./redact-patterns.js";
 import { redactSensitiveText, redactText } from "./redact.js";
 
-// Redaction helpers for support bundles; preserve operational shape while removing private data.
 const SECRET_SUPPORT_FIELD_RE =
   /(?:authorization|cookie|credential|key|password|passwd|secret|token)/iu;
 const PAYLOAD_SUPPORT_FIELD_RE =
@@ -463,12 +461,27 @@ export function redactPublicSupportVersion(version: string): string {
     : "[redacted-version]";
 }
 
+/** Validation paths may include operator-defined keys at any depth. */
+export function redactPublicSupportConfigKey(value: string): string {
+  const anchor =
+    /^(mcp\.servers|models\.providers|plugins\.entries|skills\.entries|auth\.profiles|cron\.jobs|agents\.list|hooks\.internal\.entries|engines\.node)(?:\.|$)/u.exec(
+      value,
+    )?.[1] ??
+    /^(agents|auth|channels|commands|cron|engines|gateway|hooks|mcp|messages|models|plugins|session|skills|stateDir|tools)(?:\.|$)/u.exec(
+      value,
+    )?.[1];
+  return anchor ? (value === anchor ? anchor : `${anchor}.*`) : "[redacted-key]";
+}
+
 /** Public diagnostics expose recognized causes, never arbitrary prose or executable arguments. */
 export function redactPublicSupportDiagnosticLine(
   value: string,
   context: SupportRedactionContext,
 ): string {
   const line = redactSupportDiagnosticLine(value, context);
+  if (line === "Invalid configuration field" || line === "Configuration could not be read.") {
+    return line;
+  }
   if (line.startsWith("System-scope Gateway package update cannot write its install root ")) {
     return "System-scope Gateway package update cannot write its install root.";
   }
@@ -525,8 +538,13 @@ export function redactPublicSupportDiagnosticLine(
       /\b(?:[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
     ) ?? []
   ).map((cause) => cause.replace(/^permission denied$/u, "Permission denied"));
+  // Candidate admission's existing text protocol carries only these fixed validation lines.
+  const configFields = value.split(/[\r\n\u2028\u2029]|; /u).flatMap((entry) => {
+    const field = /^(?:- )?(.+): Invalid configuration field$/u.exec(entry)?.[1];
+    return field ? [`${redactPublicSupportConfigKey(field)}: Invalid configuration field`] : [];
+  });
   return truncateUtf16Safe(
-    [...new Set([...codes, ...causes])].join("; ") || "[redacted-diagnostic]",
+    [...new Set([...codes, ...causes, ...configFields])].join("; ") || "[redacted-diagnostic]",
     200,
   );
 }
@@ -559,45 +577,7 @@ export function sanitizeSupportSnapshotValue(
   key = "",
   depth = 0,
 ): unknown {
-  if (value == null || typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return isPrivateSupportField(key) ? "<redacted>" : value;
-  }
-  if (typeof value === "string") {
-    return isPrivateSupportField(key) ? "<redacted>" : redactSupportString(value, redaction);
-  }
-  if (depth >= MAX_SUPPORT_SNAPSHOT_DEPTH) {
-    return "<truncated>";
-  }
-  if (Array.isArray(value)) {
-    const { count, items } = limitedSupportArray(value);
-    if (key === "programArguments") {
-      // Command arguments get flag-aware redaction so "--token value" redacts the following item.
-      return supportArrayResult(sanitizeCommandArguments(items, redaction), count);
-    }
-    return supportArrayResult(
-      items.map((entry) => sanitizeSupportSnapshotValue(entry, redaction, key, depth + 1)),
-      count,
-    );
-  }
-  const record = asOptionalRecord(value);
-  if (!record) {
-    return "<unsupported>";
-  }
-  if (PRIVATE_MAP_SUPPORT_FIELD_RE.test(key)) {
-    return { count: countOwnObjectEntries(record) };
-  }
-  const sanitized = createSupportRecord();
-  const { count, entries } = limitedSupportObjectEntries(record);
-  for (const { key: entryKey, value: entryValue } of entries) {
-    sanitized[entryKey] = isPrivateSupportField(entryKey)
-      ? "<redacted>"
-      : sanitizeSupportSnapshotValue(entryValue, redaction, entryKey, depth + 1);
-  }
-  addTruncationMetadata(sanitized, count);
-  return sanitized;
+  return sanitizeSupportValue(value, redaction, key, depth, false);
 }
 
 /** Sanitizes config-shaped values with stricter private field handling. */
@@ -607,23 +587,33 @@ export function sanitizeSupportConfigValue(
   key = "",
   depth = 0,
 ): unknown {
+  return sanitizeSupportValue(value, redaction, key, depth, true);
+}
+
+function sanitizeSupportValue(
+  value: unknown,
+  redaction: SupportRedactionContext,
+  key: string,
+  depth: number,
+  config: boolean,
+): unknown {
   if (value == null || typeof value === "boolean") {
     return value;
   }
+  const privateField = config ? isPrivateConfigField(key) : isPrivateSupportField(key);
   if (typeof value === "number") {
-    return isPrivateConfigField(key) ? "<redacted>" : value;
+    return privateField ? "<redacted>" : value;
   }
   if (typeof value === "string") {
-    if (value === REDACTED_SENTINEL) {
-      return "<redacted>";
-    }
-    return isPrivateConfigField(key) ? "<redacted>" : redactSupportString(value, redaction);
+    return privateField || (config && value === REDACTED_SENTINEL)
+      ? "<redacted>"
+      : redactSupportString(value, redaction);
   }
   if (depth >= MAX_SUPPORT_SNAPSHOT_DEPTH) {
     return "<truncated>";
   }
   if (Array.isArray(value)) {
-    if (isPrivateConfigField(key)) {
+    if (config && privateField) {
       return {
         redacted: true,
         count: value.length,
@@ -631,7 +621,9 @@ export function sanitizeSupportConfigValue(
     }
     const { count, items } = limitedSupportArray(value);
     return supportArrayResult(
-      items.map((entry) => sanitizeSupportConfigValue(entry, redaction, key, depth + 1)),
+      !config && key === "programArguments"
+        ? sanitizeCommandArguments(items, redaction)
+        : items.map((entry) => sanitizeSupportValue(entry, redaction, key, depth + 1, config)),
       count,
     );
   }
@@ -639,13 +631,16 @@ export function sanitizeSupportConfigValue(
   if (!record) {
     return "<unsupported>";
   }
-  if (isPrivateConfigField(key)) {
+  if (config && privateField) {
     return isSecretRefShape(record) ? sanitizeSecretRefForSupport(record) : "<redacted>";
   }
-
+  const privateMap = PRIVATE_MAP_SUPPORT_FIELD_RE.test(key);
+  if (!config && privateMap) {
+    return { count: countOwnObjectEntries(record) };
+  }
   const sanitized = createSupportRecord();
   let privateEntryIndex = 0;
-  const redactEntryKeys = PRIVATE_MAP_SUPPORT_FIELD_RE.test(key);
+  const redactEntryKeys = config && privateMap;
   const privateEntryLabel = redactEntryKeys ? privateMapEntryLabel(key) : "";
   const { count, entries } = limitedSupportObjectEntries(record);
   for (const { key: entryKey, value: entryValue } of entries) {
@@ -654,7 +649,10 @@ export function sanitizeSupportConfigValue(
       privateEntryIndex += 1;
       outputKey = `<redacted-${privateEntryLabel}-${privateEntryIndex}>`;
     }
-    sanitized[outputKey] = sanitizeSupportConfigValue(entryValue, redaction, entryKey, depth + 1);
+    sanitized[outputKey] =
+      !config && isPrivateSupportField(entryKey)
+        ? "<redacted>"
+        : sanitizeSupportValue(entryValue, redaction, entryKey, depth + 1, config);
   }
   addTruncationMetadata(sanitized, count);
   return sanitized;

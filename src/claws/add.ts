@@ -1,4 +1,3 @@
-// Applies the package, agent, workspace, and managed-file slices of a consented Claw add plan.
 import type { Stats } from "node:fs";
 import { lstat, mkdir, rmdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -554,32 +553,21 @@ export async function applyClawAddPlan(
             workspaceFiles,
           );
     markInstallStatus(plan.agent.finalId, "config_committed", ["config_committed"], options);
-    return {
-      schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      dryRun: false,
-      mutationAllowed: true,
-      planIntegrity: plan.planIntegrity,
-      status: "partial",
-      claw: plan.claw,
-      agent: plan.agent,
+    return partialResult({
+      plan,
+      installRecord,
       workspaceCreated,
       configCommitted,
       workspaceFiles: workspaceError.createdFiles,
       packages,
-      mcpServers: [],
-      cronJobs: [],
-      installRecord: {
-        ...installRecord,
-        status: "config_committed",
-        updatedAtMs: options.nowMs ?? Date.now(),
-      },
+      installStatus: "config_committed",
+      nowMs: options.nowMs,
       error: {
         code: "workspace_files_failed",
         message: workspaceError.message,
         diagnostics: workspaceError.diagnostics,
       },
-    };
+    });
   }
 
   let cronJobs: PersistedClawCronRef[] = [];

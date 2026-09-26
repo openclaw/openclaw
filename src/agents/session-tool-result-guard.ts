@@ -49,7 +49,6 @@ import {
 } from "./transcript-code-mode-source.js";
 
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
-type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 type AsyncMessageCallback<T extends AgentMessage> = (message: T) => void | Promise<void>;
 type UserMessagePersistedCallback = (
   message: UserAgentMessage,
@@ -77,8 +76,8 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage): boolea
   if (!message || message.role !== "assistant") {
     return false;
   }
-  const provider = normalizeOptionalString((message as { provider?: unknown }).provider) ?? "";
-  const model = normalizeOptionalString((message as { model?: unknown }).model) ?? "";
+  const provider = normalizeOptionalString(message.provider) ?? "";
+  const model = normalizeOptionalString(message.model) ?? "";
   return isTranscriptOnlyOpenClawAssistantModel(provider, model);
 }
 
@@ -90,12 +89,29 @@ function extractPendingAssistantToolCalls(message: AgentMessage) {
     : [];
 }
 
+/**
+ * Identities of one streamed assistant response. The runtime turnId is carried by every
+ * fragment; the provider responseId can first appear on a later fragment.
+ */
+function assistantResponseIds(message: AgentMessage): string[] {
+  if (message.role !== "assistant") {
+    return [];
+  }
+  return [message.responseId, message.turnId].flatMap((id) => normalizeOptionalString(id) ?? []);
+}
+
 function clearsPendingToolCalls(
   message: AgentMessage,
   toolCalls: ReturnType<typeof extractPendingAssistantToolCalls>,
   allowSyntheticToolResults: boolean,
+  pendingResponseIds: readonly string[],
 ): boolean {
   if (message.role === "toolResult") {
+    return false;
+  }
+  // Async tool execution commits each call as a fragment of one provider response while the
+  // response keeps streaming. A later fragment of that response is not a turn boundary.
+  if (assistantResponseIds(message).some((id) => pendingResponseIds.includes(id))) {
     return false;
   }
   const transcriptOnly =
@@ -178,6 +194,8 @@ export function installSessionToolResultGuard(
     sessionManager.appendMessageWithTranscriptAnchorAsync.bind(sessionManager);
   setRawSessionAppendMessage(sessionManager, originalAppend);
   const pending = new Map<string, string | undefined>();
+  // Response that most recently added pending tool calls; see clearsPendingToolCalls.
+  let pendingResponseIds: readonly string[] = [];
   const persistMessage = (message: AgentMessage, sourceAppend?: CodeModeSourceAppend) => {
     const transformer = opts?.transformMessageForPersistence;
     const persisted = transformer ? transformer(message) : message;
@@ -255,6 +273,9 @@ export function installSessionToolResultGuard(
     for (const call of calls) {
       pending.set(call.id, call.name);
     }
+    if (calls.length > 0) {
+      pendingResponseIds = assistantResponseIds(message);
+    }
   };
   const recordPendingReceipt = (
     entryId: string,
@@ -277,7 +298,9 @@ export function installSessionToolResultGuard(
         continue;
       }
       const calls = extractPendingAssistantToolCalls(entry.message);
-      if (clearsPendingToolCalls(entry.message, calls, allowSyntheticToolResults)) {
+      if (
+        clearsPendingToolCalls(entry.message, calls, allowSyntheticToolResults, pendingResponseIds)
+      ) {
         pending.clear();
       }
       updatePending(entry.message, calls);
@@ -440,8 +463,7 @@ export function installSessionToolResultGuard(
   ): Generator<AppendRequest, string | undefined, AppendReceipt> {
     const callerInvalidatesCache = callerOptions?.invalidateSerializedPrefixCache === true;
     let nextMessage = message;
-    const role = (message as { role?: unknown }).role;
-    if (role === "assistant") {
+    if (message.role === "assistant") {
       const sanitized = sanitizeToolCallInputs([message], {
         allowedToolNames: opts?.allowedToolNames,
       });
@@ -451,17 +473,11 @@ export function installSessionToolResultGuard(
         }
         return undefined;
       }
-      const sanitizedMessage = sanitized.at(0);
-      if (!sanitizedMessage) {
-        return undefined;
-      }
-      nextMessage = sanitizedMessage;
+      nextMessage = sanitized[0]!;
       copyCodeModeSourceAppend(message, nextMessage, sourceAppend);
     }
-    const nextRole = (nextMessage as { role?: unknown }).role;
-
-    if (nextRole === "toolResult") {
-      const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
+    if (nextMessage.role === "toolResult") {
+      const id = extractToolResultId(nextMessage);
       const toolName = id ? pending.get(id) : undefined;
       const normalizedToolResult = normalizePersistedToolResultName(
         nextMessage,
@@ -521,7 +537,7 @@ export function installSessionToolResultGuard(
     // back into strict provider order before the next replay.
     if (
       pending.size > 0 &&
-      clearsPendingToolCalls(nextMessage, toolCalls, allowSyntheticToolResults)
+      clearsPendingToolCalls(nextMessage, toolCalls, allowSyntheticToolResults, pendingResponseIds)
     ) {
       yield* flushPendingToolResultsOperation();
     }
@@ -535,26 +551,21 @@ export function installSessionToolResultGuard(
       return undefined;
     }
     let finalMessage = finalWrite.message;
-    const finalRole = (finalMessage as { role?: unknown }).role;
     if (
-      finalRole === "assistant" &&
+      finalMessage.role === "assistant" &&
       toolCalls.length === 0 &&
       opts?.suppressTranscriptOnlyAssistantPersistence === true
     ) {
       return undefined;
     }
     if (
-      finalRole === "assistant" &&
+      finalMessage.role === "assistant" &&
       assistantErrorTranscript &&
-      (finalMessage as { stopReason?: string }).stopReason === "error"
+      finalMessage.stopReason === "error"
     ) {
       const target = sessionManager.getSessionTarget();
       if (target) {
-        const replayMessage = assistantErrorTranscript.record(
-          finalMessage as AssistantAgentMessage,
-          target,
-          message,
-        );
+        const replayMessage = assistantErrorTranscript.record(finalMessage, target, message);
         if (!replayMessage) {
           return undefined;
         }

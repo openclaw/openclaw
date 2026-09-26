@@ -9,6 +9,7 @@ type EnforceWorktreeCleanupLimitsParams = {
   progress: WorktreeGcProgress;
   protect: (record: ManagedWorktreeRecord) => Promise<string | undefined>;
   remove: (record: ManagedWorktreeRecord) => Promise<void>;
+  onError: (record: ManagedWorktreeRecord, error: unknown) => Promise<void>;
 };
 
 /** Enforces retention caps without retrying a record already handled by idle cleanup. */
@@ -101,7 +102,7 @@ export async function enforceWorktreeCleanupLimits(
       }
       await params.remove(record);
     } catch (error) {
-      progress.error("limits", error, record.id);
+      await params.onError(record, error);
       continue;
     }
     removed.push(record.id);

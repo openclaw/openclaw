@@ -46,6 +46,12 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
 
 const isWorkerDeployConfig = (config: TsdownConfig) =>
   hasWorkerEntry(config, "worker/worker", "src/worker/worker-deploy-entry.ts");
+const isWorkerFileToolPlanningConfig = (config: TsdownConfig) =>
+  hasWorkerEntry(
+    config,
+    "worker/file-tool-planning.worker",
+    "src/worker/worker-deploy-file-tool-planning.ts",
+  );
 const isWorkerImageProcessorConfig = (config: TsdownConfig) =>
   hasWorkerEntry(
     config,
@@ -76,6 +82,7 @@ const isWorkerServiceChildGroupAnchorConfig = (config: TsdownConfig) =>
   );
 const workerBuildTargets = [
   ["worker", isWorkerDeployConfig],
+  ["file-tool-planning", isWorkerFileToolPlanningConfig],
   ["image-processor", isWorkerImageProcessorConfig],
   ["sqlite-store", isWorkerSqliteStoreConfig],
   ["receiver", isWorkerRsyncReceiverConfig],
@@ -1042,6 +1049,37 @@ console.log("relocated Bash parser works without native grammar package");
     },
   );
 
+  it("gives every standalone declaration caller one canonical package config", () => {
+    for (const packageName of [
+      "gateway-client",
+      "gateway-protocol",
+      "sdk",
+      "retry",
+      "normalization-core",
+      "net-policy",
+      "media-understanding-common",
+      "media-generation-core",
+      "media-core",
+      "acp-core",
+    ]) {
+      const manifest = JSON.parse(
+        fs.readFileSync(`packages/${packageName}/package.json`, "utf8"),
+      ) as { scripts: { build: string }; exports: Record<string, { import: string }> };
+      expect(manifest.scripts.build).toContain(`build-workspace-package.mts ${packageName}`);
+      const selected = configs.filter((config) => config.outDir === `packages/${packageName}/dist`);
+      expect(selected, packageName).toHaveLength(1);
+      const sources = Object.values(selected[0]!.entry ?? {});
+      for (const entry of Object.values(manifest.exports)) {
+        expect(sources).toContain(
+          entry.import.replace("./dist/", `packages/${packageName}/src/`).replace(/\.mjs$/u, ".ts"),
+        );
+      }
+      if (packageName === "acp-core") {
+        expect(sources).toContain("packages/acp-core/src/error-format.ts");
+      }
+    }
+  });
+
   it("isolates runtime output from bounded declaration-only graphs", () => {
     const packageConfigs = configs.filter((entry) => entry.name === TSDOWN_PACKAGE_CONFIG_GROUP);
     const unifiedRuntimeConfig = configs.find(
@@ -1174,6 +1212,7 @@ console.log("relocated Bash parser works without native grammar package");
 
   it("builds self-contained worker deploy executables with every dependency bundled", () => {
     const workerConfig = configs.find(isWorkerDeployConfig);
+    const fileToolPlanningConfig = configs.find(isWorkerFileToolPlanningConfig);
     const imageProcessorConfig = configs.find(isWorkerImageProcessorConfig);
     const sqliteStoreConfig = configs.find(isWorkerSqliteStoreConfig);
     const receiverConfig = configs.find(isWorkerRsyncReceiverConfig);
@@ -1182,6 +1221,9 @@ console.log("relocated Bash parser works without native grammar package");
     const anchorConfig = configs.find(isWorkerServiceChildGroupAnchorConfig);
     expect(workerConfig?.entry).toEqual({
       "worker/worker": "src/worker/worker-deploy-entry.ts",
+    });
+    expect(fileToolPlanningConfig?.entry).toEqual({
+      "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
     });
     expect(imageProcessorConfig?.entry).toEqual({
       "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
@@ -1251,6 +1293,7 @@ console.log("relocated Bash parser works without native grammar package");
     } as Parameters<OutExtensions>[0];
     for (const config of [
       workerConfig,
+      fileToolPlanningConfig,
       imageProcessorConfig,
       sqliteStoreConfig,
       receiverConfig,

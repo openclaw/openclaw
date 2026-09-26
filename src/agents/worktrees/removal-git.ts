@@ -8,19 +8,30 @@ import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
 import { canonicalPathKey } from "./orphan-paths.js";
+import { WorktreeBranchMovedError } from "./removal-errors.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
 import type { ExactStateSnapshot } from "./snapshot-exact-state.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 type GitOptions = Parameters<typeof runGit>[2];
 
+function missingPathOrThrow(error: unknown): undefined {
+  if (!isMissingPathError(error)) {
+    throw error;
+  }
+  return undefined;
+}
+
 export async function requireManagedWorktreeHead(
   record: ManagedWorktreeRecord,
   options: GitOptions,
 ): Promise<string> {
   const branch = await runGit(record.path, ["symbolic-ref", "--quiet", "HEAD"], options);
+  if (branch.code !== 0 && branch.code !== 1) {
+    throw commandError("git symbolic-ref --quiet HEAD", branch);
+  }
   if (branch.code !== 0 || branch.stdout.trim() !== `refs/heads/${record.branch}`) {
-    throw new Error(
+    throw new WorktreeBranchMovedError(
       `Worktree HEAD no longer owns ${record.branch}; checkout and branch preserved.`,
     );
   }
@@ -169,12 +180,7 @@ export async function withExactStateGitLocks<T>(
   } finally {
     for (const lock of held.toReversed()) {
       await lock.handle.close();
-      const current = await fs.lstat(lock.path).catch((error: unknown) => {
-        if (isMissingPathError(error)) {
-          return undefined;
-        }
-        throw error;
-      });
+      const current = await fs.lstat(lock.path).catch(missingPathOrThrow);
       // Native checkout deletion may have removed its own administrative files.
       // Never unlink a lock whose incarnation has been replaced by another writer.
       if (current?.dev === lock.dev && current.ino === lock.ino) {
@@ -202,12 +208,7 @@ export async function retireExactWorktree<T>(params: {
   if (!source.isDirectory()) {
     throw new Error("Exact-state source is no longer a directory; source preserved");
   }
-  const occupied = await fs.lstat(destination).catch((error: unknown) => {
-    if (isMissingPathError(error)) {
-      return undefined;
-    }
-    throw error;
-  });
+  const occupied = await fs.lstat(destination).catch(missingPathOrThrow);
   if (occupied) {
     throw new Error("Exact-state retirement destination is occupied; source preserved");
   }
@@ -309,12 +310,7 @@ export async function hasExactWorktreeIndex(
       await requireGit(sourcePath, ["rev-parse", "--git-path", "index"], options),
     ),
   );
-  const original = await fs.readFile(index).catch((error: unknown) => {
-    if (isMissingPathError(error)) {
-      return undefined;
-    }
-    throw error;
-  });
+  const original = await fs.readFile(index).catch(missingPathOrThrow);
   if (!original) {
     return false;
   }
@@ -324,12 +320,7 @@ export async function hasExactWorktreeIndex(
   if (metadata.sharedIndex) {
     const bytes = await fs
       .readFile(path.join(path.dirname(index), metadata.sharedIndex.name))
-      .catch((error: unknown) => {
-        if (isMissingPathError(error)) {
-          return undefined;
-        }
-        throw error;
-      });
+      .catch(missingPathOrThrow);
     const digest =
       bytes &&
       createHash(metadata.head.length === 64 ? "sha256" : "sha1")
@@ -354,12 +345,7 @@ export async function restoreRetiredExactWorktree<T>(params: {
   const { record, metadata, options, assertCurrent } = params;
   const retained = path.join(path.dirname(record.path), metadata.retirementName);
   const statAt = async (target: string) =>
-    await fs.lstat(target, { bigint: true }).catch((error: unknown) => {
-      if (isMissingPathError(error)) {
-        return undefined;
-      }
-      throw error;
-    });
+    await fs.lstat(target, { bigint: true }).catch(missingPathOrThrow);
   const [retainedStat, liveStat, registrations] = await Promise.all([
     statAt(retained),
     statAt(record.path),

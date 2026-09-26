@@ -334,6 +334,110 @@ describe("runCronCommandJob", () => {
     }),
   );
 
+  function mockUncertainCleanupAfter(
+    result: Pick<SpawnResult, "code" | "termination"> &
+      Partial<Pick<SpawnResult, "stdout" | "stderr">>,
+  ) {
+    return vi.spyOn(processExecution, "runCommandWithTimeout").mockImplementation(async () => {
+      execSpawn.retainCommandProcessCleanup(Promise.resolve("uncertain"));
+      return {
+        signal: null,
+        killed: result.termination === "timeout",
+        stdout: "",
+        stderr: "",
+        cleanup: "uncertain",
+        ...result,
+      };
+    });
+  }
+
+  it("keeps a timeout terminal and records the later uncertain cleanup", async () => {
+    const runCommand = mockUncertainCleanupAfter({ code: 124, termination: "timeout" });
+    try {
+      const result = await runCronCommandJob({
+        job: makeCommandJob({ kind: "command", argv: ["sleep", "60"], timeoutSeconds: 1 }),
+        nowMs: () => 789,
+      });
+
+      expect(result).toMatchObject({
+        status: "error",
+        error: "command timed out",
+        errorClassification: { kind: "reason", reason: "timeout" },
+        failureNotificationDetail: { kind: "command-timeout", mode: "wall-clock" },
+      });
+      expect(result.diagnostics?.entries).toEqual([
+        expect.objectContaining({ source: "exec", severity: "error", exitCode: 124 }),
+        {
+          ts: 789,
+          source: "exec",
+          severity: "error",
+          message: 'Command cleanup could not confirm that owned work stopped: "sleep" "60"',
+          exitCode: 124,
+        },
+      ]);
+    } finally {
+      runCommand.mockRestore();
+    }
+  });
+
+  it("preserves clean-exit output and backup custody when later cleanup is uncertain", async () => {
+    const beginCustody = lifecycleWriteCustody.beginLifecycleWriteCustody;
+    let releaseCustody: ReturnType<typeof beginCustody> | undefined;
+    const begin = vi
+      .spyOn(lifecycleWriteCustody, "beginLifecycleWriteCustody")
+      .mockImplementation((phase) => {
+        releaseCustody = beginCustody(phase);
+        return releaseCustody;
+      });
+    const runCommand = mockUncertainCleanupAfter({
+      code: 0,
+      termination: "exit",
+      stdout: "Backup created",
+      stderr: "Backup verification completed",
+    });
+    const job = makeCommandJob({ kind: "command", argv: [...SCHEDULED_BACKUP_COMMAND] });
+    job.declarationKey = SCHEDULED_BACKUP_DECLARATION_KEY;
+    try {
+      const result = await runCronCommandJob({
+        job,
+        nowMs: () => 789,
+      });
+
+      expect(result).toMatchObject({
+        status: "error",
+        error: "Command cleanup could not confirm that owned work stopped",
+        errorClassification: { kind: "permanent" },
+        summary: "stdout:\nBackup created\n\nstderr:\nBackup verification completed",
+      });
+      expect(result.failureNotificationDetail).toBeUndefined();
+      expect(result.diagnostics?.summary).toBe(result.summary);
+      const command = SCHEDULED_BACKUP_COMMAND.map((arg) => JSON.stringify(arg)).join(" ");
+      expect(result.diagnostics?.entries).toEqual([
+        {
+          ts: 789,
+          source: "exec",
+          severity: "error",
+          message: `command error: ${command}`,
+          exitCode: 0,
+          truncated: false,
+        },
+        {
+          ts: 789,
+          source: "exec",
+          severity: "error",
+          message: `Command cleanup could not confirm that owned work stopped: ${command}`,
+          exitCode: 0,
+        },
+      ]);
+      expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
+    } finally {
+      // This synthetic fixture has no native work; release only through its original owner.
+      releaseCustody?.();
+      begin.mockRestore();
+      runCommand.mockRestore();
+    }
+  });
+
   it("marks no-output timeouts as cron errors", async () => {
     const result = await runCronCommandJob({
       job: makeCommandJob({

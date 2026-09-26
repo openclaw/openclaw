@@ -39,7 +39,7 @@ export type NativeModelSource = NonNullable<
 export type NativeModelBinding = NonNullable<
   ReturnType<NonNullable<NativeModelSource["bindModelExecution"]>>
 >;
-export type NativeModelMapping = Readonly<{
+type NativeModelMapping = Readonly<{
   nativeModel: Readonly<{ provider: string; model: string }>;
   authorizedModel: Readonly<{ provider: string; model: string }>;
 }>;
@@ -105,6 +105,11 @@ export type ParentOwner = {
   onDirectChildAccepted?: () => void;
 };
 
+export type ParentRegistrationHandle = {
+  bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
+  unregister: () => Promise<void>;
+};
+
 export type DirectSpawnEvidence = {
   parentThreadId: string;
   childThreadId: string;
@@ -132,6 +137,9 @@ export type NativeChildAdmissionEvidence = DirectSpawnEvidence &
   );
 export type ParentState = {
   parentThreadId: string;
+  // Retirement sees pending captures, but notifications cannot admit their work.
+  preparing?: true;
+  pendingRegistrations?: number;
   // Overlapping runs share this parent; the last owner releases it only after
   // detached children finish recovery and delivery.
   owners: Map<symbol, ParentOwner>;
@@ -245,7 +253,6 @@ export type ThreadStatusRevision = {
 export type TaskRecoveryCandidate = NativeSubagentAssignment & {
   expectedTask: AgentHarnessTaskAssignment;
   completionCustody?: AgentHarnessCompletionCustody;
-  readonly taskId: string;
   terminal: boolean;
   observedTurns: NativeTurnObservation[];
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;

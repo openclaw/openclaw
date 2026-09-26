@@ -32,16 +32,26 @@ import { enforceWorktreeCleanupLimits } from "./gc-limits.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { autoRemovalProtectionReason } from "./gc-protection.js";
 import {
+  assertOwnerAllowsCleanup,
+  createWorktreeGcErrorHandler,
+  type WorktreeCleanupOwnerPolicy,
+} from "./gc-removal.js";
+import {
   createWorktreeLockPrefilter,
   lockState,
   lockWorktreeForProcess,
   unlockWorktree,
 } from "./git-lock.js";
 import { commandError, worktreePathExists, runGit } from "./git.js";
-import { canonicalPathKey, shouldPreserveOrphanCandidate } from "./orphan-paths.js";
+import {
+  canonicalPathKey,
+  resolveManagedWorktreePathKeys,
+  shouldPreserveOrphanCandidate,
+} from "./orphan-paths.js";
 import { worktreeOwnerMatches } from "./owner.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
 import { readRegistryWorktrees, readWorktreeCleanupState } from "./registry-read.js";
+import { retireMissingRegistryWorktree } from "./registry-retirement.js";
 import {
   clearRegistryWorktreeProvisionedChunks,
   findLiveRegistryWorktreeByOwner,
@@ -50,7 +60,6 @@ import {
   getRegistryWorktreeProvisionedPaths,
   insertRegistryWorktree,
   listRegistryWorktrees,
-  retireMissingRegistryWorktree,
   assertWorktreeRemovalClaim,
   updateRegistryWorktree,
   WorktreeRemovalContentionError,
@@ -135,9 +144,7 @@ export type WorktreeCleanupLimits = {
   maxTotalSizeBytes?: number;
 };
 
-type ManagedWorktreeGcParams = {
-  shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
-  shouldRemoveOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
+type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy & {
   limits?: WorktreeCleanupLimits;
 };
 
@@ -1181,7 +1188,6 @@ export class ManagedWorktreeService {
 
   async removeIfLossless(id: string): Promise<boolean> {
     let record = this.requireLiveRecord(id);
-    let inspectedHead: string;
     const claimToken = randomUUID();
     const recordOutcome = (outcome: ManagedWorktreeRunEndCleanupOutcome, error?: unknown) => {
       // Retained/failed writes happen after this remover released or aborted its
@@ -1230,7 +1236,7 @@ export class ManagedWorktreeService {
     }
     try {
       record = await this.rebindLiveRepository(record);
-      inspectedHead = await requireManagedWorktreeHead(record, {});
+      const inspectedHead = await requireManagedWorktreeHead(record, {});
       const inspection = await inspectManagedWorktreeCheckout(record, "lossless", {
         env: this.env,
         getConfig: this.getConfig ?? getRuntimeConfig,
@@ -1246,12 +1252,6 @@ export class ManagedWorktreeService {
         recordOutcome(retainedOutcome);
         return false;
       }
-    } catch (error) {
-      abortWorktreeRemoval(this.env, id, claimToken);
-      recordOutcome("failed", error);
-      throw error;
-    }
-    try {
       await this.release(id);
       const result = await this.remove({
         id,
@@ -1305,12 +1305,19 @@ export class ManagedWorktreeService {
         isLocked,
         hasLiveLease,
         { env: this.env, getConfig: this.getConfig ?? getRuntimeConfig },
-        params.shouldProtectOwner,
+        params,
       );
+    const onError = createWorktreeGcErrorHandler({ env: this.env, now, progress, policy: params });
     for (const record of records) {
+      let retiredOwner = false;
       try {
         if (record.removedAt === undefined && !(await worktreePathExists(record.path))) {
-          retireMissingRegistryWorktree(this.env, record, now);
+          const retired = await retireMissingRegistryWorktree(this.env, record, now);
+          if (retired.protection) {
+            progress.protect("idle", record.id, retired.protection);
+          } else if (retired.record?.removedAt === now) {
+            result.orphansRetired += 1;
+          }
           continue;
         }
         // Manual worktrees remain until explicit removal; only run-owned worktrees expire.
@@ -1318,7 +1325,7 @@ export class ManagedWorktreeService {
         if (record.removedAt !== undefined || !expiresWhenIdle) {
           continue;
         }
-        const retiredOwner =
+        retiredOwner =
           record.ownerId !== undefined &&
           params.shouldRemoveOwner?.(record.ownerKind, record.ownerId) === true;
         if (retiredOwner || now - record.lastActiveAt > IDLE_GC_MS) {
@@ -1335,13 +1342,12 @@ export class ManagedWorktreeService {
           await this.remove({
             id: record.id,
             reason: retiredOwner ? "owner-gc" : "idle-gc",
-            commitGuard: () => this.assertOwnerAllowsCleanup(record, params, retiredOwner),
+            commitGuard: () => assertOwnerAllowsCleanup(this.env, record, params, retiredOwner),
           });
           result.removed.push(record.id);
         }
       } catch (error) {
-        progress.error("idle", error, record.id);
-        log.warn(`idle cleanup failed for ${record.id}: ${String(error)}`);
+        await onError("idle", record, error, retiredOwner);
       }
     }
     try {
@@ -1370,11 +1376,12 @@ export class ManagedWorktreeService {
         limits: params.limits ?? resolveWorktreeCleanupLimits(),
         progress,
         protect,
+        onError: (record, error) => onError("limits", record, error),
         remove: async (record) => {
           await this.remove({
             id: record.id,
             reason: "limit-gc",
-            commitGuard: () => this.assertOwnerAllowsCleanup(record, params),
+            commitGuard: () => assertOwnerAllowsCleanup(this.env, record, params),
           });
         },
       })),
@@ -1441,23 +1448,6 @@ export class ManagedWorktreeService {
     return result;
   }
 
-  private assertOwnerAllowsCleanup(
-    record: ManagedWorktreeRecord,
-    params: ManagedWorktreeGcParams,
-    retiredOwner = false,
-  ) {
-    if (getRegistryWorktree(this.env, record.id)?.lastActiveAt !== record.lastActiveAt) {
-      throw new WorktreeRemovalLockError("busy", "worktree activity changed during cleanup");
-    }
-    if (
-      record.ownerId !== undefined &&
-      (params.shouldProtectOwner?.(record.ownerKind, record.ownerId) === true ||
-        (retiredOwner && params.shouldRemoveOwner?.(record.ownerKind, record.ownerId) !== true))
-    ) {
-      throw new WorktreeRemovalLockError("busy", "worktree owner became active during cleanup");
-    }
-  }
-
   private requireLiveRecord(id: string): ManagedWorktreeRecord {
     const record = getRegistryWorktree(this.env, id);
     if (!record || record.removedAt !== undefined) {
@@ -1494,15 +1484,9 @@ export class ManagedWorktreeService {
     records: ManagedWorktreeRecord[],
     guard: WorktreeMutationGuard,
   ): Promise<number> {
-    const managedPaths = new Set<string>();
-    for (const record of records) {
-      try {
-        managedPaths.add(await canonicalPathKey(record.path));
-      } catch (error) {
-        if (!isMissingPathError(error)) {
-          throw error;
-        }
-      }
+    const managedPaths = await resolveManagedWorktreePathKeys(records);
+    if (!managedPaths) {
+      return 0;
     }
     // Only the default state-owned area grants orphan cleanup authority. A custom
     // root can contain unrelated directories; its cleanup is registry-bound above.

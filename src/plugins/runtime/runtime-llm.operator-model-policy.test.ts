@@ -7,10 +7,20 @@ import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.j
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
+import * as profileReader from "../../state/user-profile-list.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 import type { LlmCompleteParams, LlmIsolatedAgentRuntimeCompleteParams } from "./types-core.js";
 
@@ -154,6 +164,95 @@ beforeEach(() => {
 });
 
 describe("operator model policy on plugin completions", () => {
+  it.each(["restricted model", "cancelled request", "replaced caller"] as const)(
+    "preserves the original scoped requester during profile preparation: %s",
+    async (scenario) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const profile = ensureProfileForEmail("completion-reader@example.test");
+        setUserProfileRole(profile.id, "reader");
+        const context = createContext();
+        context.getRuntimeConfig = () => ({
+          ...cfg,
+          gateway: {
+            roles: {
+              definitions: {
+                reader: {
+                  agents: [],
+                  sessions: { others: "none" },
+                  scopes: ["operator.write"],
+                  modelPolicy: { allow: ["test-provider/allowed"] },
+                },
+              },
+            },
+          },
+        });
+        const started = createDeferredCore();
+        const resume = createDeferredCore();
+        const source = new AbortController();
+        let current = true;
+        const release = vi.fn();
+        const prepare = profileReader.prepareUserProfileIdentity;
+        const spy = vi
+          .spyOn(profileReader, "prepareUserProfileIdentity")
+          .mockImplementation(async (...args) => {
+            const prepared = await prepare(...args);
+            started.resolve();
+            await resume.promise;
+            return {
+              ...prepared,
+              release: () => {
+                release();
+                prepared.release();
+              },
+            };
+          });
+        mocks.select.mockReturnValue({ ...selection, modelId: "blocked" });
+        let scope: ReturnType<typeof getPluginRuntimeGatewayRequestScope>;
+        const pending = withWork(() =>
+          withPluginRuntimeGatewayRequestScope(
+            {
+              context,
+              client: createOperatorClient({ profileId: profile.id, scopes: ["operator.write"] }),
+              signal: source.signal,
+              hasCurrentClientAuthority: () => current,
+              isWebchatConnect: () => true,
+            },
+            () => {
+              scope = getPluginRuntimeGatewayRequestScope();
+              return completion().complete(request("direct"));
+            },
+          ),
+        );
+        const rejected = expect(pending).rejects.toThrow(
+          scenario === "restricted model" ? "cannot use this model" : /authority|request ended/,
+        );
+        try {
+          await Promise.race([started.promise, pending]);
+          if (scenario === "cancelled request") {
+            source.abort(new Error("request ended"));
+            if (scope) {
+              scope.signal = new AbortController().signal;
+            }
+          } else if (scenario === "replaced caller") {
+            current = false;
+            if (scope) {
+              scope.hasCurrentClientAuthority = () => true;
+            }
+          }
+          resume.resolve();
+          await rejected;
+          expect(mocks.acquire).not.toHaveBeenCalled();
+          expect(mocks.complete).not.toHaveBeenCalled();
+          expect(release).toHaveBeenCalledOnce();
+        } finally {
+          resume.resolve();
+          await Promise.allSettled([pending]);
+          spy.mockRestore();
+        }
+      });
+    },
+  );
+
   it("reports a missing Gateway binding before preparing an operator completion", async () => {
     await expect(
       withWork(() =>

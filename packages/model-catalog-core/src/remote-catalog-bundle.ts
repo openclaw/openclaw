@@ -178,6 +178,25 @@ const pricingV2Schema = z.discriminatedUnion("status", [
 
 export type RemoteModelCatalogPricingV2 = z.infer<typeof pricingV2Schema>;
 
+// Standalone rates cover models outside `models`, in USD per million tokens.
+// `upstreamPricing` is keyed by the source's vendor/model ID and serves passthrough
+// gateways plus same-vendor lookups. The entry's own rate wins; `alternatives` keep
+// later sources' rates for providers that allow only those sources. `passthroughOnly`
+// entries are owned by catalog rows and serve gateways alone. `providerPricing` holds
+// provider-owned rates for models without a catalog row.
+const sourcedPricingV2Schema = hostedPricingSchema
+  .extend({ source: z.string().trim().min(1) })
+  .strict();
+const upstreamPricingV2Schema = sourcedPricingV2Schema
+  .extend({
+    passthroughOnly: z.literal(true).optional(),
+    alternatives: z.array(sourcedPricingV2Schema).min(1).optional(),
+  })
+  .strict();
+const standalonePricingKeySchema = z
+  .string()
+  .regex(/^[^/\s]+\/\S+$/u, "standalone pricing keys must be provider/model");
+
 const modelV2Schema = modelFieldsSchema
   .omit({ cost: true, baseUrl: true, headers: true })
   .extend({ provider: z.string().trim().min(1), pricing: pricingV2Schema })
@@ -195,10 +214,16 @@ export const remoteModelCatalogBundleV2Schema = remoteModelCatalogBundleSchema
           api: z.enum(MODEL_CATALOG_APIS).optional(),
           defaultModel: z.string().optional(),
           defaultUtilityModel: z.string().optional(),
+          recommendedModels: z
+            .array(z.string().trim().min(1))
+            .refine((ids) => new Set(ids).size === ids.length, "duplicate recommended model id")
+            .optional(),
         })
         .strict(),
     ),
     models: z.array(modelV2Schema).min(1),
+    upstreamPricing: z.record(standalonePricingKeySchema, upstreamPricingV2Schema).optional(),
+    providerPricing: z.record(standalonePricingKeySchema, sourcedPricingV2Schema).optional(),
   })
   .superRefine((bundle, context) => {
     const providers = new Map<string, Set<string>>();
@@ -220,6 +245,17 @@ export const remoteModelCatalogBundleV2Schema = remoteModelCatalogBundleSchema
       }
       ids.add(model.id);
       providers.set(model.provider, ids);
+    }
+    for (const [provider, entry] of Object.entries(bundle.providers)) {
+      for (const [index, id] of (entry.recommendedModels ?? []).entries()) {
+        if (!providers.get(provider)?.has(id)) {
+          context.addIssue({
+            code: "custom",
+            message: `recommended model must reference a model of provider ${provider}: ${id}`,
+            path: ["providers", provider, "recommendedModels", index],
+          });
+        }
+      }
     }
   });
 

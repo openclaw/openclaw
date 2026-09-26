@@ -2,6 +2,7 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
 
@@ -55,7 +56,14 @@ export function resolveOpenClawAgentDatabaseStoredPath(
   }
   const relativePath = path.relative(stateDir, comparisonPath);
   if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
-    return absolutePath;
+    // Normalize the state root for canonical native paths, preserving external lexical locators.
+    const physicalRelative = path.relative(
+      resolveIdentityPathViaExistingAncestorSync(stateDir),
+      comparisonPath,
+    );
+    return physicalRelative.startsWith("..") || path.isAbsolute(physicalRelative)
+      ? absolutePath
+      : physicalRelative;
   }
   // Preserve raw traversal tokens after the root; only namespace spelling is an alias.
   const rawPrefix = [stateDir, path.toNamespacedPath(stateDir)]

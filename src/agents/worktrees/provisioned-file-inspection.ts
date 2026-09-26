@@ -7,13 +7,10 @@ export function normalizeProvisionedRelativePath(relativePath: string): string |
     return undefined;
   }
   const segments = relativePath.split("/");
-  if (
-    segments.length === 0 ||
-    segments.some((segment) => !segment || segment === "." || segment === "..")
-  ) {
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
     return undefined;
   }
-  return segments.join("/");
+  return relativePath;
 }
 
 export function resolveGitPath(root: string, relativePath: string): string {
@@ -28,15 +25,9 @@ export async function hasSafeParentDirectories(
   let current = root;
   for (const segment of segments.slice(0, -1)) {
     current = path.join(current, segment);
-    try {
-      const stat = await fs.lstat(current);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) {
-        return false;
-      }
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+    const stat = await lstatIfExists(current);
+    if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) {
+      return false;
     }
   }
   return true;

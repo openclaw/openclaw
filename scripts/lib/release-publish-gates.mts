@@ -3,6 +3,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { isRecord } from "./record-shared.mjs";
+import { resolveReleasePublishInputs } from "./release-publish-inputs.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
 
 export type ReleasePublishGate = {
@@ -45,12 +46,21 @@ export function evaluateReleasePublishGates(input: {
     });
   };
   const profile = scalar(field(manifest, "releaseProfile"));
+  try {
+    resolveReleasePublishInputs(manifest, {
+      targetSha: input.expectedSha,
+      npmDistTag: input.npmDistTag,
+    });
+  } catch (error) {
+    add(
+      "publish-inputs",
+      false,
+      error instanceof Error ? error.message : String(error),
+      "Reseal publication inputs for the exact release source and npm selector without waivers.",
+    );
+  }
   const rerunGroup = scalar(field(manifest, "rerunGroup"));
-  const performance = field(field(manifest, "controls"), "performanceBlocking");
-  const performanceSucceeded =
-    field(field(field(manifest, "childRuns"), "productPerformance"), "conclusion") === "success";
   const soak = field(manifest, "runReleaseSoak");
-  const stableTag = !input.releaseTag.includes("-alpha.") && !input.releaseTag.includes("-beta.");
   if (consumer === "publisher") {
     const workflow = scalar(field(manifest, "workflowName"));
     add(
@@ -83,42 +93,52 @@ export function evaluateReleasePublishGates(input: {
     `Full release validation must run rerun_group=all before npm publish; got ${rerunGroup}`,
     "Seal successful Full Release Validation with rerun_group=all using pnpm frv continue.",
   );
-  // Stable tags need blocking performance even when initially published to beta.
+  const stableTag = !input.releaseTag.includes("-alpha.") && !input.releaseTag.includes("-beta.");
+  const soaked = consumer === "stable-closeout" ? soak === "true" : scalar(soak) === "true";
+  const soakRequired = consumer === "stable-closeout" || stableTag;
+  const performance = field(field(manifest, "controls"), "performanceBlocking");
   const blocking =
     consumer === "stable-closeout" ? performance === true : scalar(performance) === "true";
   const blockingRequired =
-    stableTag ||
-    consumer === "stable-closeout" ||
-    (consumer === "publisher" ? profile !== "beta" : input.npmDistTag !== "beta");
+    soakRequired || (consumer === "publisher" ? profile !== "beta" : input.npmDistTag !== "beta");
   add(
     "performance",
-    blocking || !blockingRequired,
+    !blockingRequired || blocking,
     "Full release validation manifest does not record blocking product performance evidence.",
-    "Run blocking product performance validation before publication.",
+    "Rerun Full Release Validation with blocking product performance validation.",
   );
-  const soakRequired = consumer === "stable-closeout" || stableTag;
   if (soakRequired) {
     add(
       "stable-profile",
       profile === "stable" || profile === "full",
       `Stable releases require stable/full validation; got ${profile}`,
-      "Run Full Release Validation with release_profile=stable or full before publication.",
+      "Rerun Full Release Validation with release_profile=stable or full.",
     );
   }
-  const soaked = consumer === "stable-closeout" ? soak === "true" : scalar(soak) === "true";
   add(
     "soak",
     !soakRequired || soaked,
     "Stable releases require Full Release Validation with runReleaseSoak=true.",
-    "Run release soak before publication.",
+    "Rerun Full Release Validation with release soak.",
+  );
+  const waived =
+    field(field(manifest, "validationInputs"), "laneWaiver") ||
+    field(field(manifest, "publishInputs"), "stableSoakWaiver");
+  const advisory = field(manifest, "advisoryJobs");
+  add(
+    "selected-lanes",
+    !waived && (advisory === undefined || (Array.isArray(advisory) && advisory.length === 0)),
+    "Waived or advisory release evidence is no longer accepted.",
+    "Fix failed selected lanes and rerun Full Release Validation without waivers.",
   );
   if (consumer === "stable-closeout") {
-    add(
-      "performance-child",
-      performanceSucceeded,
-      "Stable closeout requires a successful product performance child run.",
-      "Rerun the product performance child and reseal Full Release Validation before publication.",
-    );
+    for (const gate of gates) {
+      if (gate.status === "FAIL") {
+        gate.remediation =
+          "Use the original strict published evidence. Historical waiver-bearing closeout replay is unsupported; a fresh validation run cannot replace its published binding.";
+        gate.message += ` ${gate.remediation}`;
+      }
+    }
   }
   return gates;
 }
@@ -206,6 +226,11 @@ function main() {
   }
   const manifest: unknown = JSON.parse(readFileSync(values.manifest, "utf8"));
   const env = process.env;
+  const resolved = resolveReleasePublishInputs(manifest, {
+    pluginSdkApiAcknowledgement: env.PLUGIN_SDK_API_ACKNOWLEDGEMENT,
+    targetSha: env.EXPECTED_SHA,
+    npmDistTag: env.RELEASE_NPM_DIST_TAG,
+  });
   const gates = evaluateReleasePublishGates({
     manifest,
     consumer,
@@ -218,6 +243,12 @@ function main() {
     if (gate.status === "FAIL") {
       throw new Error(gate.message);
     }
+  }
+  if (consumer !== "stable-closeout" && env.GITHUB_OUTPUT) {
+    appendFileSync(
+      env.GITHUB_OUTPUT,
+      `plugin_sdk_api_acknowledgement=${resolved.pluginSdkApiAcknowledgement}\nnpm_decisions=${JSON.stringify(resolved.npmDecisions ?? [])}\n`,
+    );
   }
   if (consumer === "publisher" && env.GITHUB_OUTPUT) {
     appendFileSync(

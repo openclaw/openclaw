@@ -129,9 +129,35 @@ Controls inline attachment support for `sessions_spawn`.
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
 - `allowAgents`: default allowlist of configured target agent ids for `sessions_spawn` when the requester agent does not set its own `subagents.allowAgents` (`["*"]` = any configured target; default: same agent only). Stale entries whose agent config was deleted are rejected by `sessions_spawn` and omitted from `agents_list`; run `openclaw doctor --fix` to clean them up.
-- `maxConcurrent`: max concurrent sub-agent runs per immediate spawning/controller session. Default: `8`; independent sessions do not share this budget. Codex-native subagents use Codex's separate scheduler and limits.
+- `maxConcurrent`: max concurrent ordinary sub-agent runs per immediate spawning/controller session. Default: `8`; independent sessions do not share this budget. Swarm collector children use `tools.swarm.maxConcurrent` instead. Codex-native subagents use Codex's separate scheduler and limits.
 - `maxChildrenPerAgent`: separate admission limit on active children per session. Default: `5`; raising `maxConcurrent` does not raise this limit.
 - `runTimeoutSeconds`: timeout (seconds) for `sessions_spawn` when the caller does not pass its own override. Default: `0` (no timeout); the `900` shown above is a common opt-in value, not the built-in default.
 - `announceTimeoutMs`: per-call timeout (milliseconds) for gateway `agent` announce delivery attempts. Default: `120000`. Transient retries can make the total announce wait longer than one configured timeout.
 - `archiveAfterMinutes`: minutes after a sub-agent session completes before it is auto-archived. Default: `60`; `0` disables auto-archive.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
+
+## `tools.swarm`
+
+Swarm is enabled by default. Collector children (`collect: true`) run in a
+dedicated `subagent:swarm:<schedulerGroupKey>` lane, with the group's resolved
+`maxConcurrent` cap. They leave the parent's ordinary sub-agent lane available.
+Ordinary children spawned by a collector use that collector's own session lane.
+
+```json5
+{
+  tools: {
+    swarm: {
+      maxConcurrent: 32,
+      maxChildrenPerGroup: 50,
+      maxTotalPerGroup: 200,
+    },
+  },
+}
+```
+
+`maxConcurrent` defaults to `32` and accepts integers from `1` to `1000`.
+Each running child costs one model stream and one Code Mode worker isolate.
+The separate `maxChildrenPerGroup` and `maxTotalPerGroup` admission limits
+remain `50` live children and `200` lifetime spawns per group by default.
+See [Swarm configuration](/tools/swarm#enable-swarm) for all settings and
+per-agent overrides.

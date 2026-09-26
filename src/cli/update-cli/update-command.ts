@@ -10,9 +10,12 @@ import { VERSION } from "../../version.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   confirmUpdateDowngrade,
+  UpdatePreMutationError,
   resolveGitInstallDir,
   type UpdateCommandOptions,
 } from "./shared.js";
+import { withUpdateCandidateAdmission } from "./update-command-candidate-admission.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import {
   captureUpdateCommandExecutorAuthority,
   type UpdateCommandExecutor,
@@ -21,8 +24,13 @@ import {
 import type { InitializedUpdate } from "./update-command-initialization.js";
 import { admitUpdateRequesterContinuation } from "./update-command-managed-context.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
+import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
-import { UpdateCommandFailure, withUpdateAdmissionReporting } from "./update-command-result.js";
+import {
+  UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
+  withUpdateAdmissionReporting,
+} from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
   assertUpdatePackageActivationAdmission,
@@ -239,15 +247,7 @@ async function updateCommandInternal(
   retainRuntime: RetainUpdateRuntime,
   initialization?: InitializedUpdate,
 ): Promise<void> {
-  const {
-    startedAt,
-    timeoutMs,
-    shouldRestart,
-    requestedChannel,
-    controlPlaneUpdateSentinelMeta,
-    discoveredRoot,
-    installKind,
-  } = prepared;
+  const { timeoutMs } = prepared;
   const run = opts.run!;
   const updateStepTimeoutMs =
     timeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
@@ -265,6 +265,75 @@ async function updateCommandInternal(
   if (!target) {
     return;
   }
+  try {
+    return await withUpdateCandidateAdmission(
+      {
+        target,
+        prepared,
+        opts,
+        timeoutMs: updateStepTimeoutMs,
+        invocationCwd,
+        presentation,
+        stagedPackage: initialization?.stagedPackage,
+        candidateAdmission: initialization?.candidateAdmission,
+      },
+      (stagedPackage) =>
+        runResolvedUpdate(
+          opts,
+          recoveryState,
+          invocationCwd,
+          prepared,
+          presentation,
+          executor,
+          retainRuntime,
+          target,
+          stagedPackage,
+          initialization,
+        ),
+    );
+  } catch (error) {
+    if (!(error instanceof UpdatePreMutationError)) {
+      throw error;
+    }
+    return await reportPreMutationUpdateResult({
+      root: target.root,
+      mode: target.mode,
+      installKind: target.updateInstallKind,
+      opts,
+      controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+      reason: error.reason,
+      message: error.message,
+      nextAction: error.nextAction,
+      failureFacts: error.failureFacts,
+      recoverySteps: error.recoverySteps,
+    });
+  }
+}
+
+async function runResolvedUpdate(
+  opts: UpdateCommandOptions,
+  recoveryState: UpdateCommandRecoveryState,
+  invocationCwd: string | undefined,
+  prepared: PreparedUpdate,
+  presentation: ReturnType<typeof createUpdateProgress>,
+  executor: UpdateCommandExecutor,
+  retainRuntime: RetainUpdateRuntime,
+  target: NonNullable<Awaited<ReturnType<typeof resolveUpdateCommandTarget>>>,
+  stagedPackage?: StagedPackageInstallUpdate,
+  initialization?: InitializedUpdate,
+): Promise<void> {
+  const {
+    startedAt,
+    timeoutMs,
+    shouldRestart,
+    requestedChannel,
+    controlPlaneUpdateSentinelMeta,
+    discoveredRoot,
+    installKind,
+  } = prepared;
+  const run = opts.run!;
+  const updateStepTimeoutMs =
+    timeoutMs ?? run.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const {
     root,
     mode,
@@ -288,8 +357,14 @@ async function updateCommandInternal(
     managedServiceNodeRunner,
   } = target;
   let { packageUpdateNodeRunner } = target;
-  const refuseUpdate: typeof target.refuseUpdate = (reason, message, failureFacts, recoverySteps) =>
-    reportPreMutationUpdateResult({
+  const refuseUpdate: typeof target.refuseUpdate = async (
+    reason,
+    message,
+    failureFacts,
+    recoverySteps,
+  ) => {
+    await stagedPackage?.close();
+    return await reportPreMutationUpdateResult({
       root,
       mode,
       installKind: updateInstallKind,
@@ -300,6 +375,7 @@ async function updateCommandInternal(
       failureFacts,
       recoverySteps,
     });
+  };
 
   recordUpdateRunPhase(
     run.runId,
@@ -315,6 +391,15 @@ async function updateCommandInternal(
     },
     { env: run.env },
   );
+  if (
+    opts.channel &&
+    !configSnapshot.valid &&
+    !legacyConfigPlan &&
+    !run.candidateAdmissionChecks?.includes("config")
+  ) {
+    const failure = createUpdateConfigFailure(configSnapshot);
+    return await refuseUpdate(failure.reason, failure.message, failure.failureFacts);
+  }
   const schemaPreflight = await preflightUpdateCommandSchemas({
     ...target,
     shouldRestart,
@@ -439,6 +524,8 @@ async function updateCommandInternal(
     finishAlreadyCurrentUpdate,
     continueMigratedUpdateInFreshProcess,
     inspectActivatedUpdateState,
+    restoreFailedUpdateDatabases,
+    createUpdateCommandFinalizationFence,
   } = await import("./update-execution.runtime.js");
 
   const progress = createUpdateRunProgress(run, presentation.progress);
@@ -476,7 +563,7 @@ async function updateCommandInternal(
     };
     const retentionStartedAt = Date.now();
     progress.onStepStart?.(retentionStep);
-    await retainRuntime({
+    const retention = await retainRuntime({
       mutationRoots: [root, ...(switchToGit ? [resolveGitInstallDir()] : [])],
       installTarget,
       env,
@@ -487,6 +574,7 @@ async function updateCommandInternal(
       ...retentionStep,
       durationMs: Date.now() - retentionStartedAt,
       exitCode: 0,
+      diagnostics: retention ? [JSON.stringify(retention)] : undefined,
     });
     mutableUpdatePrepared = true;
   };
@@ -501,7 +589,7 @@ async function updateCommandInternal(
     stop: presentation.stop,
     opts,
     shouldRestart,
-    stagedPackage: initialization?.stagedPackage,
+    stagedPackage,
     packageTargetVersion: targetVersion ?? undefined,
     packageUpdateNodeRunner,
     managedServiceNodeRunner,
@@ -577,10 +665,32 @@ async function updateCommandInternal(
   if (opts.recovery || rollbackBlockedReason) {
     // Only candidate code may reopen migrated state, including during reporting and cleanup.
     recoveryState.ledgerHandoffOwned = true;
+    const assertRollbackCurrent = createUpdateCommandFinalizationFence(finalization);
     const continued = await continueMigratedUpdateInFreshProcess(
       { ...finalization, rollbackBlockedReason },
       progress.pendingSteps,
     );
+    if (continued.databaseRollbackAvailable && finalization.databaseBackup) {
+      const restored = await restoreFailedUpdateDatabases({
+        backup: finalization.databaseBackup,
+        result: continued.result,
+        runId: run.runId,
+        env: ownedManagedUpdateContext?.env ?? run.env,
+        assertCurrent: assertRollbackCurrent,
+        progress,
+      });
+      if (!restored) {
+        throw new UpdateCommandPendingRecoveryFailure(
+          continued.result,
+          continued.result.steps.at(-1)?.stderrTail ?? undefined,
+        );
+      }
+      progress.flushLedgerWrites();
+      recoveryState.ledgerHandoffOwned = false;
+      presentation.resume();
+      await finishUpdate({ ...finalization, result: continued.result });
+      return;
+    }
     recoveryState.ledgerHandoffCompleted = true;
     opts.onResult?.(continued.result);
     if (continued.exitCode !== 0) {

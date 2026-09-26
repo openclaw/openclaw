@@ -14,6 +14,11 @@ The WebSocket RPC query subcommands and their shared options. Part of the [`open
 
 All query commands use WebSocket RPC.
 
+With token, password, or `none` authentication, ordinary RPC calls to the
+configured local loopback Gateway do not open the shared state database for device
+authentication. Explicit URL targets and paired remote connections retain their
+device authentication rules.
+
 <Tabs>
   <Tab title="Output modes">
     - Default: human-readable (colored in TTY).
@@ -200,6 +205,7 @@ openclaw gateway status --port 19001
 <AccordionGroup>
   <Accordion title="Status semantics">
     - Stays available for diagnostics even when the local CLI config is missing or invalid.
+    - If service discovery cannot inspect a required file, such as a systemd environment file readable only by root, status reports the native service as unknown and continues with the caller's Gateway target and credentials. Observed service ownership refusals remain errors; status does not change file permissions or relax lifecycle checks.
     - Default output proves service state, WebSocket connect, and the auth capability visible at handshake time — not read/write/admin operations.
     - Probes are non-mutating for first-time device auth: they reuse an existing cached device token when one exists, but never create a new CLI device identity or read-only pairing record just to check status.
     - Resolves configured auth SecretRefs for probe auth when possible. If a required SecretRef is unresolved, `--json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or fix the secret source. Unresolved-auth warnings are suppressed once the probe succeeds.
@@ -410,4 +416,6 @@ openclaw gateway resume <suspensionId> --port 18999 --json
 ```
 
 An already expired or resumed lease is a successful no-op. A different active
-suspension ID is rejected.
+suspension ID is rejected. Once shutdown commits, resume is refused even for the
+original owner; `gateway.suspend.status` reports that owner's shutdown progress
+until server teardown closes RPC access.

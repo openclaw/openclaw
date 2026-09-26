@@ -5,7 +5,7 @@ import type { Client } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { formatMention } from "../mentions.js";
 import { getDiscordRuntime } from "../runtime.js";
-import { createDiscordAudioTransport, type DiscordAudioTransport } from "./audio-transport.js";
+import { DiscordAudioTransport } from "./audio-transport.js";
 import { createVoiceCaptureState, stopVoiceCaptureState } from "./capture-state.js";
 import { resolveDiscordVoiceRealtimeBootstrapContext } from "./ingress.js";
 import type { DiscordVoiceMembershipTracker } from "./membership.js";
@@ -221,7 +221,7 @@ export class DiscordVoiceSessions {
     if (this.params.destroyed() || authority?.isCurrent() === false) {
       return cancelledJoinResult();
     }
-    const audio = createDiscordAudioTransport(
+    const audio = new DiscordAudioTransport(
       {
         guildId,
         channelId,

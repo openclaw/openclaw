@@ -10,8 +10,8 @@ Keep OpenClaw up to date.
 
 For Docker, Podman, and Kubernetes image replacements, see
 [Upgrading container images](/install/docker#upgrading-container-images). The
-gateway runs startup-safe upgrade work before readiness and exits if mounted
-state needs manual repair.
+image entrypoint runs Doctor before starting the Gateway and exits if mounted
+state cannot be repaired safely.
 
 Before a significant update, [create a verified backup](#before-updating-create-a-verified-backup).
 Automatic config copies and migration recovery originals are not a full-state
@@ -22,11 +22,19 @@ backup.
 For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases, repairs retired pre-June agent config keys,
-and includes the old runtime aliases.
-Current releases leave those retired database files untouched.
+`plugin-state/state.sqlite` databases, imports pre-June plugin JSON state and
+`credentials/oauth.json`, repairs retired agent and channel config keys, and
+includes the old runtime aliases. The retired plugin imports cover Telegram,
+iMessage, Active Memory, Nostr, and Microsoft Teams; see
+[legacy state migration](/cli/doctor/state-migrations). Current releases leave
+those retired state files untouched.
 If you already installed the latest version, Doctor stops before rewriting config
-that still contains these retired agent keys and directs you through the same bridge.
+that still contains these retired keys and directs you through the same bridge.
+
+If a newer release has already upgraded your SQLite databases, use a compatible
+pre-update backup for the bridge. Older releases cannot open newer database
+schemas; follow [downgrade recovery](/reference/database-schemas/integrity-and-recovery#downgrade-recovery)
+before running `2026.9.5` against that state.
 
 Back up the state first and use a [supported Node version](/install/node):
 Node 24.16+ on the 24.x line, or Node 26.1+. Keep the same owning account,
@@ -43,8 +51,12 @@ openclaw gateway stop &&
 ```
 
 Confirm that the version output is `2026.9.5` and that Doctor imported the old
-task, flow, and plugin stores you need. Resolve any failed or conflicting
-imports before continuing. Then install the current release and restart:
+task, flow, plugin, and channel state you need. Resolve any failed or conflicting
+imports before continuing. Doctor imports channel state only for enabled channels
+and accounts. If needed, temporarily enable those channels while the Gateway is
+stopped, rerun the bridge Doctor, then restore their previous enabled settings.
+Ensure the affected plugins are installed before running their migrations.
+Then install the current release and restart:
 
 ```bash
 npm install -g openclaw@latest --allow-scripts=openclaw &&
@@ -71,11 +83,39 @@ the old Gateway serves, then activates and verifies the update.
 openclaw update
 ```
 
+Starting with the release that adds [candidate-owned admission](/cli/update#candidate-owned-admission),
+package updates privately stage the target and let its code judge configuration,
+database schema, Node requirements, and plugin availability before activation.
+Later releases can therefore correct these admission decisions for users already
+on a supporting updater. The installed updater retains managed-service ownership
+and ancestry checks and every mutation. Older installed updaters keep their
+pre-staging refusals; a newer candidate cannot repair that first hop. Targets
+without the capability marker fall back to installed checks, as do
+`--admission installed` and `--dry-run` (which never stages a package).
+Admission selection is CLI-only: `--admission auto` is the default, and there is
+no environment-variable override.
+
 Managed-service inspection is best effort. If the service manager is unavailable,
 including Linux hosts without systemd, the update continues and records a warning.
 It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
+
+Service membership uses the running Gateway's process ancestry and native supervisor
+facts. An external terminal that inherited service environment markers can still update after native
+membership is verified as external. Reparented children remain inside when they
+share the Gateway's macOS process group or launchd job, or its systemd unit cgroup.
+Unreadable native membership refuses with `service-membership-unverified`;
+confirmed native membership uses `inside-gateway-service`. Windows currently uses
+verified ancestry and the inherited-marker fallback because job-object membership
+is not available to the runtime. A genuine Gateway descendant must use the managed
+update handoff or an independent terminal.
+Managed-service refusals retain a specific code, such as
+`inside-gateway-process-tree` or `service-definition-changed`, in the failure
+report and `openclaw update status --json`. Shared reports preserve that code and
+recovery guidance while removing private paths and process IDs. These checks run
+in the installed updater: a new candidate cannot repair an older driver's refusal
+before package replacement, or recover detail an older report already discarded.
 
 Control UI updates use a verified helper to stop and restart the managed Gateway.
 On macOS, the helper carries its live update ownership into LaunchAgent activation;
@@ -90,6 +130,10 @@ applies to updates driven by 2026.9.4. If an optional read fails, the updater
 prints `candidate-config-read-failed` and leaves the service definition unchanged.
 Reads follow the restored package after a rollback. Inspect the reported problem
 with the updated CLI after the update.
+Node and Bun readers run only one child per read. An attempted nested reader
+stops before spawning and records `candidate-config-read-recursion`.
+Both runtimes use the same result channel for synchronous and asynchronous reads;
+config diagnostics stay separate from the result.
 
 When a writable managed Gateway service points at another global installation,
 the update keeps the active CLI's installation as its target and refreshes the
@@ -135,7 +179,7 @@ containing the managed-helper authority fix, subsequent updates started through
 **from** the fixed version; it does not repair the 2026.9.4 macOS handoff in place.
 </Note>
 
-Registry updates inspect the exact candidate's Node requirement before staging.
+Package updates inspect the exact candidate's Node requirement before activation.
 An incompatible runtime produces `node-runtime-preflight`, with the target
 version, required engine range, selected Node version, and an upgrade command.
 npm directory permission failures produce `global-install-permission-denied`,
@@ -144,8 +188,8 @@ includes these outcomes in `failures`; the update report and Doctor's update
 history retain recorded failures. The serving Gateway stays in place during
 these preflight checks.
 
-These checks run in the **installed updater**. Older updaters cannot gain new
-preflight behavior from the candidate they have not installed yet. If upgrading
+Directory permission checks remain in the **installed updater**. Older updaters cannot gain new
+admission behavior from the candidate they have not staged yet. If upgrading
 from an older release, check [Node requirements](/install/node) and the npm
 prefix's permissions first; see [update troubleshooting](/install/update-troubleshooting#node-and-global-install-permissions).
 
@@ -197,6 +241,18 @@ downtime through convergence and final verification, plus verification
 results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
 
+Source updates also admit build-artifact ownership and runtime staging access in
+the installed checkout before stopping the Gateway. A retained
+`.artifacts/dist-artifacts.lock` refuses the update with the recorded owner,
+timestamp, and exact recovery command while the serving Gateway stays running.
+Verify that all associated build/check processes, including detached descendants,
+have stopped before releasing that lock; a dead owner PID alone is insufficient.
+The updater keeps that ownership until its work has settled and carries the
+prepared runtime result into completion. Already-current repairs reuse the admitted
+ownership; promoted runtime outputs do not need regeneration. Published updaters
+that pass the source build-cache location, including 2026.9.6, also receive the
+installed-checkout check during candidate builds.
+
 The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.
 This lets validation run while the serving Gateway keeps its configured ports.
@@ -212,12 +268,19 @@ That older updater still caps the entire validation sequence at five minutes;
 its `--timeout` option cannot increase this cap.
 
 Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
-them avoids a disk flush for every file; canonical state and recovery backups
+uses up to four concurrent file copies and avoids a disk flush for every file.
+If a copy fails, active copies finish before cleanup; link publication and
+verification run only after all file copies succeed. Canonical state and recovery backups
 retain their existing durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
 Database rehearsal also avoids a second full backup of each private snapshot.
-It acquires a fresh consistent copy, then checks, compacts, and publishes that
+Update schema inspection and rehearsal use SQLite online backup with a pinned
+read transaction, so a busy Gateway can keep writing while the copy includes
+committed WAL data. Each acquisition makes one copy instead of retrying until
+the database becomes quiet. On rollback-journal volumes, SQLite can delay writer
+commits until the consistent read finishes. Rehearsal records copied pages, bytes, and elapsed
+time in the update ledger, then checks, compacts, and publishes the private
 copy for validation. Source databases and recovery backups retain their existing
 protection; the faster preparation takes effect when the newer updater runs.
 

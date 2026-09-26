@@ -26,6 +26,27 @@ Read only the references needed for the selected phase:
 
 ## Shared release boundaries
 
+Every selected validation lane must succeed. Preserve first failures and fix the
+owning defect before explicit recovery. Stable publication requires stable/full
+evidence, soak, and blocking performance. Beta-profile evidence cannot authorize
+stable publication. No lane or soak waiver can bypass these requirements.
+All nine Gateway install/upgrade combinations across Linux, Windows, and macOS
+are required for all-group qualification. Preserve identity, provenance,
+complete evidence, and existing publication approvals.
+
+The operating objectives are approximately 20 minutes to seal validation and
+publication within an hour, not measured guarantees. Source-only children start
+alongside artifact producers; candidate consumers start as soon as the candidate
+is ready. Independently sealed green children can be reused for the same exact
+target and inputs even when their parent failed, was cancelled, or remains active;
+verify their original trusted-main workflow SHA and current attempt. The sealed
+manifest supplies the SDK evidence digest and npm publication decisions; it
+never acknowledges SDK API changes, so supply
+`plugin_sdk_api_acknowledgement` whenever the SDK report contains changes. The
+publisher cannot accept waived validation evidence. Explicit
+publisher inputs select publication scope; the candidate helper still validates its explicit
+SDK acknowledgement when needed.
+
 Explicit approval is required for version changes and irreversible publication.
 A request to cut, publish, or complete a named release carries through its
 validated publication and verification; do not ask again unless identity,
@@ -73,19 +94,31 @@ publish-bytes defect. Name each cherry-pick in the handoff record. Not allowed:
 opportunistic backports, feature reverts, or a new base taken to "pick up" a
 fix that cherry-picks cleanly enough with a small conflict resolution.
 
+Release process improvements made during a release land on both branches.
+Workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
+merge to `main` first, then get cherry-picked (`-x`) onto `release/YYYY.M.PATCH`
+after the tag without moving the Code SHA, so recovery and the next patch run
+the same tooling. Where `main`-only CI infrastructure is missing on the branch,
+keep the branch's expression form and port only the logic. Product code on the
+release branch stays blocker-only per the rule above.
+
+A release is not done while anything opened for it is still open. Before the
+final report, list every PR created during the release (`gh pr list --author
+@me --state open` plus any PR bound to the session) and land or explicitly close
+each one with a reason; confirm its fix is on `main` and, when it is release
+tooling, on the release branch. Also remove the release's temporary worktrees,
+abandoned local cut branches, and stale `scripts/pr` worktrees.
+
 Published versions and final tags are immutable. Reuse successful exact-source
 artifacts; do not rebuild or republish as an implicit retry. The active release
 is the work queue: no opportunistic moving-main fixes or backports. Classify
 failures, repair their owner, retry the affected surface, then reassess rather
 than repeating the full release.
 
-Required checks and enforced environment approvals remain required. A passing
-sibling lane cannot waive a failure. npm + ClawHub publication is the priority
-path. macOS/Windows/Linux/Android native publication runs in parallel and never
-gates npm/ClawHub publication, GitHub release finalization, or main closeout.
-Platform publisher failures are classified and repaired in parallel. Selected
-normal CI lanes, including macOS Swift and Windows Node, remain required.
-Linux, Windows, and macOS Gateway cross-OS install and upgrade failures block
-beta, stable, and full release validation. Repair required failures and rerun
-the affected lanes before publication. Report proof gaps and pending platforms
-accurately.
+Required publication proofs and enforced environment approvals remain required.
+A passing sibling cannot replace missing required evidence. npm + ClawHub is the
+priority path. macOS, Windows, Linux, and Android native publication runs in
+parallel and never gates npm/ClawHub, GitHub release finalization, or main closeout.
+Selected Windows/macOS Gateway, Node, and native-app CI failures block release
+validation. Platform publishers retain their own artifact
+and updater contracts; report pending platforms and proof gaps accurately.

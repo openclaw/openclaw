@@ -705,7 +705,7 @@ it.each(["restore", "fresh", "fresh after yield"] as const)(
       recoveryPollDelaysMs: [],
       interruptModelExecution,
     });
-    const parent = monitor.registerParent({
+    const parent = await monitor.registerParent({
       parentThreadId: "parent-thread",
       modelSource: source,
       requesterSessionKey: "agent:main:unqualified-native",

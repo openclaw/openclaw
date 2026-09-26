@@ -8,8 +8,8 @@ const McpOAuthClientMetadataUrlSchema = z
   .string()
   .url()
   .refine((value) => {
-    const url = new URL(value);
-    return isHttpsUrl(url) && url.pathname !== "/";
+    const url = URL.parse(value);
+    return url !== null && isHttpsUrl(url) && url.pathname !== "/";
   }, "Expected https:// URL with a non-root pathname");
 
 export const McpServerSchema = z

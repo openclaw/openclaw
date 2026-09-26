@@ -133,7 +133,6 @@ function* loadConfigWithEffects(
       // (compaction safeguard, session/cron defaults) silently diverges.
       const config = coerceConfig(migratePersistedImplicitMainRoster({}).config);
       const metadata = context.createValidationPluginMetadataSnapshotLoader({
-        effectiveConfigRaw: config,
         env: deps.env,
       });
       const materialized = yield* resolveConfigLoadEffect({
@@ -207,7 +206,6 @@ function* loadConfigWithEffects(
       }
     }
     const pluginMetadata = context.createValidationPluginMetadataSnapshotLoader({
-      effectiveConfigRaw,
       env: deps.env,
     });
     const validationParams = {

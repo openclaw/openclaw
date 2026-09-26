@@ -74,6 +74,10 @@ type SlashCommandContext = {
   ownsModelOverride?: () => boolean;
 };
 
+function commandFailure(key: string, error: unknown): SlashCommandResult {
+  return { content: t(key, { error: formatUiError(error) }), failed: true };
+}
+
 function assertCurrentSlashCommand(context: SlashCommandContext): void {
   if (context.isCurrent?.() === false) {
     throw new Error("The Gateway connection changed. Retry the command.");
@@ -254,10 +258,7 @@ async function executeModel(
       }
       return { content: lines.join("\n") };
     } catch (err) {
-      return {
-        content: t("chat.commandResults.model.getFailed", { error: formatUiError(err) }),
-        failed: true,
-      };
+      return commandFailure("chat.commandResults.model.getFailed", err);
     }
   }
 
@@ -279,10 +280,7 @@ async function executeModel(
       modelChanged: true,
     };
   } catch (err) {
-    return {
-      content: t("chat.commandResults.model.setFailed", { error: formatUiError(err) }),
-      failed: true,
-    };
+    return commandFailure("chat.commandResults.model.setFailed", err);
   }
 }
 
@@ -310,10 +308,7 @@ async function executeThink(
         ),
       };
     } catch (err) {
-      return {
-        content: t("chat.commandResults.thinking.getFailed", { error: formatUiError(err) }),
-        failed: true,
-      };
+      return commandFailure("chat.commandResults.thinking.getFailed", err);
     }
   }
 
@@ -327,10 +322,7 @@ async function executeThink(
         action: "refresh",
       };
     } catch (err) {
-      return {
-        content: t("chat.commandResults.thinking.resetFailed", { error: formatUiError(err) }),
-        failed: true,
-      };
+      return commandFailure("chat.commandResults.thinking.resetFailed", err);
     }
   }
 
@@ -362,10 +354,7 @@ async function executeThink(
       action: "refresh",
     };
   } catch (err) {
-    return {
-      content: t("chat.commandResults.thinking.setFailed", { error: formatUiError(err) }),
-      failed: true,
-    };
+    return commandFailure("chat.commandResults.thinking.setFailed", err);
   }
 }
 
@@ -389,10 +378,7 @@ async function executeVerbose(
         ),
       };
     } catch (err) {
-      return {
-        content: t("chat.commandResults.verbose.getFailed", { error: formatUiError(err) }),
-        failed: true,
-      };
+      return commandFailure("chat.commandResults.verbose.getFailed", err);
     }
   }
 
@@ -412,10 +398,7 @@ async function executeVerbose(
       action: "refresh",
     };
   } catch (err) {
-    return {
-      content: t("chat.commandResults.verbose.setFailed", { error: formatUiError(err) }),
-      failed: true,
-    };
+    return commandFailure("chat.commandResults.verbose.setFailed", err);
   }
 }
 
@@ -443,10 +426,7 @@ async function executeFast(
         ),
       };
     } catch (err) {
-      return {
-        content: t("chat.commandResults.fast.getFailed", { error: formatUiError(err) }),
-        failed: true,
-      };
+      return commandFailure("chat.commandResults.fast.getFailed", err);
     }
   }
 
@@ -460,10 +440,7 @@ async function executeFast(
         action: "refresh",
       };
     } catch (err) {
-      return {
-        content: t("chat.commandResults.fast.resetFailed", { error: formatUiError(err) }),
-        failed: true,
-      };
+      return commandFailure("chat.commandResults.fast.resetFailed", err);
     }
   }
 
@@ -486,10 +463,7 @@ async function executeFast(
       action: "refresh",
     };
   } catch (err) {
-    return {
-      content: t("chat.commandResults.fast.setFailed", { error: formatUiError(err) }),
-      failed: true,
-    };
+    return commandFailure("chat.commandResults.fast.setFailed", err);
   }
 }
 
@@ -551,10 +525,7 @@ async function executeUsage(
     }
     return { content: lines.join("\n") };
   } catch (err) {
-    return {
-      content: t("chat.commandResults.usage.failed", { error: formatUiError(err) }),
-      failed: true,
-    };
+    return commandFailure("chat.commandResults.usage.failed", err);
   }
 }
 
@@ -577,10 +548,7 @@ async function executeAgents(client: GatewayBrowserClient): Promise<SlashCommand
     }
     return { content: lines.join("\n") };
   } catch (err) {
-    return {
-      content: t("chat.commandResults.agents.failed", { error: formatUiError(err) }),
-      failed: true,
-    };
+    return commandFailure("chat.commandResults.agents.failed", err);
   }
 }
 
@@ -768,10 +736,6 @@ async function executeRunCommand(
     }
     return result;
   } catch (err) {
-    return {
-      content: t(`chat.commandResults.${command}.requestFailed`, { error: formatUiError(err) }),
-      failed: true,
-    };
+    return commandFailure(`chat.commandResults.${command}.requestFailed`, err);
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

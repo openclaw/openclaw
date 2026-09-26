@@ -422,6 +422,7 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("does not launch another Discord smoke retry after the timeout budget expires", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     let calls = 0;
     const response = {
       ok: false,

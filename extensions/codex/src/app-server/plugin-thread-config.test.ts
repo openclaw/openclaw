@@ -7,10 +7,7 @@ import {
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config.js";
 import { refreshCodexPluginRuntimeState } from "./plugin-activation.js";
-import {
-  resolveOwnedAppApprovalOverrideKeys,
-  resolveRecoverableCodexPluginConfigKeys,
-} from "./plugin-inventory.js";
+import { resolveRecoverableCodexPluginConfigKeys } from "./plugin-inventory.js";
 import {
   appInfo,
   appSummary,
@@ -166,63 +163,6 @@ describe("Codex plugin thread config", () => {
     }
   });
 
-  it("keeps approval checks conservative when tool metadata is absent", () => {
-    expect(
-      resolveOwnedAppApprovalOverrideKeys({ name: "linear", toolSummaries: null }),
-    ).toStrictEqual({});
-    expect(
-      resolveOwnedAppApprovalOverrideKeys({ name: "linear", toolSummaries: [] }),
-    ).toStrictEqual({ approvalOverrideToolConfigKeys: [] });
-  });
-
-  it("retains disabled writable tools in the approval boundary", () => {
-    expect(
-      resolveOwnedAppApprovalOverrideKeys({
-        name: "linear",
-        toolSummaries: [
-          {
-            name: "save_issue",
-            title: "Save issue",
-            description: "Create or update an issue.",
-            isEnabled: false,
-            disabledReason: "App policy",
-            isReadOnly: false,
-          },
-        ],
-      }),
-    ).toStrictEqual({
-      approvalOverrideToolConfigKeys: ["Save issue", "linear_save_issue", "save_issue"],
-    });
-  });
-
-  it("preserves writable approval checks for keys shared with read-only tools", () => {
-    const app = {
-      name: "linear",
-      toolSummaries: [
-        {
-          name: "fetch",
-          title: "Fetch",
-          description: "Fetch a Linear issue.",
-          isEnabled: true,
-          disabledReason: null,
-          isReadOnly: true,
-        },
-        {
-          name: "linear_fetch",
-          title: "Save issue",
-          description: "Create or update a Linear issue.",
-          isEnabled: true,
-          disabledReason: null,
-          isReadOnly: false,
-        },
-      ],
-    };
-
-    expect(resolveOwnedAppApprovalOverrideKeys(app)).toStrictEqual({
-      approvalOverrideToolConfigKeys: ["Save issue", "linear_fetch", "linear_linear_fetch"],
-    });
-  });
-
   it.each([
     { name: "empty plugin selection", plugin: false, account: false, app: false },
     { name: "plugin without apps", plugin: true, account: false, app: false },
@@ -349,7 +289,6 @@ describe("Codex plugin thread config", () => {
           enabled: true,
           destructive_enabled: true,
           open_world_enabled: true,
-          default_tools_approval_mode: "auto",
         },
       },
     });
@@ -437,7 +376,6 @@ describe("Codex plugin thread config", () => {
         enabled: true,
         destructive_enabled: false,
         open_world_enabled: true,
-        default_tools_approval_mode: "auto",
       },
     });
     expect(config.policyContext.apps["workspace-data-app"]).toMatchObject({
@@ -671,7 +609,6 @@ describe("Codex plugin thread config", () => {
       enabled: true,
       destructive_enabled: false,
       open_world_enabled: true,
-      default_tools_approval_mode: "auto",
     });
     expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("default_tools_enabled");
     expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("approvals_reviewer");
@@ -704,7 +641,6 @@ describe("Codex plugin thread config", () => {
       enabled: true,
       destructive_enabled: true,
       open_world_enabled: true,
-      default_tools_approval_mode: "auto",
     });
     expect(enabledApps?.["google-calendar-app"]).not.toHaveProperty("approvals_reviewer");
     expect(
@@ -734,7 +670,6 @@ describe("Codex plugin thread config", () => {
       enabled: true,
       destructive_enabled: true,
       open_world_enabled: true,
-      default_tools_approval_mode: "auto",
     });
     expect(apps?.["google-calendar-app"]).not.toHaveProperty("approvals_reviewer");
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
@@ -971,7 +906,6 @@ describe("Codex plugin thread config", () => {
           enabled: true,
           destructive_enabled: true,
           open_world_enabled: true,
-          default_tools_approval_mode: "auto",
         },
       },
     });
@@ -1240,19 +1174,16 @@ describe("Codex plugin thread config", () => {
           enabled: true,
           destructive_enabled: false,
           open_world_enabled: true,
-          default_tools_approval_mode: "auto",
         },
         "disabled-account-app": {
           enabled: true,
           destructive_enabled: false,
           open_world_enabled: true,
-          default_tools_approval_mode: "auto",
         },
         slack: {
           enabled: true,
           destructive_enabled: false,
           open_world_enabled: true,
-          default_tools_approval_mode: "auto",
         },
       },
     });
@@ -2037,7 +1968,6 @@ describe("Codex plugin thread config", () => {
           enabled: true,
           destructive_enabled: true,
           open_world_enabled: true,
-          default_tools_approval_mode: "auto",
         },
       },
     });
@@ -2572,7 +2502,6 @@ describe("Codex plugin thread config", () => {
         enabled: true,
         destructive_enabled: true,
         open_world_enabled: true,
-        default_tools_approval_mode: "auto",
       },
     });
     expect(config.policyContext.apps["google-calendar-app"]).toEqual({
@@ -2653,7 +2582,6 @@ describe("Codex plugin thread config", () => {
         enabled: true,
         destructive_enabled: true,
         open_world_enabled: true,
-        default_tools_approval_mode: "auto",
       },
     });
     expect(config.policyContext.apps["google-calendar-app"]).toEqual({
@@ -3157,7 +3085,6 @@ describe("Codex plugin thread config", () => {
       enabled: true,
       destructive_enabled: false,
       open_world_enabled: true,
-      default_tools_approval_mode: "auto",
     });
     expect(apps?.["github-app"]).not.toHaveProperty("tools");
   });

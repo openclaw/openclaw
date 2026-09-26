@@ -163,7 +163,7 @@ describe("CodexNativeSubagentMonitor", () => {
         retainClient: retained,
       });
       onTestFinished(() => monitor.dispose());
-      const owner = monitor.registerParent({
+      const owner = await monitor.registerParent({
         parentThreadId: "parent-thread",
         requesterSessionKey: original.requesterSessionKey,
         taskRuntimeScope: createTaskScope(),
@@ -254,7 +254,7 @@ describe("CodexNativeSubagentMonitor", () => {
             .turns!,
         );
       }
-      let replacement: ReturnType<typeof registerParent> | undefined;
+      let replacement: Awaited<ReturnType<typeof registerParent>> | undefined;
       let unregisterPromise: Promise<void> | undefined;
       try {
         expect(records.size).toBe(1);
@@ -269,7 +269,7 @@ describe("CodexNativeSubagentMonitor", () => {
           monitor.retireParent("parent-thread");
         }
         if (parent === "replaced") {
-          replacement = monitor.registerParent({
+          replacement = await monitor.registerParent({
             parentThreadId: "parent-thread",
             claimDirectChild: replacementClaim,
           });
@@ -434,7 +434,7 @@ describe("CodexNativeSubagentMonitor", () => {
         recoveryPollDelaysMs: [10],
       });
       onTestFinished(() => monitor.dispose());
-      const owner = monitor.registerParent({
+      const owner = await monitor.registerParent({
         parentThreadId: "parent-thread",
         requesterSessionKey: original.requesterSessionKey,
         taskRuntimeScope: createTaskScope(),
@@ -567,7 +567,7 @@ describe("CodexNativeSubagentMonitor", () => {
       recoveryPollDelaysMs: [],
     });
     onTestFinished(() => monitor.dispose());
-    const owner = monitor.registerParent({
+    const owner = await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: task.requesterSessionKey,
       taskRuntimeScope: createTaskScope(),
@@ -614,7 +614,7 @@ describe("CodexNativeSubagentMonitor", () => {
       recoveryPollDelaysMs: [],
     });
     onTestFinished(() => monitor.dispose());
-    const owner = monitor.registerParent({
+    const owner = await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
       taskRuntimeScope: createTaskScope("agent:main:main"),
@@ -668,7 +668,7 @@ describe("CodexNativeSubagentMonitor", () => {
       retainClient: retained,
     });
     onTestFinished(() => monitor.dispose());
-    const owner = monitor.registerParent({
+    const owner = await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:discord:channel:C123",
       taskRuntimeScope: createTaskScope(),
@@ -727,7 +727,7 @@ describe("CodexNativeSubagentMonitor", () => {
         retainClient: retained,
       });
       onTestFinished(() => monitor.dispose());
-      const owner = monitor.registerParent({
+      const owner = await monitor.registerParent({
         parentThreadId: "parent-thread",
         requesterSessionKey: "agent:main:discord:channel:C123",
         taskRuntimeScope: createTaskScope(),
@@ -789,7 +789,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const releaseClaim = vi.fn();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
     onTestFinished(() => monitor.dispose());
-    const owner = monitor.registerParent({
+    const owner = await monitor.registerParent({
       parentThreadId: "parent-thread",
       claimDirectChild: () => releaseClaim,
     });

@@ -180,37 +180,17 @@ function pickThresholdPressure(params: {
   thresholds: Required<DiagnosticMemoryThresholds>;
 }): Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type"> | null {
   const { memory, thresholds } = params;
-  if (memory.rssBytes >= thresholds.rssCriticalBytes) {
-    return {
-      level: "critical",
-      reason: "rss_threshold",
-      memory,
-      thresholdBytes: thresholds.rssCriticalBytes,
-    };
-  }
-  if (memory.heapUsedBytes >= thresholds.heapUsedCriticalBytes) {
-    return {
-      level: "critical",
-      reason: "heap_threshold",
-      memory,
-      thresholdBytes: thresholds.heapUsedCriticalBytes,
-    };
-  }
-  if (memory.rssBytes >= thresholds.rssWarningBytes) {
-    return {
-      level: "warning",
-      reason: "rss_threshold",
-      memory,
-      thresholdBytes: thresholds.rssWarningBytes,
-    };
-  }
-  if (memory.heapUsedBytes >= thresholds.heapUsedWarningBytes) {
-    return {
-      level: "warning",
-      reason: "heap_threshold",
-      memory,
-      thresholdBytes: thresholds.heapUsedWarningBytes,
-    };
+  // First match wins: critical pressure precedes warnings, with RSS first at each level.
+  const candidates = [
+    [memory.rssBytes, thresholds.rssCriticalBytes, "critical", "rss_threshold"],
+    [memory.heapUsedBytes, thresholds.heapUsedCriticalBytes, "critical", "heap_threshold"],
+    [memory.rssBytes, thresholds.rssWarningBytes, "warning", "rss_threshold"],
+    [memory.heapUsedBytes, thresholds.heapUsedWarningBytes, "warning", "heap_threshold"],
+  ] as const;
+  for (const [value, thresholdBytes, level, reason] of candidates) {
+    if (value >= thresholdBytes) {
+      return { level, reason, memory, thresholdBytes };
+    }
   }
   return null;
 }
@@ -381,16 +361,36 @@ function logMemoryPressure(
     ` arrayBuffersBytes=${pressure.memory.arrayBuffersBytes}` +
     formatOptionalPressureMetric("workerHeapTotalBytes", pressure.memory.workerHeapTotalBytes) +
     formatOptionalPressureMetric("workerHeapUsedBytes", pressure.memory.workerHeapUsedBytes) +
+    formatOptionalPressureMetric("workerExternalBytes", pressure.memory.workerExternalBytes) +
+    formatOptionalPressureMetric(
+      "workerArrayBuffersBytes",
+      pressure.memory.workerArrayBuffersBytes,
+    ) +
     formatOptionalPressureMetric("workerCount", pressure.memory.workerCount) +
     formatOptionalPressureMetric("workerHeapSampledCount", pressure.memory.workerHeapSampledCount) +
+    formatOptionalPressureMetric(
+      "workerArrayBuffersSampledCount",
+      pressure.memory.workerArrayBuffersSampledCount,
+    ) +
+    (pressure.memory.workerMemoryCoverage
+      ? ` workerMemoryCoverage=${pressure.memory.workerMemoryCoverage} workerMemoryScope=direct`
+      : "") +
+    (pressure.memory.workerMemoryMissing?.length
+      ? ` workerMemoryMissing=${JSON.stringify(pressure.memory.workerMemoryMissing.slice(0, 5))}`
+      : "") +
     (pressure.memory.workerHeaps?.length
       ? ` workerHeaps=${JSON.stringify(
-          pressure.memory.workerHeaps.toSorted((a, b) => b.heapUsed - a.heapUsed).slice(0, 5),
+          pressure.memory.workerHeaps
+            .toSorted((a, b) => b.heapUsed + (b.external ?? 0) - a.heapUsed - (a.external ?? 0))
+            .slice(0, 5),
         )}`
       : "") +
     formatOptionalPressureMetric("thresholdBytes", pressure.thresholdBytes) +
     formatOptionalPressureMetric("rssGrowthBytes", pressure.rssGrowthBytes) +
     formatOptionalPressureMetric("windowMs", pressure.windowMs) +
+    (pressure.memory.workerCount
+      ? " workerLimitScope=js-heap-only; external/ArrayBuffers are not capped; nested workers are not included."
+      : "") +
     ` ${nextStep}`;
   log.warn(message);
 }

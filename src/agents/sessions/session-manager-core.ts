@@ -435,17 +435,9 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     };
     this.fileEntries = [header];
     this.opaqueFileEntries = [];
-    this.byId.clear();
-    this.opaqueParentsById.clear();
+    this.clearNavigation();
     this.boundedFirstKeptById.clear();
     this.boundedParentIds.clear();
-    this.logicalParentsById.clear();
-    this.invalidLeafControlIds.clear();
-    this.labelsById.clear();
-    this.labelTimestampsById.clear();
-    this.leafId = null;
-    this.appendParentId = null;
-    this.appendMode = undefined;
     this.pendingDeliberateAppend = false;
     return this.persistenceTarget ? this.sessionId : undefined;
   }

@@ -97,6 +97,19 @@ retirement unless pinned or still held by an allocation.
 
 ### Ready workers
 
+Open **Settings → Connections → Cloud workers → Pool** to inspect running
+prepared workers. The view groups workers by profile and shows ready, preparing,
+releasing, and attention counts, the project and prepared commit, expiry, and
+recorded failures. Capacity includes preparation and unconfirmed cleanup;
+consumed workers leave this view unless pending cleanup still reserves capacity. The inventory
+refreshes every 10 seconds while the view is visible. A failed refresh keeps the
+last result visible with a warning. The **Profiles** tab controls reserve targets
+and the shared pool limit; **Snapshots** manages the reusable disk images.
+
+Pool details require current administrator access. API clients request them with
+`includePreparedDetails: true` on `environments.list` or `environments.status`;
+default responses retain the existing inventory shape for older clients.
+
 For an eligible local Git project or repository-only session, a successful session activation can prepare a
 dedicated worker for the next session in the background. The default target is
 one unassigned worker per project and profile, with a Gateway-wide cap of four.

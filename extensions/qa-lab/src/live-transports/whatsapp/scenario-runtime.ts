@@ -20,7 +20,7 @@ import {
   resolveWhatsAppQaNoReplyTarget,
   restartWhatsAppQaDriverSession,
   waitForNoWhatsAppReply,
-  waitForWhatsAppScenarioSutMessage,
+  waitForScenarioObservedMessage,
 } from "./whatsapp-live.operations.js";
 import { waitForWhatsAppChannelStable } from "./whatsapp-live.setup.js";
 
@@ -172,10 +172,9 @@ async function runWhatsAppScenarioAttempt(params: {
       details: ["no reply", afterSendDetails].filter(Boolean).join("; "),
     };
   }
-  const reply = await waitForWhatsAppScenarioSutMessage(scenarioContext, {
+  const reply = await waitForScenarioObservedMessage(scenarioContext, {
     observedAfter: requestStartedAt,
     timeoutMs: params.scenario.timeoutMs,
-    targetKind: scenarioRun.target,
     match: (message) => messageMatches(message as WhatsAppObservedMessage, scenarioRun.matchText),
   });
   scenarioRun.verify?.(reply, scenarioContext);

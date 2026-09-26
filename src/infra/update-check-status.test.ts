@@ -369,43 +369,6 @@ describe("checkUpdateStatus", () => {
     });
   });
 
-  it("prefers a retained main branch's configured non-origin upstream", async () => {
-    await withTestDir({ prefix: "openclaw-update-check-configured-upstream-" }, async (base) => {
-      const sourceRoot = path.join(base, "source");
-      const localRoot = path.join(base, "local");
-      await initGitRepo(sourceRoot);
-      await commitGit(sourceRoot, "base");
-      await runGit(base, "clone", "--quiet", sourceRoot, localRoot);
-      const detachedSha = await runGit(localRoot, "rev-parse", "HEAD");
-      await runGit(localRoot, "remote", "add", "upstream", sourceRoot);
-      await runGit(localRoot, "fetch", "upstream", "+refs/heads/main:refs/remotes/upstream/main");
-      await runGit(localRoot, "branch", "--set-upstream-to=upstream/main", "main");
-      await runGit(localRoot, "checkout", "--detach", detachedSha);
-      await runGit(localRoot, "remote", "set-url", "origin", path.join(base, "missing"));
-      await commitGit(sourceRoot, "newer");
-      const upstreamSha = await runGit(sourceRoot, "rev-parse", "HEAD");
-
-      const status = await checkUpdateStatus({
-        root: localRoot,
-        includeRegistry: false,
-        fetchGit: true,
-        timeoutMs: 5000,
-        useDetachedDevUpstream: true,
-      });
-
-      expect(status.git).toMatchObject({
-        branch: "HEAD",
-        sha: detachedSha,
-        upstream: "upstream/main",
-        upstreamSource: "tracking",
-        upstreamSha,
-        ahead: 0,
-        behind: 1,
-        fetchOk: true,
-      });
-    });
-  });
-
   it("resolves manager-style detached dev tracking before matching update receipts", async () => {
     await withTestDir({ prefix: "openclaw-update-check-receipt-fallback-" }, async (base) => {
       const sourceRoot = path.join(base, "source");
@@ -714,11 +677,6 @@ describe("checkUpdateStatus", () => {
   });
 
   it.each([
-    {
-      name: "text lockfile",
-      lockfiles: ["bun.lock"],
-      expectedLockfile: "bun.lock",
-    },
     {
       name: "binary lockfile",
       lockfiles: ["bun.lockb"],

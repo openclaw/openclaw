@@ -108,6 +108,7 @@ it.each([
 source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 SCENARIO="$1"
 UPDATE_RESTART_MODE="$2"
+baseline_version=2026.8.1
 COMMAND_TIMEOUT=1
 plugin_registry_pid=synthetic
 NPM_CONFIG_REGISTRY=initial-registry
@@ -356,6 +357,10 @@ if (args[0] === "--help") {
 } else if (args[0] === "setup") {
   cfg.agents = { entries: { main: {} }, defaults: {} };
   fs.writeFileSync(configPath, JSON.stringify(cfg));
+} else if (args[0] === "plugins" && args[1] === "list") {
+  process.stdout.write(JSON.stringify({ plugins: [
+    { id: "device-pair", enabled: true }, { id: "webhooks", enabled: false },
+  ] }));
 } else if (args[0] === "config" && args[1] === "set") {
   const keys = args[2].split(".");
   let target = cfg;
@@ -402,6 +407,7 @@ if (args[0] === "--help") {
       env: {
         PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: "2026.9.2",
         OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
         OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: "baseline",
         OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT: "44081",

@@ -1,6 +1,6 @@
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
-import chokidar from "chokidar";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
@@ -17,15 +17,11 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   type LinuxMemoryDirectoryWatcher,
   MemoryFileWatchResources,
+  type MemoryFileWatchCallbacks,
   type NativeMemoryWatchPair,
 } from "./manager-watch-resources.js";
 import { countChokidarWatchedEntries } from "./watch-pressure.js";
-import {
-  recordMemoryWatchEventPath,
-  settleMemoryWatchEventPaths,
-  type MemoryWatchEventStats,
-  type MemoryWatchSettleQueue,
-} from "./watch-settle.js";
+import type { MemoryWatchEventStats } from "./watch-settle.js";
 
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
@@ -37,32 +33,8 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   "__pycache__",
 ]);
 const log = createSubsystemLogger("memory");
-const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
-const TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
 
 type NativeMemoryWatchResult = "attached" | "missing" | "failed";
-
-function resolveMemoryWatchFactory(): typeof chokidar.watch {
-  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
-    const override: unknown = Reflect.get(globalThis, TEST_MEMORY_WATCH_FACTORY_KEY);
-    if (typeof override === "function") {
-      // SAFETY: Only test fixtures install the chokidar-compatible factory at this test-only symbol.
-      return override as typeof chokidar.watch;
-    }
-  }
-  return chokidar.watch.bind(chokidar);
-}
-
-function resolveMemoryNativeWatchFactory(): typeof fsSync.watch {
-  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
-    const override: unknown = Reflect.get(globalThis, TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY);
-    if (typeof override === "function") {
-      // SAFETY: Only test fixtures install the fs.watch-compatible factory at this test-only symbol.
-      return override as typeof fsSync.watch;
-    }
-  }
-  return fsSync.watch.bind(fsSync);
-}
 
 function shouldIgnoreMemoryWatchPath(
   watchPath: string,
@@ -92,35 +64,25 @@ function shouldIgnoreMemoryWatchPath(
   return classifyMemoryMultimodalPath(normalized, multimodalSettings) === null;
 }
 
-function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
-  void sync().catch((err: unknown) => {
-    log.warn(`memory sync failed (${reason}): ${String(err)}`);
-  });
-}
-
-export type MemoryFileWatcherOptions = {
+export type MemoryFileWatcherOptions = MemoryFileWatchCallbacks & {
   workspaceDir: string;
   agentId: string;
   settings: MemoryWorkspaceWatchRequest["settings"];
-  onChange: () => void | Promise<void>;
-  onUnavailable: () => void;
-  onDirty?: () => void;
 };
 
 /** Native Memory file coverage and settling, independent of index or provider state. */
 export class MemoryFileWatcher extends MemoryFileWatchResources {
   private readonly workspaceDir: string;
   private readonly settings: MemoryFileWatcherOptions["settings"];
-  private readonly pendingWatchPaths: MemoryWatchSettleQueue = new Map();
-  private watchTimer: NodeJS.Timeout | null = null;
+  private nextWatchGeneration = 0;
 
-  constructor(private readonly options: MemoryFileWatcherOptions) {
-    super(options.agentId, options.onUnavailable);
+  constructor(options: MemoryFileWatcherOptions) {
+    super(options.agentId, options.settings, options);
     this.workspaceDir = options.workspaceDir;
     this.settings = options.settings;
   }
 
-  start(): void {
+  protected async startWatching(): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -146,7 +108,10 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
     );
     for (const entry of additionalPaths) {
       try {
-        const stat = fsSync.lstatSync(entry.path);
+        const stat = await fs.lstat(entry.path);
+        if (this.closed) {
+          return;
+        }
         if (stat.isSymbolicLink()) {
           continue;
         }
@@ -166,6 +131,9 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
       }
     }
     const markDirty = (watchPath?: string, stats?: MemoryWatchEventStats) => {
+      if (this.closed) {
+        return;
+      }
       if (watchPath && stats && !stats.isDirectory?.()) {
         const normalizedWatchPath = path.resolve(watchPath);
         const matchingEntries = isPathInside(memoryDir, normalizedWatchPath)
@@ -178,9 +146,7 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
           return;
         }
       }
-      recordMemoryWatchEventPath(this.pendingWatchPaths, watchPath, stats);
-      this.options.onDirty?.();
-      this.scheduleWatchSync();
+      this.markMemoryWatchDirty(watchPath, stats);
     };
     // Native recursive fs.watch for directory paths — one watcher per
     // directory on macOS (FSEvents) and Windows (ReadDirectoryChangesW).
@@ -198,9 +164,9 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
     const nativeRecursiveSupported = process.platform === "darwin" || process.platform === "win32";
     for (const dir of dirWatchPaths) {
       const attached = nativeRecursiveSupported
-        ? this.attachNativeMemoryWatchForDir(dir, markDirty)
+        ? await this.attachNativeMemoryWatchForDir(dir, markDirty)
         : process.platform === "linux"
-          ? this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty)
+          ? await this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty)
           : "failed";
       if (attached !== "attached") {
         // Native creation failed (dir missing, unsupported FS, throw) —
@@ -218,52 +184,61 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
   }
 
   // Pair recursive coverage with a parent watch that survives root replacement.
-  protected attachNativeMemoryWatchForDir(
+  protected async attachNativeMemoryWatchForDir(
     dir: string,
     markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
-  ): NativeMemoryWatchResult {
-    if (this.closed) {
+    stillCurrent: () => boolean = () => true,
+  ): Promise<NativeMemoryWatchResult> {
+    if (this.closed || this.memoryWatchCapacityDegraded || !stillCurrent()) {
       return "failed";
     }
     let recordedInode: number | null;
     try {
-      recordedInode = fsSync.statSync(dir).ino;
+      recordedInode = (await fs.stat(dir)).ino;
     } catch (err) {
       // Startup falls back; an existing parent can wait for a missing root.
       return isFileMissingError(err) ? "missing" : "failed";
     }
     const pair: NativeMemoryWatchPair = { dir, main: null, parent: null };
+    // Capacity exhaustion in another root revokes probes already awaiting I/O.
+    if (this.closed || this.memoryWatchCapacityDegraded || !stillCurrent()) {
+      return "failed";
+    }
     let mainWatcher: fsSync.FSWatcher | undefined;
+    const generation = ++this.nextWatchGeneration;
     try {
-      mainWatcher = resolveMemoryNativeWatchFactory()(
+      mainWatcher = this.resolveMemoryNativeWatchFactory()(
         dir,
         { recursive: true },
-        (_eventType, filename) => {
-          if (this.closed || (mainWatcher && pair.main !== mainWatcher)) {
-            return;
-          }
-          if (filename == null) {
-            // Node docs: filename may be null on some platforms even when
-            // recursive watching is otherwise supported. Be conservative
-            // and mark broadly dirty rather than dropping the event.
-            markDirty();
-            return;
-          }
-          const full = path.join(dir, filename);
-          let stats: fsSync.Stats | undefined;
-          try {
-            const s = fsSync.lstatSync(full, { throwIfNoEntry: false });
-            stats = s ?? undefined;
-          } catch {
-            stats = undefined;
-          }
-          if (shouldIgnoreMemoryWatchPath(full, stats, this.settings.multimodal)) {
-            return;
-          }
-          // Pass stats so the watch-settle queue can debounce rapid
-          // writes; without a snapshot the queue cannot detect stability.
-          markDirty(full, stats);
-        },
+        (_eventType, filename) =>
+          this.enqueueReconciliation(`${generation}\0${filename ?? ""}`, async () => {
+            if (this.closed || (mainWatcher && pair.main !== mainWatcher)) {
+              return;
+            }
+            if (filename == null) {
+              // Node docs: filename may be null on some platforms even when
+              // recursive watching is otherwise supported. Be conservative
+              // and mark broadly dirty rather than dropping the event.
+              markDirty();
+              return;
+            }
+            const full = path.join(dir, filename);
+            let stats: fsSync.Stats | undefined;
+            try {
+              stats = await fs.lstat(full);
+            } catch {
+              stats = undefined;
+            }
+            if (this.closed || pair.main !== mainWatcher) {
+              return;
+            }
+            if (shouldIgnoreMemoryWatchPath(full, stats, this.settings.multimodal)) {
+              return;
+            }
+            // Pass stats so the watch-settle queue can debounce rapid
+            // writes; without a snapshot the queue cannot detect stability.
+            markDirty(full, stats);
+          }),
       );
     } catch (err) {
       if (isFileMissingError(err)) {
@@ -300,19 +275,33 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
       this.attachMemoryChokidarFallback(dir, markDirty);
     });
     this.nativeMemoryWatchPairs.push(pair);
-    this.attachNativeMemoryParentWatch(pair, recordedInode, markDirty, "native", () =>
-      this.attachNativeMemoryWatchForDir(dir, markDirty),
+    pair.reconcile = async () => markDirty();
+    await this.attachNativeMemoryParentWatch(
+      pair,
+      recordedInode,
+      markDirty,
+      "native",
+      () =>
+        this.attachNativeMemoryWatchForDir(dir, markDirty, () =>
+          this.nativeMemoryWatchPairs.includes(pair),
+        ),
+      stillCurrent,
     );
+    if (!stillCurrent()) {
+      this.closeNativeMemoryWatchPair(pair);
+      return "failed";
+    }
     return "attached";
   }
 
-  private attachNativeMemoryParentWatch(
+  private async attachNativeMemoryParentWatch(
     pair: NativeMemoryWatchPair,
     recordedInode: number,
     markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
     label: "native" | "Linux",
-    reattach: () => NativeMemoryWatchResult,
-  ): void {
+    reattach: () => Promise<NativeMemoryWatchResult>,
+    stillCurrent: () => boolean,
+  ): Promise<void> {
     const { dir } = pair;
     let watchedInode: number | null = recordedInode;
     // Non-recursive parent watcher: catches root-directory replacement so
@@ -323,69 +312,90 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
     const baseName = path.basename(dir);
     let parentInode: number;
     try {
-      parentInode = fsSync.statSync(parentDir).ino;
+      parentInode = (await fs.stat(parentDir)).ino;
     } catch (err) {
       log.warn(`memory ${label} parent watcher could not start on ${parentDir}: ${String(err)}`);
       return;
     }
+    if (this.closed || !stillCurrent() || !this.nativeMemoryWatchPairs.includes(pair)) {
+      return;
+    }
+    let parentWatcher: fsSync.FSWatcher | null = null;
+    const reconcileRoot = async () => {
+      if (this.closed || !this.nativeMemoryWatchPairs.includes(pair)) {
+        return;
+      }
+      let currentInode: number | null = null;
+      let result: NativeMemoryWatchResult = "missing";
+      try {
+        currentInode = (await fs.stat(dir)).ino;
+      } catch (err) {
+        result = isFileMissingError(err) ? "missing" : "failed";
+        if (result === "missing") {
+          try {
+            if ((await fs.stat(parentDir)).ino !== parentInode) {
+              result = "failed";
+            }
+          } catch {
+            result = "failed";
+          }
+        }
+      }
+      if (this.closed || !this.nativeMemoryWatchPairs.includes(pair)) {
+        return;
+      }
+      if (currentInode === watchedInode && result !== "failed") {
+        return;
+      }
+      // Keep the parent authoritative while the root is absent. Chokidar's
+      // asynchronous missing-path setup can miss an immediate recreation.
+      this.closeNativeMemoryWatchChildren(pair);
+      watchedInode = null;
+      markDirty();
+      if (currentInode !== null) {
+        result = await reattach();
+      }
+      if (this.closed || !this.nativeMemoryWatchPairs.includes(pair)) {
+        return;
+      }
+      // A missing root can wait only while a live parent owns its recreation.
+      // Parent errors can revoke that coverage while the inode probe awaits I/O.
+      if (result === "missing" && pair.parent) {
+        return;
+      }
+      // New coverage must attach before the old parent closes: the root
+      // can disappear again between the inode check and native attachment.
+      this.closeNativeMemoryWatchPair(pair);
+      if (result !== "attached") {
+        this.attachMemoryChokidarFallback(dir, markDirty);
+      }
+    };
+    const reconcileChildren = pair.reconcile;
+    pair.reconcile = async () => {
+      await reconcileRoot();
+      if (!this.closed && this.nativeMemoryWatchPairs.includes(pair) && pair.main) {
+        await reconcileChildren?.();
+      }
+    };
+    const generation = ++this.nextWatchGeneration;
     try {
-      let parentWatcher: fsSync.FSWatcher | null = null;
-      parentWatcher = resolveMemoryNativeWatchFactory()(
+      parentWatcher = this.resolveMemoryNativeWatchFactory()(
         parentDir,
         { recursive: false },
         (_eventType, filename) => {
-          if (this.closed || (parentWatcher && pair.parent !== parentWatcher)) {
-            return;
+          if (this.closed || pair.parent !== parentWatcher) {
+            return undefined;
           }
-          // Per Node docs `filename` can be null on some platforms even
-          // when the parent watcher is otherwise supported. Treat null
-          // as an unknown event and re-check the watched directory's inode;
-          // otherwise filter by basename so sibling events don't trigger reattach.
           // A retained parent can itself be replaced while the root is absent.
-          // Its self-rename must reach the inode check before we trust it again.
           if (
             filename !== null &&
             filename !== baseName &&
             (pair.main || filename !== path.basename(parentDir))
           ) {
-            return;
+            return undefined;
           }
-          let currentInode: number | null = null;
-          let result: NativeMemoryWatchResult = "missing";
-          try {
-            currentInode = fsSync.statSync(dir).ino;
-          } catch (err) {
-            result = isFileMissingError(err) ? "missing" : "failed";
-            if (result === "missing") {
-              try {
-                if (fsSync.statSync(parentDir).ino !== parentInode) {
-                  result = "failed";
-                }
-              } catch {
-                result = "failed";
-              }
-            }
-          }
-          if (currentInode === watchedInode && result !== "failed") {
-            return;
-          }
-          // Keep the parent authoritative while the root is absent. Chokidar's
-          // asynchronous missing-path setup can miss an immediate recreation.
-          this.closeNativeMemoryWatchChildren(pair);
-          watchedInode = null;
-          markDirty();
-          if (currentInode !== null) {
-            result = reattach();
-          }
-          if (result === "missing") {
-            return;
-          }
-          // New coverage must attach before the old parent closes: the root
-          // can disappear again between the inode check and native attachment.
-          this.closeNativeMemoryWatchPair(pair);
-          if (result === "failed") {
-            this.attachMemoryChokidarFallback(dir, markDirty);
-          }
+          // Share the drain Promise; an async wrapper retains a waiter per event.
+          return this.enqueueReconciliation(`${generation}\0parent`, reconcileRoot);
         },
       );
       const attachedParent = parentWatcher;
@@ -398,11 +408,7 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
         }
         const message = err instanceof Error ? err.message : String(err);
         log.warn(`memory ${label} parent watcher error on ${path.dirname(dir)}: ${message}`);
-        try {
-          attachedParent.close();
-        } catch {
-          // ignore
-        }
+        this.closeNativeMemoryWatcher(attachedParent);
         pair.parent = null;
         if (!pair.main) {
           this.closeNativeMemoryWatchPair(pair);
@@ -414,6 +420,9 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
         // A live main watcher still covers normal events without its parent.
       });
       pair.parent = attachedParent;
+      // The root can change while the parent inode probe awaits I/O. Recheck
+      // after parent admission so neither side of that gap loses replacement.
+      await reconcileRoot();
     } catch (err) {
       if (this.degradeMemoryWatchCapacity(dir, err, markDirty)) {
         return;
@@ -428,16 +437,17 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
   // Linux inotify reports direct child changes from a watched directory, but
   // it has no native recursive primitive. Watch directories only, then attach
   // newly-created subdirectories on demand; this avoids per-file watchers.
-  protected attachLinuxMemoryDirectoryTreeWatchForDir(
+  protected async attachLinuxMemoryDirectoryTreeWatchForDir(
     dir: string,
     markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
-  ): NativeMemoryWatchResult {
-    if (this.closed) {
+    stillCurrent: () => boolean = () => true,
+  ): Promise<NativeMemoryWatchResult> {
+    if (this.closed || this.memoryWatchCapacityDegraded || !stillCurrent()) {
       return "failed";
     }
     let recordedInode: number | null;
     try {
-      recordedInode = fsSync.statSync(dir).ino;
+      recordedInode = (await fs.stat(dir)).ino;
     } catch (err) {
       return isFileMissingError(err) ? "missing" : "failed";
     }
@@ -445,6 +455,12 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
     let pair: NativeMemoryWatchPair | null = null;
     const treeWatchers = new Map<string, LinuxMemoryDirectoryWatcher>();
     let rootMissing = false;
+    let installing = true;
+    const current = () =>
+      !this.closed &&
+      !this.memoryWatchCapacityDegraded &&
+      (!installing || stillCurrent()) &&
+      (!pair || this.nativeMemoryWatchPairs.includes(pair));
 
     const closeAndFallback = (message: string, cause?: unknown) => {
       if (this.memoryWatchCapacityDegraded) {
@@ -470,28 +486,27 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
         if (entryDir !== watchDir && !entryDir.startsWith(watchDirPrefix)) {
           continue;
         }
-        try {
-          entry.watcher.close();
-        } catch {
-          // ignore close failures
-        }
+        this.closeNativeMemoryWatcher(entry.watcher);
         treeWatchers.delete(entryDir);
       }
     };
 
-    const attachDirectory = (watchDir: string): fsSync.FSWatcher | null => {
-      if (this.closed) {
+    const attachDirectory = async (watchDir: string): Promise<fsSync.FSWatcher | null> => {
+      if (!current()) {
         return null;
       }
       let currentInode: number;
       try {
-        const currentStat = fsSync.statSync(watchDir);
+        const currentStat = await fs.stat(watchDir);
         if (!currentStat.isDirectory()) {
           return null;
         }
         currentInode = currentStat.ino;
       } catch (err) {
         rootMissing ||= watchDir === dir && isFileMissingError(err);
+        return null;
+      }
+      if (!current()) {
         return null;
       }
       const existing = treeWatchers.get(watchDir);
@@ -502,50 +517,54 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
         closeDirectorySubtree(watchDir);
       }
       let watcher: fsSync.FSWatcher | undefined;
+      const generation = ++this.nextWatchGeneration;
       try {
-        watcher = resolveMemoryNativeWatchFactory()(
+        watcher = this.resolveMemoryNativeWatchFactory()(
           watchDir,
           { recursive: false },
-          (eventType, filename) => {
-            if (this.closed || (watcher && treeWatchers.get(watchDir)?.watcher !== watcher)) {
-              return;
-            }
-            if (filename == null) {
-              markDirty();
-              if (!this.attachLinuxSubtree(watchDir, attachDirectory)) {
-                closeAndFallback(
-                  `failed to refresh Linux memory directory watchers under ${watchDir}; falling back to chokidar`,
-                );
-              }
-              return;
-            }
-            const full = path.join(watchDir, filename);
-            let stats: fsSync.Stats | undefined;
-            try {
-              const s = fsSync.lstatSync(full, { throwIfNoEntry: false });
-              stats = s ?? undefined;
-            } catch {
-              stats = undefined;
-            }
-            if (!stats) {
-              closeDirectorySubtree(full);
-            }
-            if (stats?.isDirectory()) {
-              if (eventType === "rename") {
-                closeDirectorySubtree(full);
-              }
-              if (!this.attachLinuxSubtree(full, attachDirectory)) {
-                closeAndFallback(
-                  `failed to attach Linux memory directory watcher under ${full}; falling back to chokidar`,
-                );
+          (eventType, filename) =>
+            this.enqueueReconciliation(`${generation}\0${filename ?? ""}`, async () => {
+              if (this.closed || (watcher && treeWatchers.get(watchDir)?.watcher !== watcher)) {
                 return;
               }
-            }
-            if (shouldIgnoreMemoryWatchPath(full, stats, this.settings.multimodal)) {
-              return;
-            }
-            markDirty(full, stats);
-          },
+              if (filename == null) {
+                markDirty();
+                if (!(await this.attachLinuxSubtree(watchDir, attachDirectory, current))) {
+                  closeAndFallback(
+                    `failed to refresh Linux memory directory watchers under ${watchDir}; falling back to chokidar`,
+                  );
+                }
+                return;
+              }
+              const full = path.join(watchDir, filename);
+              let stats: fsSync.Stats | undefined;
+              try {
+                stats = await fs.lstat(full);
+              } catch {
+                stats = undefined;
+              }
+              if (!current() || treeWatchers.get(watchDir)?.watcher !== watcher) {
+                return;
+              }
+              if (!stats) {
+                closeDirectorySubtree(full);
+              }
+              if (stats?.isDirectory()) {
+                if (eventType === "rename") {
+                  closeDirectorySubtree(full);
+                }
+                if (!(await this.attachLinuxSubtree(full, attachDirectory, current))) {
+                  closeAndFallback(
+                    `failed to attach Linux memory directory watcher under ${full}; falling back to chokidar`,
+                  );
+                  return;
+                }
+              }
+              if (shouldIgnoreMemoryWatchPath(full, stats, this.settings.multimodal)) {
+                return;
+              }
+              markDirty(full, stats);
+            }),
         );
       } catch (err) {
         rootMissing ||= watchDir === dir && isFileMissingError(err);
@@ -570,23 +589,47 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
       return watcher;
     };
 
-    const mainWatcher = attachDirectory(dir);
+    const mainWatcher = await attachDirectory(dir);
     if (!mainWatcher) {
       return rootMissing ? "missing" : "failed";
     }
     pair = { dir, main: mainWatcher, parent: null, treeWatchers };
     this.nativeMemoryWatchPairs.push(pair);
-    let subtreeAttached = this.attachLinuxSubtree(dir, attachDirectory);
+    pair.reconcile = async () => {
+      if (!current()) {
+        return;
+      }
+      markDirty();
+      // Core roots retain their symlink-following anchor even when subtree
+      // discovery intentionally skips symlink traversal.
+      const visited = new Set<string>([dir]);
+      if (!(await this.attachLinuxSubtree(dir, attachDirectory, current, visited))) {
+        closeAndFallback(
+          `failed to refresh Linux memory directory watchers under ${dir}; falling back to chokidar`,
+        );
+        return;
+      }
+      for (const watchedDir of treeWatchers.keys()) {
+        if (!visited.has(watchedDir)) {
+          closeDirectorySubtree(watchedDir);
+        }
+      }
+    };
+    let subtreeAttached = await this.attachLinuxSubtree(dir, attachDirectory, current);
     // Scan errors can refer to a missing child, not the root. Only the root's
     // identity can decide whether an existing parent should retain coverage.
     try {
-      subtreeAttached = fsSync.statSync(dir).ino === recordedInode && subtreeAttached;
+      subtreeAttached = (await fs.stat(dir)).ino === recordedInode && subtreeAttached;
     } catch (err) {
       this.closeNativeMemoryWatchPair(pair);
       if (!this.closed) {
         markDirty();
       }
       return isFileMissingError(err) ? "missing" : "failed";
+    }
+    if (!current()) {
+      this.closeNativeMemoryWatchPair(pair);
+      return "failed";
     }
     if (!subtreeAttached) {
       closeAndFallback(
@@ -595,19 +638,37 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
       return "attached";
     }
 
-    this.attachNativeMemoryParentWatch(pair, recordedInode, markDirty, "Linux", () =>
-      this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty),
+    await this.attachNativeMemoryParentWatch(
+      pair,
+      recordedInode,
+      markDirty,
+      "Linux",
+      () =>
+        this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty, () =>
+          this.nativeMemoryWatchPairs.includes(pair!),
+        ),
+      stillCurrent,
     );
+    if (!stillCurrent()) {
+      this.closeNativeMemoryWatchPair(pair);
+      return "failed";
+    }
+    installing = false;
     return "attached";
   }
 
-  private attachLinuxSubtree(
+  private async attachLinuxSubtree(
     root: string,
-    attachDirectory: (dir: string) => fsSync.FSWatcher | null,
-  ): boolean {
+    attachDirectory: (dir: string) => Promise<fsSync.FSWatcher | null>,
+    current: () => boolean,
+    visited?: Set<string>,
+  ): Promise<boolean> {
+    if (!current()) {
+      return true;
+    }
     let rootStats: fsSync.Stats | undefined;
     try {
-      rootStats = fsSync.lstatSync(root, { throwIfNoEntry: false }) ?? undefined;
+      rootStats = await fs.lstat(root);
     } catch {
       // Directory-scan failures (including ENOSPC disk-full) are not watcher
       // capacity. Returning false keeps closeAndFallback's Chokidar path.
@@ -619,12 +680,16 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
     ) {
       return true;
     }
-    if (!attachDirectory(root)) {
+    if (!current()) {
+      return true;
+    }
+    if (!(await attachDirectory(root))) {
       return false;
     }
+    visited?.add(root);
     let entries: fsSync.Dirent[];
     try {
-      entries = fsSync.readdirSync(root, { withFileTypes: true });
+      entries = await fs.readdir(root, { withFileTypes: true });
     } catch {
       // Same scan-side contract as the lstat catch above: do not permanently
       // disable watching after a full disk or a racy child listing.
@@ -634,7 +699,14 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
       if (!entry.isDirectory() || entry.isSymbolicLink()) {
         continue;
       }
-      if (!this.attachLinuxSubtree(path.join(root, entry.name), attachDirectory)) {
+      if (
+        !(await this.attachLinuxSubtree(
+          path.join(root, entry.name),
+          attachDirectory,
+          current,
+          visited,
+        ))
+      ) {
         return false;
       }
     }
@@ -670,7 +742,7 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
       this.watcher.add(paths);
       return;
     }
-    const watcher = resolveMemoryWatchFactory()(typeof paths === "string" ? [paths] : paths, {
+    const watcher = this.resolveMemoryWatchFactory()(typeof paths === "string" ? [paths] : paths, {
       ignoreInitial: true,
       ignored: (watchPath, stats) =>
         shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
@@ -691,50 +763,5 @@ export class MemoryFileWatcher extends MemoryFileWatchResources {
     watcher.once("ready", () => {
       this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
     });
-  }
-
-  async close(): Promise<void> {
-    this.closed = true;
-    if (this.watchTimer) {
-      clearTimeout(this.watchTimer);
-      this.watchTimer = null;
-    }
-    if (this.memoryWatchPressureStartupTimer) {
-      clearTimeout(this.memoryWatchPressureStartupTimer);
-      this.memoryWatchPressureStartupTimer = null;
-    }
-    this.closeNativeMemoryWatchPairs();
-    if (this.watcher) {
-      await this.watcher.close();
-      this.watcher = null;
-    }
-    this.pendingWatchPaths.clear();
-  }
-
-  private scheduleWatchSync() {
-    if (this.closed) {
-      return;
-    }
-    if (this.watchTimer) {
-      clearTimeout(this.watchTimer);
-    }
-    this.watchTimer = setTimeout(() => {
-      this.watchTimer = null;
-      runDetachedMemorySync(async () => {
-        if (this.closed) {
-          return;
-        }
-        if (!(await settleMemoryWatchEventPaths(this.pendingWatchPaths))) {
-          if (!this.closed) {
-            this.scheduleWatchSync();
-          }
-          return;
-        }
-        if (this.closed) {
-          return;
-        }
-        await this.options.onChange();
-      }, "watch");
-    }, this.settings.sync.watchDebounceMs);
   }
 }

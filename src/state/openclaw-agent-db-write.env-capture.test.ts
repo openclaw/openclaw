@@ -55,6 +55,9 @@ vi.mock("./openclaw-state-worker-context.js", () => ({
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class {
     readonly isOpen = true;
+    location() {
+      return null;
+    }
   },
 }));
 vi.mock("../config/state-dir.js", () => ({
@@ -70,6 +73,9 @@ vi.mock("./openclaw-agent-write-admission.js", () => ({
 vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
   agentDatabaseLifecycle: boundary.cache,
   retainAgentDatabase: vi.fn(() => vi.fn()),
+}));
+vi.mock("./agent-database-admission.js", () => ({
+  assertAgentDatabaseAdmitted: vi.fn(),
 }));
 vi.mock("./agent-deletion-cleanup.js", () => ({
   assertAgentDeletionDatabaseCleanupAccess: vi.fn(),
@@ -98,6 +104,7 @@ vi.mock("./openclaw-agent-db.js", async () => {
   const { createSqliteWalReclamationResult } = await import("../infra/sqlite-wal-reclamation.js");
   const { createOpenClawAgentDatabaseAdmissionOwner } =
     await import("./openclaw-agent-db-admission.js");
+  const { registerOpenClawAgentDatabaseIdentity } = await import("./openclaw-agent-db-identity.js");
   const owner = createOpenClawAgentDatabaseAdmissionOwner(function* (
     options: OpenClawAgentDatabaseOptions,
   ): SqliteIntegrityOperation<OpenClawAgentDatabase> {
@@ -111,6 +118,7 @@ vi.mock("./openclaw-agent-db.js", async () => {
         reclaimFreePages: createSqliteWalReclamationResult,
       },
     };
+    registerOpenClawAgentDatabaseIdentity(database.db);
     yield { database: database.db, databaseLabel: database.path };
     boundary.open(options);
     boundary.cache.databases.set(database.path, database);

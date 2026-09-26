@@ -14,7 +14,7 @@ import type { QaLabServerHandle } from "./lab-server.types.js";
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import { qaMaturityTaxonomyIdentity, readQaMaturityTaxonomySource } from "./scorecard-taxonomy.js";
 import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
-import { runQaSuiteWithInfraRetry } from "./suite-launch.runtime.js";
+import { runQaSuiteWithInfraRetry } from "./suite-infra-retry.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type { QaSuiteResolvedRunContext, QaSuiteResult, QaSuiteRunParams } from "./suite-types.js";

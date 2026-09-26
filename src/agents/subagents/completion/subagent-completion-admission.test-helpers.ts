@@ -3,6 +3,7 @@ import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-q
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { getTaskById } from "../../../tasks/runtime-internal.js";
+import { prepareTaskRegistryRead } from "../../../tasks/task-registry-read.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
@@ -103,6 +104,17 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
       lookup: "available",
       task: getTaskById(inputs.find((input) => input.subagent.runId === entry.runId)!.task.taskId),
     }),
+    resolveSubagentTaskAsync: async (entry) => {
+      const read = await prepareTaskRegistryRead();
+      return read
+        ? {
+            lookup: "available",
+            task: read.getTaskById(
+              inputs.find((input) => input.subagent.runId === entry.runId)!.task.taskId,
+            ),
+          }
+        : { lookup: "unavailable" };
+    },
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: vi.fn(async () => {}),
     emitSubagentProgressEndedForRun: vi.fn(async () => {}),

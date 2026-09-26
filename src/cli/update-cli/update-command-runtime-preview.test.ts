@@ -51,7 +51,7 @@ const cases = [
 ];
 
 it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, entry, { json }))))(
-  "previews package runtime admission without mutation ($name, json=$json)",
+  "previews installed package runtime admission without mutation ($name, json=$json)",
   async ({ restart, compatible, current, refresh, json, owned = true, running = true }) => {
     fixture.managedServiceNodeRunner = "/service/node";
     const provisionRuntime = vi
@@ -198,7 +198,9 @@ it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, e
     expect(fs.readFileSync(path.join(fixture.root, "package.json"))).toEqual(manifest);
 
     if (!current) {
-      await expect(updateCommand({ ...opts, json: true })).rejects.toBeInstanceOf(Error);
+      await expect(
+        updateCommand({ ...opts, json: true, admission: "installed" }),
+      ).rejects.toBeInstanceOf(Error);
       if (compatible || replacement) {
         expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledWith(
           expect.objectContaining({ nodeRunner: replacement ? "/current/node" : "/service/node" }),

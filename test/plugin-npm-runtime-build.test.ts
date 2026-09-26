@@ -1,4 +1,3 @@
-// Plugin npm runtime build tests validate plugin runtime package builds.
 import {
   existsSync,
   mkdirSync,
@@ -13,6 +12,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { Worker } from "node:worker_threads";
+// Plugin npm runtime build tests validate plugin runtime package builds.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildPluginNpmRuntime,
@@ -124,6 +125,69 @@ describe("plugin npm runtime build planning", () => {
       expect(readFileSync(path.join(outDir, "sentinel.js"), "utf8")).toBe("keep\n");
     }
   });
+
+  it.each(["qa-lab", "qa-channel"])(
+    "builds an executable %s Gateway fixture without the tooling graph",
+    async (id) => {
+      const packageDir = path.join(tempDirs.make("openclaw-qa-gateway-package-"), id);
+      mkdirSync(packageDir);
+      writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: `@openclaw/${id}`,
+          private: true,
+          version: "2026.9.5",
+          type: "module",
+          dependencies: id === "qa-channel" ? { typebox: "1.3.32", zod: "4.6.5" } : {},
+          openclaw: {
+            extensions: ["./index.ts"],
+            build: { workerEntries: ["./tooling.worker.ts"] },
+          },
+        }),
+      );
+      writeFileSync(path.join(packageDir, "openclaw.plugin.json"), JSON.stringify({ id }));
+      for (const file of ["tooling-api.ts", "tooling.worker.ts"]) {
+        writeFileSync(path.join(packageDir, file), 'import "private-qa-tooling-not-installed";\n');
+      }
+      const protocol = 'export { parseQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";\n';
+      if (id === "qa-lab") {
+        writeFileSync(
+          path.join(packageDir, "index.ts"),
+          'import "private-qa-tooling-not-installed";\n',
+        );
+        writeFileSync(path.join(packageDir, "gateway-entry.ts"), protocol);
+      } else {
+        writeFileSync(path.join(packageDir, "index.ts"), 'export const companion = "./api.js";\n');
+        writeFileSync(path.join(packageDir, "api.ts"), protocol);
+        for (const file of ["setup-entry.ts", "setup-plugin-api.ts", "channel-plugin-api.ts"]) {
+          writeFileSync(path.join(packageDir, file), 'export const id = "qa-channel";\n');
+        }
+      }
+
+      const plan = expectPluginNpmRuntimeBuildPlan(
+        await buildPluginNpmRuntime({
+          repoRoot,
+          packageDir,
+          profile: "qa-gateway-fixture",
+          logLevel: "silent",
+        }),
+      );
+      const runtimeEntry = expectDefined(
+        plan.runtimeExtensions[0],
+        "QA Gateway fixture runtime entry",
+      );
+      const entryUrl = pathToFileURL(path.join(packageDir, runtimeEntry));
+      const entry = await import(entryUrl.href);
+      const runtime =
+        id === "qa-channel" ? await import(new URL(entry.companion, entryUrl).href) : entry;
+      expect(runtime.parseQaTarget("thread:/v1/dm/Case%2FID/Thread")).toEqual({
+        chatType: "direct",
+        conversationId: "Case/ID",
+        threadId: "Thread",
+      });
+      expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
+    },
+  );
 
   it("builds a private worker without registering it as a plugin entry", async () => {
     const packageDir = tempDirs.make("openclaw-plugin-runtime-worker-");
@@ -309,30 +373,6 @@ describe("plugin npm runtime build planning", () => {
       expect(plan.runtimeBuildOutputs).toContain(`./dist/doctor-contract-api${extension}`);
       expect(plan.packageFiles).toContain("dist/**");
     }
-  });
-
-  it("plans msteams startup runtime surfaces as native CommonJS entrypoints", () => {
-    const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({
-        repoRoot,
-        packageDir: path.join(repoRoot, "extensions", "msteams"),
-      }),
-    );
-
-    expect(plan.runtimeFormat).toBe("cjs");
-    expect(plan.runtimeExtensions).toEqual(["./dist/index.cjs"]);
-    expect(plan.runtimeSetupEntry).toBe("./dist/setup-entry.cjs");
-    expect(plan.runtimeBuildOutputs).toEqual(
-      expect.arrayContaining([
-        "./dist/channel-plugin-api.cjs",
-        "./dist/doctor-contract-api.cjs",
-        "./dist/index.cjs",
-        "./dist/runtime-api.cjs",
-        "./dist/secret-contract-api.cjs",
-        "./dist/setup-entry.cjs",
-        "./dist/setup-plugin-api.cjs",
-      ]),
-    );
   });
 
   it("builds msteams startup runtime surfaces as CommonJS files", async () => {

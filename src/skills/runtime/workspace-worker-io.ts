@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const MAX_REQUEST_BYTES = 12 * 1024 * 1024;
 
@@ -8,11 +9,10 @@ const MAX_REQUEST_BYTES = 12 * 1024 * 1024;
 // node/SSH adapters own authentication and the admitted filesystem roots.
 export function decodeSkillWorkerRequest(text: string): Record<string, unknown> {
   const value: unknown = JSON.parse(text);
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new Error("Skill worker request must be an object");
   }
-  // SAFETY: JSON.parse returned a non-null, non-array object; every property stays unknown.
-  return value as Record<string, unknown>;
+  return value;
 }
 
 export function skillWorkerLines(input: Readable) {

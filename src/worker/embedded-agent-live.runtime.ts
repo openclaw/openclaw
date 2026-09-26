@@ -153,7 +153,7 @@ function readAssistantThinking(message: AgentMessage): string {
     .join("");
 }
 
-type WorkerLiveClient = {
+export type WorkerLiveClient = {
   enqueuePreview: (event: WorkerLiveEvent) => boolean;
   emitTerminal: (event: WorkerLiveEvent) => Promise<void>;
 };

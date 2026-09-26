@@ -58,9 +58,6 @@ describe("Telegram userbot driver runtime", () => {
         "print(json.dumps({'type':'ready','chatId':-1001,'user':{'id':100}}), flush=True)",
         "for line in sys.stdin:",
         "    request = json.loads(line)",
-        "    if request['method'] == 'cleanup-private-forum':",
-        "        print(json.dumps({'type':'response','id':request['id'],'result':{'ok':True,'status':'deleted'}}), flush=True)",
-        "        continue",
         "    assert request['chatId'] == '-2002' and request['forumTopicId'] == 42",
         "    message_id = 10 + int(request['id'])",
         "    update = {'kind':'message','chatId':-1001,'messageId':message_id + 1,'senderId':200,'timestamp':1000,'text':request['text'],'entities':entities,'contentType':'messagePhoto'}",
@@ -87,7 +84,6 @@ describe("Telegram userbot driver runtime", () => {
         updates.push(update);
       },
     });
-    expect(driver.chatId).toBe(-1001);
     try {
       await expect(driver.send({ text, chatId: "-2002", forumTopicId: 42 })).resolves.toMatchObject(
         {
@@ -128,7 +124,6 @@ describe("Telegram userbot driver runtime", () => {
       ]);
       expect(updates[5]).not.toHaveProperty("richMessage");
       expect(() => driver.assertHealthy()).not.toThrow();
-      await expect(driver.cleanupPrivateForum()).resolves.toBeUndefined();
     } finally {
       await driver.close();
     }

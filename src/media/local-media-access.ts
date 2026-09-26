@@ -2,10 +2,9 @@
 import type { ReadOptions, ReadOptionsWithBuffer, ReadPosition } from "node:fs";
 import fs, { type FileReadResult } from "node:fs/promises";
 import path from "node:path";
+import { assertNoWindowsNetworkPath, readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import { resolveInboundPathRoot } from "@openclaw/media-core/inbound-path-policy";
-import { readFileHandleBounded } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
-import { assertNoWindowsNetworkPath } from "../infra/local-file-access.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
@@ -235,55 +234,51 @@ export async function readLocalMediaFile(
     ? await resolveLocalMediaRoots(options.excludedRoots)
     : [];
   readScope?.assertCurrent();
-  const opened = await openLocalFileSafely({ filePath: mediaPath });
-  try {
-    if (excludedRoots.some((root) => isPathInside(root, opened.realPath))) {
-      throw new LocalMediaAccessError(
-        "path-not-allowed",
-        `Local media path belongs to a remote workspace: ${mediaPath}`,
-      );
-    }
-    if (
-      boundary.roots !== "any" &&
-      !boundary.roots.some((resolvedRoot) => isPathInside(resolvedRoot, opened.realPath))
-    ) {
-      throw new LocalMediaAccessError(
-        "path-not-allowed",
-        `Local media path is not under an allowed directory: ${mediaPath}`,
-      );
-    }
-    if (boundary.rejectHardlinks && opened.stat.nlink > 1) {
-      throw new FsSafeError("hardlink", "hardlinked path not allowed");
-    }
-    if (opened.stat.size > options.maxBytes) {
-      throw new FsSafeError(
-        "too-large",
-        `file exceeds limit of ${options.maxBytes} bytes (got ${opened.stat.size})`,
-      );
-    }
-    if (!readScope) {
-      return await readFileHandleBounded(opened.handle, options.maxBytes);
-    }
-    const guardedHandle = {
-      fd: opened.handle.fd,
-      async read<T extends NodeJS.ArrayBufferView = Buffer>(
-        bufferOrOptions?: T | ReadOptionsWithBuffer<T>,
-        offsetOrOptions?: number | null | ReadOptions,
-        length?: number | null,
-        position?: ReadPosition | null,
-      ): Promise<FileReadResult<T>> {
-        readScope.assertCurrent();
-        const result = ArrayBuffer.isView(bufferOrOptions)
-          ? typeof offsetOrOptions === "object" && offsetOrOptions !== null
-            ? await opened.handle.read(bufferOrOptions, offsetOrOptions)
-            : await opened.handle.read(bufferOrOptions, offsetOrOptions, length, position)
-          : await opened.handle.read<T>(bufferOrOptions);
-        readScope.assertCurrent();
-        return result;
-      },
-    };
-    return await readFileHandleBounded(guardedHandle, options.maxBytes);
-  } finally {
-    await opened.handle.close().catch(() => {});
+  await using opened = await openLocalFileSafely({ filePath: mediaPath });
+  if (excludedRoots.some((root) => isPathInside(root, opened.realPath))) {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      `Local media path belongs to a remote workspace: ${mediaPath}`,
+    );
   }
+  if (
+    boundary.roots !== "any" &&
+    !boundary.roots.some((resolvedRoot) => isPathInside(resolvedRoot, opened.realPath))
+  ) {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      `Local media path is not under an allowed directory: ${mediaPath}`,
+    );
+  }
+  if (boundary.rejectHardlinks && opened.stat.nlink > 1) {
+    throw new FsSafeError("hardlink", "hardlinked path not allowed");
+  }
+  if (opened.stat.size > options.maxBytes) {
+    throw new FsSafeError(
+      "too-large",
+      `file exceeds limit of ${options.maxBytes} bytes (got ${opened.stat.size})`,
+    );
+  }
+  if (!readScope) {
+    return await readFileHandleBounded(opened.handle, options.maxBytes);
+  }
+  const guardedHandle = {
+    fd: opened.handle.fd,
+    async read<T extends NodeJS.ArrayBufferView = Buffer>(
+      bufferOrOptions?: T | ReadOptionsWithBuffer<T>,
+      offsetOrOptions?: number | null | ReadOptions,
+      length?: number | null,
+      position?: ReadPosition | null,
+    ): Promise<FileReadResult<T>> {
+      readScope.assertCurrent();
+      const result = ArrayBuffer.isView(bufferOrOptions)
+        ? typeof offsetOrOptions === "object" && offsetOrOptions !== null
+          ? await opened.handle.read(bufferOrOptions, offsetOrOptions)
+          : await opened.handle.read(bufferOrOptions, offsetOrOptions, length, position)
+        : await opened.handle.read<T>(bufferOrOptions);
+      readScope.assertCurrent();
+      return result;
+    },
+  };
+  return await readFileHandleBounded(guardedHandle, options.maxBytes);
 }

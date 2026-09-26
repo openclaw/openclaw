@@ -91,17 +91,6 @@ export type QaGatewayChildParams = {
   runtimePreloads?: readonly string[];
 };
 
-function buildQaRuntimePreloadArgs(preloads: readonly string[] | undefined): string[] {
-  return (preloads ?? []).flatMap((specifier) => ["--import", specifier]);
-}
-
-function createQaGatewayEmptyTransport() {
-  return {
-    requiredPluginIds: [] as const,
-    createGatewayConfig: () => ({}),
-  } satisfies Pick<QaTransportAdapter, "requiredPluginIds" | "createGatewayConfig">;
-}
-
 function resolveQaControlUiRoot(params: { repoRoot: string; controlUiEnabled?: boolean }) {
   if (params.controlUiEnabled === false) {
     return undefined;
@@ -195,7 +184,10 @@ export async function prepareQaGatewayChild(
   const gatewayExecutablePath = gatewayCommand?.executablePath;
   const gatewayArgsPrefix = gatewayCommand?.argsPrefix ?? [];
   const gatewayArgsSuffix = gatewayCommand?.argsSuffix ?? [];
-  const runtimePreloadArgs = buildQaRuntimePreloadArgs(params.runtimePreloads);
+  const runtimePreloadArgs = (params.runtimePreloads ?? []).flatMap((specifier) => [
+    "--import",
+    specifier,
+  ]);
   const gatewayCwd = gatewayCommand?.cwd ?? runtimeCwd;
   const workspaceDir = path.join(tempRoot, "workspace");
   const stateDir = path.join(tempRoot, "state");
@@ -206,7 +198,7 @@ export async function prepareQaGatewayChild(
   const configPath = path.join(tempRoot, "openclaw.json");
   const packagedAuthConfigPath = path.join(stateDir, "qa-auth-bootstrap", "openclaw.json");
   const gatewayToken = `qa-suite-${randomUUID()}`;
-  const transport = params.transport ?? createQaGatewayEmptyTransport();
+  const transport = params.transport;
   await seedQaAgentWorkspace({
     workspaceDir,
     repoRoot: params.repoRoot,
@@ -246,9 +238,10 @@ export async function prepareQaGatewayChild(
           providerConfigs: liveProviderConfigs,
         })
       : [];
-  const enabledPluginIds = [
-    ...new Set([...(liveOwnerPluginIds ?? []), ...(params.enabledPluginIds ?? [])]),
-  ];
+  const enabledPluginIds = uniqueStrings([
+    ...liveOwnerPluginIds,
+    ...(params.enabledPluginIds ?? []),
+  ]);
   const buildGatewayConfig = (gatewayPort: number) =>
     buildQaGatewayConfig({
       bind: "loopback",
@@ -270,10 +263,11 @@ export async function prepareQaGatewayChild(
       primaryModel: params.primaryModel,
       alternateModel: params.alternateModel,
       enabledPluginIds,
-      transportPluginIds: transport.requiredPluginIds,
-      transportConfig: transport.createGatewayConfig({
-        baseUrl: params.transportBaseUrl,
-      }),
+      transportPluginIds: transport?.requiredPluginIds ?? [],
+      transportConfig:
+        transport?.createGatewayConfig({
+          baseUrl: params.transportBaseUrl,
+        }) ?? {},
       liveProviderConfigs,
       fastMode: params.fastMode,
       thinkingDefault: params.thinkingDefault,
@@ -434,9 +428,6 @@ export async function prepareQaGatewayChild(
             forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
             claudeCliAuthMode: params.claudeCliAuthMode,
           });
-        }
-        if (!env) {
-          throw new Error("qa gateway runtime env not initialized");
         }
         assertQaLiveCodexAuthAvailable({
           cfg,

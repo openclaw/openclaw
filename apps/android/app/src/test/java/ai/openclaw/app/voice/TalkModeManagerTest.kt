@@ -1476,18 +1476,7 @@ class TalkModeManagerTest {
       assertEquals("Generating voice…", manager.statusText.value)
       assertFalse(manager.isSpeaking.value)
 
-      talkSpeakClient.result.complete(
-        TalkSpeakResult.Success(
-          TalkSpeakAudio(
-            bytes = byteArrayOf(1, 2, 3),
-            provider = "test",
-            outputFormat = "mp3_44100_128",
-            voiceCompatible = true,
-            mimeType = "audio/mpeg",
-            fileExtension = ".mp3",
-          ),
-        ),
-      )
+      completeRemoteSynthesis(talkSpeakClient)
       talkAudioPlayer.started.await()
 
       assertEquals("Speaking…", manager.statusText.value)
@@ -1523,18 +1512,7 @@ class TalkModeManagerTest {
     runTest {
       val audio = shadowOf(RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java))
       val synthesizer = FakeTalkSpeechSynthesizer()
-      synthesizer.result.complete(
-        TalkSpeakResult.Success(
-          TalkSpeakAudio(
-            bytes = byteArrayOf(1, 2, 3),
-            provider = "test",
-            outputFormat = "mp3_44100_128",
-            voiceCompatible = true,
-            mimeType = "audio/mpeg",
-            fileExtension = ".mp3",
-          ),
-        ),
-      )
+      completeRemoteSynthesis(synthesizer)
       val player = FakeTalkAudioPlayer()
       val managerJob = SupervisorJob()
       var callbackDepth = 0

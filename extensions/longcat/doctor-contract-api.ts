@@ -7,14 +7,6 @@ import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 const MODELS_PATH = ["models", "providers", "longcat", "models"];
 const LEGACY_CACHE_WRITE_PRICE = 0.75;
 
-function isStringArray(value: unknown, expected: readonly string[]): boolean {
-  return (
-    Array.isArray(value) &&
-    value.length === expected.length &&
-    value.every((entry, index) => entry === expected[index])
-  );
-}
-
 function isLegacyStockLongCatModel(value: unknown): boolean {
   const model = asObjectRecord(value);
   const cost = asObjectRecord(model?.cost);
@@ -41,7 +33,9 @@ function isLegacyStockLongCatModel(value: unknown): boolean {
     model.id === "LongCat-2.0" &&
     model.name === "LongCat 2.0" &&
     model.reasoning === true &&
-    isStringArray(model.input, ["text"]) &&
+    Array.isArray(model.input) &&
+    model.input.length === 1 &&
+    model.input.every((entry) => entry === "text") &&
     model.contextWindow === 1_048_576 &&
     model.maxTokens === 131_072 &&
     cost?.input === 0.75 &&

@@ -155,7 +155,7 @@ enum QuickChatFocusedTextCollector {
             if childResult.wasTruncated {
                 wasStructurallyTruncated = true
             }
-            let descendantTexts = next.parentTexts + ownTexts.filter { !next.parentTexts.contains($0) }
+            let descendantTexts = next.parentTexts + ownTexts
             for child in childResult.nodes.reversed() {
                 stack.append((child, next.depth + 1, descendantTexts))
             }

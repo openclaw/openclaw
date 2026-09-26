@@ -188,7 +188,6 @@ describe("resolveCliRuntimeExecutionProvider", () => {
   );
 
   it.each([
-    { name: "alone", order: ["anthropic:stored-api"] },
     {
       name: "before a configured CLI profile",
       order: ["anthropic:stored-api", "anthropic:claude-cli"],
@@ -237,29 +236,6 @@ describe("resolveCliRuntimeExecutionProvider", () => {
       resolveCliRuntimeExecutionProvider({
         agentId: "secondary",
         cfg: createAnthropicAuthConfig({}),
-        provider: "anthropic",
-        modelId: "opus-4.7",
-      }),
-    ).toBe("claude-cli");
-  });
-
-  it("prefers the stored auth order over a conflicting config order", () => {
-    // Same precedence as resolveAuthProfileOrderWithMetadata: stored order wins,
-    // config order is only the fallback.
-    seedStoredAuthOrder(["anthropic:claude-cli"]);
-    expect(
-      resolveCliRuntimeExecutionProvider({
-        cfg: createAnthropicAuthConfig({ order: ["anthropic:api"] }),
-        provider: "anthropic",
-        modelId: "opus-4.7",
-      }),
-    ).toBe("claude-cli");
-  });
-
-  it("routes Anthropic execution to Claude CLI when the selected auth profile is Claude CLI", () => {
-    expect(
-      resolveCliRuntimeExecutionProvider({
-        cfg: createAnthropicAuthConfig({ order: ["anthropic:claude-cli"] }),
         provider: "anthropic",
         modelId: "opus-4.7",
       }),

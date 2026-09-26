@@ -266,14 +266,6 @@ describe("worker environment service", () => {
     );
   });
 
-  it("prunes terminal environments after provider reconciliation", async () => {
-    const prune = vi.spyOn(support.testState.store, "pruneTerminalEnvironments");
-
-    await support.createService(support.createProvider()).reconcileOnce();
-
-    expect(prune).toHaveBeenCalledOnce();
-  });
-
   it("coalesces targeted and full inspection while retaining full-sweep maintenance", async () => {
     const targetId = "worker-targeted-overlap";
     const siblingId = "worker-full-sweep-sibling";

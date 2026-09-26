@@ -2,14 +2,16 @@ import type { LogRecord, SeverityNumber } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
 import type { Resource } from "@opentelemetry/resources";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   assignOtelLogAttribute,
   assignOtelLogEventAttributes,
   assignOtelSecurityAttributes,
   redactOtelAttributes,
   securitySeverityText,
-  shouldCaptureOtelLogBody,
   writeStdoutDiagnosticLogRecord,
 } from "./service-attributes.js";
 import {
@@ -72,7 +74,6 @@ export function createDiagnosticsLogExporter(params: {
     serviceName,
   } = params;
   let logProvider: LoggerProvider | null = null;
-  const logSeverityMap = LOG_SEVERITY_MAP;
   let recordLogRecord:
     | ((
         evt: Extract<DiagnosticEventPayload, { type: "log.record" }>,
@@ -182,8 +183,8 @@ export function createDiagnosticsLogExporter(params: {
       metadata: DiagnosticEventMetadata,
     ): BuiltOtelLogRecord => {
       const logLevelName = evt.level || "INFO";
-      const severityNumber = logSeverityMap[logLevelName] ?? (9 as SeverityNumber);
-      const body = shouldCaptureOtelLogBody(contentCapturePolicy)
+      const severityNumber = LOG_SEVERITY_MAP[logLevelName] ?? (9 as SeverityNumber);
+      const body = contentCapturePolicy.logBodies
         ? normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS)
         : "log";
       const attributes = Object.create(null) as Record<string, string | number | boolean>;
@@ -230,7 +231,7 @@ export function createDiagnosticsLogExporter(params: {
       const logRecord: LogRecord = {
         body: "openclaw.security.event",
         severityText,
-        severityNumber: logSeverityMap[severityText] ?? (9 as SeverityNumber),
+        severityNumber: LOG_SEVERITY_MAP[severityText] ?? (9 as SeverityNumber),
         attributes: redactOtelAttributes(attributes),
         timestamp: evt.ts,
       };

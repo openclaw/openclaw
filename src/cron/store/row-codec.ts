@@ -153,7 +153,7 @@ function decodeCronJobConfig(jobJson: Record<string, unknown>): Record<string, u
   return delivery ? { ...jobJson, delivery } : jobJson;
 }
 
-function rowToCronJob(
+export function rowToCronJob(
   row: Pick<CronJobReadRow, "job_id" | "state_json" | "runtime_updated_at_ms" | "updated_at">,
   jobJson: Record<string, unknown>,
 ): CronStoredJob | null {

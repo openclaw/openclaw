@@ -323,6 +323,34 @@ describe("AppSidebar session attention", () => {
     });
   });
 
+  it("keeps status expiry retired through queued updates after disconnect", async () => {
+    vi.useFakeTimers();
+    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
+    setRows(sessionsHarness, [agentAttentionRow()]);
+    const { sidebar, provider } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      sessionsHarness.sessions,
+    );
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+
+    sidebar.requestUpdate();
+    provider.remove();
+    await sidebar.updateComplete;
+    const requestUpdate = vi.spyOn(sidebar, "requestUpdate");
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    document.body.append(provider);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
+
+    setRows(sessionsHarness, [agentAttentionRow()]);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
+  });
+
   it("does not render an expired agent declaration", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
     setRows(sessionsHarness, [

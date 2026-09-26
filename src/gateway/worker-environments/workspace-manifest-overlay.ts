@@ -1,5 +1,5 @@
 import path from "node:path";
-import { changedPaths, manifestNodes } from "./workspace-manifest-comparison.js";
+import { changedPaths, hasPathAncestor, manifestNodes } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -22,15 +22,7 @@ export function applyWorkspaceSourceOverlay(
     ),
   );
   for (const entryPath of nodes.keys()) {
-    let remove = changed.has(entryPath);
-    for (
-      let parent = path.posix.dirname(entryPath);
-      !remove && parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
-      remove = replaced.has(parent);
-    }
-    if (remove) {
+    if (changed.has(entryPath) || hasPathAncestor(replaced, entryPath)) {
       nodes.delete(entryPath);
     }
   }

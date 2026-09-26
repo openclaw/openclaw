@@ -392,6 +392,7 @@ export function projectChatTranscript(
       activeContinuation: activeContinuationByGroupKey.get(item.key),
       turnRecap: turnRecapByGroupKey.get(item.key),
       latestAssistant: item.key === latestAssistantItemKey,
+      searchResult: searchFiltering,
     } satisfies Parameters<typeof renderMessageGroup>[1];
   };
   // Only the working indicator shows live usage, so rows without one keep
@@ -426,7 +427,7 @@ export function projectChatTranscript(
     const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
     return `${continuationKey}|${recapKey}|${
       item.key === latestAssistantItemKey ? "latest-assistant" : ""
-    }`;
+    }|${searchFiltering ? "search-result" : ""}`;
   };
   const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {
@@ -575,12 +576,18 @@ export function projectChatTranscript(
       }
     }
   }
-  const persistedIds = new Set(props.messages.map(persistedMessageEntryId));
+  // Only ID-bearing voice captions need a history scan. Keep membership local
+  // to this projection so history replacement and search cannot stale it.
+  let persistedIds: Set<string | null> | undefined;
   const realtimeConversation = renderRealtimeTalkConversation({
     ...props,
-    realtimeTalkConversation: props.realtimeTalkConversation?.filter(
-      (entry) => !entry.transcriptId || !persistedIds.has(entry.transcriptId),
-    ),
+    realtimeTalkConversation: props.realtimeTalkConversation?.filter((entry) => {
+      if (!entry.transcriptId) {
+        return true;
+      }
+      persistedIds ??= new Set(props.messages.map(persistedMessageEntryId));
+      return !persistedIds.has(entry.transcriptId);
+    }),
   });
   if (realtimeConversation !== nothing) {
     transcriptRows.push({

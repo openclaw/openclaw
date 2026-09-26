@@ -53,8 +53,9 @@ function createOps(params: {
   const nodeSendToSession = vi.fn();
   const removeChatRun = vi.fn();
   const chatRunState = createChatRunState();
+  chatRunState.updateBuffer(runId, { delta: buffer ?? "" });
+  chatRunState.takeBufferDelta(runId, buffer ?? "");
   Object.assign(chatRunState.getOrCreate(runId), {
-    ...(buffer !== undefined ? { buffer, deltaLastBroadcastText: buffer } : {}),
     deltaSentAt: Date.now(),
     assistantScope: { itemId: "assistant-1", prefix: "", boundaryNewlines: 0, separatorLength: 0 },
     agentText: {
@@ -461,7 +462,7 @@ describe("abortChatRunById", () => {
     expect(ops.chatRunState.runs.get(runId)?.buffer).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.deltaSentAt).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.assistantScope).toBeUndefined();
-    expect(ops.chatRunState.runs.get(runId)?.deltaLastBroadcastText).toBeUndefined();
+    expect(ops.chatRunState.runs.get(runId)?.display).toBeUndefined();
     expect(ops.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
     expect(ops.agentRunSeq.has(runId)).toBe(false);

@@ -10,15 +10,11 @@ import type {
   ParsedTranscriptEntry,
 } from "./session-cost-usage.types.js";
 
-const normalizeUsageCostTotalOrigin = (value: unknown): CostBreakdown["totalOrigin"] =>
-  value === "provider-billed" ? value : undefined;
-
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {
     return undefined;
   }
-  const record = usageRaw as Record<string, unknown>;
-  const cost = record.cost as Record<string, unknown> | undefined;
+  const cost = usageRaw.cost;
   if (!cost) {
     return undefined;
   }
@@ -34,7 +30,7 @@ const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | unde
     output: asFiniteNumber(cost.output),
     cacheRead: asFiniteNumber(cost.cacheRead),
     cacheWrite: asFiniteNumber(cost.cacheWrite),
-    totalOrigin: normalizeUsageCostTotalOrigin(cost.totalOrigin),
+    totalOrigin: cost.totalOrigin === "provider-billed" ? cost.totalOrigin : undefined,
   };
 };
 
@@ -147,7 +143,6 @@ export const applyCostBreakdown = (
   totals.cacheWriteCost += costBreakdown.cacheWrite ?? 0;
 };
 
-// Legacy function for backwards compatibility (no cost breakdown available)
 export const applyCostTotal = (
   totals: CostUsageTotals,
   costTotal: number | undefined,

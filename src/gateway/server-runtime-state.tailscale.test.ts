@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
 async function requestStatus(options: RequestOptions): Promise<{ status: number; body: string }> {
@@ -218,7 +218,7 @@ describe("managed Tailscale gateway ingress", () => {
   });
 
   it("isolates protected Funnel auth lockout by the validated source", async () => {
-    const limiter = createAuthRateLimiter({
+    const limiter = createGatewayAuthRateLimiter({
       maxAttempts: 1,
       windowMs: 60_000,
       lockoutMs: 60_000,

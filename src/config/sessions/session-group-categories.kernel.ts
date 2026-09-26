@@ -3,19 +3,28 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
+  prepareExactSessionEntryRowReads,
   readExactSessionEntryRow,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
 
+// Small groups are cheaper through the connection's already compiled point reads.
+const MIN_BATCHED_CATEGORY_KEYS = 10;
+
 export function prepareSessionGroupCategoryMutation(
   database: OpenClawAgentDatabase,
   name: string,
 ): Map<string, ResolvedSessionEntryRow> {
   const rows = new Map<string, ResolvedSessionEntryRow>();
-  for (const key of readSessionGroupCategoryKeys(database, name)) {
-    const row = readExactSessionEntryRow(database, key);
+  const keys = readSessionGroupCategoryKeys(database, name);
+  const readPrepared =
+    keys.length >= MIN_BATCHED_CATEGORY_KEYS
+      ? prepareExactSessionEntryRowReads(database, keys)
+      : undefined;
+  for (const key of keys) {
+    const row = readPrepared ? readPrepared(key) : readExactSessionEntryRow(database, key);
     if (row?.entry.category?.trim() === name) {
       rows.set(key, row);
     }
@@ -30,8 +39,12 @@ export function applySessionGroupCategoryMutation(
   env: NodeJS.ProcessEnv,
 ): Array<{ sessionKey: string; sessionId: string }> {
   const current = new Map<string, ResolvedSessionEntryRow>();
+  const readPrepared =
+    expected.size >= MIN_BATCHED_CATEGORY_KEYS
+      ? prepareExactSessionEntryRowReads(database, [...expected.keys()])
+      : undefined;
   for (const [key, before] of expected) {
-    const row = readExactSessionEntryRow(database, key);
+    const row = readPrepared ? readPrepared(key) : readExactSessionEntryRow(database, key);
     if (
       !row ||
       row.row.entry_json !== before.row.entry_json ||

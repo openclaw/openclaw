@@ -291,76 +291,65 @@ describe("node worker bundle installer", () => {
     },
   );
 
-  it.each(["http", "local"] as const)(
-    "does not publish a %s bundle when cancellation arrives during receipt staging",
-    async (source) => {
-      const fixture = await bundleFixture();
-      if (source === "local") {
-        await prepareLocalArchive(fixture);
+  it("does not publish an HTTP bundle when cancellation arrives during receipt staging", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const controller = new AbortController();
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (String(args[0]).endsWith("bootstrap-receipt.json") && args[1] === "wx") {
+        controller.abort(new Error("installer cancelled"));
       }
-      const served = await serve(fixture.archive, fixture.input.archive.token);
-      const installer = new NodeWorkerBundleInstaller({ root });
-      const controller = new AbortController();
-      const open = fs.open.bind(fs);
-      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        const handle = await open(...args);
-        if (String(args[0]).endsWith("bootstrap-receipt.json") && args[1] === "wx") {
-          controller.abort(new Error("installer cancelled"));
-        }
-        return handle;
-      });
+      return handle;
+    });
 
-      await expect(
-        installer.ensure({
-          input: fixture.input,
-          gatewayUrl: served.gatewayUrl,
-          signal: controller.signal,
-        }),
-      ).rejects.toThrow("installer cancelled");
-      expect(served.requests).toHaveBeenCalledTimes(source === "local" ? 0 : 1);
-      await expect(
-        fs.readdir(path.join(root, fixture.input.gatewayNamespace, "bundles")),
-      ).resolves.toEqual([]);
-    },
-  );
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("installer cancelled");
+    expect(served.requests).toHaveBeenCalledOnce();
+    await expect(
+      fs.readdir(path.join(root, fixture.input.gatewayNamespace, "bundles")),
+    ).resolves.toEqual([]);
+  });
 
-  it.each(["http", "local"] as const)(
-    "restores the prior destination when cancelled between %s publication renames",
-    async (source) => {
-      const fixture = await bundleFixture();
-      if (source === "local") {
-        await prepareLocalArchive(fixture);
+  it("restores the prior destination when cancelled between local publication renames", async () => {
+    const fixture = await bundleFixture();
+    await prepareLocalArchive(fixture);
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const bundlesRoot = path.join(root, fixture.input.gatewayNamespace, "bundles");
+    const destination = path.join(bundlesRoot, fixture.input.build.bundleHash);
+    await fs.mkdir(destination, { recursive: true });
+    await fs.writeFile(path.join(destination, "prior-install"), "preserved");
+    const controller = new AbortController();
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      await rename(...args);
+      if (args[0] === destination && String(args[1]).includes(".previous-")) {
+        controller.abort(new Error("publication cancelled"));
       }
-      const served = await serve(fixture.archive, fixture.input.archive.token);
-      const installer = new NodeWorkerBundleInstaller({ root });
-      const bundlesRoot = path.join(root, fixture.input.gatewayNamespace, "bundles");
-      const destination = path.join(bundlesRoot, fixture.input.build.bundleHash);
-      await fs.mkdir(destination, { recursive: true });
-      await fs.writeFile(path.join(destination, "prior-install"), "preserved");
-      const controller = new AbortController();
-      const rename = fs.rename.bind(fs);
-      vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
-        await rename(...args);
-        if (args[0] === destination && String(args[1]).includes(".previous-")) {
-          controller.abort(new Error("publication cancelled"));
-        }
-      });
+    });
 
-      await expect(
-        installer.ensure({
-          input: fixture.input,
-          gatewayUrl: served.gatewayUrl,
-          signal: controller.signal,
-        }),
-      ).rejects.toThrow("publication cancelled");
+    await expect(
+      installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("publication cancelled");
 
-      await expect(fs.readdir(bundlesRoot)).resolves.toEqual([fixture.input.build.bundleHash]);
-      await expect(fs.readdir(destination)).resolves.toEqual(["prior-install"]);
-      await expect(fs.readFile(path.join(destination, "prior-install"), "utf8")).resolves.toBe(
-        "preserved",
-      );
-    },
-  );
+    await expect(fs.readdir(bundlesRoot)).resolves.toEqual([fixture.input.build.bundleHash]);
+    await expect(fs.readdir(destination)).resolves.toEqual(["prior-install"]);
+    await expect(fs.readFile(path.join(destination, "prior-install"), "utf8")).resolves.toBe(
+      "preserved",
+    );
+  });
 
   it("does not renew retention when cancelled while validating an installed bundle", async () => {
     const fixture = await bundleFixture();

@@ -94,14 +94,11 @@ import {
   isSessionStatusModelPatchOrigin,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
+import { invalidSessionRequest as invalid } from "./session-request-error.js";
 import { normalizeSessionToolOverrides } from "./session-tool-overrides.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchDisplayMetadata } from "./sessions-patch-display-metadata.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
-
-function invalid(message: string): { ok: false; error: ErrorShape } {
-  return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
-}
 
 type SessionPatchProjectionParams = {
   cfg: OpenClawConfig;

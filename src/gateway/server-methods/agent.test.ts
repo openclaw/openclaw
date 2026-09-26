@@ -4,7 +4,13 @@ import {
   resetAgentTaskRegistryForTests,
   restoreAgentTaskRegistryRuntimeAfterTests,
 } from "./agent.test-harness.js";
-import { afterAll } from "vitest";
+import { afterAll, beforeAll } from "vitest";
+import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import {
+  retainGatewayPluginMetadata,
+  type GatewayPluginMetadataOwner,
+} from "../../plugins/plugin-metadata-lifecycle.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import "./agent.base.test-utils.js";
 import "./agent.media-and-routing.test-utils.js";
 import "./agent.events-and-subagents.test-utils.js";
@@ -17,5 +23,19 @@ import "./agent.abort-integration.test-utils.js";
 import "./agent.caller-authority.test-utils.js";
 import "./agent.dispatch-clock.test-utils.js";
 
+let metadataOwner: GatewayPluginMetadataOwner | undefined;
 resetAgentTaskRegistryForTests();
-afterAll(restoreAgentTaskRegistryRuntimeAfterTests);
+beforeAll(() => {
+  // Handler cases share the real startup inventory; no case changes plugin
+  // installation, so admission can consume prepared metadata like a live Gateway.
+  metadataOwner = retainGatewayPluginMetadata();
+  const snapshot = metadataOwner.runBootstrap(() =>
+    loadPluginMetadataSnapshot({ config: {}, allowCurrent: false }),
+  );
+  metadataOwner.publish(snapshot);
+  setGatewayPluginMetadataSnapshot(snapshot, { config: {} });
+});
+afterAll(async () => {
+  restoreAgentTaskRegistryRuntimeAfterTests();
+  await metadataOwner?.close();
+});

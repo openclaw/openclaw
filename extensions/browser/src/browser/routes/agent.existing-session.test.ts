@@ -132,6 +132,11 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/fake.png" })),
 }));
 
+vi.mock("../pw-ai-module.js", () => ({
+  getPwAiModule: vi.fn(async () => null),
+  getLoadedPwAiModule: () => null,
+}));
+
 vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
@@ -773,9 +778,10 @@ describe("existing-session browser routes", () => {
     );
 
     expect(response.statusCode).toBe(501);
-    expect(response.body).toMatchObject({
+    expect(response.body).toEqual({
       code: "ACT_EXISTING_SESSION_UNSUPPORTED",
-      error: expect.stringContaining("Paste is not supported for existing-session"),
+      error:
+        "Paste is not supported for existing-session browser profiles. Use a managed browser profile.",
     });
     expect(JSON.stringify(response.body)).not.toContain("synthetic-password-paste");
     expect(chromeMcpMocks.fillChromeMcpElement).not.toHaveBeenCalled();

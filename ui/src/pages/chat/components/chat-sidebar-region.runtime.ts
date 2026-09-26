@@ -72,12 +72,15 @@ function renderPanelTypeOption(type: SidebarPanelDefinition, slotted = false) {
   `;
 }
 
-function panelsOf(layout: SidebarLayout): SidebarPanel[] {
-  return layout.columns[0]?.panels ?? [];
-}
+const HOSTED_TAB_REQUESTS = [
+  ["browser", BROWSER_PANEL_TOGGLE_EVENT, { open: true, newTab: true }],
+  ["link-reader", LINK_READER_PANEL_TOGGLE_EVENT, { open: true, newTab: true }],
+  ["terminal", TERMINAL_PANEL_TOGGLE_EVENT, { open: true, newSession: true }],
+] as const;
 
 class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ attribute: false }) panelIdPrefix = "";
+  @property({ attribute: false }) conversationTab?: Pick<SidebarPanelDefinition, "label" | "icon">;
   @property({ attribute: false }) layout: SidebarLayout = { columns: [] };
   @property({ attribute: false }) panelDefinitions = sidebarPanelDefinitions();
   @property({ attribute: false }) panelTemplates: SidebarPanelTemplates = {};
@@ -225,7 +228,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private renderTypeMenu() {
-    const openSlots = new Set(panelsOf(this.layout).map((panel) => panel.slot));
+    const openSlots = new Set((this.layout.columns[0]?.panels ?? []).map((panel) => panel.slot));
     return html`
       <wa-dropdown
         class="side-panel-type-menu"
@@ -234,28 +237,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           const slot = event.detail.item.value;
           if (slot) {
             this.callbacks?.openSlot(slot);
-            if (slot === "browser" && openSlots.has(slot)) {
+            const request = HOSTED_TAB_REQUESTS.find(([panel]) => panel === slot);
+            if (request && openSlots.has(slot)) {
               this.deliverPanelEvent(
                 slot,
-                new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {
-                  detail: { open: true, newTab: true },
-                }),
-              );
-            }
-            if (slot === "link-reader" && openSlots.has(slot)) {
-              this.deliverPanelEvent(
-                slot,
-                new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
-                  detail: { open: true, newTab: true },
-                }),
-              );
-            }
-            if (slot === "terminal" && openSlots.has(slot)) {
-              this.deliverPanelEvent(
-                slot,
-                new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
-                  detail: { open: true, newSession: true },
-                }),
+                new CustomEvent(request[1], { detail: { ...request[2] } }),
               );
             }
           }
@@ -273,10 +259,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         ${this.panelTypes()
           .filter(
             (type) =>
-              type.slot === "browser" ||
-              type.slot === "terminal" ||
-              type.slot === "link-reader" ||
-              !openSlots.has(type.slot),
+              HOSTED_TAB_REQUESTS.some(([slot]) => slot === type.slot) || !openSlots.has(type.slot),
           )
           .map(
             (type) => html`
@@ -349,12 +332,15 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         }));
       }
       const type = panelType(this.panelDefinitions, panel.slot);
+      // Agent transitions clear identity before loading the next name.
+      const tab =
+        panel.slot === "conversation" && this.conversationTab?.label ? this.conversationTab : type;
       return [
         {
           id: panel.id,
           domId: `${this.panelIdPrefix}-tab-${encodeURIComponent(panel.id)}`,
           contentId,
-          label: type.label,
+          label: tab.label,
           labelTooltip:
             panel.slot === "dashboard"
               ? t(
@@ -365,12 +351,12 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
                     : "chat.sidePanel.expandPanel",
                   { panel: type.label },
                 )
-              : type.label,
+              : tab.label,
           onActivate:
             panel.slot === "dashboard"
               ? () => this.callbacks?.togglePanelExpanded(panel.id)
               : undefined,
-          icon: type.icon,
+          icon: tab.icon,
           closeLabel: t("chat.sidebarColumns.close", { panel: type.label }),
         },
       ];
@@ -601,12 +587,12 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       (this.layout.open === true && (!this.layout.expanded || this.layout.expandedSide === true)) ||
       (sidebarMainPanel(this.layout)?.slot ?? "conversation") !== "conversation";
     return html`${
-        !this.narrow && this.layout.open && !this.layout.expanded && column
+        !this.narrow && this.layout.open && !this.layout.expanded
           ? this.renderDivider(column)
           : nothing
       }
       <div class="side-panel">
-        ${column && sidebarSidePanels(this.layout).length > 0 ? this.renderHeader(column) : nothing}
+        ${sidebarSidePanels(this.layout).length > 0 ? this.renderHeader(column) : nothing}
         ${this.contentMounted ? this.renderBody(column) : nothing}
       </div>`;
   }

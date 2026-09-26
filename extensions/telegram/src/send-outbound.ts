@@ -110,7 +110,7 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
     | { kind: "nonIdempotent"; useApiErrorLogging?: boolean }
     | { kind: "standard"; shouldRetry?: (err: unknown) => boolean };
 }): Promise<PreparedTelegramOutboundWithMessageId<T>> {
-  const { cfg, account, api } = params.context;
+  const { cfg, api } = params.context;
   const rawTarget = String(params.to);
   const target = parseTelegramTarget(rawTarget);
   const chatId = await resolveAndPersistChatId({
@@ -140,14 +140,12 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
     params.request.kind === "nonIdempotent"
       ? createTelegramNonIdempotentRequestWithDiag({
           cfg,
-          account,
           retry: params.opts.retry,
           verbose: params.opts.verbose,
           useApiErrorLogging: params.request.useApiErrorLogging,
         })
       : createTelegramRequestWithDiag({
           cfg,
-          account,
           retry: params.opts.retry,
           verbose: params.opts.verbose,
           shouldRetry: params.request.shouldRetry,

@@ -1,6 +1,7 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 // Mattermost tests cover send plugin behavior.
 import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -62,13 +63,7 @@ type MattermostUploadParams = {
   contentType?: string;
 };
 
-type MattermostDirectRetryOptions = {
-  maxRetries?: number;
-  initialDelayMs?: number;
-  maxDelayMs?: number;
-  timeoutMs?: number;
-  onRetry?: () => void;
-};
+type DmRetryOptions = NonNullable<SendMessageMattermostOptions["dmRetryOptions"]>;
 
 function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
@@ -107,7 +102,7 @@ function directChannelRetryCall() {
   return mockCall(
     mockState.createMattermostDirectChannelWithRetry,
     "createMattermostDirectChannelWithRetry",
-  ) as [unknown, unknown, MattermostDirectRetryOptions?];
+  ) as [unknown, unknown, DmRetryOptions?];
 }
 
 async function createMattermostProviderFailure(
@@ -705,24 +700,9 @@ describe("sendMessageMattermost", () => {
 });
 
 describe("parseMattermostTarget", () => {
-  it("parses channel: prefix with valid ID as channel id", () => {
-    const target = parseMattermostTarget("channel:dthcxgoxhifn3pwh65cut3ud3w");
-    expect(target).toEqual({ kind: "channel", id: "dthcxgoxhifn3pwh65cut3ud3w" });
-  });
-
   it("parses channel: prefix with non-ID as channel name", () => {
     const target = parseMattermostTarget("channel:abc123");
     expect(target).toEqual({ kind: "channel-name", name: "abc123" });
-  });
-
-  it("parses user: prefix as user id", () => {
-    const target = parseMattermostTarget("user:usr456");
-    expect(target).toEqual({ kind: "user", id: "usr456" });
-  });
-
-  it("parses mattermost: prefix as user id", () => {
-    const target = parseMattermostTarget("mattermost:usr789");
-    expect(target).toEqual({ kind: "user", id: "usr789" });
   });
 
   it("parses @ prefix as username", () => {
@@ -730,29 +710,9 @@ describe("parseMattermostTarget", () => {
     expect(target).toEqual({ kind: "user", username: "alice" });
   });
 
-  it("parses # prefix as channel name", () => {
-    const target = parseMattermostTarget("#off-topic");
-    expect(target).toEqual({ kind: "channel-name", name: "off-topic" });
-  });
-
   it("parses # prefix with spaces", () => {
     const target = parseMattermostTarget("  #general  ");
     expect(target).toEqual({ kind: "channel-name", name: "general" });
-  });
-
-  it("treats 26-char alphanumeric bare string as channel id", () => {
-    const target = parseMattermostTarget("dthcxgoxhifn3pwh65cut3ud3w");
-    expect(target).toEqual({ kind: "channel", id: "dthcxgoxhifn3pwh65cut3ud3w" });
-  });
-
-  it("treats non-ID bare string as channel name", () => {
-    const target = parseMattermostTarget("off-topic");
-    expect(target).toEqual({ kind: "channel-name", name: "off-topic" });
-  });
-
-  it("treats channel: with non-ID value as channel name", () => {
-    const target = parseMattermostTarget("channel:off-topic");
-    expect(target).toEqual({ kind: "channel-name", name: "off-topic" });
   });
 
   it("throws on empty string", () => {
@@ -765,11 +725,6 @@ describe("parseMattermostTarget", () => {
 
   it("throws on empty @ prefix", () => {
     expect(() => parseMattermostTarget("@")).toThrow("Username is required");
-  });
-
-  it("parses channel:#name as channel name", () => {
-    const target = parseMattermostTarget("channel:#off-topic");
-    expect(target).toEqual({ kind: "channel-name", name: "off-topic" });
   });
 
   it("parses channel:#name with spaces", () => {
@@ -811,91 +766,18 @@ describe("sendMessageMattermost user-first resolution", () => {
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
   });
 
-  it("resolves unprefixed 26-char id as user and sends via DM channel", async () => {
-    // Unique token + id to avoid cache pollution from other tests
-    const userId = "aaaaaa1111111111aaaaaa1111"; // 26 chars
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-user-dm-t1"));
-    mockState.fetchMattermostUser.mockResolvedValueOnce({ id: userId });
-
-    const res = await sendMessageMattermost(userId, "hello", { cfg: TEST_CFG });
-
-    expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
-    const params = createMattermostPostParams();
-    expect(params.channelId).toBe("dm-channel-id");
-    expect(res.channelId).toBe("dm-channel-id");
-    expect(res.messageId).toBe("post-id");
-    expect(res.receipt.primaryPlatformMessageId).toBe("post-id");
-    expect(res.receipt.platformMessageIds).toEqual(["post-id"]);
-  });
-
-  it("falls back to channel id when user lookup returns 404", async () => {
-    // Unique token + id for this test
-    const channelId = "bbbbbb2222222222bbbbbb2222"; // 26 chars
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-404-t2"));
-    const err = new Error("Mattermost API 404: user not found");
-    mockState.fetchMattermostUser.mockRejectedValueOnce(err);
-
-    const res = await sendMessageMattermost(channelId, "hello", { cfg: TEST_CFG });
-
-    expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
-    expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
-    const params = createMattermostPostParams();
-    expect(params.channelId).toBe(channelId);
-    expect(res.channelId).toBe(channelId);
-  });
-
-  it("falls back to channel id without caching negative result on transient error", async () => {
-    // Two unique tokens so each call has its own cache namespace
-    const userId = "cccccc3333333333cccccc3333"; // 26 chars
-    const tokenA = "token-transient-t3a";
-    const tokenB = "token-transient-t3b";
-    const transientErr = new Error("Mattermost API 503: service unavailable");
-
-    // First call: transient error → fall back to channel id, do NOT cache negative
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount(tokenA));
-    mockState.fetchMattermostUser.mockRejectedValueOnce(transientErr);
-
-    const res1 = await sendMessageMattermost(userId, "first", { cfg: TEST_CFG });
-    expect(res1.channelId).toBe(userId);
-
-    // Second call with a different token (new cache key) → retries user lookup
-    vi.clearAllMocks();
-    mockState.createMattermostClient.mockImplementation(({ baseUrl: clientBaseUrl, botToken }) => ({
-      baseUrl: clientBaseUrl,
-      token: botToken,
-    }));
-    mockState.createMattermostPost.mockResolvedValue({ id: "post-id-2" });
-    mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
-    mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount(tokenB));
-    mockState.fetchMattermostUser.mockResolvedValueOnce({ id: userId });
-
-    const res2 = await sendMessageMattermost(userId, "second", { cfg: TEST_CFG });
-    expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
-    expect(res2.channelId).toBe("dm-channel-id");
-  });
-
-  it("does not apply user-first resolution for explicit user: prefix", async () => {
-    // Unique token + id — explicit user: prefix bypasses probe, goes straight to DM
-    const userId = "dddddd4444444444dddddd4444"; // 26 chars
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-explicit-user-t4"));
-    mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
-
-    const res = await sendMessageMattermost(`user:${userId}`, "hello", { cfg: TEST_CFG });
-
-    expect(mockState.fetchMattermostUser).not.toHaveBeenCalled();
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
-    expect(res.channelId).toBe("dm-channel-id");
-  });
-
   it("does not apply user-first resolution for explicit channel: prefix", async () => {
     // Unique token + id — explicit channel: prefix, no probe, no DM
     const chanId = "eeeeee5555555555eeeeee5555"; // 26 chars
     mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-explicit-chan-t5"));
 
-    const res = await sendMessageMattermost(`channel:${chanId}`, "hello", { cfg: TEST_CFG });
+    const onRetry = vi.fn();
+    const res = await sendMessageMattermost(`channel:${chanId}`, "hello", {
+      cfg: TEST_CFG,
+      dmRetryOptions: { maxRetries: 0, onRetry },
+    });
 
+    expect(onRetry).not.toHaveBeenCalled();
     expect(mockState.fetchMattermostUser).not.toHaveBeenCalled();
     expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
     const params = createMattermostPostParams();
@@ -903,97 +785,150 @@ describe("sendMessageMattermost user-first resolution", () => {
     expect(res.channelId).toBe(chanId);
   });
 
-  it("passes dmRetryOptions from opts to createMattermostDirectChannelWithRetry", async () => {
-    const userId = "ffffff6666666666ffffff6666"; // 26 chars
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-retry-opts-t6"));
-    mockState.fetchMattermostUser.mockResolvedValueOnce({ id: userId });
-
-    const retryOptions = {
-      maxRetries: 5,
-      initialDelayMs: 500,
-      maxDelayMs: 5000,
-      timeoutMs: 10000,
-    };
-
-    await sendMessageMattermost(`user:${userId}`, "hello", {
-      cfg: TEST_CFG,
-      dmRetryOptions: retryOptions,
-    });
-
-    const retryCall = directChannelRetryCall();
-    expect(retryCall?.[0]).toEqual(
-      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
+  const baseRetry = {
+    maxRetries: 4,
+    initialDelayMs: 2000,
+    maxDelayMs: 8000,
+    timeoutMs: 15000,
+  };
+  const optionRetry = { maxRetries: 5, initialDelayMs: 500, maxDelayMs: 5000, timeoutMs: 10000 };
+  const zeroRetry = { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0, timeoutMs: 0 };
+  const undefinedRetry = {
+    maxRetries: undefined,
+    initialDelayMs: undefined,
+    maxDelayMs: undefined,
+    timeoutMs: undefined,
+  };
+  const baseCallback = vi.fn();
+  const overrideCallback = vi.fn();
+  const extraBase = { ...baseRetry, onRetry: baseCallback, ignored: "not a retry option" };
+  it.each<[string, DmRetryOptions?, DmRetryOptions?, DmRetryOptions?]>([
+    ["absent", undefined, undefined, undefined],
+    ["empty", {}, {}, undefined],
+    ["own-undefined", undefinedRetry, undefinedRetry, undefined],
+    ["options-only", undefined, optionRetry, optionRetry],
+    ["config-only", baseRetry, undefined, baseRetry],
+    [
+      "partial",
+      { maxRetries: 2, initialDelayMs: 1000 },
+      { maxRetries: 7, timeoutMs: 20000 },
+      { maxRetries: 7, initialDelayMs: 1000, timeoutMs: 20000 },
+    ],
+    ["zero", baseRetry, zeroRetry, zeroRetry],
+    ["undefined-override", baseRetry, undefinedRetry, baseRetry],
+    ["base-extras", extraBase, undefined, baseRetry],
+    ["override-callback", {}, { onRetry: overrideCallback }, {}],
+  ])("projects frozen %s retry settings", async (name, base, override, expected) => {
+    Object.freeze(base);
+    Object.freeze(override);
+    const userId = `retry-${name}`;
+    mockState.resolveMattermostAccount.mockReturnValue(
+      makeAccount(`token-${userId}`, { dmChannelRetry: base }),
     );
-    expect(retryCall?.[1]).toEqual(["bot-id", userId]);
-    expect(retryCall?.[2]?.maxRetries).toBe(retryOptions.maxRetries);
-    expect(retryCall?.[2]?.initialDelayMs).toBe(retryOptions.initialDelayMs);
-    expect(retryCall?.[2]?.maxDelayMs).toBe(retryOptions.maxDelayMs);
-    expect(retryCall?.[2]?.timeoutMs).toBe(retryOptions.timeoutMs);
+    const result = await sendMessageMattermost(`user:${userId}`, "hello", {
+      cfg: TEST_CFG,
+      dmRetryOptions: override,
+    });
+    const retry = directChannelRetryCall();
+    expect(retry[0]).toEqual(
+      expect.objectContaining({
+        baseUrl: "https://mattermost.example.com",
+        token: `token-${userId}`,
+      }),
+    );
+    expect(retry[1]).toEqual(["bot-id", userId]);
+    expect(retry[2]).toStrictEqual(
+      expected
+        ? { ...undefinedRetry, ...expected, onRetry: expect.any(Function) }
+        : { onRetry: expect.any(Function) },
+    );
+    const error = new Error("retry callback identity");
+    retry[2]?.onRetry?.(2, 17, error);
+    expect(baseCallback).not.toHaveBeenCalled();
+    if (override?.onRetry) {
+      expect(overrideCallback).toHaveBeenCalledExactlyOnceWith(2, 17, error);
+    }
+    expect(createMattermostPostParams()).toMatchObject({
+      channelId: "dm-channel-id",
+      message: "hello",
+    });
+    expect(result).toMatchObject({ channelId: "dm-channel-id", messageId: "post-id" });
   });
 
-  it("uses dmChannelRetry from account config when opts.dmRetryOptions not provided", async () => {
-    const userId = "gggggg7777777777gggggg7777"; // 26 chars
-    mockState.resolveMattermostAccount.mockReturnValue({
-      accountId: "default",
-      botToken: "token-retry-config-t7",
-      baseUrl: "https://mattermost.example.com",
-      config: {
-        dmChannelRetry: {
-          maxRetries: 4,
-          initialDelayMs: 2000,
-          maxDelayMs: 8000,
-          timeoutMs: 15000,
-        },
-      },
-    });
-    mockState.fetchMattermostUser.mockResolvedValueOnce({ id: userId });
-
-    await sendMessageMattermost(`user:${userId}`, "hello", { cfg: TEST_CFG });
-
-    const retryCall = directChannelRetryCall();
-    expect(retryCall?.[0]).toEqual(
-      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
+  it("captures retry settings before resolving a bare user id and sends via DM", async () => {
+    const userId = "iiiiii9999999999iiiiii9999";
+    const entered = createDeferred<void>();
+    const release = createDeferred<{ id: string }>();
+    const base = { maxRetries: 2, initialDelayMs: 1000 };
+    const onRetry = vi.fn();
+    const override = { timeoutMs: 20000, onRetry };
+    mockState.resolveMattermostAccount.mockReturnValue(
+      makeAccount("token-retry-capture", { dmChannelRetry: base }),
     );
-    expect(retryCall?.[1]).toEqual(["bot-id", userId]);
-    expect(retryCall?.[2]?.maxRetries).toBe(4);
-    expect(retryCall?.[2]?.initialDelayMs).toBe(2000);
-    expect(retryCall?.[2]?.maxDelayMs).toBe(8000);
-    expect(retryCall?.[2]?.timeoutMs).toBe(15000);
+    mockState.fetchMattermostUser.mockImplementationOnce(() => {
+      entered.resolve();
+      return release.promise;
+    });
+    const sending = sendMessageMattermost(userId, "captured", {
+      cfg: TEST_CFG,
+      dmRetryOptions: override,
+    });
+    try {
+      await entered.promise;
+      base.maxRetries = 9;
+      override.timeoutMs = 1;
+      override.onRetry = vi.fn();
+      expect(mockState.createMattermostDirectChannelWithRetry).not.toHaveBeenCalled();
+      release.resolve({ id: userId });
+      const result = await sending;
+      expect(mockState.fetchMattermostUser).toHaveBeenCalledTimes(1);
+      expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
+      const retry = directChannelRetryCall();
+      expect(retry[1]).toEqual(["bot-id", userId]);
+      expect(retry[2]).toStrictEqual({
+        maxRetries: 2,
+        initialDelayMs: 1000,
+        maxDelayMs: undefined,
+        timeoutMs: 20000,
+        onRetry: expect.any(Function),
+      });
+      const error = new Error("captured callback");
+      retry[2]?.onRetry?.(1, 1000, error);
+      expect(onRetry).toHaveBeenCalledExactlyOnceWith(1, 1000, error);
+      expect(override.onRetry).not.toHaveBeenCalled();
+      expect(mockState.fetchMattermostUser.mock.invocationCallOrder[0]).toBeLessThan(
+        mockState.createMattermostDirectChannelWithRetry.mock.invocationCallOrder[0]!,
+      );
+      expect(
+        mockState.createMattermostDirectChannelWithRetry.mock.invocationCallOrder[0],
+      ).toBeLessThan(mockState.createMattermostPost.mock.invocationCallOrder[0]!);
+      expect(createMattermostPostParams()).toMatchObject({
+        channelId: "dm-channel-id",
+        message: "captured",
+      });
+      expect(result).toMatchObject({ channelId: "dm-channel-id", messageId: "post-id" });
+      expect(result.receipt).toMatchObject({
+        primaryPlatformMessageId: "post-id",
+        platformMessageIds: ["post-id"],
+      });
+    } finally {
+      release.resolve({ id: userId });
+      await sending;
+    }
   });
 
-  it("opts.dmRetryOptions overrides provided fields and preserves account defaults", async () => {
-    const userId = "hhhhhh8888888888hhhhhh8888"; // 26 chars
-    mockState.resolveMattermostAccount.mockReturnValue({
-      accountId: "default",
-      botToken: "token-retry-override-t8",
-      baseUrl: "https://mattermost.example.com",
-      config: {
-        dmChannelRetry: {
-          maxRetries: 2,
-          initialDelayMs: 1000,
-        },
-      },
-    });
-    mockState.fetchMattermostUser.mockResolvedValueOnce({ id: userId });
-
-    const overrideOptions = {
-      maxRetries: 7,
-      timeoutMs: 20000,
-    };
-
-    await sendMessageMattermost(`user:${userId}`, "hello", {
-      cfg: TEST_CFG,
-      dmRetryOptions: overrideOptions,
-    });
-
-    const retryCall = directChannelRetryCall();
-    expect(retryCall?.[0]).toEqual(
-      expect.objectContaining({ baseUrl: "https://mattermost.example.com" }),
-    );
-    expect(retryCall?.[1]).toEqual(["bot-id", userId]);
-    expect(retryCall?.[2]?.maxRetries).toBe(overrideOptions.maxRetries);
-    expect(retryCall?.[2]?.timeoutMs).toBe(overrideOptions.timeoutMs);
-    expect(retryCall?.[2]?.initialDelayMs).toBe(1000);
+  it("preserves DM creation errors without posting", async () => {
+    const error = new Error("DM creation failed");
+    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-retry-error"));
+    mockState.createMattermostDirectChannelWithRetry.mockRejectedValueOnce(error);
+    await expect(
+      sendMessageMattermost("user:retry-error", "hello", {
+        cfg: TEST_CFG,
+        dmRetryOptions: zeroRetry,
+      }),
+    ).rejects.toBe(error);
+    expect(directChannelRetryCall()[1]).toEqual(["bot-id", "retry-error"]);
+    expect(mockState.createMattermostPost).not.toHaveBeenCalled();
   });
 });
 

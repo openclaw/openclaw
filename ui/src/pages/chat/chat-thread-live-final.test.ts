@@ -57,9 +57,13 @@ function completed() {
 }
 
 describe("live terminal continuity with pending collaborators", () => {
-  it.each([null, "active"])(
-    "keeps local input before progress through custody with runId=%s",
-    (runId) => {
+  it.each([
+    { runId: null, localQueue: true },
+    { runId: "active", localQueue: true },
+    { runId: "active", localQueue: false },
+  ])(
+    "keeps the active input before progress through custody with runId=$runId, localQueue=$localQueue",
+    ({ runId, localQueue }) => {
       const local = {
         id: "active-local",
         sendRunId: "active",
@@ -81,10 +85,13 @@ describe("live terminal continuity with pending collaborators", () => {
         },
       };
       for (const pendingInputs of [[], [accepted], [accepted, pending]]) {
+        if (!localQueue && pendingInputs.length === 0) {
+          continue;
+        }
         const rows = buildChatItems(
           props({
             messages: [],
-            queue: [local],
+            queue: localQueue ? [local] : [],
             runId,
             stream: "",
             pendingInputs,

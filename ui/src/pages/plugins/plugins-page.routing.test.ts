@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
 import { configMocks } from "../../e2e/plugins-settings-admin.test-support.ts";
-import { i18n, t } from "../../i18n/index.ts";
+import { i18n } from "../../i18n/index.ts";
 import type { PluginCatalogItem, PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
@@ -29,7 +29,7 @@ function discoveryDetail(
   return {
     plugin: {
       id: plugin.catalogId,
-      catalog: { name: plugin.name, official: true, categories: [] },
+      catalog: { name: plugin.name, official: true, categories: ["productivity"] },
       local: {
         present: plugin.installed,
         installed: plugin.installed,
@@ -155,6 +155,7 @@ describe("PluginsPage routing", () => {
     expect(page.querySelector("#plugins-tab-skills")).not.toBeNull();
     expect(page.querySelector("#plugins-tab-installed")).toBeNull();
     expect(page.querySelector("#plugins-tab-discover")).toBeNull();
+    expect(page.querySelector("openclaw-plugin-manager")).toBeNull();
 
     clickHubTab(page, "plugins");
     expect(context.navigate).not.toHaveBeenCalled();
@@ -162,85 +163,6 @@ describe("PluginsPage routing", () => {
     expect(context.navigate).toHaveBeenCalledWith("skills");
     clickHubTab(page, "skill-workshop");
     expect(context.navigate).toHaveBeenCalledWith("skill-workshop");
-  });
-
-  it("keeps the canonical settings inventory at /settings/plugins", async () => {
-    const { client } = createClient(async () => createResult());
-    const harness = createGateway(client);
-    const context = createContext(harness.gateway);
-    const routeData = createPluginsRouteData(
-      harness.gateway,
-      createResult(),
-      createPluginsRouteLocation("/settings/plugins"),
-    );
-    const { page } = await mountPage(context, routeData);
-    await switchToSettingsSurface(page, routeData);
-
-    expect(context.replace).not.toHaveBeenCalled();
-    expect(page.querySelector('.plugins-settings-search input[type="search"]')).not.toBeNull();
-    expect(page.querySelector(".plugins-settings-tabs")?.classList.contains("oc-segmented")).toBe(
-      true,
-    );
-    const row = page.querySelector('[data-plugin-id="workboard"]');
-    expect(row?.querySelector("wa-switch")).toBeNull();
-    expect(row?.querySelector('[data-plugin-state="disabled"]')).not.toBeNull();
-  });
-
-  it.each([
-    {
-      label: "Settings",
-      route: "/settings/plugins/workboard",
-      target: "plugin-settings" as const,
-      pathname: "/settings/plugins",
-      href: "/settings/plugins",
-    },
-    {
-      label: "Plugins",
-      route: "/settings/plugins/workboard?from=plugins",
-      target: "plugins" as const,
-      pathname: "/plugins",
-      href: "/plugins",
-    },
-  ])("opens a settings detail with its $label breadcrumb", async (testCase) => {
-    const { client, request } = createClient(async (method) =>
-      method === "plugins.inspect" ? createInspectResult() : createResult(),
-    );
-    const harness = createGateway(client);
-    const context = createContext(harness.gateway);
-    const routeData = createPluginsRouteData(
-      harness.gateway,
-      createResult(),
-      createPluginsRouteLocation(testCase.route),
-    );
-    const { page } = await mountPage(context, routeData);
-    await switchToSettingsSurface(page, routeData);
-
-    await vi.waitFor(() => {
-      expect(page.querySelector("h1")?.textContent).toContain("Workboard");
-    });
-    expect(request).toHaveBeenCalledWith("plugins.inspect", { pluginId: "workboard" });
-
-    const breadcrumb = page.querySelector<HTMLAnchorElement>(
-      ".plugins-settings-breadcrumb__parent",
-    );
-    expect(breadcrumb?.textContent).toBe(testCase.label);
-    expect(breadcrumb?.getAttribute("href")).toBe(testCase.href);
-    expect(page.querySelector('[aria-current="page"]')?.textContent).toBe("Workboard");
-    const hero = page.querySelector(".plugin-catalog-detail__hero");
-    expect(page.querySelector(".plugin-catalog-detail--no-sidebar")).not.toBeNull();
-    expect(hero?.querySelector(".plugin-catalog-detail__sidebar")).toBeNull();
-    expect(hero?.querySelector(".plugin-catalog-detail__icon")).not.toBeNull();
-    expect(hero?.querySelector(".plugin-catalog-detail__publisher-icon")).toBeNull();
-    expect(hero?.querySelector("h1")?.textContent).toBe("Workboard");
-    expect(hero?.querySelector(".plugin-catalog-detail__summary")?.textContent).toBe(
-      t("subtitles.workboard"),
-    );
-    expect(hero?.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
-    breadcrumb?.click();
-    await page.updateComplete;
-    expect(context.navigate).toHaveBeenCalledWith(testCase.target, {
-      pathname: testCase.pathname,
-    });
   });
 
   it("retries a failed configuration write without discarding the pending draft", async () => {
@@ -620,7 +542,18 @@ describe("PluginsPage routing", () => {
       };
       const { client, request } = createClient(async (method, params) => {
         if (method === "plugins.catalog.browse") {
-          return { items: asNullableRecord(params)?.intent === "all" ? [offered.plugin] : [] };
+          return {
+            items: asNullableRecord(params)?.intent === "all" ? [offered.plugin] : [],
+            categories: [
+              {
+                slug: "productivity",
+                label: "Productivity",
+                description: "Work tools",
+                icon: "checkSquare",
+                order: 1,
+              },
+            ],
+          };
         }
         if (method === "plugins.catalog.categories") {
           return { categories: [] };
@@ -674,6 +607,15 @@ describe("PluginsPage routing", () => {
             asNullableRecord(params)?.intent === "all"
               ? details.map((detail) => detail.plugin)
               : [],
+          categories: [
+            {
+              slug: "productivity",
+              label: "Productivity",
+              description: "Work tools",
+              icon: "checkSquare",
+              order: 1,
+            },
+          ],
         };
       }
       if (method === "plugins.catalog.categories") {

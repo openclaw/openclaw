@@ -46,7 +46,7 @@ it("keeps omitted read limits unlimited and explicit zero limits empty", async (
 });
 
 it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
-  "rejects inaccessible local mirror parents before creating remote directories",
+  "rejects inaccessible local mirror parents before remote mutations",
   async () => {
     await using workspace = await tempWorkspace({
       rootDir: resolvePreferredOpenClawTmpDir(),
@@ -61,6 +61,10 @@ it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
         code: "EACCES",
       });
       expect(backend.mkdirpRemotePath).not.toHaveBeenCalled();
+      await expect(
+        bridge.remove({ filePath: "locked/file.txt", force: true }),
+      ).rejects.toMatchObject({ code: "EACCES" });
+      expect(backend.removeRemotePath).not.toHaveBeenCalled();
     } finally {
       await fs.chmod(lockedDir, 0o700);
     }

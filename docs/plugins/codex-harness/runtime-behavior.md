@@ -150,6 +150,12 @@ OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
 
+Failed app-server startup waits for child shutdown before returning its error.
+If startup times out or is canceled during process registration, cleanup joins
+that registration and closes any late child. Cleanup can extend beyond the
+startup deadline. A canceled caller leaves startup running when another caller
+still owns it.
+
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.
 Completed items, including empty messages, reconcile the transcript with Codex's

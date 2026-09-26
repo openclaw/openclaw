@@ -1,6 +1,23 @@
 import { cpSync, lstatSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+export function createIndependentPrFixtureEnv(
+  parentEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env = { ...parentEnv };
+  // Independent fixtures own their Git selection and create fresh supervisor bindings.
+  for (const key of [
+    "OPENCLAW_PR_GIT",
+    "GIT_EXEC",
+    "OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT",
+    "OPENCLAW_PR_LOCK_NOTIFY_FD",
+    "OPENCLAW_PR_LOCK_SUPERVISOR_PID",
+  ]) {
+    delete env[key];
+  }
+  return env;
+}
+
 export function copyPrWrapperSources(destination: string): string[] {
   // Keep fixture sources and commits on the production inventory. Extracted
   // execution tests catch missing dependencies without a second source list.

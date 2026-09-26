@@ -10,20 +10,14 @@ import { pruneExpiredPending } from "./pairing-files.js";
 
 const DEVICE_PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
 
-function pruneExpiredDevicePairingRequests(state: DevicePairingStoreState, nowMs: number): void {
-  pruneExpiredPending(state.pendingById, nowMs, DEVICE_PAIRING_PENDING_TTL_MS);
-  // Node capability requests are durable operator decisions. Their lifecycle
-  // owner resolves them on approval, rejection, replacement, reconnect cleanup,
-  // or node-role removal.
-}
-
 /** Read authoritative rows inside the worker transaction or an admitted migration. */
 export function loadDevicePairingStateForMutation(
   nowMs: number,
   baseDir?: string,
 ): DevicePairingStoreState {
   const state = loadDevicePairingStoreState(baseDir);
-  pruneExpiredDevicePairingRequests(state, nowMs);
+  // Node capability requests remain until their approval or reconnect lifecycle resolves them.
+  pruneExpiredPending(state.pendingById, nowMs, DEVICE_PAIRING_PENDING_TTL_MS);
   return state;
 }
 

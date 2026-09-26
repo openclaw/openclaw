@@ -5,8 +5,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
 import { chromium } from "playwright";
+import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
-import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
+import type { Vitest } from "vitest/node";
+import {
+  filterFilesByPatterns,
+  intersectIncludePatterns,
+} from "../test/vitest/vitest.include-patterns.ts";
 import {
   loadPatternListFromEnv,
   matchesVitestGlob,
@@ -131,16 +136,15 @@ const sharedUiTestConfig = {
   // Preserve calls recorded during shared setup and beforeAll hooks.
   clearMocks: false,
   isolate: false,
-  pool: "threads",
+  pool: process.versions.bun ? "forks" : "threads",
+  // Initialize jsdom compatibility before either native worker pool starts.
+  execArgv: sharedVitestConfig.test.execArgv,
   // Real-Chromium layout tests exceed Vitest's 5s default on 4vcpu CI runners;
   // without this the checks-ui lane flakes on cold hover/interaction tests.
   testTimeout: 60_000,
   hookTimeout: 60_000,
 } as const;
-const nodeSetupFiles = [
-  "./src/test-helpers/bun-css-tokenizer.setup.ts",
-  "./src/test-helpers/lit-warnings.setup.ts",
-];
+const nodeSetupFiles = ["./src/test-helpers/lit-warnings.setup.ts"];
 const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
 const timingTests = relativizeScopedPatterns(uiTimingTestFiles, "ui");
 const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));
@@ -175,9 +179,36 @@ function resolveChromiumLaunchOptions(): { executablePath: string } | undefined 
   return systemExecutablePath ? { executablePath: systemExecutablePath } : undefined;
 }
 
-const chromiumLaunchOptions = resolveChromiumLaunchOptions();
+let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | null = null;
 
 export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
+  const include = includeUiTests(
+    ["src/**/*.browser.test.ts", "../extensions/*/browser/**/*.browser.test.ts"],
+    env,
+  );
+  const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
+  const excludesBrowserFiles =
+    runtimeFiles !== null &&
+    filterFilesByPatterns(
+      runtimeFiles.map((file) => path.posix.relative("ui", file)),
+      include,
+      nodeDrivenBrowserLayoutTests,
+      matchesVitestGlob,
+    ).length === 0;
+  if (!excludesBrowserFiles && chromiumLaunchOptions === null) {
+    chromiumLaunchOptions = resolveChromiumLaunchOptions();
+  }
+  const provider = playwright({
+    launchOptions: {
+      ...chromiumLaunchOptions,
+      // Keep real canvas encoding without Chromium's idle-task watchdog in test pages.
+      args: ["--enable-blink-features=NoIdleEncodingForWebTests"],
+    },
+  });
+  if (excludesBrowserFiles) {
+    // Keep browser discovery for native sharding; only skip its speculative launch.
+    delete provider.prewarm;
+  }
   return defineProject({
     root: here,
     plugins: [
@@ -197,13 +228,23 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "@awesome.me/webawesome/dist/components/tab/tab.js",
         "@awesome.me/webawesome/dist/components/dropdown/dropdown.js",
         "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js",
+        "@awesome.me/webawesome/dist/components/option/option.js",
         "@awesome.me/webawesome/dist/components/popover/popover.js",
         "@awesome.me/webawesome/dist/components/popup/popup.js",
+        "@awesome.me/webawesome/dist/components/select/select.js",
+        "@codemirror/commands",
+        "@codemirror/state",
+        "@codemirror/view",
         "@lit/context",
         "@lit/task",
         "@noble/ed25519",
         "@noble/hashes/sha2.js",
+        "@openclaw/normalization-core > libphonenumber-js/min",
+        "@openclaw/normalization-core > libphonenumber-js/min/metadata",
         "@openclaw/uirouter",
+        "@panzoom/panzoom",
+        "@tanstack/lit-virtual",
+        "@tanstack/virtual-core",
         "dompurify",
         "file-type",
         "highlight.js/lib/core",
@@ -229,6 +270,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "typebox/compile",
         "typebox/guard",
         "typebox/value",
+        "yaml",
         "zod",
       ],
     },
@@ -243,15 +285,12 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
       name: "browser",
       // No cleanup runner: it imports node:fs and repo server modules, which
       // cannot load in browser mode. Browser files own their own teardown.
-      include: includeUiTests(
-        ["src/**/*.browser.test.ts", "../extensions/*/browser/**/*.browser.test.ts"],
-        env,
-      ),
+      include,
       exclude: [...nodeDrivenBrowserLayoutTests],
       setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
       browser: {
         enabled: true,
-        provider: playwright(chromiumLaunchOptions ? { launchOptions: chromiumLaunchOptions } : {}),
+        provider,
         instances: [{ browser: "chromium", name: "chromium" }],
         headless: true,
         ui: false,
@@ -260,17 +299,57 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
   });
 }
 
+function createUiTestSequencerPlugin(): Plugin {
+  let partitionedShuffle = false;
+  return {
+    name: "openclaw:ui-test-sequencer",
+    config(config) {
+      partitionedShuffle = false;
+      const sequence = config.test?.sequence;
+      if (sequence?.sequencer) {
+        return undefined;
+      }
+      const shuffleFiles =
+        sequence?.shuffle === true ||
+        (typeof sequence?.shuffle === "object" && sequence.shuffle.files);
+      if (shuffleFiles) {
+        partitionedShuffle = Boolean(process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE);
+        return undefined;
+      }
+      return { test: { sequence: { sequencer: UiRuntimePartitionSequencer } } };
+    },
+    configureServer(server) {
+      if (!partitionedShuffle) {
+        return;
+      }
+      // Vitest has now resolved its native random sequencer. Preserve it while
+      // applying runtime membership after native sharding and before shuffling.
+      const sequence = server.config.test?.sequence;
+      if (!sequence || typeof sequence.sequencer !== "function") {
+        throw new Error("Vitest did not resolve the UI file-shuffle sequencer");
+      }
+      const NativeSequencer = sequence.sequencer;
+      sequence.sequencer = class extends UiRuntimePartitionSequencer {
+        constructor(ctx: Vitest) {
+          super(ctx, new NativeSequencer(ctx));
+        }
+      };
+    },
+  };
+}
+
 export default defineConfig({
   root: here,
-  plugins: [createVitestProjectCachePlugin(), createRedactingReporterPlugin()],
+  plugins: [
+    createVitestProjectCachePlugin(),
+    createRedactingReporterPlugin(),
+    createUiTestSequencerPlugin(),
+  ],
   resolve: {
     alias: workspaceSourceAliases,
   },
   test: {
     ...sharedUiTestConfig,
-    ...(process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE
-      ? { sequence: { sequencer: UiRuntimePartitionSequencer } }
-      : {}),
     maxWorkers: sharedVitestConfig.test.maxWorkers,
     reporters: sharedVitestConfig.test.reporters,
     // These projects already own their complete plugins, aliases, and test config.

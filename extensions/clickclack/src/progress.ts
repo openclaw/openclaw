@@ -8,18 +8,9 @@ import {
   isCompleteAgentPreamble,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import type { ClickClackClient } from "./http-client.js";
 
 export type ClickClackItemEventPayload = Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0];
-
-type ClickClackProgressClient = {
-  publishEphemeral(params: {
-    workspaceId: string;
-    channelId?: string;
-    conversationId?: string;
-    type: "agent.progress";
-    payload?: Record<string, unknown>;
-  }): Promise<void>;
-};
 
 type ClickClackProgressTarget = {
   workspaceId: string;
@@ -127,7 +118,7 @@ const CLICKCLACK_PROGRESS_UPDATE_INTERVAL_MS = 100;
 const CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS = 1_000;
 
 export function createClickClackAgentProgressPublisher(params: {
-  client: ClickClackProgressClient;
+  client: Pick<ClickClackClient, "publishEphemeral">;
   target: ClickClackProgressTarget;
   turnId: string;
   agentLabel?: string;

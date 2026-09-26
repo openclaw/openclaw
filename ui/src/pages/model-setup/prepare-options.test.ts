@@ -8,7 +8,7 @@ import {
 
 function detection(
   candidates: SystemAgentSetupDetectResult["candidates"],
-  prepareOptions: NonNullable<SystemAgentSetupDetectResult["prepareOptions"]>,
+  prepareOptions: SystemAgentSetupDetectResult["prepareOptions"],
 ): SystemAgentSetupDetectResult {
   return {
     candidates,
@@ -23,6 +23,13 @@ function detection(
 }
 
 describe("model setup prepare options", () => {
+  it.each([{ prepareOptions: undefined }, { prepareOptions: [] }])(
+    "does not invent preparation choices when discovery returns $prepareOptions",
+    ({ prepareOptions }) => {
+      expect(listModelSetupPrepareOptions(detection([], prepareOptions))).toEqual([]);
+    },
+  );
+
   it.each([undefined, "utility"] as const)(
     "encodes prepared activation for target %s",
     (modelTarget) => {

@@ -1,5 +1,8 @@
 import { createDeferredCore } from "../shared/deferred.js";
-import type { SqliteWorkerInputPreparation } from "./sqlite-worker-broker.types.js";
+import type {
+  SqliteWorkerInputPreparation,
+  SqliteWorkerInputRetention,
+} from "./sqlite-worker-broker.types.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 
 /** Retained inputs share the broker budget before they become queued jobs. */
@@ -14,6 +17,7 @@ export class SqliteWorkerInputAdmission {
       queuedBytes(): number;
       isClosing(): boolean;
       maxQueuedBytes: number;
+      maxQueuedInputBytes: number;
       maxMessageBytes: number;
     },
   ) {}
@@ -65,14 +69,20 @@ export class SqliteWorkerInputAdmission {
     await Promise.allSettled(this.inputPreparations);
   }
 
-  reserveInputPreparation(inputBytes: number): SqliteWorkerInputPreparation {
+  reserveInputPreparation(
+    inputBytes: number,
+    retention: SqliteWorkerInputRetention = "stream",
+  ): SqliteWorkerInputPreparation {
     if (!Number.isSafeInteger(inputBytes) || inputBytes < 0) {
       throw new RangeError("SQLite worker input bytes must be a non-negative safe integer");
     }
     if (this.owner.isClosing()) {
       throw new SqliteWorkerError("SQLite worker host is closing", "closed");
     }
-    const bytes = inputBytes > this.owner.maxQueuedBytes ? this.owner.maxMessageBytes : inputBytes;
+    const bytes =
+      retention === "stream" && inputBytes > this.owner.maxQueuedInputBytes
+        ? this.owner.maxMessageBytes
+        : inputBytes;
     if (this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes) {
       throw new SqliteWorkerError("SQLite worker input preparation capacity reached", "overloaded");
     }

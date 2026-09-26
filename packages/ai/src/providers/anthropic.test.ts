@@ -7,6 +7,7 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "../utils/system-prompt-cache-boundary.js";
+import { anthropicServerSideFallbackCases } from "./anthropic-server-fallback.test-support.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -311,7 +312,7 @@ describe("Anthropic provider", () => {
     expect((capturedPayload as { system?: unknown }).system).toEqual([
       {
         type: "text",
-        text: "x-anthropic-billing-header: cc_version=2.1.278; cc_entrypoint=sdk-cli;",
+        text: "x-anthropic-billing-header: cc_version=2.1.280; cc_entrypoint=sdk-cli;",
       },
       {
         type: "text",
@@ -1348,25 +1349,23 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it.each([
-    { id: "claude-fable-5", name: "Claude Fable 5" },
-    { id: "claude-opus-5", name: "Claude Opus 5" },
-  ])(
+  it.each(anthropicServerSideFallbackCases)(
     "sends default server-side fallback params for direct $name API-key requests",
-    async (model) => {
+    async ({ optionHeaders, customBeta, ...model }) => {
       const { payload: capturedPayload } = await captureSimpleAnthropicPayload(model, {
         mode: "raw",
-        stopBeforeNetwork: true,
+        headers: optionHeaders,
       });
 
       expect((capturedPayload as { fallbacks?: unknown }).fallbacks).toBe("default");
-      await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
-      const config = anthropicMockState.configs[0] as {
-        defaultHeaders?: Record<string, string>;
+      const requestOptions = anthropicMockState.requestOptions[0] as {
+        headers?: Record<string, string>;
       };
-      expect(config.defaultHeaders?.["anthropic-beta"]).toContain(
-        "server-side-fallback-2026-07-01",
-      );
+      const betas = requestOptions.headers?.["anthropic-beta"]?.split(",");
+      expect(betas).toContain("server-side-fallback-2026-07-01");
+      if (customBeta) {
+        expect(betas).toContain("files-api-2025-04-14");
+      }
     },
   );
 

@@ -22,7 +22,7 @@ const runtimeMocks = vi.hoisted(() => ({
   stopBrowserControlService: vi.fn(async () => undefined),
 }));
 
-vi.mock("./sdk-node-runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   startLazyPluginServiceModule: runtimeMocks.startLazyPluginServiceModule,
 }));
 

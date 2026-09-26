@@ -27,6 +27,7 @@ export type ManagedServiceUpdateHandoffParams = {
   channel?: UpdateChannel;
   tag?: string;
   acceptCapabilities?: boolean;
+  admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   meta: UpdateRestartSentinelMeta;
   requester?: UpdateRequester;

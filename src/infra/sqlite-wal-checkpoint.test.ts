@@ -14,15 +14,119 @@ import {
 } from "./sqlite-reader-lifecycle.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import {
+  createSqliteWalCheckpoint,
   onSqliteWalCheckpoint,
   publishSqliteWalCheckpointObservation,
   type SqliteWalCheckpointSnapshot,
 } from "./sqlite-wal-checkpoint.js";
 import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
+import { StateDatabaseCoordinatorContentionError } from "./state-database-coordinator-errors.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite WAL checkpoint observations", () => {
+  it("retains relayed health across native generations and rejects older observations", () => {
+    const databasePath = path.join(tempDirs.make("openclaw-wal-health-relay-"), "state.sqlite");
+    const database = openNodeSqliteDatabase(databasePath);
+    database.exec("PRAGMA journal_mode=WAL; CREATE TABLE events(value TEXT)");
+    const owner = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
+    const replacement = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
+    try {
+      expect(owner.checkpoint("PASSIVE")).toBe(true);
+      const completed = owner.snapshot!;
+      replacement.adopt(completed);
+      replacement.recordError(new StateDatabaseCoordinatorContentionError("state-lifecycle"));
+      owner.adopt(replacement.snapshot!);
+      expect(owner.health).toMatchObject({
+        state: "blocked",
+        consecutiveBlocked: 1,
+        lastCompletedAtMs: completed.health.lastCompletedAtMs,
+      });
+      owner.recordError(new StateDatabaseCoordinatorContentionError("state-lifecycle"));
+      const blocked = owner.snapshot;
+      owner.adopt(completed);
+      expect(owner.snapshot).toEqual(blocked);
+      expect(owner.health).toMatchObject({ consecutiveBlocked: 2, warning: true });
+      expect(owner.checkpoint("PASSIVE")).toBe(true);
+      owner.adopt(replacement.snapshot!);
+      expect(owner.health).toMatchObject({ state: "complete", consecutiveBlocked: 0 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("backs off once per interval, warns in health early, and throttles contention logs", async () => {
+    vi.useFakeTimers();
+    const databasePath = path.join(
+      tempDirs.make("openclaw-wal-coordinator-retry-"),
+      "state.sqlite",
+    );
+    const writer = openNodeSqliteDatabase(databasePath);
+    const onCheckpointError = vi.fn();
+    let blocked = true;
+    const runMaintenance = vi.fn((operation: () => boolean) => {
+      if (blocked) {
+        throw new StateDatabaseCoordinatorContentionError("state-lifecycle");
+      }
+      return operation();
+    });
+    const interval = 30 * 60 * 1000;
+    const maintenance = configureSqliteWalMaintenance(writer, {
+      databasePath,
+      checkpointIntervalMs: interval,
+      runMaintenance,
+      onCheckpointError,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(interval);
+      expect(runMaintenance).toHaveBeenCalledTimes(1);
+      expect(onCheckpointError).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(runMaintenance).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runMaintenance).toHaveBeenCalledTimes(2);
+      expect(maintenance.health).toMatchObject({
+        state: "blocked",
+        consecutiveBlocked: 2,
+        warning: true,
+      });
+      expect(onCheckpointError).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(interval);
+      expect(runMaintenance).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(interval - 1_000);
+      expect(runMaintenance).toHaveBeenCalledTimes(5);
+      expect(onCheckpointError).toHaveBeenCalledTimes(1);
+      expect(maintenance.health).toMatchObject({
+        state: "blocked",
+        consecutiveBlocked: 5,
+        warning: true,
+      });
+      await vi.advanceTimersByTimeAsync(2 * interval + 1_000);
+      expect(runMaintenance).toHaveBeenCalledTimes(10);
+      expect(onCheckpointError).toHaveBeenCalledTimes(2);
+      blocked = false;
+      await vi.advanceTimersByTimeAsync(interval - 1_000);
+      expect(runMaintenance).toHaveBeenCalledTimes(11);
+      expect(maintenance.health).toMatchObject({
+        state: "complete",
+        consecutiveBlocked: 0,
+        warning: false,
+      });
+      expect(onCheckpointError).toHaveBeenCalledTimes(2);
+      blocked = true;
+      await vi.advanceTimersByTimeAsync(interval);
+      expect(maintenance.health?.consecutiveBlocked).toBe(1);
+      maintenance.close();
+      const callsAtClose = runMaintenance.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(interval);
+      expect(runMaintenance).toHaveBeenCalledTimes(callsAtClose);
+    } finally {
+      maintenance.close();
+      writer.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("recycles an oversized completed WAL during admitted periodic maintenance without waiting for readers", async () => {
     vi.useFakeTimers();
     const databasePath = path.join(tempDirs.make("openclaw-wal-recycle-"), "state.sqlite");

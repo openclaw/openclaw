@@ -27,9 +27,16 @@ While the initial connection or a route loads, shimmer placeholders reserve the 
 
 The selected chat loads before automatic sidebar task lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
 
+Sidebar live narration pauses while the browser tab is hidden and resumes from current activity when you return. The selected chat and pending outbox keep their separately owned subscriptions.
+
 Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
 
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Ordinary session patches and command changes wait for a 2.5-second quiet period before refreshing commands and session facts. They reuse the model catalog unless the returned metadata indicates a changed model or account projection. Explicit model, account, and runtime selections refresh promptly. Configuration, catalog, and session lifecycle changes still invalidate the full metadata bundle. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
+
+New Session keeps previously fetched model choices selectable while their catalog
+refreshes in the background. Before the first catalog arrives, it does not turn a
+configured default into a model option. Command palette model results use the same
+catalog cache and appear independently of slower search categories.
 
 Provider authentication status is shared across views and refreshes after account changes and near credential warning or expiry deadlines. Credentials without an expiry do not need periodic refreshes. Hidden tabs defer deadline refreshes until visible again.
 
@@ -47,8 +54,8 @@ dashboard turns collapse their narration and tool activity under **Worked for â€
 above the answer. Expanding it restores the sequence with the existing tool-call
 groups. When no run duration is available, the heading reads **Worked**.
 
-Subagent runs appear in inline transcript activity rows, the chat **Tasks** tab,
-and the [Tasks page](/automation/tasks#control-ui), outside sidebar navigation.
+Subagent runs appear in inline transcript activity rows and the chat **Tasks** tab,
+outside sidebar navigation. Use the [Tasks CLI](/cli/tasks) to inspect work across conversations.
 Their activity rows lead with the child task's display title, using its configured
 `label` when present, followed by the latest activity. The leading claw moves only
 while running; queued and cancelled tasks stay still, and completion briefly turns
@@ -167,7 +174,7 @@ gateway. It survives reloads and switching to another gateway and back, even if
 you open a different agent's chat in team mode. Turning team mode off clears the
 remembered value after restoring it. You can still
 choose a narrower scope; navigating between pages does not reset that choice.
-Automations, Dashboards, Sessions, Tasks, and Usage support all-agent views, with
+Automations, Dashboards, Sessions, and Usage support all-agent views, with
 agent identity shown on mixed-agent rows. In Settings, choose an agent below the
 sidebar title to keep the same target across Agents, Models, Memory, and Skills.
 Global settings remain global. Skill Workshop uses the agent selected through
@@ -186,8 +193,9 @@ This behavior is shared by the roster, agent switcher, identity chips, settings,
 
 Activity and previews on the page and sidebar roster refresh on session events
 and Gateway reconnects. Reusing cached ancestry for the selected session does not
-trigger another list read. Events collect in a fixed five-second window before an
-automatic refresh. After an automatic read, the next waits three times its duration,
+trigger another list read. Events collect in a randomized four-to-five-second window
+that later events cannot postpone, spreading automatic reads across browsers.
+After an automatic read, the next waits three times its duration,
 bounded between five and 15 seconds. Navigation, reconnects, and explicit refreshes
 bypass that delay. When both are visible, they share one activity window and
 one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading

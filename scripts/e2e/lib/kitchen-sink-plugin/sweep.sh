@@ -201,10 +201,11 @@ run_failure_scenario() {
 run_kitchen_sink_sweep_main() {
   if [[ "$KITCHEN_SINK_SCENARIOS" == *"clawhub:"* ]]; then
     if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
-      export OPENCLAW_CLAWHUB_URL="${OPENCLAW_CLAWHUB_URL:-${CLAWHUB_URL:-https://clawhub.ai}}"
+      echo "The OpenClaw Kitchen Sink package is delisted from ClawHub; use the local ClawHub fixture or npm scenarios." >&2
+      return 2
     else
       if [[ -n "${OPENCLAW_CLAWHUB_URL:-}" || -n "${CLAWHUB_URL:-}" ]]; then
-        echo "Ignoring ambient ClawHub URL for fixture-mode kitchen-sink E2E; set OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB=1 for live ClawHub."
+        echo "Ignoring ambient ClawHub URL for fixture-mode kitchen-sink E2E."
       fi
       unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
       clawhub_fixture_dir="$(mktemp -d "${KITCHEN_SINK_TMP_DIR}/clawhub.XXXXXX")"

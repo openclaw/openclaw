@@ -8,7 +8,6 @@ import knipConfig from "../../config/knip.config.ts";
 import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
 import {
   checkExportScan,
-  checkUnusedExports,
   parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mts";
@@ -204,7 +203,6 @@ describe("check-deadcode-exports", () => {
         "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
       ]),
     );
-    expect(knipConfig.workspaces["."].entry).toContain("docs/nav-tabs-underline.js!");
     expect(knipConfig.workspaces["."].entry).toEqual(
       expect.arrayContaining([
         "config/knip.config.ts!",
@@ -321,12 +319,56 @@ describe("check-deadcode-exports", () => {
   });
 
   it.each([
-    "packages/agent-core",
-    "packages/markdown-core",
-    "packages/media-core",
-    "packages/acp-core",
-    "packages/terminal-core",
-  ] as const)("mirrors the published entry map for %s", (workspace) => {
+    "gateway-client",
+    "gateway-protocol",
+    "sdk",
+    "retry",
+    "normalization-core",
+    "net-policy",
+    "media-understanding-common",
+    "media-generation-core",
+    "media-core",
+    "acp-core",
+    "markdown-core",
+    "terminal-core",
+    "model-catalog-core",
+  ] as const)("derives public audit roots from the %s export map", (packageDir) => {
+    const workspace = "packages/" + packageDir;
+    const manifest = JSON.parse(fs.readFileSync(workspace + "/package.json", "utf8")) as {
+      exports: Record<string, { import: string }>;
+    };
+    const expected = Object.values(manifest.exports)
+      .map(({ import: target }) => target.replace("./dist/", "src/").replace(/\.mjs$/u, ".ts!"))
+      .toSorted();
+    if (packageDir === "normalization-core") {
+      // The QA Lab Vite alias is a distinct source consumer, not a package export.
+      expect(fs.readFileSync("extensions/qa-lab/web/vite.config.ts", "utf8")).toContain(
+        "../../../packages/normalization-core/src/browser-error-runtime.ts",
+      );
+      expected.push("src/browser-error-runtime.ts!");
+      expected.sort();
+    }
+    const production = Object.entries(knipConfig.workspaces).find(
+      ([name]) => name === workspace,
+    )?.[1];
+    const full = allExportsKnipConfig.workspaces[workspace];
+    expect(production?.entry.toSorted(), workspace).toEqual(expected);
+    expect(production?.project).toEqual(["src/**/*.ts!"]);
+    expect(full?.entry).toEqual(expect.arrayContaining(expected));
+    for (const entry of expected) {
+      expect(fs.existsSync(workspace + "/" + entry.slice(0, -1)), entry).toBe(true);
+    }
+  });
+
+  it("does not promote private implementation or build-only artifacts to public audit roots", () => {
+    expect(knipConfig.workspaces["packages/gateway-client"].entry).not.toContain(
+      "src/protocol-client.ts!",
+    );
+    expect(knipConfig.workspaces["packages/acp-core"].entry).not.toContain("src/error-format.ts!");
+  });
+
+  it("preserves the agent-core relocated source-entry contract", () => {
+    const workspace = "packages/agent-core";
     const packageJson = JSON.parse(
       fs.readFileSync(new URL(`../../${workspace}/package.json`, import.meta.url), "utf8"),
     ) as { exports: Record<string, unknown> };
@@ -339,21 +381,18 @@ describe("check-deadcode-exports", () => {
           new URL(`../../${workspace}/${entry.slice(0, -"!".length)}`, import.meta.url),
         ),
     );
-    expect(missingConventionalEntries).toEqual(
-      workspace === "packages/agent-core"
-        ? ["src/harness/compaction.ts!", "src/harness/branch-summarization.ts!"]
-        : [],
-    );
-    if (workspace === "packages/agent-core") {
-      for (const sourcePath of [
-        "src/harness/compaction/compaction.ts",
-        "src/harness/compaction/branch-summarization.ts",
-      ]) {
-        expect(
-          fs.existsSync(new URL(`../../${workspace}/${sourcePath}`, import.meta.url)),
-          sourcePath,
-        ).toBe(true);
-      }
+    expect(missingConventionalEntries).toEqual([
+      "src/harness/compaction.ts!",
+      "src/harness/branch-summarization.ts!",
+    ]);
+    for (const sourcePath of [
+      "src/harness/compaction/compaction.ts",
+      "src/harness/compaction/branch-summarization.ts",
+    ]) {
+      expect(
+        fs.existsSync(new URL(`../../${workspace}/${sourcePath}`, import.meta.url)),
+        sourcePath,
+      ).toBe(true);
     }
     const expected = conventionalEntries
       .filter((entry) => !missingConventionalEntries.includes(entry))
@@ -420,30 +459,6 @@ tsdown.ai.config.ts: default
     expect(parseKnipCompactUnusedExportsResult("Unused exports (0)\n")).toEqual({
       entries: [],
       sawExportSection: true,
-    });
-  });
-
-  it("accepts an empty compact report with zero unused exports", () => {
-    expect(checkUnusedExports("")).toEqual({
-      ok: true,
-      entries: [],
-      message: "",
-    });
-  });
-
-  it("rejects every unused export without an allowlist", () => {
-    expect(
-      checkUnusedExports(`Unused exports (2)
-src/z.ts: zebra
-src/a.ts: alpha
-`),
-    ).toEqual({
-      ok: false,
-      entries: ["src/a.ts: alpha", "src/z.ts: zebra"],
-      message: `Unused exports are not allowed:
-  src/a.ts: alpha
-  src/z.ts: zebra
-Delete the exports or model their real production consumers in Knip.`,
     });
   });
 

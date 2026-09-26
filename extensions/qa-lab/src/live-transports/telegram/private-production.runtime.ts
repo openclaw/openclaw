@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { root as openRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -18,12 +19,6 @@ export type TelegramPrivateProductionDescriptor = {
   mode: "private-production-local-apps";
   participants: TelegramPrivateAppParticipant[];
   topicTitle: string;
-};
-
-type TelegramBotIdentity = {
-  id: string;
-  token: string;
-  username: string;
 };
 
 function requireString(value: Record<string, unknown>, key: string) {
@@ -98,10 +93,10 @@ export function readTelegramPrivateProductionDescriptor(
   };
 }
 
-async function botApi(bot: TelegramBotIdentity, method: string) {
+async function botApi(token: string, method: string) {
   try {
     const guarded = await fetchWithSsrFGuard({
-      url: `https://api.telegram.org/bot${bot.token}/${method}`,
+      url: `https://api.telegram.org/bot${token}/${method}`,
       init: { method: "POST" },
       timeoutMs: 30_000,
       maxRedirects: 0,
@@ -126,16 +121,11 @@ export async function resolveTelegramPrivateProductionBot(env: NodeJS.ProcessEnv
   if (!token) {
     throw new Error("Telegram private production proof requires TELEGRAM_BOT_TOKEN.");
   }
-  const placeholder = { id: "", token, username: "" };
-  const result = await botApi(placeholder, "getMe");
+  const result = await botApi(token, "getMe");
   if (!isRecord(result) || typeof result.id !== "number" || typeof result.username !== "string") {
     throw new Error("Telegram private production bot identity is invalid.");
   }
   return { id: String(result.id), token, username: result.username };
-}
-
-function appProofRoot(descriptorFile: string) {
-  return `${descriptorFile}.app-proof`;
 }
 
 async function readAcknowledgement(params: {
@@ -184,14 +174,15 @@ export async function requestTelegramPrivateAppTurn(params: {
   participant: TelegramPrivateAppParticipant;
   text: string;
 }) {
-  const root = appProofRoot(params.descriptor.file);
+  const root = `${params.descriptor.file}.app-proof`;
   await fsp.mkdir(root, { recursive: true, mode: 0o700 });
   await fsp.chmod(root, 0o700);
   const token = randomUUID();
   const requestPath = path.join(root, `${token}.request.json`);
   const acknowledgementPath = path.join(root, `${token}.ack.json`);
-  await fsp.writeFile(
-    requestPath,
+  const proofFiles = await openRoot(root);
+  await proofFiles.create(
+    `${token}.request.json`,
     `${JSON.stringify(
       {
         schemaVersion: 1,
@@ -206,7 +197,7 @@ export async function requestTelegramPrivateAppTurn(params: {
       null,
       2,
     )}\n`,
-    { flag: "wx", mode: 0o600 },
+    { atomic: true, mode: 0o600, durable: false },
   );
   process.stdout.write(`TELEGRAM_PRIVATE_APP_SEND_REQUIRED ${token}\n`);
   try {

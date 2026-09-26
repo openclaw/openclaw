@@ -66,6 +66,37 @@ While a migration is pending, explicit config edits that would change or remove
 its retained inputs are refused with the recovery command. Unrelated settings
 remain writable. Complete the plugin migration before editing those inputs.
 
+## Retired TaskFlow Webhooks plugin
+
+The bundled TaskFlow Webhooks plugin has been removed. Existing
+`plugins.entries.webhooks` settings are ignored with a `plugin removed: webhooks`
+warning so the Gateway can start after an update. Run `openclaw doctor --fix` to
+remove its stale entry and `plugins.allow` or `plugins.deny` references through
+the normal config backup and repair flow. This retirement does not change the
+database schema or delete stored Tasks or TaskFlows.
+
+If Webhooks was the only plugin in `plugins.allow`, Doctor retains other
+already enabled plugins as explicit allowlist entries, including configured
+bundled channels and selected memory or context-engine plugins. Existing deny
+and disable settings still apply. Doctor reports the retained IDs; review this
+list when changing channels or plugin slots because these entries remain explicit
+plugin permissions.
+
+If no enabled plugins remain, Doctor sets `plugins.enabled: false`. An empty
+allowlist would otherwise allow unrelated installed plugins to load. Review the
+remaining plugin choices, set `plugins.allow` to the plugins you want, and then
+re-enable plugins.
+
+If an active plugin's legacy ID aliases to a different owner, Doctor leaves the
+stale plugin settings unchanged and warns instead of granting that other owner
+access. Choose noncolliding allowed plugin IDs, then rerun `openclaw doctor --fix`
+to finish cleanup. Other Doctor repairs continue.
+
+Use [Gateway HTTP hooks](/automation/cron-jobs/webhooks) to wake an agent or submit
+an agent turn from an external service. Their `hooks.*` settings, internal event
+hooks, and the `openclaw webhooks gmail` commands remain available. TaskFlow
+record actions from the retired plugin have no equivalent HTTP endpoint.
+
 ## Schema publication during a 2026.9.2 update
 
 When OpenClaw 2026.9.2 drives an update that needs a newer shared-state schema,
@@ -157,7 +188,7 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
 
     Doctor also warns when `plugins.allow` is non-empty and tool policy uses wildcard or plugin-owned tool entries. `tools.allow: ["*"]` only matches tools from plugins that actually load; it does not bypass the exclusive plugin allowlist.
 
-    A tool policy scope with nonempty `allow` and `alsoAllow` lists fails validation. `doctor --fix` merges the lists only when the effective profile grants remain unchanged for every agent and provider that inherits the extras. It retains `alsoAllow: []` as an explicit override so inherited extras cannot reappear. If the extras may extend a profile or grant Gateway configuration-read access, Doctor leaves the conflicting scope untouched and reports the exact keys and values to review manually. This applies at the root `tools` policy, per-agent and per-provider policies, and channel or gateway tool policies. Sandbox lists remain untouched because `allow` and `alsoAllow` inherit independently; conflicting sandbox lists still require manual repair. Plugin-owned `plugins.entries.*.config` is left to the owning plugin's doctor contract. Gateway startup uses the same permission-preserving repair; unresolved conflicts still require operator guidance before the config can validate.
+    A tool policy scope with nonempty `allow` and `alsoAllow` lists fails validation. `doctor --fix` merges the lists only when the effective profile grants remain unchanged for every agent and provider that inherits the extras. It retains `alsoAllow: []` as an explicit override so inherited extras cannot reappear. If the extras may extend a profile or grant Gateway configuration-read access, Doctor leaves the conflicting scope untouched and reports the exact keys and values to review manually. This applies at the root `tools` policy, per-agent and per-provider policies, and channel or gateway tool policies. Sandbox lists remain untouched because `allow` and `alsoAllow` inherit independently; conflicting sandbox lists still require manual repair. Plugin-owned `plugins.entries.*.config` is left to the owning plugin's doctor contract. Gateway startup leaves these conflicts unchanged and directs the operator to Doctor; unresolved conflicts still require operator guidance before the config can validate.
 
     `doctor --fix` removes `workspace: null` from `agents.entries.<id>` so normal workspace resolution can apply. It also removes invalid `heartbeat.activeHours` windows from agent entries and `agents.defaults`, preserving other heartbeat settings. Reconfigure a valid window if needed; without an explicit or inherited window, heartbeat hours are unrestricted. These repairs also apply after migrating a legacy `agents.list` roster.
 
@@ -165,13 +196,13 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
   <Accordion title="2. Legacy config key migrations">
     Ordinary Doctor, including `doctor --non-interactive`, automatically normalizes a legacy single-file config when the shared migration transforms produce a fully valid result. This also covers older npm updaters that invoke Doctor without `--fix`. The planner still requires complete plugin validation. Doctor preserves the original in the config backup ring and keeps state migration ordering intact. Includes, externally managed config, newer-written config, and remaining validation errors require the existing explicit repair or operator recovery path. Updaters that explicitly defer plugin repair or advertise a later writable config handoff keep automatic normalization deferred. This does not enable repair maintenance, service changes, or exec-approval migration without `--fix`.
 
-    Older Git updaters can keep an in-memory config snapshot and write it after Doctor exits. When that parent marks the update in progress without advertising support for Doctor config writes, Doctor preserves the config and defers importing retired plugin install records, including with `--fix`. The first fresh Gateway startup then performs the complete migration. Existing canonical plugin install records keep precedence; missing records from the legacy config are imported before that config is rewritten. Startup also handles records restored after the same build previously completed its migration checkpoint.
+    Older Git updaters can keep an in-memory config snapshot and write it after Doctor exits. When that parent marks the update in progress without advertising support for Doctor config writes, Doctor preserves the config and defers importing retired plugin install records, including with `--fix`. A supported fresh update continuation runs Doctor before plugin convergence and rereads the repaired config. Existing canonical plugin install records keep precedence. Doctor imports missing records before rewriting config and completes required workspace-state migration in the same repair pass. An older Git updater without that continuation requires `openclaw doctor --fix` after the update; Gateway startup does not finish its legacy repair.
 
-    Gateway startup automatically applies deterministic, prompt-free legacy config migrations when an otherwise invalid single-file config can be fully migrated. It uses the same migration transforms as `openclaw doctor --fix`, validates the complete result including plugin config before writing, and reports the applied changes. The write runs under the startup migration lease and preserves the previous config in the five-slot `openclaw.json.bak` / `.bak.1` through `.bak.4` backup ring.
+    Gateway and local CLI startup validate current config without rewriting legacy keys. Invalid legacy config remains unchanged and startup prints the `openclaw doctor --fix` hint. An interactive terminal can offer to run Doctor and retry once; headless services stop with the hint. Doctor preserves the original in the five-slot `openclaw.json.bak` / `.bak.1` through `.bak.4` backup ring before writing a validated repair. Includes, externally managed config, newer-written config, and unresolved validation errors retain their existing repair and recovery safeguards.
 
-    Startup checks the authored config revision, included files, and environment-resolved values before migration writes. Runtime path expansion (such as `~/.openclaw/wiki` on Windows) does not count as an input change. A real change reports whether the config path, file contents, included files, or resolved values changed; restart so migrations can validate the new inputs.
+    Ordinary config recovery can restore an already valid backup without changing its authored bytes. A backup that needs legacy transformations must be recovered through Doctor, which applies the same shared migration transforms before validation and restoration.
 
-    Startup does not migrate configs using `$include`, configs in Nix mode, or configs last written by a newer OpenClaw version. It also skips automatic config migration while an update is in progress and plugin validation is deferred; the post-update doctor run owns that repair. If any validation or legacy-key issue remains after migration, startup leaves the config unchanged, refuses to start, and prints the `openclaw doctor --fix` hint. An interactive terminal can still offer to run doctor and retry once for configs that need other repairs; headless services stop with the hint.
+    Doctor checks the authored config revision, included files, and environment-resolved values before migration writes. Runtime path expansion (such as `~/.openclaw/wiki` on Windows) does not count as an input change. A real change reports whether the config path, file contents, included files, or resolved values changed; rerun Doctor so migrations can validate the new inputs.
 
     When model migrations change a configured consumer between subscription/OAuth and metered API-key billing, Doctor reports the consumer, model, and old and new routes after saving the config. The warning also appears in the diagnostic log and update run record. A later Doctor run does not repeat it when the resolved billing route is unchanged. Missing credentials are not treated as proof of a billing change.
 
@@ -199,8 +230,15 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
       can proceed.
     </Note>
 
-    Doctor no longer repairs the pre-June agent `embeddedHarness`, `embeddedPi`,
-    `sandbox.perSession`, `agents.defaults.llm`, and top-level `heartbeat` keys.
+    Doctor no longer repairs these pre-June keys:
+
+    - Agent `embeddedHarness`, `embeddedPi`, `sandbox.perSession`, and `agents.defaults.llm`.
+    - Top-level `heartbeat`, `routing.allowFrom`, and `routing.groupChat`.
+    - `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
+      and retired `channels.webchat` / `gateway.webchat` sections.
+    - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
+      including per-account settings.
+
     Configs containing these keys must be repaired before current validation can
     succeed. Doctor preserves the config and stops with recovery guidance instead
     of stripping these settings or replacing them with a backup. For an older installation,
@@ -213,14 +251,6 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
     | `tools.codeMode.runtime: "quickjs-wasi"` (global and per-agent)                                | `tools.codeMode.executor: "quickjs"` (an existing executor selection wins) |
     | `tools.codeMode.languages`, `agents.entries.*.tools.codeMode.languages`                         | removed (Code Mode executes JavaScript; activation and limits are preserved) |
-    | `routing.allowFrom`                                                                              | `channels.whatsapp.allowFrom`                                                |
-    | `routing.groupChat.requireMention`                                                               | `channels.whatsapp/telegram/imessage.groups."*".requireMention`             |
-    | `routing.groupChat.historyLimit`                                                                 | `messages.groupChat.historyLimit`                                            |
-    | `routing.groupChat.mentionPatterns`                                                              | `messages.groupChat.mentionPatterns`                                         |
-    | `channels.telegram.requireMention`                                                               | `channels.telegram.groups."*".requireMention`                               |
-    | `channels.webchat`, `gateway.webchat`                                                            | removed (WebChat is retired)                                                 |
-    | `channels.feishu.accounts.<accountId>.botName`                                                   | `channels.feishu.accounts.<accountId>.name`                                 |
-    | `session.threadBindings.ttlHours`, `channels.<id>.threadBindings.ttlHours` (and per-account)      | `...threadBindings.idleHours`                                               |
     | legacy `talk.voiceId`/`talk.voiceAliases`/`talk.modelId`/`talk.outputFormat`/`talk.apiKey`        | `talk.provider` + `talk.providers.<provider>`                               |
     | legacy top-level realtime Talk selectors (`talk.mode`/`talk.transport`/`talk.brain`/`talk.model`/`talk.voice`) | `talk.realtime`                                                              |
     | `messages.tts`                                                                                  | top-level `tts`                                                              |
@@ -289,7 +319,7 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
 
     Code Mode's runtime migration preserves an explicit QuickJS choice in global config, keyed agent entries, and legacy agent rosters. Existing `executor` values win, and activation and limits remain unchanged. Selecting the bundled QuickJS runtime works even when generic plugins are disabled or allowlisted, without enabling other plugins; an explicit deny or disabled entry for `code-mode-quickjs` still blocks it. Configurations that never selected a runtime use the new `node` default. See [Code Mode executors](/tools/code-mode/executors) before enabling Node execution; `node:vm` is not a security boundary.
 
-    Doctor names the retired tuning paths it actually removes in one notice, including explicit `false` values: `Removed retired runtime tuning knobs: diagnostics.memoryPressureSnapshot; built-in defaults now apply.` Startup repair uses the same migration. Memory-pressure events remain available; use [diagnostics export or manual allocation profiling](/gateway/diagnostics) for current evidence.
+    Doctor names the retired tuning paths it actually removes in one notice, including explicit `false` values: `Removed retired runtime tuning knobs: diagnostics.memoryPressureSnapshot; built-in defaults now apply.` Run `openclaw doctor --fix` before starting with these retired keys. Memory-pressure events remain available; use [diagnostics export or manual allocation profiling](/gateway/diagnostics) for current evidence.
 
     <Note>
       The Voice Call plugin supplies the migration for its legacy config keys.

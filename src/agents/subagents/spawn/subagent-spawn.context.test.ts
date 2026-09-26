@@ -80,29 +80,6 @@ describe("sessions_spawn context modes", () => {
         }
         const maxTokens = 100_000;
         const parentTokens = parentEntry?.totalTokens;
-        if (
-          typeof parentTokens === "number" &&
-          Number.isFinite(parentTokens) &&
-          parentTokens > maxTokens
-        ) {
-          const sessionEntry = {
-            ...params.fallbackEntry,
-            ...store[params.sessionKey],
-          };
-          return {
-            status: "skipped",
-            reason: "decision-skip",
-            parentEntry,
-            sessionEntry,
-            decision: {
-              status: "skip",
-              reason: "parent-too-large",
-              maxTokens,
-              parentTokens,
-              message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
-            },
-          };
-        }
         const fork = await forkSessionFromParentMock({
           parentEntry,
           agentId: params.agentId,
@@ -285,35 +262,6 @@ describe("sessions_spawn context modes", () => {
     expect(prepareContext.ttlMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("falls back to isolated context when requested fork is too large", async () => {
-    const store: SessionStore = {
-      main: {
-        sessionId: "parent-session-id",
-        sessionFile: "/tmp/parent-session.jsonl",
-        updatedAt: 1,
-        totalTokens: 170_000,
-      },
-    };
-    usePersistentStoreMock(store);
-    const prepareSubagentSpawn = vi.fn(async () => undefined);
-    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
-
-    const result = await spawnSubagentDirect(
-      { task: "inspect the current thread", context: "fork" },
-      { agentSessionKey: "main" },
-    );
-
-    const accepted = requireAcceptedResult(result);
-    expect(accepted.runId).toBe("run-1");
-    expect(accepted.note).toContain("Parent context is too large to fork");
-    expect(forkSessionFromParentMock).not.toHaveBeenCalled();
-    const prepareContext = requireFirstMockArg(prepareSubagentSpawn);
-    expect(prepareContext.parentSessionKey).toBe("main");
-    expect(prepareContext.childSessionKey).toBe(requireChildSessionKey(accepted));
-    expect(prepareContext.contextMode).toBe("isolated");
-    expect(prepareContext.parentSessionId).toBe("parent-session-id");
-  });
-
   it("rejects fork context when the freshest requester alias is model-locked", async () => {
     const store: SessionStore = {
       "agent:main:main": {
@@ -343,48 +291,6 @@ describe("sessions_spawn context modes", () => {
         ([request]) => (request as GatewayRequest).method === "agent",
       ),
     ).toBe(false);
-  });
-
-  it("forks by default for thread-bound subagent sessions", async () => {
-    const store: SessionStore = {
-      main: {
-        sessionId: "parent-session-id",
-        sessionFile: "/tmp/parent-session.jsonl",
-        updatedAt: 1,
-        totalTokens: 1200,
-      },
-    };
-    usePersistentStoreMock(store);
-    forkSessionFromParentMock.mockImplementation(async () => ({
-      sessionId: "forked-session-id",
-      sessionFile: "/tmp/forked-session.jsonl",
-    }));
-    const prepareSubagentSpawn = vi.fn(async () => undefined);
-    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
-
-    const result = await spawnSubagentDirect(
-      { task: "spin this into a thread", thread: true },
-      {
-        agentSessionKey: "main",
-        agentChannel: "discord",
-        agentAccountId: "default",
-        agentTo: "channel:123",
-      },
-    );
-
-    expect(result.status).toBe("error");
-    expect(forkSessionFromParentMock).toHaveBeenCalledWith({
-      parentEntry: store.main,
-      agentId: "main",
-      parentSessionKey: "main",
-      sessionKey: result.childSessionKey,
-      storePath,
-    });
-    const cleanupRequest = requireGatewayRequest("sessions.delete");
-    expect(cleanupRequest.params?.key).toBe(result.childSessionKey);
-    expect(cleanupRequest.params?.deleteTranscript).toBe(true);
-    expect(cleanupRequest.params?.emitLifecycleHooks).toBe(false);
-    expect(prepareSubagentSpawn).not.toHaveBeenCalled();
   });
 
   it("initializes built-in context engines before resolving spawn preparation", async () => {

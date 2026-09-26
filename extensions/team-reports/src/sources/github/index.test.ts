@@ -35,6 +35,26 @@ afterEach(() => {
 });
 
 describe("GitHub reports source", () => {
+  it.each([
+    ["/commits", 409, "Git Repository is empty.", true],
+    ["/commits", 409, "Conflict", false],
+    ["/commits", 403, "Git Repository is empty.", false],
+    ["/issues/comments", 409, "Git Repository is empty.", false],
+  ] as const)(
+    "qualifies empty-repository responses from %s with HTTP %s (%s)",
+    async (endpoint, httpStatus, message, ok) => {
+      const { api } = source((url) =>
+        url.pathname === `/repos/example/app${endpoint}`
+          ? json({ message }, {}, httpStatus)
+          : emptyRoute(url),
+      );
+      const result = await api.collect(config, window, roster);
+      expect(result.items).toEqual([]);
+      expect(result.status.ok).toBe(ok);
+      expect(result.status.warnings).toHaveLength(ok ? 0 : 1);
+    },
+  );
+
   it("resolves relative next-page links against the current endpoint on GHES", async () => {
     const { api, fetchImpl } = source((url) => {
       expect(url.pathname).toBe("/api/v3/orgs/example/teams/builders/members");
@@ -214,6 +234,7 @@ describe("GitHub reports source", () => {
       expect(result.items.some((item) => item.kind === "pr_closed")).toBe(false);
       expect(result.status.stats.searchSplits).toBe(1);
       expect(result.status.stale).toBe(true);
+      expect(result.status.ok).toBe(false);
       expect(result.status.warnings).toEqual([
         expect.stringContaining("incomplete search results"),
       ]);
@@ -327,7 +348,7 @@ describe("GitHub reports source", () => {
       window,
       roster,
     );
-    expect(result.status.ok).toBe(true);
+    expect(result.status.ok).toBe(false);
     expect(result.status.warnings).toEqual([expect.stringContaining("example/app")]);
     expect(JSON.stringify(result.status)).not.toContain(config.token);
     expect(result.items.map((item) => item.repo)).not.toContain("example/old");
@@ -639,6 +660,7 @@ describe("GitHub reports source", () => {
       await vi.runAllTimersAsync();
       const result = await pending;
       expect(result.status.stale).toBe(true);
+      expect(result.status.ok).toBe(false);
       expect(result.status.warnings).toEqual([
         `Advisories for example/app: HTTP ${httpStatus}; check token permissions and repository access`,
       ]);

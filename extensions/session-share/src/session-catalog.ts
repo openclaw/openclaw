@@ -48,7 +48,7 @@ const nodeErrorCodes = new Set([
   "APPROVAL_AUTHORITY_CLOSED",
 ]);
 
-function observeCatalogPhase<T>(phase: "discovery" | "invoke", operation: () => Promise<T>) {
+async function observeCatalogPhase<T>(phase: "discovery" | "invoke", operation: () => Promise<T>) {
   if (!areDiagnosticsEnabledForProcess() || !log.isEnabled("warn")) {
     return operation();
   }
@@ -86,16 +86,9 @@ function observeCatalogPhase<T>(phase: "discovery" | "invoke", operation: () => 
     }
   };
   try {
-    return operation().then(
-      (value) => {
-        finish("resolved");
-        return value;
-      },
-      (error: unknown) => {
-        finish("rejected", error);
-        throw error;
-      },
-    );
+    const value = await operation();
+    finish("resolved");
+    return value;
   } catch (error) {
     finish("rejected", error);
     throw error;

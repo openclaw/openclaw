@@ -37,7 +37,6 @@ import {
   loadTranscriptEventsFromDatabase,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptHeaderSync,
-  loadTranscriptTailEventsSync,
   readTranscriptEventAtSeqSync,
   readTranscriptEventRows,
   readTranscriptStatsBatchReadOnlySync,
@@ -201,7 +200,6 @@ const readers: Array<{ name: string; read: (race: Race) => unknown }> = [
       }),
   },
   { name: "header", read: ({ scope }) => loadTranscriptHeaderSync(scope) },
-  { name: "tail", read: ({ scope }) => loadTranscriptTailEventsSync(scope, 2) },
   { name: "checkpoint suffix", read: ({ scope }) => loadTranscriptEventRowsAfterSeqSync(scope, 0) },
   { name: "checkpoint row", read: ({ scope }) => readTranscriptEventAtSeqSync(scope, 1) },
   {

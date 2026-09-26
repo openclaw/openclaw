@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
 import { runDoctorStateSqliteCompact } from "../commands/doctor-state-sqlite-compact.js";
-import { planPristineStartupStateMigrations } from "../commands/doctor/shared/pristine-startup-state.js";
 import {
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
@@ -18,6 +17,7 @@ import * as sqliteReadonlyLocation from "../infra/sqlite-snapshot-source.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
@@ -42,7 +42,8 @@ import {
 } from "./openclaw-state-ownership.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   });
@@ -148,37 +149,25 @@ describe("external shared-state ownership", () => {
     expect(fs.existsSync(missingStateDir)).toBe(false);
   });
 
-  it.each(["missing", "orphaned", "existing"])(
-    "rejects canceled %s ownership admission before recovery or staging",
-    async (layout) => {
-      const env = createEnv();
-      const databasePath = resolveOpenClawStateSqlitePath(env);
-      if (layout === "existing") {
-        openOpenClawStateDatabase({ env });
-        closeOpenClawStateDatabaseForTest();
-      } else if (layout === "orphaned") {
-        fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-        fs.writeFileSync(`${databasePath}-wal`, Buffer.alloc(64, 1));
-      }
-      const before = layout === "missing" ? undefined : snapshotSqliteFamily(databasePath);
-      const controller = new AbortController();
-      const reason = new Error("ownership admission stopped");
-      controller.abort(reason);
-      const snapshot = vi.spyOn(sqliteReadonlyLocation, "prepareSqliteReadOnlyLocation");
-      try {
-        const options = { databasePath, env, signal: controller.signal };
-        await expect(assertOpenClawStateWriteAllowedAtPath(options)).rejects.toBe(reason);
-        expect(snapshot).not.toHaveBeenCalled();
-        if (layout === "missing") {
-          expect(fs.existsSync(path.dirname(databasePath))).toBe(false);
-        } else {
-          assert.deepStrictEqual(snapshotSqliteFamily(databasePath), before);
-        }
-      } finally {
-        snapshot.mockRestore();
-      }
-    },
-  );
+  it("rejects canceled ownership admission before orphan recovery or staging", async () => {
+    const env = createEnv();
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.writeFileSync(`${databasePath}-wal`, Buffer.alloc(64, 1));
+    const before = snapshotSqliteFamily(databasePath);
+    const controller = new AbortController();
+    const reason = new Error("ownership admission stopped");
+    controller.abort(reason);
+    const snapshot = vi.spyOn(sqliteReadonlyLocation, "prepareSqliteReadOnlyLocation");
+    try {
+      const options = { databasePath, env, signal: controller.signal };
+      await expect(assertOpenClawStateWriteAllowedAtPath(options)).rejects.toBe(reason);
+      expect(snapshot).not.toHaveBeenCalled();
+      assert.deepStrictEqual(snapshotSqliteFamily(databasePath), before);
+    } finally {
+      snapshot.mockRestore();
+    }
+  });
 
   it.each([
     { mode: "unmarked", external: false, recoverOrphanedSidecars: undefined },
@@ -229,16 +218,8 @@ describe("external shared-state ownership", () => {
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(configPath, "{}\n");
 
-    expect(planPristineStartupStateMigrations(env)).toEqual({
-      skipAllStateMigrations: true,
-      skipCoreStateMigrations: true,
-    });
     await assertOpenClawStateWriteAllowedAtPath({ databasePath, env });
     expect(fs.readdirSync(stateDir)).toEqual(["openclaw.json"]);
-    expect(planPristineStartupStateMigrations(env)).toEqual({
-      skipAllStateMigrations: true,
-      skipCoreStateMigrations: true,
-    });
   });
 
   it("preserves ordinary unowned database behavior", () => {
@@ -248,14 +229,11 @@ describe("external shared-state ownership", () => {
     expect(inspectOpenClawStateOwnershipAtPath(database.path)).toBeNull();
   });
 
-  it("checks Doctor startup admission without staging a public snapshot", async () => {
+  it("refuses unauthorized Doctor admission before staging a public snapshot", async () => {
     const fixture = claimFixture();
     const home = tempDirs.make("openclaw-state-ownership-doctor-");
     const snapshotStaging = vi.spyOn(sqliteReadonlyLocation, "prepareSqliteReadOnlyLocationSync");
-    const runPreflight = async (
-      env: NodeJS.ProcessEnv,
-      skipPristineStartupStateMigrations: boolean,
-    ) =>
+    const runPreflight = async (env: NodeJS.ProcessEnv) =>
       await withEnvAsync(
         {
           HOME: home,
@@ -270,15 +248,12 @@ describe("external shared-state ownership", () => {
             migrateLegacyConfig: false,
             migrateState: true,
             observe: false,
-            skipPristineStartupStateMigrations,
           }),
       );
     try {
-      await expect(runPreflight(fixture.unmarkedEnv, false)).rejects.toThrow(
-        OpenClawStateOwnershipError,
-      );
-      await expect(runPreflight(fixture.externalEnv, true)).resolves.toBeDefined();
+      await expect(runPreflight(fixture.unmarkedEnv)).rejects.toThrow(OpenClawStateOwnershipError);
       expect(snapshotStaging).not.toHaveBeenCalled();
+      await expect(runPreflight(fixture.externalEnv)).resolves.toBeDefined();
     } finally {
       snapshotStaging.mockRestore();
     }

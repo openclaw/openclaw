@@ -199,7 +199,7 @@ async function assertRecordsOnlyUpdateConfigFresh(params: {
   }
 }
 
-type RunPluginUpdateCommandParams = {
+export type RunPluginUpdateCommandParams = {
   ids: string[];
   opts: {
     all?: boolean;

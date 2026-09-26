@@ -6,12 +6,11 @@
  */
 
 import type { JsoncEntry, JsoncValue } from "../jsonc/ast.js";
+import { resolveJsoncPositionalSegment } from "../jsonc/resolve-value.js";
 import type { OcPath } from "../oc-path.js";
 import {
   isPositionalSeg,
-  isQuotedSeg,
   parseArrayIndexSegment,
-  resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
 } from "../oc-path.js";
@@ -38,20 +37,6 @@ export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue
     return { ok: false, reason: "unresolved" };
   }
 
-  // No item/field — replace the whole line. Requires an existing value line.
-  if (path.item === undefined && path.field === undefined) {
-    if (target.kind !== "value") {
-      return { ok: false, reason: "not-a-value-line" };
-    }
-    const newLine: JsonlLine = {
-      kind: "value",
-      line: target.line,
-      value: newValue,
-      raw: target.raw,
-    };
-    return finalize(ast, lineIdx, newLine, path.file);
-  }
-
   if (target.kind !== "value") {
     return { ok: false, reason: "not-a-value-line" };
   }
@@ -75,7 +60,9 @@ export function setJsonlOcPath(ast: JsonlAst, path: OcPath, newValue: JsoncValue
     value: replaced,
     raw: target.raw,
   };
-  return finalize(ast, lineIdx, newLine, path.file);
+  const newLines = ast.lines.slice();
+  newLines[lineIdx] = newLine;
+  return { ok: true, ast: renderEditedJsonl(ast, newLines, path.file) };
 }
 
 function replaceAt(
@@ -84,30 +71,25 @@ function replaceAt(
   i: number,
   newValue: JsoncValue,
 ): JsoncValue | null {
-  const seg = segments[i];
+  let seg = segments[i];
   if (seg === undefined) {
     return newValue;
   }
   if (seg.length === 0) {
     return null;
   }
+  if (isPositionalSeg(seg)) {
+    const resolved = resolveJsoncPositionalSegment(current, seg);
+    if (resolved === null) {
+      return null;
+    }
+    seg = resolved;
+  }
 
   if (current.kind === "object") {
     // Positional tokens resolve against the entries' ordered key list;
     // quoted segments are unquoted before literal-key comparison.
-    let segNorm = seg;
-    if (isPositionalSeg(seg)) {
-      const resolved = resolvePositionalSeg(seg, {
-        indexable: false,
-        size: current.entries.length,
-        keys: current.entries.map((e) => e.key),
-      });
-      if (resolved === null) {
-        return null;
-      }
-      segNorm = resolved;
-    }
-    const lookupKey = isQuotedSeg(segNorm) ? unquoteSeg(segNorm) : segNorm;
+    const lookupKey = unquoteSeg(seg);
     const idx = current.entries.findIndex((e) => e.key === lookupKey);
     if (idx === -1) {
       return null;
@@ -131,18 +113,7 @@ function replaceAt(
   }
 
   if (current.kind === "array") {
-    let segNorm = seg;
-    if (isPositionalSeg(seg)) {
-      const resolved = resolvePositionalSeg(seg, {
-        indexable: true,
-        size: current.items.length,
-      });
-      if (resolved === null) {
-        return null;
-      }
-      segNorm = resolved;
-    }
-    const idx = parseArrayIndexSegment(segNorm, current.items.length);
+    const idx = parseArrayIndexSegment(seg, current.items.length);
     if (idx === null) {
       return null;
     }
@@ -166,18 +137,15 @@ function replaceAt(
   return null;
 }
 
-function finalize(
+function renderEditedJsonl(
   ast: JsonlAst,
-  lineIdx: number,
-  newLine: JsonlLine,
+  lines: readonly JsonlLine[],
   fileName?: string,
-): JsonlEditResult {
-  const newLines = ast.lines.slice();
-  newLines[lineIdx] = newLine;
+): JsonlAst {
   const next: JsonlAst = {
     kind: "jsonl",
     raw: "",
-    lines: newLines,
+    lines,
     ...(ast.lineEnding !== undefined ? { lineEnding: ast.lineEnding } : {}),
   };
   const opts =
@@ -185,7 +153,7 @@ function finalize(
       ? { mode: "render" as const, fileNameForGuard: fileName }
       : { mode: "render" as const };
   const rendered = emitJsonl(next, opts);
-  return { ok: true, ast: { ...next, raw: rendered } };
+  return { ...next, raw: rendered };
 }
 
 /** Append a value as the next line. Line numbers are substrate-assigned. */
@@ -197,12 +165,5 @@ export function appendJsonlOcPath(ast: JsonlAst, value: JsoncValue): JsonlAst {
     value,
     raw: "",
   };
-  const next: JsonlAst = {
-    kind: "jsonl",
-    raw: "",
-    lines: [...ast.lines, newLine],
-    ...(ast.lineEnding !== undefined ? { lineEnding: ast.lineEnding } : {}),
-  };
-  const rendered = emitJsonl(next, { mode: "render" });
-  return { ...next, raw: rendered };
+  return renderEditedJsonl(ast, [...ast.lines, newLine]);
 }

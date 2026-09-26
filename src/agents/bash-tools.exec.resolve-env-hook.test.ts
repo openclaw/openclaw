@@ -8,6 +8,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { ExtensionContext } from "./sessions/index.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 declare module "../plugins/hook-types.js" {
   interface PluginHookChannelSenderContext {
@@ -235,6 +236,20 @@ describe("exec resolve_exec_env hook wiring", () => {
       EXISTING: "plugin",
       PLUGIN_SAFE: "yes",
     });
+  });
+
+  it("retains plugin env when prepared arguments are prepared again", async () => {
+    installResolveExecEnvHook({ PLUGIN_SAFE: "yes" });
+    const tool: AnyAgentTool = createExecTool({ host: "node", security: "full", ask: "off" });
+    const prepare = expectDefined(tool.prepareBeforeToolCallParams, "exec preparation");
+    const prepared = await prepare({ command: "echo ok" }, {});
+    const preparedAgain = await prepare(prepared, {});
+
+    await tool.execute("call-prepared-twice", preparedAgain);
+
+    expect(mocks.hookRunner?.runResolveExecEnv).toHaveBeenCalledOnce();
+    expect(mocks.nodeHostParams[0]?.env).toMatchObject({ PLUGIN_SAFE: "yes" });
+    expect(mocks.nodeHostParams[0]?.requestedEnv).toMatchObject({ PLUGIN_SAFE: "yes" });
   });
 
   it("inherits configured node for auto while forwarding filtered plugin env", async () => {

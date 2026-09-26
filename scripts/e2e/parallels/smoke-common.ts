@@ -540,6 +540,31 @@ async function cleanupSmokeArtifacts(input: {
   await rm(input.tgzDir, { force: true, recursive: true }).catch(() => undefined);
 }
 
+export function assertDevChannelUpdate(
+  status: string,
+  targetCommit: string | undefined,
+  readCheckoutHead: () => string,
+): void {
+  const expectedBranch = targetCommit ? "HEAD" : "main";
+  for (const needle of [
+    '"installKind": "git"',
+    '"value": "dev"',
+    `"branch": "${expectedBranch}"`,
+  ]) {
+    if (!status.includes(needle)) {
+      throw new Error(`dev update status missing ${needle}`);
+    }
+  }
+  if (targetCommit) {
+    const checkoutHead = readCheckoutHead().replaceAll("\r", "").trim().split("\n").at(-1) ?? "";
+    if (checkoutHead !== targetCommit) {
+      throw new Error(
+        `dev update checkout head ${checkoutHead || "<empty>"} did not match ${targetCommit}`,
+      );
+    }
+  }
+}
+
 export async function expectedPackageTargetVersion(artifact: PackageArtifact): Promise<string> {
   return artifact.version || (await packageVersionFromTgz(artifact.path));
 }

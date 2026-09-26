@@ -127,6 +127,8 @@ async function runCommandPreflightMaintenance(
   params: CommandPreflight,
 ): Promise<SessionEntry | undefined> {
   const { prepared, opts, sessionEntry, modelSelection } = params;
+  const operatorAuthority = opts.operatorAuthority;
+  const assertSourceCurrent = opts.assertSourceCurrent;
   if (
     prepared.isNewSession ||
     !sessionEntry ||
@@ -137,6 +139,8 @@ async function runCommandPreflightMaintenance(
   }
   const assertActive = () => {
     opts.abortSignal?.throwIfAborted();
+    assertSourceCurrent?.();
+    operatorAuthority?.assertCurrent();
     assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
   };
   assertActive();
@@ -158,20 +162,25 @@ async function runCommandPreflightMaintenance(
       ),
     },
   });
+  // Required foreground preparation keeps the command's original source.
+  followupRun.operatorAuthority = operatorAuthority;
   followupRun.prompt = prepared.body;
-  return memory.runSessionCompactionIfNeeded({
-    pendingUserEntryId: preflightAdmission?.entryId,
+  const maintenanceParams = {
     cfg: prepared.cfg,
     followupRun,
     promptForEstimate: prepared.body,
     defaultModel: modelSelection.defaultModel,
-    sessionEntry,
     sessionStore: prepared.sessionStore,
     sessionKey: prepared.sessionKey,
     runtimePolicySessionKey: prepared.sessionKey,
     storePath: prepared.storePath,
     isHeartbeat: opts.bootstrapContextRunKind === "heartbeat",
     abortSignal: opts.abortSignal,
+  };
+  return memory.runSessionCompactionIfNeeded({
+    ...maintenanceParams,
+    pendingUserEntryId: preflightAdmission?.entryId,
+    sessionEntry,
     authorize: () => {
       assertActive();
       return true;
@@ -180,19 +189,10 @@ async function runCommandPreflightMaintenance(
     onCompactionCommitted: (accepted) => params.onCommittedSessionId(accepted.sessionId),
     beforeCompaction: async (entry) => {
       const flushed = await memory.runMemoryFlushIfNeeded({
+        ...maintenanceParams,
         preflightAdmission,
-        cfg: prepared.cfg,
-        followupRun,
-        promptForEstimate: prepared.body,
-        defaultModel: modelSelection.defaultModel,
         resolvedVerboseLevel: params.embeddedSessionState.resolvedVerboseLevel ?? "off",
         sessionEntry: entry,
-        sessionStore: prepared.sessionStore,
-        sessionKey: prepared.sessionKey,
-        runtimePolicySessionKey: prepared.sessionKey,
-        storePath: prepared.storePath,
-        isHeartbeat: opts.bootstrapContextRunKind === "heartbeat",
-        abortSignal: opts.abortSignal,
       });
       assertActive();
       return flushed.sessionEntry;

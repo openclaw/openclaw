@@ -158,6 +158,98 @@ describe("feishu subagent hook handlers", () => {
     });
   });
 
+  it.each(["single", "direct", "topic"] as const)(
+    "keeps the selected %s requester record private and unchanged",
+    async (selection) => {
+      const { deliveryHandler, manager } = managedHookFixture();
+      // One account/conversation has one record, so matching requester and child routes share a session.
+      const sharedSessionKey = "agent:main:subagent:shared-requester";
+      const topic = selection === "topic";
+      if (selection !== "single") {
+        manager.bindConversation({
+          conversationId: "ou_other",
+          targetKind: "subagent",
+          targetSessionKey: sharedSessionKey,
+          metadata: { deliveryTo: "user:ou_other" },
+        });
+      }
+      manager.bindConversation({
+        conversationId: topic ? "oc_group:topic:om_topic:sender:ou_selected" : "ou_selected",
+        parentConversationId: topic ? "oc_group" : undefined,
+        targetKind: "subagent",
+        targetSessionKey: sharedSessionKey,
+        metadata: {
+          deliveryTo: " chat:oc_delivery ",
+          ...(topic ? { deliveryThreadId: " om_delivery " } : {}),
+          label: "private route label",
+          boundBy: "fixture",
+          data: { internal: "not an origin field" },
+        },
+      });
+      const records = manager.listBySessionKey(sharedSessionKey);
+      const snapshot = structuredClone(records);
+      expect(records).toHaveLength(selection === "single" ? 1 : 2);
+
+      await expect(
+        deliveryHandler(
+          deliveryEvent({
+            childSessionKey: sharedSessionKey,
+            requesterSessionKey: ` ${sharedSessionKey} `,
+            requesterOrigin: topic
+              ? { channel: "feishu", accountId: "work", to: "chat:oc_group", threadId: "om_topic" }
+              : dmOrigin(selection === "single" ? "ou_unrelated" : "ou_selected"),
+          }),
+          {},
+        ),
+      ).resolves.toStrictEqual({
+        origin: {
+          channel: "feishu",
+          accountId: "work",
+          to: "chat:oc_delivery",
+          ...(topic ? { threadId: "om_delivery" } : {}),
+        },
+      });
+      expect(manager.listBySessionKey(sharedSessionKey)).toStrictEqual(snapshot);
+      for (const record of records) {
+        expect(manager.getByConversationId(record.conversationId)).toBe(record);
+      }
+    },
+  );
+
+  it.each(["direct", "topic"] as const)(
+    "does not pick one of several child routes when the requester has no %s match",
+    async (selection) => {
+      const { deliveryHandler, manager } = managedHookFixture();
+      const sharedSessionKey = "agent:main:subagent:no-match";
+      for (const sender of ["ou_one", "ou_two"]) {
+        manager.bindConversation({
+          conversationId: sender,
+          targetKind: "subagent",
+          targetSessionKey: sharedSessionKey,
+        });
+      }
+
+      await expect(
+        deliveryHandler(
+          deliveryEvent({
+            childSessionKey: sharedSessionKey,
+            requesterSessionKey: sharedSessionKey,
+            requesterOrigin:
+              selection === "topic"
+                ? {
+                    channel: "feishu",
+                    accountId: "work",
+                    to: "chat:oc_group",
+                    threadId: "om_missing",
+                  }
+                : dmOrigin("ou_missing"),
+          }),
+          {},
+        ),
+      ).resolves.toBeUndefined();
+    },
+  );
+
   it("keeps ambiguous requester topics unresolved unless the child has one route", async () => {
     const { deliveryHandler, manager } = managedHookFixture();
     const requesterSessionKey = "agent:main:requester";
@@ -229,10 +321,23 @@ describe("feishu subagent hook handlers", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("leaves unrelated channels and missing managers unchanged", async () => {
-    const handlers = registerHandlersForTest();
-    const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
+  it("leaves disabled completion, unrelated channels and missing managers unchanged", async () => {
+    const { deliveryHandler, manager } = managedHookFixture();
+    manager.bindConversation({
+      conversationId: "ou_sender_1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child",
+    });
 
+    await expect(
+      deliveryHandler(
+        {
+          ...deliveryEvent({ childSessionKey: "agent:main:subagent:child" }),
+          expectsCompletionMessage: false,
+        },
+        {},
+      ),
+    ).resolves.toBeUndefined();
     await expect(
       deliveryHandler(
         deliveryEvent({
@@ -246,6 +351,7 @@ describe("feishu subagent hook handlers", () => {
         {},
       ),
     ).resolves.toBeUndefined();
+    manager.stop();
     await expect(
       deliveryHandler(deliveryEvent({ childSessionKey: "agent:main:subagent:child" }), {}),
     ).resolves.toBeUndefined();

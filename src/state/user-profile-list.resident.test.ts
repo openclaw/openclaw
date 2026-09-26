@@ -12,10 +12,12 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
-import { onUserProfilesChanged } from "./user-profile-events.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { fenceUserProfileMutationAuthority, onUserProfilesChanged } from "./user-profile-events.js";
 import {
   getUserProfileDisplay,
   getUserProfileDisplays,
+  prepareUserProfileCatalog,
   prepareUserProfileIdentity,
   readUserProfileAliases,
   readUserProfileIdentity,
@@ -53,6 +55,37 @@ function fixture() {
 }
 
 describe("resident profile display and reference catalog", () => {
+  it("reads current batch identities through merges and refuses unsettled authority without host SQL", async () => {
+    const options = fixture();
+    const alias = ensureProfileForEmail("alias@example.test", options);
+    const target = ensureProfileForEmail("target@example.test", options);
+    const catalog = await prepareUserProfileCatalog(options);
+    releases.push(catalog.release);
+    expect(catalog.readCurrentIdentity(alias.id)?.profileId).toBe(alias.id);
+    linkEmail("alias@example.test", target.id, options);
+    setUserProfileRole(target.id, "reader", options);
+    const admission = captureOpenClawStateWorkerContext(options).admission;
+    const native = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+    for (const id of [alias.id, target.id]) {
+      expect(catalog.readCurrentIdentity(id)).toEqual({
+        profileId: target.id,
+        role: "reader",
+        aliases: new Set([alias.id, target.id]),
+      });
+      const mutation = fenceUserProfileMutationAuthority(admission, {
+        profiles: [id],
+        identities: [],
+        channels: [],
+      });
+      expect(() => catalog.readCurrentIdentity(alias.id)).toThrow("has not settled");
+      mutation.settle(true);
+    }
+    expect(catalog.readCurrentIdentity("missing")).toBeUndefined();
+    catalog.release();
+    expect(() => catalog.readCurrentIdentity(target.id)).toThrow("user profile not found");
+    expect(native).not.toHaveBeenCalled();
+  });
+
   it.each(["email", "github", "delete"] as const)(
     "keeps prepared binding checks current through %s changes without host SQL",
     async (producer) => {
@@ -81,6 +114,7 @@ describe("resident profile display and reference catalog", () => {
         assignedRole: null,
       });
       expect(current.aliases).toEqual(new Set([first.id]));
+      expect(prepared.readCurrentProfile()).toEqual({ profileId: first.id, assignedRole: null });
       expect(native).not.toHaveBeenCalled();
       native.mockRestore();
       setDisplayName(first.id, "Cosmetic update", options);
@@ -90,6 +124,10 @@ describe("resident profile display and reference catalog", () => {
       );
       linkEmail("later@example.test", target.id, options);
       setUserProfileRole(first.id, "reader", options);
+      expect(prepared.readCurrentProfile()).toEqual({
+        profileId: first.id,
+        assignedRole: "reader",
+      });
       prepared.readCurrentFacts(bindings);
       if (producer === "email") {
         linkEmail(email, target.id, options);
@@ -132,6 +170,7 @@ describe("resident profile display and reference catalog", () => {
     await closeOpenClawStateDatabaseByPathAsync(replacement.path);
     fs.renameSync(replacement.path, options.path);
     expect(() => prepared.readCurrentFacts()).toThrow();
+    expect(() => prepared.readCurrentProfile()).toThrow();
     const next = await prepareUserProfileIdentity(current.id, options);
     releases.push(next.release);
     expect(next.emailBindingIds).toEqual([expect.any(String)]);
@@ -144,6 +183,7 @@ describe("resident profile display and reference catalog", () => {
     const missing = await prepareUserProfileIdentity(prior.id, options);
     releases.push(missing.release);
     expect(() => missing.readCurrentFacts()).toThrow("user profile not found");
+    expect(() => missing.readCurrentProfile()).toThrow("user profile not found");
   });
 
   it.each(["email", "github"])(

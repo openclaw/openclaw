@@ -13,7 +13,7 @@ type ResolvedSwarmConfig = {
 
 const DEFAULT_SWARM_CONFIG: ResolvedSwarmConfig = {
   enabled: true,
-  maxConcurrent: 8,
+  maxConcurrent: 32,
   maxChildrenPerGroup: 50,
   maxTotalPerGroup: 200,
   waitTimeoutSecondsMax: 600,

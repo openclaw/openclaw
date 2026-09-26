@@ -39,9 +39,9 @@ type TaskRecordApi = Pick<
   "createTaskRecord" | "markTaskTerminalById"
 >;
 
-type TaskRegistryQueryApi = Pick<
-  typeof import("../src/tasks/task-registry-query.js"),
-  "deleteTaskRecordById"
+type TaskRegistryMaintenanceApi = Pick<
+  typeof import("../src/tasks/task-registry.maintenance.js"),
+  "runTaskRegistryMaintenance"
 >;
 
 function parseInteger(raw: string | undefined, flag: string, min: number, max: number): number {
@@ -242,7 +242,7 @@ async function runCycle(
   serial: number,
   readSnapshot: () => RegistrySnapshot,
   taskRecordApi: TaskRecordApi,
-  taskRegistryQuery: TaskRegistryQueryApi,
+  taskRegistryMaintenance: TaskRegistryMaintenanceApi,
 ): Promise<TimingSample> {
   const taskIds: string[] = [];
   const startedAt = Date.now();
@@ -260,6 +260,7 @@ async function runCycle(
       status: "running",
       deliveryStatus: "pending",
       notifyPolicy: "silent",
+      cleanupAfter: 0,
       startedAt,
       lastEventAt: startedAt,
     });
@@ -320,10 +321,9 @@ async function runCycle(
   );
 
   const teardownStartedAt = performance.now();
-  for (const taskId of taskIds) {
-    if (!taskRegistryQuery.deleteTaskRecordById(taskId)) {
-      throw new Error(`teardown failed for task ${taskId}`);
-    }
+  const maintenance = await taskRegistryMaintenance.runTaskRegistryMaintenance();
+  if (maintenance.pruned !== taskIds.length) {
+    throw new Error(`teardown pruned ${maintenance.pruned}/${taskIds.length} tasks`);
   }
   const teardownMs = performance.now() - teardownStartedAt;
   const teardown = readSnapshot();
@@ -344,10 +344,10 @@ async function runBenchmark(options: WorkerOptions): Promise<WorkerResult> {
   await resetRuntime(true);
   // Load lifecycle owners before the baseline so warmup=0 still measures task churn,
   // not one-time module initialization retained by the worker.
-  const [readSnapshot, taskRecordApi, taskRegistryQuery] = await Promise.all([
+  const [readSnapshot, taskRecordApi, taskRegistryMaintenance] = await Promise.all([
     createCountReader(),
     import("../src/tasks/task-registry-record-api.js"),
-    import("../src/tasks/task-registry-query.js"),
+    import("../src/tasks/task-registry.maintenance.js"),
   ]);
   const emptyCounts: RegistryLifecycleCounts = {
     taskCount: 0,
@@ -366,7 +366,7 @@ async function runBenchmark(options: WorkerOptions): Promise<WorkerResult> {
   const postGcSamples: MemorySample[] = [];
   let lastSample: TimingSample | undefined;
   for (let index = 0; index < options.warmup; index += 1) {
-    await runCycle(options.size, index, readSnapshot, taskRecordApi, taskRegistryQuery);
+    await runCycle(options.size, index, readSnapshot, taskRecordApi, taskRegistryMaintenance);
     forceGc();
   }
   forceGc();
@@ -377,7 +377,7 @@ async function runBenchmark(options: WorkerOptions): Promise<WorkerResult> {
       options.warmup + index,
       readSnapshot,
       taskRecordApi,
-      taskRegistryQuery,
+      taskRegistryMaintenance,
     );
     forceGc();
     timingsMs.registration.push(lastSample.registrationMs);

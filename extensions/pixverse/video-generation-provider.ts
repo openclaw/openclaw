@@ -1,4 +1,3 @@
-// Pixverse provider module implements model/runtime integration.
 import { randomUUID } from "node:crypto";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
@@ -30,6 +29,7 @@ import type {
 import {
   DEFAULT_PIXVERSE_MODEL_ID,
   DEFAULT_PIXVERSE_REGION,
+  normalizePixVerseRegion,
   PIXVERSE_BASE_URL_BY_REGION,
   PIXVERSE_PROVIDER_ID,
   type PixVerseApiRegion,
@@ -92,20 +92,11 @@ function resolvePixVerseBaseUrl(req: VideoGenerationRequest): string {
 
 function resolvePixVerseApiRegion(value: unknown): PixVerseApiRegion {
   const region = normalizeOptionalString(value)?.toLowerCase();
-  switch (region) {
-    case "cn":
-    case "china":
-    case "mainland":
-    case "pai":
-      return "cn";
-    case "global":
-    case "intl":
-    case "international":
-    case undefined:
-      return DEFAULT_PIXVERSE_REGION;
-    default:
-      throw new Error(`Unsupported PixVerse API region "${region}". Use "international" or "cn".`);
+  const normalized = normalizePixVerseRegion(region);
+  if (normalized || region === undefined) {
+    return normalized ?? DEFAULT_PIXVERSE_REGION;
   }
+  throw new Error(`Unsupported PixVerse API region "${region}". Use "international" or "cn".`);
 }
 
 function normalizePixVerseModel(model: string | undefined): string {
@@ -164,14 +155,9 @@ function readPixVerseSuccess<T>(payload: PixVerseEnvelope<T>, label: string): T 
   return payload.Resp;
 }
 
-// Reads a PixVerse JSON response through the shared provider JSON reader so a
-// provider that streams an unbounded body cannot force the runtime to buffer the
-// whole payload before parsing it on the success path. The shared helper applies
-// the established 16 MiB provider JSON cap and the standard malformed-JSON
-// wrapping; PixVerse envelope validation stays local via readPixVerseSuccess.
 async function readPixVerseJson<T>(response: Response, label: string): Promise<T> {
-  const payload = await readProviderJsonResponse(response, label);
-  return readPixVerseSuccess(payload as PixVerseEnvelope<T>, label);
+  const payload = await readProviderJsonResponse<PixVerseEnvelope<T>>(response, label);
+  return readPixVerseSuccess(payload, label);
 }
 
 function readPixVerseVideoId(payload: PixVerseVideoCreateResponse): number {

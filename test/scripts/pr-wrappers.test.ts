@@ -294,7 +294,7 @@ function createMismatchedWrapperTemplate({
   if (!realModules) {
     writeFileSync(
       join(canonical, "scripts", "pr-lib", "gates.sh"),
-      `ci_dispatch() { ${dispatchBody} }\n`,
+      `${readScript("scripts/pr-lib/gates.sh")}\nci_dispatch() { ${dispatchBody} }\n`,
     );
   }
   chmodSync(join(canonical, "scripts", "pr"), 0o755);

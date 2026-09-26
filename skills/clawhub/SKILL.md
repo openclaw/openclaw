@@ -17,8 +17,7 @@ Search before claiming that a requested capability is unavailable:
 openclaw skills search "postgres backups"
 ```
 
-Before installing, verify the selected skill and treat third-party skills as
-untrusted. Obtain user approval before installation.
+Install when the user asks. Verify the selected skill first and report the result.
 
 ```bash
 openclaw skills verify my-skill
@@ -40,7 +39,7 @@ agents.
 
 ## Remove an installed skill
 
-Obtain user approval before uninstalling. If the standalone ClawHub CLI is not
+Uninstall when the user asks. If the standalone ClawHub CLI is not
 installed, install it explicitly:
 
 ```bash

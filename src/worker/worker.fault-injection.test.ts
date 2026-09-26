@@ -581,7 +581,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       return [live.runId, live.seq, live.lastAckedSeq];
     });
     expect(liveRequests).toContainEqual([recoveryRunId, 1, 0]);
-    harness.settleRun(recoveryRunId);
+    await harness.settleRun(recoveryRunId);
   });
 
   it("fences a dead worker and admits a fresh owner at a higher epoch", async () => {

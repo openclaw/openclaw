@@ -58,11 +58,6 @@ function isChinaBotFrameworkServiceHost(host: string): boolean {
   );
 }
 
-function isChinaBotFrameworkServiceUrl(value: string): boolean {
-  const parsed = normalizeOptionalServiceUrl(value);
-  return Boolean(parsed && isChinaBotFrameworkServiceHost(parsed.host));
-}
-
 export function validateMSTeamsProactiveServiceUrlBoundary(params: {
   cloud: MSTeamsCloudName;
   conversationId: string;
@@ -90,14 +85,15 @@ export function validateMSTeamsProactiveServiceUrlBoundary(params: {
     );
   }
 
+  const stored = normalizeOptionalServiceUrl(params.storedServiceUrl);
+  if (!stored) {
+    throw new Error(
+      `msteams proactive send blocked for ${params.conversationId}: stored conversation reference is missing a valid serviceUrl. ` +
+        "Ask the bot to receive a new Teams message in this conversation, then retry.",
+    );
+  }
+
   if (configured) {
-    const stored = normalizeOptionalServiceUrl(params.storedServiceUrl);
-    if (!stored) {
-      throw new Error(
-        `msteams proactive send blocked for ${params.conversationId}: stored conversation reference is missing a valid serviceUrl. ` +
-          "Ask the bot to receive a new Teams message in this conversation, then retry.",
-      );
-    }
     if (stored.host !== configured.host) {
       throw new Error(
         `msteams proactive send blocked for ${params.conversationId}: stored conversation serviceUrl (${stored.value}) ` +
@@ -106,14 +102,6 @@ export function validateMSTeamsProactiveServiceUrlBoundary(params: {
       );
     }
     return;
-  }
-
-  const stored = normalizeOptionalServiceUrl(params.storedServiceUrl);
-  if (!stored) {
-    throw new Error(
-      `msteams proactive send blocked for ${params.conversationId}: stored conversation reference is missing a valid serviceUrl. ` +
-        "Ask the bot to receive a new Teams message in this conversation, then retry.",
-    );
   }
 
   if (params.cloud === "China") {
@@ -127,7 +115,7 @@ export function validateMSTeamsProactiveServiceUrlBoundary(params: {
     return;
   }
 
-  if (isChinaBotFrameworkServiceUrl(stored.value)) {
+  if (isChinaBotFrameworkServiceHost(stored.host)) {
     throw new Error(
       `msteams proactive send blocked for ${params.conversationId}: stored conversation serviceUrl (${stored.value}) ` +
         "requires channels.msteams.cloud=China.",

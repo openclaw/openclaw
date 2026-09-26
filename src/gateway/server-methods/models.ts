@@ -10,6 +10,7 @@ import {
   validateModelsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { refreshExpiredPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
@@ -82,6 +83,9 @@ export const modelsHandlers: GatewayRequestHandlers = {
         scope ?? resolveChatMetadataReadParams(options, { agentId: resolved.agentId });
       if (!publicationScope) {
         return;
+      }
+      if (params.refresh !== true) {
+        refreshExpiredPreparedModelCatalog({ agentId: resolved.agentId, config: cfg });
       }
       const result = await buildModelsListResult({
         source: { kind: "gateway", context },

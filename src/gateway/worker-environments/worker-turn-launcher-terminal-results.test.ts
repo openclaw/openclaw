@@ -116,7 +116,7 @@ describe("worker turn launcher terminal results", () => {
     "retains the ACKed finishing outcome after assistant $stopReason (reconciliation fails: $reconciliationFails; cleanup: $cleanupFailure; provider fallback: $providerFailure)",
     async ({ stopReason, reconciliationFails, cleanupFailure, providerFailure }) => {
       const outerFallback = cleanupFailure !== undefined || providerFailure === true;
-      seedActivePlacement();
+      await seedActivePlacement();
       const grant = credential();
       const environment = attachedEnvironment();
       const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
@@ -143,7 +143,7 @@ describe("worker turn launcher terminal results", () => {
         prepareInstallation: vi.fn(),
         bootstrapWorker: vi.fn(),
         executeInference: vi.fn(),
-        inferenceStore: createWorkerInferenceStore({ database }),
+        inferenceStore: createWorkerInferenceStore({ path: database.path }),
         placementStore: gate,
         liveEvents,
       });
@@ -461,7 +461,7 @@ describe("worker turn launcher terminal results", () => {
   );
 
   it("requests immediate recovery when reconciliation fails after worker finishing", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const destroy = vi.fn(async () => attachedEnvironment());
     const tunnelFailure = new NodeWorkerWorkspaceTransferError(
       "workspace-transfer-failed: gateway TLS fingerprint mismatch",
@@ -620,7 +620,7 @@ describe("worker turn launcher terminal results", () => {
       terminalReply,
       costs = { first: 0, last: 0, total: 0 },
     }) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const environments: WorkerTurnEnvironmentService = {
         get: vi.fn(() => attachedEnvironment()),
         acquireTurnCredential: vi.fn(async () => credential()),

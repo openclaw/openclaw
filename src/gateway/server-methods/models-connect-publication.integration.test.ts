@@ -1,4 +1,4 @@
-import { expect, it, onTestFailed, vi } from "vitest";
+import { beforeAll, expect, it, onTestFailed, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -23,9 +23,6 @@ import {
 } from "../test-helpers.e2e.js";
 
 // Optional startup prewarming must not compete with the catalog request drain.
-vi.mock("../server-startup-context-cache-prewarm.js", () => ({
-  scheduleContextCachePrewarm: () => ({ stop() {} }),
-}));
 vi.mock("../server-startup-handler-prewarm.js", () => ({
   scheduleGatewayHandlerPrewarm: () => ({ stop() {} }),
 }));
@@ -47,6 +44,11 @@ vi.mock("../server-runtime-services.js", async (importOriginal) => {
       return timer;
     },
   };
+});
+
+beforeAll(async () => {
+  // Cold module compilation belongs to fixture preparation, before the real Gateway startup.
+  await import("../server-start.js");
 });
 
 it("connect negotiates snapshots and preserves draft and saved-session catalog scopes", async () => {
@@ -215,6 +217,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         { agentId: "alpha", shortId: "12345678", slugHint: "saved" },
       ]) {
         const savedPublications: ModelsSnapshotEvent[] = [];
+        const savedPublication = createDeferred();
         const saved = await connectGatewayClient({
           url: `ws://127.0.0.1:${port}`,
           token,
@@ -227,38 +230,41 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           onEvent(event) {
             if (event.event === "models.snapshot") {
               savedPublications.push(event.payload as ModelsSnapshotEvent);
+              savedPublication.resolve();
             }
           },
         });
         try {
-          await expect
-            .poll(() => savedPublications)
-            .toMatchObject([
-              {
-                scope: { agentId: "alpha", sessionKey },
-                catalog: {
-                  models: [
-                    {
-                      id: "first",
-                      provider: "fixture",
-                      available: true,
-                      manualSelectionAllowed: true,
-                    },
-                    {
-                      id: "second",
-                      provider: "fixture",
-                      available: true,
-                      manualSelectionAllowed: false,
-                    },
-                  ],
-                  accountSelection: {
-                    kind: "shared",
-                    authProfileId: "fixture:saved-account",
-                    source: "user",
-                  },
+          // hello-ok precedes worker-backed catalog publication; join that event
+          // instead of assuming preparation fits the polling matcher's deadline.
+          await savedPublication.promise;
+          expect(savedPublications[0]?.catalog.models).toHaveLength(2);
+          expect(savedPublications).toMatchObject([
+            {
+              scope: { agentId: "alpha", sessionKey },
+              catalog: {
+                models: expect.arrayContaining([
+                  expect.objectContaining({
+                    id: "first",
+                    provider: "fixture",
+                    available: true,
+                    manualSelectionAllowed: true,
+                  }),
+                  expect.objectContaining({
+                    id: "second",
+                    provider: "fixture",
+                    available: true,
+                    manualSelectionAllowed: false,
+                  }),
+                ]),
+                accountSelection: {
+                  kind: "shared",
+                  authProfileId: "fixture:saved-account",
+                  source: "user",
                 },
               },
-            ]);
+            },
+          ]);
           expect(publications).toHaveLength(1);
           expect(loadSessionEntry({ agentId: "alpha", sessionKey })?.modelOverride).toBe("second");
         } finally {
@@ -362,7 +368,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           await disconnectGatewayClient(racingClient);
         }
       }
-      enterPhase("catalog request supersession");
+      enterPhase("catalog request during unrelated session patch");
       const unrelatedKey = "agent:alpha:catalog-other";
       await upsertSessionEntryCore(
         { agentId: "alpha", sessionKey: unrelatedKey },
@@ -378,10 +384,9 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           return readPreparedCatalog(...args);
         });
       const pendingCatalog = client.request("models.list", { agentId: "alpha", sessionKey });
-      const superseded = expect(pendingCatalog).rejects.toMatchObject({
-        code: "UNAVAILABLE",
-        retryable: true,
-        retryAfterMs: 0,
+      const deliveredCatalog = expect(pendingCatalog).resolves.toMatchObject({
+        models: [{ id: "first", provider: "fixture", available: true }],
+        accountSelection: { authProfileId: "fixture:replacement-account" },
       });
       try {
         await withTestTimeout(requestEntered.promise, 10_000, "Catalog request did not start");
@@ -391,16 +396,11 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           label: "Renamed unrelated session",
         });
         releaseRequest.resolve();
-        await superseded;
-        await expect(
-          client.request("models.list", { agentId: "alpha", sessionKey }),
-        ).resolves.toMatchObject({
-          accountSelection: { authProfileId: "fixture:replacement-account" },
-        });
+        await deliveredCatalog;
       } finally {
         releaseRequest.resolve();
         pendingAcquisition.mockRestore();
-        await Promise.allSettled([pendingCatalog, superseded]);
+        await Promise.allSettled([pendingCatalog, deliveredCatalog]);
       }
       enterPhase("legacy clients");
       for (const clientName of [

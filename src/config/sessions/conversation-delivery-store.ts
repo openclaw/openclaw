@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { Selectable } from "kysely";
 import type { ChannelProgressDraftCompositorSnapshot } from "../../channels/progress-draft-compositor.types.js";
 import {
   executeSqliteQuerySync,
@@ -61,25 +62,10 @@ export type ConversationDeliveryStoreScope = {
   storePath?: string;
 };
 
-type ConversationDeliveryRow = {
+type ConversationDeliveryRow = Selectable<
+  OpenClawAgentKyselyDatabase["conversation_deliveries"]
+> & {
   channel: string;
-  conversation_id: string;
-  created_at: number;
-  message_hash: string;
-  operation_kind: string;
-  operation_id: string;
-  platform_message_id: string | null;
-  prepared_message_id: string | null;
-  queue_id: string | null;
-  rejection_error: string | null;
-  reply_message_id: string | null;
-  reply_text: string | null;
-  reply_thread_id: string | null;
-  reply_timestamp: number | null;
-  reply_to_id: string | null;
-  source_session_key: string | null;
-  status: string;
-  updated_at: number;
 };
 
 function resolveDatabaseOptions(scope: ConversationDeliveryStoreScope) {

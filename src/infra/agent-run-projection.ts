@@ -28,6 +28,18 @@ export function areAgentRunModelsEqual(
   return left?.provider === right?.provider && left?.model === right?.model;
 }
 
+/** Admission waits cannot hide an independently running or queued producer. */
+export function mergeProjectedAgentRunStates(
+  previous: ProjectedAgentRunState | undefined,
+  next: ProjectedAgentRunState | undefined,
+): ProjectedAgentRunState | undefined {
+  return previous === "running" ||
+    next === undefined ||
+    (previous === "queued" && next !== "running")
+    ? previous
+    : next;
+}
+
 /** Canonicalizes every run-context field consumed by the session projection. */
 export function projectedAgentRunInputKey(context: Readonly<AgentRunContext>): string {
   const agentId = context.agentId ?? parseAgentSessionKey(context.sessionKey)?.agentId;
@@ -61,7 +73,7 @@ export function buildAgentRunProjectionIndex(params: {
     status: ProjectedAgentRunState,
   ) => {
     const previous = index.get(key);
-    if (previous !== "running" && !(previous === "queued" && status === "capacity-wait")) {
+    if (previous !== status && mergeProjectedAgentRunStates(previous, status) === status) {
       index.set(key, status);
     }
   };

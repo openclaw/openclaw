@@ -41,7 +41,7 @@ function detail(id: string, name: string, installed = false): PluginDiscoveryDet
   return {
     plugin: {
       id,
-      catalog: { name, official: true, categories: [] },
+      catalog: { name, official: true, categories: ["productivity"] },
       local: {
         present: installed,
         installed,
@@ -218,7 +218,17 @@ suite.define(() => {
         methodResponses: {
           "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
           "plugins.catalog.browse": { items: [alpha.plugin, beta.plugin] },
-          "plugins.catalog.categories": { categories: [] },
+          "plugins.catalog.categories": {
+            categories: [
+              {
+                slug: "productivity",
+                label: "Productivity",
+                description: "Tasks and work organization.",
+                icon: "list-todo",
+                order: 0,
+              },
+            ],
+          },
           "plugins.catalog.get": beta,
         },
       });

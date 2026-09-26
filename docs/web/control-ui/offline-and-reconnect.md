@@ -60,7 +60,10 @@ automatic reconnect use a calm presentation; authentication and other failures t
 attention keep their explanation and recovery action. The same status appears in the macOS app's
 embedded dashboard. Connection status does not replace the Gateway name in the account menu.
 
-The client retries ordinary connection loss automatically with backoff (800 ms up to 15 s).
+The client retries ordinary connection loss automatically with randomized backoff: the first
+retry waits 800–960 ms, and sustained failures spread retries across 12.5–15 seconds.
+Server retry hints remain minimum waits and can extend beyond that normal cap, with up to
+20% additional spread. Gateway startup hints keep their separate bounded timing.
 If the browser provides no reason for the disconnect, the connection tooltip explains that
 the connection was interrupted and whether automatic reconnection is underway. It retains
 the WebSocket close code for troubleshooting; specific Gateway errors keep their explanation.
@@ -147,6 +150,14 @@ When the Gateway confirms that it holds the same pending input, the Control UI c
 uncertain-delivery warning without sending the message again. The browser keeps its retry
 payload until consumption or cancellation is confirmed. If delivery is still unknown,
 the review warning remains.
+If the Gateway is holding that input for a later turn, it appears in the queue
+above the composer. Canceling that row withdraws the exact queued message without
+stopping the active turn. Server-held messages cannot be edited or reordered.
+
+If automatic restart recovery is interrupted or cancelled before the agent resumes,
+the **System · restart recovery** notice shows that outcome and asks you to send a
+message to continue. It does not mean the agent resumed. Messages forwarded from
+other sessions keep their own delivery status next to each message.
 
 Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Loading older history shows the saved message in its original position without adding a second copy.
 
@@ -203,16 +214,19 @@ Discard stays effective after reloading the tab; it does not cancel Gateway work
 remove messages already in the conversation history.
 
 If the Gateway reports that a `/steer` or `/redirect` message failed to start, the Control UI
-restores the submitted draft when the composer is still empty. It preserves newer text and
-attachments. If you switched conversations, recovery stays with the original conversation.
+restores the submitted draft when the composer is still empty. It preserves newer text, replies,
+and attachments. If you switched conversations, recovery stays with the original conversation.
 If you moved Home between the page and its dock while the command was pending, recovery
 follows the current Home composer and preserves any newer draft entered there.
 
 Queued messages and drafts keep the conversation and agent selected when they were created.
 Switching agents, opening a split pane, or reloading does not move them to another destination.
 When split panes show the same conversation, returning to an older pane after visiting other
-conversations does not replace a newer saved draft. Text, selected recipients, Goal mode,
-and attachments follow the same draft revision. Switching quickly between split panes keeps
+conversations does not replace a newer saved draft. Text, selected recipients, quoted replies,
+Goal mode, and attachments follow the same draft revision. A selected reply survives reload
+with its preview and original message target, even before you enter text. Canceling the reply
+clears that selection without discarding the text. Sending transfers the reply to the submitted
+message; a failed admission restores it only if you have not started a newer draft. Switching quickly between split panes keeps
 the last selected conversation active, including when narrowing the window.
 A literal `global` conversation keeps its captured agent; an agent's main conversation stays
 separate unless the Gateway is configured with global session scope.

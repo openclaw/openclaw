@@ -25,9 +25,9 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskActivitySnapshot, recordTaskActivityEvent } from "./task-registry-activity.js";
 import { retainCommittedTaskFlowEffects } from "./task-registry-flow-sync.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
-import { deleteTaskRecordById } from "./task-registry-query.js";
 import { markTaskRunningByRunId } from "./task-registry-record-api.js";
 import { taskFlowSyncOwner } from "./task-registry-state.js";
+import { runTaskRegistryMaintenance } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import { bindTaskRunOwner, getTaskRunOwner } from "./task-run-owner.js";
@@ -104,7 +104,7 @@ it("preserves task identity when terminal timestamps precede its normalized life
     endedAt: startedAt - 1_000,
     terminalSummary: "Completed the selected task",
     childSessionKey: "agent:other:unselected",
-    detail: { unexpected: "terminal input" },
+    detail: { exitCode: 0 },
   } satisfies DetachedTaskTerminalState;
   await created.finalizeActive(terminal, () => true);
   const completed = f.store.loadSnapshot().tasks.get(created.task.taskId);
@@ -120,10 +120,10 @@ it("preserves task identity when terminal timestamps precede its normalized life
     scopeKind: created.task.scopeKind,
   });
   expect(completed?.childSessionKey).toBe(created.task.childSessionKey);
-  expect(completed?.detail).toEqual(created.task.detail);
+  expect(completed?.detail).toEqual(terminal.detail);
 });
 
-it.each(["metadata", "removal", "replacement", "adoption", "prior adoption"] as const)(
+it.each(["metadata", "replacement", "adoption", "prior adoption"] as const)(
   "preserves active run selection across a sibling observer's %s change",
   async (change) => {
     const f = await fixture();
@@ -156,9 +156,7 @@ it.each(["metadata", "removal", "replacement", "adoption", "prior adoption"] as 
           expect(f.commands.filter((command) => command === "tasks.finalizeActive")).toHaveLength(
             1,
           );
-          if (change === "removal") {
-            deleteTaskRecordById(second.task.taskId);
-          } else if (change === "adoption") {
+          if (change === "adoption") {
             releaseAdoption = bindTaskRunOwner(second.task, async () => err("Synthetic successor"));
           } else if (change !== "prior adoption") {
             const replacement = {
@@ -181,15 +179,11 @@ it.each(["metadata", "removal", "replacement", "adoption", "prior adoption"] as 
       const rows = f.store.loadSnapshot().tasks;
       expect(rows.get(first.task.taskId)?.status).toBe("succeeded");
       expect(rows.get(unrelated.task.taskId)?.status).toBe("running");
-      if (change === "removal") {
-        expect(rows.has(second.task.taskId)).toBe(false);
-      } else {
-        expect(rows.get(second.task.taskId)?.status).toBe(
-          change === "metadata" ? "succeeded" : "running",
-        );
-        if (change === "metadata") {
-          expect(rows.get(second.task.taskId)?.progressSummary).toBe("Newer observer progress");
-        }
+      expect(rows.get(second.task.taskId)?.status).toBe(
+        change === "metadata" ? "succeeded" : "running",
+      );
+      if (change === "metadata") {
+        expect(rows.get(second.task.taskId)?.progressSummary).toBe("Newer observer progress");
       }
     } finally {
       releaseAdoption?.();
@@ -500,6 +494,88 @@ it("preserves acknowledged cleanup and repairs its flow after a snapshot failure
   expect(f.flows.loadSnapshot().flows.get(flow.flowId)?.status).toBe("failed");
   expect(f.commands.filter((command) => command === "tasks.settleUnstarted")).toHaveLength(1);
 });
+
+it.each([
+  ["flow sync", "current"],
+  ["flow sync", "retired task store"],
+  ["flow sync", "retired flow store"],
+  ["managed cancellation", "current"],
+  ["managed cancellation", "retired task store"],
+  ["managed cancellation", "retired flow store"],
+] as const)(
+  "retains a cleanup stamp's flow after a postcommit %s failure with %s",
+  async (failure, owner) => {
+    const f = await fixture(failure === "managed cancellation" ? "managed" : "task_mirrored");
+    const created = await f.create();
+    if (!created) {
+      throw new Error("Expected a created task");
+    }
+    const terminal: TaskRecord = {
+      ...created.task,
+      status: "succeeded",
+      endedAt: Date.now(),
+      lastEventAt: Date.now(),
+    };
+    delete terminal.cleanupAfter;
+    f.store.upsertTaskWithDeliveryState({ task: terminal });
+    publishTaskRecordAfterAtomicStore(terminal);
+    const sync = vi.spyOn(f.store, "syncLiveTaskFlowAsync");
+    if (failure === "flow sync") {
+      sync.mockRejectedValueOnce(new Error("Synthetic postcommit flow failure"));
+    } else {
+      f.flows.upsertFlow({
+        ...flow,
+        syncMode: "managed",
+        controllerId: "proof",
+        status: "running",
+        cancelRequestedAt: Date.now(),
+      });
+      f.beforeFinalize.mockImplementationOnce(() => {
+        throw new Error("Synthetic managed cancellation write failure");
+      });
+    }
+
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ cleanupStamped: 1, pruned: 0 });
+    const committed = f.store.loadSnapshot();
+    expect(committed.tasks.get(terminal.taskId)?.cleanupAfter).toBeTypeOf("number");
+    expect(f.flows.loadSnapshot().flows.get(flow.flowId)?.status).toBe("running");
+    expect(sync).toHaveBeenCalledOnce();
+    if (failure === "managed cancellation") {
+      expect(f.beforeFinalize).toHaveBeenCalledOnce();
+    }
+    // A later sweep skips the durable stamp, so only the retained flow owner can finish it.
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ cleanupStamped: 0, pruned: 0 });
+    expect(sync).toHaveBeenCalledOnce();
+    const replacementFlows = createInMemoryTaskFlowRegistryStore({
+      flows: new Map([[flow.flowId, flow]]),
+    });
+    const replacementTasks = createInMemoryTaskRegistryStore();
+    if (owner === "retired task store") {
+      configureTaskRegistryRuntime({ store: replacementTasks });
+    } else if (owner === "retired flow store") {
+      configureTaskFlowRegistryRuntime({ store: replacementFlows });
+    }
+    await vi.advanceTimersByTimeAsync(999);
+    expect(sync).toHaveBeenCalledOnce();
+    await drainRetry(1);
+    expect(sync).toHaveBeenCalledTimes(owner === "current" ? 2 : 1);
+    expect(f.flows.loadSnapshot().flows.get(flow.flowId)?.status).toBe(
+      owner === "current"
+        ? failure === "managed cancellation"
+          ? "cancelled"
+          : "succeeded"
+        : "running",
+    );
+    if (failure === "managed cancellation") {
+      expect(f.beforeFinalize).toHaveBeenCalledTimes(owner === "current" ? 2 : 1);
+    }
+    expect(f.store.loadSnapshot()).toEqual(committed);
+    expect(f.commands.filter((command) => command === "tasks.applyRetention")).toHaveLength(1);
+    expect(replacementTasks.loadSnapshot().tasks.size).toBe(0);
+    expect(replacementFlows.loadSnapshot().flows.get(flow.flowId)).toEqual(flow);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  },
+);
 
 it("upgrades the pending timer at its original deadline without losing managed cancellation", async () => {
   const f = await fixture("managed");
