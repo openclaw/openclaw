@@ -101,7 +101,7 @@ it.each(["sync", "async"])(
     expect(fs.existsSync(path.join(instance, "owner.sqlite"))).toBe(true);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 2 * hour);
-    await sweepPluginSourceCaptureDirectories(stateDir);
+    await sweepPluginSourceCapturesForTest(stateDir);
     expect(fs.readFileSync(payload, "utf8")).toBe("retained native bytes");
     expect(fs.existsSync(path.join(instance, "owner.sqlite"))).toBe(true);
   },
