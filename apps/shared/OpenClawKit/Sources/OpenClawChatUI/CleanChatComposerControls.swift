@@ -193,26 +193,31 @@ struct OpenClawChatAttachmentsStrip: View {
                                 .scaledToFill()
                                 .frame(width: 22, height: 22)
                                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        } else if attachment.mimeType.hasPrefix("audio/") {
-                            Image(systemName: "waveform")
+                        } else {
+                            Image(systemName: OpenClawChatPickerAttachmentMetadata.fileIcon(
+                                mimeType: attachment.mimeType,
+                                fileName: attachment.fileName))
+                                .accessibilityHidden(true)
+                        }
+
+                        if attachment.mimeType.hasPrefix("audio/"), let duration = attachment.durationSeconds {
                             Text("Voice note")
                                 .font(OpenClawChatTypography.caption)
-                            if let duration = attachment.durationSeconds {
-                                Text(openClawVoiceNoteDurationLabel(duration))
+                            Text(openClawVoiceNoteDurationLabel(duration))
+                                .font(OpenClawChatTypography.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(attachment.fileName)
+                                .font(OpenClawChatTypography.caption)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .frame(maxWidth: 180)
+                            if !attachment.mimeType.hasPrefix("image/") {
+                                Text(ByteCountFormatter.string(
+                                    fromByteCount: Int64(attachment.data.count), countStyle: .file))
                                     .font(OpenClawChatTypography.caption)
                                     .foregroundStyle(.secondary)
                             }
-                        } else {
-                            Image(systemName: "photo")
-                            Text(attachment.fileName)
-                                .font(OpenClawChatTypography.caption)
-                                .lineLimit(1)
-                        }
-
-                        if attachment.preview != nil {
-                            Text(attachment.fileName)
-                                .font(OpenClawChatTypography.caption)
-                                .lineLimit(1)
                         }
 
                         Button {
@@ -221,11 +226,15 @@ struct OpenClawChatAttachmentsStrip: View {
                             Image(systemName: "xmark.circle.fill")
                         }
                         .buttonStyle(.plain)
+                        .help("Remove attachment")
+                        .accessibilityLabel(String(
+                            format: String(localized: "Remove attachment: %@"), attachment.fileName))
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
                     .background(OpenClawChatTheme.accent.opacity(0.08))
                     .clipShape(Capsule())
+                    .help(attachment.fileName)
                 }
             }
         }
@@ -288,7 +297,7 @@ struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
                 self.showsFileImporter = true
             } label: {
                 Label {
-                    Text("Choose Media File")
+                    Text("Attach file")
                         .font(OpenClawChatTypography.body)
                 } icon: {
                     Image(systemName: "folder")

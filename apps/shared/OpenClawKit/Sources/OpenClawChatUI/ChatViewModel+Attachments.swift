@@ -4,8 +4,9 @@ import ImageIO
 import OpenClawKit
 import UniformTypeIdentifiers
 
-private enum ChatVideoAttachmentReadError: Error {
+private enum ChatAttachmentReadError: Error {
     case tooLarge
+    case unreadable
 }
 
 #if canImport(AppKit)
@@ -15,10 +16,6 @@ import UIKit
 #endif
 
 extension OpenClawChatViewModel {
-    nonisolated static var maxVideoAttachmentBytes: Int {
-        20 * 1024 * 1024
-    }
-
     public func addAttachments(urls: [URL]) {
         self.beginAttachmentStaging()
         Task {
@@ -160,41 +157,38 @@ extension OpenClawChatViewModel {
     }
 
     func loadAttachments(urls: [URL], expectedSession: SessionSnapshot? = nil) async {
+        var unreadable: [String] = []
+        var oversized: [String] = []
         for url in urls {
             guard self.ownsAttachmentSession(expectedSession) else { return }
-            let hasSecurityScope = url.startAccessingSecurityScopedResource()
-            defer {
-                if hasSecurityScope {
-                    url.stopAccessingSecurityScopedResource()
-                }
-            }
             do {
-                let contentType = UTType(filenameExtension: url.pathExtension) ?? .data
-                if Self.isVideoType(contentType) {
-                    await self.addVideoAttachment(
-                        url: url,
-                        fileName: url.lastPathComponent,
-                        mimeType: contentType.preferredMIMEType ?? "application/octet-stream",
-                        expectedSession: expectedSession)
-                } else if contentType.conforms(to: .image) {
-                    let data = try await Task.detached { try Data(contentsOf: url) }.value
-                    await self.addImageAttachment(
-                        url: url,
-                        data: data,
-                        fileName: url.lastPathComponent,
-                        mimeType: Self.mimeType(for: url) ?? "application/octet-stream",
-                        expectedSession: expectedSession)
-                } else {
-                    self.errorText = String(localized: "Only image and video attachments are supported right now")
-                }
+                try await self.addFileAttachment(
+                    url: url,
+                    fileName: url.lastPathComponent,
+                    mimeType: Self.mimeType(for: url) ?? "application/octet-stream",
+                    expectedSession: expectedSession)
+            } catch ChatAttachmentReadError.tooLarge {
+                oversized.append(url.lastPathComponent)
             } catch {
-                guard self.ownsAttachmentSession(expectedSession) else { return }
-                self.errorText = error.localizedDescription
+                unreadable.append(url.lastPathComponent)
             }
         }
+        guard self.ownsAttachmentSession(expectedSession) else { return }
+        let errors = [
+            unreadable.isEmpty ? nil : String(
+                format: String(localized: "Could not attach: %@"), Self.attachmentNames(unreadable)),
+            oversized.isEmpty ? nil : String(
+                format: String(localized: "Too large to send: %@"), Self.attachmentNames(oversized)),
+        ].compactMap(\.self)
+        if !errors.isEmpty { self.errorText = errors.joined(separator: "\n") }
     }
 
-    static func mimeType(for url: URL) -> String? {
+    private static func attachmentNames(_ names: [String]) -> String {
+        let more = names.count > 3 ? String(format: String(localized: " +%@"), String(names.count - 3)) : ""
+        return names.prefix(3).joined(separator: ", ") + more
+    }
+
+    nonisolated static func mimeType(for url: URL) -> String? {
         let ext = url.pathExtension
         guard !ext.isEmpty else { return nil }
         return (UTType(filenameExtension: ext) ?? .data).preferredMIMEType
@@ -207,7 +201,16 @@ extension OpenClawChatViewModel {
         mimeType: String,
         expectedSession: SessionSnapshot? = nil) async
     {
+        let limits = await self.transport.attachmentLimits()
         guard self.ownsAttachmentSession(expectedSession) else { return }
+        guard !data.isEmpty else {
+            errorText = String(format: String(localized: "Could not attach: %@"), fileName)
+            return
+        }
+        if let maximumBytes = limits?.maxImageBytes, data.count > maximumBytes {
+            errorText = String(format: String(localized: "Too large to send: %@"), fileName)
+            return
+        }
         let uti: UTType = {
             if let url {
                 return UTType(filenameExtension: url.pathExtension) ?? .data
@@ -236,9 +239,9 @@ extension OpenClawChatViewModel {
         // Image processing runs off actor. Revalidate the draft owner before
         // publishing either the attachment or any session-scoped error state.
         guard self.ownsAttachmentSession(expectedSession) else { return }
-        if processed.count > Self.maxAttachmentBytes {
+        if let maximumBytes = limits?.maxImageBytes, processed.count > maximumBytes {
             errorText = String(
-                format: String(localized: "Attachment %@ exceeds 5 MB limit after resizing"),
+                format: String(localized: "Too large to send: %@"),
                 fileName)
             return
         }
@@ -266,58 +269,53 @@ extension OpenClawChatViewModel {
     {
         guard self.ownsAttachmentSession(expectedSession) else { return }
         do {
-            let data = try await Self.readVideoData(from: url)
-            guard self.ownsAttachmentSession(expectedSession) else { return }
-            await self.addVideoAttachment(
-                data: data,
+            try await self.addFileAttachment(
+                url: url,
                 fileName: fileName,
                 mimeType: mimeType,
-                contentType: UTType(filenameExtension: url.pathExtension) ?? .data,
                 expectedSession: expectedSession)
-        } catch ChatVideoAttachmentReadError.tooLarge {
+        } catch ChatAttachmentReadError.tooLarge {
             guard self.ownsAttachmentSession(expectedSession) else { return }
             self.errorText = String(
-                format: String(localized: "Attachment %@ exceeds the 20 MB video limit"),
+                format: String(localized: "Too large to send: %@"),
                 fileName)
         } catch {
             guard self.ownsAttachmentSession(expectedSession) else { return }
-            self.errorText = error.localizedDescription
+            self.errorText = String(format: String(localized: "Could not attach: %@"), fileName)
         }
     }
 
-    private func addVideoAttachment(
-        data: Data,
+    private func addFileAttachment(
+        url: URL,
         fileName: String,
         mimeType: String,
-        contentType: UTType,
-        expectedSession: SessionSnapshot?) async
+        expectedSession: SessionSnapshot?) async throws
     {
+        let limits = await self.transport.attachmentLimits()
         guard self.ownsAttachmentSession(expectedSession) else { return }
-        guard Self.isVideoType(contentType) else {
-            self.errorText = String(localized: "Only image and video attachments are supported right now")
-            return
+        let hasSecurityScope = url.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurityScope { url.stopAccessingSecurityScopedResource() }
         }
-        guard data.count <= Self.maxVideoAttachmentBytes else {
-            self.errorText = String(
-                format: String(localized: "Attachment %@ exceeds the 20 MB video limit"),
-                fileName)
+        let maximumBytes = mimeType.hasPrefix("image/") ? limits?.maxImageBytes : limits?.maxBytes
+        let data = try await Self.readAttachmentData(from: url, maximumBytes: maximumBytes)
+        guard self.ownsAttachmentSession(expectedSession) else { return }
+        if mimeType.hasPrefix("image/") {
+            await self.addImageAttachment(
+                url: url, data: data, fileName: fileName, mimeType: mimeType, expectedSession: expectedSession)
             return
         }
 
-        let normalizedMIME = contentType.preferredMIMEType ?? mimeType
-        guard normalizedMIME.lowercased().hasPrefix("video/") else {
-            self.errorText = String(localized: "Only image and video attachments are supported right now")
-            return
+        var thumbnailData: Data?
+        if mimeType.hasPrefix("video/") {
+            thumbnailData = await Self.videoThumbnailData(data: data, fileExtension: url.pathExtension)
         }
-        let thumbnailData = await Self.videoThumbnailData(
-            data: data,
-            fileExtension: contentType.preferredFilenameExtension ?? "mp4")
         guard self.ownsAttachmentSession(expectedSession) else { return }
         self.attachments.append(OpenClawPendingAttachment(
             url: nil,
             data: data,
             fileName: fileName,
-            mimeType: normalizedMIME,
+            mimeType: mimeType,
             preview: thumbnailData.flatMap { Self.previewImage(data: $0) }))
     }
 
@@ -335,24 +333,27 @@ extension OpenClawChatViewModel {
         #endif
     }
 
-    private nonisolated static func isVideoType(_ contentType: UTType) -> Bool {
-        contentType.conforms(to: .movie) ||
-            (contentType.conforms(to: .audiovisualContent) && !contentType.conforms(to: .audio))
-    }
-
-    private nonisolated static func readVideoData(from url: URL) async throws -> Data {
+    private nonisolated static func readAttachmentData(from url: URL, maximumBytes: Int?) async throws -> Data {
         try await Task.detached(priority: .userInitiated) {
-            let maximumBytes = Self.maxVideoAttachmentBytes
-            let values = try url.resourceValues(forKeys: [.fileSizeKey])
-            if let fileSize = values.fileSize, fileSize > maximumBytes {
-                throw ChatVideoAttachmentReadError.tooLarge
+            guard url.isFileURL else { throw ChatAttachmentReadError.unreadable }
+            let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+            guard values.isRegularFile == true else { throw ChatAttachmentReadError.unreadable }
+            if let maximumBytes, let fileSize = values.fileSize, fileSize > maximumBytes {
+                throw ChatAttachmentReadError.tooLarge
             }
             let handle = try FileHandle(forReadingFrom: url)
             defer { try? handle.close() }
-            let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
-            guard data.count <= maximumBytes else {
-                throw ChatVideoAttachmentReadError.tooLarge
+            // Recheck bytes after reading: a file can grow after the metadata
+            // check. An oversized base64 frame would disconnect the Gateway.
+            let data: Data = if let maximumBytes {
+                try handle.read(upToCount: maximumBytes + 1) ?? Data()
+            } else {
+                try handle.readToEnd() ?? Data()
             }
+            if let maximumBytes, data.count > maximumBytes {
+                throw ChatAttachmentReadError.tooLarge
+            }
+            guard !data.isEmpty else { throw ChatAttachmentReadError.unreadable }
             return data
         }.value
     }

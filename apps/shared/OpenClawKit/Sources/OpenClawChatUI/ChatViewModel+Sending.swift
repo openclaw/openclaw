@@ -597,6 +597,7 @@ extension OpenClawChatViewModel {
                     text: nil,
                     mimeType: payload.mimeType,
                     fileName: payload.fileName,
+                    sizeBytes: attachment.data.count,
                     durationSeconds: attachment.durationSeconds,
                     content: AnyCodable(payload.content)))
         }

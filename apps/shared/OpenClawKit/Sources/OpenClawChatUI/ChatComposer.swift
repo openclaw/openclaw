@@ -878,6 +878,10 @@ struct OpenClawChatComposer: View {
                     guard self.isAttachmentInputEnabled else { return }
                     self.viewModel.addImageAttachment(data: data, fileName: fileName, mimeType: mimeType)
                 },
+                onPasteFiles: { urls in
+                    guard self.isAttachmentInputEnabled else { return }
+                    self.viewModel.addAttachments(urls: urls)
+                },
                 onKeyCommand: { command, context in
                     self.handleComposerKeyCommand(command, context: context)
                 })
