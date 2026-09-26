@@ -526,4 +526,77 @@ describe("cron tool flat-params", () => {
     expect(params.enabled).toBe(true);
     expect(params.description).toBe("All keys should be preserved as-is");
   });
+
+  it("nests literal dotted job keys into the recovered update patch (#120616)", async () => {
+    // Models sometimes emit "job.payload.message" as a flat literal key instead of
+    // nesting it. Without dotted-key recovery the key is not a recognized cron
+    // field, params.job stays absent, and cron-tool throws "job required".
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-dotted-payload", {
+      action: "update",
+      jobId: "job-dotted",
+      "job.payload.message": "after",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: Record<string, unknown>;
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params.id).toBe("job-dotted");
+    expect(params.patch).toEqual({ payload: { kind: "agentTurn", message: "after" } });
+    expect(params.patch).not.toHaveProperty("job.payload.message");
+  });
+
+  it("leaves a dotted key unresolved when its canonical root already exists (#120616)", async () => {
+    // Same principle as the padded-duplicate rule: an ambiguous input is not
+    // silently resolved. The canonical root keeps its value and the literal
+    // dotted key survives so strict gateway validation rejects the conflict.
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-dotted-conflict", {
+      action: "update",
+      jobId: "job-dotted-conflict",
+      payload: { kind: "agentTurn", message: "before" },
+      "job.payload.message": "after",
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      patch?: Record<string, unknown>;
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params.patch).toHaveProperty("payload.message", "before");
+    expect(params.patch).toHaveProperty("job.payload.message", "after");
+  });
+
+  it("does not nest dotted keys rooted at a scalar cron field (#120616)", async () => {
+    // Only object-typed cron fields are containers in the gateway schema, so a
+    // dot inside a scalar such as a job name stays a plain unrecognized key
+    // instead of being reshaped into a path.
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-dotted-scalar", {
+        action: "update",
+        jobId: "job-dotted-name",
+        "job.name": "nightly.report",
+      }),
+    ).rejects.toThrow("job required");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("does not nest dotted keys that would reach Object.prototype (#120616)", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await expect(
+      tool.execute("call-dotted-proto", {
+        action: "update",
+        jobId: "job-dotted-proto",
+        "job.payload.__proto__.polluted": "yes",
+      }),
+    ).rejects.toThrow("job required");
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
 });

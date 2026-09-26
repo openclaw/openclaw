@@ -68,6 +68,32 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   ...CRON_FLAT_SCHEDULE_KEYS,
 ]);
 
+/**
+ * Top-level cron fields the gateway schema types as objects, so a dotted model
+ * key such as "payload.message" is a recoverable path into them.
+ *
+ * Membership is read off CronJobSchema, not guessed: every other entry of
+ * CRON_RECOVERABLE_OBJECT_KEYS is a scalar (or a flat shorthand scalar), so a
+ * dot there belongs to the value rather than to the shape — "nightly.report" is
+ * a job name, not a path, and must never be expanded into a nested object.
+ */
+const CRON_NESTABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
+  "delivery",
+  "failureAlert",
+  "owner",
+  "pacing",
+  "payload",
+  "schedule",
+  "trigger",
+]);
+
+/** Path segments that would reach Object.prototype when assigned while nesting. */
+const CRON_UNSAFE_KEY_SEGMENTS: ReadonlySet<string> = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
+
 function isCronScheduleKind(value: unknown): value is (typeof CRON_SCHEDULE_KINDS)[number] {
   return isStringOption(value, CRON_SCHEDULE_KINDS);
 }
@@ -298,6 +324,53 @@ function repairPaddedCronKeys(value: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Nests a literal dotted cron key ("job.payload.message") into
+ * { payload: { message } } so the gateway sees the nested shape the tool schema
+ * documents. Returns:
+ * - "nested": the path was free and now holds the recovered value.
+ * - "conflict": some segment along the path is already occupied. Mirrors
+ *   repairPaddedCronKeys: the ambiguity is never resolved here, so the caller
+ *   keeps the literal key and strict gateway validation rejects the input.
+ * - "ignored": not a recoverable path (unrecognized root, empty or unsafe
+ *   segment); the key stays an unknown property for strict validation.
+ */
+function nestDottedCronKey(
+  value: Record<string, unknown>,
+  key: string,
+  entry: unknown,
+): "nested" | "conflict" | "ignored" {
+  const segments = key.split(".").map((segment) => segment.trim());
+  // "job." is the tool-schema wrapper the model is addressing; the recovered
+  // value is already that job object, so the leading segment is dropped.
+  if (segments[0] === "job") {
+    segments.shift();
+  }
+  const [root, ...rest] = segments;
+  if (rest.length === 0 || !root || !CRON_NESTABLE_OBJECT_KEYS.has(root)) {
+    return "ignored";
+  }
+  if (segments.some((segment) => !segment || CRON_UNSAFE_KEY_SEGMENTS.has(segment))) {
+    return "ignored";
+  }
+  let cursor = value;
+  for (const [index, segment] of segments.entries()) {
+    // `in` also covers inherited members, which keeps a dotted path from ever
+    // overwriting something already present on the target object.
+    if (segment in cursor) {
+      return "conflict";
+    }
+    if (index === segments.length - 1) {
+      cursor[segment] = entry;
+      return "nested";
+    }
+    const child: Record<string, unknown> = {};
+    cursor[segment] = child;
+    cursor = child;
+  }
+  return "nested";
+}
+
 /** Converts model-friendly cron tool shorthands into the nested gateway job/patch shape. */
 export function canonicalizeCronToolObject(
   value: Record<string, unknown>,
@@ -360,6 +433,22 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
   let found = false;
   for (const key of Object.keys(params)) {
     if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
+      value[key] = params[key];
+      found = true;
+    }
+  }
+  // Dotted keys run as a second pass so a canonical sibling always wins,
+  // whatever the key order the model happened to emit.
+  for (const key of Object.keys(params)) {
+    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) || params[key] === undefined) {
+      continue;
+    }
+    const outcome = nestDottedCronKey(value, key, params[key]);
+    if (outcome === "nested") {
+      found = true;
+    } else if (outcome === "conflict") {
+      // Ambiguous input: preserve the literal key so strict gateway validation
+      // rejects the conflict instead of one value silently winning.
       value[key] = params[key];
       found = true;
     }
