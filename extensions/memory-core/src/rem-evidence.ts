@@ -3,6 +3,15 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readWorkspaceText } from "./memory-workspace-files.js";
 import { collectMarkdownFiles } from "./rem-evidence-files.js";
 import {
+  makeRef,
+  parseMarkdownSections,
+  sanitizeSectionTitle,
+  sectionToSnippets,
+  type GroundedRemSource,
+  type ParsedMarkdownSection,
+  type SectionSnippet,
+} from "./rem-evidence-markdown.js";
+import {
   normalizeMemoryPath,
   normalizeSnippet as normalizeWhitespace,
 } from "./short-term-promotion-utils.js";
@@ -58,10 +67,6 @@ const REM_MONITORING_SIGNAL_RE =
   /\b(heartbeat|ariston|collect-temps|low pressure|exit code|invalid[_-]?grant|token expired|token revoked|warning\/error|warning|alert(?:ing)?|checkpoint at|daily note file already existed|header creation|local time verified|calendar access failed|gmail .* failed|no proactive .* sent|silent log only|gateway restarted successfully|still no response|no reply yet|blocked\b|passkey|credential|password in bws|working correctly|catchup completed)\b/i;
 const REM_SPECIFICITY_BURDEN_RE =
   /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b|€|\$\d|→|\b\d{1,2}:\d{2}\b|\+\d{6,}/i;
-const REM_TIME_PREFIX_RE = /^\d{1,2}:\d{2}\s*-\s*/;
-const REM_CODE_FENCE_RE = /^\s*```/;
-const REM_TABLE_RE = /^\s*\|.*\|\s*$/;
-const REM_TABLE_DIVIDER_RE = /^\s*\|?[\s:-]+\|[\s|:-]*$/;
 const REM_SUMMARY_FACT_LIMIT = 4;
 const REM_SUMMARY_REFLECTION_LIMIT = 4;
 const REM_SUMMARY_MEMORY_LIMIT = 3;
@@ -94,23 +99,6 @@ type CandidateSnippetSummary = GroundedRemCandidate & {
   score: number;
 };
 
-type ParsedSectionLine = {
-  line: number;
-  text: string;
-};
-
-type ParsedMarkdownSection = {
-  title: string;
-  startLine: number;
-  endLine: number;
-  lines: ParsedSectionLine[];
-};
-
-type SectionSnippet = {
-  text: string;
-  line: number;
-};
-
 type SectionSummary = {
   title: string;
   text: string;
@@ -127,111 +115,6 @@ type SectionSummary = {
     overall: number;
   };
 };
-
-function stripMarkdown(text: string): string {
-  return normalizeWhitespace(
-    text
-      .replace(/!\[[^\]]*]\([^)]*\)/g, "")
-      .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
-      .replace(/[`*_~>#]/g, "")
-      .replace(/\s+/g, " "),
-  );
-}
-
-function sanitizeSectionTitle(title: string): string {
-  return normalizeWhitespace(stripMarkdown(title).replace(REM_TIME_PREFIX_RE, ""));
-}
-
-function makeRef(pathValue: string, startLine: number, endLine = startLine): string {
-  return startLine === endLine
-    ? `${pathValue}:${startLine}`
-    : `${pathValue}:${startLine}-${endLine}`;
-}
-
-function parseMarkdownSections(content: string): ParsedMarkdownSection[] {
-  const sections: ParsedMarkdownSection[] = [];
-  const lines = content.split(/\r?\n/);
-  let current: ParsedMarkdownSection | null = null;
-  let inCodeFence = false;
-
-  const flush = () => {
-    if (!current) {
-      return;
-    }
-    const meaningfulLines = current.lines.filter(
-      (entry) => normalizeWhitespace(entry.text).length > 0,
-    );
-    if (meaningfulLines.length > 0) {
-      const endLine = meaningfulLines[meaningfulLines.length - 1]?.line ?? current.endLine;
-      sections.push({ ...current, endLine, lines: meaningfulLines });
-    }
-    current = null;
-  };
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const rawLine = lines[index] ?? "";
-    const lineNumber = index + 1;
-    if (REM_CODE_FENCE_RE.test(rawLine)) {
-      inCodeFence = !inCodeFence;
-      continue;
-    }
-    if (inCodeFence) {
-      continue;
-    }
-    const headingMatch = rawLine.match(/^\s{0,3}(#{2,6})\s+(.+)$/);
-    if (headingMatch?.[2]) {
-      flush();
-      current = {
-        title: sanitizeSectionTitle(headingMatch[2]),
-        startLine: lineNumber,
-        endLine: lineNumber,
-        lines: [],
-      };
-      continue;
-    }
-    if (!current) {
-      continue;
-    }
-    current.endLine = lineNumber;
-    const trimmed = rawLine.trim();
-    if (
-      !trimmed ||
-      /^---+$/.test(trimmed) ||
-      REM_TABLE_RE.test(trimmed) ||
-      REM_TABLE_DIVIDER_RE.test(trimmed)
-    ) {
-      continue;
-    }
-    current.lines.push({ line: lineNumber, text: rawLine });
-  }
-
-  flush();
-  return sections;
-}
-
-function sectionToSnippets(section: ParsedMarkdownSection): SectionSnippet[] {
-  const snippets: SectionSnippet[] = [];
-  const seen = new Set<string>();
-  for (const entry of section.lines) {
-    const trimmed = entry.text.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const bulletMatch = trimmed.match(/^(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s*)?(.*)$/);
-    const candidateText = bulletMatch?.[1] ?? trimmed;
-    const text = stripMarkdown(candidateText);
-    if (text.length < 10) {
-      continue;
-    }
-    const dedupeKey = text.toLowerCase();
-    if (seen.has(dedupeKey)) {
-      continue;
-    }
-    seen.add(dedupeKey);
-    snippets.push({ text, line: entry.line });
-  }
-  return snippets;
-}
 
 function countMatchingSnippets(snippets: SectionSnippet[], pattern: RegExp): number {
   let count = 0;
@@ -469,6 +352,15 @@ function buildFactText(title: string, text: string): string {
     return `${compactTitle}: ${text}`;
   }
   return text;
+}
+
+export function resolveGroundedRemSeedSnippet(text: string, source: GroundedRemSource): string {
+  const compactText = compactCandidateSnippetText(source.text, source.title);
+  const isAtomicClaim = atomizeClaimText(compactText).some(
+    (claim) => buildFactText(source.title, claim) === text,
+  );
+  // A coalesced atomic claim stays compact; a joined summary uses only this source's text.
+  return isAtomicClaim ? text : source.text;
 }
 
 function findTopLevelDelimiter(text: string, delimiter: string): number {
