@@ -368,6 +368,7 @@ Manual run and inspection:
 ```bash
 openclaw automations list
 openclaw automations list --agent ops
+openclaw automations list --all --agent ops --query backup --json
 openclaw automations get <job-id>
 openclaw automations get <job-id> --json
 openclaw automations show <job-id>
@@ -394,6 +395,14 @@ newest-first order, and `--offset <n>` advances through the result set using the
 page metadata returned by the previous command.
 
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
+
+Use `--query <text>` to search job IDs, names, descriptions, declared agent IDs,
+and display names. Matching is case-insensitive and uses the Gateway's existing
+inventory filter before paging; the CLI reads every bounded matching page with
+the same query. It combines with `--all`, `--agent`, and either text or `--json`
+output. Omitting the flag or passing only whitespace keeps the existing listing.
+This searches job metadata, not message or script payloads; use `automations runs
+<job-id> --query <text>` to search run summaries and errors instead.
 
 The human-readable Agent ID column shows the effective owner. JSON list rows preserve the declared `agentId` and include `effectiveAgentId`, which is `null` when ownership is unresolved.
 
