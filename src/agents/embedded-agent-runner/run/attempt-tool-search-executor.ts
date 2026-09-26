@@ -40,6 +40,16 @@ export function createSubscribedToolSearchExecutor(params: {
   return async (toolParams) => {
     const runSignal = params.runSignal;
     const signal = AbortSignal.any([toolParams.signal ?? runSignal, runSignal]);
+    let input = toolParams.input;
+    let preparationFailure: { error: unknown } | undefined;
+    try {
+      if (toolParams.tool.prepareArguments) {
+        input = toolParams.tool.prepareArguments(toolParams.input);
+      }
+    } catch (error) {
+      preparationFailure = { error };
+    }
+    const lifecycleArgs = preparationFailure ? toolParams.input : input;
     const yieldRunSignal = toolParams.toolName === "sessions_yield" ? runSignal : undefined;
     const startedAt = Date.now();
     const startOrder = nestedStartOrder++;
@@ -58,7 +68,7 @@ export function createSubscribedToolSearchExecutor(params: {
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
         parentToolCallId: toolParams.parentToolCallId,
-        args: toolParams.input,
+        args: lifecycleArgs,
         replaySafe: toolParams.replaySafe ?? params.isReplaySafeTool(toolParams.tool),
         hideFromChannelProgress:
           "hideFromChannelProgress" in toolParams.tool &&
@@ -109,6 +119,9 @@ export function createSubscribedToolSearchExecutor(params: {
           await raceWithAbortSignal(
             retainToolSearchImplementation(
               (async () => {
+                if (preparationFailure) {
+                  throw preparationFailure.error;
+                }
                 signal.throwIfAborted();
                 const preparer = getInternalToolExecutionPreparer(toolParams.tool);
                 if (!preparer) {
@@ -116,14 +129,14 @@ export function createSubscribedToolSearchExecutor(params: {
                   // SAFETY: toClientToolDefinitions pre-binds client dispatch to the native execution contract.
                   return await (toolParams.tool as AnyAgentTool).execute(
                     toolParams.toolCallId,
-                    toolParams.input,
+                    input,
                     signal,
                     toolParams.onUpdate,
                   );
                 }
                 const prepared = await preparer({
                   toolCallId: toolParams.toolCallId,
-                  args: toolParams.input,
+                  args: input,
                   signal,
                   onUpdate: toolParams.onUpdate,
                 });
