@@ -56,6 +56,12 @@ function createConfiguredRouteResult(
 ): ConfiguredBindingRoute {
   return {
     bindingResolution: {
+      statefulTarget: {
+        kind: "stateful",
+        driverId: "acp",
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+      },
       record: {
         bindingId: "binding-1",
         targetSessionKey: SESSION_KEY,
@@ -68,7 +74,10 @@ function createConfiguredRouteResult(
           conversationId: "C1",
         },
       },
-    } as ConfiguredBindingResolution,
+    } satisfies Pick<
+      ConfiguredBindingResolution,
+      "record" | "statefulTarget"
+    > as ConfiguredBindingResolution,
     boundSessionKey: SESSION_KEY,
     route: {
       ...params.route,
@@ -425,6 +434,11 @@ describe("discord native /think autocomplete", () => {
       cfg,
       accountId: "default",
       threadBindings: createNoopThreadBindingManager("default"),
+    });
+    expect(context).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      agentId: "main",
     });
     const { command, levelArg } = requireThinkLevelCommand();
 
