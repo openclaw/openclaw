@@ -263,3 +263,21 @@ export function wrapXaiProviderStream(
     (streamFn) => createToolStreamWrapper(streamFn, toolStreamEnabled),
   );
 }
+
+/**
+ * Direct `completeSimple` callers (utility model labels, titles, summaries) dispatch
+ * through the built-in API without the embedded runtime's wrappers. The Grok OAuth
+ * proxy still requires its CLI identity headers and the payload compat patches on
+ * that path, or it rejects every request; tool and fast-mode wrappers do not apply
+ * to these tool-less completions (#153366).
+ */
+export function wrapXaiSimpleCompletionStream(
+  ctx: ProviderWrapStreamFnContext,
+  runtime?: { clientVersion?: string },
+): StreamFn | undefined {
+  return composeProviderStreamWrappers(
+    ctx.streamFn,
+    (streamFn) => createXaiGrokOAuthHeadersWrapper(streamFn, runtime?.clientVersion),
+    createXaiToolPayloadCompatibilityWrapper,
+  );
+}

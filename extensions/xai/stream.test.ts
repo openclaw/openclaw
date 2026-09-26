@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { resolveFastModeSupport } from "./provider-policy-api.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
-import { wrapXaiProviderStream } from "./stream.js";
+import { wrapXaiProviderStream, wrapXaiSimpleCompletionStream } from "./stream.js";
 type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
 type StreamEvent = Record<string, unknown> & { type?: string };
 
@@ -230,6 +230,68 @@ describe("xai stream wrappers", () => {
       "x-grok-model-override": id,
       "x-xai-token-auth": "xai-grok-cli",
     });
+  });
+
+  // Utility completions (labels, titles, summaries) dispatch outside the embedded runtime,
+  // so the proxy contract must also hold on the simple-completion wrapper (#153366).
+  it("applies the Grok OAuth proxy request contract to simple completions", () => {
+    let capturedHeaders: Record<string, string> | undefined;
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      capturedHeaders = options?.headers;
+      const payload: Record<string, unknown> = { reasoning: { effort: "high" }, include: [] };
+      options?.onPayload?.(payload, model);
+      capturedPayload = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = wrapXaiSimpleCompletionStream({ streamFn: baseStreamFn } as never, {
+      clientVersion: "2026.9.5",
+    });
+
+    void wrapped?.(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4.20-0309-non-reasoning",
+        reasoning: false,
+        baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      { headers: { "X-Existing": "kept" } },
+    );
+
+    expect(capturedHeaders).toEqual({
+      "x-existing": "kept",
+      "x-grok-client-version": "2026.9.5",
+      "x-grok-model-override": "grok-4.20-0309-non-reasoning",
+      "x-xai-token-auth": "xai-grok-cli",
+    });
+    // Non-reasoning models reject reasoning controls on the wire.
+    expect(capturedPayload).not.toHaveProperty("reasoning");
+  });
+
+  it("leaves simple completions to a non-proxy xai endpoint unchanged", () => {
+    let capturedHeaders: Record<string, string> | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedHeaders = options?.headers;
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = wrapXaiSimpleCompletionStream({ streamFn: baseStreamFn } as never, {
+      clientVersion: "2026.9.5",
+    });
+
+    void wrapped?.(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4.5",
+        baseUrl: XAI_BASE_URL,
+      } as Model<"openai-responses">,
+      { messages: [] } as Context,
+      { headers: { "X-Existing": "kept" } },
+    );
+
+    expect(capturedHeaders).toEqual({ "X-Existing": "kept" });
   });
 
   it.each([
