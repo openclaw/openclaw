@@ -1,9 +1,11 @@
-name: iOS narration focused native checks
+name: Apple grouping focused regression proof
 
 on:
   push:
     branches: [roboclaw/ios-narration-proof-156944]
-    paths: [.github/workflows/ios-narration-check.yml]
+    paths:
+      - .github/workflows/ios-narration-check.yml
+      - scripts/native-grouping-regressions/**
 
 permissions:
   contents: read
@@ -14,74 +16,56 @@ jobs:
     timeout-minutes: 60
     env:
       CANDIDATE_SHA: b9ae24aec6ad8ef987f904d3ed2fb748daac4892
-      BASELINE_SHA: 8c870f669e3528864881333d04875512ef81cfdc
-      RUN_FOCUSED_TESTS: "false"
+      GROUPING_PATCH_SHA256: b80dff99f29e45f1ad887f7d882f2a2ec3fec1a9dee3426419a2e4b917cdb549
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: b9ae24aec6ad8ef987f904d3ed2fb748daac4892
-          fetch-depth: 3
           persist-credentials: false
-      - name: Verify exact source and Apple capability
+      - name: Checkout verification-only helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: .proof
+          persist-credentials: false
+      - name: Pin original prototype and transplant regression tests only
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(shasum -a 256 .proof/scripts/ios-agent-grouping.patch | awk '{print $1}')" = "$GROUPING_PATCH_SHA256"
+          git apply --index .proof/scripts/ios-agent-grouping.patch
+          mkdir -p "$RUNNER_TEMP/grouping-regressions"
+          { git rev-parse HEAD; git write-tree; } > "$RUNNER_TEMP/grouping-regressions/source-identity.txt"
+          git apply .proof/scripts/native-grouping-regressions/settlement-test.patch
+          git diff --exit-code -- apps/shared/OpenClawKit/Sources
+          git diff -- apps/shared/OpenClawKit/Tests > "$RUNNER_TEMP/grouping-regressions/tests-only.patch"
           source scripts/lib/swift-toolchain.sh
           select_xcode_toolchain 27.0
-          mkdir -p "$RUNNER_TEMP/narration-proof"
-          { git rev-parse HEAD; xcodebuild -version; swift --version; } > "$RUNNER_TEMP/narration-proof/toolchain.txt"
-          xcrun devicectl list devices > "$RUNNER_TEMP/narration-proof/physical-devices.txt"
-          xcrun simctl list devices available --json > "$RUNNER_TEMP/narration-proof/simulators.json"
+          { xcodebuild -version; swift --version; } > "$RUNNER_TEMP/grouping-regressions/toolchain.txt"
       - uses: ./.github/actions/setup-node-env
-        if: env.RUN_FOCUSED_TESTS == 'true'
         with:
           node-version: 24.19.0
           install-bun: "false"
           install-deps: "false"
-          cache-mode: off
+          cache-mode: "off"
       - name: Prepare native renderer resources
-        if: env.RUN_FOCUSED_TESTS == 'true'
         run: |
           pnpm install --frozen-lockfile --prefer-offline --optional --filter '@openclaw/mermaid-renderer...' --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
           node scripts/prepare-apple-mermaid.mjs
-      - name: Install repository-pinned Swift tools
-        run: |
-          scripts/install-swift-tools.sh "$RUNNER_TEMP/swift-tools"
-          echo "$RUNNER_TEMP/swift-tools" >> "$GITHUB_PATH"
-      - name: Check changed Swift formatting
-        id: formatting
-        continue-on-error: true
+      - name: Require settlement regression to fail on the original prototype
         run: |
           set -euo pipefail
-          git diff --name-only -z "$BASELINE_SHA" "$CANDIDATE_SHA" -- '*.swift' | while IFS= read -r -d '' file; do
-            test -f "$GITHUB_WORKSPACE/$file"
-            printf '%s/%s\n' "$GITHUB_WORKSPACE" "$file"
-          done > "$RUNNER_TEMP/narration-proof/changed-swift.txt"
-          test -s "$RUNNER_TEMP/narration-proof/changed-swift.txt"
-          swiftformat --lint --config config/swiftformat --filelist "$RUNNER_TEMP/narration-proof/changed-swift.txt" > "$RUNNER_TEMP/narration-proof/format.log" 2>&1
-      - name: Run focused shared Apple regressions
-        if: env.RUN_FOCUSED_TESTS == 'true'
-        id: tests
-        run: |
-          set -euo pipefail
-          /usr/bin/time -p swift test --package-path apps/shared/OpenClawKit --disable-index-store -Xswiftc -gline-tables-only --filter 'ChatStreamReplayTests|ChatViewModelSessionActionTests|ChatCompletedWorkTests|ChatWorkingProgressTests' > "$RUNNER_TEMP/narration-proof/tests.log" 2>&1
-      - name: Preserve native formatting correction and results
-        if: always()
-        run: |
-          if [[ -x "$RUNNER_TEMP/swift-tools/swiftformat" && -f "$RUNNER_TEMP/narration-proof/changed-swift.txt" ]]; then
-            "$RUNNER_TEMP/swift-tools/swiftformat" --config config/swiftformat --filelist "$RUNNER_TEMP/narration-proof/changed-swift.txt"
-            git diff --binary > "$RUNNER_TEMP/narration-proof/format.patch"
-          fi
-          for log in "$RUNNER_TEMP/narration-proof/format.log" "$RUNNER_TEMP/narration-proof/tests.log"; do
-            if [[ -f "$log" ]]; then tail -n 100 "$log"; fi
-          done
+          status=0
+          /usr/bin/time -p swift test --package-path apps/shared/OpenClawKit --filter ChatStreamReplayTests > "$RUNNER_TEMP/grouping-regressions/red-tests.log" 2>&1 || status=$?
+          tail -n 150 "$RUNNER_TEMP/grouping-regressions/red-tests.log"
+          test "$status" -ne 0
+          grep -F 'settled history retires unsaved narration without erasing live or lagging work' "$RUNNER_TEMP/grouping-regressions/red-tests.log"
+          grep -E 'Expectation failed: !.*hasNarration' "$RUNNER_TEMP/grouping-regressions/red-tests.log"
+          git diff --exit-code -- apps/shared/OpenClawKit/Sources
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: ios-narration-native-b9ae24aec6a
-          path: ${{ runner.temp }}/narration-proof
+          name: apple-grouping-red-regressions
+          path: ${{ runner.temp }}/grouping-regressions
           if-no-files-found: error
           retention-days: 7
-      - name: Require formatting proof
-        if: steps.formatting.outcome != 'success'
-        run: exit 1
