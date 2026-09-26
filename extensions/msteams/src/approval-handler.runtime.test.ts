@@ -332,7 +332,7 @@ describe("msTeamsApprovalNativeRuntime", () => {
     });
     expect(editAdaptiveCardMSTeams).toHaveBeenCalledWith({
       cfg,
-      to: "19:channel@thread.tacv2",
+      to: "conversation:19:channel@thread.tacv2",
       activityId: "approval-activity-1",
       card: final.payload,
     });
@@ -379,6 +379,68 @@ describe("msTeamsApprovalNativeRuntime", () => {
       }
     },
   );
+
+  it("finalizes personal-chat cards by conversation id instead of user id", async () => {
+    // Personal chats use opaque Bot Framework ids ("a:..."); passed bare they
+    // parse as user targets and the card update cannot find its reference.
+    sendAdaptiveCardMSTeams.mockResolvedValue({
+      messageId: "approval-activity-1",
+      conversationId: "a:1personal-chat",
+    });
+    const { view, request, pendingPayload, plannedTarget, prepared } =
+      await createPendingScenario(createPluginPendingView());
+    const entry = await msTeamsApprovalNativeRuntime.transport.deliverPending({
+      cfg,
+      accountId: "default",
+      plannedTarget,
+      preparedTarget: prepared.target,
+      request,
+      approvalKind: "plugin",
+      view,
+      pendingPayload,
+    });
+    if (!entry) {
+      throw new Error("Expected delivered personal-chat approval card");
+    }
+    const resolvedView: ResolvedApprovalView = {
+      ...view,
+      phase: "resolved",
+      decision: "allow-once",
+      resolvedBy: "00000000-0000-4000-8000-000000000001",
+    };
+    const final = await msTeamsApprovalNativeRuntime.presentation.buildResolvedResult({
+      cfg,
+      accountId: "default",
+      request,
+      resolved: {
+        id: request.id,
+        decision: "allow-once",
+        resolvedBy: "00000000-0000-4000-8000-000000000001",
+        ts: Date.now(),
+      },
+      view: resolvedView,
+      entry,
+    });
+    if (final.kind !== "update") {
+      throw new Error("Expected resolved Microsoft Teams approval card update");
+    }
+    await msTeamsApprovalNativeRuntime.transport.updateEntry?.({
+      cfg,
+      accountId: "default",
+      entry,
+      request,
+      approvalKind: "plugin",
+      payload: final.payload,
+      phase: "resolved",
+    });
+
+    expect(editAdaptiveCardMSTeams).toHaveBeenCalledWith({
+      cfg,
+      to: "conversation:a:1personal-chat",
+      activityId: "approval-activity-1",
+      card: final.payload,
+    });
+  });
 
   it("replaces expired approvals without actions and releases canceled deliveries", async () => {
     const { view, request, pendingPayload, plannedTarget, prepared } =

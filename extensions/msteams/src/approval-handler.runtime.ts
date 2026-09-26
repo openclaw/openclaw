@@ -93,7 +93,8 @@ export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
     updateEntry: async ({ cfg, entry, payload }) => {
       await editAdaptiveCardMSTeams({
         cfg,
-        to: entry.conversationId,
+        // Explicit prefix: bare personal-chat ids ("a:...") would parse as user ids.
+        to: `conversation:${entry.conversationId}`,
         activityId: entry.activityId,
         card: payload,
       });
