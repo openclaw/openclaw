@@ -1,15 +1,23 @@
 use super::{
     AppView,
-    sidebar_menu_surface::{SidebarMenuStyle, sidebar_menu_surface},
-    sidebar_navigation::{
-        append_identity_navigation, navigation_active_background, navigation_icon,
+    components::{
+        icon::icon as ui_icon,
+        icon_button::icon_button,
+        menu_surface::{MenuSurfaceSpec, menu_surface},
     },
-    theme::Palette,
+    sidebar_navigation::append_identity_navigation,
+    theme::{
+        Palette,
+        tokens::{
+            TypographyExt, avatar, colors, header, icon, icon_button as controls, menu, opacity,
+            radius, sidebar as layout, space, text,
+        },
+    },
 };
 use gpui_kit::{
     assets::IconName,
     component::{
-        Disableable, Icon, Selectable, Sizable, StyledExt,
+        Disableable, Icon, Selectable, Sizable, StyledExt, Theme,
         button::{Button, ButtonCustomVariant, ButtonVariants},
         menu::{DropdownMenu, PopupMenuItem},
         spinner::Spinner,
@@ -35,9 +43,9 @@ impl AppView {
             .child(
                 div()
                     .v_flex()
-                    .w(px(self.sidebar_state.width - 1.))
+                    .w(px(self.sidebar_state.width) - layout::DIVIDER)
                     .h_full()
-                    .px(px(10.))
+                    .px(layout::PADDING)
                     .child(
                         div()
                             .h_flex()
@@ -60,10 +68,10 @@ impl AppView {
                                 div()
                                     .relative()
                                     .group("sidebar-pages")
-                                    .mx(px(2.))
+                                    .mx(space::XXS)
                                     .track_focus(&pages_focus)
                                     .v_flex()
-                                    .gap(px(2.))
+                                    .gap(space::XXS)
                                     .when(!self.sidebar_state.preferences.all_agents, |el| {
                                         el.child(self.sidebar_home(cx))
                                     })
@@ -76,16 +84,15 @@ impl AppView {
                                 el.child(
                                     div()
                                         .h_flex()
-                                        .gap(px(2.))
-                                        .mt(px(16.))
-                                        .min_h(px(24.))
-                                        .pl(px(36.))
-                                        .pr(px(10.))
+                                        .gap(space::XXS)
+                                        .mt(icon::NORMAL)
+                                        .min_h(header::SECTION_HEIGHT)
+                                        .pl(layout::THREADS_INDENT)
+                                        .pr(space::LG)
                                         .child(
                                             div()
                                                 .flex_1()
-                                                .text_size(px(11.))
-                                                .font_weight(FontWeight::MEDIUM)
+                                                .typography(text::CATEGORY)
                                                 .text_color(p.muted)
                                                 .child("SESSIONS"),
                                         )
@@ -97,8 +104,8 @@ impl AppView {
                                             Button::new("section-new")
                                                 .ghost()
                                                 .small()
-                                                .size(px(22.))
-                                                .icon(Icon::new(IconName::Plus).size(px(14.)))
+                                                .size(icon::RUN_RING)
+                                                .icon(Icon::new(IconName::Plus).size(icon::ACTION))
                                                 .accessibility_label("New conversation (⇧⌘O)")
                                                 .disabled(self.session.is_none())
                                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -140,8 +147,14 @@ impl AppView {
                 div()
                     .id("sidebar-resize")
                     .relative()
-                    .w(px(1.))
-                    .child(div().absolute().left(px(-2.)).w(px(5.)).h_full())
+                    .w(space::HAIRLINE)
+                    .child(
+                        div()
+                            .absolute()
+                            .left(layout::RESIZE_HIT_OFFSET)
+                            .w(layout::RESIZE_HIT_WIDTH)
+                            .h_full(),
+                    )
                     .h_full()
                     .cursor_col_resize()
                     .hover(|el| el.bg(p.border))
@@ -189,25 +202,23 @@ impl AppView {
             .custom(
                 ButtonCustomVariant::new(cx)
                     .foreground(p.muted)
-                    .hover(p.hover.opacity(0.84))
-                    .active(p.hover.opacity(0.84)),
+                    .hover(colors::navigation_hover(p))
+                    .active(colors::navigation_hover(p)),
             )
             .group("nav-home")
-            .h(px(32.))
+            .h(controls::FOOTER.size)
             .w_full()
-            .px(px(8.))
+            .px(space::MD)
             .py_0()
             .border_1()
             .border_color(transparent_black())
-            .rounded(px(12.5))
+            .rounded(radius::ROW)
             .child(
                 div()
                     .h_flex()
                     .w_full()
-                    .gap(px(8.))
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .line_height(px(20.15))
+                    .gap(space::MD)
+                    .typography(text::NAV)
                     .text_color(if active { p.strong } else { p.muted })
                     .when(!active, |el| {
                         el.group_hover("nav-home", |style| style.text_color(p.text))
@@ -215,17 +226,23 @@ impl AppView {
                     .child(
                         div()
                             .relative()
-                            .w(px(20.))
-                            .h(px(22.))
+                            .w(icon::LEADING)
+                            .h(icon::RUN_RING)
                             .flex_shrink_0()
                             .flex()
                             .items_center()
                             .justify_center()
                             .child(
                                 div()
-                                    .opacity(if active { 1. } else { 0.72 })
-                                    .group_hover("nav-home", |style| style.opacity(1.))
-                                    .child(navigation_icon(icon, 16.).text_color(if active {
+                                    .opacity(if active {
+                                        opacity::VISIBLE
+                                    } else {
+                                        opacity::NAV_ICON
+                                    })
+                                    .group_hover("nav-home", |style| {
+                                        style.opacity(opacity::VISIBLE)
+                                    })
+                                    .child(ui_icon(icon, icon::NORMAL).text_color(if active {
                                         p.accent
                                     } else {
                                         p.muted
@@ -233,10 +250,10 @@ impl AppView {
                             )
                             .when(running, |el| {
                                 el.child(
-                                    div().absolute().left(px(-1.)).top_0().child(
+                                    div().absolute().left(-space::HAIRLINE).top_0().child(
                                         Spinner::new()
                                             .icon(IconName::LoaderCircle)
-                                            .with_size(px(22.))
+                                            .with_size(icon::RUN_RING)
                                             .color(p.muted),
                                     ),
                                 )
@@ -245,9 +262,9 @@ impl AppView {
                                 el.child(
                                     div()
                                         .absolute()
-                                        .right(px(-1.))
+                                        .right(-space::HAIRLINE)
                                         .top_0()
-                                        .size(px(6.))
+                                        .size(space::SM)
                                         .rounded_full()
                                         .bg(p.accent),
                                 )
@@ -258,8 +275,8 @@ impl AppView {
             .accessibility_label("Home")
             .selected(active)
             .when(active, |el| {
-                el.bg(navigation_active_background(p, cx))
-                    .border_color(p.accent.opacity(0.16))
+                el.bg(colors::navigation_active(p, Theme::global(cx).is_dark()))
+                    .border_color(colors::selected_border(p))
             })
             .on_click(
                 cx.listener(move |this, _, window, cx| {
@@ -294,16 +311,16 @@ impl AppView {
             .people
             .self_user
             .as_ref()
-            .map(|person| self.render_person_avatar(person, 28., cx))
+            .map(|person| self.render_person_avatar(person, avatar::IDENTITY, cx))
             .unwrap_or_else(|| {
                 div()
-                    .size(px(28.))
+                    .size(avatar::IDENTITY.diameter)
                     .rounded_full()
                     .bg(p.elevated)
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(Icon::new(IconName::UserRound).size(px(16.)))
+                    .child(Icon::new(IconName::UserRound).size(icon::NORMAL))
                     .into_any_element()
             });
         let pending: Vec<_> = self
@@ -324,11 +341,11 @@ impl AppView {
             .ghost()
             .flex_1()
             .min_w_0()
-            .h(px(34.))
-            .rounded(px(10.))
-            .px(px(6.))
+            .h(layout::IDENTITY_TRIGGER_HEIGHT)
+            .rounded(radius::PERSON)
+            .px(space::SM)
             .child(
-                div().w_full().h_flex().gap(px(8.)).child(avatar).child(
+                div().w_full().h_flex().gap(space::MD).child(avatar).child(
                     div()
                         .v_flex()
                         .flex_1()
@@ -336,17 +353,14 @@ impl AppView {
                         .child(
                             div()
                                 .truncate()
-                                .text_size(px(13.5))
-                                .line_height(px(18.))
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .typography(text::IDENTITY)
                                 .text_color(p.strong)
                                 .child(name),
                         )
                         .when_some(status, |el, status| {
                             el.child(
                                 div()
-                                    .text_size(px(11.))
-                                    .line_height(px(14.))
+                                    .typography(text::FOOTER_STATUS)
                                     .text_color(p.muted)
                                     .child(status),
                             )
@@ -354,54 +368,53 @@ impl AppView {
                 ),
             )
             .accessibility_label("Profile and settings");
-        let identity_menu = sidebar_menu_surface(
+        let identity_menu = menu_surface(
             "sidebar-identity-popup",
             trigger,
-            SidebarMenuStyle::identity(),
+            MenuSurfaceSpec::above(menu::IDENTITY)
+                .horizontal_offset(menu::IDENTITY_HORIZONTAL_OFFSET)
+                .outer_ring(),
             move |menu, window, cx| append_identity_navigation(menu, view.clone(), window, cx),
         );
         div()
             .h_flex()
-            .h(px(44.))
-            .mb(px(4.))
-            .pl(px(8.))
-            .gap(px(4.))
+            .h(layout::FOOTER_HEIGHT)
+            .mb(space::XS)
+            .pl(space::MD)
+            .gap(space::XS)
             .child(identity_menu)
             .child(
-                Button::new("footer-home")
-                    .ghost()
-                    .small()
-                    .size(px(32.))
-                    .icon(Icon::new(IconName::House).size(px(18.)).text_color(p.muted))
-                    .accessibility_label("Home")
-                    .on_click(cx.listener(|this, _, window, cx| {
+                icon_button("footer-home", IconName::House, "Home", controls::FOOTER, cx).on_click(
+                    cx.listener(|this, _, window, cx| {
                         this.select_session(this.agent_home(), window, cx)
-                    })),
+                    }),
+                ),
             )
             .child(
-                Button::new("footer-attention")
-                    .ghost()
-                    .small()
-                    .size(px(32.))
-                    .icon(Icon::new(IconName::Inbox).size(px(18.)).text_color(p.muted))
-                    .accessibility_label("Attention")
-                    .dropdown_menu(move |mut menu, _, _| {
-                        if pending.is_empty() {
-                            return menu.label("You're all caught up");
-                        }
-                        for row in &pending {
-                            let row = row.clone();
-                            let view = attention_view.clone();
-                            menu = menu.item(PopupMenuItem::new(row.title()).on_click(
-                                move |_, window, cx| {
-                                    let _ = view.update(cx, |this, cx| {
-                                        this.select_session(row.key.clone(), window, cx)
-                                    });
-                                },
-                            ));
-                        }
-                        menu
-                    }),
+                icon_button(
+                    "footer-attention",
+                    IconName::Inbox,
+                    "Attention",
+                    controls::FOOTER,
+                    cx,
+                )
+                .dropdown_menu(move |mut menu, _, _| {
+                    if pending.is_empty() {
+                        return menu.label("You're all caught up");
+                    }
+                    for row in &pending {
+                        let row = row.clone();
+                        let view = attention_view.clone();
+                        menu = menu.item(PopupMenuItem::new(row.title()).on_click(
+                            move |_, window, cx| {
+                                let _ = view.update(cx, |this, cx| {
+                                    this.select_session(row.key.clone(), window, cx)
+                                });
+                            },
+                        ));
+                    }
+                    menu
+                }),
             )
             .into_any_element()
     }

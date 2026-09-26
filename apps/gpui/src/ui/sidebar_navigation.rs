@@ -1,14 +1,24 @@
 use super::{
     AppView,
-    sidebar_menu_surface::{SidebarMenuStyle, sidebar_menu_surface},
-    theme::Palette,
+    components::{
+        icon::icon as ui_icon,
+        icon_button::icon_button,
+        menu_surface::{MenuSurfaceSpec, menu_surface},
+    },
+    theme::{
+        Palette,
+        tokens::{
+            IconButtonMetrics, InsetsExt, TypographyExt, colors, icon, icon_button as buttons,
+            menu, opacity, row, sidebar, space, text,
+        },
+    },
     web_state::WebUi,
 };
 use crate::model::web_urls::{self, ControlUiTab, SIDEBAR_ROUTES};
 use gpui_kit::{
-    assets::{AllAssets, IconName},
+    assets::IconName,
     component::{
-        Disableable, Icon, Selectable, StyledExt, Theme,
+        Disableable, Selectable, StyledExt, Theme,
         button::{Button, ButtonCustomVariant, ButtonVariants},
         menu::PopupMenuItem,
     },
@@ -17,10 +27,6 @@ use gpui_kit::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use std::{
-    collections::HashMap,
-    sync::{LazyLock, Mutex},
-};
 
 #[path = "sidebar_identity_menu.rs"]
 mod identity_menu;
@@ -163,7 +169,7 @@ impl AppView {
             .settings_open
             .then(|| web_urls::sidebar_route_for_path(&self.web.page_path).map(|route| route.id))
             .flatten();
-        let mut content = div().id("sidebar-navigation").v_flex().gap(px(2.));
+        let mut content = div().id("sidebar-navigation").v_flex().gap(row::GAP);
         for entry in entries {
             let Some(route) = SIDEBAR_ROUTES
                 .iter()
@@ -189,7 +195,7 @@ impl AppView {
                             },
                         )),
                     )
-                    .child(div().w(px(24.)).flex_shrink_0()),
+                    .child(div().w(sidebar::REORDER_WIDTH).flex_shrink_0()),
             );
         }
         for group in ["chat", "control", "agent", "settings"] {
@@ -219,7 +225,7 @@ impl AppView {
                                 },
                             )),
                         )
-                        .child(div().w(px(24.)).flex_shrink_0()),
+                        .child(div().w(sidebar::REORDER_WIDTH).flex_shrink_0()),
                 );
             }
         }
@@ -231,7 +237,6 @@ impl AppView {
         pages_focused: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let p = Palette::sidebar(cx);
         let entries = &self.sidebar_state.preferences.sidebar_entries;
         let active = self
             .web
@@ -240,28 +245,22 @@ impl AppView {
             .flatten();
         let entries = entries.clone();
         let view = cx.entity().downgrade();
-        let trigger = Button::new("sidebar-more")
-            .custom(
-                ButtonCustomVariant::new(cx)
-                    .foreground(p.muted)
-                    .hover(p.hover.opacity(0.84)),
-            )
-            .size(px(22.))
-            .p_0()
-            .rounded(px(10.))
-            .child(navigation_icon(IconName::PenLine, 13.).text_color(p.muted))
-            .accessibility_label("Edit pinned items")
-            .disabled(self.session.is_none());
-        let trigger = sidebar_menu_surface(
+        let trigger = icon_button(
+            "sidebar-more",
+            IconName::PenLine,
+            "Edit pinned items",
+            IconButtonMetrics {
+                icon: icon::COMPACT,
+                ..buttons::COMPACT
+            },
+            cx,
+        )
+        .disabled(self.session.is_none());
+        let trigger = menu_surface(
             "sidebar-more-popup",
             trigger,
-            SidebarMenuStyle::below(224., 420.),
+            MenuSurfaceSpec::below(menu::STANDARD),
             move |mut menu, window, cx| {
-                menu = menu
-                    .min_w(px(224.))
-                    .max_w(px(264.))
-                    .max_h(px(420.))
-                    .scrollable(true);
                 for route in SIDEBAR_ROUTES {
                     if !entries.contains(&format!("route:{}", route.id)) {
                         menu = menu.item(navigation_menu_item(
@@ -278,9 +277,9 @@ impl AppView {
                 menu.separator()
                     .submenu("Edit pinned items", window, cx, move |mut menu, _, _| {
                         menu = menu
-                            .min_w(px(224.))
-                            .max_w(px(264.))
-                            .max_h(px(420.))
+                            .min_w(menu::STANDARD.width)
+                            .max_w(menu::MAX_STANDARD_WIDTH)
+                            .max_h(menu::STANDARD.max_height)
                             .scrollable(true);
                         for route in SIDEBAR_ROUTES {
                             let entry = format!("route:{}", route.id);
@@ -336,11 +335,15 @@ impl AppView {
         );
         div()
             .absolute()
-            .top(px(5.))
-            .right(px(8.))
-            .size(px(22.))
-            .opacity(if pages_focused { 1. } else { 0. })
-            .group_hover("sidebar-pages", |style| style.opacity(1.))
+            .top(sidebar::MORE_TOP)
+            .right(sidebar::MORE_RIGHT)
+            .size(buttons::COMPACT.size)
+            .opacity(if pages_focused {
+                opacity::VISIBLE
+            } else {
+                opacity::HIDDEN
+            })
+            .group_hover("sidebar-pages", |style| style.opacity(opacity::VISIBLE))
             .child(trigger)
             .into_any_element()
     }
@@ -359,45 +362,48 @@ impl AppView {
             .custom(
                 ButtonCustomVariant::new(cx)
                     .foreground(p.muted)
-                    .hover(p.hover.opacity(0.84))
-                    .active(p.hover.opacity(0.84)),
+                    .hover(colors::navigation_hover(p))
+                    .active(colors::navigation_hover(p)),
             )
             .group(group.clone())
             .flex_1()
             .min_w_0()
-            .h(px(32.))
-            .px(px(8.))
-            .py_0()
-            .border_1()
+            .h(row::NAV.min_height)
+            .insets(row::NAV.padding)
+            .border(space::HAIRLINE)
             .border_color(transparent_black())
-            .rounded(px(12.5))
+            .rounded(row::NAV.radius)
             .child(
                 div()
                     .w_full()
                     .h_flex()
-                    .gap(px(8.))
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .line_height(px(20.15))
+                    .gap(row::NAV.gap)
+                    .typography(text::NAV)
                     .text_color(if active { p.strong } else { p.muted })
                     .when(!active, |el| {
                         el.group_hover(group.clone(), |style| style.text_color(p.text))
                     })
                     .child(
                         div()
-                            .w(px(20.))
-                            .h(px(16.))
+                            .w(row::NAV.leading_width)
+                            .h(icon::NORMAL)
                             .flex_shrink_0()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .opacity(if active { 1. } else { 0.72 })
-                            .text_color(if active { p.accent } else { p.muted })
-                            .group_hover(group.clone(), |style| style.opacity(1.))
-                            .when(!active, |el| {
-                                el.group_hover(group, |style| style.opacity(1.).text_color(p.text))
+                            .opacity(if active {
+                                opacity::VISIBLE
+                            } else {
+                                opacity::NAV_ICON
                             })
-                            .child(navigation_icon(icon, 16.)),
+                            .text_color(if active { p.accent } else { p.muted })
+                            .group_hover(group.clone(), |style| style.opacity(opacity::VISIBLE))
+                            .when(!active, |el| {
+                                el.group_hover(group, |style| {
+                                    style.opacity(opacity::VISIBLE).text_color(p.text)
+                                })
+                            })
+                            .child(ui_icon(icon, icon::NORMAL)),
                     )
                     .child(div().flex_1().min_w_0().truncate().child(title.to_owned())),
             )
@@ -409,8 +415,8 @@ impl AppView {
             .selected(active)
             .when(active, |button| {
                 button
-                    .bg(navigation_active_background(p, cx))
-                    .border_color(p.accent.opacity(0.16))
+                    .bg(colors::navigation_active(p, Theme::global(cx).is_dark()))
+                    .border_color(colors::selected_border(p))
             })
     }
 }
@@ -461,52 +467,6 @@ fn plugin_icon(name: Option<&str>) -> IconName {
     }
 }
 
-pub(super) fn navigation_active_background(p: Palette, cx: &App) -> Hsla {
-    let accent_alpha = if Theme::global(cx).is_dark() {
-        26. / 255.
-    } else {
-        20. / 255.
-    };
-    let alpha = accent_alpha * 0.88 + 0.12;
-    p.elevated
-        .blend(p.accent.opacity(accent_alpha * 0.88 / alpha))
-        .opacity(alpha)
-}
-
-/// Control UI's sidebar uses the shared Lucide paths with a 1.5px stroke.
-pub(super) fn navigation_icon(name: IconName, size: f32) -> Icon {
-    static ICONS: LazyLock<Mutex<HashMap<IconName, Option<Vec<u8>>>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
-    let special = match name {
-        IconName::PenLine => Some(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>"#.as_slice()),
-        IconName::House => Some(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>"#.as_slice()),
-        _ => None,
-    };
-    if let Some(bytes) = special {
-        return Icon::default().data(bytes).size(px(size));
-    }
-    let Ok(mut icons) = ICONS.lock() else {
-        return Icon::new(name).size(px(size));
-    };
-    let bytes = icons
-        .entry(name)
-        .or_insert_with(|| match AllAssets.load(&name.path()) {
-            Ok(Some(bytes)) => Some(
-                String::from_utf8_lossy(&bytes)
-                    .replace("stroke-width=\"2\"", "stroke-width=\"1.5\"")
-                    .into_bytes(),
-            ),
-            _ => {
-                log::warn!("Could not prepare bundled navigation icon {name:?}");
-                None
-            }
-        });
-    match bytes {
-        Some(bytes) => Icon::default().data(bytes).size(px(size)),
-        None => Icon::new(name).size(px(size)),
-    }
-}
-
 fn navigation_menu_item(
     title: &str,
     path: &str,
@@ -522,20 +482,19 @@ fn navigation_menu_item(
         div()
             .h_flex()
             .w_full()
-            .h(px(26.))
-            .gap(px(8.))
-            .text_size(px(13.))
-            .font_weight(FontWeight::NORMAL)
+            .h(menu::ROW_HEIGHT - menu::NATIVE_ROW_GAP)
+            .gap(row::NAV.gap)
+            .typography(text::MENU)
             .text_color(if active { p.strong } else { p.text })
             .child(
                 div()
-                    .w(px(24.))
-                    .h(px(16.))
+                    .w(menu::ICON_COLUMN)
+                    .h(icon::NORMAL)
                     .flex_shrink_0()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(navigation_icon(icon, 16.).text_color(if active {
+                    .child(ui_icon(icon, icon::NORMAL).text_color(if active {
                         p.accent
                     } else {
                         p.text
@@ -548,20 +507,4 @@ fn navigation_menu_item(
             this.open_control_page(&path, &title, window, cx)
         });
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_bundled_icon_is_admitted_by_the_sidebar_renderer() {
-        // Agent menus and footer controls share this renderer with navigation.
-        for &name in IconName::ALL {
-            assert!(
-                std::panic::catch_unwind(|| navigation_icon(name, 16.)).is_ok(),
-                "sidebar icon construction panicked for {name:?}"
-            );
-        }
-    }
 }

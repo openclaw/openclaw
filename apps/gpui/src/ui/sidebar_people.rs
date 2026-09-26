@@ -1,13 +1,27 @@
-pub(super) use super::sidebar_person_hover::PersonHoverCard;
-
-use super::{AppView, theme::Palette};
+use super::{
+    AppView,
+    components::{
+        facepile::{self, FacepileItem},
+        hover_card::{HoverCard, HoverCardDismiss},
+        list::{list_row, section_header},
+    },
+    theme::{
+        Palette,
+        tokens::{
+            InsetsExt, TypographyExt, avatar, card, colors, header, icon, opacity, radius, row,
+            space, text,
+        },
+    },
+};
 use crate::model::{
+    avatars,
+    elapsed_time::{ElapsedFormat, format_elapsed},
     people::{OnlinePerson, PeopleState, card_sessions},
     sessions::SessionRow,
 };
 use gpui_kit::{
     assets::IconName,
-    component::{Icon, StyledExt, Theme, tooltip::Tooltip},
+    component::{Icon, StyledExt, Theme},
     prelude::FluentBuilder,
     *,
 };
@@ -50,18 +64,18 @@ impl AppView {
         } else {
             self.sidebar_state.preferences.people_collapsed
         };
-        let mut header = div()
-            .id("online-people-toggle")
-            .h(px(24.))
-            .pl(px(8.))
-            .pr(px(10.))
+        let mut header = section_header("online-people-toggle")
+            .border_0()
+            .accessibility_label("Online")
+            .h(header::SECTION_HEIGHT)
+            .pl(space::MD)
+            .pr(space::LG)
             .flex()
             .items_center()
-            .gap(px(8.))
+            .gap(space::MD)
             .cursor_pointer()
             .text_color(p.muted)
-            .text_size(px(11.))
-            .line_height(relative(1.55))
+            .typography(text::SECTION)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.change_sidebar_preferences(
                     |preferences| {
@@ -77,8 +91,8 @@ impl AppView {
             }))
             .child(
                 div()
-                    .w(px(20.))
-                    .h(px(16.))
+                    .w(icon::LEADING)
+                    .h(space::XXL)
                     .flex()
                     .items_center()
                     .justify_center()
@@ -88,15 +102,15 @@ impl AppView {
                         } else {
                             IconName::ChevronDown
                         })
-                        .size(px(11.))
-                        .opacity(0.75),
+                        .size(icon::SECTION)
+                        .opacity(opacity::DISCLOSURE),
                     ),
             )
             .child(
                 div()
                     .h_flex()
-                    .gap(px(0.88))
-                    .font_weight(FontWeight(650.))
+                    .gap(header::ONLINE_TRACKING)
+                    .typography(text::SECTION)
                     .children(
                         "ONLINE"
                             .chars()
@@ -111,54 +125,41 @@ impl AppView {
         let mut section = div()
             .id("sidebar-online")
             .v_flex()
-            .gap(px(4.))
-            .mt(px(12.))
-            .mb(px(10.))
-            .pt(px(12.))
-            .pr(px(8.))
-            .border_t_1()
-            .border_color(p.border.opacity(0.64))
+            .gap(space::XS)
+            .mt(space::XL)
+            .mb(space::LG)
+            .pt(space::XL)
+            .pr(space::MD)
+            .border_t(space::HAIRLINE)
+            .border_color(colors::section_border(p))
             .child(header);
         if !collapsed {
-            let mut list = div().v_flex().gap(px(2.));
+            let mut list = div().v_flex().gap(space::XXS);
             for person in people {
                 let p = Palette::sidebar(cx);
                 let id = person.person.key();
                 let route = person.person.profile_id().map(person_activity_path);
                 let title = person.person.label().to_owned();
                 let idle = person.idle();
-                let row = div()
-                    .id(SharedString::from(format!("online:{id}")))
+                let row = list_row(SharedString::from(format!("online:{id}")), row::PERSON)
                     .group(SharedString::from(format!("online-row:{id}")))
-                    .h(px(30.))
-                    .px(px(8.))
+                    .h(row::PERSON.min_height)
+                    .px(space::MD)
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .rounded(px(10.))
+                    .gap(space::MD)
+                    .rounded(radius::PERSON)
                     .cursor_pointer()
-                    .hover(move |style| style.bg(p.hover.opacity(0.84)))
-                    .when(idle, |this| this.opacity(0.45))
-                    .child(self.render_person_avatar(&person.person, 20., cx))
+                    .hover(move |style| style.bg(colors::navigation_hover(p)))
+                    .when(idle, |this| this.opacity(opacity::IDLE))
+                    .child(self.render_person_avatar(&person.person, avatar::PERSON, cx))
                     .child(
                         div()
                             .flex_1()
                             .overflow_hidden()
                             .text_ellipsis()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .line_height(relative(1.55))
+                            .typography(text::NAV)
                             .child(title.clone()),
-                    )
-                    .child(
-                        div()
-                            .size(px(13.))
-                            .opacity(0.)
-                            .group_hover(SharedString::from(format!("online-row:{id}")), |style| {
-                                style.opacity(1.)
-                            })
-                            .text_color(p.muted)
-                            .child(Icon::new(IconName::ChevronRight).size(px(13.))),
                     )
                     .when_some(route, |this, route| {
                         this.on_click(cx.listener(move |this, _, window, cx| {
@@ -166,10 +167,28 @@ impl AppView {
                         }))
                     });
                 let view = cx.entity().downgrade();
-                list = list.child(PersonHoverCard::new(
+                let trigger_id = id.clone();
+                list = list.child(HoverCard::new(
                     SharedString::from(format!("person-card:{id}")),
-                    row,
-                    move |_, cx| {
+                    move |open| {
+                        row.child(
+                            div()
+                                .size(icon::COMPACT)
+                                .opacity(if open {
+                                    opacity::VISIBLE
+                                } else {
+                                    opacity::HIDDEN
+                                })
+                                .group_hover(
+                                    SharedString::from(format!("online-row:{trigger_id}")),
+                                    |style| style.opacity(opacity::VISIBLE),
+                                )
+                                .text_color(p.muted)
+                                .child(Icon::new(IconName::ChevronRight).size(icon::COMPACT)),
+                        )
+                        .into_any_element()
+                    },
+                    move |dismiss, _, cx| {
                         let Some(entity) = view.upgrade() else {
                             return div().into_any_element();
                         };
@@ -181,7 +200,9 @@ impl AppView {
                             .into_iter()
                             .find(|current| current.person.key() == id);
                         current
-                            .map(|person| this.person_card(&person, view.clone(), cx))
+                            .map(|person| {
+                                this.person_card(&person, view.clone(), dismiss.clone(), cx)
+                            })
                             .unwrap_or_else(|| div().into_any_element())
                     },
                 ));
@@ -197,54 +218,35 @@ impl AppView {
         limit: usize,
         cx: &App,
     ) -> AnyElement {
-        let p = Palette::sidebar(cx);
-        let mut pile = div().ml(px(1.)).flex().items_center();
-        for (index, person) in people.iter().take(limit).enumerate() {
-            let label = person.person.label().to_owned();
-            pile = pile.child(
-                div()
-                    .id(SharedString::from(format!(
-                        "online-face:{}",
-                        person.person.key()
-                    )))
-                    .when(index > 0, |this| this.ml(px(-5.)))
-                    .rounded_full()
-                    .child(self.render_person_avatar(&person.person, 18., cx))
-                    .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx)),
-            );
-        }
-        if people.len() > limit {
-            let names = people
-                .iter()
-                .skip(limit)
-                .map(|person| person.person.label())
-                .collect::<Vec<_>>()
-                .join("\n");
-            pile = pile.child(
-                div()
-                    .id("online-face-overflow")
-                    .ml(px(-5.))
-                    .size(px(18.))
-                    .rounded_full()
-                    .bg(p.elevated)
-                    .border_1()
-                    .border_color(p.sidebar)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(8.))
-                    .text_color(p.muted)
-                    .child(format!("+{}", people.len() - limit))
-                    .tooltip(move |window, cx| Tooltip::new(names.clone()).build(window, cx)),
-            );
-        }
-        pile.into_any_element()
+        let gateway = self
+            .web
+            .auth
+            .as_ref()
+            .map(|auth| auth.gateway_url.as_str())
+            .unwrap_or("");
+        let items = people
+            .iter()
+            .map(|person| FacepileItem {
+                key: format!("online-face:{}", person.person.key()),
+                label: person.person.label().to_owned(),
+                avatar: avatars::person_avatar(&person.person, gateway),
+            })
+            .collect::<Vec<_>>();
+        facepile::facepile(
+            &items,
+            &self.sidebar_state.avatars,
+            limit,
+            people.len(),
+            Palette::sidebar(cx).sidebar,
+            cx,
+        )
     }
 
     pub(super) fn person_card(
         &self,
         person: &OnlinePerson,
         view: WeakEntity<Self>,
+        dismiss: HoverCardDismiss,
         cx: &App,
     ) -> AnyElement {
         let p = Palette::sidebar(cx);
@@ -255,46 +257,39 @@ impl AppView {
         } else {
             person
                 .online_since()
-                .map(|since| format!("Online for {}", elapsed(now.saturating_sub(since), true)))
+                .map(|since| {
+                    format!(
+                        "Online for {}",
+                        format_elapsed(now.saturating_sub(since), ElapsedFormat::MinuteCompact)
+                    )
+                })
                 .unwrap_or_else(|| "Online".into())
         };
         let dark = Theme::global(cx).is_dark();
-        let surface = if dark {
-            p.card.blend(Hsla {
-                a: 0.06,
-                ..rgb(0).into()
-            })
-        } else {
-            p.card
-        };
+        let surface = colors::hover_card_surface(p, dark);
         let header = div()
             .h_flex()
             .items_center()
-            .gap(px(10.))
-            .px(px(16.))
-            .pt(px(15.))
-            .pb(px(12.))
-            .child(self.render_person_avatar_on(&person.person, 34.5, 12., surface, cx))
+            .gap(space::LG)
+            .insets(card::HEADER_PADDING)
+            .child(self.render_person_avatar_on(&person.person, avatar::PERSON_CARD, surface))
             .child(
                 div()
                     .v_flex()
-                    .gap(px(4.))
+                    .gap(space::XS)
                     .min_w_0()
                     .child(
                         div()
-                            .text_size(px(14.))
-                            .line_height(relative(1.))
-                            .font_weight(FontWeight::SEMIBOLD)
+                            .typography(text::PERSON_CARD_NAME)
                             .child(person.person.label().to_owned()),
                     )
                     .child(
                         div()
                             .h_flex()
-                            .gap(px(3.))
-                            .text_size(px(12.))
-                            .line_height(relative(1.))
+                            .gap(space::TIGHT)
+                            .typography(text::PERSON_CARD_STATUS)
                             .text_color(p.muted)
-                            .child(div().size(px(6.)).rounded_full().bg(if offline {
+                            .child(div().size(icon::DOT).rounded_full().bg(if offline {
                                 p.muted
                             } else {
                                 p.ok
@@ -305,32 +300,32 @@ impl AppView {
         let mut card = div()
             .w_full()
             .v_flex()
-            .text_size(px(12.))
-            .line_height(relative(1.5))
+            .typography(text::PERSON_CARD_BODY)
             .text_color(p.text)
             .child(header);
         if person.person.id == "gateway-owner" {
             card = card.child(
                 div()
-                    .px(px(16.))
-                    .pb(px(12.))
+                    .px(space::XXL)
+                    .pb(space::XL)
                     .text_color(p.muted)
                     .child("A shared Gateway identity. Multiple people may use this account."),
             );
         }
         if !offline {
-            let mut facts = div().v_flex().gap(px(12.)).px(px(16.)).pb(px(16.));
+            let mut facts = div().v_flex().gap(space::XL).px(space::XXL).pb(space::XXL);
             let connections = person.connections();
             let zones = person.time_zones();
             if !connections.is_empty() || !zones.is_empty() {
-                let mut values = div().v_flex().gap(px(3.)).flex_1().min_w_0();
+                let mut values = div().v_flex().gap(space::TIGHT).flex_1().min_w_0();
                 for connection in connections {
-                    values = values.child(div().font_weight(FontWeight::MEDIUM).child(connection));
+                    values =
+                        values.child(div().typography(text::PERSON_CARD_LINK).child(connection));
                 }
                 for zone in zones {
                     values = values.child(
                         div()
-                            .text_size(px(11.))
+                            .typography(text::PERSON_CARD_AGE)
                             .text_color(p.muted)
                             .child(format!("Reported time zone: {zone}")),
                     );
@@ -339,10 +334,10 @@ impl AppView {
                     div()
                         .h_flex()
                         .items_start()
-                        .gap(px(8.))
+                        .gap(space::MD)
                         .child(
                             div()
-                                .w(px(80.))
+                                .w(card::FACT_LABEL_WIDTH)
                                 .flex_shrink_0()
                                 .text_color(p.muted)
                                 .child("Where"),
@@ -355,10 +350,10 @@ impl AppView {
                     div()
                         .h_flex()
                         .items_start()
-                        .gap(px(8.))
+                        .gap(space::MD)
                         .child(
                             div()
-                                .w(px(80.))
+                                .w(card::FACT_LABEL_WIDTH)
                                 .flex_shrink_0()
                                 .text_color(p.muted)
                                 .child("Last activity"),
@@ -368,7 +363,13 @@ impl AppView {
                                 person
                                     .last_activity_at()
                                     .map(|at| {
-                                        format!("{} ago", elapsed(now.saturating_sub(at), false))
+                                        format!(
+                                            "{} ago",
+                                            format_elapsed(
+                                                now.saturating_sub(at),
+                                                ElapsedFormat::Compact
+                                            )
+                                        )
                                     })
                                     .unwrap_or_else(|| "Not observed yet".into()),
                             ),
@@ -395,6 +396,7 @@ impl AppView {
                 "Viewing now",
                 viewing,
                 view.clone(),
+                dismiss.clone(),
                 p,
             ));
         }
@@ -402,6 +404,7 @@ impl AppView {
             "Recent sessions",
             recent,
             view.clone(),
+            dismiss.clone(),
             p,
         ));
         if let Some(profile) = person.person.profile_id() {
@@ -410,11 +413,11 @@ impl AppView {
             card = card.child(
                 div()
                     .id("person-view-activity")
-                    .px(px(16.))
-                    .py(px(8.))
-                    .min_h(px(37.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .border_t_1()
+                    .px(space::XXL)
+                    .py(space::MD)
+                    .min_h(card::FOOTER_MIN_HEIGHT)
+                    .typography(text::PERSON_CARD_LINK)
+                    .border_t(space::HAIRLINE)
                     .border_color(p.border)
                     .flex()
                     .items_center()
@@ -422,8 +425,9 @@ impl AppView {
                     .cursor_pointer()
                     .hover(move |style| style.bg(p.hover))
                     .child("View activity")
-                    .child(Icon::new(IconName::ChevronRight).size(px(14.)))
+                    .child(Icon::new(IconName::ChevronRight).size(icon::ACTION))
                     .on_click(move |_, window, cx| {
+                        dismiss.dismiss(window, cx);
                         let _ = view.update(cx, |this, cx| {
                             this.open_control_page(&route, &title, window, cx)
                         });
@@ -438,18 +442,18 @@ fn person_card_sessions(
     label: &'static str,
     rows: Vec<SessionRow>,
     view: WeakEntity<AppView>,
+    dismiss: HoverCardDismiss,
     p: Palette,
 ) -> AnyElement {
     let mut section = div()
         .v_flex()
-        .px(px(16.))
-        .py(px(12.))
-        .border_t_1()
+        .insets(card::SECTION_PADDING)
+        .border_t(space::HAIRLINE)
         .border_color(p.border)
         .child(
             div()
-                .mb(px(6.))
-                .text_size(px(12.))
+                .mb(space::SM)
+                .typography(text::PERSON_CARD_BODY)
                 .text_color(p.muted)
                 .child(label),
         );
@@ -461,27 +465,28 @@ fn person_card_sessions(
     for (index, row) in rows.into_iter().enumerate() {
         let key = row.key.clone();
         let age = row.updated_at.map(|at| {
-            elapsed(
+            format_elapsed(
                 crate::model::chat::now_ms().saturating_sub(at as u64),
-                false,
+                ElapsedFormat::SingleUnit,
             )
         });
         let view = view.clone();
+        let dismiss = dismiss.clone();
         section = section.child(
             div()
                 .id(SharedString::from(format!("card-session:{label}:{key}")))
-                .mt(px(if index == 0 { 0. } else { 2. }))
-                .p(px(6.))
-                .mx(px(-6.))
-                .rounded(px(6.))
+                .mt(if index == 0 { space::NONE } else { space::XXS })
+                .p(space::SM)
+                .mx(-space::SM)
+                .rounded(radius::SMALL)
                 .flex()
                 .items_center()
-                .gap(px(8.))
+                .gap(space::MD)
                 .cursor_pointer()
                 .hover(move |style| style.bg(p.hover))
                 .child(
                     Icon::new(IconName::MessageSquare)
-                        .size(px(14.))
+                        .size(icon::ACTION)
                         .text_color(p.muted),
                 )
                 .child(
@@ -489,19 +494,20 @@ fn person_card_sessions(
                         .flex_1()
                         .overflow_hidden()
                         .text_ellipsis()
-                        .font_weight(FontWeight::MEDIUM)
+                        .typography(text::PERSON_CARD_LINK)
                         .child(row.title()),
                 )
                 .when_some(age, |this, age| {
                     this.child(
                         div()
                             .flex_shrink_0()
-                            .text_size(px(11.))
+                            .typography(text::PERSON_CARD_AGE)
                             .text_color(p.muted)
                             .child(age),
                     )
                 })
                 .on_click(move |_, window, cx| {
+                    dismiss.dismiss(window, cx);
                     let _ =
                         view.update(cx, |this, cx| this.select_session(key.clone(), window, cx));
                 }),
@@ -515,17 +521,4 @@ fn person_activity_path(profile: &str) -> String {
         "/activity/{}",
         percent_encoding::utf8_percent_encode(profile, percent_encoding::NON_ALPHANUMERIC)
     )
-}
-
-fn elapsed(ms: u64, minutes: bool) -> String {
-    let seconds = ms / 1000;
-    if seconds >= 86_400 {
-        format!("{}d", seconds / 86_400)
-    } else if seconds >= 3_600 {
-        format!("{}h", seconds / 3_600)
-    } else if seconds >= 60 || minutes {
-        format!("{}m", (seconds / 60).max(1))
-    } else {
-        format!("{seconds}s")
-    }
 }

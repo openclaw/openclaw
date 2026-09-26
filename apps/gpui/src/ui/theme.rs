@@ -1,3 +1,5 @@
+pub mod tokens;
+
 use gpui_kit::{
     component::{Theme, ThemeMode},
     *,
@@ -143,11 +145,11 @@ pub fn apply(window: &mut Window, cx: &mut App) {
         .text_system()
         .all_font_names()
         .iter()
-        .any(|name| name == "Instrument Sans")
+        .any(|name| name == tokens::text::UI_FAMILY)
     {
-        "Instrument Sans"
+        tokens::text::UI_FAMILY
     } else {
-        ".SystemUIFont"
+        tokens::text::FALLBACK_FAMILY
     };
     let t = Theme::global_mut(cx);
     t.font_family = font_family.into();
@@ -188,8 +190,8 @@ pub fn apply(window: &mut Window, cx: &mut App) {
     t.ring = p.focus_ring;
     t.success = p.ok;
     t.danger = p.danger;
-    t.font_size = px(14.);
-    t.radius = px(8.);
+    t.font_size = tokens::text::BODY.size;
+    t.radius = tokens::radius::CONTROL;
     // Widgets read resolved backgrounds as well as the solid color fields.
     t.tokens = t.colors.into();
     Theme::sync_base(cx);

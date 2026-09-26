@@ -1,4 +1,10 @@
-use super::{AppView, theme::Palette};
+use super::{
+    AppView,
+    theme::{
+        Palette,
+        tokens::{dialog, space},
+    },
+};
 use crate::model::sessions::SessionRow;
 use gpui_kit::{
     component::{
@@ -148,7 +154,7 @@ impl AppView {
         let view = cx.entity().downgrade();
         let epoch = self.epoch;
         window.open_dialog(cx, move |dialog, _, _| {
-            let mut colors = div().h_flex().flex_wrap().gap_1();
+            let mut colors = div().h_flex().flex_wrap().gap(space::WIDGET_GAP);
             for color in ["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"] {
                 let view = view.clone();
                 let row = row.clone();
@@ -378,8 +384,8 @@ impl Render for OwnerPicker {
         let mut body = div()
             .id("session-owner-options")
             .v_flex()
-            .gap_1()
-            .max_h(px(360.))
+            .gap(space::WIDGET_GAP)
+            .max_h(dialog::OWNER_OPTIONS_MAX_HEIGHT)
             .overflow_y_scroll();
         if self.loading {
             body = body.child("Loading people…");

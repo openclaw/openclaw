@@ -11,8 +11,9 @@ pub mod tools;
 pub mod web_urls;
 
 pub mod avatars;
+pub mod elapsed_time;
+pub mod overlay_placement;
 pub mod people;
-pub mod person_card;
 pub mod session_links;
 pub mod sidebar;
 pub mod sidebar_activity;

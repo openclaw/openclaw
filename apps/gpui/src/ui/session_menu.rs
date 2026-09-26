@@ -1,4 +1,8 @@
-use super::{AppView, sidebar_batch::batch_menu};
+use super::{
+    AppView,
+    sidebar_batch::batch_menu,
+    theme::tokens::{menu, space},
+};
 use crate::model::sessions::SessionRow;
 use gpui_kit::{
     base::actions::Cancel,
@@ -118,7 +122,10 @@ pub(super) fn session_menu(
     let Some(view) = MenuTarget::new(view, cx) else {
         return menu;
     };
-    menu = menu.min_w(px(230.)).max_w(px(320.)).scrollable(true);
+    menu = menu
+        .min_w(menu::SESSION_MIN_WIDTH)
+        .max_w(menu::SESSION_MAX_WIDTH)
+        .scrollable(true);
     if row.can_pin(main_key) {
         menu = item(
             menu,
@@ -474,7 +481,7 @@ impl AppView {
             SessionAction::CopyMenu => {
                 let view = cx.entity().downgrade();
                 window.open_dialog(cx, move |dialog, _, _| {
-                    let mut choices = div().v_flex().gap_1();
+                    let mut choices = div().v_flex().gap(space::WIDGET_GAP);
                     for (label, action) in [
                         ("Session link", SessionAction::CopyLink),
                         ("Preview link", SessionAction::CopyPreview),

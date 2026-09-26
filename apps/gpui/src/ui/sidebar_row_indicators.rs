@@ -1,8 +1,12 @@
 use super::{AppView, Palette, SessionRow, SidebarAttention};
-use crate::model::{chat::now_ms, sidebar_pr::scoped_key};
+use crate::ui::components::icon::icon as ui_icon;
+use crate::{
+    model::{chat::now_ms, sidebar_pr::scoped_key},
+    ui::theme::tokens::{avatar, colors, icon, space, text},
+};
 use gpui_kit::{
     assets::IconName,
-    component::{Icon, Sizable, StyledExt, spinner::Spinner, tooltip::Tooltip},
+    component::{Sizable, StyledExt, spinner::Spinner, tooltip::Tooltip},
     prelude::FluentBuilder,
     *,
 };
@@ -60,27 +64,32 @@ impl AppView {
                     "Failed".into(),
                     p.danger,
                 ),
-                _ => div().size(px(18.)).into_any_element(),
+                _ => div().size(avatar::SESSION.diameter).into_any_element(),
             }
         } else {
-            self.render_session_avatar(row, 18., depth > 0, cx)
+            self.render_session_avatar(row, avatar::SESSION.diameter.into(), depth > 0, cx)
         };
         div()
             .relative()
-            .size(px(22.))
+            .size(icon::RUN_RING)
             .flex()
             .items_center()
             .justify_center()
             .child(content)
             .when(running && attention != SidebarAttention::Question, |el| {
-                el.child(div().absolute().inset_0().child(run_ring(22., queued, p)))
+                el.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .child(run_ring(icon::RUN_RING, queued, p)),
+                )
             })
             .when(unread && !running, |el| {
                 el.child(
                     div()
                         .absolute()
-                        .right(px(-1.))
-                        .bottom(px(-1.))
+                        .right(-space::HAIRLINE)
+                        .bottom(-space::HAIRLINE)
                         .child(unread_dot(p)),
                 )
             })
@@ -117,7 +126,7 @@ impl AppView {
                     && self.composer_state.drafts.gateway() == Some(pending.gateway.as_str())
             })
             .count();
-        let mut badges = div().h_flex().flex_shrink_0().gap(px(3.));
+        let mut badges = div().h_flex().flex_shrink_0().gap(space::TIGHT);
         if row.incognito {
             badges = badges.child(row_badge(
                 &row.key,
@@ -139,7 +148,7 @@ impl AppView {
             );
             let color = match pr.state.as_str() {
                 "open" => p.ok,
-                "merged" => rgb(0xb595e8).into(),
+                "merged" => colors::merged_pull_request(),
                 _ => p.muted,
             };
             badges = badges.child(row_badge(
@@ -244,7 +253,7 @@ impl AppView {
         {
             badges = badges.child(
                 div()
-                    .text_size(px(10.))
+                    .text_size(text::COUNT.size)
                     .text_color(p.muted)
                     .child(compact_duration(runtime)),
             );
@@ -262,12 +271,12 @@ pub(super) fn row_badge(
 ) -> AnyElement {
     div()
         .id(SharedString::from(format!("badge:{key}:{id}")))
-        .size(px(14.))
+        .size(icon::BADGE_BOX)
         .flex_shrink_0()
         .flex()
         .items_center()
         .justify_center()
-        .child(Icon::new(icon).size(px(13.)).text_color(color))
+        .child(ui_icon(icon, icon::COMPACT).text_color(color))
         .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
         .into_any_element()
 }
@@ -316,16 +325,15 @@ pub(super) fn attention_badge(
     row_badge(&row.key, "attention", icon, label, color)
 }
 
-pub(super) fn run_ring(size: f32, queued: bool, p: Palette) -> AnyElement {
+pub(super) fn run_ring(size: Pixels, queued: bool, p: Palette) -> AnyElement {
     if queued {
-        Icon::new(IconName::CircleDashed)
-            .size(px(size))
+        ui_icon(IconName::CircleDashed, size)
             .text_color(p.muted)
             .into_any_element()
     } else {
         Spinner::new()
             .icon(IconName::LoaderCircle)
-            .with_size(px(size))
+            .with_size(size)
             .color(p.muted)
             .into_any_element()
     }
@@ -333,7 +341,7 @@ pub(super) fn run_ring(size: f32, queued: bool, p: Palette) -> AnyElement {
 
 pub(super) fn unread_dot(p: Palette) -> AnyElement {
     div()
-        .size(px(6.))
+        .size(icon::DOT)
         .rounded_full()
         .bg(p.accent)
         .flex_shrink_0()
@@ -351,22 +359,4 @@ fn compact_duration(ms: u64) -> String {
     } else {
         format!("{ms}ms")
     }
-}
-
-pub(super) fn session_color(value: &str, dark: bool) -> Option<Hsla> {
-    let colors = if dark {
-        [
-            0xf07878, 0x72a7ed, 0x69bf8a, 0xdcc365, 0xb595e8, 0xeaa36a, 0xdf8cb9, 0x66bccb,
-        ]
-    } else {
-        [
-            0xc74646, 0x376fbd, 0x328452, 0x9a791b, 0x8652ba, 0xbb681f, 0xb34885, 0x258394,
-        ]
-    };
-    [
-        "red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan",
-    ]
-    .iter()
-    .position(|color| *color == value)
-    .map(|index| rgb(colors[index]).into())
 }

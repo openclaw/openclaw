@@ -10,6 +10,9 @@ pub(super) async fn download_avatar(
     auth: &WebAuth,
     device_token: Option<&str>,
 ) -> Option<(ImageFormat, Vec<u8>)> {
+    if !auth.trusts(url) {
+        return None;
+    }
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())

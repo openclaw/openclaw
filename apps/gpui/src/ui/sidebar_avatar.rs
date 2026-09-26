@@ -1,8 +1,11 @@
-#[path = "sidebar_avatar_http.rs"]
-mod http;
-use http::download_avatar;
-
-use super::{AppView, theme::Palette};
+use super::{
+    AppView,
+    components::{avatar::Avatar, avatar_cache::AvatarCache},
+    theme::{
+        Palette,
+        tokens::{AvatarMetrics, avatar, facepile, opacity, space},
+    },
+};
 use crate::{
     gateway::sessions_rpc::Agent,
     model::{
@@ -12,49 +15,7 @@ use crate::{
     },
 };
 use gpui_kit::{assets::IconName, component::Icon, prelude::FluentBuilder, *};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::{Duration, Instant},
-};
-
-const MAX_CACHED_AVATARS: usize = 128;
-const FAILED_AVATAR_RETRY_AFTER: Duration = Duration::from_secs(60);
-
-#[derive(Default)]
-pub(super) struct AvatarCache {
-    images: HashMap<String, Option<Arc<Image>>>,
-    failed_at: HashMap<String, Instant>,
-    faces: HashMap<String, Arc<Image>>,
-    pending: HashMap<String, tokio::task::AbortHandle>,
-}
-
-impl Drop for AvatarCache {
-    fn drop(&mut self) {
-        for task in self.pending.values() {
-            task.abort();
-        }
-    }
-}
-
-impl AvatarCache {
-    pub(super) fn image(&self, spec: &AvatarSpec) -> Option<Arc<Image>> {
-        spec.url
-            .as_ref()
-            .and_then(|url| self.images.get(url))
-            .cloned()
-            .flatten()
-    }
-
-    fn face(&self, id: &str) -> Arc<Image> {
-        self.faces.get(id).cloned().unwrap_or_else(|| {
-            Arc::new(Image::from_bytes(
-                ImageFormat::Svg,
-                avatars::agent_face_svg(id).into_bytes(),
-            ))
-        })
-    }
-}
+use std::collections::HashSet;
 
 impl AppView {
     pub(super) fn render_session_viewers(
@@ -97,23 +58,20 @@ impl AppView {
         self.online_facepile(&viewers, 3, cx)
     }
 
-    pub(super) fn render_person_avatar(&self, person: &Person, size: f32, cx: &App) -> AnyElement {
-        let font_size = match size {
-            18. => 7.,
-            20. => 8.,
-            28. => 10.,
-            _ => size * 0.4,
-        };
-        self.render_person_avatar_on(person, size, font_size, Palette::sidebar(cx).sidebar, cx)
+    pub(super) fn render_person_avatar(
+        &self,
+        person: &Person,
+        metrics: AvatarMetrics,
+        cx: &App,
+    ) -> AnyElement {
+        self.render_person_avatar_on(person, metrics, Palette::sidebar(cx).sidebar)
     }
 
     pub(super) fn render_person_avatar_on(
         &self,
         person: &Person,
-        size: f32,
-        font_size: f32,
+        metrics: AvatarMetrics,
         surface: Hsla,
-        _cx: &App,
     ) -> AnyElement {
         let gateway = self
             .web
@@ -122,35 +80,15 @@ impl AppView {
             .map(|auth| auth.gateway_url.as_str())
             .unwrap_or("");
         let spec = avatars::person_avatar(person, gateway);
-        let face = match &spec.fallback {
-            AvatarFallback::AgentFace(id) => Some(self.sidebar_state.avatars.face(id)),
-            _ => None,
-        };
-        div()
-            .size(px(size))
-            .flex_shrink_0()
-            .rounded_full()
-            .border_1()
+        Avatar::new(&spec, &self.sidebar_state.avatars, metrics)
             .border_color(surface)
-            .child(avatar_element(
-                &spec,
-                self.sidebar_state.avatars.image(&spec),
-                face,
-                size - 2.,
-                Some(font_size),
-            ))
             .into_any_element()
     }
 
-    pub(super) fn render_agent_avatar(&self, agent: &Agent, size: f32, cx: &App) -> AnyElement {
-        self.render_agent_avatar_sized(agent, size, size * 0.72, cx)
-    }
-
-    pub(super) fn render_agent_avatar_sized(
+    pub(super) fn render_agent_avatar(
         &self,
         agent: &Agent,
-        size: f32,
-        text_size: f32,
+        metrics: AvatarMetrics,
         _cx: &App,
     ) -> AnyElement {
         let gateway = self
@@ -166,17 +104,7 @@ impl AppView {
             agent.identity.emoji.as_deref(),
             gateway,
         );
-        let face = match &spec.fallback {
-            AvatarFallback::AgentFace(id) => Some(self.sidebar_state.avatars.face(id)),
-            _ => None,
-        };
-        avatar_element(
-            &spec,
-            self.sidebar_state.avatars.image(&spec),
-            face,
-            size,
-            Some(text_size),
-        )
+        Avatar::new(&spec, &self.sidebar_state.avatars, metrics).into_any_element()
     }
 
     pub(super) fn render_session_avatar(
@@ -203,10 +131,8 @@ impl AppView {
                     .as_deref()
                     .and_then(|url| avatars::trusted_avatar_url(url, gateway, Some("channel")));
                 let image = url
-                    .as_ref()
-                    .and_then(|url| self.sidebar_state.avatars.images.get(url))
-                    .cloned()
-                    .flatten();
+                    .as_deref()
+                    .and_then(|url| self.sidebar_state.avatars.image_url(url));
                 let fallback = if suppress_owner {
                     div().size(px(size)).into_any_element()
                 } else {
@@ -255,9 +181,11 @@ impl AppView {
             _ => None,
         };
         if let Some(named) = named {
-            return Icon::new(named).size(px(size * 0.8)).into_any_element();
+            return Icon::new(named)
+                .size(px(size * avatar::SESSION_ICON_RATIO))
+                .into_any_element();
         }
-        if let Some(Some(image)) = self.sidebar_state.avatars.images.get(icon) {
+        if let Some(image) = self.sidebar_state.avatars.image_url(icon) {
             return img(image.clone())
                 .size(px(size))
                 .object_fit(ObjectFit::Contain)
@@ -268,7 +196,7 @@ impl AppView {
             .flex()
             .items_center()
             .justify_center()
-            .text_size(px(size * 0.8))
+            .text_size(px(size * avatar::SESSION_ICON_RATIO))
             .child(if icon.starts_with("data:") {
                 String::new()
             } else {
@@ -290,12 +218,16 @@ impl AppView {
         let count = row.participant_count.unwrap_or(row.participants.len());
         let mut result = div()
             .relative()
-            .w(px(if count > 0 { size + 6. } else { size }))
+            .w(px(if count > 0 {
+                size + f32::from(facepile::PARTICIPANT_OFFSET_X)
+            } else {
+                size
+            }))
             .h(px(size))
             .flex_shrink_0()
             .when(
                 owner.profile_id().is_some() && !self.session_owner_viewing(&owner, row),
-                |this| this.opacity(0.45),
+                |this| this.opacity(opacity::IDLE),
             );
         if count > 0 {
             let participant = if count == 1 {
@@ -305,7 +237,17 @@ impl AppView {
             };
             let rear = participant
                 .as_ref()
-                .map(|person| self.render_person_avatar(person, size, cx))
+                .map(|person| {
+                    self.render_person_avatar(
+                        person,
+                        AvatarMetrics {
+                            diameter: px(size),
+                            text_size: px(size * avatar::FALLBACK_TEXT_RATIO),
+                            border: space::HAIRLINE,
+                        },
+                        cx,
+                    )
+                })
                 .unwrap_or_else(|| {
                     div()
                         .size(px(size))
@@ -314,11 +256,17 @@ impl AppView {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_size(px(8.))
+                        .text_size(facepile::OVERFLOW_TEXT)
                         .child(format!("+{count}"))
                         .into_any_element()
                 });
-            result = result.child(div().absolute().left(px(6.)).top(px(-2.)).child(rear));
+            result = result.child(
+                div()
+                    .absolute()
+                    .left(facepile::PARTICIPANT_OFFSET_X)
+                    .top(facepile::PARTICIPANT_OFFSET_Y)
+                    .child(rear),
+            );
         }
         result
             .child(div().relative().child(self.render_avatar_spec(
@@ -382,16 +330,16 @@ impl AppView {
     }
 
     pub(super) fn render_avatar_spec(&self, spec: &AvatarSpec, size: f32, _cx: &App) -> AnyElement {
-        avatar_element(
+        Avatar::new(
             spec,
-            self.sidebar_state.avatars.image(spec),
-            match &spec.fallback {
-                AvatarFallback::AgentFace(id) => Some(self.sidebar_state.avatars.face(id)),
-                _ => None,
+            &self.sidebar_state.avatars,
+            AvatarMetrics {
+                diameter: px(size),
+                text_size: px(size * avatar::FALLBACK_TEXT_RATIO),
+                border: space::NONE,
             },
-            size,
-            None,
         )
+        .into_any_element()
     }
 
     /// Fetch only currently referenced routes. Each Gateway window owns its cache and tasks.
@@ -452,53 +400,7 @@ impl AppView {
                 });
             }
         }
-        // Preserve priority rather than letting hash iteration decide which images fit.
-        let mut wanted = HashSet::new();
-        let urls: Vec<_> = specs
-            .iter()
-            .filter_map(|spec| spec.url.clone())
-            .filter(|url| wanted.insert(url.clone()))
-            .take(MAX_CACHED_AVATARS)
-            .collect();
-        self.sidebar_state
-            .avatars
-            .images
-            .retain(|url, _| wanted.contains(url));
-        self.sidebar_state
-            .avatars
-            .failed_at
-            .retain(|url, _| wanted.contains(url));
-        self.sidebar_state.avatars.pending.retain(|url, task| {
-            let retained = wanted.contains(url);
-            if !retained {
-                task.abort();
-            }
-            retained
-        });
-        let wanted_faces: HashSet<_> = specs
-            .iter()
-            .filter_map(|spec| match &spec.fallback {
-                AvatarFallback::AgentFace(id) => Some(id.clone()),
-                _ => None,
-            })
-            .take(MAX_CACHED_AVATARS)
-            .collect();
-        self.sidebar_state
-            .avatars
-            .faces
-            .retain(|id, _| wanted_faces.contains(id));
-        for id in wanted_faces {
-            self.sidebar_state
-                .avatars
-                .faces
-                .entry(id.clone())
-                .or_insert_with(|| {
-                    Arc::new(Image::from_bytes(
-                        ImageFormat::Svg,
-                        avatars::agent_face_svg(&id).into_bytes(),
-                    ))
-                });
-        }
+        let downloads = self.sidebar_state.avatars.prepare(&specs);
         let device_token = self
             .session
             .as_ref()
@@ -509,43 +411,18 @@ impl AppView {
                     .and_then(serde_json::Value::as_str)
             })
             .map(str::to_owned);
-        for url in urls {
-            let retry = self
-                .sidebar_state
-                .avatars
-                .failed_at
-                .get(&url)
-                .is_some_and(|failed| failed.elapsed() >= FAILED_AVATAR_RETRY_AFTER);
-            if self.sidebar_state.avatars.images.contains_key(&url) && !retry {
-                continue;
-            }
-            self.sidebar_state.avatars.failed_at.remove(&url);
-            self.sidebar_state.avatars.images.insert(url.clone(), None);
-            if let Some((mime, bytes)) = avatars::decode_data_image(&url) {
-                if let Some(format) = ImageFormat::from_mime_type(&mime) {
-                    self.sidebar_state
-                        .avatars
-                        .images
-                        .insert(url, Some(Arc::new(Image::from_bytes(format, bytes))));
-                } else {
-                    self.sidebar_state
-                        .avatars
-                        .failed_at
-                        .insert(url, Instant::now());
-                }
-                continue;
-            }
+        for url in downloads {
             let request_url = url.clone();
             let request_auth = auth.clone();
             let request_device_token = device_token.clone();
             let task = self.runtime.spawn(async move {
-                download_avatar(&request_url, &request_auth, request_device_token.as_deref()).await
+                AvatarCache::download(&request_url, &request_auth, request_device_token.as_deref())
+                    .await
             });
             let request_id = task.id();
             self.sidebar_state
                 .avatars
-                .pending
-                .insert(url.clone(), task.abort_handle());
+                .request_started(url.clone(), task.abort_handle());
             let epoch = self.epoch;
             cx.spawn(async move |this, cx| {
                 let result = task.await.ok().flatten();
@@ -553,26 +430,12 @@ impl AppView {
                     if this.epoch != epoch {
                         return;
                     }
-                    if this
+                    if !this
                         .sidebar_state
                         .avatars
-                        .pending
-                        .get(&url)
-                        .map(tokio::task::AbortHandle::id)
-                        != Some(request_id)
+                        .complete(&url, request_id, result)
                     {
                         return;
-                    }
-                    this.sidebar_state.avatars.pending.remove(&url);
-                    if result.is_none() {
-                        this.sidebar_state
-                            .avatars
-                            .failed_at
-                            .insert(url.clone(), Instant::now());
-                    }
-                    if let Some(entry) = this.sidebar_state.avatars.images.get_mut(&url) {
-                        *entry = result
-                            .map(|(format, bytes)| Arc::new(Image::from_bytes(format, bytes)));
                     }
                     cx.notify();
                 });
@@ -580,69 +443,4 @@ impl AppView {
             .detach();
         }
     }
-}
-
-pub(super) fn avatar_element(
-    spec: &AvatarSpec,
-    image: Option<Arc<Image>>,
-    face: Option<Arc<Image>>,
-    size: f32,
-    text_size: Option<f32>,
-) -> AnyElement {
-    let fallback = match &spec.fallback {
-        AvatarFallback::Initials { text, hue, owner } => div()
-            .size_full()
-            .rounded_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(hsla(
-                f32::from(*hue) / 360.,
-                if *owner { 0.58 } else { 0.48 },
-                if *owner { 0.26 } else { 0.42 },
-                1.,
-            ))
-            .text_color(rgb(0xffffff))
-            .text_size(px(text_size.unwrap_or(size * 0.4)))
-            .font_weight(FontWeight::BOLD)
-            .child(text.clone())
-            .into_any_element(),
-        AvatarFallback::Text(text) => div()
-            .size_full()
-            .rounded_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_size(px(text_size.unwrap_or(size * 0.72)))
-            .child(text.clone())
-            .into_any_element(),
-        AvatarFallback::AgentFace(_) => face
-            .map(|face| {
-                img(face)
-                    .size_full()
-                    .rounded_full()
-                    .object_fit(ObjectFit::Cover)
-                    .into_any_element()
-            })
-            .unwrap_or_else(|| div().into_any_element()),
-    };
-    div()
-        .relative()
-        .size(px(size))
-        .flex_shrink_0()
-        .rounded_full()
-        .overflow_hidden()
-        .child(fallback)
-        .when_some(image, |this, image| {
-            this.child(
-                img(image)
-                    .absolute()
-                    .inset_0()
-                    .size_full()
-                    .rounded_full()
-                    .object_fit(ObjectFit::Cover)
-                    .with_fallback(|| div().into_any_element()),
-            )
-        })
-        .into_any_element()
 }

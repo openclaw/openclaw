@@ -1,4 +1,16 @@
-use super::{AppView, sidebar_people::PersonHoverCard, theme::Palette};
+use super::{
+    AppView,
+    components::{
+        hover_card::HoverCard,
+        icon::icon as ui_icon,
+        icon_button::icon_button as ui_icon_button,
+        list::{empty_state, section_header},
+    },
+    theme::{
+        Palette,
+        tokens::{TypographyExt, avatar, header, icon, icon_button, opacity, row, space, text},
+    },
+};
 use crate::model::{
     people::{OnlinePerson, Person},
     sessions::SessionRow,
@@ -7,7 +19,7 @@ use crate::model::{
 use gpui_kit::{
     assets::IconName,
     component::{
-        Disableable, Icon, Sizable, StyledExt,
+        Disableable, Sizable, StyledExt,
         button::{Button, ButtonVariants},
         menu::{DropdownMenu, PopupMenuItem},
     },
@@ -51,7 +63,7 @@ impl AppView {
         sections
     }
     pub(super) fn sidebar_pinned_navigation(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut content = div().v_flex().gap(px(2.));
+        let mut content = div().v_flex().gap(row::GAP);
         if !self.sidebar_state.preferences.all_agents {
             for section in self
                 .projected_sections(&self.rows, &self.agent_home())
@@ -70,8 +82,8 @@ impl AppView {
         let team = self.sidebar_state.preferences.all_agents;
         let mut content = div()
             .v_flex()
-            .gap(px(if team { 0. } else { 2. }))
-            .when(team, |content| content.px(px(8.)));
+            .gap(if team { space::NONE } else { row::GAP })
+            .when(team, |content| content.px(space::MD));
         if self.sidebar_state.preferences.all_agents {
             for agent in &self.sidebar_state.agents {
                 let id = agent.id.clone();
@@ -108,26 +120,26 @@ impl AppView {
                     div()
                         .group(header_group.clone())
                         .h_flex()
-                        .h(px(48.))
-                        .gap(px(4.))
+                        .h(header::ROSTER_HEIGHT)
+                        .gap(space::XS)
                         .child(
                             Button::new(SharedString::from(format!("agent-section:{id}")))
                                 .ghost()
                                 .small()
-                                .size(px(20.))
-                                .h(px(22.))
+                                .size(icon::LEADING)
+                                .h(icon_button::COMPACT.size)
                                 .px_0()
                                 .py_0()
                                 .justify_start()
-                                .gap(px(7.))
-                                .icon(
-                                    Icon::new(if collapsed {
+                                .gap(header::ROSTER_CONTROL_GAP)
+                                .icon(ui_icon(
+                                    if collapsed {
                                         IconName::ChevronRight
                                     } else {
                                         IconName::ChevronDown
-                                    })
-                                    .size(px(14.)),
-                                )
+                                    },
+                                    icon::ACTION,
+                                ))
                                 .accessibility_label(format!(
                                     "{} {}",
                                     if collapsed { "Expand" } else { "Collapse" },
@@ -144,37 +156,41 @@ impl AppView {
                                 .flex_1()
                                 .min_w_0()
                                 .justify_start()
-                                .gap(px(7.))
-                                .h(px(44.))
+                                .gap(header::ROSTER_CONTROL_GAP)
+                                .h(header::ROSTER_BUTTON_HEIGHT)
                                 .px_0()
-                                .py(px(4.))
+                                .py(space::XS)
                                 .child(
                                     div()
                                         .w_full()
                                         .h_flex()
-                                        .gap(px(8.))
-                                        .child(self.render_agent_avatar(agent, 36., cx))
+                                        .gap(space::MD)
+                                        .child(self.render_agent_avatar(
+                                            agent,
+                                            avatar::AGENT_ROSTER,
+                                            cx,
+                                        ))
                                         .child(
                                             div()
                                                 .flex_1()
                                                 .min_w_0()
                                                 .truncate()
-                                                .text_size(px(16.))
-                                                .font_weight(FontWeight(650.))
-                                                .line_height(px(24.8))
+                                                .typography(text::AGENT_ROSTER)
                                                 .child(agent.name().to_owned()),
                                         ),
                                 )
                                 .when(attention || running || unread, |el| {
                                     el.child(
-                                        Icon::new(if attention {
-                                            IconName::Hand
-                                        } else if running {
-                                            IconName::LoaderCircle
-                                        } else {
-                                            IconName::Circle
-                                        })
-                                        .size(px(12.))
+                                        ui_icon(
+                                            if attention {
+                                                IconName::Hand
+                                            } else if running {
+                                                IconName::LoaderCircle
+                                            } else {
+                                                IconName::Circle
+                                            },
+                                            icon::SMALL,
+                                        )
                                         .text_color(if attention { p.danger } else { p.accent }),
                                     )
                                 })
@@ -185,96 +201,101 @@ impl AppView {
                                 })),
                         )
                         .child(
-                            Button::new(SharedString::from(format!("agent-new:{id}")))
-                                .ghost()
-                                .small()
-                                .size(px(22.))
-                                .opacity(0.)
-                                .group_hover(header_group.clone(), |style| style.opacity(1.))
-                                .focus_visible(|style| style.opacity(1.))
-                                .icon(Icon::new(IconName::Plus).size(px(14.)))
-                                .accessibility_label(format!("New conversation: {}", agent.name()))
-                                .disabled(self.session.is_none())
-                                .on_click(cx.listener(move |this, _, window, cx| {
+                            ui_icon_button(
+                                SharedString::from(format!("agent-new:{id}")),
+                                IconName::Plus,
+                                format!("New conversation: {}", agent.name()),
+                                icon_button::COMPACT,
+                                cx,
+                            )
+                            .opacity(opacity::HIDDEN)
+                            .group_hover(header_group.clone(), |style| {
+                                style.opacity(opacity::VISIBLE)
+                            })
+                            .focus_visible(|style| style.opacity(opacity::VISIBLE))
+                            .disabled(self.session.is_none())
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
                                     this.sidebar_state.selected_agent = Some(new_agent.clone());
                                     this.sidebar_state.agent_revision += 1;
                                     this.new_chat(window, cx);
-                                })),
+                                },
+                            )),
                         )
                         .child(
-                            Button::new(SharedString::from(format!("agent-options:{id}")))
-                                .ghost()
-                                .small()
-                                .size(px(22.))
-                                .opacity(0.)
-                                .group_hover(header_group, |style| style.opacity(1.))
-                                .focus_visible(|style| style.opacity(1.))
-                                .icon(Icon::new(IconName::Ellipsis).size(px(14.)))
-                                .accessibility_label(format!("Agent options: {}", agent.name()))
-                                .dropdown_menu(move |menu, _, _| {
-                                    let home_view = view.clone();
-                                    let agent = menu_agent.clone();
-                                    let main = menu_main.clone();
-                                    let sessions_view = view.clone();
-                                    let collapse_view = view.clone();
-                                    let keep = menu_agent.clone();
-                                    menu.item(PopupMenuItem::new("Open main chat").on_click(
-                                        move |_, window, cx| {
-                                            let _ = home_view.update(cx, |this, cx| {
-                                                this.sidebar_state.selected_agent =
-                                                    Some(agent.clone());
-                                                this.select_session(main.clone(), window, cx);
-                                            });
-                                        },
-                                    ))
-                                    .item(PopupMenuItem::new("All sessions…").on_click(
-                                        move |_, window, cx| {
-                                            let _ = sessions_view.update(cx, |this, cx| {
-                                                this.open_control_page(
-                                                    "/sessions",
-                                                    "Sessions",
-                                                    window,
-                                                    cx,
-                                                )
-                                            });
-                                        },
-                                    ))
-                                    .separator()
-                                    .item(
-                                        PopupMenuItem::new("Collapse other agents").on_click(
-                                            move |_, _, cx| {
-                                                let _ = collapse_view.update(cx, |this, cx| {
-                                                    let ids: Vec<_> = this
-                                                        .sidebar_state
-                                                        .agents
-                                                        .iter()
-                                                        .map(|agent| agent.id.clone())
-                                                        .collect();
-                                                    for id in ids {
-                                                        let key = format!("agent:{id}");
-                                                        if id == keep {
-                                                            this.sidebar_state
-                                                                .preferences
-                                                                .collapsed_sections
-                                                                .remove(&key);
-                                                        } else {
-                                                            this.sidebar_state
-                                                                .preferences
-                                                                .collapsed_sections
-                                                                .insert(key);
-                                                        }
+                            ui_icon_button(
+                                SharedString::from(format!("agent-options:{id}")),
+                                IconName::Ellipsis,
+                                format!("Agent options: {}", agent.name()),
+                                icon_button::COMPACT,
+                                cx,
+                            )
+                            .opacity(opacity::HIDDEN)
+                            .group_hover(header_group, |style| style.opacity(opacity::VISIBLE))
+                            .focus_visible(|style| style.opacity(opacity::VISIBLE))
+                            .dropdown_menu(move |menu, _, _| {
+                                let home_view = view.clone();
+                                let agent = menu_agent.clone();
+                                let main = menu_main.clone();
+                                let sessions_view = view.clone();
+                                let collapse_view = view.clone();
+                                let keep = menu_agent.clone();
+                                menu.item(PopupMenuItem::new("Open main chat").on_click(
+                                    move |_, window, cx| {
+                                        let _ = home_view.update(cx, |this, cx| {
+                                            this.sidebar_state.selected_agent = Some(agent.clone());
+                                            this.select_session(main.clone(), window, cx);
+                                        });
+                                    },
+                                ))
+                                .item(PopupMenuItem::new("All sessions…").on_click(
+                                    move |_, window, cx| {
+                                        let _ = sessions_view.update(cx, |this, cx| {
+                                            this.open_control_page(
+                                                "/sessions",
+                                                "Sessions",
+                                                window,
+                                                cx,
+                                            )
+                                        });
+                                    },
+                                ))
+                                .separator()
+                                .item(
+                                    PopupMenuItem::new("Collapse other agents").on_click(
+                                        move |_, _, cx| {
+                                            let _ = collapse_view.update(cx, |this, cx| {
+                                                let ids: Vec<_> = this
+                                                    .sidebar_state
+                                                    .agents
+                                                    .iter()
+                                                    .map(|agent| agent.id.clone())
+                                                    .collect();
+                                                for id in ids {
+                                                    let key = format!("agent:{id}");
+                                                    if id == keep {
+                                                        this.sidebar_state
+                                                            .preferences
+                                                            .collapsed_sections
+                                                            .remove(&key);
+                                                    } else {
+                                                        this.sidebar_state
+                                                            .preferences
+                                                            .collapsed_sections
+                                                            .insert(key);
                                                     }
-                                                    this.sidebar_state.preference_revision += 1;
-                                                    this.persist_sidebar_preferences(cx);
-                                                    this.sync_sidebar_pull_requests(cx);
-                                                    this.refresh_sidebar_avatars(cx);
-                                                    this.sync_sidebar_activity(cx);
-                                                    cx.notify();
-                                                });
-                                            },
-                                        ),
-                                    )
-                                }),
+                                                }
+                                                this.sidebar_state.preference_revision += 1;
+                                                this.persist_sidebar_preferences(cx);
+                                                this.sync_sidebar_pull_requests(cx);
+                                                this.refresh_sidebar_avatars(cx);
+                                                this.sync_sidebar_activity(cx);
+                                                cx.notify();
+                                            });
+                                        },
+                                    ),
+                                )
+                            }),
                         ),
                 );
                 if !collapsed {
@@ -283,12 +304,12 @@ impl AppView {
                         content = content.child(self.render_sidebar_section(&section, &scope, cx));
                     }
                 }
-                content = content.child(div().h(px(12.)).flex_shrink_0());
+                content = content.child(div().h(header::SECTION_GAP).flex_shrink_0());
             }
         } else {
             let sections = self.projected_sections(&self.rows, &self.agent_home());
             if sections.iter().all(|s| s.rows.is_empty()) {
-                content = content.child(div().p_3().text_size(px(12.)).text_color(p.muted).child(
+                content = content.child(empty_state(
                     if self.roster_loading {
                         "Loading conversations…"
                     } else if self.sidebar_state.preferences.archive
@@ -300,6 +321,7 @@ impl AppView {
                     } else {
                         "No conversations yet. Start a new chat."
                     },
+                    p.muted,
                 ));
             }
             for section in sections
@@ -346,8 +368,12 @@ impl AppView {
         let team = self.sidebar_state.preferences.all_agents;
         let mut content = div()
             .v_flex()
-            .gap(px(if team { 0. } else { 2. }))
-            .mt(px(if team { 0. } else { 12. }));
+            .gap(if team { space::NONE } else { row::GAP })
+            .mt(if team {
+                space::NONE
+            } else {
+                header::SECTION_GAP
+            });
         if section.render_header {
             let toggle = key.clone();
             let person = section.person_owner.as_ref().and_then(Person::from_actor);
@@ -358,45 +384,37 @@ impl AppView {
                     .into_iter()
                     .find(|online| online.person.key() == person.key())
             });
-            let header = Button::new(SharedString::from(format!("section:{key}")))
-                .ghost()
-                .small()
-                .flex_1()
-                .min_w_0()
-                .h(px(24.))
-                .justify_start()
-                .px(px(8.))
-                .gap(px(8.))
+            let header = section_header(SharedString::from(format!("section:{key}")))
                 .child(
                     div()
-                        .w(px(20.))
+                        .w(row::NAV.leading_width)
                         .flex_shrink_0()
                         .flex()
                         .justify_center()
-                        .child(
-                            Icon::new(if collapsed {
+                        .child(ui_icon(
+                            if collapsed {
                                 IconName::ChevronRight
                             } else {
                                 IconName::ChevronDown
-                            })
-                            .size(px(10.)),
-                        ),
+                            },
+                            icon::DISCLOSURE,
+                        )),
                 )
                 .when_some(person.clone(), |el, person| {
                     el.child(
                         div()
                             .relative()
-                            .size(px(18.))
-                            .child(self.render_person_avatar(&person, 18., cx))
+                            .size(avatar::PERSON_SECTION.diameter)
+                            .child(self.render_person_avatar(&person, avatar::PERSON_SECTION, cx))
                             .when_some(online.as_ref(), |el, online| {
                                 el.child(
                                     div()
                                         .absolute()
-                                        .bottom(px(-1.))
-                                        .right(px(-1.))
-                                        .size(px(6.))
+                                        .bottom(-space::HAIRLINE)
+                                        .right(-space::HAIRLINE)
+                                        .size(icon::DOT)
                                         .rounded_full()
-                                        .border_1()
+                                        .border(space::HAIRLINE)
                                         .border_color(p.sidebar)
                                         .bg(if online.idle() { p.muted } else { p.ok }),
                                 )
@@ -406,27 +424,29 @@ impl AppView {
                 .child(
                     div()
                         .flex_1()
-                        .text_size(px(11.))
+                        .text_size(text::CATEGORY.size)
                         .text_color(p.muted)
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .font_weight(text::CATEGORY.weight)
                         .child(section.label.to_uppercase()),
                 )
                 .when(collapsed, |el| {
                     el.child(
                         div()
-                            .text_size(px(10.))
+                            .text_size(text::COUNT.size)
                             .text_color(p.muted)
                             .child(section.rows.len().to_string()),
                     )
                 })
                 .when(collapsed && (attention || running), |el| {
                     el.child(
-                        Icon::new(if attention {
-                            IconName::Hand
-                        } else {
-                            IconName::LoaderCircle
-                        })
-                        .size(px(12.))
+                        ui_icon(
+                            if attention {
+                                IconName::Hand
+                            } else {
+                                IconName::LoaderCircle
+                            },
+                            icon::SMALL,
+                        )
                         .text_color(if attention {
                             p.danger
                         } else {
@@ -449,10 +469,10 @@ impl AppView {
             let header = if let Some(person) = card_person {
                 let person = person.clone();
                 let view = cx.entity().downgrade();
-                PersonHoverCard::new(
+                HoverCard::new(
                     SharedString::from(format!("section-person:{key}")),
-                    header,
-                    move |_, cx| {
+                    move |_| header.into_any_element(),
+                    move |dismiss, _, cx| {
                         let Some(entity) = view.upgrade() else {
                             return div().into_any_element();
                         };
@@ -468,7 +488,7 @@ impl AppView {
                                 entries: Vec::new(),
                                 watched_sessions: Vec::new(),
                             });
-                        this.person_card(&online, view.clone(), cx)
+                        this.person_card(&online, view.clone(), dismiss, cx)
                     },
                 )
                 .into_any_element()
@@ -481,30 +501,27 @@ impl AppView {
                     let id = person.id.clone();
                     let active = self.sidebar_state.preferences.owner_id.as_deref() == Some(&id);
                     el.child(
-                        Button::new(SharedString::from(format!("person-filter:{key}")))
-                            .ghost()
-                            .small()
-                            .size(px(24.))
-                            .icon(
-                                Icon::new(IconName::ListFilter)
-                                    .size(px(12.))
-                                    .text_color(if active { p.accent } else { p.muted }),
-                            )
-                            .accessibility_label(if active {
+                        ui_icon_button(
+                            SharedString::from(format!("person-filter:{key}")),
+                            IconName::ListFilter,
+                            if active {
                                 "Show everyone".to_owned()
                             } else {
                                 format!("Show only {}", person.label())
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.change_sidebar_preferences(
-                                    |prefs| {
-                                        prefs.owner_id =
-                                            if active { None } else { Some(id.clone()) };
-                                        prefs.involving_me = false;
-                                    },
-                                    cx,
-                                )
-                            })),
+                            },
+                            icon_button::SECTION,
+                            cx,
+                        )
+                        .text_color(if active { p.accent } else { p.muted })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.change_sidebar_preferences(
+                                |prefs| {
+                                    prefs.owner_id = if active { None } else { Some(id.clone()) };
+                                    prefs.involving_me = false;
+                                },
+                                cx,
+                            )
+                        })),
                     )
                 },
             ));
@@ -526,9 +543,9 @@ impl AppView {
                     Button::new(SharedString::from(format!("section-more:{key}")))
                         .ghost()
                         .small()
-                        .h(px(25.))
+                        .h(row::SHOW_MORE_HEIGHT)
                         .label("Show more")
-                        .text_size(px(11.))
+                        .text_size(text::CATEGORY.size)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.sidebar_state
                                 .section_limits

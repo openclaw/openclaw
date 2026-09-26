@@ -1,9 +1,19 @@
-use super::{AppView, sidebar_navigation::navigation_icon, theme::Palette};
+use super::{
+    AppView,
+    components::icon::icon as ui_icon,
+    theme::{
+        Palette,
+        tokens::{
+            InsetsExt, TypographyExt, avatar, colors, header, icon, menu, opacity, radius, space,
+            text,
+        },
+    },
+};
 use crate::gateway::sessions_rpc::Agent;
 use gpui_kit::{
     assets::IconName,
     base::{Align, Placement, Positioner},
-    component::StyledExt,
+    component::{StyledExt, Theme},
     prelude::FluentBuilder,
     *,
 };
@@ -130,17 +140,22 @@ impl AppView {
             .any(|row| row.unread && !row.archived && row.agent() != selected);
         let avatar = if roster {
             div()
-                .size(px(28.))
+                .size(avatar::AGENT_HEADER.diameter)
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(24.))
+                .text_size(avatar::WORKSPACE_GLYPH)
                 .child("🦞")
                 .into_any_element()
         } else {
             selected_agent
-                .map(|agent| self.render_agent_avatar_sized(agent, 28., 19., cx))
-                .unwrap_or_else(|| div().size(px(28.)).child("◈").into_any_element())
+                .map(|agent| self.render_agent_avatar(agent, avatar::AGENT_HEADER, cx))
+                .unwrap_or_else(|| {
+                    div()
+                        .size(avatar::AGENT_HEADER.diameter)
+                        .child("◈")
+                        .into_any_element()
+                })
         };
         let trigger = div()
             .id("agent-picker")
@@ -150,24 +165,16 @@ impl AppView {
             .tab_index(0)
             .h_flex()
             .relative()
-            .h(px(38.))
-            .max_w(px(self.sidebar_state.width - 24.))
-            .px(px(6.))
-            .gap(px(6.))
-            .rounded(px(10.))
+            .h(header::AGENT_TRIGGER_HEIGHT)
+            .max_w(px(self.sidebar_state.width) - space::WIDE)
+            .px(space::SM)
+            .gap(space::SM)
+            .rounded(radius::PERSON)
             .cursor_pointer()
             .text_color(p.strong)
-            .hover(|style| style.bg(p.hover.opacity(0.84)))
-            .when(opened, |el| el.bg(p.hover.opacity(0.84)))
-            .focus_visible(|style| {
-                style.shadow(vec![BoxShadow {
-                    color: p.accent.opacity(0.5),
-                    offset: point(px(0.), px(0.)),
-                    blur_radius: px(0.),
-                    spread_radius: px(2.),
-                    inset: false,
-                }])
-            })
+            .hover(|style| style.bg(colors::navigation_hover(p)))
+            .when(opened, |el| el.bg(colors::navigation_hover(p)))
+            .focus_visible(|style| style.shadow(colors::focus_ring(p)))
             .aria_label(format!(
                 "{name} · {}",
                 if roster {
@@ -179,7 +186,7 @@ impl AppView {
             .child(
                 div()
                     .relative()
-                    .size(px(28.))
+                    .size(avatar::AGENT_HEADER.diameter)
                     .flex_shrink_0()
                     .rounded_full()
                     .bg(p.card)
@@ -188,9 +195,9 @@ impl AppView {
                         el.child(
                             div()
                                 .absolute()
-                                .right(px(-1.))
-                                .top(px(-1.))
-                                .size(px(6.))
+                                .right(-space::HAIRLINE)
+                                .top(-space::HAIRLINE)
+                                .size(icon::DOT)
                                 .rounded_full()
                                 .bg(p.accent),
                         )
@@ -204,13 +211,11 @@ impl AppView {
                         div()
                             .min_w_0()
                             .truncate()
-                            .pr(px(8.))
-                            .text_size(px(14.))
-                            .line_height(px(16.8))
-                            .font_weight(FontWeight(650.))
+                            .pr(header::AGENT_NAME_GAP)
+                            .typography(text::AGENT_TITLE)
                             .child(name),
                     )
-                    .child(navigation_icon(IconName::ChevronsUpDown, 12.).text_color(p.muted)),
+                    .child(ui_icon(IconName::ChevronsUpDown, icon::SMALL).text_color(p.muted)),
             )
             .child(
                 canvas(move |bounds, _, _| capture.set(bounds), |_, _, _, _| {})
@@ -248,8 +253,8 @@ impl AppView {
         let mut root = div()
             .h_flex()
             .items_start()
-            .h(px(48.))
-            .pb(px(10.))
+            .h(header::AGENT_HEIGHT)
+            .pb(space::LG)
             .child(trigger);
         if !opened {
             return root.into_any_element();
@@ -265,24 +270,20 @@ impl AppView {
         if show_tiles {
             content = content.child(
                 div()
-                    .h(px(31.05))
-                    .px(px(8.))
-                    .pt(px(6.))
-                    .pb(px(8.))
-                    .text_size(px(11.))
-                    .line_height(px(17.05))
-                    .font_weight(FontWeight(650.))
+                    .h(menu::TITLE_HEIGHT)
+                    .insets(menu::TITLE_PADDING)
+                    .typography(text::SECTION)
                     .text_color(p.muted)
                     .child("AGENTS"),
             );
             let mut grid = div()
                 .id("agent-tile-grid")
                 .v_flex()
-                .gap(px(4.))
-                .max_h(px(212.))
+                .gap(space::XS)
+                .max_h(header::AGENT_GRID_MAX_HEIGHT)
                 .overflow_y_scroll();
             for (line, agents) in self.sidebar_state.agents.chunks(3).enumerate() {
-                let mut row = div().h_flex().items_start().gap(px(4.));
+                let mut row = div().h_flex().items_start().gap(space::XS);
                 for (column, agent) in agents.iter().enumerate() {
                     let index = line * 3 + column;
                     row = row.child(self.agent_picker_tile(
@@ -298,10 +299,10 @@ impl AppView {
             }
             content = content.child(grid).child(
                 div()
-                    .h(px(13.))
-                    .pt(px(6.))
-                    .pb(px(6.))
-                    .child(div().h(px(1.)).bg(p.border)),
+                    .h(menu::SEPARATOR_HEIGHT)
+                    .pt(space::SM)
+                    .pb(space::SM)
+                    .child(div().h(space::HAIRLINE).bg(p.border)),
             );
         }
         for (index, entry) in entries.iter().enumerate().skip(tile_count) {
@@ -323,28 +324,13 @@ impl AppView {
             .track_focus(&menu_focus)
             .occlude()
             .relative()
-            .w(px(264.))
-            .p(px(4.))
-            .border_1()
-            .border_color(p.border_strong.opacity(0.64))
-            .rounded(px(12.5))
+            .w(menu::AGENT.width)
+            .p(menu::AGENT.padding)
+            .border(space::HAIRLINE)
+            .border_color(colors::overlay_border(p))
+            .rounded(radius::ROW)
             .bg(p.elevated)
-            .shadow(vec![
-                BoxShadow {
-                    color: rgba(0x0000002e).into(),
-                    offset: point(px(0.), px(1.)),
-                    blur_radius: px(2.),
-                    spread_radius: px(0.),
-                    inset: false,
-                },
-                BoxShadow {
-                    color: rgba(0x0000003d).into(),
-                    offset: point(px(0.), px(8.)),
-                    blur_radius: px(24.),
-                    spread_radius: px(0.),
-                    inset: false,
-                },
-            ])
+            .shadow(colors::menu_shadow(Theme::global(cx).is_dark()))
             .on_hover(
                 window.listener_for(&state, move |state, hovered, window, cx| {
                     state.hover(false, *hovered, active, window, cx)
@@ -371,24 +357,30 @@ impl AppView {
                 .role(Role::Menu)
                 .aria_label("Help")
                 .v_flex()
-                .w(px(167.875))
-                .p(px(4.))
-                .border_1()
-                .border_color(p.border_strong.opacity(0.64))
-                .rounded(px(12.5))
+                .w(menu::HELP.width)
+                .p(menu::AGENT.padding)
+                .border(space::HAIRLINE)
+                .border_color(colors::overlay_border(p))
+                .rounded(radius::ROW)
                 .bg(p.elevated);
             for (index, entry) in help_entries().iter().enumerate() {
                 links = links.child(menu_entry(entry, index, false, &context, window, cx));
             }
-            menu = menu.child(div().absolute().left(px(258.)).top(px(55.)).child(links));
+            menu = menu.child(
+                div()
+                    .absolute()
+                    .left(menu::HELP_LEFT)
+                    .top(menu::HELP_TOP)
+                    .child(links),
+            );
         }
         root = root.child(
             deferred(
                 Positioner::side(bounds.get())
                     .placement(Placement::Bottom)
                     .align(Align::Start)
-                    .offset(px(10.))
-                    .margin(px(8.))
+                    .offset(menu::ANCHOR_GAP)
+                    .margin(menu::VIEWPORT_MARGIN)
                     .occlude()
                     .child(menu),
             )
@@ -418,23 +410,18 @@ impl AppView {
         let choice = Choice::Agent(agent.id.clone());
         let view = view.clone();
         let epoch = self.epoch;
-        let ring = if selected {
-            p.accent.opacity(0.45)
-        } else {
-            p.strong.opacity(0.24)
-        };
         div()
             .id(SharedString::from(format!("agent-tile:{}", agent.id)))
             .role(Role::RadioButton)
             .aria_selected(selected)
             .aria_label(agent.name().to_owned())
-            .w(px(82.))
-            .h(px(104.))
-            .py(px(8.))
-            .px(px(6.))
+            .w(header::AGENT_TILE_WIDTH)
+            .h(header::AGENT_TILE_HEIGHT)
+            .py(space::MD)
+            .px(space::SM)
             .v_flex()
             .items_center()
-            .gap(px(10.))
+            .gap(space::LG)
             .relative()
             .cursor_pointer()
             .group("agent-tile")
@@ -442,51 +429,42 @@ impl AppView {
             .hover(|style| style.text_color(p.text))
             .child(
                 div()
-                    .size(px(48.))
+                    .size(avatar::AGENT_TILE.diameter)
                     .rounded_full()
-                    .bg(p.card.blend(p.strong.opacity(0.09)))
+                    .bg(colors::agent_tile(p))
                     .when(selected || focused, |el| {
-                        el.shadow(vec![
-                            BoxShadow {
-                                color: ring,
-                                offset: point(px(0.), px(0.)),
-                                blur_radius: px(0.),
-                                spread_radius: px(4.),
-                                inset: false,
-                            },
-                            BoxShadow {
-                                color: p.elevated,
-                                offset: point(px(0.), px(0.)),
-                                blur_radius: px(0.),
-                                spread_radius: px(2.),
-                                inset: false,
-                            },
-                        ])
+                        el.shadow(colors::agent_ring_shadow(p, selected))
                     })
-                    .opacity(if selected { 1. } else { 0.55 })
+                    .opacity(if selected {
+                        opacity::VISIBLE
+                    } else {
+                        opacity::AGENT_INACTIVE
+                    })
                     .group_hover("agent-tile", |style| {
-                        style.opacity(if selected { 1. } else { 0.85 })
+                        style.opacity(if selected {
+                            opacity::VISIBLE
+                        } else {
+                            opacity::AGENT_HOVER
+                        })
                     })
-                    .child(self.render_agent_avatar_sized(agent, 48., 25., cx)),
+                    .child(self.render_agent_avatar(agent, avatar::AGENT_TILE, cx)),
             )
             .child(
                 div()
                     .w_full()
-                    .h(px(30.))
+                    .h(header::AGENT_TILE_LABEL_HEIGHT)
                     .overflow_hidden()
                     .text_center()
-                    .text_size(px(11.))
-                    .line_height(px(13.75))
-                    .font_weight(FontWeight(550.))
+                    .typography(text::AGENT_TILE)
                     .child(agent.name().to_owned()),
             )
             .when(unread, |el| {
                 el.child(
                     div()
                         .absolute()
-                        .right(px(2.))
-                        .top(px(-2.))
-                        .size(px(6.))
+                        .right(space::XXS)
+                        .top(-space::XXS)
+                        .size(icon::DOT)
                         .rounded_full()
                         .bg(p.accent),
                 )
@@ -524,32 +502,32 @@ fn menu_entry(
         .id(("agent-command", index))
         .role(Role::MenuItem)
         .h_flex()
-        .h(px(28.))
-        .pl(px(13.))
-        .pr(px(8.))
-        .rounded(px(8.5))
+        .h(menu::ROW_HEIGHT)
+        .insets(menu::ITEM_PADDING)
+        .rounded(radius::MENU_ITEM)
         .cursor_pointer()
-        .text_size(px(13.))
-        .line_height(px(20.15))
+        .typography(text::MENU)
         .text_color(p.text)
         .when(focused, |el| el.bg(p.hover))
-        .when(!enabled, |el| el.opacity(0.5))
+        .when(!enabled, |el| el.opacity(opacity::DISABLED))
         .when(enabled, |el| el.hover(|style| style.bg(p.hover)))
         .when_some(entry.icon, |el, icon| {
             el.child(
                 div()
-                    .w(px(24.))
-                    .mr(px(9.75))
+                    .w(menu::ICON_COLUMN)
+                    .mr(menu::ICON_GAP)
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(navigation_icon(icon, 16.).text_color(p.muted)),
+                    .child(
+                        ui_icon(icon, crate::ui::theme::tokens::icon::NORMAL).text_color(p.muted),
+                    ),
             )
         })
         .child(entry.label.clone())
         .when(matches!(entry.choice, Choice::Help), |el| {
             el.child(div().flex_1())
-                .child(navigation_icon(IconName::ChevronRight, 12.))
+                .child(ui_icon(IconName::ChevronRight, icon::SMALL))
         })
         .on_hover(
             window.listener_for(&state, move |state, hovered, window, cx| {

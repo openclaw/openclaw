@@ -1,15 +1,11 @@
 use super::super::AppView;
-use crate::model::web_urls;
+use crate::{model::web_urls, ui::theme::tokens::motion};
 use gpui_kit::{
     assets::IconName,
     base::{DeferredPopover, GlobalState},
     *,
 };
-use std::{
-    cell::Cell,
-    rc::Rc,
-    time::{Duration, Instant},
-};
+use std::{cell::Cell, rc::Rc, time::Instant};
 
 #[derive(Clone)]
 pub(super) enum Choice {
@@ -137,7 +133,11 @@ impl PickerState {
         }
         self.timer = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor()
-                .timer(Duration::from_millis(if opening { 300 } else { 200 }))
+                .timer(if opening {
+                    motion::AGENT_OPEN
+                } else {
+                    motion::AGENT_CLOSE
+                })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if opening {
@@ -281,7 +281,7 @@ pub(super) fn picker_key(
             && !event.keystroke.modifiers.control
             && !event.keystroke.modifiers.alt =>
         {
-            if state.typed_at.elapsed() > Duration::from_secs(1) {
+            if state.typed_at.elapsed() > motion::TYPEAHEAD_RESET {
                 state.query.clear();
             }
             state.typed_at = Instant::now();

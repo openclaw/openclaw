@@ -1,4 +1,4 @@
-//! The web person card's horizontal placement, including its vertical fallback.
+//! Horizontal-first overlay placement with a vertical fallback and viewport clamping.
 #[derive(Clone, Copy, Debug)]
 pub struct Rect {
     pub left: f32,
@@ -7,23 +7,36 @@ pub struct Rect {
     pub height: f32,
 }
 
-pub fn position(anchor: Rect, card: [f32; 2], viewport: [f32; 2]) -> [f32; 2] {
+#[derive(Clone, Copy)]
+pub struct Placement {
+    pub gap: f32,
+    pub viewport_padding: f32,
+}
+
+pub fn horizontal_first(
+    anchor: Rect,
+    card: [f32; 2],
+    viewport: [f32; 2],
+    placement: Placement,
+) -> [f32; 2] {
+    let gap = placement.gap;
+    let padding = placement.viewport_padding;
     let [width, height] = card;
     let [viewport_width, viewport_height] = viewport;
-    let max_left = (viewport_width - width - 12.).max(12.);
-    let max_top = (viewport_height - height - 12.).max(12.);
+    let max_left = (viewport_width - width - padding).max(padding);
+    let max_top = (viewport_height - height - padding).max(padding);
     let right = anchor.left + anchor.width;
     let bottom = anchor.top + anchor.height;
-    let fits_below = bottom + 10. + height + 12. <= viewport_height;
-    let fits_right = right + 10. + width + 12. <= viewport_width;
-    let fits_left = anchor.left - 10. - width >= 12.;
-    let fits_above = anchor.top - 10. - height >= 12.;
+    let fits_below = bottom + gap + height + padding <= viewport_height;
+    let fits_right = right + gap + width + padding <= viewport_width;
+    let fits_left = anchor.left - gap - width >= padding;
+    let fits_above = anchor.top - gap - height >= padding;
     let (left, top) = if fits_right || fits_left || (!fits_below && !fits_above) {
         (
             if fits_right {
-                right + 10.
+                right + gap
             } else {
-                anchor.left - width - 10.
+                anchor.left - width - gap
             },
             anchor.top,
         )
@@ -31,18 +44,27 @@ pub fn position(anchor: Rect, card: [f32; 2], viewport: [f32; 2]) -> [f32; 2] {
         (
             anchor.left,
             if fits_below {
-                bottom + 10.
+                bottom + gap
             } else {
-                anchor.top - height - 10.
+                anchor.top - height - gap
             },
         )
     };
-    [left.clamp(12., max_left), top.clamp(12., max_top)]
+    [left.clamp(padding, max_left), top.clamp(padding, max_top)]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PLACEMENT: Placement = Placement {
+        gap: 10.,
+        viewport_padding: 12.,
+    };
+
+    fn position(anchor: Rect, card: [f32; 2], viewport: [f32; 2]) -> [f32; 2] {
+        horizontal_first(anchor, card, viewport, PLACEMENT)
+    }
 
     #[test]
     fn person_cards_use_row_edge_then_flip_or_clamp_without_covering_a_fitting_axis() {

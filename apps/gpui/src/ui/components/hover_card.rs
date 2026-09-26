@@ -3,30 +3,45 @@ use gpui_kit::{
     component::Theme,
     *,
 };
-use std::{cell::Cell, rc::Rc, time::Duration};
+use std::{cell::Cell, rc::Rc};
 
-use crate::model::person_card as geometry;
+use crate::{
+    model::overlay_placement as geometry,
+    ui::theme::{
+        Palette,
+        tokens::{card, colors, motion, radius, space},
+    },
+};
 
-type CardContent = Box<dyn Fn(&mut Window, &mut App) -> AnyElement>;
+type CardContent = Box<dyn Fn(HoverCardDismiss, &mut Window, &mut App) -> AnyElement>;
+type CardTrigger = Box<dyn FnOnce(bool) -> AnyElement>;
 
 #[derive(IntoElement)]
-pub(in crate::ui) struct PersonHoverCard {
+pub(in crate::ui) struct HoverCard {
     id: ElementId,
-    trigger: AnyElement,
+    trigger: CardTrigger,
     content: CardContent,
 }
 
-impl PersonHoverCard {
+impl HoverCard {
     pub(in crate::ui) fn new(
         id: impl Into<ElementId>,
-        trigger: impl IntoElement,
-        content: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
+        trigger: impl FnOnce(bool) -> AnyElement + 'static,
+        content: impl Fn(HoverCardDismiss, &mut Window, &mut App) -> AnyElement + 'static,
     ) -> Self {
         Self {
             id: id.into(),
-            trigger: trigger.into_any_element(),
+            trigger: Box::new(trigger),
             content: Box::new(content),
         }
+    }
+}
+
+#[derive(Clone)]
+pub(in crate::ui) struct HoverCardDismiss(WeakEntity<HoverState>);
+impl HoverCardDismiss {
+    pub fn dismiss(&self, window: &mut Window, cx: &mut App) {
+        let _ = self.0.update(cx, |state, cx| state.show(false, window, cx));
     }
 }
 
@@ -73,7 +88,11 @@ impl HoverState {
         if open == self.open {
             return;
         }
-        let delay = Duration::from_millis(if open { 450 } else { 220 });
+        let delay = if open {
+            motion::PERSON_OPEN
+        } else {
+            motion::PERSON_CLOSE
+        };
         self.timer = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(delay).await;
             let _ = this.update_in(cx, |this, window, cx| this.show(open, window, cx));
@@ -87,14 +106,22 @@ impl Render for HoverState {
     }
 }
 
-impl RenderOnce for PersonHoverCard {
+impl RenderOnce for HoverCard {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let state = window.use_keyed_state(self.id.clone(), cx, |_, _| HoverState::default());
+        let open = state.read(cx).open;
         let bounds = state.read(cx).bounds.clone();
         let capture = bounds.clone();
         let mut root = div()
             .id(self.id)
-            .child(self.trigger)
+            .child(
+                div()
+                    .id("hover-card-trigger")
+                    .child((self.trigger)(open))
+                    .on_click(window.listener_for(&state, |state, _, window, cx| {
+                        state.show(false, window, cx)
+                    })),
+            )
             // A size-only absolute child keeps its static position after the row.
             // Pin the probe to the row's origin before applying viewport placement.
             .child(
@@ -107,35 +134,22 @@ impl RenderOnce for PersonHoverCard {
                 state.hover(true, *hovered, window, cx)
             }));
         if state.read(cx).open {
-            let p = super::theme::Palette::sidebar(cx);
+            let p = Palette::get(cx);
             let dark = Theme::global(cx).is_dark();
-            let surface = if dark {
-                p.card.blend(Hsla {
-                    a: 0.06,
-                    ..rgb(0).into()
-                })
-            } else {
-                p.card
-            };
+            let surface = colors::hover_card_surface(p, dark);
             let content = div()
-                .id("person-hover-content")
-                .w(px(304.).min((window.viewport_size().width - px(24.)).max(px(0.))))
-                .max_h(px(520.).min((window.viewport_size().height - px(24.)).max(px(0.))))
-                .border_1()
+                .id("hover-card-content")
+                .w(card::WIDTH.min(
+                    (window.viewport_size().width - card::VIEWPORT_MARGIN * 2.).max(space::NONE),
+                ))
+                .max_h(card::MAX_HEIGHT.min(
+                    (window.viewport_size().height - card::VIEWPORT_MARGIN * 2.).max(space::NONE),
+                ))
+                .border(space::HAIRLINE)
                 .border_color(p.border)
-                .rounded(px(14.))
+                .rounded(radius::CARD)
                 .bg(surface)
-                .shadow(vec![BoxShadow {
-                    color: if dark {
-                        rgba(0x00000066).into()
-                    } else {
-                        rgba(0x3c2a1817).into()
-                    },
-                    offset: point(px(0.), px(12.)),
-                    blur_radius: px(if dark { 32. } else { 28. }),
-                    spread_radius: px(0.),
-                    inset: false,
-                }])
+                .shadow(colors::hover_card_shadow(dark))
                 .overflow_y_scroll()
                 .on_hover(window.listener_for(&state, |state, hovered, window, cx| {
                     state.hover(false, *hovered, window, cx)
@@ -144,13 +158,17 @@ impl RenderOnce for PersonHoverCard {
                     window
                         .listener_for(&state, |state, _, window, cx| state.show(false, window, cx)),
                 )
-                .child((self.content)(window, cx));
+                .child((self.content)(
+                    HoverCardDismiss(state.downgrade()),
+                    window,
+                    cx,
+                ));
             root = root.child(
                 deferred(PositionedCard {
                     anchor: bounds,
                     content: content.into_any_element(),
                 })
-                .with_priority(100),
+                .with_priority(gpui_kit::base::POPUP_PRIORITY),
             );
         }
         root
@@ -210,7 +228,7 @@ impl Element for PositionedCard {
         let anchor = self.anchor.get();
         let card = window.layout_bounds(*child).size;
         let viewport = window.viewport_size();
-        let [x, y] = geometry::position(
+        let [x, y] = geometry::horizontal_first(
             geometry::Rect {
                 left: anchor.left().into(),
                 top: anchor.top().into(),
@@ -219,6 +237,10 @@ impl Element for PositionedCard {
             },
             [card.width.into(), card.height.into()],
             [viewport.width.into(), viewport.height.into()],
+            geometry::Placement {
+                gap: card::ANCHOR_GAP.into(),
+                viewport_padding: card::VIEWPORT_MARGIN.into(),
+            },
         );
         let origin = point(px(x), px(y));
         window.insert_hitbox(Bounds::new(origin, card), HitboxBehavior::BlockMouse);

@@ -1,4 +1,8 @@
-use super::{AppView, session_menu::MenuTarget, theme::Palette};
+use super::{
+    AppView,
+    session_menu::MenuTarget,
+    theme::{Palette, tokens::space},
+};
 use crate::{
     gateway::sessions_rpc::{self as rpc, SessionIdentity},
     model::{
@@ -120,9 +124,9 @@ impl AppView {
         div()
             .h_flex()
             .items_center()
-            .gap_1()
-            .px_2()
-            .py_1()
+            .gap(space::WIDGET_GAP)
+            .px(space::WIDGET_INSET)
+            .py(space::WIDGET_GAP)
             .bg(p.accent_subtle)
             .child(
                 Button::new("sidebar-batch-actions")

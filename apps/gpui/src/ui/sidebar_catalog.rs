@@ -1,4 +1,11 @@
-use super::{AppView, theme::Palette};
+use super::{
+    AppView,
+    components::{icon::icon, list::list_row},
+    theme::{
+        Palette,
+        tokens::{self, header, opacity, radius, row, space, text},
+    },
+};
 use crate::model::{
     sidebar::{ArchiveFilter, Grouping},
     sidebar_catalog::{self, Catalog, CatalogResult},
@@ -6,7 +13,7 @@ use crate::model::{
 use gpui_kit::{
     assets::IconName,
     component::{
-        Disableable, Icon, Sizable, StyledExt,
+        Disableable, Sizable, StyledExt,
         button::{Button, ButtonVariants},
         menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     },
@@ -168,7 +175,7 @@ impl AppView {
         let p = Palette::sidebar(cx);
         let prefs = &self.sidebar_state.preferences;
         let state = &self.sidebar_state.catalogs;
-        let mut content = div().v_flex().gap(px(2.));
+        let mut content = div().v_flex().gap(space::XXS);
         if prefs.archive == ArchiveFilter::Archived || prefs.all_agents {
             return content.into_any_element();
         }
@@ -218,25 +225,25 @@ impl AppView {
                     .unwrap_or("main"),
                 &catalog.id,
             );
-            let mut block = div().v_flex().pt(px(12.)).child(
+            let mut block = div().v_flex().pt(header::SECTION_GAP).child(
                 div()
                     .group(header_group.clone())
                     .h_flex()
-                    .gap(px(2.))
+                    .gap(space::XXS)
                     .child(
                         Button::new(SharedString::from(section.clone()))
                             .ghost()
                             .small()
                             .flex_1()
                             .justify_start()
-                            .icon(
-                                Icon::new(if collapsed {
+                            .icon(icon(
+                                if collapsed {
                                     IconName::ChevronRight
                                 } else {
                                     IconName::ChevronDown
-                                })
-                                .size(px(14.)),
-                            )
+                                },
+                                tokens::icon::ACTION,
+                            ))
                             .label(if collapsed {
                                 format!("{}  {count}", catalog.label)
                             } else {
@@ -262,11 +269,13 @@ impl AppView {
                         Button::new(SharedString::from(format!("catalog-menu:{id}")))
                             .ghost()
                             .small()
-                            .size(px(22.))
-                            .opacity(0.)
-                            .group_hover(header_group.clone(), |style| style.opacity(1.))
-                            .focus_visible(|style| style.opacity(1.))
-                            .icon(Icon::new(IconName::ListFilter).size(px(14.)))
+                            .size(tokens::icon_button::COMPACT.size)
+                            .opacity(opacity::HIDDEN)
+                            .group_hover(header_group.clone(), |style| {
+                                style.opacity(opacity::VISIBLE)
+                            })
+                            .focus_visible(|style| style.opacity(opacity::VISIBLE))
+                            .icon(icon(IconName::ListFilter, tokens::icon::ACTION))
                             .accessibility_label("Session source options")
                             .dropdown_menu(move |mut menu, _, _| {
                                 for (label, mode) in [
@@ -324,11 +333,11 @@ impl AppView {
                             Button::new(SharedString::from(format!("catalog-new:{}", catalog.id)))
                                 .ghost()
                                 .small()
-                                .size(px(22.))
-                                .icon(Icon::new(IconName::Plus).size(px(14.)))
-                                .opacity(0.)
-                                .group_hover(header_group, |style| style.opacity(1.))
-                                .focus_visible(|style| style.opacity(1.))
+                                .size(tokens::icon_button::COMPACT.size)
+                                .icon(icon(IconName::Plus, tokens::icon::ACTION))
+                                .opacity(opacity::HIDDEN)
+                                .group_hover(header_group, |style| style.opacity(opacity::VISIBLE))
+                                .focus_visible(|style| style.opacity(opacity::VISIBLE))
                                 .accessibility_label(format!("New {} session", catalog.label))
                                 .disabled(self.session.is_none())
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -338,7 +347,13 @@ impl AppView {
                     }),
             );
             if let Some(error) = error {
-                block = block.child(div().px_2().text_xs().text_color(p.danger).child(error));
+                block = block.child(
+                    div()
+                        .px(space::WIDGET_INSET)
+                        .text_size(text::WIDGET_XS_SIZE)
+                        .text_color(p.danger)
+                        .child(error),
+                );
             }
             if !collapsed {
                 for host in &catalog.hosts {
@@ -354,9 +369,9 @@ impl AppView {
                     if catalog.hosts.len() > 1 || !host.connected {
                         block = block.child(
                             div()
-                                .px_2()
-                                .py_1()
-                                .text_size(px(11.))
+                                .px(space::WIDGET_INSET)
+                                .py(space::WIDGET_GAP)
+                                .text_size(text::CAPTION.size)
                                 .text_color(p.muted)
                                 .child(format!(
                                     "{}{}",
@@ -368,8 +383,8 @@ impl AppView {
                     if host.pending {
                         block = block.child(
                             div()
-                                .px_2()
-                                .text_xs()
+                                .px(space::WIDGET_INSET)
+                                .text_size(text::WIDGET_XS_SIZE)
                                 .text_color(p.muted)
                                 .child("Loading source…"),
                         );
@@ -379,8 +394,8 @@ impl AppView {
                     {
                         block = block.child(
                             div()
-                                .px_2()
-                                .text_xs()
+                                .px(space::WIDGET_INSET)
+                                .text_size(text::WIDGET_XS_SIZE)
                                 .text_color(p.danger)
                                 .child(error.label()),
                         );
@@ -397,16 +412,16 @@ impl AppView {
                                     .small()
                                     .w_full()
                                     .justify_start()
-                                    .text_size(px(11.))
+                                    .text_size(text::CAPTION.size)
                                     .label(group.label)
-                                    .icon(
-                                        Icon::new(if group_collapsed {
+                                    .icon(icon(
+                                        if group_collapsed {
                                             IconName::ChevronRight
                                         } else {
                                             IconName::ChevronDown
-                                        })
-                                        .size(px(12.)),
-                                    )
+                                        },
+                                        tokens::icon::SMALL,
+                                    ))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if !this
                                             .sidebar_state
@@ -456,53 +471,60 @@ impl AppView {
                             let menu_label = label.clone();
                             let view = cx.entity().downgrade();
                             block = block.child(
-                                div()
-                                    .id(SharedString::from(format!("{group_id}:{}", row.thread_id)))
-                                    .h_flex()
-                                    .gap(px(8.))
-                                    .h(px(30.))
-                                    .px_2()
-                                    .rounded_md()
-                                    .when(active, |el| el.bg(p.hover))
-                                    .hover(|el| el.bg(p.hover))
-                                    .child(
-                                        Icon::new(if row.archived {
+                                list_row(
+                                    SharedString::from(format!("{group_id}:{}", row.thread_id)),
+                                    row::SESSION,
+                                )
+                                .role(Role::Button)
+                                .aria_label(title.clone())
+                                .h(row::SESSION.min_height)
+                                .px(space::WIDGET_INSET)
+                                .py(space::NONE)
+                                .rounded(radius::WIDGET_MD)
+                                .when(active, |el| el.bg(p.hover))
+                                .hover(|el| el.bg(p.hover))
+                                .child(
+                                    icon(
+                                        if row.archived {
                                             IconName::Archive
                                         } else {
                                             IconName::Terminal
-                                        })
-                                        .size(px(16.))
-                                        .text_color(p.muted),
+                                        },
+                                        tokens::icon::NORMAL,
                                     )
-                                    .child(
-                                        div().flex_1().truncate().text_size(px(13.)).child(title),
+                                    .text_color(p.muted),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .truncate()
+                                        .text_size(text::SESSION.size)
+                                        .child(title),
+                                )
+                                .when(live.is_some_and(|row| row.unread), |el| {
+                                    el.child(
+                                        div().size(tokens::icon::DOT).rounded_full().bg(p.accent),
                                     )
-                                    .when(live.is_some_and(|row| row.unread), |el| {
-                                        el.child(div().size(px(6.)).rounded_full().bg(p.accent))
-                                    })
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        if let Some(key) = &native_key {
-                                            this.select_session(key.clone(), window, cx);
-                                        } else {
-                                            this.open_control_page(&path, &label, window, cx);
-                                        }
-                                    }))
-                                    .context_menu(move |menu, _, _| {
-                                        let view = view.clone();
-                                        let path = menu_path.clone();
-                                        let title = menu_label.clone();
-                                        menu.item(
-                                            PopupMenuItem::new("Open source viewer…").on_click(
-                                                move |_, window, cx| {
-                                                    let _ = view.update(cx, |this, cx| {
-                                                        this.open_control_page(
-                                                            &path, &title, window, cx,
-                                                        )
-                                                    });
-                                                },
-                                            ),
-                                        )
-                                    }),
+                                })
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    if let Some(key) = &native_key {
+                                        this.select_session(key.clone(), window, cx);
+                                    } else {
+                                        this.open_control_page(&path, &label, window, cx);
+                                    }
+                                }))
+                                .context_menu(move |menu, _, _| {
+                                    let view = view.clone();
+                                    let path = menu_path.clone();
+                                    let title = menu_label.clone();
+                                    menu.item(PopupMenuItem::new("Open source viewer…").on_click(
+                                        move |_, window, cx| {
+                                            let _ = view.update(cx, |this, cx| {
+                                                this.open_control_page(&path, &title, window, cx)
+                                            });
+                                        },
+                                    ))
+                                }),
                             );
                         }
                         if group.sessions.len() > limit {

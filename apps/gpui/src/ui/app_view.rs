@@ -493,7 +493,10 @@ impl Render for AppView {
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 if this.sidebar_state.resizing {
-                    this.sidebar_state.width = f32::from(event.position.x).clamp(240., 400.);
+                    this.sidebar_state.width = f32::from(event.position.x).clamp(
+                        f32::from(super::theme::tokens::sidebar::MIN_WIDTH),
+                        f32::from(super::theme::tokens::sidebar::MAX_WIDTH),
+                    );
                     cx.notify();
                 }
                 if this.web.resizing {
@@ -517,7 +520,7 @@ impl Render for AppView {
             )
             .child(
                 TitleBar::new()
-                    .h(px(44.))
+                    .h(super::theme::tokens::header::WINDOW_HEIGHT)
                     .bg(p.sidebar)
                     .border_b_0()
                     .child(if self.show_connect_form {

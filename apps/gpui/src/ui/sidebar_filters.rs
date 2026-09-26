@@ -1,7 +1,14 @@
 use super::{
     AppView,
-    sidebar_menu_surface::{SidebarMenuStyle, sidebar_menu_surface},
-    theme::Palette,
+    components::{
+        icon::icon as ui_icon,
+        icon_button::icon_button,
+        menu_surface::{MenuSurfaceSpec, menu_surface},
+    },
+    theme::{
+        Palette,
+        tokens::{TypographyExt, header, icon, icon_button as buttons, menu, sidebar, text},
+    },
 };
 use crate::model::{
     people::Person,
@@ -10,7 +17,7 @@ use crate::model::{
 use gpui_kit::{
     assets::IconName,
     component::{
-        Icon, Sizable,
+        Sizable,
         button::{Button, ButtonVariants},
         menu::PopupMenuItem,
     },
@@ -23,20 +30,18 @@ impl AppView {
         let prefs = self.sidebar_state.preferences.clone();
         let owners = self.sidebar_state.owners.clone();
         let view = cx.entity().downgrade();
-        let trigger = Button::new("sidebar-filter")
-            .ghost()
-            .small()
-            .size(px(22.))
-            .icon(
-                Icon::new(IconName::ListFilter)
-                    .size(px(14.))
-                    .text_color(if prefs.filtered() { p.accent } else { p.muted }),
-            )
-            .accessibility_label("Filter and sort conversations");
-        sidebar_menu_surface(
+        let trigger = icon_button(
+            "sidebar-filter",
+            IconName::ListFilter,
+            "Filter and sort conversations",
+            buttons::COMPACT,
+            cx,
+        )
+        .text_color(if prefs.filtered() { p.accent } else { p.muted });
+        menu_surface(
             "sidebar-filter-popup",
             trigger,
-            SidebarMenuStyle::below(300., 450.),
+            MenuSurfaceSpec::below(menu::FILTER),
             move |mut menu, window, cx| {
                 let page = view.clone();
                 menu = menu
@@ -53,12 +58,7 @@ impl AppView {
                         }),
                     )
                     .separator();
-                menu = menu
-                    .min_w(px(300.))
-                    .max_w(px(300.))
-                    .max_h(px(450.))
-                    .scrollable(true)
-                    .label("GROUP BY");
+                menu = menu.label("GROUP BY");
                 for (label, value) in [
                     ("Custom groups", Grouping::Category),
                     ("Project", Grouping::Project),
@@ -212,11 +212,11 @@ impl AppView {
         Button::new("clear-sidebar-filters")
             .ghost()
             .small()
-            .h(px(24.))
-            .max_w(px(160.))
-            .text_size(px(11.))
+            .h(header::SECTION_HEIGHT)
+            .max_w(sidebar::FILTER_SUMMARY_MAX_WIDTH)
+            .typography(text::CAPTION)
             .label(labels.join(" · "))
-            .icon(Icon::new(IconName::X).size(px(12.)))
+            .icon(ui_icon(IconName::X, icon::SMALL))
             .accessibility_label("Clear conversation filters")
             .on_click(cx.listener(|this, _, _, cx| {
                 this.change_sidebar_preferences(

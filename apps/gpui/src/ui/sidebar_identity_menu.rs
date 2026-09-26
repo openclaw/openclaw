@@ -1,9 +1,15 @@
-use super::{AppView, navigation_icon};
-use crate::ui::theme::{self, Appearance, Palette};
+use super::AppView;
+use crate::ui::{
+    components::{icon::icon as ui_icon, icon_button::icon_button},
+    theme::{
+        self, Appearance, Palette,
+        tokens::{TypographyExt, avatar, icon, icon_button as buttons, menu, space, text},
+    },
+};
 use gpui_kit::{
     assets::IconName,
     component::{
-        Icon, StyledExt,
+        StyledExt,
         button::{Button, ButtonCustomVariant, ButtonVariants},
         menu::{PopupMenu, PopupMenuItem},
     },
@@ -66,10 +72,6 @@ pub(in crate::ui) fn append_identity_navigation(
     let header_view = view.clone();
     let profile_view = view.clone();
     menu = menu
-        .min_w(px(278.))
-        .max_w(px(278.))
-        .max_h(px(600.))
-        .scrollable(true)
         .item(
             PopupMenuItem::element(move |_, cx| {
                 let p = Palette::get(cx);
@@ -79,39 +81,43 @@ pub(in crate::ui) fn append_identity_navigation(
                         let app = entity.read(cx);
                         profile
                             .as_ref()
-                            .map(|person| app.render_person_avatar(person, 26., cx))
+                            .map(|person| {
+                                app.render_person_avatar(person, avatar::IDENTITY_MENU, cx)
+                            })
                             .unwrap_or_else(|| {
                                 div()
-                                    .size(px(26.))
+                                    .size(avatar::IDENTITY_MENU.diameter)
                                     .rounded_full()
                                     .bg(p.elevated)
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(Icon::new(IconName::UserRound).size(px(15.)))
+                                    .child(ui_icon(IconName::UserRound, icon::MENU))
                                     .into_any_element()
                             })
                     })
-                    .unwrap_or_else(|| div().size(px(26.)).into_any_element());
+                    .unwrap_or_else(|| {
+                        div()
+                            .size(avatar::IDENTITY_MENU.diameter)
+                            .into_any_element()
+                    });
                 div()
                     .h_flex()
                     .w_full()
-                    .h(px(40.))
-                    .gap(px(8.))
-                    .ml(px(-2.))
+                    .h(menu::IDENTITY_HEADER_HEIGHT)
+                    .gap(space::MD)
+                    .ml(menu::IDENTITY_LABEL_INSET)
                     .child(avatar)
                     .child(
                         div()
                             .v_flex()
                             .flex_1()
                             .min_w_0()
-                            .gap(px(1.))
+                            .gap(space::HAIRLINE)
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(13.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .line_height(px(16.25))
+                                    .typography(text::IDENTITY_MENU_NAME)
                                     .text_color(p.text)
                                     .child(name.clone()),
                             )
@@ -119,8 +125,7 @@ pub(in crate::ui) fn append_identity_navigation(
                                 el.child(
                                     div()
                                         .truncate()
-                                        .text_size(px(12.))
-                                        .line_height(px(15.))
+                                        .typography(text::IDENTITY_MENU_EMAIL)
                                         .text_color(p.muted)
                                         .child(email),
                                 )
@@ -178,12 +183,14 @@ pub(in crate::ui) fn append_identity_navigation(
         ))
         .separator();
     menu = menu.submenu_with_icon(
-        Some(navigation_icon(IconName::CircleQuestionMark, 15.)),
+        Some(ui_icon(IconName::CircleQuestionMark, icon::MENU)),
         "Help",
         window,
         cx,
         |mut menu, _, _| {
-            menu = menu.min_w(px(160.)).max_w(px(220.));
+            menu = menu
+                .min_w(menu::IDENTITY_HELP_MIN_WIDTH)
+                .max_w(menu::IDENTITY_HELP_MAX_WIDTH);
             for (title, url, icon) in [
                 (
                     "Documentation",
@@ -250,21 +257,21 @@ pub(in crate::ui) fn append_identity_navigation(
         div()
             .h_flex()
             .w_full()
-            .h(px(28.))
-            .gap(px(8.))
+            .h(menu::IDENTITY_FOOTER_HEIGHT)
+            .gap(space::MD)
             .child(
                 Button::new("identity-build")
                     .custom(ButtonCustomVariant::new(cx).foreground(p.muted))
                     .flex_1()
                     .min_w_0()
-                    .h(px(26.))
-                    .p_0()
+                    .h(buttons::IDENTITY.size)
+                    .p(space::NONE)
                     .child(
                         div()
                             .w_full()
                             .truncate()
-                            .font_family("SF Mono")
-                            .text_size(px(10.5))
+                            .font_family(text::MONO_FAMILY)
+                            .typography(text::BUILD)
                             .child(version.clone()),
                     )
                     .accessibility_label("About OpenClaw")
@@ -277,22 +284,18 @@ pub(in crate::ui) fn append_identity_navigation(
                     }),
             )
             .child(
-                Button::new("identity-theme-mode")
-                    .custom(
-                        ButtonCustomVariant::new(cx)
-                            .foreground(p.muted)
-                            .hover(p.hover),
-                    )
-                    .size(px(26.))
-                    .p_0()
-                    .rounded(px(10.))
-                    .child(navigation_icon(icon, 16.))
-                    .accessibility_label(format!("Color mode: {label}"))
-                    .tooltip(format!("Color mode: {label}"))
-                    .on_click(move |_, window, cx| {
-                        cx.stop_propagation();
-                        theme::set_appearance(next, window, cx);
-                    }),
+                icon_button(
+                    "identity-theme-mode",
+                    icon,
+                    format!("Color mode: {label}"),
+                    buttons::IDENTITY,
+                    cx,
+                )
+                .tooltip(format!("Color mode: {label}"))
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    theme::set_appearance(next, window, cx);
+                }),
             )
     }))
 }
@@ -320,28 +323,26 @@ fn menu_label(title: &str, icon: IconName, hint: Option<&str>, p: Palette) -> An
     div()
         .h_flex()
         .w_full()
-        .h(px(30.))
-        .gap(px(8.))
-        .ml(px(-2.))
-        .text_size(px(13.))
-        .font_weight(FontWeight::NORMAL)
-        .line_height(px(20.15))
+        .h(menu::IDENTITY_ROW_HEIGHT)
+        .gap(space::MD)
+        .ml(menu::IDENTITY_LABEL_INSET)
+        .typography(text::MENU)
         .text_color(p.text)
         .child(
             div()
-                .w(px(20.))
-                .h(px(20.))
+                .w(icon::LEADING)
+                .h(icon::LEADING)
                 .flex_shrink_0()
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(navigation_icon(icon, 15.).text_color(p.muted)),
+                .child(ui_icon(icon, icon::MENU).text_color(p.muted)),
         )
         .child(div().flex_1().truncate().child(title.to_owned()))
         .when_some(hint, |el, hint| {
             el.child(
                 div()
-                    .text_size(px(10.5))
+                    .typography(text::BUILD)
                     .text_color(p.muted)
                     .child(hint.to_owned()),
             )
