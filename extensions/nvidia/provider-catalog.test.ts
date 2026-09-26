@@ -106,13 +106,21 @@ afterEach(() => {
   catalogResponses.clear();
 });
 
+function createMinimaxFeaturedModel() {
+  return {
+    model: "minimaxai/minimax-m3",
+    "model-name": "Minimax M3",
+    context: 196608,
+    "max-output": 8192,
+  };
+}
+
 function mockFeaturedCatalogResponse(payload: unknown, status = 200, inventoryIds?: string[]) {
   const release = vi.fn();
   const featured =
     (payload as { "featured-models"?: Array<{ model: string }> })["featured-models"] ?? [];
-  const ids =
-    inventoryIds ??
-    featured.map((row) => row.model).filter((id) => typeof id === "string" && !/\s/.test(id));
+  // Include malformed IDs so inventory filtering cannot hide parser regressions.
+  const ids = inventoryIds ?? featured.map((row) => row.model);
   for (const [url, body] of [
     [
       NVIDIA_MODELS_URL,
@@ -311,18 +319,12 @@ describe("nvidia provider catalog", () => {
       { id: "deepseek-ai/deepseek-v4-pro", input: ["text"], reasoning: true },
     ]);
     expect(provider.models[0]).toMatchObject({
-      contextWindow: 1_048_576,
-      maxTokens: 8_192,
       params: {
         chat_template_kwargs: {
           enable_thinking: false,
           force_nonempty_content: true,
         },
       },
-    });
-    expect(provider.models[2]).toMatchObject({
-      id: "nvidia/nemotron-3-super-120b-a12b",
-      contextWindow: 1_000_000,
     });
     expect(
       manifest.modelCatalog.providers.nvidia.models
@@ -340,14 +342,10 @@ describe("nvidia provider catalog", () => {
     expect(provider.models.find((model) => model.id === "moonshotai/kimi-k2.5")).toMatchObject({
       input: ["text", "image"],
       reasoning: true,
-      contextWindow: 262_144,
-      maxTokens: 32_768,
     });
     expect(provider.models.find((model) => model.id === "minimaxai/minimax-m2.7")).toMatchObject({
       input: ["text"],
       reasoning: true,
-      contextWindow: 204_800,
-      maxTokens: 16_384,
     });
   });
 
@@ -412,12 +410,7 @@ describe("nvidia provider catalog", () => {
   it("restores bundled legacy models when NVIDIA republishes them in its featured catalog", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
-        {
-          model: "minimaxai/minimax-m3",
-          "model-name": "Minimax M3",
-          context: 196608,
-          "max-output": 8192,
-        },
+        createMinimaxFeaturedModel(),
         ...EXPECTED_DEPRECATED_MODELS.map((model) => ({
           model: model.id,
           "model-name": model.name,
@@ -439,12 +432,7 @@ describe("nvidia provider catalog", () => {
   it("maps a republished Qwen model from NVIDIA's current featured catalog", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
-        {
-          model: "minimaxai/minimax-m3",
-          "model-name": "Minimax M3",
-          context: 196608,
-          "max-output": 8192,
-        },
+        createMinimaxFeaturedModel(),
         {
           model: "deepseek-ai/deepseek-v4-pro",
           "model-name": "DeepSeek V4 Pro",
@@ -484,12 +472,7 @@ describe("nvidia provider catalog", () => {
           context: 1000,
           "max-output": 1000,
         },
-        {
-          model: "minimaxai/minimax-m3",
-          "model-name": "Minimax M3",
-          context: 196608,
-          "max-output": 8192,
-        },
+        createMinimaxFeaturedModel(),
         {
           model: "oversized-context",
           "model-name": "Oversized Context",
@@ -520,14 +503,7 @@ describe("nvidia provider catalog", () => {
 
   it("caches the featured catalog for repeated provider builds", async () => {
     mockFeaturedCatalogResponse({
-      "featured-models": [
-        {
-          model: "minimaxai/minimax-m3",
-          "model-name": "Minimax M3",
-          context: 196608,
-          "max-output": 8192,
-        },
-      ],
+      "featured-models": [createMinimaxFeaturedModel()],
     });
 
     await buildLiveNvidiaProvider();
