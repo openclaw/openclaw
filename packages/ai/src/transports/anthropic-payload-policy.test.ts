@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import {
   applyAnthropicPayloadPolicyToParams,
+  applyAnthropicRequestCacheControl,
   isAnthropicServerToolClearingEnabled,
   resolveAnthropicPayloadPolicy,
   resolveAnthropicEphemeralCacheControl,
@@ -117,5 +118,137 @@ describe("Anthropic tool-clearing policy", () => {
         }),
       ],
     });
+  });
+});
+
+describe("applyAnthropicPayloadPolicyToParams message anchors", () => {
+  const model = { provider: "anthropic", api: "anthropic-messages", contextWindow: 200_000 };
+
+  function historyPayload(): Record<string, unknown> {
+    return {
+      system: [{ type: "text", text: "Stable system prompt." }],
+      tools: [],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Earlier stable question." }] },
+        { role: "assistant", content: [{ type: "text", text: "Answer." }] },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool_1", content: "log chunk" }],
+        },
+        { role: "assistant", content: [{ type: "text", text: "Analyzing." }] },
+        { role: "user", content: [{ type: "text", text: "Volatile latest question." }] },
+      ],
+    };
+  }
+
+  function markerAt(message: unknown): unknown {
+    const content = (message as { content: Array<Record<string, unknown>> }).content;
+    return (content[0] as { cache_control?: unknown }).cache_control;
+  }
+
+  it("anchors the previous user turn before the latest tool result when budget remains", () => {
+    const payload = historyPayload();
+    applyAnthropicPayloadPolicyToParams(
+      payload,
+      resolveAnthropicPayloadPolicy({
+        ...model,
+        cacheRetention: "short",
+        enableCacheControl: true,
+      }),
+      new Set(),
+    );
+
+    const messages = payload.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    // system: 1 marker; history budget: 3 -> previous user turn, latest tool
+    // result, newest user turn (issue #147168: a reshaped newest message must
+    // not invalidate the whole cached history).
+    expect(markerAt(messages[0])).toEqual({ type: "ephemeral" });
+    expect(markerAt(messages[2])).toEqual({ type: "ephemeral" });
+    expect(markerAt(messages[4])).toEqual({ type: "ephemeral" });
+  });
+
+  it("keeps the tool-result-only fallback when a single history marker remains", () => {
+    const payload = {
+      system: [
+        { type: "text", text: "Stable system prompt one." },
+        { type: "text", text: "Stable system prompt two." },
+      ],
+      tools: [{ name: "Read", cache_control: { type: "ephemeral" } }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Investigate the cache writes." }] },
+        { role: "assistant", content: [{ type: "text", text: "I'll inspect the logs." }] },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool_1", content: "log chunk" }],
+        },
+      ],
+    };
+    applyAnthropicPayloadPolicyToParams(
+      payload,
+      resolveAnthropicPayloadPolicy({
+        ...model,
+        cacheRetention: "short",
+        enableCacheControl: true,
+      }),
+      new Set(),
+    );
+
+    const messages = payload.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    expect(markerAt(messages[0])).toBeUndefined();
+    expect(markerAt(messages[2])).toEqual({ type: "ephemeral" });
+  });
+
+  it("reserves the trailing tool result checkpoint when two user turns precede it", () => {
+    const payload = {
+      system: [
+        { type: "text", text: "Stable system prompt.", cache_control: { type: "ephemeral" } },
+      ],
+      tools: [{ name: "Read", cache_control: { type: "ephemeral" } }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "First stable question." }] },
+        { role: "assistant", content: [{ type: "text", text: "Working." }] },
+        { role: "user", content: [{ type: "text", text: "Follow-up question." }] },
+        { role: "assistant", content: [{ type: "text", text: "Checking." }] },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool_1", content: "log chunk" }],
+        },
+      ],
+    };
+
+    // 1 system marker + 1 tool marker leave two history slots.
+    applyAnthropicRequestCacheControl(payload, { type: "ephemeral" }, true, new Set());
+
+    const messages = payload.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    // The advancing tool-result anchor keeps its slot and the newest user
+    // turn takes the remaining one; the older user turn is left unmarked.
+    expect(markerAt(messages[0])).toBeUndefined();
+    expect(markerAt(messages[2])).toEqual({ type: "ephemeral" });
+    expect(markerAt(messages[4])).toEqual({ type: "ephemeral" });
+  });
+
+  it("still anchors earlier user turns once the tool result slot is reserved", () => {
+    const payload = {
+      system: [{ type: "text", text: "Stable system prompt." }],
+      tools: [],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "First stable question." }] },
+        { role: "assistant", content: [{ type: "text", text: "Working." }] },
+        { role: "user", content: [{ type: "text", text: "Follow-up question." }] },
+        { role: "assistant", content: [{ type: "text", text: "Checking." }] },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool_1", content: "log chunk" }],
+        },
+      ],
+    };
+
+    // Full four-marker budget: trailing tool result plus both user turns.
+    applyAnthropicRequestCacheControl(payload, { type: "ephemeral" }, true, new Set());
+
+    const messages = payload.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    expect(markerAt(messages[0])).toEqual({ type: "ephemeral" });
+    expect(markerAt(messages[2])).toEqual({ type: "ephemeral" });
+    expect(markerAt(messages[4])).toEqual({ type: "ephemeral" });
   });
 });

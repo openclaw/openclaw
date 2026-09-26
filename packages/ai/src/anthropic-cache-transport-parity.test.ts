@@ -197,4 +197,45 @@ describe("Anthropic cache checkpoint transport parity", () => {
       );
     }
   }
+
+  it("keeps the advancing tool-result checkpoint when multiple user turns precede tool calls", async () => {
+    const secondUserTurn: Context["messages"] = [
+      ...context.messages,
+      {
+        role: "assistant",
+        api: anthropicModel.api,
+        provider: anthropicModel.provider,
+        model: anthropicModel.id,
+        timestamp: 2,
+        stopReason: "stop",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        content: [{ type: "text", text: "Here is what I found." }],
+      },
+      { role: "user", content: "Now check the logs.", timestamp: 3 },
+    ];
+    const messages = appendToolTurn(appendToolTurn(secondUserTurn, 1), 2);
+    for (const implementation of ["provider", "transport"] as const) {
+      const { payload } = await captureAnthropicRequest(implementation, {
+        cacheRetention: "short",
+        context: { ...context, messages },
+      });
+      const paths = markers(payload)
+        .map((marker) => marker.path)
+        .toSorted();
+      // Issue #147168: the trailing tool result keeps its advancing
+      // checkpoint, the newest user turn keeps the remaining history slot,
+      // and the older user turn is left unmarked (two history slots total).
+      expect(paths.some((path) => path.startsWith("messages[6]."))).toBe(true);
+      expect(paths.some((path) => path.startsWith("messages[2]."))).toBe(true);
+      expect(paths.some((path) => path.startsWith("messages[0]."))).toBe(false);
+      expect(paths.some((path) => path.startsWith("system["))).toBe(true);
+    }
+  });
 });

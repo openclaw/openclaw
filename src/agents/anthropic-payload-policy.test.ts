@@ -508,3 +508,59 @@ describe("anthropic payload policy", () => {
     expect(payload.system).toEqual([textBlock("Stable prefix\nDynamic lab suffix")]);
   });
 });
+
+it("anchors history on the newest and previous user turns when the marker budget allows", () => {
+  const policy = resolveAnthropicPayloadPolicy({
+    provider: "anthropic",
+    api: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com/v1",
+    cacheRetention: "long",
+    enableCacheControl: true,
+  });
+  const payload: TestPayload = {
+    system: [{ type: "text", text: "Stable system prompt." }],
+    messages: [
+      { role: "user", content: [{ type: "text", text: "Earlier stable question." }] },
+      { role: "assistant", content: [{ type: "text", text: "Answer." }] },
+      { role: "user", content: [{ type: "text", text: "Follow-up detail." }] },
+      { role: "assistant", content: [{ type: "text", text: "Analyzing." }] },
+      { role: "user", content: [{ type: "text", text: "Volatile latest question." }] },
+    ],
+  };
+
+  applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
+
+  // The exported system contract is unchanged: one marker per unsplit block.
+  expect(payload.system).toEqual([
+    textBlock("Stable system prompt.", { type: "ephemeral", ttl: "1h" }),
+  ]);
+  // History budget (3 markers) anchors the newest user turn, the previous
+  // user turn, and the earliest stable turn, so a reshaped newest message no
+  // longer rewrites the whole cached history (issue #147168).
+  expect(payload.messages[0]).toEqual({
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: "Earlier stable question.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ],
+  });
+  expect(payload.messages[2]).toEqual({
+    role: "user",
+    content: [
+      { type: "text", text: "Follow-up detail.", cache_control: { type: "ephemeral", ttl: "1h" } },
+    ],
+  });
+  expect(payload.messages[4]).toEqual({
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: "Volatile latest question.",
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      },
+    ],
+  });
+});
