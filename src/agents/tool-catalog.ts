@@ -174,6 +174,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "presence",
+    description: "Online people, connected devices, recent activity, and connection location",
+    sectionId: "sessions",
+    profiles: ["minimal", "coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "sessions",
     description: "Session settings: label, pin, archive, groups",
     sectionId: "sessions",

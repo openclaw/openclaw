@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { claimAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
@@ -72,6 +73,77 @@ describe("worker session tool topology", () => {
   });
 
   afterEach(() => resetGlobalHookRunner());
+
+  it.each([false, true])(
+    "reads presence as the original operator only while the worker owner is live (closed=%s)",
+    async (closed) => {
+      setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+      placements.authorizeWorkerTurnTools(sourceClaim, ["presence"]);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const snapshot = { status: "ok", people: [{ name: "Ada" }] };
+      gatewayRequest.mockImplementationOnce(async (request) => {
+        expect(request).toMatchObject({
+          method: "presence.query",
+          params: { action: "person", person: "me", include: ["devices"] },
+        });
+        expect(request.params).not.toHaveProperty("toolCallId");
+        expect(getGatewayToolCallerIdentity()?.operatorAuthority).toMatchObject({
+          profileId: "profile-worker-requester",
+          scopes: ["operator.write"],
+        });
+        entered.resolve();
+        await release.promise;
+        return snapshot;
+      });
+      const pending = execute({
+        identity,
+        toolName: "presence",
+        request: {
+          toolCallId: "presence-read",
+          action: "person",
+          person: "me",
+          include: ["devices"],
+        },
+      });
+      await entered.promise;
+      if (closed) {
+        getFixture().closeSourceRun();
+      }
+      release.resolve();
+      if (closed) {
+        await expect(pending).rejects.toThrow("source worker run ended");
+      } else {
+        expect(JSON.parse((await pending).resultJson).details).toEqual(snapshot);
+        placements.authorizeWorkerTurnTools(sourceClaim, []);
+        await expect(
+          execute({ identity, toolName: "presence", request: { toolCallId: "revoked-presence" } }),
+        ).rejects.toThrow("Worker presence is not authorized");
+      }
+      expect(gatewayRequest).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("applies worker presence policy before querying the roster", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    placements.authorizeWorkerTurnTools(sourceClaim, ["presence"]);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          matcher: ["presence"],
+          handler: () => ({ block: true, blockReason: "presence is disabled here" }),
+        },
+      ]),
+    );
+    const result = await execute({
+      identity,
+      toolName: "presence",
+      request: { toolCallId: "blocked-presence" },
+    });
+    expect(result.resultJson).toContain("presence is disabled here");
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
 
   it("blocks a worker spawn before child effects and replays the decision", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);

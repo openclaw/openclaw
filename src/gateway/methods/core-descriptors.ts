@@ -336,6 +336,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ],
   ["gateway.restart.request", "restart", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["system-presence", "system", "operator.read", "<=2026.7"],
+  ["presence.query", "presence", "operator.read", "2026.9"],
   ["system-event", "system", "operator.admin", "<=2026.7"],
   ["message.action", "send", "operator.write", "<=2026.7"],
   ["conversations.send", "conversations", "operator.admin", "<=2026.7"],

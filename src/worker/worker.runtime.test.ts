@@ -14,6 +14,7 @@ import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   validateWorkerComputerParams,
   validateWorkerPortalParams,
+  validateWorkerPresenceParams,
   validateWorkerSessionsSendParams,
   validateWorkerSessionsSpawnParams,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -25,10 +26,10 @@ import {
   type WorkerLiveEventParams,
   type WorkerLiveEventRequestFrame,
   WorkerLiveEventRequestFrameSchema,
-  WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
   type WorkerPortalParams,
+  type WorkerPresenceParams,
   type WorkerSessionsSendParams,
   type WorkerSessionsSpawnParams,
   type WorkerTranscriptCommitParams,
@@ -82,6 +83,10 @@ import {
   registerWorkerBackgroundExecLifecycleTests,
   registerWorkerExecEnvironmentFinalizationTests,
 } from "./worker-runtime-background-exec.suite.js";
+import {
+  registerWorkerGatewayToolAvailabilityTests,
+  registerWorkerGatewayToolRpcTests,
+} from "./worker-runtime-gateway-tools.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -224,6 +229,7 @@ class FakeWorkerGateway {
   readonly sessionSpawnRequests: WorkerSessionsSpawnParams[] = [];
   readonly sessionSendRequests: WorkerSessionsSendParams[] = [];
   readonly portalRequests: WorkerPortalParams[] = [];
+  readonly presenceRequests: WorkerPresenceParams[] = [];
   readonly computerRequests: WorkerComputerParams[] = [];
   readonly applicationOrder: string[] = [];
 
@@ -337,6 +343,21 @@ class FakeWorkerGateway {
                 },
               },
         );
+        return;
+      }
+      if (parsed.method === "worker.presence" && validateWorkerPresenceParams(parsed.params)) {
+        this.presenceRequests.push(structuredClone(parsed.params));
+        this.send(socket, {
+          type: "res",
+          id: parsed.id,
+          ok: true,
+          payload: {
+            resultJson: JSON.stringify({
+              content: [{ type: "text", text: "Ada is online" }],
+              details: { status: "ok", people: [{ name: "Ada" }] },
+            }),
+          },
+        });
         return;
       }
       const sessionToolMethod =
@@ -1120,48 +1141,7 @@ describe("worker runtime", () => {
     }
   });
 
-  it("exposes exactly the Gateway-authorized worker tools", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.toolAuthority.allowedToolNames = [
-      "read",
-      "exec",
-      "sessions_spawn",
-      "sessions_send",
-      "portal",
-    ];
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
-      "read",
-      "exec",
-      "sessions_spawn",
-      "sessions_send",
-      "portal",
-    ]);
-  });
-
-  it("hides portal authority when the admitted Gateway lacks portal protocol support", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.toolAuthority.allowedToolNames = ["read", "portal"];
-    launch.admission.handshake.protocolFeatures =
-      launch.admission.handshake.protocolFeatures.filter(
-        (feature) => feature !== WORKER_PORTAL_PROTOCOL_FEATURE,
-      );
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual(["read"]);
-  });
-
-  it("runs with no tools when the Gateway authority is empty", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.toolAuthority.allowedToolNames = [];
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.inferenceRequests[0]?.context.tools ?? []).toEqual([]);
-  });
+  registerWorkerGatewayToolAvailabilityTests({ setup });
 
   it("materializes exactly the Browser tool and disposes it before finishing", async () => {
     const { gateway, launch } = await setup();
@@ -1357,27 +1337,7 @@ describe("worker runtime", () => {
     expect(gateway.inferenceRequests).toHaveLength(0);
   });
 
-  it("runs an authorized nested-session tool through the closed worker RPC", async () => {
-    const { gateway, launch } = await setup({ inferencePlans: ["session-tool", "text"] });
-    launch.assignment.toolAuthority.allowedToolNames = ["sessions_spawn"];
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.sessionSpawnRequests).toEqual([
-      {
-        toolCallId: "nested-session-spawn-call",
-        task: "start a nested cloud child",
-      },
-    ]);
-    expect(gateway.inferenceRequests).toHaveLength(2);
-    expect(
-      gateway.transcriptRequests.flatMap((request) =>
-        request.messages.flatMap((message) =>
-          message.role === "toolResult" ? [message.toolName] : [],
-        ),
-      ),
-    ).toContain("sessions_spawn");
-  });
+  registerWorkerGatewayToolRpcTests({ setup });
 
   it.each([
     {

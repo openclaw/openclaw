@@ -44,6 +44,8 @@ export type NodeSession = {
   connectedAtMs: number;
   lastActiveAtMs?: number;
   presenceUpdatedAtMs?: number;
+  /** Source of the current connection's activity sample; reset with that sample. */
+  presenceActivitySource?: "app" | "system";
   hostStats?: NodeHostStats;
   desktopAvailability?: DesktopAvailability;
 };

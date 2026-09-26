@@ -10,6 +10,8 @@ import {
   WorkerLiveEventResponseFrameSchema,
   type WorkerPortalParams,
   WorkerPortalResponseFrameSchema,
+  type WorkerPresenceParams,
+  WorkerPresenceResponseFrameSchema,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   type WorkerSessionsSendParams,
   WorkerSessionsSendResponseFrameSchema,
@@ -77,6 +79,10 @@ const WORKER_REQUEST_SPECS = {
     method: "worker.portal",
     responseSchema: WorkerPortalResponseFrameSchema,
   },
+  presence: {
+    method: "worker.presence",
+    responseSchema: WorkerPresenceResponseFrameSchema,
+  },
   computer: {
     method: "worker.computer",
     responseSchema: WorkerComputerResponseFrameSchema,
@@ -100,6 +106,7 @@ type WorkerRequestParams = {
   "sessions-spawn": WorkerSessionsSpawnParams;
   "sessions-send": WorkerSessionsSendParams;
   portal: WorkerPortalParams;
+  presence: WorkerPresenceParams;
   computer: WorkerComputerParams;
   "inference-start": WorkerInferenceStartParams;
   "inference-cancel": WorkerInferenceCancelParams;

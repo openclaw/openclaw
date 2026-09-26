@@ -5,6 +5,7 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { PresenceQueryResult } from "../../packages/gateway-protocol/src/schema/presence.js";
 import { PresenceEntrySchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -15,7 +16,11 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import { listSystemPresence, type SystemPresence } from "../infra/system-presence.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import {
+  ensureProfileForEmail,
+  setDisplayName,
+  setUserProfileRole,
+} from "../state/user-profiles.js";
 import {
   connectReq,
   CONTROL_UI_CLIENT,
@@ -90,7 +95,9 @@ describe("gateway presence audience", () => {
     const restricted = ensureProfileForEmail("restricted@example.com");
     setUserProfileRole(restricted.id, "restricted");
     setUserProfileRole(ensureProfileForEmail("admin@example.com").id, "maintainer");
-    setUserProfileRole(ensureProfileForEmail("watcher@example.com").id, "maintainer");
+    const watcherProfile = ensureProfileForEmail("watcher@example.com");
+    setUserProfileRole(watcherProfile.id, "maintainer");
+    setDisplayName(watcherProfile.id, "Presence Watcher");
     setUserProfileRole(ensureProfileForEmail("writer@example.com").id, "writer");
     setUserProfileRole(ensureProfileForEmail("pairing@example.com").id, "pairing");
     const sharedKey = "agent:main:presence-shared";
@@ -326,6 +333,60 @@ describe("gateway presence audience", () => {
           }
           const presence = await rpcReq(recipient.ws, "system-presence");
           expect(presence.ok, `${scenario.name} system-presence scope`).toBe(canRead);
+          const query = await rpcReq<PresenceQueryResult>(
+            recipient.ws,
+            "presence.query",
+            scenario.name === "reader" ? { include: ["devices", "network"] } : {},
+          );
+          expect(query.ok, `${scenario.name} presence.query scope`).toBe(canRead);
+          if (canRead) {
+            expect(query.payload).toMatchObject({
+              status: "ok",
+              observedAt: expect.any(Number),
+              truncated: false,
+            });
+            const watcherPeople = query.payload?.people.filter(
+              (entry) => entry.profileId === watcherProfile.id,
+            );
+            expect(watcherPeople, `${scenario.name} reads one named person`).toEqual([
+              expect.objectContaining({ name: "Presence Watcher", online: true }),
+            ]);
+            if (scenario.name === "reader") {
+              expect(watcherPeople?.[0]).toMatchObject({
+                activity: {
+                  at: person.connectionLastActivityAt,
+                  source: "openclaw-interaction",
+                },
+                deviceCount: 1,
+                devices: [
+                  {
+                    kind: "client",
+                    connections: [
+                      {
+                        id: person.connectionId,
+                        clientId: CONTROL_UI_CLIENT.id,
+                        timeZone: "Europe/Vienna",
+                        network: { ip: "203.0.113.50" },
+                      },
+                    ],
+                  },
+                ],
+              });
+              const self = await rpcReq<PresenceQueryResult>(recipient.ws, "presence.query", {
+                action: "person",
+                person: "me",
+              });
+              expect(self).toMatchObject({
+                ok: true,
+                payload: {
+                  status: "ok",
+                  people: [{ profileId: ensureProfileForEmail("reader@example.com").id }],
+                },
+              });
+            }
+          } else {
+            expect(query.payload).toBeUndefined();
+          }
           recipients.push({ ...recipient, ...scenario, canRead, rpcPresence: presence.payload });
         }
 

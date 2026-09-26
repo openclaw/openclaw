@@ -2,6 +2,7 @@ import { Type, type Static, type TProperties } from "typebox";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 import { closedObject } from "./closed-object.js";
 import { FailoverReasonSchema } from "./failover-reason.js";
+import { PresenceQueryParamsSchema } from "./presence.js";
 import { withSince } from "./since.js";
 import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "./worker-computer.js";
 import {
@@ -42,6 +43,7 @@ export const WORKER_PROTOCOL_METHODS = [
   "worker.portal",
   "worker.computer",
   "worker.skill-workshop",
+  "worker.presence",
 ] as const;
 export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-commit-v1";
 export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
@@ -51,6 +53,7 @@ export const WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE = "worker-execution-aut
 export const WORKER_LINEAGE_START_PROTOCOL_FEATURE = "worker-lineage-start-v1";
 export const WORKER_SESSION_TOOLS_PROTOCOL_FEATURE = "worker-session-tools-v1";
 export const WORKER_PORTAL_PROTOCOL_FEATURE = "worker-portal-v1";
+export const WORKER_PRESENCE_PROTOCOL_FEATURE = "worker-presence-v1";
 export const WORKER_PROTOCOL_FEATURES = [
   "skill-resources-v1",
   "worker-skill-workshop-v1",
@@ -64,6 +67,7 @@ export const WORKER_PROTOCOL_FEATURES = [
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
+  WORKER_PRESENCE_PROTOCOL_FEATURE,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;
@@ -241,6 +245,11 @@ export const WorkerPortalParamsSchema = closedObject({
   id: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
 });
 
+export const WorkerPresenceParamsSchema = closedObject({
+  toolCallId: WorkerSessionToolCallIdSchema,
+  ...PresenceQueryParamsSchema.properties,
+});
+
 export const WorkerSessionToolResultSchema = closedObject({
   resultJson: Type.String({ minLength: 2, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
 });
@@ -258,6 +267,7 @@ export const WorkerSessionToolResponseFrameSchema = Type.Union([
 export const WorkerSessionsSpawnResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
 export const WorkerSessionsSendResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
 export const WorkerPortalResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
+export const WorkerPresenceResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
 
 const WorkerTranscriptTextContentSchema = closedObject({
   type: Type.Literal("text"),
@@ -723,12 +733,14 @@ export type WorkerHeartbeatResponseFrame = Static<typeof WorkerHeartbeatResponse
 export type WorkerSessionsSpawnParams = Static<typeof WorkerSessionsSpawnParamsSchema>;
 export type WorkerSessionsSendParams = Static<typeof WorkerSessionsSendParamsSchema>;
 export type WorkerPortalParams = Static<typeof WorkerPortalParamsSchema>;
+export type WorkerPresenceParams = Static<typeof WorkerPresenceParamsSchema>;
 export type WorkerSessionToolResult = Static<typeof WorkerSessionToolResultSchema>;
 export type WorkerSessionsSpawnResponseFrame = Static<
   typeof WorkerSessionsSpawnResponseFrameSchema
 >;
 export type WorkerSessionsSendResponseFrame = Static<typeof WorkerSessionsSendResponseFrameSchema>;
 export type WorkerPortalResponseFrame = Static<typeof WorkerPortalResponseFrameSchema>;
+export type WorkerPresenceResponseFrame = Static<typeof WorkerPresenceResponseFrameSchema>;
 export type WorkerTranscriptMessage = Static<typeof WorkerTranscriptMessageSchema>;
 export type WorkerProviderReplayState = Static<typeof WorkerProviderReplayStateSchema>;
 export type WorkerTranscriptCommitParams = Static<typeof WorkerTranscriptCommitParamsSchema>;

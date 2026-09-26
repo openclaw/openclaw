@@ -1,7 +1,6 @@
-import { normalizeOptionalString as normalized } from "@openclaw/normalization-core/string-coerce";
 import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
-import { presenceUserKey } from "../../../src/shared/presence-user.ts";
+import { groupPresenceUsers, presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { PresenceEntry } from "../api/types.ts";
 import {
   readPresenceEntries,
@@ -18,60 +17,8 @@ export type PresenceViewer = NonNullable<PresenceEntry["user"]> & {
 // Matches the native Mac's recent-input window for interactive presence.
 const PRESENCE_ACTIVE_INPUT_THRESHOLD_SECONDS = 120;
 
-function firstSorted(values: Iterable<string | null | undefined>): string | undefined {
-  return [...values]
-    .map(normalized)
-    .filter((value): value is string => value !== undefined)
-    .toSorted()[0];
-}
-
-function presenceEntrySortKey(entry: PresenceEntry): string {
-  return [
-    normalized(entry.host) ?? "",
-    normalized(entry.platform) ?? "",
-    normalized(entry.deviceFamily) ?? "",
-    normalized(entry.instanceId) ?? "",
-    String(entry.ts ?? 0).padStart(16, "0"),
-  ].join("\u0000");
-}
-
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
-}
-
-function groupPresenceUsers(entries: readonly PresenceEntry[]): {
-  users: readonly PresenceViewer[];
-} {
-  const grouped = new Map<string, PresenceEntry[]>();
-  for (const entry of entries) {
-    if (entry.reason === "disconnect" || !entry.user?.id) {
-      continue;
-    }
-    const key = presenceUserKey(entry.user);
-    const existing = grouped.get(key);
-    if (existing) {
-      existing.push(entry);
-    } else {
-      grouped.set(key, [entry]);
-    }
-  }
-  return {
-    users: [...grouped.entries()]
-      .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([, userEntries]) => ({
-        id: userEntries[0]!.user!.id,
-        identity: userEntries[0]!.user!.identity,
-        name: firstSorted(userEntries.map((entry) => entry.user?.name)),
-        email: firstSorted(userEntries.map((entry) => entry.user?.email)),
-        avatarUrl: firstSorted(userEntries.map((entry) => entry.user?.avatarUrl)),
-        watchedSessions: [
-          ...new Set(userEntries.flatMap((entry) => entry.watchedSessions ?? [])),
-        ].toSorted(),
-        entries: userEntries.toSorted((a, b) =>
-          compareText(presenceEntrySortKey(a), presenceEntrySortKey(b)),
-        ),
-      })),
-  };
 }
 
 let cachedPresencePayload: unknown;

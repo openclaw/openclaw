@@ -20,7 +20,11 @@ import {
   disconnectStaleSharedGatewayAuthClients,
   enforceSharedGatewaySessionGenerationForConfigWrite,
 } from "./server-shared-auth-generation.js";
-import { recordClientPresenceActivity, refreshClientPresence } from "./server/client-presence.js";
+import {
+  recordClientPresenceActivity,
+  refreshClientPresence,
+  snapshotClientPresence,
+} from "./server/client-presence.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { getHealthCache } from "./server/health-state.js";
 import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
@@ -316,6 +320,7 @@ export function createGatewayRequestContext(
     logGateway: params.log,
     broadcast,
     publishPresence: runtime.publishPresence,
+    getPresenceSnapshot: () => snapshotClientPresence(clients),
     broadcastToConnIds: runtime.broadcastToConnIds,
     nodeSendToSession: runtime.nodeSendToSession,
     nodeSendToAllSubscribed: runtime.nodeSendToAllSubscribed,

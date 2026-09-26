@@ -10,8 +10,10 @@ import {
   runWithGatewayToolCleanupContext,
   withAgentToolGatewayRuntimeIdentity,
 } from "../../agents/tools/in-process-gateway.js";
+import { PRESENCE_QUERY_TIMEOUT_MS } from "../../agents/tools/presence-tool-contract.js";
 import { runWithScopedSessionAccess } from "../../agents/tools/scoped-session-access.js";
 import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.js";
+import { jsonResult } from "../../agents/tools/tool-results.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { sha256Base64Url, sha256HexPrefixCore } from "../../infra/crypto-digest.js";
@@ -446,6 +448,30 @@ export function createWorkerSessionToolExecutor(params: {
     }
     if (request.toolName === "portal") {
       return await executePortal(request);
+    }
+    if (request.toolName === "presence") {
+      return await runWithSource({ source, ...request }, async ({ assertSource, callGateway }) => {
+        const assertAuthorized = () => {
+          assertSource();
+          if (!params.placements.isWorkerTurnToolAuthorized(source.turnClaim, "presence")) {
+            throw new Error("Worker presence is not authorized.");
+          }
+        };
+        assertAuthorized();
+        const policy = await applyWorkerSessionToolPolicy({ request, source });
+        assertAuthorized();
+        if ("result" in policy) {
+          return { resultJson: serializeResult(policy.result) };
+        }
+        const { toolCallId: _toolCallId, ...query } = policy.request.request;
+        const result = await callGateway({
+          method: "presence.query",
+          params: query,
+          timeoutMs: PRESENCE_QUERY_TIMEOUT_MS,
+        });
+        assertAuthorized();
+        return { resultJson: serializeResult(jsonResult(result)) };
+      });
     }
     const requestDigest = computeRequestDigest(
       request.toolName === "sessions_spawn"

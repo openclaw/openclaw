@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   WorkerPortalParams,
+  WorkerPresenceParams,
   WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
   WorkerSessionToolResult,
@@ -21,6 +22,7 @@ export type WorkerSessionToolRequest = {
   | { toolName: "sessions_spawn"; request: WorkerSessionsSpawnParams }
   | { toolName: "sessions_send"; request: WorkerSessionsSendParams }
   | { toolName: "portal"; request: WorkerPortalParams }
+  | { toolName: "presence"; request: WorkerPresenceParams }
   | { toolName: "skill_workshop"; request: WorkerSkillWorkshopParams }
 );
 

@@ -2427,7 +2427,7 @@ src/gateway/method-scopes.ts	10
 src/gateway/node-browser-proxy-policy.ts	1
 src/gateway/node-command-policy.ts	2
 src/gateway/node-pairing-ssh-verify.ts	1
-src/gateway/node-registry.ts	2
+src/gateway/node-registry.ts	1
 src/gateway/openai-agent-run-usage.ts	1
 src/gateway/openai-http.ts	1
 src/gateway/operator-approval-snapshot.ts	4
