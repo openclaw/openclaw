@@ -158,12 +158,11 @@ export async function executeRegisteredPluginCommand(
     return { text: "⚠️ This command has invalid gateway scope configuration." };
   }
   const requiredScopes = command.requiredScopes ?? [];
-  const unknownScope = (requiredScopes as readonly unknown[]).find(
-    (scope) => !isOperatorScope(scope),
-  );
-  if (unknownScope) {
-    logVerbose(`Plugin command /${command.name} blocked: unknown gateway scope`);
-    return { text: "⚠️ This command has invalid gateway scope configuration." };
+  for (const scope of requiredScopes) {
+    if (!isOperatorScope(scope)) {
+      logVerbose(`Plugin command /${command.name} blocked: unknown gateway scope`);
+      return { text: "⚠️ This command has invalid gateway scope configuration." };
+    }
   }
   if (requiredScopes.length > 0) {
     const scopes = Array.isArray(params.gatewayClientScopes)

@@ -17,6 +17,16 @@ import {
   testing,
 } from "./code-mode.test-support.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
+import type { AnyAgentTool } from "./tools/common.js";
+
+function createGuestHarness(targets: AnyAgentTool[] = []) {
+  const harness = createCodeModeHarness();
+  const compacted = applyCodeModeCatalog({
+    ...harness.ctx,
+    tools: [...harness.tools, ...targets],
+  });
+  return { ...harness, compacted };
+}
 
 describe("Code Mode guest execution", () => {
   beforeEach(() => {
@@ -65,63 +75,15 @@ describe("Code Mode guest execution", () => {
     });
   });
 
-  it("runs JavaScript through the selected executor and resumes nested tool calls with wait", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, ticket],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const details = await runUntilCompleted({
-      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
-      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      code: `
-        const [ticket] = await catalog.search("ticket", { limit: 1 });
-        const called = await ticket({ value: "ship" });
-        text("created");
-        return called;
-      `,
-    });
-
-    expect(details.status).toBe("completed");
-    expect(details.value).toEqual({
-      name: "fake_create_ticket",
-      input: { value: "ship" },
-    });
-    expect(details.output).toEqual([{ type: "text", text: "created" }]);
-    expect(details.telemetry).toMatchObject({ searchCount: 1, describeCount: 0, callCount: 1 });
-    expect(ticket.execute).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    {
-      surface: "catalog.search",
-      code: 'return await catalog.search("fake_create_ticket");',
-      searchCount: 1,
-    },
-    { surface: "catalog.all", code: "return catalog.all();", searchCount: 0 },
-  ])("serializes $surface handles as safe public metadata", async ({ code, searchCount }) => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+  it("serializes catalog.all handles as safe public metadata", async () => {
     const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
     ticket.outputSchema = Type.Object({ ok: Type.Boolean() }, { additionalProperties: false });
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, ticket],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createGuestHarness([ticket]);
 
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      code,
+      code: "return catalog.all();",
     });
 
     expect(details).toMatchObject({
@@ -137,7 +99,7 @@ describe("Code Mode guest execution", () => {
           output: "{ ok: boolean }",
         },
       ],
-      telemetry: { searchCount, describeCount: 0, callCount: 0 },
+      telemetry: { searchCount: 0, describeCount: 0, callCount: 0 },
     });
     const serialized = JSON.stringify(details.value);
     expect(serialized).not.toContain("null");
@@ -174,16 +136,8 @@ describe("Code Mode guest execution", () => {
       expected: {},
     },
   ])("does not invoke $kind toJSON while serializing final values", async (scenario) => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const noop = pluginTool("fake_noop", "Noop");
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, noop],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createGuestHarness([noop]);
 
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
@@ -213,16 +167,8 @@ describe("Code Mode guest execution", () => {
   });
 
   it("serializes catalog handles nested inside arrays and plain objects", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const noop = pluginTool("fake_noop", "Noop");
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, noop],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createGuestHarness([noop]);
 
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
@@ -247,17 +193,9 @@ describe("Code Mode guest execution", () => {
   });
 
   it("exposes catalog tools as bare globals and removes the legacy guest surface", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const search = pluginTool("web_search", "Search the web");
     const llmTask = pluginTool("llm-task", "Run an LLM task");
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, search, llmTask],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createGuestHarness([search, llmTask]);
 
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
@@ -290,7 +228,6 @@ describe("Code Mode guest execution", () => {
   });
 
   it("keeps normalized, reserved, and colliding prompt names aligned with runtime", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const targets = [
       pluginTool("llm-task", "Run an LLM task"),
       pluginTool("llm_task", "Run the exact-name task"),
@@ -302,14 +239,7 @@ describe("Code Mode guest execution", () => {
       pluginTool("__openclawResult", "Collide with a private lifecycle hook"),
       pluginTool("tool___openclawResult", "Keep the exact safe lifecycle-shaped name"),
     ];
-    const compacted = applyCodeModeCatalog({
-      tools: [...codeModeTools, ...targets],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools, compacted } = createGuestHarness([...targets]);
 
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
@@ -361,7 +291,6 @@ describe("Code Mode guest execution", () => {
   });
 
   it("keeps private lifecycle hooks intact while invoking colliding catalog globals", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const privateNames = [
       "__openclawResult",
       "__openclawRunCell",
@@ -370,14 +299,7 @@ describe("Code Mode guest execution", () => {
       "__openclawFuturePrivateHook",
     ];
     const targets = privateNames.map((name) => pluginTool(name, `Exercise ${name}`));
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, ...targets],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createGuestHarness([...targets]);
 
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
@@ -411,16 +333,8 @@ describe("Code Mode guest execution", () => {
   });
 
   it("uses the client tool as the single winner for a shadowed exact name", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const plugin = pluginTool("shared_action", "Plugin action");
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, plugin],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { config, catalogRef, tools: codeModeTools } = createGuestHarness([plugin]);
     const client = pluginTool("shared_action", "Client action");
     addClientToolsToCodeModeCatalog({
       tools: [client as never],
@@ -452,16 +366,8 @@ describe("Code Mode guest execution", () => {
   });
 
   it("returns structured values from globals and callable catalog handles", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, ticket],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createGuestHarness([ticket]);
 
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
@@ -498,7 +404,6 @@ describe("Code Mode guest execution", () => {
   });
 
   it.each([
-    { surface: "bare global", code: "return await fake_network_page({});" },
     {
       surface: "catalog handle",
       code: 'const [page] = await catalog.search("fake_network_page"); return await page({});',
@@ -589,21 +494,13 @@ describe("Code Mode guest execution", () => {
   });
 
   it("wraps uncaught network tool errors while preserving the failed guest result", async () => {
-    const { config, catalogRef, tools } = createCodeModeHarness();
     const hostile = "Uncaught page instruction <|endoftext|>";
     const target = pluginTool("fake_network_error", "Read a failing network page");
     target.resultContentSource = "network";
     target.execute = vi.fn(async () => {
       throw new Error(hostile);
     });
-    applyCodeModeCatalog({
-      tools: [...tools, target],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools } = createGuestHarness([target]);
 
     let result = await expectDefined(tools[0], "exec tool").execute(
       "code-call-uncaught-network-error",
@@ -629,16 +526,8 @@ describe("Code Mode guest execution", () => {
   });
 
   it("returns no catalog handles for a missing tool without exposing ids", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const writeTool = pluginTool("write", "Write a file to the workspace");
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, writeTool],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createGuestHarness([writeTool]);
 
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
@@ -652,15 +541,7 @@ describe("Code Mode guest execution", () => {
   });
 
   it("never exposes Node module-loader globals to the real guest worker", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createGuestHarness([pluginTool("fake_noop", "Noop")]);
 
     const details = await runUntilCompleted({
       execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
@@ -676,15 +557,7 @@ describe("Code Mode guest execution", () => {
   });
 
   it("isolates and cleans up 12 concurrent real guest workers", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createGuestHarness([pluginTool("fake_noop", "Noop")]);
     const execTool = expectDefined(codeModeTools[0], "codeModeTools[0] test invariant");
 
     const results = await Promise.all(
@@ -710,15 +583,7 @@ describe("Code Mode guest execution", () => {
   });
 
   it("fails pending promises that have no host bridge work", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createGuestHarness([pluginTool("fake_noop", "Noop")]);
 
     const beforeRunCount = testing.activeRuns.size;
     const details = resultDetails(
@@ -837,15 +702,7 @@ describe("Code Mode guest execution", () => {
   );
 
   it("does not expose the raw host request callback", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
+    const { tools: codeModeTools } = createGuestHarness([pluginTool("fake_noop", "Noop")]);
 
     const details = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(

@@ -125,14 +125,11 @@ export function diffPluginRegistryRecords(
       string | undefined,
       Array<InstalledPluginIndex["diagnostics"][number]>
     >();
-    index.diagnostics.forEach((diagnostic) => {
-      const group = groups.get(diagnostic.pluginId);
-      if (group) {
-        group.push(diagnostic);
-      } else {
-        groups.set(diagnostic.pluginId, [diagnostic]);
-      }
-    });
+    for (const diagnostic of index.diagnostics) {
+      const group = groups.get(diagnostic.pluginId) ?? [];
+      group.push(diagnostic);
+      groups.set(diagnostic.pluginId, group);
+    }
     return groups;
   };
   const persistedDiagnostics = groupDiagnostics(persisted);

@@ -142,7 +142,7 @@ describe("streaming Markdown DOM", () => {
     }
   });
 
-  it("retains enhanced table controls while a cell streams", () => {
+  it("retains table controls and updates overflow as streamed cells resize", async () => {
     container.className = "chat-text";
     const initial = "| Name | Value |\n| --- | --- |\n| First | Growing";
     renderReply(initial);
@@ -154,6 +154,26 @@ describe("streaming Markdown DOM", () => {
     expect(container.querySelector("table")).toBe(table);
     expect(container.querySelector(".markdown-table__copy svg")).toBe(icon);
     expect(table?.rows[1]?.cells[1]?.textContent).toBe("Growing cell");
+    const shell = container.querySelector<HTMLElement>(".markdown-table")!;
+    const viewport = container.querySelector<HTMLElement>(".markdown-table__viewport")!;
+    viewport.style.cssText = "width: 300px; overflow-x: auto";
+    table!.style.width = "max-content";
+    for (const wide of [true, false]) {
+      await new Promise<void>((resolve) => {
+        const observer = new ResizeObserver(() => {
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(table!);
+        if (wide) {
+          renderReply(initial + " cell".repeat(100));
+        } else {
+          table!.rows[1]!.cells[1]!.textContent = "Short";
+        }
+      });
+      expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(wide);
+      expect(container.querySelector(".markdown-table__copy svg")).toBe(icon);
+    }
   });
 
   it.each([true, false])(

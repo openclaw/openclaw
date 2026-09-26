@@ -28,7 +28,8 @@ not enter a restart loop. Add the reported binding and restart the Gateway.
 
 ## Device worker inference naming
 
-For a `cloudWorkers.profiles` entry whose provider is `device`, Doctor renames
+For pre-release opt-in `cloudWorkers.profiles` entries whose provider is `device`,
+Doctor renames
 `settings.inference: "runtime-local"` to `"worker"`. Explicit `"gateway"`, omitted
 inference, and other providers' settings stay unchanged. Eligible Gateway startup
 uses the same transform and normal config backup/validation safeguards.
@@ -38,6 +39,42 @@ recorded snapshots, including the earlier spelling, and retain worker inference
 until reclaimed or retired. Profile edits do not change an existing binding. The
 worker launch dialect, database schema, and Gateway/proxied defaults do not change.
 See [Worker-local inference](/gateway/cloud-workers/native-inference).
+
+## Channel webhook listeners
+
+Telegram now receives webhooks on Gateway HTTP routes. Its plugin-owned Doctor
+migration moves an explicitly configured `webhookPort` and effective bind host
+into `legacyWebhook: { port, host? }`. An explicit host without a port keeps that
+host with port `8787`. Doctor validates and backs up the config through the normal
+write flow. The compatibility listener forwards only its registered webhook
+routes through the same Gateway request pipeline, preserving signatures and retry
+responses during channel restarts.
+
+The exported Telegram config types retain deprecated `webhookPort` and
+`webhookHost` input properties until the next Plugin SDK major. TypeScript config
+producers remain source-compatible, but parsed runtime config uses only
+`legacyWebhook`; run Doctor before using legacy inputs. This type compatibility
+window does not schedule removal of the default listener.
+
+Update the external callback or reverse-proxy upstream to the Gateway port and
+the channel's webhook path, verify delivery, then set `legacyWebhook: false` to
+close the old port. Omitting `legacyWebhook` preserves Telegram's previous
+`127.0.0.1:8787` listener whenever the account uses webhook mode. An explicit
+object selects its configured endpoint; an account-level value overrides the
+channel-level setting. Doctor explains the canonical Gateway route and opt-out
+without changing implicit settings. A shared compatibility port closes when no
+account retains that endpoint.
+
+This behavior is the same for existing and new installations. It needs no upgrade
+eligibility check or migration receipt. Removing `legacyWebhook: false` restores
+the default listener; removing an explicit object also returns to the default.
+Retiring these listeners is a separate future change, with no removal deadline
+or automatic expiry introduced here.
+
+Telegram re-registers its configured public `webhookUrl` at startup. It preserves
+that URL because its reverse-proxy upstream cannot be inferred safely. Accounts
+that shared a path and secret on different explicit ports keep their old-port
+routing; assign distinct secrets or paths before moving them to one Gateway port.
 
 ## ACP agents' model precedence
 

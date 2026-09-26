@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type {
   PluginStateCompareIntent,
   PluginStateKeyedStore,
@@ -46,13 +47,6 @@ type DiscordActivityStores = {
   launches: AtomicPluginStateKeyedStore<DiscordActivityPendingLaunch>;
 };
 
-type OpenKeyedStore = <T>(options: {
-  namespace: string;
-  maxEntries: number;
-  overflowPolicy: "evict-oldest";
-  defaultTtlMs: number;
-}) => PluginStateKeyedStore<T>;
-
 function requireAtomicComparison<T>(
   store: PluginStateKeyedStore<T>,
 ): AtomicPluginStateKeyedStore<T> {
@@ -62,7 +56,9 @@ function requireAtomicComparison<T>(
   return store as AtomicPluginStateKeyedStore<T>;
 }
 
-export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): DiscordActivityStores {
+export function openDiscordActivityStores(
+  openKeyedStore: PluginRuntime["state"]["openKeyedStore"],
+): DiscordActivityStores {
   return {
     widgets: requireAtomicComparison(
       openKeyedStore<DiscordActivityWidget>({

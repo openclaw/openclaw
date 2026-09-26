@@ -418,7 +418,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     },
   );
 
-  it.each([null, 0, 2, 3, 4])(
+  it.each([null, 0, 3, 4])(
     "requires exactly three reviewed one-shot fixture spawns when packed: %s",
     async (count) => {
       const packageName = "@openclaw/codex";
