@@ -1,4 +1,5 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   interruptCodexTurnAndWaitBestEffort,
   retireUnsafeCodexTurnClientBestEffort,
@@ -17,6 +18,7 @@ import { joinPresentSections } from "./developer-instruction-sections.js";
 import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { getCodexInferenceThread } from "./inference-routing.js";
+import { prepareCodexLunaReserveTurn } from "./luna-reserve.js";
 import { readCodexRuntimeModelId } from "./model-runtime.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
@@ -130,6 +132,7 @@ export async function prepareCodexAttemptTurnRequest(
     prompt.refreshWorkspaceReferences(references.include);
     return references;
   };
+  let unsettledNativeTurn = false;
   const startCodexTurn = async (): Promise<CodexStartedTurn> => {
     const activeTurnRoute = (await ensureCurrentThreadRoute()) as {
       armTurn(): void;
@@ -149,6 +152,8 @@ export async function prepareCodexAttemptTurnRequest(
       ? requireCodexSupervisionModelSelection(selectedThread)
       : undefined;
     const assertTurnCurrent = () => {
+      runAbortController.signal.throwIfAborted();
+      params.hostCapabilities.assertActive();
       connection.assertCurrent();
       liveThreadOwnership?.assertCurrent();
       if (
@@ -185,7 +190,9 @@ export async function prepareCodexAttemptTurnRequest(
       ...(usesSupervisionConnection
         ? {}
         : {
-            model: resourceState.thread.model,
+            model: resourceState.thread.reserveReturn
+              ? runtimeParams.modelId
+              : resourceState.thread.model,
             modelProvider: resourceState.thread.modelProvider,
           }),
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
@@ -198,18 +205,44 @@ export async function prepareCodexAttemptTurnRequest(
         (tool) => tool.name === "session_status",
       ),
     });
+    const reserveBinding = { ...selectedThread };
+    const reserveTurn = isIncognitoSessionKey(runtimeParams.sessionKey)
+      ? undefined
+      : await prepareCodexLunaReserveTurn({
+          client: resourceState.client,
+          bindingStore: connection.bindingStore,
+          identity: connection.bindingIdentity,
+          binding: reserveBinding,
+          normal: turnStartParams,
+          signal: runAbortController.signal,
+          timeoutMs: params.timeoutMs,
+          assertCurrent: assertTurnCurrent,
+          activeNativeTurn: unsettledNativeTurn,
+        });
+    // Recovery must see pre-admission return intent even if native input is rejected.
+    selectedThread.reserveReturn = reserveBinding.reserveReturn;
+    const reserveSettings = reserveTurn?.settings;
+    if (reserveSettings) {
+      Object.assign(turnStartParams, reserveSettings);
+    }
+    const assertSubmissionCurrent = () => {
+      assertTurnCurrent();
+      reserveTurn?.assertCurrent();
+    };
     // Prepared runtime mappings retain catalog authorization; a retry must
     // authorize the model actually encoded for the substituted turn.
     const authorizedModel = nativeModel
       ? { provider: nativeModel.modelProvider, model: nativeModel.model }
-      : effectiveRuntimeModelId === readCodexRuntimeModelId(params.model, params.modelId)
-        ? { provider: params.provider, model: params.modelId }
-        : turnStartParams.model
-          ? {
-              provider: modelProvider ?? params.provider,
-              model: turnStartParams.model,
-            }
-          : undefined;
+      : reserveSettings?.model
+        ? { provider: modelProvider ?? params.provider, model: reserveSettings.model }
+        : effectiveRuntimeModelId === readCodexRuntimeModelId(params.model, params.modelId)
+          ? { provider: params.provider, model: params.modelId }
+          : turnStartParams.model
+            ? {
+                provider: modelProvider ?? params.provider,
+                model: turnStartParams.model,
+              }
+            : undefined;
     connection.bindModelExecution(authorizedModel);
     const nativeRequestModel = turnStartParams.model ?? model;
     const modelMapping =
@@ -305,7 +338,10 @@ export async function prepareCodexAttemptTurnRequest(
       data: {
         phase: "turn_starting",
         threadId: resourceState.thread.threadId,
-        model: params.modelId,
+        model: turnStartParams.model ?? params.modelId,
+        ...(reserveSettings
+          ? { requestedModel: params.modelId, route: "luna_reserve_transition" }
+          : {}),
         effort: turnStartParams.effort,
         collaborationEffort: turnStartParams.collaborationMode?.settings.reasoning_effort,
         serviceTier: turnStartParams.serviceTier,
@@ -321,21 +357,33 @@ export async function prepareCodexAttemptTurnRequest(
           timeoutMs: params.timeoutMs,
           signal: runAbortController.signal,
           assertCurrent: () => {
-            assertTurnCurrent();
+            assertSubmissionCurrent();
             continuation?.dispatch();
           },
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
       resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, acceptedTurnId);
-      assertTurnCurrent();
+      assertSubmissionCurrent();
       resourceState.nativeSubagentMonitor?.bindTurn(acceptedTurnId, modelMapping);
+      // Persist against a detached record: this attempt retains its immutable selected tuple.
+      await reserveTurn?.accepted?.();
+      assertSubmissionCurrent();
+      if (reserveSettings?.model) {
+        resourceState.acceptedReserveModel = reserveSettings.model;
+        codexModelCallDiagnostics.setAcceptedModel(reserveSettings.model);
+      }
       // Fitting may drop or truncate references; only acknowledge the complete block.
       if (upstreamUserText.includes(workspaceBootstrapContext.promptContext ?? "")) {
         references.accepted();
       }
       throwIfTurnStartAcceptedAfterAbort();
       await continuation?.accept(acceptedTurnId);
+      if (reserveSettings) {
+        assertSubmissionCurrent();
+        selectedThread.model = reserveBinding.model;
+        selectedThread.reserveReturn = reserveBinding.reserveReturn;
+      }
       return { turn: startedTurn, upstreamUserText };
     } catch (error) {
       if (acceptedTurnId || isCodexAppServerIndeterminateRequestCancellationError(error)) {
@@ -382,6 +430,7 @@ export async function prepareCodexAttemptTurnRequest(
       },
     });
     const nativeTurnCompleted = await waitForActiveNativeTurnCompletion();
+    unsettledNativeTurn = !nativeTurnCompleted;
     if (nativeTurnCompleted) {
       await resourceState.turnRoute?.drain();
     } else if (!runAbortController.signal.aborted) {

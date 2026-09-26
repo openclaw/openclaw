@@ -1211,6 +1211,58 @@ describe("canonical descendant lifecycle through real owners", () => {
     });
   }, 180_000);
 
+  it("preserves an independent Reserve return marker through canonical fork and cold continuation", async () => {
+    await withFixture(async (fixture, fork) => {
+      const source = await fixture.adopt();
+      const binding = await fixture.turn(source.sessionKey, "Reserve source turn");
+      await fixture.turn(source.sessionKey, "fork boundary");
+      const current = expectDefined(fixture.native.threads.get(binding.threadId), "source thread");
+      current.model = "gpt-reserve";
+      current.thread.model = "gpt-reserve";
+      await fixture.native.persist(current);
+      const reserveReturn = {
+        accountId: "fixture-account",
+        model: "gpt-5.6-luna",
+        effort: "high",
+        serviceTier: null,
+      };
+      await fixture.bindingStore.mutate(fixture.identity(source.sessionKey), {
+        kind: "patch",
+        threadId: binding.threadId,
+        patch: { model: "gpt-reserve", reserveReturn },
+      });
+      const entries = await fixture.readEntries(source.sessionKey);
+      const users = entries.filter((entry) => entry.role === "user");
+      const result = await fork(source.sessionKey, users[3]!.entryId);
+      expect(result, result.message).toMatchObject({ ok: true });
+      const childKey = expectDefined(result.key, "Reserve fork key");
+      const child = expectDefined(
+        fixture.bindingStore.read(fixture.identity(childKey)),
+        "Reserve child",
+      );
+      expect(child).toMatchObject({
+        model: "gpt-reserve",
+        preserveNativeModel: true,
+        connectionScope: "supervision",
+        reserveReturn,
+      });
+      await fixture.bindingStore.mutate(fixture.identity(source.sessionKey), {
+        kind: "patch",
+        threadId: binding.threadId,
+        patch: { reserveReturn: undefined },
+      });
+      expect(fixture.bindingStore.read(fixture.identity(childKey))?.reserveReturn).toEqual(
+        reserveReturn,
+      );
+      await fixture.native.restart();
+      const resumed = await fixture.turn(childKey, "continue native Reserve fork");
+      expect(resumed).toMatchObject({ model: "gpt-reserve", reserveReturn });
+      expect(
+        fixture.native.calls.filter((call) => call.method === "account/rateLimits/read"),
+      ).toEqual([]);
+    });
+  }, 180_000);
+
   it.each([
     ...(["searchable", "direct"] as const).flatMap((loading) =>
       (["unconfigured", "empty", "disabled", "enabled"] as const).map((appPolicy) => ({

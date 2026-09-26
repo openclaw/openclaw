@@ -53,6 +53,7 @@ import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js"
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
 import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
+import { resolveCodexThreadRolloutPath } from "./thread-rollout-path.js";
 import { hasCodexAppServerSiblingRouteWork } from "./turn-router.js";
 
 export async function resumeExistingCodexThread(
@@ -160,6 +161,7 @@ export async function resumeExistingCodexThread(
         model: startModelSelection.model,
         modelProvider: startModelProvider,
         preserveNativeModel: resumeBinding.preserveNativeModel === true,
+        preserveReserveSettings: resumeBinding.reserveReturn !== undefined,
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
         developerInstructions: params.developerInstructions,
@@ -421,6 +423,7 @@ export async function resumeExistingCodexThread(
       acceptedConfiguration.assertConfigured();
     }
     if (
+      resumeBinding.reserveReturn ||
       resumeBinding.pendingResumeConfiguration ||
       resumeBinding.preserveNativeModel ||
       resumeBinding.connectionScope === "supervision" ||

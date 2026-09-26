@@ -119,6 +119,8 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     client: undefined as unknown as CodexAppServerClient,
     thread: undefined as unknown as CodexAppServerThreadLifecycleBinding,
     runtimeArtifact: undefined as AgentHarnessRuntimeArtifactBinding | undefined,
+    // SAFETY: Empty until confirmed native settings supply the accepted model before turn/start.
+    acceptedReserveModel: undefined as string | undefined,
     turnRouter: undefined as unknown as CodexAppServerTurnRouter,
     turnRoute: undefined as CodexThreadRouteReservation | undefined,
     routeActivated: false,

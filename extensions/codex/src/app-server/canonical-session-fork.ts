@@ -323,6 +323,9 @@ export async function forkCanonicalCodexSession(params: {
             rolloutPath: response.thread.path ?? undefined,
             model,
             modelProvider,
+            ...(sourceBinding.reserveReturn && model === "gpt-reserve"
+              ? { reserveReturn: { ...sourceBinding.reserveReturn } }
+              : {}),
             appServerRuntimeFingerprint: control.connectionFingerprint,
             dynamicToolsFingerprint: codexDynamicToolsFingerprint(childCatalog),
             dynamicToolsContainDeferred: flattenCodexDynamicToolFunctions(childCatalog).some(

@@ -23,6 +23,8 @@ export type CodexAppServerModel = {
   isDefault?: boolean;
   inputModalities: string[];
   supportedReasoningEfforts: string[];
+  serviceTiers?: { id: string }[];
+  defaultServiceTier?: string | null;
   defaultReasoningEffort?: string;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
@@ -171,6 +173,8 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     supportedReasoningEfforts: normalizeUniqueTrimmedStringList(
       value.supportedReasoningEfforts.map((entry) => entry.reasoningEffort),
     ),
+    ...(value.serviceTiers?.length ? { serviceTiers: value.serviceTiers } : {}),
+    ...(value.defaultServiceTier != null ? { defaultServiceTier: value.defaultServiceTier } : {}),
     ...(normalizeOptionalString(value.defaultReasoningEffort)
       ? { defaultReasoningEffort: normalizeOptionalString(value.defaultReasoningEffort) }
       : {}),

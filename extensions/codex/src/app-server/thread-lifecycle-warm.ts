@@ -252,7 +252,11 @@ export async function tryReuseCodexLiveThread(
   let nativeThread: CodexThread | undefined;
   try {
     assertWarmOwner();
-    if (binding.preserveNativeModel || binding.connectionScope === "supervision") {
+    if (
+      binding.preserveNativeModel ||
+      binding.reserveReturn ||
+      binding.connectionScope === "supervision"
+    ) {
       try {
         nativeThread = await assertAdoptedCodexThreadResumeAllowed(
           params,
@@ -317,6 +321,7 @@ export async function tryReuseCodexLiveThread(
         model: startModelSelection.model,
         modelProvider: startModelProvider,
         preserveNativeModel: binding.preserveNativeModel === true,
+        preserveReserveSettings: binding.reserveReturn !== undefined,
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
         developerInstructions: params.developerInstructions,
@@ -417,9 +422,10 @@ export async function tryReuseCodexLiveThread(
     const nativeHookRelayGeneration =
       prebuiltFinalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration;
     // Older App Servers omit model metadata; newer ones report native changes between turns.
-    const model = binding.preserveNativeModel
-      ? nativeThread?.model?.trim() || binding.model
-      : startModelSelection.model;
+    const model =
+      binding.preserveNativeModel || binding.reserveReturn
+        ? nativeThread?.model?.trim() || binding.model
+        : startModelSelection.model;
     const modelProvider = binding.preserveNativeModel
       ? nativeThread?.modelProvider?.trim() || binding.modelProvider
       : binding.modelProvider;

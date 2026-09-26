@@ -132,6 +132,9 @@ export function createCodexModelCallDiagnosticEmitter(params: {
     requestPayloadBytes !== undefined ? { requestPayloadBytes } : {};
 
   return {
+    setAcceptedModel(model: string): void {
+      params.baseFields = { ...params.baseFields, model };
+    },
     setRequestPayloadBytes(bytes: number | undefined): void {
       requestPayloadBytes = bytes;
     },

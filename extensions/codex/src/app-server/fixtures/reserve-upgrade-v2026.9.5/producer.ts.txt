@@ -1,0 +1,37 @@
+// Reproduction recipe: copy this file to produce-reserve-upgrade.ts at the root
+// of an isolated archive of ec9c1a13db8938e5a3eaa51fca2e981cde2395a9.
+// Run: TSX_TSCONFIG_PATH=./tsconfig.json node --import tsx produce-reserve-upgrade.ts <fresh-output-dir>
+// The .txt suffix prevents compiling old-release imports as candidate code.
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { createPluginStateSyncKeyedStore, resetPluginStateStoreForTests } from "./src/plugin-state/plugin-state-store.ts";
+import { closeOpenClawStateDatabaseAsync } from "./src/state/openclaw-state-db.ts";
+import { createCodexAppServerBindingStore, bindingStoreKey, type StoredCodexAppServerBinding } from "./extensions/codex/src/app-server/session-binding.ts";
+import { CODEX_APP_SERVER_BINDING_NAMESPACE, CODEX_APP_SERVER_BINDING_MAX_ENTRIES } from "./extensions/codex/src/app-server/session-binding-meta.ts";
+
+const output = path.resolve(process.argv[2]!);
+await fs.mkdir(output, { recursive: true });
+const stateDir = path.join(output, "state-dir");
+const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_TEST: "1" };
+const state = createPluginStateSyncKeyedStore<StoredCodexAppServerBinding>("codex", { namespace: CODEX_APP_SERVER_BINDING_NAMESPACE, maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES, overflowPolicy: "reject-new", env });
+const store = createCodexAppServerBindingStore(state);
+const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1", sessionKey: "agent:main:session-1" };
+const binding = { threadId: "thread-1", cwd: "/synthetic-upgrade-workspace", model: "gpt-5.6-luna", modelProvider: "openai", serviceTier: "priority", webSearchThreadConfigFingerprint: JSON.stringify({ "features.standalone_web_search": false, web_search: "disabled" }), historyCoveredThrough: "2026-09-18T00:00:00.000Z" };
+assert.equal(await store.mutate(identity, { kind: "set", binding }), true);
+const row = state.lookup(bindingStoreKey(identity));
+assert.deepEqual(store.read(identity), binding);
+assert.equal(Object.hasOwn(row!.state === "active" ? row!.binding : {}, "reserveReturn"), false);
+await closeOpenClawStateDatabaseAsync();
+resetPluginStateStoreForTests();
+const database = path.join(stateDir, "state", "openclaw.sqlite");
+const db = new DatabaseSync(database, { readOnly: true });
+const schema = db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all();
+const userVersion = db.prepare("PRAGMA user_version").get();
+const integrity = db.prepare("PRAGMA integrity_check").get();
+const stored = db.prepare("SELECT plugin_id, namespace, entry_key, value_json, expires_at FROM plugin_state_entries").all();
+db.close();
+const receipt = { release: "v2026.9.5", commit: "ec9c1a13db8938e5a3eaa51fca2e981cde2395a9", identity, binding, namespace: CODEX_APP_SERVER_BINDING_NAMESPACE, row, userVersion, integrity, stored, schema };
+await fs.writeFile(path.join(output, "producer.json"), JSON.stringify(receipt, null, 2) + "\n");
+console.log(JSON.stringify({ commit: receipt.commit, database, userVersion, integrity, row, schemaObjects: schema.length }));

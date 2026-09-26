@@ -181,6 +181,7 @@ async function prepare(
               provider: "openai",
               modelId: "test-model",
               model: { api: "openai-chatgpt-responses" },
+              hostCapabilities: { assertActive: vi.fn() },
               ...(acknowledgment ? { providerReviewAcknowledgment: acknowledgment } : {}),
             },
             mutable: { pluginAppServer: {} },

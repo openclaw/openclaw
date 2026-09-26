@@ -122,6 +122,21 @@ describe("listCodexAppServerModels", () => {
     },
   );
 
+  it("preserves backend-advertised service tiers for task-scoped model transitions", () => {
+    expect(
+      readModelListResult({
+        data: [
+          {
+            ...validModelListEntry,
+            serviceTiers: [{ id: "priority", name: "Fast", description: "fixture" }],
+            defaultServiceTier: "priority",
+          },
+        ],
+        nextCursor: null,
+      }).models[0],
+    ).toMatchObject({ serviceTiers: [{ id: "priority" }], defaultServiceTier: "priority" });
+  });
+
   it("preserves generated model defaults and a valid pagination cursor", () => {
     expect(readModelListResult({ data: [validModelListEntry], nextCursor: "page-2" })).toEqual({
       models: [

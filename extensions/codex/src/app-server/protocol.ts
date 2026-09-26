@@ -584,6 +584,8 @@ export type CodexModel = {
   isDefault: boolean;
   inputModalities: string[];
   supportedReasoningEfforts: CodexReasoningEffortOption[];
+  serviceTiers?: { id: string }[];
+  defaultServiceTier?: string | null;
   defaultReasoningEffort?: string | null;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };

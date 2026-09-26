@@ -145,6 +145,17 @@ const threadBindingSchema = z
     // Bootstrap refreshes must not mutate a captured native-thread snapshot.
     agentWorkspaceDeveloperInstructions: optionalStringSchema,
     model: optionalStringSchema,
+    // Written before a backend-authorized transition; survives ambiguous writes and restarts.
+    // This is a return target, never permission to infer or to switch models.
+    reserveReturn: z
+      .object({
+        accountId: z.string().trim().min(1).max(256),
+        model: z.string().trim().min(1).max(256),
+        effort: z.string().max(64).nullable().optional(),
+        serviceTier: z.string().max(256).nullable().optional(),
+      })
+      .strict()
+      .optional(),
     // Codex App Server owns selection for supervised and adopted threads. Keep
     // this marker across resumes so OpenClaw never substitutes a default or fallback.
     preserveNativeModel: z.literal(true).optional().catch(undefined),
@@ -535,6 +546,11 @@ export function assertCodexBindingMayBeReplaced(
   if (expected) {
     throw new AgentHarnessPreflightError(
       `Codex native model ownership prevents ${operation}. Continue or compact the original session in its native runtime, or create a new chat with a concrete model; the original binding was preserved.`,
+    );
+  }
+  if (binding?.reserveReturn) {
+    throw new AgentHarnessPreflightError(
+      `Codex Reserve recovery prevents ${operation}. Reconnect the original account or explicitly start a new conversation; the original thread and return target were preserved.`,
     );
   }
   if (binding?.connectionScope === "supervision") {
