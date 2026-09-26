@@ -144,9 +144,16 @@ describe("team report attribution", () => {
         body: "automation: label backfill",
         url: "https://github.com/sample/project/issues/1#issuecomment-5",
       }),
+      ...["\ud800", "\ud801"].map((body, index) =>
+        item({
+          kind: "issue_comment",
+          body,
+          url: `https://github.com/sample/project/issues/1#unicode-${index}`,
+        }),
+      ),
     ];
     const report = day(comments);
-    expect(report.totals.github).toMatchObject({ total: 3, issueComments: 2, reviewComments: 1 });
+    expect(report.totals.github).toMatchObject({ total: 5, issueComments: 4, reviewComments: 1 });
     expect(member(report, "alpha").github.items.map((entry) => entry.url)).toContain(
       "https://github.com/sample/project/issues/2#issuecomment-2",
     );

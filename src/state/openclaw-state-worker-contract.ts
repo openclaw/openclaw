@@ -82,6 +82,7 @@ import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-in
 import type { HostedCatalogSnapshotWorkerOperations } from "../plugins/official-external-plugin-catalog-snapshot-store.worker-contract.js";
 import type { PluginSourceAdmissionPublication } from "../plugins/plugin-source-admission.types.js";
 import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
+import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker.js";
@@ -109,7 +110,8 @@ import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; identityKey: string };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = TuiLastSessionWorkerOperations &
+export type OpenClawStateWorkerOperations = CaptureWorkerOperations &
+  TuiLastSessionWorkerOperations &
   AcpSessionWriteOperations &
   WorktreeRetirementOperations &
   WorktreeRegistryReadOperations &
@@ -340,6 +342,7 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | "database.inspectIdle"
       | "database.walMaintenance"
       | "agentDatabases.releaseExitedLease"
+      | keyof CaptureWorkerOperations
       | keyof PluginStateWorkerOperations
       | keyof OpenClawStateLeaseLifecycleOperations;
   }

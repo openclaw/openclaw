@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
@@ -55,11 +55,11 @@ export type PluginLoadOptions = {
   preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;
   /** Native host operations supplied by a runtime composition root. */
-  capabilityCatalogContext?: PluginCapabilityCatalogContext;
+  capabilityCatalogContext?: PluginCapabilityCatalogHostContext;
   /** Resolve declared descriptors for this family without full runtime registration. */
   capabilityCatalog?: {
     family: keyof PluginCapabilityCatalog;
-    context: PluginCapabilityCatalogContext;
+    context: PluginCapabilityCatalogHostContext;
   };
   activate?: boolean;
   /** Staged Gateway candidates expose runtime APIs only after publication or owner preparation. */

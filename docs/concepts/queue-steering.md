@@ -12,6 +12,8 @@ When a normal prompt arrives while a session run is active and the queue mode is
 
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
+An older followup does not disable steering for later input. OpenClaw tries each new steer against the active run after earlier steering attempts settle. Messages that the runtime declines remain queued in their original order; accepted steering goes to the active turn.
+
 ## Runtime boundary
 
 Steering does not interrupt a tool call that is already running. The OpenClaw runtime checks at tool-launch boundaries as well as model boundaries:
@@ -29,7 +31,7 @@ Internal updates, including subagent completion reports, also use this steering 
 
 In the built-in runtime, each steered user input gets its own delivered answer in order. A later answer does not replace a completed answer to an earlier input, even when steering skipped its pending tools.
 
-The native Codex app-server harness exposes `turn/steer` instead of OpenClaw runtime's internal steering queue. OpenClaw batches queued prompts for the configured quiet window, then sends a single `turn/steer` request with all collected user input in arrival order. Codex's upstream turn scheduler owns its tool scheduling and consumes accepted steering at the next model boundary; OpenClaw does not add per-tool preemption to that runtime.
+The native Codex app-server harness exposes `turn/steer` instead of OpenClaw runtime's internal steering queue. OpenClaw batches queued prompts for the configured quiet window, then sends a single `turn/steer` request with all collected user input in arrival order. Codex's upstream turn scheduler owns its tool scheduling and drains pending input at model boundaries; OpenClaw does not add per-tool preemption to that runtime. A transcript commit confirms persistence, not that a later model request has read the input.
 
 Codex review and manual compaction turns reject same-turn steering. When a runtime cannot accept steering in `steer` mode, OpenClaw waits for the active run to finish before starting the prompt.
 
@@ -67,6 +69,10 @@ If four users send messages while the agent is executing a tool call:
 
 Steering always targets the current active session run. It does not create a new session, change the active run's tool policy, or split messages by sender. In multi-user channels, inbound prompts already include sender and route context, so the next model call can see who sent each message.
 
+Visible user turns started through the `agent` RPC can also receive compatible
+steering. Direct background turns with optional replies leave new human messages
+queued for a followup turn that can provide the required answer.
+
 Authorized participants with matching tool permissions can steer from different
 browsers. The running turn keeps its original approval destination. A different
 browser identity alone does not defer the message, but changes to permissions,
@@ -74,6 +80,12 @@ execution policy, workspace, or bound tools can require a followup turn.
 Reconnecting as the same authenticated user preserves steering when permissions
 and model access remain unchanged. The active turn keeps its original browser,
 tool, and approval bindings; steering does not transfer them to the new connection.
+
+Automatic credential rotation and model fallback also retain the active turn.
+New input can steer that turn while the selected model remains unchanged, fallback
+is still allowed, and the current permissions match. Selecting or locking a model,
+pinning a different account, or changing tool permissions can require a followup
+turn. Answers to a pending question still go to the question's original owner.
 
 [Personal `USER.md` context](/concepts/user-model#personal-user-files-on-a-shared-gateway)
 follows the session's assigned human owner, otherwise its authenticated human

@@ -4,16 +4,6 @@ import readline from "node:readline";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { readFileRangeAsync } from "./file-range.js";
 
-// Shared streaming helpers for JSONL session transcripts.
-//
-// Callers historically read the entire transcript with `fs.readFile` before
-// splitting on newlines. That worked fine for short sessions but produced real
-// memory pressure on long-running ones where transcripts grow to tens or
-// hundreds of MB (see #54296). These helpers replace the whole-file reads with
-// either a forward `readline` stream or a chunked reverse scan. Both are bounded
-// to a small chunk plus the current line and preserve the malformed-line
-// tolerance and "first/last match wins" semantics callers rely on.
-
 const DEFAULT_REVERSE_CHUNK_BYTES = 64 * 1024;
 const MAX_REVERSE_CHUNK_BYTES = 1024 * 1024;
 const MIN_REVERSE_CHUNK_BYTES = 1024;
@@ -121,7 +111,10 @@ export async function* streamSessionTranscriptLinesReverse(
         if (combined[index] !== 0x0a) {
           continue;
         }
-        const line = decodeTrimmedLine(combined.subarray(index + 1, lineEnd));
+        const line = combined
+          .subarray(index + 1, lineEnd)
+          .toString("utf-8")
+          .trim();
         if (line) {
           yield line;
           if (options.signal?.aborted) {
@@ -133,16 +126,11 @@ export async function* streamSessionTranscriptLinesReverse(
       carry = combined.subarray(0, lineEnd);
     }
 
-    const firstLine = decodeTrimmedLine(carry);
+    const firstLine = carry.toString("utf-8").trim();
     if (firstLine && !options.signal?.aborted) {
       yield firstLine;
     }
   } finally {
     await fileHandle.close().catch(() => undefined);
   }
-}
-
-function decodeTrimmedLine(line: Buffer): string {
-  const trimmed = line.toString("utf-8").trim();
-  return trimmed;
 }

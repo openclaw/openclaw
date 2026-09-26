@@ -319,7 +319,7 @@ export function readDebugProxyCaptureBlob(db: NodeSqliteDatabase, blobId: string
   return (row.encoding === "gzip" ? gunzipSync(data) : data).toString("utf8");
 }
 
-/** Read capture rows without joining or mutating the shared-state writer lifecycle. */
+/** @deprecated Use createDebugProxyCaptureReaderAsync for worker-backed, noncreating reads. */
 export function createDebugProxyCaptureReader(params: {
   env: NodeJS.ProcessEnv;
 }): DebugProxyCaptureReader {

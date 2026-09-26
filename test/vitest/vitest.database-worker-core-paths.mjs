@@ -578,6 +578,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/registry/subagent-registry-task-replacement.test.ts",
   "src/agents/subagents/registry/subagent-registry-read.prepared.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.authority.test.ts",
+  "src/agents/subagents/spawn/subagent-spawn.requester-incarnation.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.in-process-gateway.test.ts",
   "src/agents/tools/swarm-tools.integration.test.ts",
   "src/tasks/task-registry-session-index.test.ts",
@@ -696,6 +697,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-db-bloat.worker.test.ts",
   "src/commands/doctor-device-pairing.worker.test.ts",
   "src/commands/doctor-device-pairing.test.ts",
+  "src/cli/proxy-cli.runtime.test.ts",
   "src/commands/doctor-maintenance.worker.test.ts",
   "src/commands/doctor-lint.crabbox.test.ts",
   "src/fleet/doctor.runtime.test.ts",
@@ -737,6 +739,13 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-db.test.ts",
   "src/state/openclaw-state-db-read-admission.test.ts",
   "src/state/openclaw-state-db-schema-policy.test.ts",
+  "src/agents/provider-transport-fetch.capture.test.ts",
+  "src/proxy-capture/proxy-server.test.ts",
+  "src/proxy-capture/proxy-server.managed-proxy.test.ts",
+  "src/proxy-capture/runtime.guarded-fetch.test.ts",
+  "src/proxy-capture/runtime.lifecycle.test.ts",
+  "src/proxy-capture/runtime.input-admission.test.ts",
+  "src/proxy-capture/store.async.test.ts",
   "src/state/openclaw-state-maintenance-resources.test.ts",
   "src/tasks/task-registry.test.ts",
   "src/tasks/task-registry.test-support.test.ts",
@@ -841,6 +850,8 @@ export const databaseWorkerCoreFormerFastKinds = new Map([
   ["src/commands/doctor/auth-alias-preservation.test.ts", "unitFast"],
   ["src/plugin-sdk/memory-host-events.test.ts", "unitFastFakeTimers"],
   ["src/plugin-sdk/outbound-media.bulk.test.ts", "unitFast"],
+  ["src/agents/provider-transport-fetch.capture.test.ts", "unitFast"],
+  ["src/proxy-capture/proxy-server.test.ts", "unitFast"],
 ]);
 
 export const DATABASE_WORKER_WATCH_OWNER_ENV_KEY = "OPENCLAW_VITEST_DATABASE_WORKER_WATCH_OWNER";

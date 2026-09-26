@@ -76,7 +76,7 @@ import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
 import { isApnsRegistrationWorkerCommand } from "../infra/push-apns-store.worker-contract.js";
 import { executeApnsRegistrationCommand } from "../infra/push-apns-store.worker.js";
 import { readPersistedVapidKeyPairInDatabase } from "../infra/push-web-store.kernel.js";
-import { executeWebPushCommand } from "../infra/push-web-store.worker.js";
+import { executeWebPushCommand, isWebPushCommand } from "../infra/push-web-store.worker.js";
 import { isSessionDeliveryCommand } from "../infra/session-delivery-queue.worker-contract.js";
 import { executeSessionDeliveryCommand } from "../infra/session-delivery-queue.worker.js";
 import { createSqliteAuditRecordKernel } from "../infra/sqlite-audit-record.kernel.js";
@@ -296,21 +296,7 @@ export function executeSharedStateCommand(
       env: getSqliteWorkerStateContext().environment,
     });
   }
-  if (
-    command.type === "webPush.findBoundWebPushSubscriptionByEndpoint" ||
-    command.type === "webPush.setWebPushSubscriptionPreferences" ||
-    command.type === "webPush.listWebPushSubscriptions" ||
-    command.type === "webPush.hasBoundWebPushSubscriptions" ||
-    command.type === "webPush.listBoundWebPushSubscriptions" ||
-    command.type === "webPush.prepareWebPushApprovalDeliveries" ||
-    command.type === "webPush.listWebPushApprovalDeliveryTargets" ||
-    command.type === "webPush.deleteWebPushApprovalDeliveryTargets" ||
-    command.type === "webPush.listTerminalWebPushApprovalDeliveryIds" ||
-    command.type === "webPush.upsertWebPushSubscription" ||
-    command.type === "webPush.deleteBoundWebPushSubscription" ||
-    command.type === "webPush.deleteWebPushSubscriptionIfCurrent" ||
-    command.type === "webPush.insertVapidKeyPairIfAbsent"
-  ) {
+  if (isWebPushCommand(command)) {
     return executeWebPushCommand(command, open());
   }
   if (command.type === "nativeHookRelay.read") {

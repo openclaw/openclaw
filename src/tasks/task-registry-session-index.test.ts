@@ -117,7 +117,7 @@ it("publishes requester membership through create, update, restore, atomic publi
   expect(await taskIds({ sessionKey: published.requesterSessionKey })).toEqual([task.taskId]);
   expect(await taskIds({ sessionKey: task.ownerKey })).toEqual([task.taskId]);
   expect(
-    await applyTaskRegistryMaintenanceRetention(published, Date.now(), new Set(), () => {}),
+    await applyTaskRegistryMaintenanceRetention(published, Date.now(), new Map(), () => {}),
   ).toBe("pruned");
   await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
   for (const sessionKey of [
@@ -184,7 +184,7 @@ it("preserves owner-or-child ACP generation history when requester candidates ar
     "expired child task",
   );
   expect(
-    await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Set(), () => {}),
+    await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Map(), () => {}),
   ).toBe("pruned");
 });
 
@@ -249,7 +249,7 @@ it.each(["native update", "store readback"] as const)(
     publishTaskRecordAfterAtomicStore(published);
     const unrelated = createTask({ runId: "run-unrelated", status: "succeeded", cleanupAfter: 0 });
     expect(
-      await applyTaskRegistryMaintenanceRetention(unrelated, Date.now(), new Set(), () => {}),
+      await applyTaskRegistryMaintenanceRetention(unrelated, Date.now(), new Map(), () => {}),
     ).toBe("pruned");
     expect(getTasksByRunId("run-shared").map((task) => task.taskId)).toEqual(expectedIds);
     expect(findTaskByRunId("run-shared")?.taskId).toBe(first.taskId);
@@ -343,7 +343,7 @@ it("preserves run membership across rejected retention and enclosing update roll
   `);
   try {
     expect(
-      await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Set(), () => {}),
+      await applyTaskRegistryMaintenanceRetention(expired, Date.now(), new Map(), () => {}),
     ).toBeUndefined();
     expect(deleted).toEqual([]);
     expect(getTasksByRunId("run-shared").map((task) => task.taskId)).toEqual(expectedIds);
