@@ -367,18 +367,20 @@ export function collectPackageRootImports(
     if (expression.type === "CallExpression" || expression.type === "OptionalCallExpression") {
       const specifier = literal(expression.arguments[0]);
       const namespace = specifier === undefined ? undefined : namespaces.get(specifier);
-      const locations = expression.arguments.map((value) =>
-        origins(value, new Set(seen), inputScope),
-      );
+      // Opaque calls do not propagate argument origins; their binding graphs can be exponential.
+      const locations = () =>
+        expression.arguments.map((value) => origins(value, new Set(seen), inputScope));
       return union(
         ...origins(expression.callee, new Set(seen), inputScope).map((loader): Origin[] => {
           if (loader === "factory") {
-            return (locations[0] ?? ["unknown"]).map((location) =>
-              location === "location"
-                ? "root"
-                : callerValues.has(location)
-                  ? "caller"
-                  : "unlocated",
+            const anchor = expression.arguments[0];
+            return (anchor ? origins(anchor, new Set(seen), inputScope) : ["unknown"]).map(
+              (location) =>
+                location === "location"
+                  ? "root"
+                  : callerValues.has(location)
+                    ? "caller"
+                    : "unlocated",
             );
           }
           if (loaders.has(loader) || loader === "builtin") {
@@ -396,7 +398,8 @@ export function collectPackageRootImports(
             ((loader === "realpath" || loader === "realpath-async") &&
               expression.arguments.length === 1)
           ) {
-            const values = loader === "resolve" ? locations.flat() : (locations[0] ?? ["unknown"]);
+            const values =
+              loader === "resolve" ? locations().flat() : (locations()[0] ?? ["unknown"]);
             return [
               !changedCwd &&
               values.every((value) =>
@@ -409,13 +412,14 @@ export function collectPackageRootImports(
             ];
           }
           if (loader === "join") {
-            const values = locations.flat();
+            const argumentsOrigins = locations();
+            const values = argumentsOrigins.flat();
             if (
               values.every((value) => pathValues.has(value)) &&
               values.some((value) => callerValues.has(value))
             ) {
               return [
-                locations[0]?.every((value) => value === "caller-path")
+                argumentsOrigins[0]?.every((value) => value === "caller-path")
                   ? "caller-path"
                   : "caller-string",
               ];
