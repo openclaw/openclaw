@@ -4709,11 +4709,20 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ];
     const options = {
       runnerBackend: "hybrid",
-      includeReleaseOnlyPluginShards: false,
-      includeReleaseOnlyToolingShards: false,
       includeReleaseOnlyRuntimeTests: false,
-    } as const;
-    const full = createNodeTestShardBundles({ ...options, compactMode: "pull-request" });
+    } satisfies NonNullable<Parameters<typeof createSelectedNodeTestShardBundles>[1]>;
+    // Precise selections inherit templates before whole-plan runtime relocation.
+    const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+    let full: CompactNodeTestShard[];
+    try {
+      full = createNodeTestShardBundles({
+        ...options,
+        includeReleaseOnlyPluginShards: false,
+        compactMode: "pull-request",
+      });
+    } finally {
+      placement.mockRestore();
+    }
     const owners = full.filter((job) =>
       job.groups.some((group) => group.includePatterns?.some((file) => targets.includes(file))),
     );
