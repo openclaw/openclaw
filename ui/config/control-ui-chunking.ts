@@ -60,10 +60,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/i18n/locales/en-login.ts":
     case "ui/src/lib/gateway-secret-shape.ts":
       return "login-runtime";
-    case "ui/src/styles/plugins.css":
-      return "plugins-styles";
-    case "ui/src/styles/settings.css":
-      return "settings-styles";
     case "ui/src/components/sidebar-update-card.ts":
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
