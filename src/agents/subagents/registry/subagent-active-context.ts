@@ -46,6 +46,13 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   if (entry.requesterSettleWake) {
     return true;
   }
+  // Give-up plus completed cleanup is terminal; resume does not retry it.
+  if (
+    entry.delivery?.status === "failed" &&
+    (entry.cleanupHandled === true || typeof entry.cleanupCompletedAt === "number")
+  ) {
+    return false;
+  }
   return (
     entry.completion?.required === true &&
     entry.delivery?.disposition !== "intentional_non_delivery" &&

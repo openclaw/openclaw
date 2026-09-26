@@ -388,4 +388,69 @@ describe("buildActiveSubagentRuntimeContext", () => {
     expect(laterParentTurn).toContain("run-later-parent-turn");
     expect(laterParentTurn).toContain('taskName_json="summarize_inbox"');
   });
+
+  it("does not re-inject exhausted failed delivery into awaiting-delivery context", () => {
+    const endedAt = Date.now() - 7_200_000;
+    addSubagentRunForTests({
+      runId: "run-failed-delivery-exhausted",
+      childSessionKey: "agent:main:subagent:failed-delivery-exhausted",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "failed child with exhausted delivery",
+      cleanup: "keep",
+      createdAt: endedAt - 1_000,
+      startedAt: endedAt - 1_000,
+      endedAt,
+      outcome: { status: "error" as const, error: "LLM request failed" },
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: null },
+      delivery: {
+        status: "failed",
+        attemptCount: 3,
+        lastError: "completion agent did not use the message tool for message-tool-only delivery",
+      },
+      cleanupHandled: true,
+      cleanupCompletedAt: endedAt + 1_000,
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+      includeSpawnContext: false,
+    });
+
+    expect(prompt).toBeUndefined();
+  });
+
+  it("keeps retryable failed delivery outstanding until cleanup completes", () => {
+    const endedAt = Date.now() - 7_200_000;
+    addSubagentRunForTests({
+      runId: "run-failed-delivery-retryable",
+      childSessionKey: "agent:main:subagent:failed-delivery-retryable",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "failed child still awaiting retry",
+      cleanup: "keep",
+      createdAt: endedAt - 1_000,
+      startedAt: endedAt - 1_000,
+      endedAt,
+      outcome: { status: "error" as const, error: "LLM request failed" },
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "child result still owed" },
+      delivery: { status: "failed" },
+    } satisfies SubagentRunRecordOverrides);
+
+    const prompt = buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+      includeSpawnContext: false,
+    });
+
+    expect(prompt).toContain("## Child results awaiting delivery");
+    expect(prompt).toContain("run-failed-delivery-retryable");
+    expect(prompt).toContain("delivery=failed");
+    expect(prompt).toContain("requester_continuation=none");
+  });
 });
