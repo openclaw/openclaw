@@ -152,7 +152,9 @@ function makePerModelThinkingConfig(
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function mockAutoFallbackSession(params: { modelSelectionLocked?: boolean } = {}) {
+function mockAutoFallbackSession(
+  params: { modelSelectionLocked?: boolean; originProvider?: string; originModel?: string } = {},
+) {
   const sessionKey = "agent:main:telegram:123";
   const sessionEntry: SessionEntry = {
     sessionId: "fallback-session",
@@ -160,8 +162,8 @@ function mockAutoFallbackSession(params: { modelSelectionLocked?: boolean } = {}
     providerOverride: "anthropic",
     modelOverride: "claude-fallback",
     modelOverrideSource: "auto",
-    modelOverrideFallbackOriginProvider: "openai",
-    modelOverrideFallbackOriginModel: "gpt-5.5",
+    modelOverrideFallbackOriginProvider: params.originProvider ?? "openai",
+    modelOverrideFallbackOriginModel: params.originModel ?? "gpt-5.5",
     modelSelectionLocked: params.modelSelectionLocked,
   };
   // Reply-turn admission re-reads the canonical SQLite store before starting
@@ -249,6 +251,26 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     expect(runParams?.provider).toBe("anthropic");
     expect(runParams?.model).toBe("claude-fallback");
     expect(runParams?.autoFallbackPrimaryProbe).toBeUndefined();
+  });
+
+  it("routes normal turns to the primary when the fallback origin is no longer the primary", async () => {
+    const { sessionKey } = mockAutoFallbackSession({
+      originProvider: "google",
+      originModel: "gemini-2.5-pro",
+    });
+    mockFallbackDirectiveResult({ sessionKey, provider: "openai", model: "gpt-5.5" });
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), undefined, makeReasoningModelConfig()),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    expect(
+      vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0]?.autoFallbackPrimaryProbe,
+    ).toBeUndefined();
   });
 
   it("suppresses heartbeat model overrides for a model-locked session", async () => {

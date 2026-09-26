@@ -104,6 +104,50 @@ test.each(["origin", "notice"])(
   },
 );
 
+test.each([
+  { action: "resets", originModel: "old", expected: "custom/model", reset: true, reason: "stale" },
+  {
+    action: "keeps a self-origin",
+    originModel: "fallback",
+    expected: "fallback",
+    reset: false,
+    reason: undefined,
+  },
+])("$action normal-turn fallback whose origin is custom/$originModel", async (params) => {
+  await withStateDirEnv("reply-normal-turn-origin-", async () => {
+    const entry: SessionEntry = {
+      sessionId: "direct",
+      updatedAt: 1,
+      providerOverride: "custom",
+      modelOverride: "fallback",
+      modelOverrideSource: "auto",
+      modelOverrideRouteResolution: "resolved",
+      modelOverrideFallbackOriginProvider: "custom",
+      modelOverrideFallbackOriginModel: params.originModel,
+    };
+    const selection = await createModelSelectionState({
+      agentId: "main",
+      cfg: { plugins: { enabled: false } },
+      agentCfg: undefined,
+      sessionEntry: entry,
+      sessionStore: { direct: entry },
+      sessionKey: "direct",
+      defaultProvider: "custom",
+      defaultModel: "custom/model",
+      provider: "custom",
+      model: "fallback",
+      hasModelDirective: false,
+    });
+    expect(selection).toMatchObject({
+      provider: "custom",
+      model: params.expected,
+      resetModelOverride: params.reset,
+      resetModelOverrideReason: params.reason,
+    });
+    expect(entry.modelOverride).toBe(params.reset ? undefined : "fallback");
+  });
+});
+
 const metadataSnapshot = createPluginMetadataSnapshotFixture({
   plugins: [
     {

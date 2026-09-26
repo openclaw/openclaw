@@ -1,12 +1,15 @@
-// Detects stale heartbeat fallback pins from the identities their producers selected.
+// Detects stale automatic fallback pins from the identities their producers selected.
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
+import {
+  hasSessionActiveAutoModelFallback,
+  hasSessionAutoModelFallbackProvenance,
+} from "../../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { StoredModelOverride } from "../../sessions/stored-model-overrides.js";
 
-/** Detects heartbeat auto-fallback overrides that no longer match the primary model. */
-export function isStaleHeartbeatAutoFallbackOverride(params: {
+/** Detects auto-fallback overrides that no longer match the primary model. */
+export function isStaleAutoFallbackOverride(params: {
   isHeartbeat?: boolean;
   hasResolvedHeartbeatModelOverride?: boolean;
   sessionEntry?: SessionEntry;
@@ -16,7 +19,7 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
   primaryProvider?: string;
   primaryModel?: string;
 }): boolean {
-  if (params.isHeartbeat !== true || params.hasResolvedHeartbeatModelOverride === true) {
+  if (params.hasResolvedHeartbeatModelOverride === true) {
     return false;
   }
   if (params.storedOverride?.source !== "session") {
@@ -43,7 +46,14 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
   if (originModel) {
     const originProvider =
       normalizeOptionalString(entry.modelOverrideFallbackOriginProvider) ?? params.defaultProvider;
-    return originProvider !== primaryProvider || originModel !== primaryModel;
+    const originChanged = originProvider !== primaryProvider || originModel !== primaryModel;
+    // Primary recovery only probes the recorded origin, so no later turn can clear this pin.
+    return (
+      originChanged && (params.isHeartbeat === true || hasSessionActiveAutoModelFallback(entry))
+    );
+  }
+  if (params.isHeartbeat !== true) {
+    return false;
   }
   const noticeSelectedKey = normalizeOptionalString(entry.fallbackNotice?.selectedModel);
   return noticeSelectedKey

@@ -187,6 +187,25 @@ describe("command selection with configured model facts", () => {
     expect(selected.autoFallbackPrimaryProbe).toBeUndefined();
   });
 
+  it("resets an automatic fallback whose origin is no longer the primary", async () => {
+    const fixture = createFixture();
+    fixture.inventory.mockReturnValue([
+      catalogEntry("custom", "base"),
+      catalogEntry("custom", "manual"),
+    ]);
+    fixture.store[sessionKey] = {
+      ...automaticEntry("manual"),
+      modelOverrideFallbackOriginModel: "retired",
+    };
+
+    const selected = await fixture.select();
+
+    expect(selected).toMatchObject({ provider: "custom", model: "base" });
+    expect(selected.autoFallbackPrimaryProbe).toBeUndefined();
+    expect(selected.sessionEntry?.modelOverride).toBeUndefined();
+    expect(fixture.entry().modelOverride).toBeUndefined();
+  });
+
   it("keeps an incompatible shared account pin when role policy selects another provider", async () => {
     const fixture = createRestrictedFixture();
     fixture.defaults.model = { primary: "other/default", fallbacks: ["custom/manual"] };

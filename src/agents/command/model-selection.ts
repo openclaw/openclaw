@@ -1,5 +1,6 @@
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { isStaleAutoFallbackOverride } from "../../auto-reply/reply/stored-model-override.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
@@ -157,6 +158,43 @@ export async function resolveEmbeddedModelSelection(params: {
       modelManifestContext: params.modelManifestContext,
     });
 
+  const currentRunModelChannel = [
+    params.runContext.messageChannel,
+    params.opts.replyChannel,
+    params.opts.channel,
+  ].find((channel): channel is string => Boolean(channel && isDeliverableMessageChannel(channel)));
+  const channelOverrideGroupId = currentRunModelChannel
+    ? (params.runContext.groupId ?? sessionEntry?.groupId ?? params.runContext.currentChannelId)
+    : (sessionEntry?.groupId ?? params.runContext.groupId ?? params.runContext.currentChannelId);
+  const channelModelOverride =
+    params.cfg.channels?.modelByChannel && !hasExplicitRunOverride
+      ? resolveChannelModelOverride({
+          cfg: params.cfg,
+          channel: currentRunModelChannel ?? sessionDeliveryChannel(sessionEntry),
+          groupId: channelOverrideGroupId,
+          groupChatType: sessionEntry?.chatType ?? sessionDeliveryOrigin(sessionEntry)?.chatType,
+          groupChannel: params.runContext.groupChannel ?? sessionEntry?.groupChannel,
+          groupSubject: sessionEntry?.subject,
+          parentSessionKey: sessionEntry?.parentSessionKey ?? params.sessionKey,
+          directUserIds: [
+            sessionDeliveryOrigin(sessionEntry)?.nativeDirectUserId,
+            sessionDeliveryOrigin(sessionEntry)?.from,
+            sessionDeliveryOrigin(sessionEntry)?.to,
+          ],
+        })
+      : null;
+  const normalizedChannelOverride = channelModelOverride
+    ? parseAgentCommandModelRef(
+        params.cfg,
+        params.sessionAgentId,
+        channelModelOverride.model,
+        defaultProvider,
+        params.modelManifestContext,
+      )
+    : null;
+  const primaryProvider = normalizedChannelOverride?.provider ?? defaultProvider;
+  const primaryModel = normalizedChannelOverride?.model ?? defaultModel;
+
   if (
     (!hasExplicitRunOverride || !operatorAuthority?.modelPolicy) &&
     !isModelSelectionLocked(sessionEntry) &&
@@ -195,10 +233,22 @@ export async function resolveEmbeddedModelSelection(params: {
         provider: directOverride.provider ?? defaultProvider,
         model: directOverride.model,
       };
-      if (!hasSessionAutoModelSelection(entry) && !visibilityPolicy.allows(normalizedOverride)) {
+      const staleAutoFallbackOverride = isStaleAutoFallbackOverride({
+        sessionEntry: entry,
+        storedOverride: directOverride,
+        defaultProvider,
+        defaultModel,
+        primaryProvider,
+        primaryModel,
+      });
+      if (
+        staleAutoFallbackOverride ||
+        (!hasSessionAutoModelSelection(entry) && !visibilityPolicy.allows(normalizedOverride))
+      ) {
         const { updated } = applyModelOverrideToSessionEntry({
           entry,
           selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+          preserveAuthProfileOverride: staleAutoFallbackOverride,
         });
         entryUpdated ||= updated;
       }
@@ -261,42 +311,6 @@ export async function resolveEmbeddedModelSelection(params: {
   const storedModelOverrideRouteResolution = effectiveStoredOverride?.routeResolution;
   const hasStoredAutomaticSelection =
     effectiveStoredOverride?.source === "session" && hasSessionAutoModelSelection(sessionEntry);
-  const currentRunModelChannel = [
-    params.runContext.messageChannel,
-    params.opts.replyChannel,
-    params.opts.channel,
-  ].find((channel): channel is string => Boolean(channel && isDeliverableMessageChannel(channel)));
-  const channelOverrideGroupId = currentRunModelChannel
-    ? (params.runContext.groupId ?? sessionEntry?.groupId ?? params.runContext.currentChannelId)
-    : (sessionEntry?.groupId ?? params.runContext.groupId ?? params.runContext.currentChannelId);
-  const channelModelOverride =
-    params.cfg.channels?.modelByChannel && !hasExplicitRunOverride
-      ? resolveChannelModelOverride({
-          cfg: params.cfg,
-          channel: currentRunModelChannel ?? sessionDeliveryChannel(sessionEntry),
-          groupId: channelOverrideGroupId,
-          groupChatType: sessionEntry?.chatType ?? sessionDeliveryOrigin(sessionEntry)?.chatType,
-          groupChannel: params.runContext.groupChannel ?? sessionEntry?.groupChannel,
-          groupSubject: sessionEntry?.subject,
-          parentSessionKey: sessionEntry?.parentSessionKey ?? params.sessionKey,
-          directUserIds: [
-            sessionDeliveryOrigin(sessionEntry)?.nativeDirectUserId,
-            sessionDeliveryOrigin(sessionEntry)?.from,
-            sessionDeliveryOrigin(sessionEntry)?.to,
-          ],
-        })
-      : null;
-  const normalizedChannelOverride = channelModelOverride
-    ? parseAgentCommandModelRef(
-        params.cfg,
-        params.sessionAgentId,
-        channelModelOverride.model,
-        defaultProvider,
-        params.modelManifestContext,
-      )
-    : null;
-  const primaryProvider = normalizedChannelOverride?.provider ?? defaultProvider;
-  const primaryModel = normalizedChannelOverride?.model ?? defaultModel;
   const hasEffectiveStoredOverride = Boolean(storedProviderOverride || storedModelOverride);
   if (normalizedChannelOverride && !hasEffectiveStoredOverride) {
     provider = normalizedChannelOverride.provider;
