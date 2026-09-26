@@ -183,6 +183,8 @@ export type PrepareSimpleCompletionModelParams = {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   workspaceDir?: string;
   agentRuntimeId?: string;
+  /** Internal worker RPC owner; sessionless helper callers cannot supply this authority. */
+  workerInferenceAuthority?: { assertCurrent: () => void };
 };
 
 /** Prepares a model within the exact generation already held by its caller. */
@@ -194,6 +196,13 @@ export async function prepareSimpleCompletionModel(
 ): Promise<PreparedSimpleCompletionModel> {
   params.signal?.throwIfAborted();
   const config = params.cfg ?? {};
+  if (config.cloudWorkers?.requiredProfile && !params.workerInferenceAuthority) {
+    return {
+      error:
+        "Sessionless model helpers are unsupported when cloudWorkers.requiredProfile is configured; run the task in a worker-backed session.",
+    };
+  }
+  params.workerInferenceAuthority?.assertCurrent();
   const preparedModelRuntime = params.preparedModelRuntime;
   const context = createPreparedSimpleCompletionResolverContext({
     preparedModelRuntime,
@@ -208,9 +217,13 @@ export async function prepareSimpleCompletionModel(
     prepareSimpleCompletionModelCore(
       { ...params, agentDir: preparedModelRuntime.agentDir },
       context,
-      assertCurrent,
+      () => {
+        assertCurrent?.();
+        params.workerInferenceAuthority?.assertCurrent();
+      },
     ),
   );
+  params.workerInferenceAuthority?.assertCurrent();
   params.signal?.throwIfAborted();
   return prepared;
 }
@@ -220,6 +233,13 @@ async function prepareSimpleCompletionModelCore(
   context: PreparedSimpleCompletionResolverContext,
   assertCurrent?: () => void,
 ): Promise<PreparedSimpleCompletionModel> {
+  if (params.cfg?.cloudWorkers?.requiredProfile && !params.workerInferenceAuthority) {
+    return {
+      error:
+        "Sessionless model helpers are unsupported when cloudWorkers.requiredProfile is configured; run the task in a worker-backed session.",
+    };
+  }
+  params.workerInferenceAuthority?.assertCurrent();
   const { modelResolver, workspaceDir } = context;
   const resolved = await modelResolver(
     params.provider,
@@ -563,6 +583,12 @@ export async function acquireSimpleCompletionModelWithSelection(
     shorthandModelId?: string;
   } | null,
 ): Promise<AcquiredSimpleCompletionModelForAgent> {
+  if (params.cfg.cloudWorkers?.requiredProfile) {
+    return {
+      error:
+        "Sessionless model helpers are unsupported when cloudWorkers.requiredProfile is configured; run the task in a worker-backed session.",
+    };
+  }
   const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
   const agentDir = params.agentDir?.trim() || resolveAgentDir(params.cfg, agentId);
   const tentativeRequest = resolveRequest();

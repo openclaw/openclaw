@@ -359,7 +359,9 @@ export async function prepareSessionWorkspace(params: {
         baseRef: pending.baseRef,
         checkoutCommit: pending.baseCommit,
         label: title ?? resolveExplicitSessionName(saved),
-        runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
+        runSetupScript:
+          !cfg.cloudWorkers?.requiredProfile &&
+          client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
         signal,
         commitGuard: assertRunOwnership,
         onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),

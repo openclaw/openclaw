@@ -60,6 +60,7 @@ import { createPlacementSessionRetirement } from "./worker-environments/placemen
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
 import { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
+import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/session-placement-lifecycle.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
@@ -67,6 +68,9 @@ import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 
 const WORKER_PLACEMENT_RECONCILE_INTERVAL_MS = 60_000;
+const loadRequiredWorkerSessionPreparation = createLazyRuntimeModule(
+  () => import("./server-worker-required-profile.js"),
+);
 
 const loadWorkerWorkspacePreflight = createLazyRuntimeModule(async () => {
   const { preflightWorkerWorkspace } =
@@ -246,6 +250,7 @@ export function createGatewayWorkerPlacementRuntime(
         sessionKey,
         agentId,
         executionMode,
+        requiredProfile,
         authorize,
         signal,
         startDispatch,
@@ -310,6 +315,20 @@ export function createGatewayWorkerPlacementRuntime(
               await preflightWorkerWorkspace({ localPath: workspace.path, signal });
             }
             authorize?.();
+            if (requiredProfile) {
+              if (
+                getRuntimeConfig().cloudWorkers?.requiredProfile !== requiredProfile ||
+                params.placements.get(sessionId)?.turnClaim
+              ) {
+                throw new WorkerDispatchTargetChangedError(
+                  "Required worker admission changed or a local turn is still active.",
+                );
+              }
+              // Initial placement belongs to this held input. There is no executing local
+              // owner to revoke, and clearing queues would discard the pending first turn.
+              placement = startDispatch();
+              return;
+            }
             placement = startDispatch();
             clearSessionQueues(lifecycleIdentities);
             params.revokeSessionAuthority({
@@ -434,6 +453,37 @@ export function createGatewayWorkerPlacementRuntime(
     }),
     publishPlacementChanges,
   );
+  const redispatchReclaimed = createReclaimedPlacementRedispatch({
+    environments: params.environments,
+    dispatch: dispatchService.dispatch,
+    resolveDevicePlacementRequirement,
+  });
+  const prepareRequiredSession: NonNullable<
+    WorkerPlacementDispatchContract["prepareRequiredSession"]
+  > = async (...args) => {
+    if (!getRuntimeConfig().cloudWorkers?.requiredProfile) {
+      return;
+    }
+    const { createRequiredWorkerSessionPreparation } = await loadRequiredWorkerSessionPreparation();
+    await createRequiredWorkerSessionPreparation({
+      warn: params.warn,
+      redispatchReclaimed,
+      onTransition: (placement) => {
+        const context = params.getSessionChangeContext?.();
+        if (context) {
+          emitSessionsChanged(context, {
+            reason: "dispatch",
+            sessionKey: placement.sessionKey,
+            agentId: placement.agentId,
+          });
+        }
+      },
+      getConfig: getRuntimeConfig,
+      placements: params.placements,
+      environments: params.environments,
+      dispatch: dispatchService,
+    })(...args);
+  };
   const placementIdleSweep = createWorkerPlacementIdleSweep({
     placements: params.placements,
     environments: params.environments,
@@ -453,17 +503,14 @@ export function createGatewayWorkerPlacementRuntime(
     warn: params.warn,
   });
   const admissionProvider = createWorkerSessionTurnPlacementProvider({
+    prepareRequiredSession,
     environments: params.environments,
     placements: params.placements,
     resolveWorkspace,
     reconcileActivePlacement: async (id) => await dispatchService.reconcileActive(id),
     waitForAdmissionNode: runtimeRefresh.wait,
     waitForInitialPlacement: dispatchService.waitForInitialPlacement,
-    redispatchReclaimed: createReclaimedPlacementRedispatch({
-      environments: params.environments,
-      dispatch: dispatchService.dispatch,
-      resolveDevicePlacementRequirement,
-    }),
+    redispatchReclaimed,
     workspaceOperations,
     prepareAcceptedWorkspacePublication,
     publishAcceptedWorkspace,
@@ -685,7 +732,7 @@ export function createGatewayWorkerPlacementRuntime(
     }
   };
   return {
-    dispatchService,
+    dispatchService: Object.assign(dispatchService, { prepareRequiredSession }),
     admissionProvider,
     diskSpace,
     runnerAvailability,

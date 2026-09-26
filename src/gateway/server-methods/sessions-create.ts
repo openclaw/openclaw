@@ -9,6 +9,7 @@ import {
   missingScopeErrorShape,
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -86,6 +87,28 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = structuredClone(params);
+    const requiredProfile = context.getRuntimeConfig().cloudWorkers?.requiredProfile;
+    try {
+      assertRequiredWorkerSelection(context.getRuntimeConfig(), p);
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
+      return;
+    }
+    const automaticEmptyWorkspace = Boolean(
+      requiredProfile &&
+      !p.repository &&
+      !p.catalogId &&
+      p.worktree !== true &&
+      !p.cwd &&
+      !p.projectId &&
+      !p.projectGitUrl,
+    );
+    if (requiredProfile && !p.repository && !p.catalogId && p.worktree !== true) {
+      p.worktree = true;
+      if (!p.cwd && !p.projectId && !p.projectGitUrl) {
+        p.worktreeSource = "empty";
+      }
+    }
     const requestAuthority = readGatewayRequestMutationAuthority(options);
     const getCurrentConfig = context.getRuntimeConfig;
     const requestingOperatorProfileId = client?.authenticatedUserProfile?.profileId;
@@ -133,6 +156,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     // Both uncommitted selections must remain authorized after awaited preparation.
     const commitGuard = () => {
       requestAuthority.assertCurrent();
+      if (getCurrentConfig().cloudWorkers?.requiredProfile !== requiredProfile) {
+        throw new Error("Required worker policy changed during session creation; retry.");
+      }
+      assertRequiredWorkerSelection(getCurrentConfig(), p);
       authority.commitGuard?.();
       sessionMutationAuthorization?.assertCurrent();
       assertPreparedSkillLibrarySelection(sessionCreation.skillLibrarySelections);
@@ -320,6 +347,24 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const existingTargetEntry = explicitlyRequestedKey
       ? loadGatewaySessionEntryReadOnly(explicitlyRequestedKey, { agentId: titleAgentId }).entry
       : undefined;
+    if (
+      automaticEmptyWorkspace &&
+      existingTargetEntry &&
+      !existingTargetEntry.worktree &&
+      (existingTargetEntry.sessionRoot ||
+        existingTargetEntry.spawnedCwd ||
+        existingTargetEntry.projectId)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Required worker setup cannot replace an existing workspace with an empty one; create a managed-workspace session with the original source.",
+        ),
+      );
+      return;
+    }
     if (existingTargetEntry?.repositoryWorkspaceId && !repository) {
       respond(
         false,
@@ -454,7 +499,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           titleSource: buildDashboardSessionTitleSource({ message: message ?? "", attachments }),
           currentUserMessage: message,
           useRequestedTitleSelection: Boolean(requestedModel && !personalModelSelection),
-          runSetupScript: clientScopes.includes(ADMIN_SCOPE),
+          runSetupScript: !requiredProfile && clientScopes.includes(ADMIN_SCOPE),
           signal,
           commitGuard,
           onTitleError: (error) =>
@@ -563,6 +608,25 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       afterCreate: async (session) => {
         if (!authority.hasActive()) {
           return;
+        }
+        if (requiredProfile && !preparedWorktree?.pendingWorktree && !requestedProjectGitUrl) {
+          const prepare = context.workerPlacementDispatchService?.prepareRequiredSession;
+          if (!prepare) {
+            throw new Error(
+              "Required worker placement is unavailable; repair the configured profile and retry.",
+            );
+          }
+          await prepare(
+            {
+              sessionId: session.entry.sessionId,
+              sessionKey: session.key,
+              agentId: session.agentId,
+            },
+            commitGuard,
+            signal,
+            { waitForReady: false },
+          );
+          commitGuard();
         }
         if (!hasInitialTurn) {
           scheduleCreatedDashboardSessionTitle(session, cfg, context, p.titleSource);

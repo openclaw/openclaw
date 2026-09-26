@@ -28,6 +28,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "../../auto-reply/reply/queue.js";
+import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -294,6 +295,11 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     ok: false as const,
     error: errorShape(ErrorCodes.INVALID_REQUEST, message),
   });
+  try {
+    assertRequiredWorkerSelection(params.cfg, params.patch);
+  } catch (error) {
+    return invalid(formatErrorMessage(error));
+  }
   let validateRuntime: (() => string | undefined) | undefined;
   let validateEnvironment: (() => ErrorShape | undefined) | undefined;
   const grantingConsent = typeof params.patch.nativeRuntimeConsent === "string";
@@ -369,6 +375,14 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     }
   }
   const validate = () => {
+    try {
+      assertRequiredWorkerSelection(params.cfg, {
+        agentRuntime: params.entry.agentRuntimeOverride,
+        execNode: params.entry.execNode,
+      });
+    } catch (error) {
+      return errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error));
+    }
     const selectionError = params.validateModelSelection?.();
     if (selectionError) {
       return selectionError;

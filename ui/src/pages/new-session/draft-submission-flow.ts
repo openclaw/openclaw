@@ -559,6 +559,8 @@ export class DraftSubmissionFlow {
           submittedRecovery: submissionPlacementRecovery,
           sessionKey: result.key,
           createdAt: submittedAt,
+          startupError:
+            result.initialRun.status === "rejected" ? result.initialRun.error : undefined,
           isRequestCurrent: () => requestId === this.submitRequestToken,
           isLifecycleCurrent: () =>
             this.read().isConnected &&

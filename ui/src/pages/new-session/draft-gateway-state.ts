@@ -66,6 +66,7 @@ type DraftGatewayCallbacks = DraftPreferenceOptions & {
 
 export class DraftGatewayState {
   private cloudProfilesValue: DraftCloudProfile[] = [];
+  private requiredProfileValue: string | undefined;
   private environmentsValue: DraftEnvironment[] | null = null;
   private cloudProfilesReadyValue = false;
   private catalogRetryingValue = false;
@@ -91,7 +92,7 @@ export class DraftGatewayState {
   private readonly gatewayNameTask: Task<readonly unknown[], string>;
   private readonly cloudProfileTask: Task<
     readonly unknown[],
-    { profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }
+    Awaited<ReturnType<typeof requestPlaceCatalog>>
   >;
 
   constructor(
@@ -135,18 +136,21 @@ export class DraftGatewayState {
           this.gatewayRecoveryScopeValue,
           this.read().runtimeId,
         ] as const,
-      task: async ([client, _connectionEpoch, canWrite, isAdmin, _recoveryScope, runtimeId]) => {
+      task: async ([client, _connectionEpoch, _canWrite, isAdmin, _recoveryScope, runtimeId]) => {
         if (!client) {
           return initialState;
         }
-        if (!canWrite) {
-          return { profiles: [], environments: [] };
-        }
         const result = await requestPlaceCatalog(client, runtimeId);
-        return { ...result, profiles: isAdmin ? result.profiles : [] };
+        return {
+          ...result,
+          profiles: isAdmin
+            ? result.profiles
+            : result.profiles.filter((profile) => profile.id === result.requiredProfile),
+        };
       },
       onComplete: (placeCatalog) => {
         this.resetCloudProfileRetry();
+        this.requiredProfileValue = placeCatalog.requiredProfile;
         this.environmentsValue = placeCatalog.environments;
         this.applyCloudProfiles(placeCatalog.profiles);
         this.cloudProfilesReadyValue = true;
@@ -167,6 +171,17 @@ export class DraftGatewayState {
 
   get cloudProfiles(): readonly DraftCloudProfile[] {
     return this.cloudProfilesValue;
+  }
+
+  get requiredProfile(): string | undefined {
+    return this.requiredProfileValue;
+  }
+
+  get placementPolicyReady(): boolean {
+    return (
+      this.cloudProfilesReadyValue &&
+      (!this.requiredProfileValue || this.cloudProfileTask.status === TaskStatus.COMPLETE)
+    );
   }
 
   get environments(): readonly DraftEnvironment[] | null {
@@ -343,6 +358,7 @@ export class DraftGatewayState {
     // Retire pending results synchronously; Lit may not run hostUpdate before they settle.
     void this.cloudProfileTask.run([null, -1, false, false, ""]);
     this.cloudProfilesValue = [];
+    this.requiredProfileValue = undefined;
     this.cloudProfilesReadyValue = false;
     if (resetHostSelection) {
       this.environmentsValue = null;
@@ -516,6 +532,10 @@ export class DraftGatewayState {
     this.stopPreferences?.();
     this.stopPreferences = undefined;
     this.identityPreferences = undefined;
+    this.cloudProfilesValue = [];
+    this.requiredProfileValue = undefined;
+    this.cloudProfilesReadyValue = false;
+    this.environmentsValue = null;
     this.cloudProfileRefresh = null;
     this.gatewaySource = null;
     this.gatewayClientValue = null;
@@ -563,10 +583,7 @@ export class DraftGatewayState {
       return;
     }
     if (this.cloudProfileRetryAttempt >= CLOUD_PROFILE_RETRY_DELAYS_MS.length) {
-      if (!this.cloudProfilesReadyValue) {
-        this.applyCloudProfiles([]);
-        this.cloudProfilesReadyValue = true;
-      }
+      // Unknown policy is not an optional empty catalog: keep new starts closed.
       return;
     }
     const delayMs = CLOUD_PROFILE_RETRY_DELAYS_MS[this.cloudProfileRetryAttempt];

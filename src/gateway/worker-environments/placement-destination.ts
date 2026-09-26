@@ -1,6 +1,7 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
+import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
@@ -69,7 +70,13 @@ export function resolveWorkerPlacementDestination(params: {
   machineClass?: string;
   os?: string;
 }): Result<WorkerPlacementDestination | undefined, string> {
-  const profileId = normalizeOptionalString(params.profileId);
+  try {
+    assertRequiredWorkerSelection(params.cfg, params);
+  } catch (error) {
+    return err((error as Error).message);
+  }
+  const profileId =
+    params.cfg.cloudWorkers?.requiredProfile ?? normalizeOptionalString(params.profileId);
   if (profileId) {
     if (!Object.hasOwn(params.cfg.cloudWorkers?.profiles ?? {}, profileId)) {
       return err(`cloud worker profile is not configured: ${profileId}`);
