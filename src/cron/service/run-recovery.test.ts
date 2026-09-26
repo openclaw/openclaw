@@ -8,6 +8,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore, saveCronJobsStore } from "../store.js";
 import {
@@ -91,6 +95,7 @@ describe("atomic cron run recovery", () => {
       const reaperDiscovery = vi.fn(() => []);
       const state = createCronServiceState({
         ...makeState(logger, storePath, startedAtMs + 1).deps,
+        scheduler: createTestGatewayScheduler(),
         onEvent,
         runCommandJob,
         resolveSessionStoreAgentIds: reaperDiscovery,
@@ -266,7 +271,11 @@ describe("atomic cron run recovery", () => {
     });
     const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
     for (let restart = 0; restart < 3; restart += 1) {
-      const next = createCronServiceState({ ...state.deps, runCommandJob });
+      const next = createCronServiceState({
+        ...state.deps,
+        scheduler: createTestGatewayScheduler(),
+        runCommandJob,
+      });
       try {
         await start(next);
         expect(runCommandJob).toHaveBeenCalledOnce();
@@ -423,6 +432,7 @@ describe("atomic cron run recovery", () => {
       for (let restart = 0; restart < 3; restart += 1) {
         const state = createCronServiceState({
           ...makeState(logger, storePath, Date.now()).deps,
+          scheduler: createTestGatewayScheduler(),
           runCommandJob,
           onEvent,
         });
@@ -475,10 +485,12 @@ describe("atomic cron run recovery", () => {
       releaseLocalCronRunReceiptOwnership(receipt);
       const finished = createDeferred();
       const runJob = vi.fn(async () => ({ status: "ok" as const }));
+      const clock = createGatewaySchedulerClock(nowMs);
       const freshState = () =>
         createCronServiceState({
           ...original.deps,
-          nowMs: Date.now,
+          scheduler: createTestGatewayScheduler(clock.clock),
+          nowMs: clock.clock.now,
           onEvent(event) {
             if (event.action === "finished" && event.status === "ok") {
               finished.resolve();
@@ -515,7 +527,7 @@ describe("atomic cron run recovery", () => {
       }
       if (phase !== "repair") {
         for (let restart = 0; restart < 3; restart += 1) {
-          await vi.advanceTimersByTimeAsync(1);
+          await clock.advanceBy(1);
           const pendingState = freshState();
           try {
             await start(pendingState);
@@ -536,10 +548,10 @@ describe("atomic cron run recovery", () => {
         await start(second);
         if (phase !== "repair") {
           expect(runJob).not.toHaveBeenCalled();
-          const delay = nowMs + (phase === "agent-deferral" ? 120_000 : 5_000) - Date.now();
-          await vi.advanceTimersByTimeAsync(delay - 1);
+          const dueAt = nowMs + (phase === "agent-deferral" ? 120_000 : 5_000);
+          await clock.advanceTo(dueAt - 1);
           expect(runJob).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(1);
+          await clock.advanceBy(1);
           await finished.promise;
           await second.op;
         }

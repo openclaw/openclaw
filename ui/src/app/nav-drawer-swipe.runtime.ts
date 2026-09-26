@@ -16,7 +16,7 @@ type Swipe = {
   backdrop: HTMLElement | null;
 };
 
-type NavDrawerHost = HTMLElement & {
+export type NavDrawerHost = HTMLElement & {
   readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
   readonly navDrawerOpen: boolean;

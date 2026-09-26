@@ -170,6 +170,29 @@ describe("resolveSessionStoreTargets", () => {
         { sessionId: "ops-session", updatedAt: 2 },
       );
 
+      const diagnostics: string[] = [];
+      expect(
+        resolveSessionStoreTargets(
+          {
+            session: { store: storePath },
+            agents: {
+              ownership: "explicit",
+              entries: { main: { default: true }, ops: {} },
+            },
+          },
+          { allAgents: true },
+          { env, diagnostics },
+        ),
+      ).toEqual([
+        { agentId: "main", storePath },
+        { agentId: "ops", storePath },
+      ]);
+      expect(diagnostics).toContainEqual(
+        expect.stringMatching(
+          /owner "main" selected by database-(?:registry|path); suffixed owner\(s\): "ops"\./,
+        ),
+      );
+
       const mainPath = resolveSqliteTargetFromSessionStorePath(storePath, {
         agentId: "main",
         defaultAgentId: "main",

@@ -104,7 +104,12 @@ describe("node wake coordination", () => {
       expect((await nudge()).reason).toBe("sent");
       wallClock.mockReturnValue(10_000_000 + clockChange);
       elapsed = 999;
-      expect((await wake()).path).toBe("throttled");
+      expect(await wake()).toEqual({
+        available: true,
+        throttled: true,
+        path: "throttled",
+        durationMs: 0,
+      });
       expect((await nudge()).reason).toBe("throttled");
       elapsed = 1_000;
       expect((await wake()).path).toBe("sent");
@@ -135,32 +140,6 @@ describe("node wake coordination", () => {
 
     await expect(first).resolves.toEqual(sentWake);
     await expect(second).resolves.toEqual(sentWake);
-  });
-
-  it("throttles only after transport admission marks a real wake attempt", async () => {
-    await runNodeWakeAttempt({
-      nodeId: "node-1",
-      force: false,
-      throttleMs: 60_000,
-      attempt: async (markAttempted) => {
-        markAttempted();
-        return sentWake;
-      },
-    });
-
-    const second = await runNodeWakeAttempt({
-      nodeId: "node-1",
-      force: false,
-      throttleMs: 60_000,
-      attempt: async () => sentWake,
-    });
-
-    expect(second).toEqual({
-      available: true,
-      throttled: true,
-      path: "throttled",
-      durationMs: 0,
-    });
   });
 
   it("tracks reconnect-nudge throttle independently from wake throttle", async () => {

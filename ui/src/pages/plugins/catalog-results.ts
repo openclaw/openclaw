@@ -70,6 +70,10 @@ const SECTION_SIZE = 8;
 // Estimate the current registry footprint without duplicating its taxonomy.
 // The actual labels, ordering, and count still come only from ClawHub.
 const CATEGORY_SKELETON_COUNT = 22;
+const PROMOTED_SECTIONS = [
+  ["featured", "pluginsPage.featuredTitle", icons.star],
+  ["trending", "pluginsPage.intentTrending", icons.barChart],
+] as const;
 
 // Category-only SVGs stay in the deferred Plugins page, outside the startup icon registry.
 const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
@@ -342,36 +346,24 @@ function renderSection(params: {
 }
 
 function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
-  const activeAll = props.intent === "all" && props.category === null;
   return html`<div
     class="plugin-catalog-chips"
     role="group"
     aria-label=${t("pluginsPage.categoriesLabel")}
   >
-    <button
-      type="button"
-      class="plugin-catalog-chip ${activeAll ? "is-active" : ""}"
-      aria-pressed=${activeAll}
-      @click=${() => props.onIntentChange("all")}
-    >
-      <span aria-hidden="true">${icons.layoutGrid}</span>${t("pluginsPage.intentAll")}
-    </button>
-    <button
-      type="button"
-      class="plugin-catalog-chip ${props.intent === "featured" ? "is-active" : ""}"
-      aria-pressed=${props.intent === "featured"}
-      @click=${() => props.onIntentChange("featured")}
-    >
-      <span aria-hidden="true">${icons.star}</span>${t("pluginsPage.featuredTitle")}
-    </button>
-    <button
-      type="button"
-      class="plugin-catalog-chip ${props.intent === "trending" ? "is-active" : ""}"
-      aria-pressed=${props.intent === "trending"}
-      @click=${() => props.onIntentChange("trending")}
-    >
-      <span aria-hidden="true">${icons.barChart}</span>${t("pluginsPage.intentTrending")}
-    </button>
+    ${([["all", "pluginsPage.intentAll", icons.layoutGrid], ...PROMOTED_SECTIONS] as const).map(
+      ([intent, label, icon]) => {
+        const active = props.intent === intent && (intent !== "all" || props.category === null);
+        return html`<button
+          type="button"
+          class="plugin-catalog-chip ${active ? "is-active" : ""}"
+          aria-pressed=${active}
+          @click=${() => props.onIntentChange(intent)}
+        >
+          <span aria-hidden="true">${icon}</span>${t(label)}
+        </button>`;
+      },
+    )}
     ${
       props.categoriesLoading
         ? html`<span class="sr-only" role="status">${t("pluginsPage.loadingCategories")}</span>
@@ -494,22 +486,16 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
   }
   return html`
     ${props.error ? renderError(props.error, props.onRetry) : nothing}
-    ${renderSection({
-      id: "featured",
-      title: t("pluginsPage.featuredTitle"),
-      items: props.featured,
-      loading: props.featuredLoading,
-      onViewAll: () => props.onIntentChange("featured"),
-      props,
-    })}
-    ${renderSection({
-      id: "trending",
-      title: t("pluginsPage.intentTrending"),
-      items: props.trending,
-      loading: props.trendingLoading,
-      onViewAll: () => props.onIntentChange("trending"),
-      props,
-    })}
+    ${PROMOTED_SECTIONS.map(([intent, label]) =>
+      renderSection({
+        id: intent,
+        title: t(label),
+        items: props[intent],
+        loading: props[`${intent}Loading`],
+        onViewAll: () => props.onIntentChange(intent),
+        props,
+      }),
+    )}
     ${repeat(
       categories,
       (category) => category.slug,

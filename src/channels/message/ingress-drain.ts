@@ -39,7 +39,7 @@ import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueRecord,
-} from "./ingress-queue.js";
+} from "./ingress-queue.types.js";
 import {
   resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
@@ -583,8 +583,13 @@ export function createChannelIngressDrain<
 
     await recoverStaleClaims();
 
-    const pending = await queue.listPending({ limit: "all", orderBy });
-    const claims = await queue.listClaims();
+    // A release between separate reads can hide a lane's head from both collections.
+    const { pending, claims } = queue.listUnsettled
+      ? await queue.listUnsettled({ orderBy })
+      : {
+          pending: await queue.listPending({ limit: "all", orderBy }),
+          claims: await queue.listClaims(),
+        };
     const activeLaneKeys = new Set(laneOwnerByKey.keys());
     const claimedLaneKeys = new Set(
       claims

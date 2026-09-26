@@ -528,11 +528,3 @@ async function executeScriptCronJob(
     ...(result.stateChanged === true ? { scriptState: result.state } : {}),
   };
 }
-
-/** Clears the currently armed cron timer. */
-export function stopTimer(state: CronServiceState) {
-  if (state.timer) {
-    clearTimeout(state.timer);
-  }
-  state.timer = null;
-}

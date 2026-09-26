@@ -516,6 +516,13 @@ function createRunParams() {
   return createParams(sessionFile, workspaceDir);
 }
 
+function startClockControlledAttempt(params: EmbeddedRunAttemptParams) {
+  // Cold transcript workers must not consume a success scenario's execution budget.
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const run = runCodexAppServerAttempt(params);
+  return { run, started: run.waitForTurnAccepted() };
+}
+
 const GOOGLE_CALENDAR_PLUGIN_CONFIG = {
   codexPlugins: {
     enabled: true,
@@ -2268,8 +2275,8 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    const { run, started } = startClockControlledAttempt(params);
+    await started;
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const startParams = startRequest?.params as
       | {
@@ -2476,6 +2483,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
+    expect(result.terminal).toEqual({ kind: "ok" });
     expect(persistedProgressCardInputs[0]).toEqual({ markdown: "Plan restored", plan });
     expect(result.messagesSnapshot).toContainEqual(
       expect.objectContaining({
@@ -2493,8 +2501,8 @@ describe("runCodexAppServerAttempt", () => {
   it("does not inject plan state after compaction when the turn has no plan", async () => {
     const params = createRunParams();
     const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    const { run, started } = startClockControlledAttempt(params);
+    await started;
 
     await harness.notify(
       itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
@@ -2502,10 +2510,9 @@ describe("runCodexAppServerAttempt", () => {
     await harness.notify(
       itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
     );
-    expect(harness.requests.map((request) => request.method)).not.toContain("thread/inject_items");
-
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    expect((await run).terminal).toEqual({ kind: "ok" });
+    expect(harness.requests.map((request) => request.method)).not.toContain("thread/inject_items");
   });
 
   it("fails closed for Codex app defaults when restricted native tools have no plugin config", async () => {
@@ -4624,8 +4631,8 @@ describe("runCodexAppServerAttempt", () => {
     params.toolsAllow = ["read"];
     params.verboseLevel = "full";
     params.onToolResult = onToolResult;
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    const { run, started } = startClockControlledAttempt(params);
+    await started;
     const startParams = harness.requests.find((request) => request.method === "thread/start")
       ?.params as { dynamicTools: CodexDynamicToolSpec[] };
     expect(specNames(startParams.dynamicTools)).toContain("read");
@@ -4674,7 +4681,8 @@ describe("runCodexAppServerAttempt", () => {
       }),
     );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
+    expect(result.terminal).toEqual({ kind: "ok" });
     expect(onToolResult).toHaveBeenCalledTimes(2);
     expect(onToolResult).toHaveBeenNthCalledWith(1, {
       text: "📖 Read: `from README.md`",
