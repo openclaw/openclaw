@@ -273,27 +273,19 @@ describe("runtime postbuild static assets", () => {
   });
 
   it.each([
-    { name: "package-relative source", dependency: "", local: false, missing: false },
-    { name: "hoisted dependency", dependency: "engine", local: false, missing: false },
+    { name: "package-relative source", dependency: "", local: false },
+    { name: "hoisted dependency", dependency: "engine", local: false },
     {
       name: "hoisted scoped dependency",
       dependency: "@fixture/engine",
       local: false,
-      missing: false,
     },
     {
       name: "plugin-local dependency precedence",
       dependency: "@fixture/engine",
       local: true,
-      missing: false,
     },
-    {
-      name: "missing asset in selected dependency",
-      dependency: "@fixture/engine",
-      local: true,
-      missing: true,
-    },
-  ])("stages $name during the same postbuild run", async ({ dependency, local, missing }) => {
+  ])("stages $name during the same postbuild run", async ({ dependency, local }) => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const output = "assets/viewer-runtime.js";
     const source = dependency ? `node_modules/${dependency}/private/runtime.js` : output;
@@ -301,7 +293,6 @@ describe("runtime postbuild static assets", () => {
     const distAsset = "dist/extensions/diffs/assets/viewer-runtime.js";
     const runtimeAsset = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
     const contents = "export const viewer = true;\n";
-    const warn = vi.fn();
 
     await fs.mkdir(path.join(rootDir, "extensions", "diffs", "assets"), { recursive: true });
     await fs.writeFile(
@@ -331,12 +322,10 @@ describe("runtime postbuild static assets", () => {
           path.join(dependencyDir, "package.json"),
           JSON.stringify({ name: dependency, exports: { "./runtime": "./private/runtime.js" } }),
         );
-        if (!(missing && base === packageDir)) {
-          await fs.writeFile(
-            path.join(dependencyDir, "private/runtime.js"),
-            local && base === rootDir ? "wrong ancestor version\n" : contents,
-          );
-        }
+        await fs.writeFile(
+          path.join(dependencyDir, "private/runtime.js"),
+          local && base === rootDir ? "wrong ancestor version\n" : contents,
+        );
       }
     } else {
       await fs.writeFile(path.join(packageDir, source), contents);
@@ -348,18 +337,10 @@ describe("runtime postbuild static assets", () => {
       repoRoot: rootDir,
       rootDir,
       timings: false,
-      warn,
     });
 
     for (const asset of [distAsset, runtimeAsset]) {
-      if (missing) {
-        await expectPathMissing(path.join(rootDir, asset));
-      } else {
-        await expect(fs.readFile(path.join(rootDir, asset), "utf8")).resolves.toBe(contents);
-      }
-    }
-    if (missing) {
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("static asset not found"));
+      await expect(fs.readFile(path.join(rootDir, asset), "utf8")).resolves.toBe(contents);
     }
   });
 
@@ -566,43 +547,68 @@ describe("runtime postbuild static assets", () => {
     await expectPathMissing(path.join(rootDir, "dist-runtime", "other", "demo", "assets"));
   });
 
-  it("warns when a runtime overlay static asset source is missing", async () => {
+  it("fails when a runtime overlay static asset source is missing", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const warn = vi.fn();
     await fs.mkdir(path.join(rootDir, "dist-runtime", "extensions"), { recursive: true });
 
-    copyStaticExtensionAssetsToRuntimeOverlay({
-      rootDir,
-      assets: [
-        {
-          src: "extensions/demo/assets/missing.js",
-          dest: "dist/extensions/demo/assets/missing.js",
-        },
-      ],
-      warn,
-    });
-
-    expect(warn).toHaveBeenCalledWith(
-      "[runtime-postbuild] static asset not found, skipping: extensions/demo/assets/missing.js",
-    );
+    expect(() =>
+      copyStaticExtensionAssetsToRuntimeOverlay({
+        rootDir,
+        assets: [
+          {
+            src: "extensions/demo/assets/missing.js",
+            dest: "dist/extensions/demo/assets/missing.js",
+          },
+        ],
+      }),
+    ).toThrow("declared static extension asset is missing: extensions/demo/assets/missing.js");
     await expectPathMissing(
       path.join(rootDir, "dist-runtime", "extensions", "demo", "assets", "missing.js"),
     );
   });
 
-  it("warns when a declared static asset is missing", async () => {
+  it("fails when a declared static asset is missing", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const warn = vi.fn();
 
-    copyStaticExtensionAssets({
-      rootDir,
-      assets: [{ src: "missing/file.mjs", dest: "dist/file.mjs" }],
-      warn,
-    });
+    expect(() =>
+      copyStaticExtensionAssets({
+        rootDir,
+        assets: [{ src: "missing/file.mjs", dest: "dist/file.mjs" }],
+      }),
+    ).toThrow("declared static extension asset is missing: missing/file.mjs");
+    await expectPathMissing(path.join(rootDir, "dist", "file.mjs"));
+  });
 
-    expect(warn).toHaveBeenCalledWith(
-      "[runtime-postbuild] static asset not found, skipping: missing/file.mjs",
+  it("fails postbuild before provenance when a declared static asset is missing", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-missing-declared-");
+    const output = "assets/runtime.js";
+    await fs.mkdir(path.join(rootDir, "extensions", "demo"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "extensions", "demo", "package.json"),
+      JSON.stringify({
+        name: "@openclaw/demo",
+        openclaw: {
+          build: {
+            staticAssets: [{ source: `./${output}`, output }],
+          },
+        },
+      }),
+      "utf8",
     );
+    writeUpdateCompatibilityBuildFixture(rootDir);
+
+    expect(() =>
+      runRuntimePostBuild({
+        cwd: rootDir,
+        repoRoot: rootDir,
+        rootDir,
+        timings: false,
+      }),
+    ).toThrow("declared static extension asset is missing: extensions/demo/assets/runtime.js");
+
+    await expectPathMissing(path.join(rootDir, "dist", "build-info.json"));
+    await expectPathMissing(path.join(rootDir, "dist", ".buildstamp"));
+    await expectPathMissing(path.join(rootDir, "dist", ".runtime-postbuildstamp"));
   });
 
   it("writes stable aliases for hashed root runtime modules", async () => {
