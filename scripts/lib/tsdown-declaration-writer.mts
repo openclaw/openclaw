@@ -20,12 +20,45 @@ import { CompilerInputSnapshot } from "./compiler-input-snapshot.mts";
 import { publishStagedDeclarations } from "./declaration-stage.mts";
 import { withDistArtifactOwnership } from "./dist-artifact-ownership.mts";
 import { hasUnjoinedWork } from "./managed-child-process.mts";
+import { resolveNativeDeclarationCompilerEnv } from "./native-declaration-emitter.mts";
+import type { MemoryLimitParams } from "./process-memory.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "./tsdown-declaration-generator-inputs.mts";
 import {
   createDeclarationStage,
   readDeclarationInputs,
   requestDeclarationInputs,
 } from "./tsdown-declaration-inputs.mts";
+
+export function budgetStagedDeclarationInvocations(
+  invocations: NonNullable<ReturnType<typeof prepareTsdownBuildExecution>>["invocations"],
+  concurrency: 1 | 2,
+  params: MemoryLimitParams = {},
+) {
+  if (concurrency === 1) {
+    return invocations;
+  }
+  // Resolve one shared snapshot, so small changes in available memory between
+  // siblings cannot give each child a different share of the same budget.
+  const limit = resolveNativeDeclarationCompilerEnv({
+    ...params,
+    env: {},
+    concurrentCompilers: concurrency,
+  }).GOMEMLIMIT;
+  if (limit === undefined) {
+    return invocations;
+  }
+  return invocations.map((invocation) =>
+    invocation.options.env.GOMEMLIMIT !== undefined
+      ? invocation
+      : {
+          ...invocation,
+          options: {
+            ...invocation.options,
+            env: { ...invocation.options.env, GOMEMLIMIT: limit },
+          },
+        },
+  );
+}
 
 export async function writeTsdownDeclarations(
   groups: readonly string[],
@@ -177,7 +210,10 @@ export async function writeTsdownDeclarations(
         : 1;
       const plan = {
         ...prepared[0]!.plan,
-        invocations: misses.flatMap((group) => group.plan.invocations),
+        invocations: budgetStagedDeclarationInvocations(
+          misses.flatMap((group) => group.plan.invocations),
+          concurrency,
+        ),
       };
       await publishStagedDeclarations(
         plan,

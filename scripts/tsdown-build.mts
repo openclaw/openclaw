@@ -692,8 +692,9 @@ const resolveTsdownMaxOldSpaceMb = (params: ResolvedMemoryLimitParams = {}) =>
   resolveTsdownMemoryBudget(params).maxOldSpaceMb;
 
 /**
- * Measured against this repo by running the full eleven-invocation build inside real cgroups.
- * A 5GiB slice resolves this heap, completes, and peaks at 4730MiB. A 4GiB slice (3328MB heap)
+ * Measured against this repo's runtime bundler inside real cgroups, before native TypeScript 7
+ * declaration emission. A 5GiB slice resolves this heap and the runtime phase peaks at 4730MiB.
+ * A 4GiB slice (3328MB heap)
  * and a 2816MiB slice (2048MB heap) are both killed in the third, unified-runtime invocation,
  * which also runs when declarations are disabled. Roughly 380MiB of the peak is rolldown, a
  * native addon which --max-old-space-size does not govern at all.
@@ -745,8 +746,9 @@ export function describeInsufficientTsdownHeap(
       budget.unresolvedCgroupMemory
         ? "[tsdown-build] The process memory limit is not visible through this cgroup mount namespace, so OpenClaw cannot choose a safe default heap."
         : `[tsdown-build] The resolved OpenClaw build heap is ${maxOldSpaceMb}MB, ` +
-          `and a full build needs ${MEASURED_MIN_TSDOWN_HEAP_MB}MB, peaking near 4.7GB once rolldown's ` +
-          `native allocations are counted; those are not covered by --max-old-space-size.`,
+          `and the runtime bundle needs ${MEASURED_MIN_TSDOWN_HEAP_MB}MB, peaking near 4.7GB once rolldown's ` +
+          `native allocations are counted; those are not covered by --max-old-space-size. ` +
+          `Cold native declaration emission needs additional memory and uses GOMEMLIMIT, not the Node heap limit.`,
       ...outcome,
     ].join("\n"),
   };

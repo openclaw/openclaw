@@ -816,12 +816,16 @@ describe("resolveTsdownBuildInvocation", () => {
 
     expect(shortfall?.fatal).toBe(true);
     expect(shortfall?.message).toContain("resolved OpenClaw build heap is 732MB");
+    expect(shortfall?.message).toContain(
+      "Cold native declaration emission needs additional memory",
+    );
+    expect(shortfall?.message).toContain("GOMEMLIMIT");
     expect(shortfall?.message).toContain("OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=<MB>");
   });
 
-  it("refuses a host whose slice cannot hold the whole-build peak", () => {
+  it("refuses a host whose slice cannot hold the runtime-bundle peak", () => {
     // A 4GiB slice resolves a 3328MB heap and clears the early invocations, then dies partway
-    // through the third: the binding constraint is the 4730MiB whole-build peak, not one pass.
+    // through the third: the binding constraint is the 4730MiB runtime-bundle peak, not one pass.
     expect(
       describeInsufficientTsdownHeap({ env: {}, cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 })
         ?.fatal,
@@ -839,7 +843,7 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(shortfall?.message).not.toContain("set OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=<MB>");
   });
 
-  it("admits the smallest slice measured to complete a full build", () => {
+  it("admits the smallest slice measured to complete the runtime bundle", () => {
     expect(
       describeInsufficientTsdownHeap({ env: {}, cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 }),
     ).toBeNull();
