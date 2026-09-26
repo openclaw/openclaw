@@ -265,26 +265,52 @@ describe("xAI realtime response and transcript lifecycle", () => {
     await bridge.close();
   });
 
-  it("preserves distinct late input items and repeated words in separate utterances", async () => {
+  it("settles cumulative snapshots with distinct item ids once per speech sequence", async () => {
     const onTranscript = vi.fn();
     const bridge = createTestBridge({ onTranscript });
     const socket = await openRealtimeBridge(bridge);
     socket.emitServer({ type: "input_audio_buffer.speech_started" });
     socket.emitServer({
       type: "conversation.item.input_audio_transcription.completed",
-      item_id: "late-A",
-      transcript: "Again",
+      item_id: "snapshot-A",
+      transcript: "Check",
     });
     socket.emitServer({
       type: "conversation.item.input_audio_transcription.completed",
-      item_id: "B",
-      transcript: "Again",
+      item_id: "snapshot-B",
+      transcript: "Check the sensor",
     });
-    socket.emitServer({ type: "response.created", response: { id: "response-B" } });
+    socket.emitServer({ type: "response.created", response: { id: "response-A" } });
     socket.emitServer({
       type: "response.done",
-      response: { id: "response-B", status: "completed" },
+      response: { id: "response-A", status: "completed" },
     });
+    expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([
+      ["user", "Check the sensor", true, { textMode: "snapshot" }],
+    ]);
+    await bridge.close();
+  });
+
+  it("preserves repeated words in separate speech sequences", async () => {
+    const onTranscript = vi.fn();
+    const bridge = createTestBridge({ onTranscript });
+    const socket = await openRealtimeBridge(bridge);
+    for (const [itemId, responseId] of [
+      ["input-A", "response-A"],
+      ["input-B", "response-B"],
+    ] as const) {
+      socket.emitServer({ type: "input_audio_buffer.speech_started" });
+      socket.emitServer({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: itemId,
+        transcript: "Again",
+      });
+      socket.emitServer({ type: "response.created", response: { id: responseId } });
+      socket.emitServer({
+        type: "response.done",
+        response: { id: responseId, status: "completed" },
+      });
+    }
     expect(onTranscript.mock.calls.filter((call) => call[2])).toEqual([
       ["user", "Again", true, { textMode: "snapshot" }],
       ["user", "Again", true, { textMode: "snapshot" }],
