@@ -388,6 +388,17 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.web.settings_open {
+            if let Some(surface) = &self.web.settings {
+                if delta < 0 {
+                    surface.back();
+                } else {
+                    surface.forward();
+                }
+            }
+            cx.notify();
+            return;
+        }
         let keys = self.sidebar_visible_keys();
         let rows: Vec<_> = keys
             .iter()

@@ -46,6 +46,14 @@ describe("native web chrome capability", () => {
       }
     },
   );
+  it("opts into host navigation chrome only through the explicit capability", () => {
+    const host = { platform: "macos", formFactor: "desktop" };
+    Object.assign(window, { __OPENCLAW_NATIVE_EMBED__: { ...host, navigationChrome: "host" } });
+    expect(nativeEmbedHost()).toEqual({ ...host, navigationChrome: "host" });
+    Object.assign(window, { __OPENCLAW_NATIVE_EMBED__: { ...host, navigationChrome: true } });
+    expect(nativeEmbedHost()).toEqual(host);
+  });
+
   it("requires the document-start capability flag", () => {
     expect(isNativeWebChromeHost()).toBe(false);
     (window as TestNativeWindow)["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;

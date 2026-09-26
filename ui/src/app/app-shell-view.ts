@@ -41,7 +41,7 @@ import {
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
-import { isNativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
+import { isNativeWebChromeHost, nativeEmbedHost } from "./native-web-chrome.ts";
 import { beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import {
   floatingSidebarAttentionVisible,
@@ -160,7 +160,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       : null;
   // Onboarding renders without any navigation chrome, so the settings takeover
   // must not reserve its fixed sidebar column (the grid would stay off-center).
-  const nativeEmbed = isNativeEmbedHost();
+  const embedHost = nativeEmbedHost();
+  const nativeEmbed = embedHost !== null;
   const embedSettingsRoot = nativeEmbed && activeRoute === "settings";
   const embedSettings =
     nativeEmbed &&
@@ -277,6 +278,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     settingsTakeover || nativeEmbed
       ? renderLazySettingsSidebar(host, {
           presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
+          navigationChrome: embedHost?.navigationChrome,
           basePath: context.basePath,
           activeRouteId: activeRoute,
           agents: context.agents.state.agentsList?.agents ?? [],

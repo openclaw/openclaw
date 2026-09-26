@@ -48,7 +48,7 @@ impl WebAuth {
   const mount = {mount};
   if (mount && location.pathname !== mount && !location.pathname.startsWith(mount + '/')) return;
   Object.defineProperty(window, '__OPENCLAW_NATIVE_CONTROL_AUTH__', {{value:{auth}, configurable:true}});
-  window.__OPENCLAW_NATIVE_EMBED__ = {{platform:{platform}, formFactor:'desktop'}};
+  window.__OPENCLAW_NATIVE_EMBED__ = {{platform:{platform}, formFactor:'desktop', navigationChrome:'host'}};
   window.__OPENCLAW_NATIVE_WEB_CHROME__ = true;
   window.__OPENCLAW_NATIVE_PANEL__ = {{postMessage:payload => window.ipc.postMessage(JSON.stringify(payload))}};
   window.__OPENCLAW_NATIVE_HISTORY__ = {{canGoBack:false, canGoForward:false}};

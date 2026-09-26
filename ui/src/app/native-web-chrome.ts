@@ -10,6 +10,7 @@ export type NativeHistoryState = {
 type NativeEmbedHost = {
   platform: "ios" | "macos" | "android" | "windows" | "linux";
   formFactor: "phone" | "pad" | "desktop";
+  navigationChrome?: "host";
 };
 
 type NativeWebChromeWindow = Window & {
@@ -41,7 +42,11 @@ export function nativeEmbedHost(): NativeEmbedHost | null {
     platform === "windows" ||
     platform === "linux") &&
     (formFactor === "phone" || formFactor === "pad" || formFactor === "desktop")
-    ? { platform, formFactor }
+    ? {
+        platform,
+        formFactor,
+        ...(host.navigationChrome === "host" ? { navigationChrome: "host" } : {}),
+      }
     : null;
 }
 

@@ -355,7 +355,12 @@ edits. A slow list read cannot replace a newer event receipt.
 
 [`src/ui`](src/ui) separates sidebar/session actions, header/search, composer,
 transcript, attention forms, and theme. Theme tokens are centralized in
-[`theme.rs`](src/ui/theme.rs). GPUI Component supplies inputs, menus, command
+[`theme`](src/ui/theme.rs), with measured sidebar metrics in
+[`theme/tokens.rs`](src/ui/theme/tokens.rs). Shared building blocks in
+[`components`](src/ui/components) own avatars, facepiles, image caching, icons,
+list geometry, and popup/hover-card placement. The per-Gateway image cache owns
+request receipts, eviction, retries, and cancellation; views only request sources
+and render its results. GPUI Component supplies inputs, menus, command
 search, dialogs, notifications, Markdown, syntax highlighting, and other controls.
 The variable-height transcript uses GPUI's virtualized list. Parsed Markdown and
 images are cached per selected conversation; streaming invalidates changed rows
@@ -380,8 +385,7 @@ to the rendering view that serves as AppKit's first responder.
 These absolute Cargo paths are local proof wiring and must be replaced with
 released dependencies before shipping the app.
 
-Sidebar proof uses the durable directory
-a task-owned durable proof directory outside the repository, with launchers and
+Sidebar proof uses a task-owned durable directory outside the repository, with launchers and
 logs in `sidebar-rig/`, screenshots in `shots-sidebar/`, the source inventory in
 `sidebar-gap-table.md`, and outcomes in `sidebar-report.md`. The earlier task
 scratchpad was removed; its launchers and screenshots are not available.
@@ -524,8 +528,12 @@ Token/password Gateways use exactly the native hosts' document-start
 Control UI mount path. The Control UI consumes it using its normal connection
 owner and creates its own browser device identity. All authenticated panels use
 one shared store within that profile, while reading websites receive no Gateway credentials or
-native device-settings bridge. Native embed/chrome/history flags remove redundant
-web chrome. No native device capabilities are invented: without the device
+native device-settings bridge. The native embed contract's `navigationChrome:
+"host"` option gives the native breadcrumb and Done control ownership of page
+navigation, hiding the web's duplicate Back/title. Route-local controls such as
+Automations' job-scope filter remain on the page. Webview back/forward uses
+`__OPENCLAW_NATIVE_HISTORY__` and `NATIVE_HISTORY_STATE_EVENT` with the actual
+history state. No native device capabilities are invented: without the device
 settings bridge the existing web app-only state is shown.
 
 For Cloudflare Access, the connection actor passes its verified, unexpired,
