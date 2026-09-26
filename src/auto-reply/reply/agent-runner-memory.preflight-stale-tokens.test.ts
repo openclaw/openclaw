@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
@@ -127,6 +129,57 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
 
     expect(entry).toBe(sessionEntry);
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("estimates only the active model context after compaction", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntryCore(scope, sessionEntry);
+
+    const transcript = SessionManager.open(scope, rootDir);
+    transcript.appendMessage({
+      role: "user",
+      content: "superseded history ".repeat(25_000),
+      timestamp: 1,
+    });
+    const retained = transcript.appendMessage({ role: "user", content: "keep", timestamp: 2 });
+    transcript.appendCompaction("Short summary", retained, 100_000);
+    transcript.appendMessage({ role: "user", content: "latest", timestamp: 3 });
+
+    await runWithEntry(sessionEntry, path.join(rootDir, "session.jsonl"));
+
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("still compacts when the active model context exceeds the budget", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntryCore(scope, sessionEntry);
+
+    const transcript = SessionManager.open(scope, rootDir);
+    const retained = transcript.appendMessage({ role: "user", content: "keep", timestamp: 1 });
+    transcript.appendCompaction("Short summary", retained, 100);
+    transcript.appendMessage({
+      role: "user",
+      content: "active history ".repeat(25_000),
+      timestamp: 2,
+    });
+
+    await runWithEntry(sessionEntry, path.join(rootDir, "session.jsonl"));
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
   });
 
   it("compacts when totalTokens is large and fresh", async () => {
