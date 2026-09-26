@@ -71,7 +71,6 @@ async function withManager(
     error: null as string | null,
   };
   for (const [key, value] of Object.entries({
-    OPENCLAW_OCM_UPDATE_PROTOCOL: "1",
     OPENCLAW_SUPERVISOR_MODE: "external",
     OCM_SELF: "/trusted/ocm",
     OCM_HOME: root,
@@ -429,10 +428,9 @@ it("preserves OCM's admission refusal when no correlated job was created", async
 it("does not execute a manager selected through config environment values", async () => {
   await withManager(async () => {
     const config = {
-      env: { vars: { OCM_SELF: "/trusted/ocm", OPENCLAW_OCM_UPDATE_PROTOCOL: "1" } },
+      env: { vars: { OCM_SELF: "/trusted/ocm" } },
     };
     deleteTestEnvValue("OCM_SELF");
-    deleteTestEnvValue("OPENCLAW_OCM_UPDATE_PROTOCOL");
     const rollback = prepareConfigRuntimeEnv({
       previousConfig: {},
       nextConfig: config,
@@ -448,6 +446,46 @@ it("does not execute a manager selected through config environment values", asyn
     } finally {
       rollback();
     }
+  });
+});
+
+it.each(["home-only", "self-only", "env-exec"])(
+  "keeps %s context on the native path",
+  async (context) => {
+    await withManager(async () => {
+      if (context === "env-exec") {
+        deleteTestEnvValue("OCM_SELF");
+      } else {
+        deleteTestEnvValue("OCM_ACTIVE_ENV");
+        deleteTestEnvValue("OCM_ACTIVE_ENV_ROOT");
+        deleteTestEnvValue(context === "home-only" ? "OCM_SELF" : "OCM_HOME");
+      }
+      const respond = vi.fn();
+      await invokeUpdateRun({}, respond);
+      expect(exec).not.toHaveBeenCalled();
+      expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
+        result: { reason: "external-supervisor-update-required" },
+      });
+    });
+  },
+);
+
+it("refuses an incomplete claimed manager binding before probing", async () => {
+  await withManager(async () => {
+    deleteTestEnvValue("OCM_ACTIVE_ENV_ROOT");
+    await expect(invokeUpdateRun({})).rejects.toThrow("OCM update binding is incomplete");
+    expect(exec).not.toHaveBeenCalled();
+    expect(listUpdateRuns()).toEqual([]);
+  });
+});
+
+it("keeps an unsupported manager probe failure out of the native updater", async () => {
+  await withManager(async () => {
+    exec.mockRejectedValue(new Error("unexpected arguments: capabilities fixture"));
+    await expect(invokeUpdateRun({})).rejects.toThrow("OCM update capabilities");
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(listUpdateRuns()).toEqual([]);
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
   });
 });
 

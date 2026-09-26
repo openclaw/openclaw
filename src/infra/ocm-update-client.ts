@@ -138,8 +138,8 @@ export async function resolveOcmUpdateManager() {
         ownedEnv: published.ownedEnv,
       })
     : { ...process.env };
-  // The daemon's OCM marker is independent of the native restart-handoff mode.
-  if (env.OPENCLAW_OCM_UPDATE_PROTOCOL !== "1") {
+  // Env activation alone is not supervision; require the manager and environment identity.
+  if (!env.OCM_SELF || (!env.OCM_ACTIVE_ENV && !env.OCM_ACTIVE_ENV_ROOT)) {
     return null;
   }
   const redaction = { env, stateDir: resolveStateDir(env) };
@@ -179,7 +179,11 @@ export async function resolveOcmUpdateManager() {
     }
   };
   const parsedCapability = capabilitySchema.safeParse(
-    await command(["capabilities", envName.data]),
+    await command(["capabilities", envName.data]).catch((error: unknown) => {
+      throw new Error(
+        `Could not read OCM update capabilities: ${formatErrorMessage(error)}. Use OCM's update command or update OCM to enable Gateway update jobs.`,
+      );
+    }),
   );
   if (!parsedCapability.success) {
     throw new Error("OCM returned an unsupported update capability response.");
