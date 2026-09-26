@@ -659,6 +659,110 @@ describe("createTeamsReplyStreamController", () => {
     }
   });
 
+  it("does not send the streamed body again when Teams rejects a formatted replacement", async () => {
+    const stream = makeAcknowledgedStream();
+    stream.emit.mockImplementation((activity: unknown) => {
+      const text = typeof activity === "string" ? activity : (activity as { text?: string }).text;
+      if (typeof text === "string" && text.includes("**Status**")) {
+        throw new Error("Request streamed content should contain the previously streamed content");
+      }
+    });
+    const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
+    });
+
+    expect(ctrl.preparePayload({ text: "# Status" })).toBeUndefined();
+    stream.acknowledge("# Status");
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      content: "# Status",
+      logicalContent: "# Status",
+      messageId: "stream-acknowledged",
+    });
+  });
+
+  it("keeps the full fallback when Teams rejects a formatted final before any acknowledgement", async () => {
+    const stream = makeStream();
+    stream.emit.mockImplementation((activity: unknown) => {
+      const text = typeof activity === "string" ? activity : (activity as { text?: string }).text;
+      if (typeof text === "string" && text.includes("**Status**")) {
+        throw new Error("Request streamed content should contain the previously streamed content");
+      }
+    });
+    const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
+    });
+
+    expect(ctrl.preparePayload({ text: "# Status" })).toBeUndefined();
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: false,
+      logicalContent: "# Status",
+      fallbackPayload: { text: "# Status" },
+    });
+  });
+
+  it("redelivers only the unacknowledged suffix when Teams rejects a formatted final", async () => {
+    const stream = makeAcknowledgedStream();
+    stream.emit.mockImplementation((activity: unknown) => {
+      const text = typeof activity === "string" ? activity : (activity as { text?: string }).text;
+      if (typeof text === "string" && text.includes("**")) {
+        throw new Error("Request streamed content should contain the previously streamed content");
+      }
+    });
+    const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
+    });
+
+    expect(ctrl.preparePayload({ text: "# Status report" })).toBeUndefined();
+    stream.acknowledge("# Status");
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      content: "# Status",
+      logicalContent: "# Status report",
+      messageId: "stream-acknowledged",
+      fallbackPayload: { text: " report" },
+    });
+  });
+
+  it("settles held replacement payloads when Teams rejects an acknowledged formatted final", async () => {
+    const stream = makeAcknowledgedStream();
+    const ctrl = makeController({ stream });
+
+    ctrl.onPartialReply({ text: "abcde" });
+    stream.acknowledge("abcde");
+    ctrl.onPartialReply({ text: "provider replacement" });
+    expect(ctrl.preparePayload({ mediaUrl: "https://example.test/before.png" })).toBeUndefined();
+    expect(ctrl.preparePayload({ text: "provider replacement" })).toBeUndefined();
+    stream.acknowledge("provider replacement");
+    expect(ctrl.preparePayload({ text: "later payload" })).toBeUndefined();
+    stream.close.mockRejectedValueOnce(
+      new Error("Request streamed content should contain the previously streamed content"),
+    );
+
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      messageId: "stream-acknowledged",
+      content: "provider replacement",
+      logicalContent: "provider replacement\nlater payload",
+      postNativePayloads: [
+        { mediaUrl: "https://example.test/before.png" },
+        { text: "later payload" },
+      ],
+    });
+  });
+
   it("suppresses block delivery when progress final text is emitted to the stream", () => {
     const stream = makeStream();
     const ctrl = createTeamsReplyStreamController({

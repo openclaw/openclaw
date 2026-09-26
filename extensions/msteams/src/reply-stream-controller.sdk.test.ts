@@ -30,7 +30,18 @@ const provider = createServer((request, response) => {
     };
     const scenario = request.url?.slice(1) ?? "";
     const priorScenarioRequests = requests.filter((entry) => entry.scenario === scenario).length;
+    const acceptedText = requests.findLast(
+      (entry) => entry.scenario === scenario && entry.status === 201 && entry.text,
+    )?.text;
+    const incomingText = activity.text ?? "";
+    const prefixRejected =
+      scenario === "prefix-reject" &&
+      Boolean(acceptedText) &&
+      incomingText.length > 0 &&
+      !incomingText.startsWith(acceptedText ?? "") &&
+      !(acceptedText ?? "").startsWith(incomingText);
     const rejected =
+      prefixRejected ||
       scenario === "no-ack" ||
       ((scenario === "cancel-replacement" || scenario === "presentation-cancel") &&
         priorScenarioRequests > 0) ||
@@ -51,8 +62,9 @@ const provider = createServer((request, response) => {
         rejected
           ? {
               error: {
-                message:
-                  scenario === "presentation-timeout"
+                message: prefixRejected
+                  ? "Request streamed content should contain the previously streamed content"
+                  : scenario === "presentation-timeout"
                     ? "exceeded streaming time"
                     : scenario.startsWith("cancel") || scenario === "presentation-cancel"
                       ? "Content stream was canceled by user"
@@ -496,5 +508,34 @@ describe("Teams native final text preparation", () => {
         .filter((request) => request.scenario === "presentation-cancel")
         .map((request) => request.status),
     ).toEqual([201, 403]);
+  });
+
+  it("keeps the acknowledged reply when Teams rejects the formatted final", async () => {
+    const scenario = "prefix-reject";
+    const { acknowledgements, controller, firstAcknowledgement } = createLoopbackController(
+      scenario,
+      { streaming: { mode: "progress", progress: { toolProgress: true } } },
+    );
+
+    expect(controller.preparePayload({ text: "# Status" })).toBeUndefined();
+    await firstAcknowledgement;
+    const result = await controller.finalize();
+    const wire = requests.filter((request) => request.scenario === scenario);
+
+    expect(acknowledgements).toEqual([{ id: `stream-${scenario}`, text: "# Status" }]);
+    expect(
+      wire.map((request) => ({ status: request.status, type: request.type, text: request.text })),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 201, text: "# Status" }),
+        expect.objectContaining({ status: 403, text: "**Status**" }),
+      ]),
+    );
+    expect(result.fallbackPayload).toBeUndefined();
+    expect(result.visibleReplySent).toBe(true);
+    expect(result.content).toBe("# Status");
+    expect(
+      wire.filter((request) => request.status < 300 && request.text.includes("**Status**")),
+    ).toEqual([]);
   });
 });
