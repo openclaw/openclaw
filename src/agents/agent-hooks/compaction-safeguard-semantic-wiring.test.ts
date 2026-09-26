@@ -192,7 +192,7 @@ describe("compaction semantic observer wiring", () => {
     const controller = new AbortController();
     const abortError = new Error("cancel asymmetric semantic observation");
     let started = 0;
-    const startedBarrier = createDeferredCore<void>();
+    const startedBarrier = createDeferredCore();
     let releaseSlowRequest: (() => void) | undefined;
     const slowRequest = new Promise<void>((resolve) => {
       releaseSlowRequest = resolve;
