@@ -164,7 +164,7 @@ describe("exec approval signed agent runtime", () => {
             patch,
           });
         }
-        const claim = placements.claimTurn({
+        const claim = await placements.claimTurn({
           ...source,
           claimId: "worker-approval-claim",
           runId: "worker-approval-run",
@@ -228,7 +228,7 @@ describe("exec approval signed agent runtime", () => {
             throw new Error("registered worker approval is missing");
           }
           if (revoked) {
-            placements.releaseTurn(claim);
+            await placements.releaseTurn(claim);
           }
           await fixture.manager.resolve(record.id, "allow-once");
           await pending;
@@ -241,7 +241,7 @@ describe("exec approval signed agent runtime", () => {
           }
         } finally {
           if (placements.validateTurnClaim(claim)) {
-            placements.releaseTurn(claim);
+            await placements.releaseTurn(claim);
           }
           releaseAgentRunDelegatedAuthority(delegated);
         }

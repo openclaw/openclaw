@@ -721,7 +721,7 @@ describe("host-owned current admission annotation", () => {
         expectedGeneration: placement.generation,
         patch: { activeOwnerEpoch: 7 },
       });
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         ...f.target,
         runId: f.attempt.runId,
         claimId: "current-claim",
@@ -759,7 +759,7 @@ describe("host-owned current admission annotation", () => {
           "worker annotation",
         )(nativeAnnotation()),
       ).rejects.toThrow("claim");
-      placements.releaseTurn(claim);
+      await placements.releaseTurn(claim);
       release.resolve();
       await locked;
       try {

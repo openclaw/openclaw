@@ -9,7 +9,7 @@ import {
   normalizeIdentity,
   required,
   resolvePlacementTurnEnvironment,
-  type WorkerSessionPlacementIdentity,
+  type WorkerTurnClaimInput,
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
   type WorkerSessionTurnOwner,
@@ -45,11 +45,6 @@ import {
 } from "./workspace-reconcile.js";
 export { registerWorkerTurnClaimClosedHandler } from "./placement-turn-claim-events.js";
 
-type WorkerTurnClaimInput = WorkerSessionPlacementIdentity & {
-  owner: WorkerSessionTurnOwner;
-  claimId: string;
-  runId: string;
-};
 const workspaceJournalQuery = (db: DatabaseSync) =>
   getNodeSqliteKysely<Pick<StateDatabase, "worker_workspace_reconciliations">>(db);
 

@@ -253,17 +253,6 @@ type ConnectTimingPayload = {
 
 const requireRecord = createRequireRecord("record", "expected-label");
 
-function requireFirstMockArg(
-  mock: ReturnType<typeof vi.fn>,
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return requireRecord(call[0], `${label} payload`);
-}
-
 function requireMockCallArg(
   mock: ReturnType<typeof vi.fn>,
   index: number,
@@ -444,6 +433,7 @@ async function expectRetriedDeviceTokenConnect(params: {
 
 describe("GatewayBrowserClient", () => {
   beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
     vi.spyOn(nodes, "loadOrCreateDeviceIdentity").mockImplementation(
       loadOrCreateDeviceIdentityMock,
     );
@@ -476,9 +466,9 @@ describe("GatewayBrowserClient", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllGlobals();
-    vi.restoreAllMocks();
   });
 
   it.each([
@@ -906,7 +896,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     expect(() => client.start()).not.toThrow();
-    const close = requireFirstMockArg(onClose, "close");
+    const close = requireMockCallArg(onClose, 0, "close");
     expect(close.code).toBe(1006);
     expect(close.reason).toBe("security error");
     const closeError = requireRecord(close.error, "close error");
@@ -945,7 +935,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     expect(() => client.start()).not.toThrow();
-    const close = requireFirstMockArg(onClose, "close");
+    const close = requireMockCallArg(onClose, 0, "close");
     expect(close.code).toBe(1006);
     expect(close.reason).toBe("websocket error");
     const closeError = requireRecord(close.error, "close error");
@@ -1198,7 +1188,7 @@ describe("GatewayBrowserClient", () => {
       expect(JSON.stringify(error)).not.toContain("not-for-logs");
     }
     expect(onRequestTiming).toHaveBeenCalledTimes(1);
-    expect(requireFirstMockArg(onRequestTiming, "request timing")).not.toHaveProperty("params");
+    expect(requireMockCallArg(onRequestTiming, 0, "request timing")).not.toHaveProperty("params");
     expect(JSON.stringify(onRequestTiming.mock.calls)).not.toContain("not-for-logs");
     expectLatestRequestTiming(onRequestTiming, {
       id: frame.id,
@@ -2193,7 +2183,7 @@ describe("GatewayBrowserClient", () => {
       message: "profile verification unavailable",
       details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
       retryAfterMs: 90_000,
-      delayMs: 90_000,
+      delayMs: 99_000,
       closeCode: 4008,
       closeReason: "connect failed",
       willRetry: true,
@@ -2212,6 +2202,7 @@ describe("GatewayBrowserClient", () => {
     "respects retry timing and terminal policy for $name",
     async ({ message, details, retryAfterMs, delayMs, closeCode, closeReason, willRetry }) => {
       useNodeFakeTimers();
+      vi.mocked(Math.random).mockReturnValue(0.5);
       const onClose = vi.fn();
       const client = new GatewayBrowserClient({
         url: "ws://127.0.0.1:18789",
@@ -2640,7 +2631,7 @@ describe("GatewayBrowserClient", () => {
     await expectSocketClosed(ws);
     ws.emitClose(4008, "connect failed");
 
-    const close = requireFirstMockArg(onClose, "close");
+    const close = requireMockCallArg(onClose, 0, "close");
     expect(close.willRetry).toBe(false);
     expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
       phase: "failed",
