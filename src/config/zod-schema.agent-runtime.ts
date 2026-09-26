@@ -805,6 +805,14 @@ export const ToolsSchema = z
     subagents: z
       .object({
         tools: ToolPolicySchema,
+        /**
+         * Grant spawned subagents a bounded session-messaging tool.
+         * - "off" (default): `sessions_send`, `message`, and `conversations_*` stay denied.
+         * - "peers": re-enables only `sessions_send` for native `agent:*:subagent:*`
+         *   children, with session visibility clamped to the child's own agent.
+         *   Cross-agent sends stay denied, and channel delivery stays parent-owned.
+         */
+        messaging: z.enum(["off", "peers"]).optional(),
       })
       .strict()
       .optional(),

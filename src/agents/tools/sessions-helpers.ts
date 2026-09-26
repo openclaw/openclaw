@@ -130,6 +130,8 @@ export function resolveSessionToolContext(opts?: {
   sessionReadScopeKey?: string;
   requesterAgentIdOverride?: string;
   sandboxed?: boolean;
+  /** Operator-granted peer session messaging for this subagent requester. */
+  subagentPeerMessaging?: boolean;
   config?: OpenClawConfig;
 }) {
   const cfg = opts?.config ?? getRuntimeConfig();
@@ -140,7 +142,11 @@ export function resolveSessionToolContext(opts?: {
     // auxiliary run keeps its execution identity but can read just the observed session.
     sessionVisibility: opts?.sessionReadScopeKey
       ? ("self" as const)
-      : resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: opts?.sandboxed === true }),
+      : resolveEffectiveSessionToolsVisibility({
+          cfg,
+          sandboxed: opts?.sandboxed === true,
+          subagentPeerMessaging: opts?.subagentPeerMessaging === true,
+        }),
     ...resolveSandboxedSessionToolContext({
       cfg,
       agentSessionKey: opts?.sessionReadScopeKey ?? opts?.agentSessionKey,

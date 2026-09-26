@@ -48,4 +48,5 @@ export const SESSION_FIELD_LABELS: Record<string, string> = {
   "session.maintenance.resetArchiveRetention": "Session Reset Archive Retention",
   "session.maintenance.maxDiskBytes": "Session Max Disk Budget",
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
+  "tools.subagents.messaging": "Subagent Session Messaging",
 };

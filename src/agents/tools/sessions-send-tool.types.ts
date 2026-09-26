@@ -9,6 +9,8 @@ export type SessionsSendToolOptions = {
   agentChannel?: string;
   requesterOrigin?: DeliveryContext;
   sandboxed?: boolean;
+  /** Operator-granted peer session messaging for this subagent requester. */
+  subagentPeerMessaging?: boolean;
   config?: OpenClawConfig;
   callGateway?: AgentToolGatewayRequestCaller;
   /** Backend-derived target incarnation; never sourced from model arguments. */

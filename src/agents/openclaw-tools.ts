@@ -6,7 +6,7 @@ import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { resolveSkillWorkshopToolConstructionBlock } from "../skills/workshop/tool-availability.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
@@ -37,6 +37,7 @@ import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { resolveWidgetPresentationForRun } from "./openclaw-tools.widget-presentation.js";
+import { resolveSubagentSessionMessagingScope } from "./subagent-session-messaging.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createAskUserTool } from "./tools/ask-user-tool.js";
@@ -585,6 +586,11 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
               threadId: options?.currentThreadTs ?? options?.agentThreadId,
             },
             sandboxed: options?.sandboxed,
+            // Only a spawned child under the operator grant can message peers, and
+            // then only sessions of its own agent (see sessions_send visibility clamp).
+            subagentPeerMessaging:
+              resolveSubagentSessionMessagingScope(sessionConfig ?? getRuntimeConfig()) ===
+                "peers" && isSubagentSessionKey(options?.runSessionKey ?? options?.agentSessionKey),
             config: sessionConfig,
           }),
         ]),
