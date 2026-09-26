@@ -25,6 +25,14 @@ describe("formatInlineCodeSpan", () => {
     expect(formatInlineCodeSpan(" `code` ")).toBe("``  `code`  ``");
   });
 
+  it("guards edge spaces held apart by a tab or a non-ASCII space", () => {
+    // The renderer's all-spaces exception is U+0020 only, so a tab or a
+    // no-break space inside makes both edge spaces strippable.
+    expect(formatInlineCodeSpan(" \t ")).toBe("`  \t  `");
+    expect(formatInlineCodeSpan(" a\tb ")).toBe("`  a\tb  `");
+    expect(formatInlineCodeSpan(" \u00a0 ")).toBe("`  \u00a0  `");
+  });
+
   it("does not pad content whose spaces are safe", () => {
     expect(formatInlineCodeSpan(" leading")).toBe("` leading`");
     expect(formatInlineCodeSpan("trailing ")).toBe("`trailing `");
