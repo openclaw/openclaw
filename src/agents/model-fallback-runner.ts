@@ -55,6 +55,7 @@ import {
   type ModelFallbackStepHandler,
   recordFailedCandidateAttempt,
   resolveFallbackAuthScope,
+  resolveFallbackCandidateAuthProfileIds,
   resolveFallbackSoonestCooldownExpiry,
   resolveLiveSessionModelSwitchRedirectIndex,
   resolveModelFallbackCandidateAgentRuntime,
@@ -160,15 +161,7 @@ async function runWithModelFallbackInternal<T>(
     assertAdmittedRunOperatorAuthority(operatorAuthority);
     operatorAuthority.assertCurrent();
   }
-  const plannedCandidates = resolveModelCandidateChain({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    provider: params.provider,
-    model: params.model,
-    fallbacksOverride: params.fallbacksOverride,
-    requestedRouteResolution: params.requestedRouteResolution,
-    manifestPlugins: params.manifestPlugins,
-  });
+  const plannedCandidates = resolveModelCandidateChain(params);
   const operatorModelPolicy = operatorAuthority?.modelPolicy;
   const candidates = operatorModelPolicy
     ? plannedCandidates.filter(operatorModelPolicy.allows)
@@ -333,16 +326,14 @@ async function runWithModelFallbackInternal<T>(
           profileId: userLockedAuthProfileId,
           includePendingOAuthRefresh: true,
         }).eligible;
-      let profileIds = authRuntime.resolveAuthProfileOrder({
+      const profileIds = resolveFallbackCandidateAuthProfileIds({
+        authRuntime,
         cfg: params.cfg,
         store: authStore,
-        provider: candidate.provider,
-        forModel: candidate.model,
-        includePendingOAuthRefresh: true,
+        candidate,
+        userLockedAuthProfileEligible,
+        userLockedAuthProfileId,
       });
-      if (userLockedAuthProfileEligible && userLockedAuthProfileId) {
-        profileIds = [...new Set([userLockedAuthProfileId, ...profileIds])];
-      }
       const quota = await authRuntime.maybeReprobeWhamBlockedProfiles({
         store: authStore,
         profileIds,
@@ -358,7 +349,9 @@ async function runWithModelFallbackInternal<T>(
       }
     }
     const candidateAuthScope = resolveFallbackAuthScope({
-      userLockedAuthProfileId: userLockedAuthProfileEligible ? userLockedAuthProfileId : undefined,
+      userLockedAuthProfileId:
+        candidate.authProfileId?.trim() ||
+        (userLockedAuthProfileEligible ? userLockedAuthProfileId : undefined),
       profileIds: candidateAuthProfileIds,
     });
 
@@ -509,6 +502,7 @@ async function runWithModelFallbackInternal<T>(
       options: {
         ...runOptions,
         isFinalFallbackAttempt: !hasRemainingCandidate,
+        ...(candidate.authProfileId ? { authProfileId: candidate.authProfileId } : {}),
         modelRoutingProvenance: {
           requestedProvider: params.provider,
           requestedModel: params.model,

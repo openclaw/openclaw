@@ -286,7 +286,7 @@ export function createGatewaySubagentRuntime(
                 skipAuthProfileRuntime: true,
                 requestedRouteResolution: "resolved",
                 ...(explicitOverride ? { fallbacksOverride: [] } : {}),
-                run: async (provider, model) => {
+                run: async (provider, model, options) => {
                   assertCurrent();
                   signal.throwIfAborted();
                   runSignal.throwIfAborted();
@@ -297,7 +297,9 @@ export function createGatewaySubagentRuntime(
                     agentId,
                     provider,
                     model,
-                    authProfileId: isSelectedPrimary ? selection.profileId : undefined,
+                    authProfileId:
+                      options?.authProfileId ??
+                      (isSelectedPrimary ? selection.profileId : undefined),
                     operatorAuthority: execution.operatorAuthority,
                     systemPrompt: params.extraSystemPrompt ?? "",
                     prompt: params.message,

@@ -5,6 +5,8 @@ export const MODEL_FALLBACK_SKIPPED_CODE = "MODEL_FALLBACK_SKIPPED";
 export type ModelCandidate = {
   provider: string;
   model: string;
+  /** Exact stored auth-profile binding for this candidate when explicitly requested. */
+  authProfileId?: string;
 };
 
 export type ModelFallbackRouteOrigin = "requested" | "configured-fallback" | "configured-primary";

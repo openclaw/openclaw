@@ -590,6 +590,46 @@ function parseDiagnosticModelRef(ref: string): { provider: string; model: string
 }
 
 describe("runWithModelFallback", () => {
+  it("advances between same-model candidates with distinct exact auth bindings", async () => {
+    const run = vi.fn(
+      async (_provider: string, _model: string, options?: { authProfileId?: string }) => {
+        if (!options?.authProfileId) {
+          throw new FailoverError("primary unavailable", {
+            provider: "openai",
+            model: "gpt-5.6",
+            reason: "overloaded",
+          });
+        }
+        if (options.authProfileId === "openai:profile-a") {
+          throw new FailoverError("profile A unavailable", {
+            provider: "openai",
+            model: "gpt-5.6",
+            reason: "auth",
+            profileId: "openai:profile-a",
+          });
+        }
+        return "profile-b-ok";
+      },
+    );
+
+    const result = await runWithModelFallback({
+      cfg: {},
+      provider: "openai",
+      model: "gpt-5.6",
+      requestedRouteResolution: "resolved",
+      fallbacksOverride: ["openai/gpt-5.6@openai:profile-a", "openai/gpt-5.6@openai:profile-b"],
+      skipAuthProfileRuntime: true,
+      run,
+    });
+
+    expect(result.result).toBe("profile-b-ok");
+    expect(run.mock.calls).toMatchObject([
+      ["openai", "gpt-5.6", { isFinalFallbackAttempt: false }],
+      ["openai", "gpt-5.6", { authProfileId: "openai:profile-a", isFinalFallbackAttempt: false }],
+      ["openai", "gpt-5.6", { authProfileId: "openai:profile-b", isFinalFallbackAttempt: true }],
+    ]);
+  });
+
   it.each(DIAGNOSTIC_CASES)("$name", async ({ refs, reasons, expectError }) => {
     const candidates = refs.map(parseDiagnosticModelRef);
     const diagnostics = captureModelFailoverDiagnostics();

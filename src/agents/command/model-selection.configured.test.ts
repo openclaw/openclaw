@@ -174,6 +174,29 @@ function createRestrictedFixture() {
 }
 
 describe("command selection with configured model facts", () => {
+  it("preserves an explicit model auth-profile suffix as the requested binding", async () => {
+    const fixture = createFixture();
+    fixture.defaults.modelPolicy = { allow: ["custom/*"] };
+    fixture.inventory.mockReturnValue([
+      catalogEntry("custom", "base"),
+      catalogEntry("custom", "manual"),
+    ]);
+
+    const selected = await fixture.select({
+      opts: {
+        message: "Use requested model",
+        model: "custom/manual@custom:exact",
+        allowModelOverride: true,
+      },
+    });
+
+    expect(selected).toMatchObject({
+      provider: "custom",
+      model: "manual",
+      explicitRunAuthProfileId: "custom:exact",
+    });
+  });
+
   it("does not probe a primary excluded by the original operator policy", async () => {
     const fixture = createRestrictedFixture();
     fixture.store[sessionKey] = {
