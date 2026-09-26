@@ -5,7 +5,7 @@ import {
   usePreparedPoolFixture,
   type PoolOptions,
 } from "./prepared-pool.test-support.js";
-import type { RepositoryWorkerProjectSnapshot } from "./workspace-git-base.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
 
 describe("repository prepared worker reserves", () => {
   const fixture = usePreparedPoolFixture();
