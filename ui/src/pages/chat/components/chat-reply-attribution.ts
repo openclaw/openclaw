@@ -406,7 +406,7 @@ function renderReplyAttributionContent(
     ${ref(inline ? inlineReplyTargetRef(resolveMissing) : resolveMissing)}
   >
     <span class="chat-reply-attribution__label"
-      >${inline ? nothing : html`<span class="chat-reply-attribution__mobile-icon" aria-hidden="true">${icons.cornerUpLeft}</span>`}${t("chat.messages.replyingToLabel")}</span
+      >${inline ? nothing : html`<span class="chat-reply-attribution__mobile-icon" aria-hidden="true">${icons.cornerUpLeft}</span>`}</span
     >
     ${target}
   </div>`;

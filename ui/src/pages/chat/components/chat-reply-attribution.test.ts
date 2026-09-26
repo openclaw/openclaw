@@ -393,9 +393,10 @@ it.each([
 it("renders an automatic recipient without claiming a textless source is unavailable", () => {
   const { row } = draw(null);
   expect(row.querySelector(".chat-reply-attribution__name")?.textContent).toBe("Alice");
-  // The decorative strokeIcon shell contributes whitespace, not visible copy.
+  // The label carries only the decorative mobile icon; the name and excerpt
+  // identify the target and the row's aria-label keeps the spoken form.
   const label = row.querySelector(".chat-reply-attribution__label")!;
-  expect(label.textContent?.trim()).toBe("Replying to");
+  expect(label.textContent?.trim()).toBe("");
   expect(
     label.querySelector(".chat-reply-attribution__mobile-icon")?.getAttribute("aria-hidden"),
   ).toBe("true");
