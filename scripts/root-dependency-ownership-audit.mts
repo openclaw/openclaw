@@ -113,23 +113,22 @@ function sectionFor(relativePath: string) {
  * Collects static and simple constant-backed package specifiers from source text.
  */
 export function collectModuleSpecifiers(source: string): Set<string> {
-  const sourceText = source;
   const specifiers = new Set<string>();
   for (const pattern of IMPORT_PATTERNS) {
-    for (const match of sourceText.matchAll(pattern)) {
+    for (const match of source.matchAll(pattern)) {
       if (match[1]) {
         specifiers.add(match[1]);
       }
     }
   }
   const stringConstants = new Map<string, string>();
-  for (const match of sourceText.matchAll(STRING_CONSTANT_PATTERN)) {
+  for (const match of source.matchAll(STRING_CONSTANT_PATTERN)) {
     if (match[1] && match[2]) {
       stringConstants.set(match[1], match[2]);
     }
   }
   for (const pattern of DYNAMIC_CONSTANT_IMPORT_PATTERNS) {
-    for (const match of sourceText.matchAll(pattern)) {
+    for (const match of source.matchAll(pattern)) {
       const specifier = match[1] ? stringConstants.get(match[1]) : undefined;
       if (specifier) {
         specifiers.add(specifier);
@@ -139,13 +138,15 @@ export function collectModuleSpecifiers(source: string): Set<string> {
   return specifiers;
 }
 
-function collectExtensionDependencyDeclarations(repoRoot: string) {
+function collectExtensionDependencyDeclarations(repoRoot: string, rootPackageJson: JsonObject) {
   const declarations = new Map<string, string[]>();
+  const internalized = new Map<string, string[]>();
   const extensionsRoot = path.join(repoRoot, "extensions");
   if (!fs.existsSync(extensionsRoot)) {
-    return declarations;
+    return { declarations, internalized };
   }
 
+  const excluded = collectExcludedPackagedExtensionDirs(rootPackageJson);
   for (const entry of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) {
       continue;
@@ -155,6 +156,9 @@ function collectExtensionDependencyDeclarations(repoRoot: string) {
       continue;
     }
     const packageJson = readJson(packageJsonPath);
+    const isBundled =
+      !excluded.has(entry.name) &&
+      fs.existsSync(path.join(extensionsRoot, entry.name, "openclaw.plugin.json"));
     for (const section of [
       "dependencies",
       "optionalDependencies",
@@ -162,57 +166,26 @@ function collectExtensionDependencyDeclarations(repoRoot: string) {
       "peerDependencies",
     ]) {
       const sectionRecord = packageJson[section];
+      const maps =
+        isBundled && (section === "dependencies" || section === "optionalDependencies")
+          ? [declarations, internalized]
+          : [declarations];
       for (const depName of Object.keys(isRecord(sectionRecord) ? sectionRecord : {})) {
-        const existing = declarations.get(depName) ?? [];
-        existing.push(`${entry.name}:${section}`);
-        declarations.set(depName, existing);
+        for (const map of maps) {
+          const owners = map.get(depName) ?? [];
+          owners.push(`${entry.name}:${section}`);
+          map.set(depName, owners);
+        }
       }
     }
   }
 
-  for (const values of declarations.values()) {
-    values.sort((left, right) => left.localeCompare(right));
-  }
-
-  return declarations;
-}
-
-function collectInternalizedBundledExtensionRuntimeDependencies(
-  repoRoot: string,
-  rootPackageJson: JsonObject,
-) {
-  const dependencies = new Map<string, string[]>();
-  const extensionsRoot = path.join(repoRoot, "extensions");
-  if (!fs.existsSync(extensionsRoot)) {
-    return dependencies;
-  }
-
-  const excluded = collectExcludedPackagedExtensionDirs(rootPackageJson);
-  for (const entry of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory() || excluded.has(entry.name)) {
-      continue;
-    }
-    const packageJsonPath = path.join(extensionsRoot, entry.name, "package.json");
-    const manifestPath = path.join(extensionsRoot, entry.name, "openclaw.plugin.json");
-    if (!fs.existsSync(packageJsonPath) || !fs.existsSync(manifestPath)) {
-      continue;
-    }
-    const packageJson = readJson(packageJsonPath);
-    for (const section of ["dependencies", "optionalDependencies"]) {
-      const sectionRecord = packageJson[section];
-      for (const depName of Object.keys(isRecord(sectionRecord) ? sectionRecord : {})) {
-        const existing = dependencies.get(depName) ?? [];
-        existing.push(`${entry.name}:${section}`);
-        dependencies.set(depName, existing);
-      }
+  for (const map of [declarations, internalized]) {
+    for (const owners of map.values()) {
+      owners.sort((left, right) => left.localeCompare(right));
     }
   }
-
-  for (const values of dependencies.values()) {
-    values.sort((left, right) => left.localeCompare(right));
-  }
-
-  return dependencies;
+  return { declarations, internalized };
 }
 
 function sectionSetContainsCore(sectionSet: Set<string>) {
@@ -353,29 +326,18 @@ export function collectRootDependencyOwnershipAudit(
     }
   }
 
-  const extensionDeclarations = collectExtensionDependencyDeclarations(repoRoot);
-  for (const [depName, declarations] of extensionDeclarations) {
-    const record = records.get(depName);
-    if (record) {
-      record.declaredInExtensions = declarations;
-    }
-  }
-
-  const internalizedBundledRuntimeDependencies =
-    collectInternalizedBundledExtensionRuntimeDependencies(repoRoot, rootPackageJson);
-  for (const [depName, owners] of internalizedBundledRuntimeDependencies) {
-    const record = records.get(depName);
-    if (record) {
-      record.internalizedBundledRuntimeOwners = owners;
-    }
+  const { declarations, internalized } = collectExtensionDependencyDeclarations(
+    repoRoot,
+    rootPackageJson,
+  );
+  for (const record of records.values()) {
+    record.declaredInExtensions = declarations.get(record.depName) ?? [];
+    record.internalizedBundledRuntimeOwners = internalized.get(record.depName) ?? [];
   }
 
   return [...records.values()]
     .map((record) => {
-      const classification = classifyRootDependencyOwnership({
-        ...record,
-        sections: [...record.sections].toSorted((left, right) => left.localeCompare(right)),
-      });
+      const classification = classifyRootDependencyOwnership(record);
       return {
         depName: record.depName,
         spec: record.spec,

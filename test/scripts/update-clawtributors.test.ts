@@ -308,6 +308,26 @@ describe("update-clawtributors", () => {
     expect(fixture.readWrittenReadme()).toBe("");
   });
 
+  it.each([
+    { size: 40, visible: true },
+    { size: 420, visible: false },
+  ])("renders avatar size $size with visibility $visible", async ({ size, visible }) => {
+    const fixture = mockClawtributorsFixture();
+    const png = Buffer.alloc(24);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png);
+    png.writeUInt32BE(size, 16);
+    png.writeUInt32BE(size, 20);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(png)),
+    );
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await importUpdateClawtributors();
+
+    expect(fixture.readWrittenReadme().includes('href="https://github.com/octo"')).toBe(visible);
+  });
+
   it("rejects unsafe avatar probe content lengths before reading the body", async () => {
     const fixture = mockClawtributorsFixture();
     const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));

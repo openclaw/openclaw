@@ -480,29 +480,25 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
       return true;
     };
 
-    const startRunner = () => {
-      try {
-        deps.pathClassifier.refreshGeneratedPluginAssetPaths();
-      } catch (error) {
-        logWatcher(
-          `Failed to refresh generated asset paths: ${errorMessage(error) || "unknown error"}`,
-          deps,
-        );
-        settle(1);
-        return;
-      }
-      watchProcess = deps.spawn(deps.process.execPath, buildRunnerArgs(deps.args), {
+    const startChild = (
+      args: string[],
+      label: string,
+      env: NodeJS.ProcessEnv,
+      onExit: (
+        exitedProcess: WatchChild | null,
+        exitCode: number | null,
+        exitSignal: ProcessSignal | null,
+      ) => void,
+    ) => {
+      watchProcess = deps.spawn(deps.process.execPath, args, {
         cwd: deps.cwd,
         detached: useChildProcessGroup,
-        env: childEnv,
+        env,
         stdio: "inherit",
       });
       watchProcess.on("error", (error) => {
         watchProcess = null;
-        logWatcher(
-          `Failed to spawn watcher child: ${errorMessage(error) || "unknown error"}`,
-          deps,
-        );
+        logWatcher(`Failed to spawn ${label}: ${errorMessage(error) || "unknown error"}`, deps);
         settle(1);
       });
       watchProcess.on("exit", (exitCode, exitSignal) => {
@@ -514,41 +510,62 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
         if (settleIfSignaled(exitedProcess, exitSignal) || settleIfShuttingDown(exitedProcess)) {
           return;
         }
-        if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal, platform)) {
-          forceKillWatchProcessGroup(exitedProcess);
-          restartRequested = false;
-          deferredRestartGeneration += 1;
-          deferredRestartActive = false;
-          if (!hasDistEntry()) {
-            deferredRestartActive = true;
-            const generation = deferredRestartGeneration;
-            logWatcher("Watcher child exited mid-build; waiting for the build entry.", deps);
-            deferRestartUntilDistEntryExists({
-              generation,
-              targetProcess: null,
-              onReady: () => {
-                if (!watchProcess) {
-                  startRunner();
-                }
-              },
-              onTimeout: () => {
-                logWatcher("Build entry wait timed out; starting run-node recovery.", deps);
-                if (!watchProcess) {
-                  startRunner();
-                }
-              },
-            });
+        onExit(exitedProcess, exitCode, exitSignal);
+      });
+    };
+
+    const startRunner = () => {
+      try {
+        deps.pathClassifier.refreshGeneratedPluginAssetPaths();
+      } catch (error) {
+        logWatcher(
+          `Failed to refresh generated asset paths: ${errorMessage(error) || "unknown error"}`,
+          deps,
+        );
+        settle(1);
+        return;
+      }
+      startChild(
+        buildRunnerArgs(deps.args),
+        "watcher child",
+        childEnv,
+        (exitedProcess, exitCode, exitSignal) => {
+          if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal, platform)) {
+            forceKillWatchProcessGroup(exitedProcess);
+            restartRequested = false;
+            deferredRestartGeneration += 1;
+            deferredRestartActive = false;
+            if (!hasDistEntry()) {
+              deferredRestartActive = true;
+              const generation = deferredRestartGeneration;
+              logWatcher("Watcher child exited mid-build; waiting for the build entry.", deps);
+              deferRestartUntilDistEntryExists({
+                generation,
+                targetProcess: null,
+                onReady: () => {
+                  if (!watchProcess) {
+                    startRunner();
+                  }
+                },
+                onTimeout: () => {
+                  logWatcher("Build entry wait timed out; starting run-node recovery.", deps);
+                  if (!watchProcess) {
+                    startRunner();
+                  }
+                },
+              });
+              return;
+            }
+            startRunner();
             return;
           }
-          startRunner();
-          return;
-        }
-        if (shouldRunAutoDoctor(deps, autoDoctorAttempted)) {
-          runAutoDoctorAndRestart();
-          return;
-        }
-        settle(exitSignal ? 1 : (exitCode ?? 1));
-      });
+          if (shouldRunAutoDoctor(deps, autoDoctorAttempted)) {
+            runAutoDoctorAndRestart();
+            return;
+          }
+          settle(exitSignal ? 1 : (exitCode ?? 1));
+        },
+      );
     };
 
     const handleWatcherError = () => {
@@ -584,42 +601,23 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
         "Gateway exited early; running `openclaw doctor --fix --non-interactive` once.",
         deps,
       );
-      watchProcess = deps.spawn(deps.process.execPath, buildDoctorRunnerArgs(), {
-        cwd: deps.cwd,
-        detached: useChildProcessGroup,
-        env: {
-          ...childEnv,
+      startChild(
+        buildDoctorRunnerArgs(),
+        "doctor repair",
+        { ...childEnv },
+        (_exitedProcess, exitCode, exitSignal) => {
+          if (exitCode === 0 && !exitSignal) {
+            logWatcher("Doctor repair completed; restarting gateway watch child.", deps);
+            startRunner();
+            return;
+          }
+          logWatcher(
+            `Doctor repair failed; gateway:watch exiting with code ${exitSignal ? 1 : (exitCode ?? 1)}.`,
+            deps,
+          );
+          settle(exitSignal ? 1 : (exitCode ?? 1));
         },
-        stdio: "inherit",
-      });
-      watchProcess.on("error", (error) => {
-        watchProcess = null;
-        logWatcher(
-          `Failed to spawn doctor repair: ${errorMessage(error) || "unknown error"}`,
-          deps,
-        );
-        settle(1);
-      });
-      watchProcess.on("exit", (exitCode, exitSignal) => {
-        const exitedProcess = watchProcess;
-        watchProcess = null;
-        if (settled) {
-          return;
-        }
-        if (settleIfSignaled(exitedProcess, exitSignal) || settleIfShuttingDown(exitedProcess)) {
-          return;
-        }
-        if (exitCode === 0 && !exitSignal) {
-          logWatcher("Doctor repair completed; restarting gateway watch child.", deps);
-          startRunner();
-          return;
-        }
-        logWatcher(
-          `Doctor repair failed; gateway:watch exiting with code ${exitSignal ? 1 : (exitCode ?? 1)}.`,
-          deps,
-        );
-        settle(exitSignal ? 1 : (exitCode ?? 1));
-      });
+      );
     };
 
     const hasDistEntry = () => deps.fs.existsSync(path.join(deps.cwd, "dist", "entry.js"));

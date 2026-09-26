@@ -153,11 +153,11 @@ async function fetchResponse(url, options, context) {
   return response;
 }
 
-async function fetchJson(url, context) {
-  const response = await fetchResponse(url, { headers: { accept: "application/json" } }, context);
-  let bytes;
+async function fetchBoundedBody(url, options, context, maximumBytes) {
+  const response = await fetchResponse(url, options, context);
   try {
-    bytes = await readBoundedBytes(response, url, MAX_JSON_BYTES);
+    const bytes = await readBoundedBytes(response, url, maximumBytes);
+    return { bytes, headers: response.headers };
   } catch (error) {
     if (error instanceof PermanentReadbackError) {
       throw error;
@@ -166,6 +166,15 @@ async function fetchJson(url, context) {
       `${url} body read failed: ${error instanceof Error ? error.message : String(error)}.`,
     );
   }
+}
+
+async function fetchJson(url, context) {
+  const { bytes } = await fetchBoundedBody(
+    url,
+    { headers: { accept: "application/json" } },
+    context,
+    MAX_JSON_BYTES,
+  );
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch (error) {
@@ -173,22 +182,6 @@ async function fetchJson(url, context) {
       `${url} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}.`,
     );
   }
-}
-
-async function fetchArtifact(url, context) {
-  const response = await fetchResponse(url, {}, context);
-  let bytes;
-  try {
-    bytes = await readBoundedBytes(response, url, MAX_ARTIFACT_BYTES);
-  } catch (error) {
-    if (error instanceof PermanentReadbackError) {
-      throw error;
-    }
-    throw new RetryableReadbackError(
-      `${url} body read failed: ${error instanceof Error ? error.message : String(error)}.`,
-    );
-  }
-  return { bytes, headers: response.headers };
 }
 
 function requireObject(value, label) {
@@ -235,25 +228,20 @@ function validateArtifactMetadata(entry, metadata, identity, headers) {
   requireExact(packageDetail.name, entry.packageName, `${entry.packageName} artifact package name`);
   requireExact(metadata.version, entry.version, `${entry.packageName} artifact version`);
   requireExact(artifact.kind, "npm-pack", `${entry.packageName} artifact kind`);
-  requireExact(artifact.sha256, identity.sha256, `${entry.packageName} artifact sha256`);
-  requireExact(artifact.size, identity.size, `${entry.packageName} artifact size`);
-  requireExact(
-    artifact.npmIntegrity,
-    identity.npmIntegrity,
-    `${entry.packageName} artifact npmIntegrity`,
-  );
-  requireExact(artifact.npmShasum, identity.npmShasum, `${entry.packageName} artifact npmShasum`);
-
-  const headerSha256 = headers.get("x-clawhub-artifact-sha256");
-  const headerIntegrity = headers.get("x-clawhub-npm-integrity");
-  const headerShasum = headers.get("x-clawhub-npm-shasum");
-  requireExact(headerSha256, identity.sha256, `${entry.packageName} download sha256 header`);
-  requireExact(
-    headerIntegrity,
-    identity.npmIntegrity,
-    `${entry.packageName} download npm integrity header`,
-  );
-  requireExact(headerShasum, identity.npmShasum, `${entry.packageName} download shasum header`);
+  for (const field of ["sha256", "size", "npmIntegrity", "npmShasum"]) {
+    requireExact(artifact[field], identity[field], `${entry.packageName} artifact ${field}`);
+  }
+  for (const [header, field, label] of [
+    ["x-clawhub-artifact-sha256", "sha256", "sha256"],
+    ["x-clawhub-npm-integrity", "npmIntegrity", "npm integrity"],
+    ["x-clawhub-npm-shasum", "npmShasum", "shasum"],
+  ]) {
+    requireExact(
+      headers.get(header),
+      identity[field],
+      `${entry.packageName} download ${label} header`,
+    );
+  }
   return {
     kind: artifact.kind,
     sha256: artifact.sha256,
@@ -283,21 +271,17 @@ async function verifyEntryOnce(entry, options, context) {
   if (options.mode === "postpublish") {
     const trustedPublisher = (await fetchJson(`${detailUrl}/trusted-publisher`, context))
       ?.trustedPublisher;
-    requireExact(
-      trustedPublisher?.provider,
-      "github-actions",
-      `${entry.packageName} trusted publisher provider`,
-    );
-    requireExact(
-      trustedPublisher?.repository,
-      "openclaw/openclaw",
-      `${entry.packageName} trusted publisher repository`,
-    );
-    requireExact(
-      trustedPublisher?.workflowFilename,
-      "plugin-clawhub-release.yml",
-      `${entry.packageName} trusted publisher workflow`,
-    );
+    for (const [field, expected, label] of [
+      ["provider", "github-actions", "provider"],
+      ["repository", "openclaw/openclaw", "repository"],
+      ["workflowFilename", "plugin-clawhub-release.yml", "workflow"],
+    ]) {
+      requireExact(
+        trustedPublisher?.[field],
+        expected,
+        `${entry.packageName} trusted publisher ${label}`,
+      );
+    }
     requireExact(
       trustedPublisher?.environment ?? null,
       null,
@@ -306,7 +290,7 @@ async function verifyEntryOnce(entry, options, context) {
   }
 
   const metadata = await fetchJson(metadataUrl, context);
-  const { bytes, headers } = await fetchArtifact(artifactUrl, context);
+  const { bytes, headers } = await fetchBoundedBody(artifactUrl, {}, context, MAX_ARTIFACT_BYTES);
   const identity = artifactIdentity(bytes);
   requireExact(identity.sha256, entry.sha256, `${entry.packageName} registry artifact sha256`);
   requireExact(identity.size, entry.size, `${entry.packageName} registry artifact size`);

@@ -1,20 +1,12 @@
 // Qa Parity Report script supports OpenClaw repository automation.
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 
-type Options = {
-  baselineLabel?: string;
-  baselineSummary?: string;
-  candidateLabel?: string;
-  candidateSummary?: string;
-  outputDir?: string;
-  repoRoot?: string;
-  runtimeAxis?: boolean;
-  summary?: string;
-  tokenEfficiency?: boolean;
-};
+type Options = Parameters<
+  typeof import("../extensions/qa-lab/src/cli.runtime.ts").runQaParityReportCommand
+>[0];
 
 function parseArgs(args: string[]): Options {
-  return parseFlagArgs(
+  return parseFlagArgs<Options>(
     args,
     {},
     [
@@ -50,7 +42,7 @@ Options:
         process.exit(0);
       },
     },
-  ) as Options;
+  );
 }
 
 try {
@@ -69,17 +61,7 @@ try {
   }
 
   const { runQaParityReportCommand } = await import("../extensions/qa-lab/src/cli.runtime.ts");
-  await runQaParityReportCommand({
-    ...(opts.baselineSummary ? { baselineSummary: opts.baselineSummary } : {}),
-    ...(opts.candidateSummary ? { candidateSummary: opts.candidateSummary } : {}),
-    ...(opts.baselineLabel ? { baselineLabel: opts.baselineLabel } : {}),
-    ...(opts.candidateLabel ? { candidateLabel: opts.candidateLabel } : {}),
-    ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
-    ...(opts.repoRoot ? { repoRoot: opts.repoRoot } : {}),
-    ...(opts.runtimeAxis ? { runtimeAxis: opts.runtimeAxis } : {}),
-    ...(opts.summary ? { summary: opts.summary } : {}),
-    ...(opts.tokenEfficiency ? { tokenEfficiency: opts.tokenEfficiency } : {}),
-  });
+  await runQaParityReportCommand(opts);
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;

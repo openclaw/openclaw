@@ -92,15 +92,9 @@ while (( $# > 0 )); do
     *)
       if (( SAW_DOUBLE_DASH )); then
         # Treat anything after `--` as a path-positional override
-        if (( PATHS_PASSED == 0 )); then
-          PATHS_PASSED=1
-          EXTRA_ARGS+=( "$1" )
-        else
-          EXTRA_ARGS+=( "$1" )
-        fi
-      else
-        EXTRA_ARGS+=( "$1" )
+        PATHS_PASSED=1
       fi
+      EXTRA_ARGS+=( "$1" )
       shift
       ;;
   esac

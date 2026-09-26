@@ -11,7 +11,10 @@ import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
 const RUNTIME_DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies"];
 
-function parsePluginList(value) {
+/**
+ * Parses OPENCLAW_EXTENSIONS into the bundled plugin ids that Docker should keep.
+ */
+export function parseDockerPluginKeepList(value) {
   if (typeof value !== "string") {
     return new Set();
   }
@@ -21,13 +24,6 @@ function parsePluginList(value) {
       .map((entry) => entry.trim())
       .filter(Boolean),
   );
-}
-
-/**
- * Parses OPENCLAW_EXTENSIONS into the bundled plugin ids that Docker should keep.
- */
-export function parseDockerPluginKeepList(value) {
-  return parsePluginList(value);
 }
 
 function readPackageJson(filePath) {
