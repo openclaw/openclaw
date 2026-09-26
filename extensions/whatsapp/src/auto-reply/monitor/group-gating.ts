@@ -217,12 +217,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   const requireMention = activation !== "always";
   const replyContext = getReplyContext(params.msg, params.authDir);
   const sharedNumberSelfChat = params.selfChatMode === true;
-  // Detect reply-to-bot: compare JIDs, LIDs, and E.164 numbers.
-  // WhatsApp may report the quoted message sender as either a phone JID
-  // (xxxxx@s.whatsapp.net) or a LID (xxxxx@lid), so we compare both.
-  // But in shared-number/selfChatMode setups, replies from the same self number
-  // should not count as implicit bot mentions unless the message explicitly
-  // mentioned the bot in text.
+  // Shared-number replies to self do not imply a bot mention; explicit mentions still apply.
   const implicitReplyToSelf = sharedNumberSelfChat && identitiesOverlap(self, sender);
   const implicitMentionKinds = implicitMentionKindWhen(
     "quoted_bot",

@@ -1,5 +1,4 @@
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-// Whatsapp API module exposes the plugin public contract.
 import { whatsappCommandPolicy as whatsappCommandPolicyImpl } from "./src/command-policy.js";
 import { resolveLegacyGroupSessionKey as resolveLegacyGroupSessionKeyImpl } from "./src/group-session-contract.js";
 import {

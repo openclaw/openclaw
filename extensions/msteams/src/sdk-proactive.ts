@@ -1,7 +1,6 @@
 import type { IMessageActivityInput } from "@microsoft/teams.api";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-// Msteams plugin module implements sdk proactive behavior.
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import {
   validateMSTeamsProactiveServiceUrlBoundary,
@@ -88,11 +87,8 @@ async function quoteMSTeamsActivity(
 }
 
 function resolveThreadedConversationId(conversationId: string, threadActivityId?: string): string {
-  if (!threadActivityId) {
-    return conversationId.split(";")[0] ?? conversationId;
-  }
   const baseId = conversationId.split(";")[0] ?? conversationId;
-  return `${baseId};messageid=${threadActivityId}`;
+  return threadActivityId ? `${baseId};messageid=${threadActivityId}` : baseId;
 }
 
 function normalizeRequiredServiceUrl(ref: MSTeamsSdkReferenceSource): string {

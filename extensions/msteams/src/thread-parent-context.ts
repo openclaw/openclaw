@@ -1,18 +1,4 @@
-// Parent-message context injection for Teams channel thread replies.
-//
-// When an inbound message arrives as a reply inside a Teams channel thread,
-// the triggering message often makes no sense on its own (for example, a
-// one-word "yes" or "go ahead"). Per-thread session isolation (PR #62713)
-// gives each thread its own session, but the first message in a brand-new
-// thread session still has no parent context.
-//
-// This module fetches the parent message via Graph and prepends a compact
-// `Replying to @sender: …` system event to the next agent turn so the agent
-// knows what is being responded to. Fetches are cached to avoid repeated
-// Graph calls within the same active thread, and per-session dedupe ensures
-// the same parent is not re-injected on every subsequent reply in the
-// thread.
-
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -21,10 +7,6 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fetchChannelMessage, stripHtmlFromTeamsMessage } from "./graph-thread.js";
 import type { GraphThreadMessage } from "./graph-thread.js";
 
-// LRU cache for parent message fetches. Keyed by `teamId:channelId:parentId`.
-// 5-minute TTL and 100-entry cap keep active-thread chatter fast without
-// holding stale data when a thread goes quiet. Eviction uses Map insertion
-// order for LRU semantics (get() re-inserts on hit).
 const PARENT_CACHE_TTL_MS = 5 * 60 * 1000;
 const PARENT_CACHE_MAX = 100;
 
@@ -35,10 +17,7 @@ type ParentCacheEntry = {
 
 const parentCache = new Map<string, ParentCacheEntry>();
 
-// Per-session dedupe: remembers the most recent parent id we injected for a
-// given session key. When the same thread session sees another reply against
-// the same parent, we skip re-enqueueing the identical system event. We keep
-// a small LRU so idle sessions eventually drop out.
+// Isolated thread sessions need their parent once, without repeating it on every reply.
 const INJECTED_MAX = 200;
 const injectedParents = new Map<string, string>();
 
@@ -50,16 +29,9 @@ type ThreadParentContextFetcher = (
 ) => Promise<GraphThreadMessage | undefined>;
 
 function touchLru<K, V>(map: Map<K, V>, key: K, value: V, max: number): void {
-  if (map.has(key)) {
-    map.delete(key);
-  } else if (map.size >= max) {
-    // Drop the oldest (first-inserted) entry.
-    const firstKey = map.keys().next().value;
-    if (firstKey !== undefined) {
-      map.delete(firstKey);
-    }
-  }
+  map.delete(key);
   map.set(key, value);
+  pruneMapToMaxSize(map, max);
 }
 
 function buildParentCacheKey(groupId: string, channelId: string, parentId: string): string {
@@ -73,12 +45,6 @@ function resolveParentCacheExpiresAt(nowRaw: number): number | undefined {
     : resolveExpiresAtMsFromDurationMs(PARENT_CACHE_TTL_MS, { nowMs });
 }
 
-/**
- * Fetch a channel parent message with an LRU+TTL cache.
- *
- * Uses the injected `fetchParent` (defaults to `fetchChannelMessage`) so
- * tests can swap in a stub without mocking the Graph transport.
- */
 export async function fetchParentMessageCached(
   token: string,
   groupId: string,
@@ -91,7 +57,6 @@ export async function fetchParentMessageCached(
   const cached = parentCache.get(key);
   const cachedExpiresAt = cached ? asDateTimestampMs(cached.expiresAt) : undefined;
   if (cached && now !== undefined && cachedExpiresAt !== undefined && cachedExpiresAt > now) {
-    // Refresh LRU ordering on hit.
     parentCache.delete(key);
     parentCache.set(key, cached);
     return cached.message;
@@ -116,11 +81,6 @@ type ParentContextSummary = {
 
 const PARENT_TEXT_MAX_CHARS = 400;
 
-/**
- * Extract a compact summary (sender + plain-text body) from a Graph parent
- * message. Returns undefined when the parent cannot be summarized (missing
- * or blank body).
- */
 export function summarizeParentMessage(
   message: GraphThreadMessage | undefined,
 ): ParentContextSummary | undefined {
@@ -145,30 +105,14 @@ export function summarizeParentMessage(
   };
 }
 
-/**
- * Build the single-line `Replying to @sender: body` system event text.
- * Callers should pass this text to `enqueueSystemEvent` together with a
- * stable contextKey derived from the parent id.
- */
 export function formatParentContextEvent(summary: ParentContextSummary): string {
   return `Replying to @${summary.sender}: ${summary.text}`;
 }
 
-/**
- * Decide whether a parent context event should be enqueued for the current
- * session. Returns `false` when we already injected the same parent for this
- * session recently (prevents re-prepending identical context on every reply
- * in the thread).
- */
 export function shouldInjectParentContext(sessionKey: string, parentId: string): boolean {
-  const key = sessionKey;
-  return injectedParents.get(key) !== parentId;
+  return injectedParents.get(sessionKey) !== parentId;
 }
 
-/**
- * Record that `parentId` was just injected for `sessionKey` so subsequent
- * replies with the same parent can short-circuit via `shouldInjectParentContext`.
- */
 export function markParentContextInjected(sessionKey: string, parentId: string): void {
   touchLru(injectedParents, sessionKey, parentId, INJECTED_MAX);
 }

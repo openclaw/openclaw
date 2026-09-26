@@ -1,10 +1,6 @@
 import type { OpenClawConfig } from "../runtime-api.js";
 import { fetchAllGraphPages, fetchGraphJson, resolveGraphToken } from "./graph.js";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 type GraphTeamsChannel = {
   id?: string;
   displayName?: string;
@@ -46,15 +42,6 @@ type GetChannelInfoMSTeamsResult = {
   };
 };
 
-// ---------------------------------------------------------------------------
-// List channels for a team
-// ---------------------------------------------------------------------------
-
-/**
- * List channels in a team via Graph API.
- * Returns id, displayName, description, and membershipType for each channel.
- * Follows @odata.nextLink for paginated results (up to 10 pages).
- */
 export async function listChannelsMSTeams(
   params: ListChannelsMSTeamsParams,
 ): Promise<ListChannelsMSTeamsResult> {
@@ -73,14 +60,6 @@ export async function listChannelsMSTeams(
   return { channels, truncated: result.truncated };
 }
 
-// ---------------------------------------------------------------------------
-// Get channel info
-// ---------------------------------------------------------------------------
-
-/**
- * Get detailed information about a single channel in a team via Graph API.
- * Returns id, displayName, description, membershipType, webUrl, and createdDateTime.
- */
 export async function getChannelInfoMSTeams(
   params: GetChannelInfoMSTeamsParams,
 ): Promise<GetChannelInfoMSTeamsResult> {

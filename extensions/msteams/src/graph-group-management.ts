@@ -3,10 +3,6 @@ import { findMSTeamsConversationMember } from "./graph-conversation-members.js";
 import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
 import { deleteGraphRequest, escapeOData, mutateGraphJson, resolveGraphToken } from "./graph.js";
 
-// ---------------------------------------------------------------------------
-// Add Participant
-// ---------------------------------------------------------------------------
-
 type AddParticipantMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
@@ -44,9 +40,6 @@ function resolveConversationMemberRoles(
   return normalized === "owner" ? ["owner"] : [];
 }
 
-/**
- * Add a user to a chat or channel via Graph API.
- */
 export async function addParticipantMSTeams(
   params: AddParticipantMSTeamsParams,
 ): Promise<AddParticipantMSTeamsResult> {
@@ -69,10 +62,6 @@ export async function addParticipantMSTeams(
 
   return { added: { userId: params.userId, chatId: conversationId } };
 }
-
-// ---------------------------------------------------------------------------
-// Remove Participant
-// ---------------------------------------------------------------------------
 
 type RemoveParticipantMSTeamsParams = {
   cfg: OpenClawConfig;
@@ -110,10 +99,6 @@ export async function removeParticipantMSTeams(
   return { removed: { userId: params.userId, chatId: conversationId } };
 }
 
-// ---------------------------------------------------------------------------
-// Rename Group
-// ---------------------------------------------------------------------------
-
 type RenameGroupMSTeamsParams = {
   cfg: OpenClawConfig;
   to: string;
@@ -124,9 +109,6 @@ type RenameGroupMSTeamsResult = {
   renamed: { chatId: string; newName: string };
 };
 
-/**
- * Rename a chat (topic) or channel (displayName) via Graph API.
- */
 export async function renameGroupMSTeams(
   params: RenameGroupMSTeamsParams,
 ): Promise<RenameGroupMSTeamsResult> {

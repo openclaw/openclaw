@@ -1,4 +1,3 @@
-// Whatsapp plugin module resolves reaction participant keys.
 import { getSenderIdentity } from "../../identity.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 

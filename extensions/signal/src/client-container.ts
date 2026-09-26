@@ -1,11 +1,3 @@
-/**
- * Signal client for bbernhard/signal-cli-rest-api container.
- * Uses WebSocket for receiving messages and REST API for sending.
- *
- * This is a separate implementation from client.ts (native signal-cli)
- * to keep the two modes cleanly isolated.
- */
-
 import { coerceErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import {
@@ -127,10 +119,6 @@ function normalizeMaxResponseBytes(value: number | undefined): number {
   return Math.floor(value);
 }
 
-function readContentLength(res: Response): number | undefined {
-  return parseMediaContentLength(res.headers?.get("content-length") ?? null) ?? undefined;
-}
-
 function signalRestIdleTimeoutError({ chunkTimeoutMs }: { chunkTimeoutMs: number }): Error {
   return new Error(`Signal REST response body stalled after ${chunkTimeoutMs}ms`);
 }
@@ -175,8 +163,8 @@ async function readCappedResponseBuffer(
   bodyIdleTimeoutMs: number,
   bodyTimeoutMs: () => number,
 ): Promise<Buffer> {
-  const contentLength = readContentLength(res);
-  if (contentLength !== undefined && contentLength > maxResponseBytes) {
+  const contentLength = parseMediaContentLength(res.headers?.get("content-length") ?? null);
+  if (contentLength !== null && contentLength > maxResponseBytes) {
     throw new Error("Signal REST attachment exceeded size limit");
   }
   return await readResponseWithLimit(res, maxResponseBytes, {
@@ -194,9 +182,6 @@ async function releaseUnreadResponseBody(res: Response | undefined): Promise<voi
   }
 }
 
-/**
- * Check if bbernhard container REST API is available.
- */
 export async function containerCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -290,9 +275,6 @@ function containerReceiveCheck(
   });
 }
 
-/**
- * Make a REST API request to bbernhard container.
- */
 async function containerRestRequest<T = unknown>(
   endpoint: string,
   opts: ContainerRpcOptions,
@@ -357,9 +339,6 @@ async function containerRestRequest<T = unknown>(
   });
 }
 
-/**
- * Fetch attachment binary from bbernhard container.
- */
 async function containerFetchAttachment(
   attachmentId: string,
   opts: ContainerRpcOptions,

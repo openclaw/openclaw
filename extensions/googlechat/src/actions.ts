@@ -3,14 +3,10 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
-import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
-import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { resolveGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
-import { describeGoogleChatMessageTool } from "./message-tool-api.js";
 import { resolveGoogleChatOutboundSpace } from "./targets.js";
-
-const providerId = "googlechat";
 
 const OUTBOUND_MEDIA_KEYS = ["media", "mediaUrl", "path", "filePath", "fileUrl"] as const;
 const STRUCTURED_ATTACHMENT_MEDIA_KEYS = [...OUTBOUND_MEDIA_KEYS, "url"] as const;
@@ -36,61 +32,51 @@ function hasGoogleChatOutboundAttachment(params: Record<string, unknown>): boole
   });
 }
 
-export const googlechatMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: describeGoogleChatMessageTool,
-  supportsAction: ({ action }) => action === "send",
-  extractToolSend: ({ args }) => {
-    return extractToolSend(args, "sendMessage");
-  },
-  handleAction: async ({
-    action,
-    params,
+export async function handleGoogleChatAction({
+  action,
+  params,
+  cfg,
+  accountId,
+  assertDirectAdapterHandoff,
+  onPlatformSendDispatch,
+}: ChannelMessageActionContext) {
+  if (action === "upload-file" || (action === "send" && hasGoogleChatOutboundAttachment(params))) {
+    throw new Error(
+      "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel.",
+    );
+  }
+
+  const account = resolveGoogleChatAccount({
     cfg,
     accountId,
-    assertDirectAdapterHandoff,
-    onPlatformSendDispatch,
-  }) => {
-    if (
-      action === "upload-file" ||
-      (action === "send" && hasGoogleChatOutboundAttachment(params))
-    ) {
-      throw new Error(
-        "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel.",
-      );
-    }
+  });
+  if (account.credentialSource === "none" || account.tokenStatus === "configured_unavailable") {
+    throw new Error("Google Chat credentials are missing.");
+  }
 
-    const account = resolveGoogleChatAccount({
-      cfg,
-      accountId,
+  if (action === "send") {
+    const to = readStringParam(params, "to", { required: true });
+    const content = readStringParam(params, "message", {
+      required: true,
+      allowEmpty: true,
     });
-    if (account.credentialSource === "none" || account.tokenStatus === "configured_unavailable") {
-      throw new Error("Google Chat credentials are missing.");
-    }
+    const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
+    const space = await resolveGoogleChatOutboundSpace({
+      account,
+      target: to,
+      assertDirectAdapterHandoff,
+    });
 
-    if (action === "send") {
-      const to = readStringParam(params, "to", { required: true });
-      const content = readStringParam(params, "message", {
-        required: true,
-        allowEmpty: true,
-      });
-      const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
-      const space = await resolveGoogleChatOutboundSpace({
-        account,
-        target: to,
-        assertDirectAdapterHandoff,
-      });
+    const sent = await sendGoogleChatMessage({
+      account,
+      space,
+      text: content,
+      thread: threadId ?? undefined,
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+    });
+    return jsonResult({ ok: true, to: space, ...sent });
+  }
 
-      const sent = await sendGoogleChatMessage({
-        account,
-        space,
-        text: content,
-        thread: threadId ?? undefined,
-        assertDirectAdapterHandoff,
-        onPlatformSendDispatch,
-      });
-      return jsonResult({ ok: true, to: space, ...sent });
-    }
-
-    throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
-  },
-};
+  throw new Error(`Action ${action} is not supported for provider googlechat.`);
+}

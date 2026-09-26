@@ -1,4 +1,3 @@
-// Whatsapp API module exposes the plugin public contract.
 export { resolveIdentityNamePrefix } from "openclaw/plugin-sdk/agent-runtime";
 export { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 export { resolveInboundSessionEnvelopeContext } from "openclaw/plugin-sdk/channel-inbound";

@@ -1,4 +1,3 @@
-// Msteams plugin module materializes inbound media and agent content.
 import type { MSTeamsHtmlAttachmentSummary, MSTeamsInboundMedia } from "../attachments.js";
 import { formatUnknownError } from "../errors.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
@@ -43,7 +42,7 @@ export async function prepareMSTeamsInboundContent(params: {
     return null;
   }
 
-  let mediaList = [] as Awaited<ReturnType<typeof resolveMSTeamsInboundMedia>>;
+  let mediaList: MSTeamsInboundMedia[] = [];
   try {
     mediaList = await withMSTeamsRequestDeadline({
       deadline: params.deadline,

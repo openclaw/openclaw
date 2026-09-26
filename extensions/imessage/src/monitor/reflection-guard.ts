@@ -28,8 +28,11 @@ type ReflectionDetection = {
   matchedLabels: string[];
 };
 
-function hasMatchOutsideCode(text: string, re: RegExp): boolean {
-  const codeRegions = findCodeRegions(text);
+function hasMatchOutsideCode(
+  text: string,
+  re: RegExp,
+  codeRegions: ReturnType<typeof findCodeRegions>,
+): boolean {
   const globalRe = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
 
   for (const match of text.matchAll(globalRe)) {
@@ -51,9 +54,10 @@ export function detectReflectedContent(text: string): ReflectionDetection {
     return { isReflection: false, matchedLabels: [] };
   }
 
+  const codeRegions = findCodeRegions(text);
   const matchedLabels: string[] = [];
   for (const { re, label } of REFLECTION_PATTERNS) {
-    if (hasMatchOutsideCode(text, re)) {
+    if (hasMatchOutsideCode(text, re, codeRegions)) {
       matchedLabels.push(label);
     }
   }

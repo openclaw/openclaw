@@ -43,7 +43,6 @@ import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
-import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
 import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
@@ -151,7 +150,6 @@ export async function monitorWebChannel(
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
   const socketTiming = resolveWhatsAppSocketTiming(tuning.socketTiming);
-  const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit = resolvePromptHistoryLimit(
     account.historyLimit ??
       cfg.channels?.whatsapp?.historyLimit ??
@@ -250,8 +248,6 @@ export async function monitorWebChannel(
               backgroundTasks: connectionLocal.backgroundTasks,
               replyResolver: activeReplyResolver,
               replyLogger,
-              baseMentionConfig,
-              account,
               buildContext: pluginChannelRuntime?.inbound.buildContext,
               // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
               dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,

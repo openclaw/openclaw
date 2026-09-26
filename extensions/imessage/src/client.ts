@@ -48,43 +48,18 @@ export class IMessageRpcRequestError extends Error {
   }
 }
 
-// A stalled bridge, as opposed to a rejected or merely slow request.
-//
-// Matches only imsg's own structured wait error, e.g.
-//   "Internal error: code=-32603 Timed out waiting for response to 'send-message'"
-// which imsg raises after publishing a request to the injected helper and
-// getting nothing back. That is first-hand evidence about the bridge.
-//
-// Deliberately excludes our own client-side timer ("imsg rpc timeout (...)"):
-// it fires when the local wrapper is slow or blocked while imsg itself is
-// healthy, so treating it as a dead bridge would evict a good capability cache
-// and point operators at `imsg launch`, the wrong repair. An ordinary rejection
-// (bad target, unknown chat) says nothing about bridge health either.
-// Module-private: request() is the only production caller, and the behavior is
-// covered through that boundary rather than by calling this directly.
+// Only imsg's helper wait error proves a bridge stall; our client timeout can
+// also mean a slow wrapper and must not evict a healthy capability cache.
 function isIMessageBridgeStall(error: unknown): boolean {
-  // Only an Error can carry a stall. Stringifying an arbitrary value here would
-  // render most objects as "[object Object]" and match nothing anyway.
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return error.message.includes("Timed out waiting for response");
+  return error instanceof Error && error.message.includes("Timed out waiting for response");
 }
 
 const BRIDGE_STALL_GUIDANCE =
   "The imsg private API bridge stopped responding. Run `imsg launch` to re-inject the dylib, " +
   "then `openclaw channels status --probe` to refresh capability detection.";
 
-// Append the actionable cause without rewriting the error.
-//
-// Normal outbound sends never consult the private-API status cache (send.ts
-// builds a client and dispatches directly), so evicting that cache alone leaves
-// them repeating an opaque timeout. Decorating here reaches every caller.
-//
-// Preserve the class, code, data, and original message text: send.ts keys
-// delayed-send reconciliation off `data.disposition`/`data.retry_safe` and
-// matches `imsg rpc timeout (send)` by regex, so the original wording has to
-// survive as a prefix.
+// Direct sends bypass the capability cache. Preserve the original error prefix,
+// class, code, and data so recovery guidance does not break send reconciliation.
 function describeIMessageBridgeStall(error: unknown): unknown {
   if (error instanceof IMessageRpcRequestError) {
     return new IMessageRpcRequestError(
@@ -318,12 +293,8 @@ export class IMessageRpcClient {
     try {
       return await response;
     } catch (err) {
-      // Every private-API action funnels through here, so this is the one place
-      // that learns the bridge went away. Without it the cached "available"
-      // verdict never expires and each later send is dispatched into a dead
-      // bridge, surfacing an opaque -32603 instead of the actionable
-      // "run imsg launch" guidance. Clearing the entry makes the next action
-      // re-probe and report the real state.
+      // Successful capability probes have no TTL; invalidate before recovery
+      // so later actions cannot reuse the stalled bridge's available verdict.
       if (isIMessageBridgeStall(err)) {
         invalidateCachedIMessagePrivateApiStatus(this.configuredCliPath);
         try {

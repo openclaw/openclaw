@@ -3,8 +3,6 @@ import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isWildcardBindHost } from "./callback-host.js";
 import type { MattermostClient } from "./client.js";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
 // Mattermost rejects command descriptions above 128 UTF-8 bytes. Keep portable
 // descriptions intact until this API boundary so other channels retain their text.
 export const MATTERMOST_SLASH_POST_METHOD = "P";
@@ -61,9 +59,6 @@ export type MattermostSlashCommandPayload = {
   response_url?: string;
 };
 
-/**
- * Response format for Mattermost slash command callbacks.
- */
 export type MattermostSlashCommandResponse = {
   response_type?: "ephemeral" | "in_channel";
   text: string;
@@ -72,8 +67,6 @@ export type MattermostSlashCommandResponse = {
   goto_location?: string;
   attachments?: unknown[];
 };
-
-// ─── MM API types ────────────────────────────────────────────────────────────
 
 type MattermostCommandCreate = {
   team_id: string;
@@ -104,81 +97,56 @@ export type MattermostCommandResponse = {
   delete_at?: number;
 };
 
-// ─── Default commands ────────────────────────────────────────────────────────
-
 /**
  * Built-in OpenClaw commands to register as native slash commands.
  * These mirror the text-based commands already handled by the gateway.
  */
 export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
   {
-    trigger: "oc_status",
     originalName: "status",
     description: "Show session status (model, usage, uptime)",
-    autoComplete: true,
   },
   {
-    trigger: "oc_model",
     originalName: "model",
     description: "View or change the current model",
-    autoComplete: true,
     autoCompleteHint: "[model-name] [--runtime runtime]",
   },
   {
-    trigger: "oc_models",
     originalName: "models",
     description: "Browse available models",
-    autoComplete: true,
     autoCompleteHint: "[provider]",
   },
   {
-    trigger: "oc_new",
     originalName: "new",
     description: "Start a new conversation session",
-    autoComplete: true,
   },
   {
-    trigger: "oc_help",
     originalName: "help",
     description: "Show available commands",
-    autoComplete: true,
   },
   {
-    trigger: "oc_think",
     originalName: "think",
     description: "Set thinking/reasoning level",
-    autoComplete: true,
     autoCompleteHint: "[off|low|medium|high]",
   },
   {
-    trigger: "oc_reasoning",
     originalName: "reasoning",
     description: "Toggle reasoning mode",
-    autoComplete: true,
     autoCompleteHint: "[on|off]",
   },
   {
-    trigger: "oc_verbose",
     originalName: "verbose",
     description: "Toggle verbose mode",
-    autoComplete: true,
     autoCompleteHint: "[on|off]",
   },
   {
-    trigger: "oc_queue",
     originalName: "queue",
     description: "Adjust active-run queue behavior",
-    autoComplete: true,
     autoCompleteHint:
       "[steer|followup|collect|interrupt] [debounce:2s] [cap:N] [drop:old|new|summarize]",
   },
-];
+].map((spec) => ({ ...spec, trigger: `oc_${spec.originalName}`, autoComplete: true }));
 
-// ─── Command registration ────────────────────────────────────────────────────
-
-/**
- * List existing custom slash commands for a team.
- */
 export async function listMattermostCommands(
   client: MattermostClient,
   teamId: string,
@@ -190,9 +158,6 @@ export async function listMattermostCommands(
   );
 }
 
-/**
- * Get a custom slash command by id.
- */
 export async function getMattermostCommand(
   client: MattermostClient,
   commandId: string,
@@ -204,9 +169,6 @@ export async function getMattermostCommand(
   );
 }
 
-/**
- * Delete a custom slash command.
- */
 async function deleteMattermostCommand(client: MattermostClient, commandId: string): Promise<void> {
   // Mattermost answers with 200 {"status":"OK"}; registration recreates the command after this.
   await client.request<void>(`/commands/${encodeURIComponent(commandId)}`, {
@@ -215,11 +177,7 @@ async function deleteMattermostCommand(client: MattermostClient, commandId: stri
   });
 }
 
-/**
- * Register all OpenClaw slash commands for a given team.
- * Skips commands that are already registered with the same trigger + callback URL.
- * Returns the list of newly created command IDs.
- */
+/** Reconcile owned commands without modifying another integration's trigger. */
 export async function registerSlashCommands(params: {
   client: MattermostClient;
   teamId: string;
@@ -234,7 +192,6 @@ export async function registerSlashCommands(params: {
     throw new Error("creatorUserId is required for slash command reconciliation");
   }
 
-  // Fetch existing commands to avoid duplicates
   let existing: MattermostCommandResponse[];
   try {
     existing = await listMattermostCommands(client, teamId);
@@ -264,11 +221,7 @@ export async function registerSlashCommands(params: {
     const ownedCommands = existingForTrigger.filter(
       (cmd) => cmd.creator_id?.trim() === normalizedCreatorUserId,
     );
-    const foreignCommands = existingForTrigger.filter(
-      (cmd) => cmd.creator_id?.trim() !== normalizedCreatorUserId,
-    );
-
-    if (ownedCommands.length === 0 && foreignCommands.length > 0) {
+    if (ownedCommands.length === 0 && existingForTrigger.length > 0) {
       log?.(
         `mattermost: trigger /${spec.trigger} already used by non-OpenClaw command(s); skipping to avoid mutating external integrations`,
       );
@@ -293,27 +246,26 @@ export async function registerSlashCommands(params: {
       auto_complete_hint: spec.autoCompleteHint,
     };
 
-    const existingNeedsUpdate = existingCmd
-      ? existingCmd.url !== callbackUrl || existingCmd.method !== MATTERMOST_SLASH_POST_METHOD
-      : false;
-
-    // Already registered with the correct callback URL and method.
-    if (existingCmd && !existingNeedsUpdate) {
-      log?.(`mattermost: command /${spec.trigger} already registered (id=${existingCmd.id})`);
+    const recordCommand = (receipt: MattermostCommandResponse, managed: boolean) => {
       registered.push({
-        id: existingCmd.id,
+        id: receipt.id,
         trigger: spec.trigger,
         teamId,
-        token: existingCmd.token,
+        token: receipt.token,
         url: callbackUrl,
-        managed: false,
+        managed,
       });
+    };
+
+    if (existingCmd?.url === callbackUrl && existingCmd.method === MATTERMOST_SLASH_POST_METHOD) {
+      log?.(`mattermost: command /${spec.trigger} already registered (id=${existingCmd.id})`);
+      recordCommand(existingCmd, false);
       continue;
     }
 
     // Exists but has drifted critical callback fields: attempt to reconcile by
     // updating (useful during callback URL migrations or method drift).
-    if (existingCmd && existingNeedsUpdate) {
+    if (existingCmd) {
       log?.(
         `mattermost: command /${spec.trigger} exists with different callback settings; updating (id=${existingCmd.id})`,
       );
@@ -325,14 +277,7 @@ export async function registerSlashCommands(params: {
             body: JSON.stringify({ id: existingCmd.id, ...command }),
           },
         );
-        registered.push({
-          id: updated.id,
-          trigger: spec.trigger,
-          teamId,
-          token: updated.token,
-          url: callbackUrl,
-          managed: false,
-        });
+        recordCommand(updated, false);
         continue;
       } catch (err) {
         log?.(
@@ -346,10 +291,8 @@ export async function registerSlashCommands(params: {
           log?.(
             `mattermost: failed to delete stale command /${spec.trigger} (id=${existingCmd.id}): ${String(deleteErr)}`,
           );
-          // Can't reconcile; skip this command.
           continue;
         }
-        // Continue on to create below.
       }
     }
 
@@ -359,14 +302,7 @@ export async function registerSlashCommands(params: {
         body: JSON.stringify(command),
       });
       log?.(`mattermost: registered command /${spec.trigger} (id=${created.id})`);
-      registered.push({
-        id: created.id,
-        trigger: spec.trigger,
-        teamId,
-        token: created.token,
-        url: callbackUrl,
-        managed: true,
-      });
+      recordCommand(created, true);
     } catch (err) {
       log?.(`mattermost: failed to register command /${spec.trigger}: ${String(err)}`);
     }
@@ -375,9 +311,6 @@ export async function registerSlashCommands(params: {
   return registered;
 }
 
-/**
- * Clean up all registered slash commands.
- */
 export async function cleanupSlashCommands(params: {
   client: MattermostClient;
   commands: MattermostRegisteredCommand[];
@@ -397,11 +330,6 @@ export async function cleanupSlashCommands(params: {
   }
 }
 
-// ─── Callback parsing ────────────────────────────────────────────────────────
-
-/**
- * Parse a Mattermost slash command callback payload from a URL-encoded or JSON body.
- */
 export function parseSlashCommandPayload(
   body: string,
   contentType?: string,
@@ -455,7 +383,6 @@ export function resolveCommandText(
   text: string,
   triggerMap?: ReadonlyMap<string, string>,
 ): string {
-  // Use the trigger map if available for accurate name resolution
   const commandName =
     triggerMap?.get(trigger) ?? (trigger.startsWith("oc_") ? trigger.slice(3) : trigger);
   const args = text.trim();
@@ -465,8 +392,6 @@ export function resolveCommandText(
 export function normalizeSlashCommandTrigger(command: string): string {
   return command.replace(/^\//, "").trim();
 }
-
-// ─── Config resolution ───────────────────────────────────────────────────────
 
 const DEFAULT_CALLBACK_PATH = "/api/channels/mattermost/command";
 
@@ -498,9 +423,6 @@ export function isSlashCommandsEnabled(config: MattermostSlashCommandConfig): bo
   return config.native === true;
 }
 
-/**
- * Build the callback URL that Mattermost will POST to when a command is invoked.
- */
 export function resolveCallbackUrl(params: {
   config: MattermostSlashCommandConfig;
   gatewayPort: number;

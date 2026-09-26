@@ -1,14 +1,9 @@
-// Whatsapp API module exposes the plugin public contract.
-import type {
-  AnyMessageContent,
-  MiscMessageGenerationOptions,
-  WAMessage,
-  WAPresence,
-} from "baileys";
+import type { AnyMessageContent, WAMessage } from "baileys";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize-target.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
+import type { WhatsAppSocketOperationAdapter } from "../socket-timing.js";
 import { toWhatsappJid, toWhatsappJidWithLid } from "../targets-runtime.js";
 import {
   addWhatsAppOutboundMentionsToContent,
@@ -41,14 +36,7 @@ type StructuredStickerSendOptions = {
 };
 
 export function createWebSendApi(params: {
-  sock: {
-    sendMessage: (
-      jid: string,
-      content: AnyMessageContent,
-      options?: MiscMessageGenerationOptions,
-    ) => Promise<WAMessage | undefined>;
-    sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
-  };
+  sock: WhatsAppSocketOperationAdapter;
   defaultAccountId: string;
   resolveOutboundMentions?: (params: {
     jid: string;
@@ -193,7 +181,7 @@ export function createWebSendApi(params: {
             values: poll.options,
             selectableCount: poll.maxSelections ?? 1,
           },
-        } as AnyMessageContent,
+        },
         "poll",
       );
     },
@@ -213,7 +201,7 @@ export function createWebSendApi(params: {
               },
             ],
           },
-        } as AnyMessageContent,
+        },
         "contact",
       );
     },
@@ -230,7 +218,7 @@ export function createWebSendApi(params: {
             name: location.name,
             address: location.address,
           },
-        } as AnyMessageContent,
+        },
         "location",
       );
     },
@@ -244,7 +232,7 @@ export function createWebSendApi(params: {
         {
           sticker: stickerBuffer,
           mimetype: options?.mimetype ?? "image/webp",
-        } as AnyMessageContent,
+        },
         "sticker",
       );
     },
@@ -268,7 +256,7 @@ export function createWebSendApi(params: {
             participant: participant ? toWhatsappJid(participant) : undefined,
           },
         },
-      } as AnyMessageContent);
+      });
       return normalizeWhatsAppSendResult(result, "reaction");
     },
     sendComposingTo: async (to: string): Promise<void> => {

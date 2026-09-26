@@ -1,4 +1,3 @@
-// Whatsapp plugin module normalizes inbound identity and access facts.
 import type { AnyMessageContent, WAMessage } from "baileys";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {

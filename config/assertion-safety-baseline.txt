@@ -487,7 +487,6 @@ extensions/imessage/src/client.ts	3
 extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
 extensions/imessage/src/monitor/conversation-repair.ts	1
-extensions/imessage/src/monitor/monitor-provider.ts	1
 extensions/imessage/src/probe.ts	1
 extensions/imessage/src/remote-host.ts	1
 extensions/imessage/src/send.ts	2
@@ -619,10 +618,9 @@ extensions/matrix/src/test-runtime.ts	9
 extensions/matrix/src/tool-actions.ts	1
 extensions/mattermost/src/channel.ts	6
 extensions/mattermost/src/gateway-auth-bypass.ts	3
-extensions/mattermost/src/mattermost/client.ts	8
+extensions/mattermost/src/mattermost/client.ts	6
 extensions/mattermost/src/mattermost/directory.ts	2
 extensions/mattermost/src/mattermost/interactions.ts	4
-extensions/mattermost/src/mattermost/model-picker.ts	1
 extensions/mattermost/src/mattermost/monitor-reactions.ts	2
 extensions/mattermost/src/mattermost/monitor-slash.ts	1
 extensions/mattermost/src/mattermost/monitor-websocket.ts	1
@@ -710,7 +708,6 @@ extensions/msteams/src/attachments/graph.ts	1
 extensions/msteams/src/attachments/shared.ts	2
 extensions/msteams/src/channel.ts	4
 extensions/msteams/src/delegated-state.ts	1
-extensions/msteams/src/directory-live.ts	1
 extensions/msteams/src/errors.ts	2
 extensions/msteams/src/feedback-invoke.ts	2
 extensions/msteams/src/file-consent.ts	1
@@ -718,8 +715,6 @@ extensions/msteams/src/graph.ts	2
 extensions/msteams/src/inbound.ts	1
 extensions/msteams/src/media-helpers.ts	1
 extensions/msteams/src/messenger.ts	1
-extensions/msteams/src/monitor-handler.ts	1
-extensions/msteams/src/monitor-handler/inbound-content.ts	1
 extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
 extensions/msteams/src/monitor.ts	5
@@ -1173,10 +1168,9 @@ extensions/whatsapp/src/approval-handler.runtime.ts	1
 extensions/whatsapp/src/auth-store.ts	3
 extensions/whatsapp/src/auto-reply/monitor.ts	2
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	4
-extensions/whatsapp/src/auto-reply/monitor/process-message.ts	2
 extensions/whatsapp/src/channel-outbound.ts	1
 extensions/whatsapp/src/connection-controller-runtime-context.ts	1
-extensions/whatsapp/src/connection-controller.ts	3
+extensions/whatsapp/src/connection-controller.ts	2
 extensions/whatsapp/src/connection-owner.ts	1
 extensions/whatsapp/src/group-config-path.ts	3
 extensions/whatsapp/src/inbound/durable-payload.ts	2
@@ -1187,13 +1181,11 @@ extensions/whatsapp/src/inbound/media.ts	2
 extensions/whatsapp/src/inbound/message-delivery.ts	1
 extensions/whatsapp/src/inbound/message-enrichment.ts	3
 extensions/whatsapp/src/inbound/outbound-mentions.ts	1
-extensions/whatsapp/src/inbound/send-api.ts	5
-extensions/whatsapp/src/inbound/socket-session.ts	1
 extensions/whatsapp/src/qa-driver.runtime.ts	1
 extensions/whatsapp/src/quoted-message.ts	1
 extensions/whatsapp/src/reconnect.ts	1
 extensions/whatsapp/src/security-fix.ts	2
-extensions/whatsapp/src/session-errors.ts	20
+extensions/whatsapp/src/session-errors.ts	15
 extensions/whatsapp/src/session.ts	4
 extensions/whatsapp/src/setup-finalize.ts	2
 extensions/whatsapp/src/targets-runtime.ts	2

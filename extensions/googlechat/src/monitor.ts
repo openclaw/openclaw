@@ -66,12 +66,6 @@ function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | 
   return undefined;
 }
 
-/**
- * Resolve bot display name with fallback chain:
- * 1. Account config name
- * 2. Agent name from config
- * 3. Agent identity name, then "OpenClaw"
- */
 function resolveBotDisplayName(params: {
   accountName?: string;
   agentId: string;
@@ -294,9 +288,6 @@ async function processGoogleChatEvent(
     },
   });
 
-  // Typing indicator setup
-  // Note: Reaction mode requires user OAuth, not available with service account auth.
-  // If reaction is configured, we fall back to message mode with a warning.
   let typingIndicator = account.config.typingIndicator ?? "message";
   if (typingIndicator === "reaction") {
     runtime.error?.(
@@ -310,7 +301,6 @@ async function processGoogleChatEvent(
       ? replyThreadName
       : undefined;
 
-  // Start typing indicator (message mode only, reaction mode not supported with app auth)
   if (typingIndicator === "message") {
     try {
       const botName = resolveBotDisplayName({

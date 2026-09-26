@@ -214,33 +214,25 @@ export function createMattermostModelPickerInteractionHandler(
       return await updatePickerPost("No models available.");
     }
 
-    if (pickerState.action === "providers" || pickerState.action === "back") {
+    if (pickerState.action !== "select") {
       const currentModel = resolveMattermostModelPickerCurrentModel({
         cfg,
         route: modelSessionRoute,
         data,
       });
-      const view = renderMattermostProviderPickerView({
+      const viewParams = {
         ownerUserId: pickerState.ownerUserId,
         data,
         currentModel,
-      });
-      return await updatePickerPost(view.text, view.buttons);
-    }
-
-    if (pickerState.action === "list") {
-      const currentModel = resolveMattermostModelPickerCurrentModel({
-        cfg,
-        route: modelSessionRoute,
-        data,
-      });
-      const view = renderMattermostModelsPickerView({
-        ownerUserId: pickerState.ownerUserId,
-        data,
-        provider: pickerState.provider,
-        page: pickerState.page,
-        currentModel,
-      });
+      };
+      const view =
+        pickerState.action === "list"
+          ? renderMattermostModelsPickerView({
+              ...viewParams,
+              provider: pickerState.provider,
+              page: pickerState.page,
+            })
+          : renderMattermostProviderPickerView(viewParams);
       return await updatePickerPost(view.text, view.buttons);
     }
 
