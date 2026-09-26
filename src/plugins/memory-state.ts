@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -10,6 +11,9 @@ import type {
   MemoryFlushPlan,
   MemoryPluginCapability,
   MemoryPluginCapabilityRegistration,
+  MemoryPluginDreamingPhaseStatus,
+  MemoryPluginDreamingProvider,
+  MemoryPluginDreamingStatus,
   MemoryPluginPublicArtifact,
   MemoryPluginRuntime,
   MemoryPromptPreparationRegistration,
@@ -35,6 +39,9 @@ export type {
   MemoryFlushPlan,
   MemoryFlushPlanResolver,
   MemoryPluginCapability,
+  MemoryPluginDreamingPhaseStatus,
+  MemoryPluginDreamingProvider,
+  MemoryPluginDreamingStatus,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
   MemoryPluginRuntime,
@@ -71,8 +78,10 @@ export function resolveMemoryCapabilityRegistration(
       };
       continue;
     }
+    // A later call that only adds providers (public artifacts, dreaming status)
+    // layers over the earlier runtime instead of replacing it.
     const preserveExisting =
-      Boolean(registration.capability.publicArtifacts) &&
+      Boolean(registration.capability.publicArtifacts || registration.capability.dreaming) &&
       !registration.capability.promptBuilder &&
       !registration.capability.flushPlanResolver &&
       !registration.capability.runtime;
@@ -429,6 +438,168 @@ export async function listActiveMemoryPublicArtifacts(params: {
         left.agentIds.join("\0").localeCompare(right.agentIds.join("\0")) ||
         left.absolutePath.localeCompare(right.absolutePath),
     );
+}
+
+/**
+ * Reported timestamps and counters go straight into date formatting and page
+ * text, where `NaN`, `Infinity` or a negative count would render as garbage,
+ * so only finite numbers (non-negative for counters) pass.
+ */
+function isOptionalFiniteNumber(value: unknown, options: { min?: number } = {}): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  return typeof value === "number" && Number.isFinite(value) && value >= (options.min ?? -Infinity);
+}
+
+function isValidDreamingPhaseStatus(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  const phase = asOptionalRecord(value);
+  if (!phase) {
+    return false;
+  }
+  return (
+    (phase.enabled === undefined || typeof phase.enabled === "boolean") &&
+    (phase.cron === undefined || typeof phase.cron === "string") &&
+    (phase.scheduled === undefined || typeof phase.scheduled === "boolean") &&
+    isOptionalFiniteNumber(phase.lastRunAtMs) &&
+    isOptionalFiniteNumber(phase.nextRunAtMs)
+  );
+}
+
+function copyDreamingPhase(
+  phase: MemoryPluginDreamingPhaseStatus | undefined,
+): MemoryPluginDreamingPhaseStatus | undefined {
+  if (phase === undefined) {
+    return undefined;
+  }
+  return {
+    ...(phase.enabled === undefined ? {} : { enabled: phase.enabled }),
+    ...(phase.cron === undefined ? {} : { cron: phase.cron }),
+    ...(phase.scheduled === undefined ? {} : { scheduled: phase.scheduled }),
+    ...(phase.lastRunAtMs === undefined ? {} : { lastRunAtMs: phase.lastRunAtMs }),
+    ...(phase.nextRunAtMs === undefined ? {} : { nextRunAtMs: phase.nextRunAtMs }),
+  };
+}
+
+/**
+ * Copies only the documented fields of a validated report. The provider's own
+ * object never reaches the RPC response: extra keys, getters and a `toJSON`
+ * would otherwise ship to the Control UI unchecked.
+ */
+function copyDreamingStatus(report: MemoryPluginDreamingStatus): MemoryPluginDreamingStatus {
+  const phases = report.phases;
+  const stats = report.stats;
+  const light = copyDreamingPhase(phases?.light);
+  const deep = copyDreamingPhase(phases?.deep);
+  const rem = copyDreamingPhase(phases?.rem);
+  return {
+    ...(report.enabled === undefined ? {} : { enabled: report.enabled }),
+    ...(report.timezone === undefined ? {} : { timezone: report.timezone }),
+    ...(phases === undefined
+      ? {}
+      : {
+          phases: {
+            ...(light === undefined ? {} : { light }),
+            ...(deep === undefined ? {} : { deep }),
+            ...(rem === undefined ? {} : { rem }),
+          },
+        }),
+    ...(stats === undefined
+      ? {}
+      : {
+          stats: {
+            ...(stats.shortTermCount === undefined ? {} : { shortTermCount: stats.shortTermCount }),
+            ...(stats.promotedTotal === undefined ? {} : { promotedTotal: stats.promotedTotal }),
+            ...(stats.promotedToday === undefined ? {} : { promotedToday: stats.promotedToday }),
+            ...(stats.lastPromotedAt === undefined ? {} : { lastPromotedAt: stats.lastPromotedAt }),
+          },
+        }),
+  };
+}
+
+const DREAMING_STATS_NUMBER_KEYS = ["shortTermCount", "promotedTotal", "promotedToday"] as const;
+
+/**
+ * The top-level report fields the host overlays without further checks. A
+ * string `enabled` would reach the page and slip past its boolean-only owner
+ * lock, so a report is rejected as a whole when any of them has the wrong type.
+ */
+function isValidDreamingStatusTop(report: MemoryPluginDreamingStatus): boolean {
+  if (report.enabled !== undefined && typeof report.enabled !== "boolean") {
+    return false;
+  }
+  if (report.timezone !== undefined && typeof report.timezone !== "string") {
+    return false;
+  }
+  if (report.stats === undefined) {
+    return true;
+  }
+  const stats = asOptionalRecord(report.stats);
+  if (!stats) {
+    return false;
+  }
+  for (const key of DREAMING_STATS_NUMBER_KEYS) {
+    if (!isOptionalFiniteNumber(stats[key], { min: 0 })) {
+      return false;
+    }
+  }
+  return stats.lastPromotedAt === undefined || typeof stats.lastPromotedAt === "string";
+}
+
+/**
+ * Asks the memory slot owner how its own dreaming is scheduled and how far
+ * consolidation has got. Returns `null` when no provider is registered, when it
+ * declines, or when it misbehaves — callers then keep memory-core's resolution,
+ * so a third-party provider can never blank out the page.
+ */
+export async function resolveActiveMemoryDreamingStatus(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<MemoryPluginDreamingStatus | null> {
+  const capability = getMemoryCapability();
+  const provider: MemoryPluginDreamingProvider | undefined = capability?.capability.dreaming;
+  if (!provider) {
+    return null;
+  }
+  const pluginId = capability?.pluginId;
+  // The checks read the provider's object, whose getters may throw like the
+  // call itself, so the whole inspection sits inside the guard.
+  try {
+    const reported = await provider.getStatus(params);
+    if (reported === undefined || reported === null) {
+      return null;
+    }
+    // Any report at all locks the page's host switch, so an array — which is
+    // `typeof "object"` too — must not count as one.
+    if (!asOptionalRecord(reported)) {
+      log.warn(`ignoring dreaming status from plugin "${pluginId}": not an object`);
+      return null;
+    }
+    const phases = reported.phases;
+    if (
+      phases !== undefined &&
+      (!asOptionalRecord(phases) ||
+        !isValidDreamingPhaseStatus(phases.light) ||
+        !isValidDreamingPhaseStatus(phases.deep) ||
+        !isValidDreamingPhaseStatus(phases.rem))
+    ) {
+      log.warn(`ignoring dreaming status from plugin "${pluginId}": malformed phases`);
+      return null;
+    }
+    if (!isValidDreamingStatusTop(reported)) {
+      log.warn(
+        `ignoring dreaming status from plugin "${pluginId}": malformed enablement, timezone or stats`,
+      );
+      return null;
+    }
+    return copyDreamingStatus(reported);
+  } catch (err) {
+    log.warn(`ignoring dreaming status from plugin "${pluginId}": ${String(err)}`);
+    return null;
+  }
 }
 
 export function clearMemoryPluginState(): void {

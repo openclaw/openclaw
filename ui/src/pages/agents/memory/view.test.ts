@@ -295,6 +295,34 @@ describe("dreaming view", () => {
     );
   });
 
+  it("shows the last run for an enabled phase that has no scheduled next run", () => {
+    const lastRunAtMs = new Date(2026, 8, 23, 2, 31).getTime();
+    const container = renderInto(
+      buildProps({
+        phases: {
+          light: { enabled: true, cron: "", lastRunAtMs },
+          deep: {
+            enabled: true,
+            cron: "0 4 * * *",
+            nextRunAtMs: new Date(2026, 8, 23, 4, 0).getTime(),
+          },
+          rem: { enabled: true, cron: "", nextRunAtMs: undefined },
+        },
+      }),
+    );
+    const chips = [...container.querySelectorAll(".dreams__phase-next")].map((node) =>
+      node.textContent?.trim(),
+    );
+    const expectedLast = new Date(lastRunAtMs).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    expect(chips[0]).toBe(`last ${expectedLast}`);
+    // A scheduled phase keeps showing its next run; one with neither keeps the dash.
+    expect(chips[1]).not.toMatch(/^last /);
+    expect(chips[2]).toBe("—");
+  });
+
   it("renders idle and unavailable scene states", () => {
     const idleContainer = renderInto(buildProps({ active: false }));
     expect(idleContainer.querySelector(".dreams__bubble")).toBeNull();

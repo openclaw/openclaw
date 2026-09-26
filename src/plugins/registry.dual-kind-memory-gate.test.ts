@@ -174,6 +174,39 @@ describe("dual-kind memory registration gate", () => {
     ).resolves.toEqual([]);
   });
 
+  it("layers a separately registered dreaming provider over its runtime capability", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const runtime = createStubMemoryRuntime();
+    const flushPlanResolver = () => null;
+    const getStatus = async () => ({ enabled: true });
+    const record = createPluginRecord({
+      id: "memory-core",
+      name: "Memory Core",
+      kind: "memory",
+      memorySlotSelected: true,
+    });
+
+    registerTestPlugin({
+      registry,
+      config,
+      record,
+      register(api) {
+        api.registerMemoryCapability({ runtime, flushPlanResolver });
+        api.registerMemoryCapability({ dreaming: { getStatus } });
+      },
+    });
+
+    const selected = resolveMemoryCapabilityRegistration(registry.registry.memoryCapabilities);
+    // The later dreaming-only call must not drop the runtime memory search needs.
+    await expect(
+      selected?.capability.runtime?.getMemorySearchManager({ cfg: config, agentId: "main" }),
+    ).resolves.toEqual({ manager: null, error: "missing" });
+    expect(selected?.capability.flushPlanResolver?.({ cfg: config })).toBeNull();
+    await expect(
+      selected?.capability.dreaming?.getStatus({ cfg: config, agentId: "main" }),
+    ).resolves.toEqual({ enabled: true });
+  });
+
   it("keeps last-registration-wins behavior when neither registration owns the slot", () => {
     const runtime = createStubMemoryRuntime();
     const promptBuilder = () => ["replacement prompt"];

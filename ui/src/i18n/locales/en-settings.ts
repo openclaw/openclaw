@@ -1554,6 +1554,8 @@ const enSettings = {
         phaseHitCount: "Phase signals",
         lightPhaseHitCount: "Light-phase hits",
         remPhaseHitCount: "REM-phase hits",
+        ownerReported:
+          "Promotion counters are what the memory slot owner reports about its own dreaming. Phase signals and hits are memory-core's own store.",
       },
       health: {
         title: "Engine health",
