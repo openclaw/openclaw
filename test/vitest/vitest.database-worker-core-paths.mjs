@@ -615,6 +615,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/model.generation-scope.test.ts",
   "src/agents/embedded-agent-runner/model.skip-agent-discovery-hooks.test.ts",
   "src/agents/embedded-agent-runner/run/model-setup.ownership.test.ts",
+  "src/agents/embedded-agent-runner/run/model-setup.run-lifetime.test.ts",
   "src/agents/embedded-agent-runner/run/model-setup.selected-model.test.ts",
   "src/agents/embedded-agent-runner/run/runtime-preparation.thinking.test.ts",
   "src/agents/embedded-agent-runner/run/run-attempt-dispatch.owner.test.ts",

@@ -28,8 +28,11 @@ provider payloads, start the Gateway with `--raw-stream` and
 
 Use the phase-specific hooks for new plugins:
 
-- `before_model_resolve`: receives only the current prompt and attachment
-  metadata. Return `providerOverride` or `modelOverride`.
+- `before_model_resolve`: receives the current prompt and attachment metadata,
+  plus the host-owned source-run cancellation `signal` when available. Stop
+  asynchronous work when that signal aborts. The host rechecks the source run
+  before using the hook's returned selection. Return `providerOverride` or
+  `modelOverride`.
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.

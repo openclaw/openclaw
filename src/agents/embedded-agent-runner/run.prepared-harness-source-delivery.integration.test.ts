@@ -548,7 +548,7 @@ describe("prepared harness source delivery", () => {
       expect(mockedGlobalHookRunner.runBeforeModelResolve).not.toHaveBeenCalled();
     } else {
       expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledWith(
-        { prompt: "hello" },
+        expect.objectContaining({ prompt: "hello", signal: expect.any(AbortSignal) }),
         expect.any(Object),
       );
     }

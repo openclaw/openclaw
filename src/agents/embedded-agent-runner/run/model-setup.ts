@@ -1,9 +1,14 @@
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import {
+  getActiveAgentRunDelegatedAuthority,
+  getAgentRunContext,
+} from "../../../infra/agent-run-registry.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
 import {
   assertOperatorModelAllowed,
+  resolveAdmittedRunActiveAssertion,
   readRunOperatorAuthority,
 } from "../../admitted-run-context.js";
 import { FailoverError } from "../../failover-error.js";
@@ -34,6 +39,82 @@ import {
   createNativeModelOwnedRuntimeModel,
   resolveHookModelSelection,
 } from "./setup.js";
+
+function sameOperationalRunInstance(
+  left: { instanceId: string; runId: string },
+  right: { instanceId: string; runId: string },
+): boolean {
+  return left.instanceId === right.instanceId && left.runId === right.runId;
+}
+
+function captureModelResolutionCurrentAssertion(params: {
+  assertCurrent: () => void;
+  runParams: RunEmbeddedAgentInternalParams;
+}): () => void {
+  const { runParams } = params;
+  const preparedRunAdmission = runParams.preparedRunAdmission;
+  const admittedRunContext = runParams.admittedRunContext;
+  const operationalRunInstance = preparedRunAdmission?.operationalRunInstance;
+  const initialAuthority = operationalRunInstance
+    ? getAgentRunContext(operationalRunInstance.runId)?.delegatedAuthority
+    : undefined;
+  const assertAdmittedRunCurrent = admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(admittedRunContext, runParams.abortSignal)
+    : undefined;
+
+  if (admittedRunContext && !assertAdmittedRunCurrent) {
+    throw new Error("admitted run authority is no longer active");
+  }
+
+  const assertHostCurrent = () => {
+    runParams.abortSignal?.throwIfAborted();
+    params.assertCurrent();
+    if (runParams.lifecycleGeneration) {
+      assertAgentRunLifecycleGenerationCurrent(runParams.lifecycleGeneration);
+    }
+    preparedRunAdmission?.assertSourceCurrent();
+    assertAdmittedRunCurrent?.();
+  };
+
+  const assertPreparedRunOwnerCurrent = () => {
+    if (!preparedRunAdmission || !operationalRunInstance) {
+      return;
+    }
+    const currentAuthority = getAgentRunContext(operationalRunInstance.runId)?.delegatedAuthority;
+    if (
+      initialAuthority &&
+      sameOperationalRunInstance(initialAuthority.operationalRunInstance, operationalRunInstance)
+    ) {
+      if (
+        currentAuthority !== initialAuthority ||
+        getActiveAgentRunDelegatedAuthority(operationalRunInstance) !== initialAuthority
+      ) {
+        throw new Error("prepared run authority changed during model resolution");
+      }
+      return;
+    }
+    if (
+      currentAuthority &&
+      sameOperationalRunInstance(currentAuthority.operationalRunInstance, operationalRunInstance)
+    ) {
+      if (getActiveAgentRunDelegatedAuthority(operationalRunInstance) !== currentAuthority) {
+        throw new Error("prepared run authority changed during model resolution");
+      }
+      return;
+    }
+    // A prior foreign owner may finish while this prepared source remains current.
+    if (currentAuthority && currentAuthority !== initialAuthority) {
+      throw new Error("prepared run authority was replaced during model resolution");
+    }
+  };
+
+  assertHostCurrent();
+  assertPreparedRunOwnerCurrent();
+  return () => {
+    assertHostCurrent();
+    assertPreparedRunOwnerCurrent();
+  };
+}
 
 export type PreparedNativeSessionRuntime = {
   harness: AgentHarness;
@@ -137,8 +218,13 @@ export async function resolveEmbeddedRunModelSetup(params: {
 }) {
   const runParams = params.runParams;
   const operatorAuthority = readRunOperatorAuthority(runParams);
+  const assertModelResolutionCurrent = captureModelResolutionCurrentAssertion({
+    assertCurrent: params.assertCurrent,
+    runParams,
+  });
   const hookSelection = await resolveHookModelSelection({
     prompt: runParams.prompt,
+    signal: runParams.abortSignal,
     attachments: buildBeforeModelResolveAttachments(runParams.images),
     provider: params.provider,
     modelId: params.modelId,
@@ -146,6 +232,9 @@ export async function resolveEmbeddedRunModelSetup(params: {
     hookRunner: params.hookRunner,
     hookContext: params.hookContext,
   });
+  // Hook failures are fail-open, but a canceled or replaced source run cannot accept
+  // even a successful late override.
+  assertModelResolutionCurrent();
   const modelSelectionChangedByHook =
     hookSelection.provider !== params.provider || hookSelection.modelId !== params.modelId;
   let provider = hookSelection.provider;

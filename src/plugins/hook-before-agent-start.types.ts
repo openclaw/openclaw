@@ -7,6 +7,8 @@ export type PluginHookBeforeModelResolveAttachment = {
 export type PluginHookBeforeModelResolveEvent = {
   /** User prompt for this run. No session messages are available yet in this phase. */
   prompt: string;
+  /** Host-owned cancellation signal for the source run. */
+  signal?: AbortSignal;
   /** Attachment metadata for file-aware model routing. */
   attachments?: PluginHookBeforeModelResolveAttachment[];
 };

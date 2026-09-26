@@ -16,7 +16,10 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
-import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import {
+  createTestAdmittedRunContext,
+  withTestRunAdmission,
+} from "../../admitted-run-context.test-support.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   type AuthProfileStore,
@@ -198,60 +201,70 @@ describe("selected route thinking metadata at runtime preparation", () => {
         : prepareModelRunCapabilities([[capabilityEntry], []], ["openai", MODEL_ID, "codex"])
             .modelThinkingCapability;
     const runId = `effort-${route}-${capability}`;
-    const runtime = await prepareEmbeddedRunRuntime({
-      assertCurrent: () => {},
-      runParams: {
-        runId,
+    await withTestRunAdmission(
+      {
         admittedRunContext: createTestAdmittedRunContext(runId),
-        sessionId: "effort-session",
-        sessionKey: "agent:main:effort-session",
+        runId,
         agentId: "main",
-        prompt: "Reply briefly.",
-        workspaceDir: root,
-        timeoutMs: 5_000,
         config: preparedModelRuntime.config,
-        authProfileId: `openai:${route}`,
-        authProfileIdSource: "user",
-        thinkLevel: "off",
-        modelThinkingCapability,
       },
-      provider: "openai",
-      modelId: MODEL_ID,
-      agentDir: preparedModelRuntime.agentDir,
-      workspaceDir: root,
-      globalLane: "test",
-      hookRunner: undefined,
-      hookContext: { sessionId: "effort-session", workspaceDir: root },
-      markStartupStage: () => {},
-      notifyExecutionPhase: () => {},
-      fallbackConfigured: false,
-      preparedModelRuntime,
-    });
-    try {
-      const { effectiveModel, activePreparedAuthPlan } = runtime.snapshot();
-      expect(activePreparedAuthPlan.modelRoute?.authRequirement).toBe(
-        route === "platform" ? "api-key" : "subscription",
-      );
-      expect(effectiveModel.baseUrl).toBe(route === "platform" ? PLATFORM : SUBSCRIPTION);
-      expect(effectiveModel.thinkingLevelMap?.off).toBe(route === "platform" ? "none" : null);
-      const efforts = effectiveModel.compat?.supportedReasoningEfforts ?? [];
-      if (modelThinkingCapability) {
-        expect(modelThinkingCapability.route).toBeUndefined();
-        expect(efforts).toEqual(
-          expect.arrayContaining(
-            modelThinkingCapability.compat.supportedReasoningEfforts?.filter(
-              (effort) => effort !== "none",
-            ) ?? [],
-          ),
-        );
-      }
-      if (route === "platform") {
-        expect(efforts).toContain("none");
-      } else {
-        expect(efforts).not.toContain("none");
-      }
-    } finally {
-      runtime.stopRuntimeAuthRefreshTimer();
-    }
+      async (admittedRunContext) => {
+        const runtime = await prepareEmbeddedRunRuntime({
+          assertCurrent: () => {},
+          runParams: {
+            runId,
+            admittedRunContext,
+            sessionId: "effort-session",
+            sessionKey: "agent:main:effort-session",
+            agentId: "main",
+            prompt: "Reply briefly.",
+            workspaceDir: root,
+            timeoutMs: 5_000,
+            config: preparedModelRuntime.config,
+            authProfileId: `openai:${route}`,
+            authProfileIdSource: "user",
+            thinkLevel: "off",
+            modelThinkingCapability,
+          },
+          provider: "openai",
+          modelId: MODEL_ID,
+          agentDir: preparedModelRuntime.agentDir,
+          workspaceDir: root,
+          globalLane: "test",
+          hookRunner: undefined,
+          hookContext: { sessionId: "effort-session", workspaceDir: root },
+          markStartupStage: () => {},
+          notifyExecutionPhase: () => {},
+          fallbackConfigured: false,
+          preparedModelRuntime,
+        });
+        try {
+          const { effectiveModel, activePreparedAuthPlan } = runtime.snapshot();
+          expect(activePreparedAuthPlan.modelRoute?.authRequirement).toBe(
+            route === "platform" ? "api-key" : "subscription",
+          );
+          expect(effectiveModel.baseUrl).toBe(route === "platform" ? PLATFORM : SUBSCRIPTION);
+          expect(effectiveModel.thinkingLevelMap?.off).toBe(route === "platform" ? "none" : null);
+          const efforts = effectiveModel.compat?.supportedReasoningEfforts ?? [];
+          if (modelThinkingCapability) {
+            expect(modelThinkingCapability.route).toBeUndefined();
+            expect(efforts).toEqual(
+              expect.arrayContaining(
+                modelThinkingCapability.compat.supportedReasoningEfforts?.filter(
+                  (effort) => effort !== "none",
+                ) ?? [],
+              ),
+            );
+          }
+          if (route === "platform") {
+            expect(efforts).toContain("none");
+          } else {
+            expect(efforts).not.toContain("none");
+          }
+        } finally {
+          runtime.stopRuntimeAuthRefreshTimer();
+        }
+      },
+    );
   });
 });

@@ -95,6 +95,7 @@ export function resolveAgentHarnessRunAdmissionError(params: {
  */
 export async function resolveHookModelSelection(params: {
   prompt: string;
+  signal?: AbortSignal;
   attachments?: PluginHookBeforeModelResolveAttachment[];
   provider: string;
   modelId: string;
@@ -114,9 +115,11 @@ export async function resolveHookModelSelection(params: {
   // provider/model before resolveModel().
   if (hookRunner?.hasHooks("before_model_resolve")) {
     try {
-      const event: PluginHookBeforeModelResolveEvent = params.attachments
-        ? { prompt: params.prompt, attachments: params.attachments }
-        : { prompt: params.prompt };
+      const event: PluginHookBeforeModelResolveEvent = {
+        prompt: params.prompt,
+        ...(params.signal ? { signal: params.signal } : {}),
+        ...(params.attachments ? { attachments: params.attachments } : {}),
+      };
       modelResolveOverride = await hookRunner.runBeforeModelResolve(event, params.hookContext);
     } catch (hookErr) {
       log.warn(`before_model_resolve hook failed: ${String(hookErr)}`);
