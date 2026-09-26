@@ -15,6 +15,7 @@ import {
   registerRuntimeConfigSnapshotPreparer,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
+  setRuntimeConfigSourceSnapshotIfCurrent,
 } from "./runtime-snapshot.js";
 import {
   captureRuntimeConfig,
@@ -83,6 +84,139 @@ describe("prepared runtime snapshots", () => {
     expect(contribute).toHaveBeenCalledOnce();
     expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
     expect(changes).toHaveReturnedWith(candidate);
+  });
+
+  it("withholds the session change when a reload resolves to the published snapshot", () => {
+    const changes = vi.fn();
+    unregister.push(sessionChanges.subscribe(changes));
+    const published = () => ({
+      agents: {
+        defaults: { model: "unit-test/model" },
+        entries: { main: { identity: { name: "Zilla" } } },
+      },
+    });
+    setRuntimeConfigSnapshot(published());
+    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
+    changes.mockClear();
+
+    // A reload reads the same bytes into a fresh object. Publishing it still counts as a
+    // publication, but no consumer of session data can observe a difference.
+    setRuntimeConfigSnapshot(published());
+    expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(2);
+    expect(changes).not.toHaveBeenCalled();
+
+    // Anything a consumer reads still publishes.
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: { model: "unit-test/other" },
+        entries: { main: { identity: { name: "Zilla" } } },
+      },
+    });
+    expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(3);
+    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
+  });
+
+  const tokenConfig = (): OpenClawConfig => ({
+    gateway: { port: 18789, auth: { token: "unit-test-token" } },
+  });
+  const withTokenFacts = (config: OpenClawConfig, unresolvedPaths: string[]): OpenClawConfig => {
+    setConfigResolutionFacts(
+      config,
+      createConfigResolutionFacts(
+        unresolvedPaths.map((configPath) => ({ varName: "UNIT_TEST_TOKEN", configPath })),
+      ),
+    );
+    return config;
+  };
+
+  // Each case republishes after the same first publication: equal bytes, token path recorded as
+  // unresolved. Only a distinct object whose values and provenance both match is withheld.
+  it.each([
+    {
+      name: "withholds a distinct object with equal values and equal fresh provenance",
+      next: () => withTokenFacts(tokenConfig(), ["gateway.auth.token"]),
+      emits: false,
+    },
+    {
+      name: "invalidates the published object republished without an edit",
+      next: (published: OpenClawConfig) => published,
+      emits: true,
+    },
+    {
+      name: "invalidates equal bytes whose resolution provenance changed",
+      next: () => withTokenFacts(tokenConfig(), []),
+      emits: true,
+    },
+    {
+      name: "invalidates equal bytes that lost their resolution provenance",
+      next: () => tokenConfig(),
+      emits: true,
+    },
+    {
+      name: "invalidates a distinct object matching values edited in place on the published one",
+      next: (published: OpenClawConfig) => {
+        published.gateway = { ...published.gateway, port: 19001 };
+        return withTokenFacts({ gateway: { ...tokenConfig().gateway, port: 19001 } }, [
+          "gateway.auth.token",
+        ]);
+      },
+      emits: true,
+    },
+    {
+      name: "invalidates a distinct object matching provenance changed in place on the published one",
+      next: (published: OpenClawConfig) => {
+        setConfigResolutionFacts(published, createConfigResolutionFacts([]));
+        return withTokenFacts(tokenConfig(), []);
+      },
+      emits: true,
+    },
+  ])("$name", ({ next, emits }) => {
+    const changes = vi.fn();
+    unregister.push(sessionChanges.subscribe(changes));
+    const published = withTokenFacts(tokenConfig(), ["gateway.auth.token"]);
+    setRuntimeConfigSnapshot(published);
+    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
+    changes.mockClear();
+
+    setRuntimeConfigSnapshot(next(published));
+    // Every case is still a publication; only the session change is conditional.
+    expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(2);
+    expect(changes).toHaveBeenCalledTimes(emits ? 1 : 0);
+  });
+
+  it("withholds a source-only republish only when runtime values and provenance are unchanged", () => {
+    const changes = vi.fn();
+    unregister.push(sessionChanges.subscribe(changes));
+    const runtime: OpenClawConfig = { gateway: { port: 18789 } };
+    const source = (version: string, unresolvedPaths: string[] = []): OpenClawConfig =>
+      withTokenFacts(
+        { gateway: { port: 18789 }, meta: { lastTouchedVersion: version } },
+        unresolvedPaths,
+      );
+    const advance = (sourceConfig: OpenClawConfig) => {
+      changes.mockClear();
+      expect(
+        setRuntimeConfigSourceSnapshotIfCurrent({
+          expectedRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? 0,
+          sourceConfig,
+        }),
+      ).toBe(true);
+      expect(getRuntimeConfigSourceSnapshot()).toBe(sourceConfig);
+      return changes.mock.calls.length;
+    };
+    setRuntimeConfigSnapshot(runtime, source("1"));
+
+    // A value-identical config.apply only restamps the source's meta, so no row can change.
+    expect(advance(source("2"))).toBe(0);
+    // Changed provenance is copied onto the published object in place, so rows refresh.
+    expect(advance(source("3", ["gateway.port"]))).toBe(1);
+    // So does an in-place edit of the published object made since its last publication.
+    runtime.gateway = { port: 19001 };
+    expect(advance(source("4", ["gateway.port"]))).toBe(1);
+    // And provenance changed in place, even when the newer source carries the same facts.
+    setConfigResolutionFacts(runtime, createConfigResolutionFacts([]));
+    expect(advance(source("5"))).toBe(1);
+    expect(getRuntimeConfigSnapshot()).toBe(runtime);
   });
 
   it.each([

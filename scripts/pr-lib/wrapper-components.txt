@@ -458,6 +458,7 @@ src/config/redact-snapshot.secret-ref.ts
 src/config/redact-snapshot.ts
 src/config/resolution-facts.ts
 src/config/runtime-config-capture-state.ts
+src/config/runtime-config-snapshot-match.ts
 src/config/runtime-overrides.ts
 src/config/runtime-snapshot.ts
 src/config/runtime-source-projection.ts
