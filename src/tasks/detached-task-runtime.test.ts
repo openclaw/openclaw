@@ -341,6 +341,63 @@ describe("detached-task-runtime", () => {
       task: "Owned task",
     } as const;
 
+    it.each(["finalize", "complete", "fail"] as const)(
+      "projects Incognito content before a legacy runtime's create and %s callbacks",
+      async (terminalMethod) =>
+        withRuntimeOwner(async () => {
+          const content = "Synthetic private legacy task content";
+          const writes: unknown[] = [];
+          const task = createFakeTaskRecord();
+          const finish = (terminal: { runId: string }) => {
+            writes.push(structuredClone(terminal));
+            return [task];
+          };
+          setDetachedTaskLifecycleRuntime({
+            ...getDetachedTaskLifecycleRuntime(),
+            createRunningTaskRun(input) {
+              writes.push(structuredClone(input));
+              return task;
+            },
+            finalizeTaskRunByRunId: terminalMethod === "finalize" ? finish : undefined,
+            completeTaskRunByRunId: finish,
+            failTaskRunByRunId: finish,
+          });
+          for (const incognito of [false, true]) {
+            writes.length = 0;
+            const prepared = prepareRunningTaskRun({
+              ...params,
+              ownerKey: incognito
+                ? "agent:main:dashboard:incognito-synthetic-legacy"
+                : params.ownerKey,
+              task: content,
+              label: content,
+              progressSummary: content,
+            });
+            if (prepared.kind !== "legacy") {
+              throw new Error("Expected the registered synchronous runtime");
+            }
+            prepared.finalizeRun({
+              runId: params.runId,
+              status: terminalMethod === "complete" ? "succeeded" : "failed",
+              endedAt: 200,
+              terminalSummary: content,
+              error: content,
+            });
+            expect.soft(writes).toEqual([
+              expect.objectContaining({
+                task: incognito ? "Incognito task" : content,
+                label: incognito ? "Incognito task" : content,
+                progressSummary: incognito ? null : content,
+              }),
+              expect.objectContaining({
+                terminalSummary: incognito ? null : content,
+                error: incognito ? "Incognito task error." : content,
+              }),
+            ]);
+          }
+        }),
+    );
+
     it.each(["core", "legacy"] as const)(
       "preserves %s failure custody without retrying the write",
       async (owner) =>

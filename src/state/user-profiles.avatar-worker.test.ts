@@ -17,10 +17,10 @@ import {
   readUserProfileIdentity,
   retainUserProfileCatalog,
 } from "./user-profile-list.js";
+import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import {
   adoptTailscaleProfileAvatar,
   ensureProfileForEmail,
-  getProfileAvatar,
   linkEmail,
   setAvatar,
   setDisplayName,

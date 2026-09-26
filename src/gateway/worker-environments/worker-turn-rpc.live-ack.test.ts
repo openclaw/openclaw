@@ -18,7 +18,7 @@ async function recoveredTurn(ackedSeq = 5) {
   const environmentId = "worker-recovered-live-ack";
   const sessionId = "session-recovered-live-ack";
   const previousIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-  const previous = claimWorkerPlacement({
+  const previous = await claimWorkerPlacement({
     environmentId,
     ownerEpoch: previousIdentity.ownerEpoch,
     sessionId,
@@ -38,7 +38,7 @@ async function recoveredTurn(ackedSeq = 5) {
     storePath: path.join(support.testState.root, "sessions.json"),
   };
   await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
-  const claim = placements.claimTurn({
+  const claim = await placements.claimTurn({
     ...target,
     claimId: "claim-after-recovery",
     runId: "run-after-recovery",

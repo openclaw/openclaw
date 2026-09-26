@@ -273,6 +273,15 @@ export function createSessionHistoryWorkerReaders(
             : ok(value.entry);
         },
       ),
+    readDiagnosticText: async (input) =>
+      await runRequest(
+        () => ({ kind: "session-diagnostic-text", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          assertResultKind(value, "session-diagnostic-text", "diagnostic text");
+          return value.text;
+        },
+      ),
     readEntries: async (scope) =>
       await runRequest(
         () => ({ kind: "session-entry-list", scope }),

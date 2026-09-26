@@ -9,6 +9,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { registerCapabilityCli } from "./capability-cli.js";
+import {
+  runCap,
+  runCapability,
+  runCapabilityWithParentAgent,
+  runModelAuthWithAgent,
+} from "./capability-cli.test-harness.js";
 import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
 
 const PNG_1X1_BASE64 =
@@ -21,36 +27,6 @@ function createIsomBrandBuffer(brand: "hevc" | "msf1"): Buffer {
   buffer.write("ftyp", 4, "ascii");
   buffer.write(brand, 8, "ascii");
   return buffer;
-}
-
-async function runCap(...argv: string[]): Promise<void> {
-  const program = new Command();
-  await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
-  await program.parseAsync(argv, { from: "user" });
-}
-
-function runCapability(domain: string, action: string, ...argv: string[]): Promise<void> {
-  return runCap("capability", domain, action, ...argv);
-}
-
-function runCapabilityWithParentAgent(
-  domain: string,
-  action: string,
-  agent: string,
-  ...argv: string[]
-): Promise<void> {
-  return runCap("capability", domain, "--agent", agent, action, ...argv);
-}
-
-function runModelAuthWithAgent(
-  position: "parent" | "leaf",
-  action: "login" | "logout" | "status",
-  agent: string,
-  ...argv: string[]
-): Promise<void> {
-  return position === "parent"
-    ? runCap("capability", "model", "--agent", agent, "auth", action, ...argv)
-    : runCap("capability", "model", "auth", action, "--agent", agent, ...argv);
 }
 
 function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {

@@ -52,7 +52,7 @@ suite.define(() => {
               result: { text: `${id} completed while this tab was open.` },
             },
           });
-        const fillDiagnosticLog = async () => {
+        const emitDiagnosticTraffic = async () => {
           for (let index = 0; index < 251; index += 1) {
             await gateway.emitGatewayEvent("diagnostic", { index });
           }
@@ -67,7 +67,7 @@ suite.define(() => {
         }
         await gateway.waitForRequest("connect");
         await emitTool("original", sessionKey);
-        await fillDiagnosticLog();
+        await emitDiagnosticTraffic();
         if (visit === "return") {
           await expect.poll(() => page.locator(".activity-entry").count()).toBe(1);
           const sidebar = page.locator("openclaw-app-sidebar");
@@ -80,7 +80,7 @@ suite.define(() => {
         }
         await page.locator("openclaw-activity-page").waitFor({ state: "detached" });
         await emitTool("while-away", otherSessionKey);
-        await fillDiagnosticLog();
+        await emitDiagnosticTraffic();
         const loggedEvents = await page.evaluate(() => {
           const app = document.querySelector<ActivityApp>("openclaw-app");
           if (!app) {
@@ -88,8 +88,7 @@ suite.define(() => {
           }
           return app.runtime.context.gateway.eventLog.map((event) => event.event);
         });
-        expect(loggedEvents).toHaveLength(250);
-        expect(loggedEvents).not.toContain("session.tool");
+        expect(loggedEvents).toEqual([]);
 
         await page.evaluate(() => {
           const app = document.querySelector<ActivityApp>("openclaw-app");

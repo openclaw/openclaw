@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/session-placement-admission.caller-scope.test.ts",
   "src/trajectory/runtime-store-writer.test.ts",
   "src/trajectory/runtime.test.ts",
   "src/infra/outbound/bound-delivery-router.test.ts",
@@ -444,6 +445,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/sessions/user-turn-transcript.test.ts",
   "src/sessions/user-turn-transcript.persistence.test.ts",
   "test/canonical-descendant.integration.test.ts",
+  "test/runtime-agent.codex-initialization.integration.test.ts",
   "packages/memory-host-sdk/src/host/session-memory-sync.test.ts",
   "src/agents/harness/native-hook-relay-store.test.ts",
   "src/agents/harness/native-hook-relay.approval-binding.test.ts",

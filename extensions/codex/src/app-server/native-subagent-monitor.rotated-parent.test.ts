@@ -1,12 +1,11 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -37,8 +36,8 @@ import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
   createCodexAppServerBindingStore,
-  type StoredCodexAppServerBinding,
 } from "./session-binding.js";
+import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 
 function observeCompletionAttempts() {
   const attempts = new Map<Promise<void>, string>();
@@ -121,7 +120,7 @@ it.each([
       });
       const openBindingStore = () =>
         createCodexAppServerBindingStore(
-          createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+          createCodexSqliteTestBindingStateStore({
             namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
             maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
             overflowPolicy: "reject-new",
@@ -186,6 +185,7 @@ it.each([
         signalReceiptWrite = resolve;
       });
       let receiptWrite: Promise<boolean> | undefined;
+      const receiptConsumption = createDeferred<{ pending: Promise<boolean> }>();
       let releaseInitialDelivery!: () => void;
       const initialDeliveryGate = new Promise<void>((resolve) => {
         releaseInitialDelivery = resolve;
@@ -400,12 +400,15 @@ it.each([
               })();
               return receiptWrite;
             },
-            consume: (receipt, guard) =>
-              bindingStore.mutate(
+            consume: (receipt, guard) => {
+              const pending = bindingStore.mutate(
                 identity,
                 { kind: "consume-native-subagent-submission", owner, receipt },
                 guard,
-              ),
+              );
+              receiptConsumption.resolve({ pending });
+              return pending;
+            },
           },
           runtime,
         };
@@ -456,6 +459,7 @@ it.each([
           expect(rows()).toEqual(initialRows);
           database.close();
           database = undefined;
+          await closeOpenClawStateDatabaseAsync();
           resetPluginStateStoreForTests();
           bindingStore = openBindingStore();
           expect(bindingStore.readNativeSubagentSubmissions(identity, owner)).toEqual(
@@ -520,6 +524,8 @@ it.each([
           });
           currentParent.bindTurn("cold-parent-turn");
           await currentParent.unregister();
+          const { pending } = await receiptConsumption.promise;
+          await expect(pending).resolves.toBe(true);
           await resumedCompletion;
           await completions.settle();
           expect({
@@ -686,6 +692,7 @@ it.each([
         resumedHost?.closeAdmission();
         firstHost.closeHost();
         firstHost.closeAdmission();
+        await closeOpenClawStateDatabaseAsync();
         resetPluginStateStoreForTests();
       }
     });

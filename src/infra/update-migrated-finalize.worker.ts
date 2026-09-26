@@ -189,6 +189,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
   const response: MigratedUpdateFinalizationResult = {
     result: finalized.result,
     exitCode: finalized.exitCode,
+    candidateStartAttempted: finalized.candidateStartAttempted || gatewayRestartPending,
     ...(gatewayRestartPending
       ? { restartRunId: terminal.runId }
       : { terminalRunId: terminal.runId }),
@@ -276,6 +277,7 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
         {
           inputHash: input.configInputHash,
           assertCurrent,
+          ...(input.databaseGenerations ? { databaseGenerations: input.databaseGenerations } : {}),
           ...(input.postCoreSchemaRepair === true
             ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
             : {}),
@@ -370,6 +372,7 @@ async function finalizeInput(
       : undefined;
   let result;
   let exitCode = 0;
+  let candidateStartAttempted = false;
   let automaticTriage: MigratedUpdateFinalizationResult["automaticTriage"];
   try {
     // This worker already loaded the candidate; the local flag conveys no authority.
@@ -382,7 +385,12 @@ async function finalizeInput(
           ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
           : {}),
       },
-      { candidateRuntime: true },
+      {
+        candidateRuntime: true,
+        onGatewayStartAttempted: () => {
+          candidateStartAttempted = true;
+        },
+      },
     );
   } catch (error) {
     if (!(error instanceof UpdateCommandFailure)) {
@@ -395,7 +403,7 @@ async function finalizeInput(
     await windowsRecovery?.complete(result?.status === "ok");
   }
   executorFence.assertCurrent();
-  return { run, result, exitCode, automaticTriage };
+  return { run, result, exitCode, automaticTriage, candidateStartAttempted };
 }
 
 void (async () => {

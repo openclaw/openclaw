@@ -246,7 +246,7 @@ async function readQueryableWikiPagesByPaths(
       const absolutePath = path.join(rootDir, relativePath);
       try {
         const raw = await vault.readText(relativePath);
-        const scan = scanWikiPageSummary({ absolutePath, relativePath, raw });
+        const scan = scanWikiPageSummary({ absolutePath, relativePath, raw, includeLinks: false });
         return scan.status === "valid" ? { ...scan.page, raw, parsed: scan.parsed } : null;
       } catch (error) {
         // Compiled candidates and directory listings can outlive a page. Only absence

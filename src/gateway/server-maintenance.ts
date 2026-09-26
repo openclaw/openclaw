@@ -2,6 +2,7 @@
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
+import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import {
@@ -11,7 +12,10 @@ import {
 } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sweepStaleRunContexts } from "../infra/agent-run-registry.js";
+import {
+  hasAgentRunContextExecutionOwner,
+  sweepStaleRunContexts,
+} from "../infra/agent-run-registry.js";
 import {
   captureDeliveryQueueStateContext,
   pruneExpiredDeliveryQueueTombstones,
@@ -473,10 +477,16 @@ export function startGatewayMaintenanceTimers(params: {
     // growth when many unique clients connect over time.
     pruneStaleControlPlaneBuckets(now);
 
-    // Sweep stale buffers for runs that were never explicitly aborted.
-    // Only reap orphaned buffers after the abort controller is gone; active
-    // runs can legitimately sit idle while tools/models work.
+    // Idle execution and queued delivery retain their projection until their owners settle.
     for (const [runId, record] of params.chatRunState.runs) {
+      if (
+        params.chatAbortControllers.has(runId) ||
+        params.chatQueuedTurns.has(runId) ||
+        hasAgentRunContextExecutionOwner(runId) ||
+        isActiveEmbeddedRunId(runId)
+      ) {
+        continue;
+      }
       if (record.abortMarker !== undefined) {
         if (now - chatAbortMarkerTimestampMs(record.abortMarker) > ABORTED_RUN_TTL_MS) {
           params.chatRunState.deleteAbortMarker(runId);
@@ -484,16 +494,7 @@ export function startGatewayMaintenanceTimers(params: {
         }
         continue;
       }
-      if (params.chatAbortControllers.has(runId)) {
-        continue;
-      }
-      const staleTimestamp = [
-        record.deltaSentAt,
-        record.bufferUpdatedAt,
-        record.agentText?.assistant?.lastSentAt,
-        record.agentText?.thinking?.lastSentAt,
-      ].some((timestamp) => timestamp !== undefined && now - timestamp > ABORTED_RUN_TTL_MS);
-      if (staleTimestamp) {
+      if (now - record.lastActivityAt > ABORTED_RUN_TTL_MS) {
         params.chatRunState.clearRun(runId);
       }
     }

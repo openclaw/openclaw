@@ -5,9 +5,11 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { transferFollowupCohort } from "../../../tasks/task-followup-cohort.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { SubagentRunIdLookup } from "./subagent-run-id-lookup.js";
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
 // must stay O(1) regardless of retained collector records. The map subclass
@@ -124,6 +126,7 @@ type CompletionCustody = {
 };
 
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
+  runIdLookup = new SubagentRunIdLookup();
   private readonly retirementScopes = new Set<SubagentRetirementScope>();
   private readonly registrationScopes = new Set<{ childSessionKey: string; current: boolean }>();
   private readonly completionAuthorities = new Map<SubagentRunRecord, CompletionCustody>();
@@ -207,18 +210,20 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 
   /** Same-task replacement stages custody before publication and can restore it on rollback. */
   transferCompletionAuthority(previous: SubagentRunRecord, next: SubagentRunRecord): () => void {
+    const restoreFollowup = transferFollowupCohort(previous, next);
     if (this.operatorCompletionEntries.has(previous)) {
       this.operatorCompletionEntries.add(next);
     }
     const custody = this.completionAuthorities.get(previous);
     if (!custody) {
-      return () => {};
+      return restoreFollowup;
     }
     this.completionAuthorities.delete(previous);
     custody.entry = next;
     this.completionAuthorities.set(next, custody);
     this.operatorCompletionEntries.add(next);
     return () => {
+      restoreFollowup();
       if (this.completionAuthorities.get(next) === custody) {
         this.completionAuthorities.delete(next);
         custody.entry = previous;
@@ -369,6 +374,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       }
     }
     super.set(runId, entry);
+    this.runIdLookup.set(runId, entry);
     indexSubagentRun(runsByChildSessionKey, entry.childSessionKey, runId, entry);
     indexSubagentRun(runsByRequesterSessionKey, entry.requesterSessionKey, runId, entry);
     indexSubagentRun(runsByCollectorGroupKey, collectorGroupKey(entry), runId, entry);
@@ -379,6 +385,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   override delete(runId: string): boolean {
+    this.runIdLookup.set(runId, undefined);
     const prev = this.get(runId);
     if (prev) {
       removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
@@ -409,6 +416,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     }
     this.retirementScopes.clear();
     super.clear();
+    this.runIdLookup = new SubagentRunIdLookup();
     collectorRunIdByChildSessionKey.clear();
     runsByChildSessionKey.clear();
     runsByRequesterSessionKey.clear();
@@ -418,6 +426,11 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 }
 
 export const subagentRuns = new SubagentRunMap();
+
+/** The live owner maintains identity changes; unowned Maps have no publication lifecycle. */
+export function getSubagentRunIdLookup(runs: Map<string, SubagentRunRecord>): SubagentRunIdLookup {
+  return runs instanceof SubagentRunMap ? runs.runIdLookup : new SubagentRunIdLookup(runs);
+}
 
 /** Iterate live generations for one child session without scanning the registry. */
 export function getSubagentRunsForChildSession(

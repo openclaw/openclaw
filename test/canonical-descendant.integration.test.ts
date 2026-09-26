@@ -41,7 +41,9 @@ import { seedAttachedPlacementEnvironment } from "../src/gateway/worker-environm
 import { readCodexSessionTranscriptEventsBeforeAdmission } from "../src/plugin-sdk/codex-session-transcript-runtime.js";
 import { appendSessionTranscriptMessagesByIdentity } from "../src/plugin-sdk/session-transcript-runtime.js";
 import {
+  createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  type OpenAsyncKeyedStoreOptions,
   type OpenKeyedStoreOptions,
 } from "../src/plugin-state/plugin-state-store.js";
 import { createRuntimePluginManifestLookup } from "../src/plugins/active-runtime-registry.js";
@@ -196,8 +198,10 @@ async function withFixture(
       agent: createRuntimeAgent(),
       config: { current: () => config },
       state: {
+        openKeyedStore: <T>(storeOptions: OpenAsyncKeyedStoreOptions) =>
+          createPluginStateKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
         openSyncKeyedStore: <T>(storeOptions: OpenKeyedStoreOptions) =>
-          createPluginStateSyncKeyedStore<T>("codex", storeOptions),
+          createPluginStateSyncKeyedStore<T>("codex", { ...storeOptions, env: state.env }),
       },
     });
     const admissions: Array<{ recorder: UserTurnTranscriptRecorder; before: unknown[] }> = [];
@@ -246,7 +250,9 @@ async function withFixture(
         });
         const admittedRunContext = await admission.admit("plugin-harness", runId);
         const placements = workerOwned ? createWorkerSessionPlacementStore() : undefined;
-        let workerClaim: ReturnType<NonNullable<typeof placements>["claimTurn"]> | undefined;
+        let workerClaim:
+          | Awaited<ReturnType<NonNullable<typeof placements>["claimTurn"]>>
+          | undefined;
         if (placements) {
           seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
             environmentId: "policy-worker",
@@ -285,7 +291,7 @@ async function withFixture(
             expectedGeneration: placement.generation,
             patch: { activeOwnerEpoch: 7 },
           });
-          workerClaim = placements.claimTurn({
+          workerClaim = await placements.claimTurn({
             ...target,
             runId,
             claimId: "policy-claim",
@@ -330,7 +336,7 @@ async function withFixture(
           invalidate: async (reason) => {
             if (reason === "claim") {
               if (capturedWorkerClaim) {
-                placements?.releaseTurn(capturedWorkerClaim);
+                await placements?.releaseTurn(capturedWorkerClaim);
               }
               workerClaim = undefined;
             } else if (reason === "aborted") {
@@ -355,10 +361,10 @@ async function withFixture(
             }
           },
           userTurnTranscriptRecorder: recorder,
-          close: () => {
+          close: async () => {
             host.close();
             if (workerClaim) {
-              placements?.releaseTurn(workerClaim);
+              await placements?.releaseTurn(workerClaim);
             }
             admission.close();
             successor?.close();

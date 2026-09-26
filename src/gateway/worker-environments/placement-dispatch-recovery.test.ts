@@ -52,7 +52,7 @@ describe("worker placement restart recovery", () => {
           error,
         });
         if (scenario === "claimed turn" || scenario === "pending result") {
-          const claim = placements.claimTurn({
+          const claim = await placements.claimTurn({
             ...REQUEST,
             claimId: "retirement-claim",
             runId: "retirement-run",
@@ -748,7 +748,7 @@ describe("worker placement restart recovery", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placements.claimTurn({
+    const claim = await placements.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -862,7 +862,7 @@ describe("worker placement restart recovery", () => {
       if (active.state !== "active") {
         throw new Error("active placement fixture was not active");
       }
-      const claim = placements.claimTurn({
+      const claim = await placements.claimTurn({
         sessionId: active.sessionId,
         sessionKey: active.sessionKey,
         agentId: active.agentId,
