@@ -568,6 +568,46 @@ describe("gateway plugin node capability auth", () => {
     }, "openclaw-canvas-auth-test-");
   }, 60_000);
 
+  test("rejects a scoped url with an empty leading path segment before dispatch", async () => {
+    await withLoopbackTrustedProxy(async () => {
+      await withCanvasGatewayHarness({
+        resolvedAuth: tokenResolvedAuth,
+        handleHttpRequest: allowCanvasHostHttp,
+        run: async ({ listener, clients }) => {
+          const host = "127.0.0.1";
+          const capability = "active-node";
+          clients.add(
+            makeWsClient({
+              connId: "c-active-node",
+              clientIp: "192.168.1.30",
+              role: "node",
+              mode: "node",
+              capability,
+              capabilityExpiresAtMs: Date.now() + 60_000,
+            }),
+          );
+
+          // A valid single-slash scoped link still reaches the canvas handler.
+          const valid = await fetchCanvas(
+            `http://${host}:${listener.port}${scopedCanvasPath(capability, `${CANVAS_HOST_PATH}/`)}`,
+          );
+          expect(valid.status).toBe(200);
+          expect(await valid.text()).toBe("ok");
+
+          // The same live capability with an empty leading segment after it is
+          // rejected at the scoped-URL gate before capability auth or dispatch,
+          // so it never reaches the canvas handler.
+          for (const innerPath of [`/${CANVAS_HOST_PATH}/`, `//${CANVAS_HOST_PATH}/`]) {
+            const malformed = await fetchCanvas(
+              `http://${host}:${listener.port}${scopedCanvasPath(capability, innerPath)}`,
+            );
+            expect(malformed.status).toBe(401);
+          }
+        },
+      });
+    }, "openclaw-canvas-empty-segment-test-");
+  }, 60_000);
+
   test("does not charge a stale bearer when a valid node capability succeeds", async () => {
     await withLoopbackTrustedProxy(async () => {
       const rateLimiter = createGatewayAuthRateLimiter({
