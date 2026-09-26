@@ -21,6 +21,7 @@ import { logWarn } from "../logger.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/account-id.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
+  isSubagentSessionKey,
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
@@ -39,6 +40,7 @@ import {
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+import { resolveSubagentSessionMessagingScope } from "./subagent-session-messaging.js";
 import {
   resolveSubagentCapabilityStore,
   resolveStoredSubagentInheritedToolAllowlist,
@@ -55,6 +57,12 @@ import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 export { resolveProviderToolPolicy };
 
 /**
+ * Direct session messaging. Denied for every subagent role by default; the
+ * operator can re-enable it through `tools.subagents.messaging: "peers"`.
+ */
+const SUBAGENT_SESSION_MESSAGING_TOOL = "sessions_send";
+
+/**
  * Tools always denied for sub-agents regardless of depth.
  * These are system-level or interactive tools that sub-agents should never use.
  */
@@ -69,7 +77,7 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   AUTOMATIONS_TOOL_NAME,
   // Direct user/session sends - subagents communicate through announce chain
   "message",
-  "sessions_send",
+  SUBAGENT_SESSION_MESSAGING_TOOL,
   "conversations_list",
   "conversations_send",
   "conversations_turn",
@@ -84,11 +92,18 @@ const SUBAGENT_TOOL_DENY_LEAF = [
   "sessions_spawn",
 ];
 
-function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
+function resolveSubagentDenyListForRole(
+  role: SubagentSessionRole,
+  opts?: { allowSessionMessaging?: boolean },
+): string[] {
+  const denyAlways =
+    opts?.allowSessionMessaging === true
+      ? SUBAGENT_TOOL_DENY_ALWAYS.filter((tool) => tool !== SUBAGENT_SESSION_MESSAGING_TOOL)
+      : SUBAGENT_TOOL_DENY_ALWAYS;
   if (role === "leaf") {
-    return [...SUBAGENT_TOOL_DENY_ALWAYS, ...SUBAGENT_TOOL_DENY_LEAF];
+    return [...denyAlways, ...SUBAGENT_TOOL_DENY_LEAF];
   }
-  return [...SUBAGENT_TOOL_DENY_ALWAYS];
+  return [...denyAlways];
 }
 
 function mergeConfiguredSubagentAllow(
@@ -117,8 +132,13 @@ export function resolveSubagentToolPolicyForSession(
   });
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
   const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
+  // The grant is limited to native `agent:*:subagent:*` children so the same
+  // key-shape predicate also gates the sessions_send visibility clamp. ACP and
+  // visible dashboard children keep the hard deny.
+  const allowSessionMessaging =
+    resolveSubagentSessionMessagingScope(cfg) === "peers" && isSubagentSessionKey(sessionKey);
   const deny = [
-    ...resolveSubagentDenyListForRole(capabilities.role),
+    ...resolveSubagentDenyListForRole(capabilities.role, { allowSessionMessaging }),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
   const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);

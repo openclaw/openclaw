@@ -13,9 +13,11 @@ target agent first. After that, OpenClaw applies the sub-agent restriction
 layer.
 
 Sub-agents always lose `gateway`, `agents_list`, `session_status`, `progress_card`, `cron`,
-`message`, `sessions_send`, and the `conversations_*` tools regardless of
+`message`, and the `conversations_*` tools regardless of
 depth or role (system-level/interactive tools, parent-owned progress cards, direct delivery surfaces, or
-tools the main agent should coordinate). This hard-deny layer is derived from
+tools the main agent should coordinate). `sessions_send` is also denied by
+default and can only be restored by the operator switch below, never by
+`allow`/`alsoAllow`. This hard-deny layer is derived from
 the persisted sub-agent session envelope on every turn, including resumed and
 visible dashboard sessions; ordinary `allow`/`alsoAllow` entries cannot override
 it. Hidden launches also disable `message` before tool construction as defense in
@@ -28,6 +30,37 @@ is neither a raw transcript dump nor a prose-only rendering.
 
 By default, sub-agents below depth `5` receive `sessions_spawn`, `subagents`,
 `sessions_list`, and `sessions_history` so they can manage their children.
+
+### Peer session messaging for spawned sub-agents
+
+Spawned children coordinate by default through the announce chain: the parent
+sends input, and a child reports completion back to its parent. Children cannot
+message each other directly.
+
+An operator can grant spawned sub-agents a bounded peer-messaging surface:
+
+```json5
+{
+  tools: {
+    subagents: {
+      messaging: "peers",
+    },
+  },
+}
+```
+
+With `messaging: "peers"`, native `sessions_spawn` subagent children (hidden
+`agent:*:subagent:*` sessions) receive `sessions_send` again, but the grant is
+clamped to the child's own agent sessions (parent, siblings, and descendants).
+Visible dashboard children and ACP children keep the hard deny. Cross-agent
+sends stay denied, and `message` plus the
+`conversations_*` tools stay hard-denied, so channel delivery remains
+parent-owned. The grant is re-evaluated from config on every turn: setting
+`messaging: "off"` (the default) removes the tool again on the next turn.
+
+This is an explicit operator decision because it widens the child's direct
+session surface. Keep it `"off"` unless a multi-lane protocol such as
+executor/verifier needs children to relay results to each other.
 
 ### Override via config
 

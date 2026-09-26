@@ -385,6 +385,128 @@ describe("resolveSubagentToolPolicyForSession", () => {
     },
   );
 
+  it("re-enables only sessions_send under the operator peers grant", async () => {
+    const storePath = createSessionStorePath("openclaw-subagent-peers-messaging");
+    const sessionKeys = {
+      leaf: "agent:main:subagent:peers-leaf",
+      orchestrator: "agent:main:subagent:peers-orchestrator",
+    } as const;
+    await writeSessionEntries(storePath, {
+      [sessionKeys.leaf]: {
+        sessionId: "peers-leaf",
+        updatedAt: Date.now(),
+        spawnDepth: 2,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      },
+      [sessionKeys.orchestrator]: {
+        sessionId: "peers-orchestrator",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+      },
+    });
+    const cfg = {
+      ...baseCfg,
+      session: { store: storePath },
+      tools: { subagents: { messaging: "peers" } },
+    } as unknown as OpenClawConfig;
+
+    for (const sessionKey of Object.values(sessionKeys)) {
+      const policy = resolveSubagentToolPolicyForSession(cfg, sessionKey);
+      expect(isToolAllowedByPolicyName("sessions_send", policy), sessionKey).toBe(true);
+      // Channel delivery and peer-conversation tools stay hard-denied.
+      expect(isToolAllowedByPolicyName("message", policy), sessionKey).toBe(false);
+      expect(isToolAllowedByPolicyName("conversations_send", policy), sessionKey).toBe(false);
+      expect(isToolAllowedByPolicyName("conversations_list", policy), sessionKey).toBe(false);
+      expect(isToolAllowedByPolicyName("gateway", policy), sessionKey).toBe(false);
+      expect(isToolAllowedByPolicyName("progress_card", policy), sessionKey).toBe(false);
+    }
+  });
+
+  it("keeps sessions_send denied for ACP and visible dashboard children under the peers grant", async () => {
+    const storePath = createSessionStorePath("openclaw-subagent-peers-nonnative");
+    const sessionKeys = {
+      acp: "agent:main:acp:peers-child",
+      dashboard: "agent:main:dashboard:peers-child",
+    } as const;
+    await writeSessionEntries(storePath, {
+      [sessionKeys.acp]: {
+        sessionId: "peers-acp",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:subagent:parent",
+        spawnDepth: 2,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+      },
+      [sessionKeys.dashboard]: {
+        sessionId: "peers-dashboard",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:dashboard:parent",
+        spawnDepth: 1,
+      },
+    });
+    const cfg = {
+      ...baseCfg,
+      session: { store: storePath },
+      tools: { subagents: { messaging: "peers" } },
+    } as unknown as OpenClawConfig;
+
+    // Only native `agent:*:subagent:*` children receive the grant, so the
+    // sessions_send visibility clamp key-shape stays in sync with the grant.
+    for (const sessionKey of Object.values(sessionKeys)) {
+      const policy = resolveSubagentToolPolicyForSession(cfg, sessionKey);
+      expect(isToolAllowedByPolicyName("sessions_send", policy), sessionKey).toBe(false);
+    }
+  });
+
+  it("keeps sessions_send denied when messaging is off or unset", async () => {
+    const storePath = createSessionStorePath("openclaw-subagent-messaging-off");
+    const sessionKey = "agent:main:subagent:messaging-off";
+    await writeSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "messaging-off",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+      },
+    });
+
+    for (const tools of [undefined, { subagents: { messaging: "off" } }] as const) {
+      const cfg = {
+        ...baseCfg,
+        session: { store: storePath },
+        ...(tools ? { tools } : {}),
+      } as unknown as OpenClawConfig;
+      const policy = resolveSubagentToolPolicyForSession(cfg, sessionKey);
+      expect(isToolAllowedByPolicyName("sessions_send", policy), JSON.stringify(tools)).toBe(false);
+    }
+  });
+
+  it("lets an explicit subagent deny keep sessions_send denied under the peers grant", async () => {
+    const storePath = createSessionStorePath("openclaw-subagent-peers-deny");
+    const sessionKey = "agent:main:subagent:peers-denied";
+    await writeSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "peers-denied",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+      },
+    });
+    const cfg = {
+      ...baseCfg,
+      session: { store: storePath },
+      tools: { subagents: { messaging: "peers", tools: { deny: ["sessions_send"] } } },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, sessionKey);
+    expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(false);
+  });
+
   it("resolves inherited tool denies from stored subagent sessions", async () => {
     const storePath = createSessionStorePath("openclaw-subagent-inherited-deny");
     await writeSessionEntries(storePath, {

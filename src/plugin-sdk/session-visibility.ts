@@ -159,8 +159,18 @@ export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionTools
 export function resolveEffectiveSessionToolsVisibility(params: {
   cfg: OpenClawConfig;
   sandboxed: boolean;
+  /**
+   * True when the requester is a subagent granted peer session messaging.
+   * Narrows an otherwise gateway-wide `all` visibility to the child's own agent
+   * sessions so the operator opt-in cannot become cross-agent direct delivery.
+   * Explicitly narrower operator settings are preserved.
+   */
+  subagentPeerMessaging?: boolean;
 }): SessionToolsVisibility {
   const visibility = resolveSessionToolsVisibility(params.cfg);
+  if (params.subagentPeerMessaging === true && visibility === "all") {
+    return "agent";
+  }
   if (!params.sandboxed) {
     return visibility;
   }
