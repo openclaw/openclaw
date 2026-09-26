@@ -555,31 +555,31 @@ impl AppView {
             "model-picker",
             self.model_controls.model_open,
             &self.model_controls.menu_focus,
+            trigger.child(content),
+            move |open, window, cx| {
+                let _ = owner.update(cx, |this, cx| {
+                    if this.model_controls_disabled_reason().is_some() {
+                        this.model_controls.model_open = false;
+                        return;
+                    }
+                    this.model_controls.model_open = *open;
+                    this.model_controls.effort_open = false;
+                    this.model_controls.accounts_open = false;
+                    this.model_controls.expanded_providers.clear();
+                    this.model_controls.highlight = 0;
+                    this.model_controls
+                        .menu_scroll
+                        .set_offset(point(px(0.), px(0.)));
+                    this.model_controls
+                        .search
+                        .update(cx, |search, cx| search.set_value("", window, cx));
+                    if *open {
+                        this.load_model_controls(control_target.clone(), cx);
+                    }
+                    cx.notify();
+                });
+            },
         )
-        .on_open_change(move |open, window, cx| {
-            let _ = owner.update(cx, |this, cx| {
-                if this.model_controls_disabled_reason().is_some() {
-                    this.model_controls.model_open = false;
-                    return;
-                }
-                this.model_controls.model_open = *open;
-                this.model_controls.effort_open = false;
-                this.model_controls.accounts_open = false;
-                this.model_controls.expanded_providers.clear();
-                this.model_controls.highlight = 0;
-                this.model_controls
-                    .menu_scroll
-                    .set_offset(point(px(0.), px(0.)));
-                this.model_controls
-                    .search
-                    .update(cx, |search, cx| search.set_value("", window, cx));
-                if *open {
-                    this.load_model_controls(control_target.clone(), cx);
-                }
-                cx.notify();
-            });
-        })
-        .trigger(trigger.child(content))
         .child(menu_surface(p).child(menu))
         .into_any_element()
     }
@@ -1329,17 +1329,17 @@ impl AppView {
                 "effort-picker",
                 self.model_controls.effort_open,
                 &self.model_controls.effort_focus,
+                trigger.child(content),
+                move |open, _, cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        this.model_controls.effort_open =
+                            *open && this.model_controls_disabled_reason().is_none();
+                        this.model_controls.model_open = false;
+                        this.model_controls.effort_preview = None;
+                        cx.notify();
+                    });
+                },
             )
-            .on_open_change(move |open, _, cx| {
-                let _ = owner.update(cx, |this, cx| {
-                    this.model_controls.effort_open =
-                        *open && this.model_controls_disabled_reason().is_none();
-                    this.model_controls.model_open = false;
-                    this.model_controls.effort_preview = None;
-                    cx.notify();
-                });
-            })
-            .trigger(trigger.child(content))
             .child(menu_surface(p).child(menu))
             .into_any_element(),
         )

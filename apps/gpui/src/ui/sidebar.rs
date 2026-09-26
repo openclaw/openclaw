@@ -412,6 +412,7 @@ impl AppView {
                             .text_color(p.muted),
                     )
                     .accessibility_label("Profile and settings")
+                    .map(super::components::menu_trigger)
                     .dropdown_menu(move |menu, window, cx| {
                         let mut menu =
                             append_identity_navigation(menu.label(name.clone()), view.clone());
