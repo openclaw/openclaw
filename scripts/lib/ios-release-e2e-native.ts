@@ -2,12 +2,15 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DevicePairSetupCodeResult } from "../../packages/gateway-protocol/src/schema/devices.js";
 import { isGatewayTransportError } from "../../src/gateway/transport-error.js";
 import type { OpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
+import { readMockUserText } from "../e2e/lib/mock-inference-facts.js";
 import {
   gatewayEnv,
+  IOS_RELEASE_REPLY_FAILURE,
   IOS_RELEASE_TESTS,
   MODEL_REF,
   OperationError,
@@ -21,6 +24,12 @@ import { hasUnjoinedWork, runManagedCommand } from "./managed-child-process.mjs"
 
 const DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro";
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu;
+const CHAT_MARKERS = [
+  ["seed-0", "OPENCLAW_E2E_SEED_0_"],
+  ["seed-1", "OPENCLAW_E2E_SEED_1_"],
+  ["seed-2", "OPENCLAW_E2E_SEED_2_"],
+  ["final", "OPENCLAW_E2E_OK_"],
+] as const;
 
 export async function createNativeDependencies(options: {
   mode: Mode;
@@ -44,10 +53,30 @@ export async function createNativeDependencies(options: {
     operation: Operation,
     bin: string,
     args: string[],
-    config: { env?: NodeJS.ProcessEnv; timeoutMs?: number; cleanup?: boolean } = {},
+    config: {
+      env?: NodeJS.ProcessEnv;
+      timeoutMs?: number;
+      cleanup?: boolean;
+      captureReplyFailure?: () => Promise<string[]>;
+    } = {},
   ) => {
     let stdout = "";
     let stderr = "";
+    const started = performance.now();
+    let failureContext: Promise<string[]> | undefined;
+    const observeReplyFailure = () => {
+      const capture = config.captureReplyFailure;
+      if (!failureContext && capture && IOS_RELEASE_REPLY_FAILURE.test(`${stdout}\n${stderr}`)) {
+        const timing = `failure-evidence-at-ms:${Math.round(performance.now() - started)}`;
+        // Snapshot at the assertion, before XCTest's potentially lengthy teardown; always join below.
+        failureContext = Promise.resolve()
+          .then(capture)
+          .then(
+            (context) => [timing, ...context],
+            () => [timing, "chat-evidence-unavailable"],
+          );
+      }
+    };
     let code: number;
     try {
       code = await runManagedCommand({
@@ -62,9 +91,11 @@ export async function createNativeDependencies(options: {
         onReady(child) {
           child.stdout?.on("data", (chunk: Buffer) => {
             stdout = (stdout + chunk.toString()).slice(-16 * 1024 * 1024);
+            observeReplyFailure();
           });
           child.stderr?.on("data", (chunk: Buffer) => {
             stderr = (stderr + chunk.toString()).slice(-4096);
+            observeReplyFailure();
           });
         },
       });
@@ -72,10 +103,15 @@ export async function createNativeDependencies(options: {
       if (hasUnjoinedWork(error)) {
         preserveResources();
       }
-      throw operationError(operation, error, `${stderr}\n${stdout}`);
+      const failure = operationError(operation, error, `${stderr}\n${stdout}`);
+      failure.diagnostic.context.push(...((await failureContext) ?? []));
+      throw failure;
     }
+    const context = (await failureContext) ?? [];
     if (code !== 0) {
-      throw new OperationError(operation, "exit", code, `${stderr}\n${stdout}`);
+      const failure = new OperationError(operation, "exit", code, `${stderr}\n${stdout}`);
+      failure.diagnostic.context.push(...context);
+      throw failure;
     }
     return stdout.trim();
   };
@@ -374,6 +410,7 @@ export async function createNativeDependencies(options: {
                 throw new OperationError("setup-code", "failed");
               }
               const resultBundle = path.join(root, `trial-${index}.xcresult`);
+              const fixture = instance;
               await command(
                 "native-test",
                 "xcodebuild",
@@ -386,7 +423,99 @@ export async function createNativeDependencies(options: {
                   `-only-testing:${test}`,
                   "test-without-building",
                 ],
-                { env: testRunnerEnv(setupCode.trim()), timeoutMs: 600_000 },
+                {
+                  env: testRunnerEnv(setupCode.trim()),
+                  timeoutMs: 600_000,
+                  async captureReplyFailure() {
+                    const facts = new Set<string>();
+                    const logs = fixture.logs();
+                    for (const stage of ["start", "first_event", "completed", "error"]) {
+                      if (logs.includes(`[responses] ${stage} `)) {
+                        facts.add(`model-any-request-stage:${stage}`);
+                      }
+                    }
+                    const [requests, history] = await Promise.allSettled([
+                      readFile(requestLog, "utf8"),
+                      callGateway<unknown>({
+                        config: {},
+                        configPath: fixture.configPath,
+                        url: fixture.url,
+                        token: fixture.gatewayToken,
+                        ignoreEnvUrlOverride: true,
+                        deviceIdentity: null,
+                        sharedStateMode: "read-only",
+                        method: "chat.history",
+                        params: { sessionKey: "main", limit: 20, maxBytes: 50_000 },
+                        timeoutMs: 5_000,
+                        signal: options.signal,
+                      }),
+                    ]);
+                    try {
+                      if (requests.status !== "fulfilled") {
+                        throw new Error("request-log-unavailable");
+                      }
+                      const lastMarker = (text: string) =>
+                        [...text.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu)].at(
+                          -1,
+                        )?.[0];
+                      const markerStage = (marker: string | undefined) =>
+                        CHAT_MARKERS.find(([, prefix]) => marker?.startsWith(prefix))?.[0] ??
+                        "other";
+                      for (const line of requests.value.trim().split("\n").slice(-20)) {
+                        const request: unknown = JSON.parse(line);
+                        if (
+                          !isRecord(request) ||
+                          request.path !== "/v1/responses" ||
+                          typeof request.body !== "string"
+                        ) {
+                          continue;
+                        }
+                        const body: unknown = JSON.parse(request.body);
+                        if (!isRecord(body) || body.model !== "ios-e2e") {
+                          continue;
+                        }
+                        const input = Array.isArray(body.input) ? body.input : [];
+                        const user = input
+                          .map(readMockUserText)
+                          .findLast((text) => text !== undefined);
+                        const userMarker = lastMarker(user ?? "");
+                        const tailMarker = lastMarker(request.body);
+                        facts.add(`provider-latest-user:${markerStage(userMarker)}`);
+                        facts.add(`provider-body-tail:${markerStage(tailMarker)}`);
+                        facts.add(
+                          `provider-marker-match:${userMarker !== undefined && userMarker === tailMarker}`,
+                        );
+                      }
+                      facts.add("provider-evidence-read");
+                    } catch {
+                      facts.add("provider-evidence-unavailable");
+                    }
+                    if (
+                      history.status === "fulfilled" &&
+                      isRecord(history.value) &&
+                      Array.isArray(history.value.messages)
+                    ) {
+                      for (const message of history.value.messages) {
+                        if (
+                          !isRecord(message) ||
+                          (message.role !== "user" && message.role !== "assistant")
+                        ) {
+                          continue;
+                        }
+                        const content = JSON.stringify(message.content) ?? "";
+                        for (const [stage, marker] of CHAT_MARKERS) {
+                          if (content.includes(marker)) {
+                            facts.add(`history-${message.role}:${stage}`);
+                          }
+                        }
+                      }
+                      facts.add("history-evidence-read");
+                    } else {
+                      facts.add("history-evidence-unavailable");
+                    }
+                    return [...facts];
+                  },
+                },
               );
               if (mockFailed) {
                 throw new OperationError("fixture-server", "failed");

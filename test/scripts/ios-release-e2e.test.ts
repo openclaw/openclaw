@@ -535,6 +535,8 @@ describe("native command adapter", () => {
     "test-unjoined",
     "test-exit",
     "test-timeout-output",
+    "reply-failure-evidence",
+    "reply-failure-history-error",
   ])("owns admission, build, test and cleanup for %s", async (scenario) => {
     const temp = tempDirs.make("ios-release-e2e-adapter-");
     vi.spyOn(os, "tmpdir").mockReturnValue(temp);
@@ -547,7 +549,21 @@ describe("native command adapter", () => {
     );
     vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", "");
     const instances: { cleanup: ReturnType<typeof vi.fn> }[] = [];
-    nativeMocks.rpc.mockImplementation(async () => {
+    let nativeCommandActive = false;
+    let historyReadBeforeCommandExit = false;
+    nativeMocks.rpc.mockImplementation(async (options) => {
+      if (options.method === "chat.history") {
+        historyReadBeforeCommandExit = nativeCommandActive;
+        if (scenario === "reply-failure-history-error") {
+          throw new Error("private history failure");
+        }
+        return {
+          messages: [
+            { role: "user", content: [{ type: "text", text: "OPENCLAW_E2E_OK_200" }] },
+            { role: "assistant", content: [{ type: "text", text: "OPENCLAW_E2E_SEED_0_100" }] },
+          ],
+        };
+      }
       if (scenario === "setup-code-timeout") {
         throw new Error("private fixture command failed", {
           cause: Object.assign(new Error("private setup code and path"), { code: "ETIMEDOUT" }),
@@ -570,6 +586,7 @@ describe("native command adapter", () => {
         gatewayToken: `synthetic-token-${index}`,
         configPath: `/private/fixture-${index}/config.json`,
         startGateway: vi.fn(async () => {}),
+        logs: () => "private log\n[responses] start private\n[responses] completed private\n",
         cleanup: vi.fn(async () => {
           if (scenario === "cleanup-failure") {
             throw new Error("private cleanup failure");
@@ -588,9 +605,29 @@ describe("native command adapter", () => {
       options.onReady?.({ stdout, stderr } as unknown as ChildProcess);
       const args = options.args as string[];
       if (args.includes("scripts/e2e/mock-openai-server.mjs")) {
+        const body = scenario.startsWith("reply-failure-")
+          ? {
+              model: "ios-e2e",
+              input: [
+                {
+                  role: "user",
+                  content: "Reply exactly with OPENCLAW_E2E_OK_200 and no other text.",
+                },
+              ],
+              metadata: { title: "OPENCLAW_E2E_SEED_0_100" },
+            }
+          : { model: "ios-e2e" };
+        const requests = [body];
+        if (scenario.startsWith("reply-failure-")) {
+          requests.push({ model: "ios-e2e" });
+        }
         writeFileSync(
           options.env.MOCK_REQUEST_LOG,
-          `${JSON.stringify({ path: "/v1/responses", body: JSON.stringify({ model: "ios-e2e" }) })}\n`,
+          requests
+            .map((requestBody) =>
+              JSON.stringify({ path: "/v1/responses", body: JSON.stringify(requestBody) }),
+            )
+            .join("\n") + "\n",
         );
         stdout.write("mock-openai listening on 20001\n");
         await new Promise<void>((_resolve, reject) => {
@@ -692,6 +729,20 @@ describe("native command adapter", () => {
           return 65;
         }
       } else if (args.includes("test-without-building")) {
+        if (
+          scenario.startsWith("reply-failure-") &&
+          args.includes(`-only-testing:${IOS_RELEASE_TESTS[1]}`)
+        ) {
+          nativeCommandActive = true;
+          stdout.write(
+            "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' started.\n" +
+              "/private/checkout/OpenClawSnapshotUITests.swift:1911: error: private IOS_RELEASE_REPLY_MISSING final keyboard=true writing=false jump=true\n" +
+              "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' failed (99 seconds).\n",
+          );
+          await Promise.resolve();
+          nativeCommandActive = false;
+          throw Object.assign(new Error("private timeout diagnostics"), { code: "ETIMEDOUT" });
+        }
         if (scenario === "test-timeout-output") {
           stdout.write(
             "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' started.\n" +
@@ -795,6 +846,37 @@ describe("native command adapter", () => {
     });
     try {
       const report = await runTrials("stock", native.dependencies);
+      if (scenario.startsWith("reply-failure-")) {
+        expect(report.complete).toBe(true);
+        expect(report.trials.map((trial) => trial.status)).toEqual(["passed", "failed"]);
+        expect(report.trials[1]).toMatchObject({
+          errors: ["test-timeout"],
+          diagnostics: [{ operation: "native-test", code: "timeout", errorCode: "ETIMEDOUT" }],
+        });
+        const context = report.trials[1]?.diagnostics[0]?.context;
+        expect(context).toEqual(
+          expect.arrayContaining([
+            "reply-stage:final",
+            "reply-keyboard:true",
+            "reply-writing:false",
+            "reply-jump:true",
+            "provider-latest-user:final",
+            "provider-body-tail:seed-0",
+            "provider-marker-match:false",
+            "model-any-request-stage:start",
+            "model-any-request-stage:completed",
+            expect.stringMatching(/^failure-evidence-at-ms:\d+$/),
+            ...(scenario === "reply-failure-history-error"
+              ? ["history-evidence-unavailable"]
+              : ["history-user:final", "history-assistant:seed-0"]),
+          ]),
+        );
+        expect(context).not.toContain("provider-marker-match:true");
+        expect(historyReadBeforeCommandExit).toBe(true);
+        expect(instances.every((instance) => instance.cleanup.mock.calls.length === 1)).toBe(true);
+        expect(JSON.stringify(report)).not.toMatch(/private|OPENCLAW_E2E_|metadata/);
+        return;
+      }
       if (scenario === "test-timeout-output") {
         expect(report.complete).toBe(true);
         for (const trial of report.trials) {

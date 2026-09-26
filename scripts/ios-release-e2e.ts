@@ -12,6 +12,8 @@ export const IOS_RELEASE_TESTS = [
   "OpenClawUITests/OpenClawSnapshotUITests/testLiveGatewayChatRoundTripAndControlOverview",
 ] as const;
 export const MODEL_REF = "openai/ios-e2e";
+export const IOS_RELEASE_REPLY_FAILURE =
+  /IOS_RELEASE_REPLY_MISSING (seed-[0-2]|final) keyboard=(true|false) writing=(true|false) jump=(true|false)/u;
 export const SAMPLE_INTERVAL_MS = 1_000;
 export const MAX_SAMPLE_GAP_MS = 3_000;
 export type Mode = "stock" | "compare";
@@ -83,6 +85,15 @@ export class OperationError extends Error {
         .map(([, tag]) => tag),
     };
     if (operation === "native-test") {
+      const replyFailure = output.match(IOS_RELEASE_REPLY_FAILURE);
+      if (replyFailure) {
+        this.diagnostic.context.push(
+          `reply-stage:${replyFailure[1]}`,
+          `reply-keyboard:${replyFailure[2]}`,
+          `reply-writing:${replyFailure[3]}`,
+          `reply-jump:${replyFailure[4]}`,
+        );
+      }
       for (const status of ["started", "passed", "failed"] as const) {
         if (
           IOS_RELEASE_TESTS.some((test) => {
@@ -261,6 +272,7 @@ export const gatewayEnv = {
   OPENCLAW_SKIP_CHANNELS: "0",
   OPENCLAW_SKIP_PROVIDERS: "0",
   OPENAI_API_KEY: "ios-e2e-synthetic-key",
+  OPENCLAW_DEBUG_MODEL_TRANSPORT: "1",
 };
 
 export function testRunnerEnv(setupCode: string): NodeJS.ProcessEnv {

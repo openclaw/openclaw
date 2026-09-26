@@ -1032,6 +1032,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
             try self.sendLiveGatewayMessage(
                 "\(seedContext)Reply exactly with \(seedMarker) and no other text.",
                 expecting: seedMarker,
+                stage: "seed-\(index)",
                 dismissKeyboard: false,
                 in: app)
         }
@@ -1040,6 +1041,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         try self.sendLiveGatewayMessage(
             "Reply exactly with \(replyMarker) and no other text.",
             expecting: replyMarker,
+            stage: "final",
             dismissKeyboard: true,
             in: app)
         let jumpToLatest = app.buttons["Jump to latest reply"]
@@ -1871,6 +1873,7 @@ extension OpenClawSnapshotUITests {
     private func sendLiveGatewayMessage(
         _ text: String,
         expecting replyMarker: String,
+        stage: String,
         dismissKeyboard: Bool,
         in app: XCUIApplication) throws
     {
@@ -1908,7 +1911,10 @@ extension OpenClawSnapshotUITests {
 
         let submittedText = app.staticTexts.matching(NSPredicate(format: "label == %@", text)).firstMatch
         XCTAssertTrue(submittedText.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts[replyMarker].waitForExistence(timeout: 60))
+        XCTAssertTrue(
+            app.staticTexts[replyMarker].waitForExistence(timeout: 60),
+            "IOS_RELEASE_REPLY_MISSING \(stage) keyboard=\(app.keyboards.firstMatch.exists) " +
+                "writing=\(app.staticTexts["Writing"].exists) jump=\(app.buttons["Jump to latest reply"].exists)")
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
     }
 
