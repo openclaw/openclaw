@@ -370,6 +370,35 @@ const OMITTED_HISTORY: JsonValue = {
   ],
 };
 
+// OpenClaw failure notices are renderer diagnostics, not conversational content.
+// Retain the missing reply without replaying their arbitrary content or details.
+const NATIVE_FAILED_RUN_CUSTOM_TYPE = "run-failed-before-reply";
+const NATIVE_FAILED_RUN_NOTICE: JsonValue = {
+  type: "message",
+  role: "user",
+  content: [
+    {
+      type: "input_text",
+      text:
+        "[A previous turn ended without an assistant reply. Use its recorded tool results " +
+        "to determine what completed; do not repeat completed actions.]",
+    },
+  ],
+};
+
+/** Recognize only the exact native failed-run notice shape; payloads stay unreplayed. */
+function isNativeFailedRunNotice(message: AgentMessage): boolean {
+  if (message.role !== "custom" || !isRecord(message)) {
+    return false;
+  }
+  return (
+    message.customType === NATIVE_FAILED_RUN_CUSTOM_TYPE &&
+    message.display &&
+    typeof message.content === "string" &&
+    isRecord(message.details)
+  );
+}
+
 /** Keep the nearest whole prior turns, reserving the budget for current evidence. */
 export class SettledTurnPriorContext {
   private groups: HistoryProjection[] = [];
@@ -383,13 +412,20 @@ export class SettledTurnPriorContext {
   }
 
   append(message: AgentMessage): void {
+    // A native failed-run notice neither opens a new group nor settles an
+    // in-flight tool call; it only records the failure inside its group.
+    const isFailedRunNotice = isNativeFailedRunNotice(message);
     // A user message while a tool is in flight steers the same atomic group.
     if (message.role === "user" && this.active.pending.size === 0) {
       this.finishGroup();
       this.active = new HistoryProjection(this.seenCallIds, "omit");
     }
     const wasOmitted = this.active.omitted;
-    this.active.append(message);
+    if (isFailedRunNotice) {
+      this.active.appendItem(NATIVE_FAILED_RUN_NOTICE);
+    } else {
+      this.active.append(message);
+    }
     if (!wasOmitted && this.active.omitted) {
       // An oversized prior turn is omitted as a whole, not replayed as a partial
       // tool exchange. Older groups are no longer a contiguous context suffix.
