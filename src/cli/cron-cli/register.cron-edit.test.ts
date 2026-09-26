@@ -97,6 +97,10 @@ describe("cron edit command", () => {
     });
   });
 
+  it.each(["", "   "])("rejects a blank --name value before Gateway access", async (value) => {
+    await expectCronEditRejection(["--name", value], "--name must not be blank");
+  });
+
   it.each(["", "   "])("rejects a blank --display-name value", async (value) => {
     await expectCronEditRejection(["--display-name", value], "--display-name must not be blank");
   });

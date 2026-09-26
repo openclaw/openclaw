@@ -198,6 +198,9 @@ export function registerCronEditCommand(cron: Command) {
             : undefined;
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") {
+            if (!normalizeOptionalString(opts.name)) {
+              throw new CronCliError("--name must not be blank");
+            }
             patch.name = opts.name;
           }
           const displayName = parseCronStringOption(opts.displayName, "--display-name");
