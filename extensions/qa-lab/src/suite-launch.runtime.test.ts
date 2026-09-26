@@ -20,7 +20,6 @@ import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type { QaSuiteRunParams, QaSuiteScenarioResult } from "./suite.js";
-import { throwQaSuiteCleanupErrors } from "./suite.js";
 import type { QaTestFileScenarioRunResult } from "./test-file-scenario-runner.js";
 import {
   makeTestFileScenario,
@@ -73,7 +72,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
   return { ...actual, replaceFileAtomic: replaceFileAtomicMock };
 });
 
-import { runQaSuite, runQaSuiteWithInfraRetry } from "./suite-launch.runtime.js";
+import { runQaSuite } from "./suite-launch.runtime.js";
 
 const tempRoots: string[] = [];
 
@@ -98,14 +97,6 @@ async function writeEvidence(pathLocal: string, writeFile = true) {
   return evidence;
 }
 
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 function requireDefaultQaFlowSuiteImplementation() {
   const implementation = runQaFlowSuite.getMockImplementation();
   if (!implementation) {
@@ -124,8 +115,8 @@ function requireDefaultQaTestFileImplementation() {
 
 function blockNextQaFlowSuite() {
   const implementation = requireDefaultQaFlowSuiteImplementation();
-  const started = createDeferred();
-  const blocked = createDeferred();
+  const started = Promise.withResolvers<void>();
+  const blocked = Promise.withResolvers<void>();
   runQaFlowSuite.mockImplementationOnce(async (params) => {
     started.resolve();
     await blocked.promise;
@@ -136,8 +127,8 @@ function blockNextQaFlowSuite() {
 
 function blockNextQaTestFileRun() {
   const implementation = requireDefaultQaTestFileImplementation();
-  const started = createDeferred();
-  const blocked = createDeferred();
+  const started = Promise.withResolvers<void>();
+  const blocked = Promise.withResolvers<void>();
   runQaTestFileScenarios.mockImplementationOnce(async (params) => {
     started.resolve();
     await blocked.promise;
@@ -957,34 +948,6 @@ describe("qa suite runtime launcher", () => {
       }
     },
   );
-
-  it("retries a cleanup-only ECONNRESET through its preserved cause", async () => {
-    const cleanupError = Object.assign(new Error("cleanup socket reset"), {
-      code: "ECONNRESET",
-    });
-    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    let attempts = 0;
-
-    try {
-      const result = await runQaSuiteWithInfraRetry(async () => {
-        attempts += 1;
-        if (attempts === 1) {
-          throwQaSuiteCleanupErrors({
-            cleanupFailures: [{ phase: "lab stop", error: cleanupError }],
-            runFailed: false,
-            runError: undefined,
-          });
-        }
-        return "retried";
-      }, 1);
-
-      expect(result).toBe("retried");
-      expect(attempts).toBe(2);
-      expect(stderrWrite.mock.calls.flat().join("")).toContain("[qa-suite] infra retry 1/1:");
-    } finally {
-      stderrWrite.mockRestore();
-    }
-  });
 
   it("partitions flow-only suites that request isolated workers", async () => {
     const repoRoot = await makeTempRepo("qa-suite-flow-only-isolated-");
@@ -2262,7 +2225,7 @@ describe("qa suite runtime launcher", () => {
     const sharedIds = ["shared-a", "shared-b", "shared-c"];
     const isolatedIds = ["isolated-a", "isolated-b"];
     const native = makeTestFileScenario("vitest", "test/native.test.ts");
-    const scenarios = [
+    const scenarioDefinitions = [
       ...sharedIds.map((id) => makeQaSuiteTestScenario(id, { channel: "telegram" })),
       ...isolatedIds.map((id) =>
         makeQaSuiteTestScenario(id, { channel: "telegram", suiteIsolation: "isolated" }),
@@ -2297,7 +2260,7 @@ describe("qa suite runtime launcher", () => {
     const result = await runQaSuite({
       repoRoot,
       outputDir: "out",
-      scenarioDefinitions: scenarios,
+      scenarioDefinitions,
       scenarioIds,
       channelDriver,
       channelId: "telegram",
@@ -2881,10 +2844,10 @@ describe("qa suite runtime launcher", () => {
     const repoRoot = await makeTempRepo("qa-suite-parallel-scripts-");
     const defaultFlowImplementation = requireDefaultQaFlowSuiteImplementation();
     const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
-    const flow = createDeferred();
-    const native = createDeferred();
-    const serial = createDeferred();
-    const parallel = createDeferred();
+    const flow = Promise.withResolvers<void>();
+    const native = Promise.withResolvers<void>();
+    const serial = Promise.withResolvers<void>();
+    const parallel = Promise.withResolvers<void>();
     const started: string[] = [];
     const preparedEnv = Object.freeze({ OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz" });
     const scriptEnvs: unknown[] = [];
@@ -3128,7 +3091,7 @@ describe("qa suite runtime launcher", () => {
   it("keeps selected evidence order and successful siblings when a parallel script rejects", async () => {
     const repoRoot = await makeTempRepo("qa-suite-parallel-script-rejection-");
     const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
-    const first = createDeferred();
+    const first = Promise.withResolvers<void>();
     runQaTestFileScenarios.mockImplementation(async (params) => {
       const scenario = params.scenarios[0] as QaTestFileScenario | undefined;
       if (!scenario) {
@@ -3192,7 +3155,7 @@ describe("qa suite runtime launcher", () => {
   it("serializes every fail-fast script and stops before post-failure work", async () => {
     const repoRoot = await makeTempRepo("qa-suite-fail-fast-scripts-");
     const defaultTestFileImplementation = requireDefaultQaTestFileImplementation();
-    const first = createDeferred();
+    const first = Promise.withResolvers<void>();
     const preparedEnv = Object.freeze({ OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz" });
     const started: string[] = [];
     let active = 0;
