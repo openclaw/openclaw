@@ -91,13 +91,6 @@ function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
-function mergeConfiguredSubagentAllow(
-  allow: string[] | undefined,
-  alsoAllow: string[] | undefined,
-): string[] | undefined {
-  return allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
-}
-
 /** Resolve sub-agent tool policy from stored session capabilities. */
 export function resolveSubagentToolPolicyForSession(
   cfg: OpenClawConfig | undefined,
@@ -121,7 +114,7 @@ export function resolveSubagentToolPolicyForSession(
     ...resolveSubagentDenyListForRole(capabilities.role),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
-  const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);
+  const mergedAllow = allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
   return { allow: mergedAllow, deny };
 }
 
@@ -158,41 +151,23 @@ export function resolveConfiguredToolPolicies(params: {
   agentId?: string | null;
   extraPolicies?: readonly (SandboxToolPolicy | undefined)[];
 }): SandboxToolPolicy[] {
-  const policies: SandboxToolPolicy[] = [];
   const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
   const profileAlsoAllow =
     resolveExplicitProfileAlsoAllow(params.agentTools) ??
     resolveExplicitProfileAlsoAllow(params.cfg.tools);
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
-  if (profilePolicy) {
-    policies.push(profilePolicy);
-  }
-
-  const globalPolicy = pickSandboxToolPolicy(params.cfg.tools ?? undefined);
-  if (globalPolicy) {
-    policies.push(globalPolicy);
-  }
-
-  const agentPolicy = pickSandboxToolPolicy(params.agentTools);
-  if (agentPolicy) {
-    policies.push(agentPolicy);
-  }
-
-  for (const policy of params.extraPolicies ?? []) {
-    if (policy) {
-      policies.push(policy);
-    }
-  }
+  const policies = [
+    profilePolicy,
+    pickSandboxToolPolicy(params.cfg.tools ?? undefined),
+    pickSandboxToolPolicy(params.agentTools),
+    ...(params.extraPolicies ?? []),
+  ].filter((policy): policy is SandboxToolPolicy => Boolean(policy));
 
   if (params.sandboxMode === "all") {
     policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
   }
 
   return policies;
-}
-
-function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
-  return normalizeUniqueSingleOrTrimmedStringList(values);
 }
 
 function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
@@ -204,17 +179,17 @@ function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
   if (topicSenderMatch) {
     const [, chatId, topicId] = topicSenderMatch;
     // Sender-scoped sessions still inherit topic/base group tool policies.
-    return collectUniqueStrings([raw, `${chatId}:topic:${topicId}`, chatId]);
+    return normalizeUniqueSingleOrTrimmedStringList([raw, `${chatId}:topic:${topicId}`, chatId]);
   }
   const topicMatch = raw.match(/^(.+):topic:([^:]+)$/i);
   if (topicMatch) {
     const [, chatId, topicId] = topicMatch;
-    return collectUniqueStrings([`${chatId}:topic:${topicId}`, chatId]);
+    return normalizeUniqueSingleOrTrimmedStringList([`${chatId}:topic:${topicId}`, chatId]);
   }
   const senderMatch = raw.match(/^(.+):sender:([^:]+)$/i);
   if (senderMatch) {
     const [, chatId] = senderMatch;
-    return collectUniqueStrings([raw, chatId]);
+    return normalizeUniqueSingleOrTrimmedStringList([raw, chatId]);
   }
   return [raw];
 }
@@ -238,7 +213,7 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
     });
     return {
       channel: conversation.channel,
-      groupIds: collectUniqueStrings([
+      groupIds: normalizeUniqueSingleOrTrimmedStringList([
         ...buildScopedGroupIdCandidates(conversation.rawId),
         resolvedConversation?.id,
         resolvedConversation?.baseConversationId,
@@ -246,8 +221,7 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
       ]),
     };
   }
-  const base = conversationKey ?? raw;
-  const parts = base.split(":").filter(Boolean);
+  const parts = (conversationKey ?? raw).split(":").filter(Boolean);
   let body = parts[0] === "agent" ? parts.slice(2) : parts;
   if (body[0] === "subagent") {
     body = body.slice(1);
@@ -283,16 +257,13 @@ function resolveTrustedGroupIdFromContexts(params: {
   if (!callerGroupId) {
     return { groupId: params.groupId, dropped: false };
   }
-  const trustedGroupIds = collectUniqueStrings([
+  const trustedGroupIds = normalizeUniqueSingleOrTrimmedStringList([
     ...(params.sessionContext.groupIds ?? []),
     ...(params.spawnedContext.groupIds ?? []),
   ]);
   // Fail closed when no server-derived session/spawn context can vouch for the
   // caller group id. Non-group sessions must not opt into group-scoped tool
   // policy by supplying an arbitrary groupId.
-  if (trustedGroupIds.length === 0) {
-    return { groupId: null, dropped: true };
-  }
   if (trustedGroupIds.includes(callerGroupId)) {
     return { groupId: params.groupId, dropped: false };
   }
@@ -615,7 +586,7 @@ export function resolveGroupToolPolicyOutcome(params: {
   });
   // Keep server-derived ids first so a caller cannot use a trusted parent
   // candidate to skip a more-specific session group policy.
-  const groupIds = collectUniqueStrings([
+  const groupIds = normalizeUniqueSingleOrTrimmedStringList([
     ...(sessionContext.groupIds ?? []),
     ...(spawnedContext.groupIds ?? []),
     ...buildScopedGroupIdCandidates(trustedGroup.groupId),

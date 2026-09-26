@@ -580,10 +580,7 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
     return undefined;
   }
   const resolved = CORE_TOOL_PROFILES[profile as ToolProfileId];
-  if (!resolved) {
-    return undefined;
-  }
-  if (!resolved.allow && !resolved.deny) {
+  if (!resolved?.allow && !resolved?.deny) {
     return undefined;
   }
   return {
@@ -619,11 +616,7 @@ export function listCoreToolSections(params?: {
 
 /** Lists built-in profile ids that include a core tool. */
 export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
-  const tool = CORE_TOOL_BY_ID.get(toolId);
-  if (!tool) {
-    return [];
-  }
-  return [...tool.profiles];
+  return [...(CORE_TOOL_BY_ID.get(toolId)?.profiles ?? [])];
 }
 
 /** Returns true when a tool id is a known core tool. */

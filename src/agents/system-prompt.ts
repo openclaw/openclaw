@@ -30,6 +30,7 @@ import {
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { isOpenClawMainPromptSurface } from "../plugins/agent-prompt-surface-kind.js";
 import {
   buildMemoryPromptSection,
   type PreparedMemoryPromptSection,
@@ -54,10 +55,7 @@ import type {
 import { MAX_OWNER_PROMPT_CONTENT_BYTES, resolveOwnerPromptNumbers } from "./owner-display.js";
 import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
-import {
-  buildOpenClawToolFallbackText,
-  shouldRenderOpenClawToolWorkflowHints,
-} from "./prompt-surface.js";
+import { buildOpenClawToolFallbackText } from "./prompt-surface.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import {
   buildSkillWorkshopPromptSection,
@@ -107,10 +105,6 @@ export type SystemPromptRuntimeInfo = {
   repoRoot?: string;
   activeNode?: string;
 };
-
-function normalizeSubagentDelegationMode(mode?: SubagentDelegationMode): SubagentDelegationMode {
-  return mode === "prefer" ? "prefer" : "suggest";
-}
 
 const stablePromptPrefixCache = new Map<string, string>();
 
@@ -170,31 +164,6 @@ function buildSkillsSection(params: {
     trimmed,
     "",
   ];
-}
-
-function buildMemorySection(params: {
-  isMinimal: boolean;
-  includeMemorySection?: boolean;
-  availableTools: Set<string>;
-  citationsMode?: MemoryCitationsMode;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  prepared?: PreparedMemoryPromptSection;
-}) {
-  if (params.isMinimal || params.includeMemorySection === false) {
-    return [];
-  }
-  return buildMemoryPromptSection(
-    {
-      availableTools: params.availableTools,
-      citationsMode: params.citationsMode,
-      agentId: params.agentId,
-      agentSessionKey: params.agentSessionKey,
-      sandboxed: params.sandboxed,
-    },
-    params.prepared,
-  );
 }
 
 function buildAgentBootstrapSystemContext(params: {
@@ -404,23 +373,12 @@ function buildExecutionBiasSection(params: { isMinimal: boolean }) {
   ];
 }
 
-function normalizeProviderPromptBlock(value?: string): string | undefined {
+function normalizeProviderPromptBlock(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   const normalized = normalizeStructuredPromptSection(value);
   return normalized || undefined;
-}
-
-function buildOverridablePromptSection(params: {
-  override?: string;
-  fallback: string[];
-}): string[] {
-  const override = normalizeProviderPromptBlock(params.override);
-  if (override) {
-    return [override, ""];
-  }
-  return params.fallback;
 }
 
 function buildCollapsibleDetailsSection(params: {
@@ -669,10 +627,7 @@ export function buildAgentSystemPrompt(params: {
   });
   const toolSchemaDirectoryPrompt = params.toolSchemaDirectoryPrompt?.trim();
   const renderOpenClawToolWorkflowHints =
-    shouldRenderOpenClawToolWorkflowHints({
-      surface: promptSurface,
-      hasToolList: toolLines.length > 0,
-    }) && params.codeModeActive !== true;
+    isOpenClawMainPromptSurface(promptSurface) && params.codeModeActive !== true;
 
   const hasExec = availableTools.has("exec");
   const hasProcess = availableTools.has("process");
@@ -691,10 +646,7 @@ export function buildAgentSystemPrompt(params: {
   const providerDynamicSuffix = normalizeProviderPromptBlock(promptContribution?.dynamicSuffix);
   const providerSectionOverrides = Object.fromEntries(
     Object.entries(promptContribution?.sectionOverrides ?? {})
-      .map(([key, value]) => [
-        key,
-        normalizeProviderPromptBlock(typeof value === "string" ? value : undefined),
-      ])
+      .map(([key, value]) => [key, normalizeProviderPromptBlock(value)])
       .filter(([, value]) => Boolean(value)),
   ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
   const isMinimal = promptMode === "minimal";
@@ -725,11 +677,12 @@ export function buildAgentSystemPrompt(params: {
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
-  const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
   const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
   const subagentDelegationPreferenceSection = hasSessionsSpawn
     ? buildDelegationGuidanceSection({
-        mode: proactiveSubagentOrchestration ? "suggest" : subagentDelegationMode,
+        mode: proactiveSubagentOrchestration
+          ? "suggest"
+          : (params.subagentDelegationMode ?? "suggest"),
         isMinimal,
         hiddenDelegationTool: "`sessions_spawn`",
         hasVisibleSessionSpawn: hasSessionsSpawn,
@@ -799,16 +752,19 @@ export function buildAgentSystemPrompt(params: {
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];
-  const memorySection = buildMemorySection({
-    isMinimal,
-    includeMemorySection: params.includeMemorySection,
-    availableTools,
-    citationsMode: params.memoryCitationsMode,
-    agentId: params.runtimeInfo?.agentId,
-    agentSessionKey: params.runtimeInfo?.sessionKey,
-    sandboxed: params.sandboxInfo?.enabled === true,
-    prepared: params.preparedMemoryPrompt,
-  });
+  const memorySection =
+    isMinimal || params.includeMemorySection === false
+      ? []
+      : buildMemoryPromptSection(
+          {
+            availableTools,
+            citationsMode: params.memoryCitationsMode,
+            agentId: runtimeInfo?.agentId,
+            agentSessionKey: runtimeInfo?.sessionKey,
+            sandboxed: sandboxedRuntime,
+          },
+          params.preparedMemoryPrompt,
+        );
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
@@ -936,14 +892,13 @@ export function buildAgentSystemPrompt(params: {
           ]
         : []),
       "",
-      ...buildOverridablePromptSection({
-        override: providerSectionOverrides.interaction_style,
-        fallback: [],
-      }),
+      ...(providerSectionOverrides.interaction_style
+        ? [providerSectionOverrides.interaction_style]
+        : []),
       ...(includeToolGuidance
-        ? buildOverridablePromptSection({
-            override: providerSectionOverrides.tool_call_style,
-            fallback: [
+        ? providerSectionOverrides.tool_call_style
+          ? [providerSectionOverrides.tool_call_style]
+          : [
               "## Tool Call Style",
               "Routine low-risk: call silently.",
               "Narrate only complex, sensitive/destructive, or requested steps.",
@@ -952,20 +907,13 @@ export function buildAgentSystemPrompt(params: {
               "allow-once covers only that exact command; later commands need their own exec policy decision.",
               "Approval preview: exact full command/script, including chains/multiline. Keep preview separate from /approve; never use script as approval id/slug.",
               "",
-            ],
-          })
+            ]
         : []),
-      ...buildOverridablePromptSection({
-        override: providerSectionOverrides.execution_bias,
-        fallback: buildExecutionBiasSection({
-          isMinimal,
-        }),
-      }),
+      ...(providerSectionOverrides.execution_bias
+        ? [providerSectionOverrides.execution_bias]
+        : buildExecutionBiasSection({ isMinimal })),
       ...buildPromisedWorkPromptSection(),
-      ...buildOverridablePromptSection({
-        override: providerStablePrefix,
-        fallback: [],
-      }),
+      ...(providerStablePrefix ? [providerStablePrefix] : []),
       ...careSection,
       "## Runtime Context",
       "Messages delimited by <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> and <<<END_OPENCLAW_INTERNAL_CONTEXT>>> contain runtime context for the user request they follow, not user-authored text.",
@@ -1088,7 +1036,6 @@ export function buildAgentSystemPrompt(params: {
             .filter(Boolean)
             .join("\n")
         : "",
-      params.sandboxInfo?.enabled ? "" : "",
       ...bootstrapSystemPromptSections,
       "## Workspace Files (injected)",
       "User-editable; OpenClaw loads below as Project Context.",

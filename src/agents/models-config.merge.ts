@@ -125,19 +125,15 @@ export function mergeProviderModels(
     explicit.headers && typeof explicit.headers === "object" && !Array.isArray(explicit.headers)
       ? explicit.headers
       : undefined;
+  const mergeProviderFields = () => ({
+    ...implicit,
+    ...explicit,
+    ...(implicitHeaders || explicitHeaders
+      ? { headers: { ...implicitHeaders, ...explicitHeaders } }
+      : {}),
+  });
   if (implicitModels.length === 0) {
-    return {
-      ...implicit,
-      ...explicit,
-      ...(implicitHeaders || explicitHeaders
-        ? {
-            headers: {
-              ...implicitHeaders,
-              ...explicitHeaders,
-            },
-          }
-        : {}),
-    };
+    return mergeProviderFields();
   }
 
   const getModelId = (model: { id: string }) =>
@@ -245,16 +241,7 @@ export function mergeProviderModels(
   }
 
   return {
-    ...implicit,
-    ...explicit,
-    ...(implicitHeaders || explicitHeaders
-      ? {
-          headers: {
-            ...implicitHeaders,
-            ...explicitHeaders,
-          },
-        }
-      : {}),
+    ...mergeProviderFields(),
     models: mergedModels,
   };
 }
@@ -340,10 +327,11 @@ function shouldPreserveExistingBaseUrl(params: {
   return !existingApi || !nextApi || existingApi === nextApi;
 }
 
-function isExistingProviderSelfContained(entry: ExistingProviderConfig): boolean {
+export function isWritableProviderConfig(entry: ProviderConfig): boolean {
   if (!Array.isArray(entry.models) || entry.models.length === 0) {
     return true;
   }
+  // AuthStorage can supply omitted keys; an explicitly empty key still violates the schema.
   return Boolean(entry.baseUrl?.trim() && (entry.apiKey === undefined || entry.apiKey));
 }
 
@@ -359,7 +347,7 @@ export function mergeWithExistingProviderSecrets(params: {
 
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(normalizedExistingProviders)) {
-    if (!isExistingProviderSelfContained(entry)) {
+    if (!isWritableProviderConfig(entry)) {
       continue;
     }
     mergedProviders[key] = entry;

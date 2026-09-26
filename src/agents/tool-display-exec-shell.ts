@@ -240,28 +240,13 @@ export function trimLeadingEnv(words: string[]): string[] {
     return words;
   }
 
-  let index = 0;
-  if (binaryName(words[0]) === "env") {
-    index = 1;
-    while (index < words.length) {
-      const token = words[index];
-      if (!token) {
-        break;
-      }
-      if (token.startsWith("-")) {
-        index += 1;
-        continue;
-      }
-      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
-        index += 1;
-        continue;
-      }
+  const isEnv = binaryName(words[0]) === "env";
+  let index = isEnv ? 1 : 0;
+  while (index < words.length) {
+    const token = words[index];
+    if (!token || (!(isEnv && token.startsWith("-")) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token))) {
       break;
     }
-    return words.slice(index);
-  }
-
-  while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words.at(index) ?? "")) {
     index += 1;
   }
   return words.slice(index);

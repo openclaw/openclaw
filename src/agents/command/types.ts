@@ -1,6 +1,3 @@
-/**
- * Public option and metadata types for agent command execution.
- */
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
@@ -34,9 +31,6 @@ import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/sub
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 export type ImageContent = Pick<LlmImageContent, "type" | "data" | "mimeType">;
-
-/** ACP turn source markers accepted by trusted command callsites. */
-type AcpTurnSource = "manual_spawn";
 
 /** Channel/account/thread context carried into an agent run. */
 export type AgentRunContext = {
@@ -247,7 +241,7 @@ export type AgentCommandOpts = {
   /** Internal prompt-mode override for trusted local/gateway callsites. */
   promptMode?: PromptMode;
   /** Internal ACP-ready session turn source. Manual spawn turns bypass only the dispatch gate. */
-  acpTurnSource?: AcpTurnSource;
+  acpTurnSource?: "manual_spawn";
   /** Internal handoffs can feed the model without writing the synthetic prompt to transcript. */
   suppressPromptPersistence?: boolean;
   /** Gateway/channel ingress can provide a canonical user-turn persistence owner. */

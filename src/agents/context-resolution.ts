@@ -87,17 +87,10 @@ function resolveConfiguredProviderModel(
 ): ConfigModelEntry | undefined {
   const providerConfig = resolveMergedModelProviderConfig(cfg ?? undefined, provider);
   const bareModel = stripSelfProviderModelPrefix(provider, model);
-  const spellings = bareModel === model ? [model] : [model, bareModel];
   const findModel = createConfiguredProviderModelResolver(providerConfig, provider, (id) =>
     normalizeConfiguredProviderCatalogModelId(provider, id),
   );
-  for (const spelling of spellings) {
-    const match = findModel(spelling);
-    if (match) {
-      return match;
-    }
-  }
-  return undefined;
+  return findModel(model) ?? (bareModel === model ? undefined : findModel(bareModel));
 }
 
 function resolveConfiguredRuntimeModel(
@@ -120,12 +113,6 @@ function resolveConfiguredRuntimeModel(
   return resolveConfiguredProviderModel(cfg, canonicalProvider, model);
 }
 
-function readAuthoredModelContextTokens(model: ConfigModelEntry | undefined): number | undefined {
-  return typeof model?.contextTokens === "number" && model.contextTokens > 0
-    ? model.contextTokens
-    : undefined;
-}
-
 /** Returns only the per-model contextTokens value authored in OpenClaw config. */
 export function resolveAuthoredModelContextTokens(
   params: Pick<ContextTokenResolutionParams, "cfg" | "provider" | "modelProvider" | "model">,
@@ -135,8 +122,9 @@ export function resolveAuthoredModelContextTokens(
   if (!ref || !explicitProvider) {
     return undefined;
   }
-  return readAuthoredModelContextTokens(
-    resolveConfiguredRuntimeModel(params.cfg, explicitProvider, params.modelProvider, ref.model),
+  return normalizePositiveContextTokens(
+    resolveConfiguredRuntimeModel(params.cfg, explicitProvider, params.modelProvider, ref.model)
+      ?.contextTokens,
   );
 }
 
@@ -219,11 +207,7 @@ function resolveConfiguredContextTokenLimitsForModel(
   params: Pick<ContextTokenResolutionParams, "cfg"> & { provider: string; model: string },
   configuredModel: ConfigModelEntry | undefined,
   normalize: (value: number | undefined) => number | null | undefined,
-): {
-  effectiveConfiguredTokens?: number;
-  configuredContextWindow?: number;
-  fixedContextWindow?: number;
-} {
+) {
   const { provider, model } = params;
   const extraParamSources = resolveModelExtraParamSources({
     config: params.cfg,
@@ -284,7 +268,7 @@ export function resolveModelContextTokenProjectionFromCache(
       params.modelProvider,
       ref.model,
     );
-    authoredContextTokens = readAuthoredModelContextTokens(configuredModel);
+    authoredContextTokens = normalizePositiveContextTokens(configuredModel?.contextTokens);
     const { effectiveConfiguredTokens, configuredContextWindow, fixedContextWindow } =
       resolveConfiguredContextTokenLimitsForModel(
         { cfg: params.cfg, provider: explicitProvider, model: ref.model },
@@ -303,19 +287,11 @@ export function resolveModelContextTokenProjectionFromCache(
     const providerWindow = lookupContextWindow(
       providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
     );
-    const modelContextTokens =
-      typeof params.modelContextTokens === "number" && params.modelContextTokens > 0
-        ? params.modelContextTokens
-        : undefined;
-    const modelContextWindow =
-      typeof params.modelContextWindow === "number" && params.modelContextWindow > 0
-        ? params.modelContextWindow
-        : undefined;
     const discoveredCap = minPositiveContextTokens(
       providerResult,
-      modelContextTokens,
+      normalizePositiveContextTokens(params.modelContextTokens),
       providerWindow,
-      modelContextWindow,
+      normalizePositiveContextTokens(params.modelContextWindow),
     );
     if (discoveredCap !== undefined) {
       return {

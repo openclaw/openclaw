@@ -169,11 +169,7 @@ export function listCliRuntimeProviderIds(
   // should be hidden from model-provider pickers. Standalone CLI backends own
   // direct refs such as acme-cli/model and must remain selectable.
   return [
-    ...new Set(
-      listCliRuntimeModelBackendBindings(params)
-        .map((binding) => normalizeProviderId(binding.runtime))
-        .filter(Boolean),
-    ),
+    ...new Set(listCliRuntimeModelBackendBindings(params).map((binding) => binding.runtime)),
   ].toSorted();
 }
 

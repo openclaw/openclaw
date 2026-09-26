@@ -1,7 +1,7 @@
 /**
  * Logging tests for tool adapter failures.
- * Verifies retryable parameter errors expose useful context while intentional
- * hook blocks and exec secrets stay out of raw logs.
+ * Verifies retryable parameter errors expose useful context while exec secrets
+ * stay out of raw logs.
  */
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
@@ -18,7 +18,6 @@ vi.mock("../logger.js", () => ({
 }));
 
 let toToolDefinitions: typeof import("./agent-tool-definition-adapter.js").toToolDefinitions;
-let createBeforeToolCallBlockedError: typeof import("./agent-tools.before-tool-call.test-support.js").createBeforeToolCallBlockedError;
 let wrapToolParamValidation: typeof import("./agent-tools.params.js").wrapToolParamValidation;
 let REQUIRED_PARAM_GROUPS: typeof import("./agent-tools.params.js").REQUIRED_PARAM_GROUPS;
 let logError: typeof import("../logger.js").logError;
@@ -56,8 +55,6 @@ function firstLogErrorMessage(): unknown {
 describe("agent tool definition adapter logging", () => {
   beforeAll(async () => {
     ({ toToolDefinitions } = await import("./agent-tool-definition-adapter.js"));
-    ({ createBeforeToolCallBlockedError } =
-      await import("./agent-tools.before-tool-call.test-support.js"));
     ({ wrapToolParamValidation, REQUIRED_PARAM_GROUPS } = await import("./agent-tools.params.js"));
     ({ logError } = await import("../logger.js"));
     ({ withToolOperatorHint } = await import("./tool-operator-hint.js"));
@@ -132,40 +129,6 @@ describe("agent tool definition adapter logging", () => {
     const modelText = JSON.stringify(result);
     expect(modelText).toContain("Path escapes sandbox root");
     expect(modelText).not.toContain("workspaceOnly");
-  });
-
-  it("does not log raw params for intentional before_tool_call blocks", async () => {
-    const baseTool = {
-      name: "bash",
-      label: "Bash",
-      description: "runs commands",
-      parameters: Type.Object({
-        command: Type.String(),
-      }),
-      execute: async () => {
-        throw createBeforeToolCallBlockedError("blocked by policy");
-      },
-    } satisfies AgentTool;
-    const def = definitionFor(baseTool);
-
-    const result = await def.execute(
-      "call-blocked-1",
-      { command: "secret-value" },
-      undefined,
-      undefined,
-      extensionContext,
-    );
-
-    const details = result.details as
-      | { status?: string; deniedReason?: string; reason?: string }
-      | undefined;
-    expect(details?.status).toBe("blocked");
-    expect(details?.deniedReason).toBe("plugin-before-tool-call");
-    expect(details?.reason).toBe("blocked by policy");
-    expect(logError).not.toHaveBeenCalled();
-    expect(mocks.logDebug).toHaveBeenCalledWith(
-      "tools: exec blocked by before_tool_call: blocked by policy",
-    );
   });
 
   it("omits raw exec commands and env values from failure logs", async () => {

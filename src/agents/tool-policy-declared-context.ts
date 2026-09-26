@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -16,10 +15,6 @@ import type { DeclaredToolAllowlistContext } from "./tool-policy.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 
 type ToolDenylist = ReturnType<typeof compileGlobPatterns>;
-
-function normalizeToolDenylist(list?: string[]): ToolDenylist {
-  return compileGlobPatterns({ raw: list, normalize: normalizeToolPolicyName });
-}
 
 function denylistBlocksName(name: string, denylist: ToolDenylist): boolean {
   const normalized = normalizeToolPolicyName(name);
@@ -107,7 +102,10 @@ function collectDeclaredPluginContext(params: {
     return {};
   }
   const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
-  const denylist = normalizeToolDenylist(params.toolDenylist);
+  const denylist = compileGlobPatterns({
+    raw: params.toolDenylist,
+    normalize: normalizeToolPolicyName,
+  });
   const pluginIds = new Set<string>();
   const pluginToolNames = new Set<string>();
   for (const plugin of snapshot.manifestRegistry.plugins) {
@@ -146,12 +144,7 @@ export function buildDeclaredToolAllowlistContext(params: {
   env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): DeclaredToolAllowlistContext | undefined {
-  const mcpServerNames = uniqueStrings(
-    collectConfiguredMcpServerNames({
-      config: params.config,
-      toolDenylist: params.toolDenylist,
-    }),
-  );
+  const mcpServerNames = collectConfiguredMcpServerNames(params);
   const pluginContext = collectDeclaredPluginContext(params);
   const pluginIds = [...(pluginContext.pluginIds ?? [])];
   const pluginToolNames = [...(pluginContext.pluginToolNames ?? [])];

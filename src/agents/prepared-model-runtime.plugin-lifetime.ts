@@ -51,10 +51,7 @@ const { generations, active, retirements, publications } = resolveGlobalSingleto
     generations: new WeakMap<PreparedModelRuntimePluginGeneration, Lifetime>(),
     active: new Set<Lifetime>(),
     retirements: new Set<Promise<void>>(),
-    publications: new WeakMap<
-      object,
-      { generation: PreparedModelRuntimePluginGeneration; release: () => Promise<void> }
-    >(),
+    publications: new WeakMap<object, { release: () => Promise<void> }>(),
   }),
 );
 
@@ -290,7 +287,6 @@ export function publishPreparedPluginGeneration(
     signal.addEventListener("abort", observe, { once: true });
   };
   publications.set(owner, {
-    generation,
     release: () => {
       unsubscribe();
       return Promise.resolve(release());

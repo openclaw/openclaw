@@ -258,10 +258,6 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeM
   return owner;
 }
 
-export function createCodeModeBridgeDispatchState(): CodeModeBridgeDispatchState {
-  return { started: false };
-}
-
 // One unreferenced timer owns parked continuations even when no later exec or wait
 // arrives; otherwise expired runs keep their VM bytes and live tool calls.
 function scheduleActiveRunExpiry(): void {
@@ -589,22 +585,9 @@ export function createPendingBridgeStates(
   });
 }
 
-export function storeSuspendedRun(params: {
-  owner: CodeModeRunOwner;
-  replayId: string;
-  pending: PendingBridgeState[];
-  replaySafe: boolean;
-  settlementMode: CodeModeSettlementMode;
-  continuation: CodeModeExecutorContinuation;
-  parentToolCallId: string;
-  ctx: ToolSearchToolContext;
-  config: CodeModeConfig;
-  runtime: ToolSearchRuntime;
-  catalogProjection: CodeModeCatalogProjection;
-  namespaceRuntime: CodeModeNamespaceRuntime;
-  output: CodeModeOutputState;
-  bridgeDispatch: CodeModeBridgeDispatchState;
-}) {
+export function storeSuspendedRun(
+  params: Omit<CodeModeRunState, "runId" | "expiresAt" | "agentWaitRetainUntil">,
+) {
   const runId = params.owner.runId;
   if (params.owner.signal.aborted) {
     cancelPendingBridgeStates(params.pending);
@@ -624,25 +607,7 @@ export function storeSuspendedRun(params: {
         params.config.snapshotTtlSeconds * MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS,
       )
     : undefined;
-  const state: CodeModeRunState = {
-    runId,
-    replayId: params.replayId,
-    parentToolCallId: params.parentToolCallId,
-    ctx: params.ctx,
-    config: params.config,
-    continuation: params.continuation,
-    pending: params.pending,
-    settlementMode: params.settlementMode,
-    replaySafe: params.replaySafe,
-    output: params.output,
-    expiresAt,
-    agentWaitRetainUntil,
-    runtime: params.runtime,
-    catalogProjection: params.catalogProjection,
-    namespaceRuntime: params.namespaceRuntime,
-    bridgeDispatch: params.bridgeDispatch,
-    owner: params.owner,
-  };
+  const state: CodeModeRunState = { ...params, runId, expiresAt, agentWaitRetainUntil };
   const result = params.output.takeResult(
     {
       status: "waiting" as const,

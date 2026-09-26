@@ -164,24 +164,6 @@ export function shouldPreferActiveRuntimeAliasAuthLabel(params: {
   );
 }
 
-function resolveConfiguredRuntime(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  agentId?: string;
-  modelId?: string;
-}): { runtime?: string; matchedProvider?: string } {
-  const policy = resolveModelRuntimePolicy({
-    config: params.cfg,
-    provider: params.provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-  });
-  return {
-    runtime: policy.policy?.id?.trim() || undefined,
-    matchedProvider: policy.matchedProvider,
-  };
-}
-
 export type CliRuntimeAuthDirectories = {
   agentDir: string;
   inheritedAuthDir?: string;
@@ -326,7 +308,13 @@ export function resolveCliRuntimeExecutionProvider(
   },
 ): string | undefined {
   const provider = normalizeProviderId(params.provider);
-  const { runtime, matchedProvider } = resolveConfiguredRuntime({ ...params, provider });
+  const { policy, matchedProvider } = resolveModelRuntimePolicy({
+    config: params.cfg,
+    provider,
+    modelId: params.modelId,
+    agentId: params.agentId,
+  });
+  const runtime = policy?.id?.trim() || undefined;
   if (runtime === "openclaw") {
     return undefined;
   }

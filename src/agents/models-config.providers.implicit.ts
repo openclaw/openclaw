@@ -59,15 +59,6 @@ import {
 
 const log = createSubsystemLogger("agents/model-providers");
 
-const PROVIDER_IMPLICIT_MERGERS: Partial<
-  Record<
-    string,
-    (params: { existing: ProviderConfig | undefined; implicit: ProviderConfig }) => ProviderConfig
-  >
-> = {
-  ollama: ({ implicit }) => implicit,
-};
-
 const PLUGIN_DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 
 type ImplicitProviderParams = {
@@ -120,12 +111,8 @@ function mergeImplicitProviderConfig(params: {
   sourceModelFields?: SourceModelFields;
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
-  if (!existing) {
+  if (!existing || providerId === "ollama") {
     return implicit;
-  }
-  const merge = PROVIDER_IMPLICIT_MERGERS[providerId];
-  if (merge) {
-    return merge({ existing, implicit });
   }
   return mergeProviderModels(implicit, existing, {
     providerId,
@@ -133,36 +120,22 @@ function mergeImplicitProviderConfig(params: {
   });
 }
 
-function resolveConfiguredImplicitProvider(params: {
-  configuredProviders?: Record<string, ProviderConfig> | null;
-  providerIds: readonly string[];
-}): ProviderConfig | undefined {
-  for (const providerId of params.providerIds) {
-    const configured = findNormalizedProviderValue(
-      params.configuredProviders ?? undefined,
-      providerId,
-    );
-    if (configured) {
-      return configured;
-    }
-  }
-  return undefined;
-}
-
 function resolveExistingImplicitProviderFromContext(params: {
   ctx: ImplicitProviderContext;
   providerIds: readonly string[];
 }): ProviderConfig | undefined {
-  return (
-    resolveConfiguredImplicitProvider({
-      configuredProviders: params.ctx.explicitProviders,
-      providerIds: params.providerIds,
-    }) ??
-    resolveConfiguredImplicitProvider({
-      configuredProviders: params.ctx.config?.models?.providers,
-      providerIds: params.providerIds,
-    })
-  );
+  for (const configuredProviders of [
+    params.ctx.explicitProviders,
+    params.ctx.config?.models?.providers,
+  ]) {
+    for (const providerId of params.providerIds) {
+      const configured = findNormalizedProviderValue(configuredProviders ?? undefined, providerId);
+      if (configured) {
+        return configured;
+      }
+    }
+  }
+  return undefined;
 }
 
 function hasRuntimeProviderCatalog(

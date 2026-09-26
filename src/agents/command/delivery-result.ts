@@ -7,7 +7,6 @@ import type {
   EmbeddedAgentRunResult,
 } from "../embedded-agent-runner/types.js";
 
-/** Aggregate delivery status for an agent command result. */
 export type AgentCommandDeliveryStatus = {
   requested: true;
   attempted: boolean;
@@ -23,7 +22,6 @@ export type AgentCommandDeliveryStatus = {
   payloadOutcomes?: SerializedDurableMessagePayloadOutcome[];
 };
 
-/** Agent command result after payload normalization and optional delivery. */
 export type AgentCommandDeliveryResult = Pick<
   EmbeddedAgentRunResult,
   | "didDeliverSourceReplyViaMessageTool"

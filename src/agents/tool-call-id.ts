@@ -41,11 +41,8 @@ type ReplaySafeToolCallBlock = {
  * - "strict9" mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
  */
 function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
-  if (!id || typeof id !== "string") {
-    if (mode === "strict9") {
-      return "defaultid";
-    }
-    return "defaulttoolid";
+  if (!id) {
+    return mode === "strict9" ? "defaultid" : "defaulttoolid";
   }
 
   if (mode === "strict9") {
@@ -53,13 +50,10 @@ function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string
     if (alphanumericOnly.length >= STRICT9_LEN) {
       return alphanumericOnly.slice(0, STRICT9_LEN);
     }
-    if (alphanumericOnly.length > 0) {
-      return shortHash(alphanumericOnly, STRICT9_LEN);
-    }
-    return shortHash("sanitized", STRICT9_LEN);
+    return sha256HexPrefixCore(alphanumericOnly || "sanitized", STRICT9_LEN);
   }
 
-  if (isNativeKimiToolCallId(id)) {
+  if (NATIVE_KIMI_TOOL_CALL_ID_RE.test(id)) {
     return id;
   }
 
@@ -136,11 +130,10 @@ function collectReplaySafeThinkingToolIds(
     if (!message || typeof message !== "object" || message.role !== "assistant") {
       continue;
     }
-    const assistant = message;
-    if (!isReplaySafeThinkingAssistantMessage(assistant, allowedToolNames, isCompleted)) {
+    if (!isReplaySafeThinkingAssistantMessage(message, allowedToolNames, isCompleted)) {
       continue;
     }
-    const toolCalls = extractToolCallsFromAssistant(assistant);
+    const toolCalls = extractToolCallsFromAssistant(message);
     if (toolCalls.some((toolCall) => reserved.has(toolCall.id))) {
       continue;
     }
@@ -152,34 +145,21 @@ function collectReplaySafeThinkingToolIds(
   return { reservedIds: reserved, preservedIndexes };
 }
 
-function shortHash(text: string, length = 8): string {
-  return sha256HexPrefixCore(text, length);
-}
-
-function isNativeAnthropicToolUseId(id: string): boolean {
-  return NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id);
-}
-
-function isNativeKimiToolCallId(id: string): boolean {
-  return NATIVE_KIMI_TOOL_CALL_ID_RE.test(id);
-}
-
 function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCallIdMode }): string {
   if (params.mode === "strict9") {
-    const base = sanitizeToolCallId(params.id, params.mode);
-    const candidate = base.length >= STRICT9_LEN ? base.slice(0, STRICT9_LEN) : "";
-    if (candidate && !params.used.has(candidate)) {
+    const candidate = sanitizeToolCallId(params.id, params.mode);
+    if (!params.used.has(candidate)) {
       return candidate;
     }
 
     for (let i = 0; i < 1000; i += 1) {
-      const hashed = shortHash(`${params.id}:${i}`, STRICT9_LEN);
+      const hashed = sha256HexPrefixCore(`${params.id}:${i}`, STRICT9_LEN);
       if (!params.used.has(hashed)) {
         return hashed;
       }
     }
 
-    return shortHash(`${params.id}:${Date.now()}`, STRICT9_LEN);
+    return sha256HexPrefixCore(`${params.id}:${Date.now()}`, STRICT9_LEN);
   }
 
   const MAX_LEN = 40;
@@ -189,25 +169,21 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
     return base;
   }
 
-  const hash = shortHash(params.id);
-  // Use separator based on mode: none for strict, underscore for non-strict variants
-  const separator = params.mode === "strict" ? "" : "_";
-  const maxBaseLen = MAX_LEN - separator.length - hash.length;
-  const clippedBase = base.length > maxBaseLen ? base.slice(0, maxBaseLen) : base;
-  const candidate = `${clippedBase}${separator}${hash}`;
+  const hash = sha256HexPrefixCore(params.id, 8);
+  const candidate = `${base.slice(0, MAX_LEN - hash.length)}${hash}`;
   if (!params.used.has(candidate)) {
     return candidate;
   }
 
   for (let i = 2; i < 1000; i += 1) {
-    const suffix = params.mode === "strict" ? `x${i}` : `_${i}`;
+    const suffix = `x${i}`;
     const next = `${candidate.slice(0, MAX_LEN - suffix.length)}${suffix}`;
     if (!params.used.has(next)) {
       return next;
     }
   }
 
-  const ts = params.mode === "strict" ? `t${Date.now()}` : `_${Date.now()}`;
+  const ts = `t${Date.now()}`;
   return `${candidate.slice(0, MAX_LEN - ts.length)}${ts}`;
 }
 
@@ -238,7 +214,7 @@ function createOccurrenceAwareResolver(
 
   const allocateOpenAIStyleId = (id: string, occurrence: number): string => {
     for (let attempt = 0; ; attempt += 1) {
-      const candidate = `call_${shortHash(`${id}:${occurrence}:${attempt}`, 24)}`;
+      const candidate = `call_${sha256HexPrefixCore(`${id}:${occurrence}:${attempt}`, 24)}`;
       if (!used.has(candidate)) {
         used.add(candidate);
         return candidate;
@@ -258,7 +234,7 @@ function createOccurrenceAwareResolver(
     }
     if (
       preserveNativeAnthropicToolUseIds &&
-      isNativeAnthropicToolUseId(id) &&
+      NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id) &&
       occurrence === 1 &&
       !used.has(id)
     ) {
@@ -289,7 +265,7 @@ function createOccurrenceAwareResolver(
     orphanToolResultOccurrences.set(id, occurrence);
     if (
       preserveNativeAnthropicToolUseIds &&
-      isNativeAnthropicToolUseId(id) &&
+      NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id) &&
       occurrence === 1 &&
       !used.has(id)
     ) {

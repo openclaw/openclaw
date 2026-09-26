@@ -74,11 +74,11 @@ export type PreparedModelRuntimeBuildResult = Readonly<{
   pluginGeneration: PreparedModelRuntimePluginGeneration;
 }>;
 
-function groupBuildCandidates<K>(
-  candidates: readonly PreparedModelRuntimeBuildCandidate[],
-  keyOf: (candidate: PreparedModelRuntimeBuildCandidate) => K,
-): Map<K, PreparedModelRuntimeBuildCandidate[]> {
-  const groups = new Map<K, PreparedModelRuntimeBuildCandidate[]>();
+function groupBuildCandidates<T extends PreparedModelRuntimeBuildCandidate, K>(
+  candidates: readonly T[],
+  keyOf: (candidate: T) => K,
+): Map<K, T[]> {
+  const groups = new Map<K, T[]>();
   for (const candidate of candidates) {
     const key = keyOf(candidate);
     const group = groups.get(key) ?? [];
@@ -119,17 +119,15 @@ async function buildSnapshotBatch(
     }
     return {
       ...candidate,
+      requestedInput: candidate.input,
       input: { ...candidate.input, config: shared.config },
       nativeConfigFingerprint: shared.nativeConfigFingerprint,
     };
   });
   const candidateByInput = new Map(candidates.map((candidate) => [candidate.input, candidate]));
-  const requestedByInput = new Map(
-    candidates.map((candidate, index) => [candidate.input, requestedCandidates[index]!.input]),
-  );
   const results = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeBuildResult>();
   const prepareSnapshot = (
-    candidate: PreparedModelRuntimeBuildCandidate,
+    candidate: (typeof candidates)[number],
     agentFacts: PreparedModelRuntimeAgentFacts,
     pluginGeneration: PreparedModelRuntimePluginGeneration,
     catalogFacts: PreparedModelRuntimeCatalogFacts,
@@ -141,18 +139,18 @@ async function buildSnapshotBatch(
       catalogFacts,
       createFullModelCatalogAccess({
         agentFacts,
-        nativeConfigFingerprint: candidateByInput.get(candidate.input)!.nativeConfigFingerprint,
+        nativeConfigFingerprint: candidate.nativeConfigFingerprint,
         catalogFacts,
         pluginGeneration,
         isCurrent: candidate.isGenerationCurrent ?? (() => false),
         retirementSignal: candidate.retirementSignal,
         inventoryOwner: candidate.inventoryOwner ?? {},
       }),
-      requestedByInput.get(candidate.input)!.config,
+      candidate.requestedInput.config,
     );
     const result = { snapshot, pluginGeneration };
     results.set(candidate.input, result);
-    onPrepared?.(requestedByInput.get(candidate.input)!, result);
+    onPrepared?.(candidate.requestedInput, result);
   };
   const assertBuildCurrent = (input: PreparedModelRuntimeInput) =>
     assertPreparedModelRuntimeInputCurrent(input, candidateByInput.get(input)!.isBuildCurrent);

@@ -10,21 +10,23 @@ export function normalizeModelTransportBaseUrl(api: string, baseUrl: string): st
   return api === "anthropic-messages" ? baseUrl.replace(/\/v1\/?$/, "") : baseUrl;
 }
 
-function normalizeBaseUrl(value: unknown, api: string): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const trimmed = normalizeModelTransportBaseUrl(api, value.trim());
-  if (!trimmed) {
-    return "";
+export function normalizeCatalogRouteBaseUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
   }
   try {
-    const url = new URL(trimmed);
+    const url = new URL(value);
     url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
     return url.toString();
   } catch {
-    return trimmed.replace(/\/+$/u, "");
+    return value.replace(/\/+$/u, "");
   }
+}
+
+function normalizeBaseUrl(value: unknown, api: string): string {
+  return typeof value === "string"
+    ? (normalizeCatalogRouteBaseUrl(normalizeModelTransportBaseUrl(api, value.trim())) ?? "")
+    : "";
 }
 
 export function modelTransportRoutesMatch(

@@ -113,12 +113,7 @@ export function resolveAssistantStreamItemId(params: {
   if (!Array.isArray(content)) {
     return undefined;
   }
-  const contentIndex =
-    typeof params.contentIndex === "number" &&
-    Number.isInteger(params.contentIndex) &&
-    params.contentIndex >= 0
-      ? params.contentIndex
-      : undefined;
+  const contentIndex = resolveAssistantStreamContentIndex(params.contentIndex);
   const indexedBlock = contentIndex !== undefined ? content[contentIndex] : undefined;
   const indexedRecord =
     indexedBlock && typeof indexedBlock === "object"

@@ -1,9 +1,4 @@
 import { emitModelTransportDebug, formatModelTransportDebugUrl } from "@openclaw/ai/diagnostics";
-/**
- * Guarded provider fetch transport utilities.
- *
- * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
- */
 import { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "@openclaw/ai/internal/retry-after";
 import {
   isCloudMetadataIpAddress,
@@ -13,7 +8,7 @@ import {
 } from "@openclaw/net-policy/ip";
 import {
   asFiniteNumberInRange,
-  clampTimerTimeoutMs,
+  clampPositiveTimerTimeoutMs,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -148,10 +143,7 @@ function sanitizeOpenAISdkSseResponse(
   if (!response.ok) {
     return capNonOkResponseBodyLazily(response, SSE_NONOK_BODY_MAX_BYTES);
   }
-  if (
-    options?.synthesizeJsonAsSse === true &&
-    (/\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType))
-  ) {
+  if (options?.synthesizeJsonAsSse === true && isJsonContentType(contentType)) {
     const source = response.body;
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
@@ -216,8 +208,7 @@ function sanitizeOpenAISdkSseResponse(
   const enqueueSanitized = (
     controller: ReadableStreamDefaultController<Uint8Array>,
     text: string,
-  ): number => {
-    let enqueued = 0;
+  ): boolean => {
     buffer += text;
     for (;;) {
       const boundary = findSseEventBoundary(buffer, scanOffset);
@@ -229,7 +220,7 @@ function sanitizeOpenAISdkSseResponse(
             `SSE response exceeded max buffer size (${SSE_SANITIZE_BUFFER_MAX_CHARS} chars) without event boundary`,
           );
         }
-        return enqueued;
+        return false;
       }
       const block = buffer.slice(0, boundary.index);
       const separator = buffer.slice(boundary.index, boundary.index + boundary.length);
@@ -239,8 +230,7 @@ function sanitizeOpenAISdkSseResponse(
       // messages. Drop those malformed keepalive-style blocks before it parses.
       if (hasReadableSseData(block)) {
         controller.enqueue(encoder.encode(`${block}${separator}`));
-        enqueued += 1;
-        return enqueued;
+        return true;
       }
     }
   };
@@ -252,8 +242,7 @@ function sanitizeOpenAISdkSseResponse(
     async pull(controller) {
       try {
         for (;;) {
-          const pending = enqueueSanitized(controller, "");
-          if (pending > 0) {
+          if (enqueueSanitized(controller, "")) {
             return;
           }
           const chunk = await reader?.read();
@@ -269,11 +258,7 @@ function sanitizeOpenAISdkSseResponse(
             controller.close();
             return;
           }
-          const enqueued = enqueueSanitized(
-            controller,
-            decoder.decode(chunk.value, { stream: true }),
-          );
-          if (enqueued > 0) {
+          if (enqueueSanitized(controller, decoder.decode(chunk.value, { stream: true }))) {
             return;
           }
         }
@@ -287,22 +272,14 @@ function sanitizeOpenAISdkSseResponse(
     },
   });
 
-  return new Response(sanitizedBody, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  return new Response(sanitizedBody, response);
 }
 
 function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
-  if (model.provider !== "openai") {
-    return true;
-  }
-  try {
-    return new URL(model.baseUrl).hostname.toLowerCase() !== "api.openai.com";
-  } catch {
-    return true;
-  }
+  return (
+    model.provider !== "openai" ||
+    URL.parse(model.baseUrl)?.hostname.toLowerCase() !== "api.openai.com"
+  );
 }
 
 function isJsonContentType(contentType: string): boolean {
@@ -389,22 +366,18 @@ async function normalizeOpenAISdkStreamContentType(params: {
   if (/\btext\/event-stream\b/i.test(contentType)) {
     return params.response;
   }
-  if (isJsonContentType(contentType)) {
+  const isJson = isJsonContentType(contentType);
+  if (isJson || !contentType.trim()) {
     // Some OpenAI-compatible gateways stream real SSE (`data: {...}`) but mislabel
     // the response as JSON. Without relabeling, the JSON-wrap fallback below would
     // re-prefix each frame as `data: data: {...}`, breaking JSON.parse in the SDK.
+    // Missing content types use the same clone sniff while preserving the original body.
     const kind = await classifyOpenAISdkStreamBody(params.response).catch(() => "unknown" as const);
     if (kind === "sse") {
       return withOpenAISdkStreamContentType(params.response, "text/event-stream; charset=utf-8");
     }
-    return params.response;
-  }
-  if (!contentType.trim()) {
-    // ChatGPT Codex can stream valid SSE with no content-type header. Sniff a
-    // clone so the SDK still receives the original body once we normalize it.
-    const kind = await classifyOpenAISdkStreamBody(params.response).catch(() => "unknown" as const);
-    if (kind === "sse") {
-      return withOpenAISdkStreamContentType(params.response, "text/event-stream; charset=utf-8");
+    if (isJson) {
+      return params.response;
     }
     if (kind === "json") {
       return withOpenAISdkStreamContentType(params.response, "application/json; charset=utf-8");
@@ -439,15 +412,11 @@ function requestBodyHasStreamTrue(
     return false;
   }
 
-  let text: string | undefined;
-  if (typeof init?.body === "string") {
-    text = init.body;
-  }
-  if (!text) {
+  if (typeof init?.body !== "string" || !init.body) {
     return false;
   }
   try {
-    return (JSON.parse(text) as { stream?: unknown }).stream === true;
+    return (JSON.parse(init.body) as { stream?: unknown }).stream === true;
   } catch {
     return false;
   }
@@ -467,16 +436,13 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
     return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
   }
 
-  const seconds = asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
-    min: 0,
-    minExclusive: true,
-    max: Number.MAX_SAFE_INTEGER,
-  });
-  if (seconds !== undefined) {
-    return seconds;
-  }
-
-  return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
+  return (
+    asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
+      min: 0,
+      minExclusive: true,
+      max: Number.MAX_SAFE_INTEGER,
+    }) ?? DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS
+  );
 }
 
 function shouldBypassLongSdkRetry(response: Response): boolean {
@@ -524,11 +490,7 @@ function buildManagedResponse(
     },
     refreshTimeout,
   });
-  return new Response(wrappedBody, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  return new Response(wrappedBody, response);
 }
 
 function resolveModelRequestPolicy(model: Model) {
@@ -567,15 +529,11 @@ export function resolveModelRequestTimeoutMs(
   model: Model,
   timeoutMs: number | undefined,
 ): number | undefined {
-  if (timeoutMs !== undefined) {
-    return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? clampTimerTimeoutMs(timeoutMs)
-      : undefined;
-  }
-  const modelTimeoutMs = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
-  return typeof modelTimeoutMs === "number" && Number.isFinite(modelTimeoutMs) && modelTimeoutMs > 0
-    ? clampTimerTimeoutMs(modelTimeoutMs)
-    : undefined;
+  return clampPositiveTimerTimeoutMs(
+    timeoutMs === undefined
+      ? (model as { requestTimeoutMs?: unknown }).requestTimeoutMs
+      : timeoutMs,
+  );
 }
 
 function buildModelRequestSignal(
@@ -596,32 +554,23 @@ function resolveHttpOrigin(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
-    return parsed.origin.toLowerCase();
-  } catch {
+  const parsed = URL.parse(value);
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     return undefined;
   }
+  parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+  return parsed.origin.toLowerCase();
 }
 
 function normalizeProviderOriginHostname(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    const normalized = parsed.hostname.trim().toLowerCase().replace(/\.+$/, "");
-    return normalized || undefined;
-  } catch {
+  const parsed = URL.parse(value);
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     return undefined;
   }
+  return parsed.hostname.trim().toLowerCase().replace(/\.+$/, "") || undefined;
 }
 
 function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is string {

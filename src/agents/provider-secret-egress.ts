@@ -98,7 +98,7 @@ export function unwrapModelHeaderSentinelsForProviderEgress<
   if (headers === model.headers && unwrappedRequest === request) {
     return model;
   }
-  const next = headers === model.headers ? ({ ...model } as T) : ({ ...model, headers } as T);
+  const next = headers === model.headers ? { ...model } : { ...model, headers };
   return unwrappedRequest === request
     ? next
     : attachModelProviderRequestTransport(next, unwrappedRequest);

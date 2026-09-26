@@ -3,6 +3,7 @@ import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 import { isComputerObservationAction } from "./tools/computer-tool-shared.js";
@@ -112,12 +113,7 @@ function normalizeActionName(value: unknown): string | undefined {
 }
 
 function readShellCommand(record: Record<string, unknown> | undefined): string | undefined {
-  const command = record?.command ?? record?.cmd;
-  if (typeof command !== "string") {
-    return undefined;
-  }
-  const trimmed = command.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(record?.command ?? record?.cmd);
 }
 
 function tokenizeReadOnlyShellCommands(command: string): string[][] | undefined {
@@ -216,10 +212,7 @@ function isReadOnlySedCommand(tokens: readonly string[]): boolean {
       sawSuppressAutoPrint = true;
       continue;
     }
-    if (token.startsWith("-") && token !== "-") {
-      return false;
-    }
-    expression ??= token;
+    expression = token;
     break;
   }
   return sawSuppressAutoPrint && expression != null && /^(\d+|\$)(,(\d+|\$))?p$/.test(expression);
@@ -364,10 +357,11 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "nodes":
       return action == null || !NODES_REPLAY_SAFE_ACTIONS.has(action);
     default: {
-      if (isAutomationsToolName(normalized) || normalized === "canvas") {
-        return action == null || !READ_ONLY_ACTIONS.has(action);
-      }
-      if (normalized.endsWith("_actions")) {
+      if (
+        isAutomationsToolName(normalized) ||
+        normalized === "canvas" ||
+        normalized.endsWith("_actions")
+      ) {
         return action == null || !READ_ONLY_ACTIONS.has(action);
       }
       if (normalized.startsWith("message_") || normalized.includes("send")) {
@@ -387,9 +381,6 @@ export function isReplaySafeToolCall(toolName: string, args: unknown): boolean {
     return true;
   }
   switch (normalized) {
-    case "exec":
-    case "bash":
-      return false;
     case "process":
       return action != null && PROCESS_REPLAY_SAFE_ACTIONS.has(action);
     case "message":
