@@ -638,8 +638,8 @@ describe("createGatewayCloseHandler", () => {
         await finished.promise;
         try {
           const result = await closing;
-          expect(result.warnings).toContain(
-            owner === "harness" ? "agent-harnesses" : `gateway:${owner}`,
+          expect(result.warnings).toEqual(
+            owner === "sdk" ? [] : [owner === "harness" ? "agent-harnesses" : `gateway:${owner}`],
           );
           expect(sdkDisposalReads).toEqual([{ value: 42 }]);
           expect(sdkDatabase.isOpen).toBe(false);

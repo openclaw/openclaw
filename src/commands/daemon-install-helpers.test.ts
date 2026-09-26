@@ -1757,8 +1757,6 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
 
     const plan = await buildNodePlan({
       env: { HOME: tmpDir, ...processEnvironment },
-      port: 3000,
-      runtime: "node",
       platform,
       existingEnvironment,
       existingEnvironmentValueSources,

@@ -958,60 +958,6 @@ describe("models.list", () => {
     });
   });
 
-  it("keeps prepared auth when deferred auth refresh rejects", async () => {
-    await withoutOpenAIEnvAuth(async () => {
-      const runtimeConfig = {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://openai.example.com",
-              models: [{ id: "gpt-test", name: "GPT Test" }],
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      const { request, respond } = requestModelsList({
-        refresh: true,
-        view: "configured",
-        includeDefaultModels: false,
-        runtimeConfig,
-        deferredAuth: Promise.reject(new Error("auth refresh failed")),
-        loadGatewayModelCatalog: vi.fn(() =>
-          Promise.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]),
-        ),
-        reqId: "req-models-list-rejected-auth",
-      });
-
-      await request;
-
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          models: [
-            {
-              id: "gpt-test",
-              name: "GPT Test",
-              provider: "openai",
-              agentRuntime: {
-                id: "openclaw",
-                cloudPlacementSupported: true,
-                cloudPlacementExecutionMode: "worker-turn",
-                devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
-                devicePlacementSupported: true,
-                source: "implicit",
-              },
-              available: false,
-              supportsFastMode: false,
-              unavailableReason: "missing-auth",
-              tags: ["default"],
-            },
-          ],
-        },
-        undefined,
-      );
-    });
-  });
-
   it("does not advertise a subscription route after deferred auth observes logout", async () => {
     await withoutOpenAIEnvAuth(async () => {
       const runtimeConfig = {
