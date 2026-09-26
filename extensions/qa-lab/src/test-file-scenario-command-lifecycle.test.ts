@@ -6,6 +6,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -34,6 +35,7 @@ import {
   resetQaScenarioCommandCleanupTimings,
   runQaScenarioCommandLifecycle,
   setQaScenarioCommandCleanupTimings,
+  type QaScenarioCommandExecution,
 } from "./test-file-scenario-command-lifecycle.js";
 
 type ParentSignal = "SIGINT" | "SIGTERM";
@@ -56,8 +58,13 @@ function createChild(pid = 42) {
 function runCommand(
   timeoutMs?: number,
   onOutput?: (stream: "stderr" | "stdout", chunk: Buffer) => void,
+  control: Pick<
+    QaScenarioCommandExecution,
+    "signal" | "forwardParentSignals" | "cleanupGraceMs"
+  > = {},
 ) {
   return runQaScenarioCommandLifecycle({
+    ...control,
     command: "/usr/local/bin/scenario-command",
     args: ["--run"],
     cwd: "/tmp/qa",
@@ -120,12 +127,67 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
       // race PID reuse and inspect an unrelated process.
       expect(result).toEqual({
         exitCode: 7,
+        forceKillRequested: true,
         signal: null,
         stdout: "Docker scheduling finished\ndelayed descendant output\n",
         stderr: "",
       });
     } finally {
       await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("joins a real child's cancellation cleanup without re-signaling the parent", async () => {
+    spawnMock.mockImplementation((...args: Parameters<NonNullable<typeof actualSpawn.value>>) => {
+      if (!actualSpawn.value) {
+        throw new Error("real spawn unavailable");
+      }
+      return actualSpawn.value(...args);
+    });
+    const controller = new AbortController();
+    const ready = createDeferred<void>();
+    const pending = runQaScenarioCommandLifecycle({
+      command: process.execPath,
+      args: [
+        "-e",
+        [
+          "process.on('SIGTERM', () => setTimeout(() => {",
+          "  process.stdout.write('cleanup joined\\n', () => process.exit(143));",
+          "}, 25));",
+          "process.stdout.write('ready\\n');",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      ],
+      cwd: os.tmpdir(),
+      env: process.env,
+      signal: controller.signal,
+      forwardParentSignals: false,
+      timeoutMs: 5_000,
+      onOutput: (stream, chunk) => {
+        if (stream === "stdout" && chunk.toString().includes("ready")) {
+          ready.resolve();
+        }
+      },
+    });
+    try {
+      await Promise.race([
+        ready.promise,
+        pending.then(() => {
+          throw new Error("child exited before ready");
+        }),
+      ]);
+      controller.abort(new Error("Lab stopping"));
+      expect(await pending).toEqual({
+        exitCode: 143,
+        signal: null,
+        observedExit: { exitCode: 143, signal: null },
+        failureMessage: `${path.basename(process.execPath)} cancelled: Error: Lab stopping`,
+        stdout: "ready\ncleanup joined\n",
+        stderr: "",
+      });
+    } finally {
+      controller.abort();
+      await pending;
     }
   });
 
@@ -330,6 +392,131 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
     expect(parentHandlers.size).toBe(0);
   });
 
+  it("does not spawn an already-cancelled command", async () => {
+    const reason = new Error("already stopped");
+    await expect(
+      runCommand(undefined, undefined, { signal: AbortSignal.abort(reason) }),
+    ).rejects.toBe(reason);
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(parentHandlers.size).toBe(0);
+  });
+
+  it.each([false, true])(
+    "retains an allocated child's I/O error and terminal facts with forced cleanup=%s",
+    async (forced) => {
+      const child = createChild();
+      const error = new Error("stdout failed");
+      let alive = true;
+      processKill.mockImplementation((pid, signal) => {
+        if (pid === -42 && signal === 0 && !alive) {
+          throw Object.assign(new Error("gone"), { code: "ESRCH" });
+        }
+        return true;
+      });
+      setQaScenarioCommandCleanupTimings({ killGraceMs: 20, forceSettleMs: 10 });
+      const pending = runCommand(undefined, undefined, { forwardParentSignals: false });
+      child.stdout?.emit("error", error);
+      if (forced) {
+        await vi.advanceTimersByTimeAsync(20);
+      }
+      alive = false;
+      child.emit("exit", forced ? null : 2, forced ? "SIGKILL" : null);
+      child.emit("close", forced ? null : 2, forced ? "SIGKILL" : null);
+      await expect(pending).resolves.toEqual({
+        error,
+        exitCode: 1,
+        failureMessage: "stdout failed",
+        signal: null,
+        observedExit: {
+          exitCode: forced ? null : 2,
+          signal: forced ? "SIGKILL" : null,
+        },
+        ...(forced ? { forceKillRequested: true } : {}),
+        stdout: "",
+        stderr: "",
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("keeps standalone parent handlers when supplied an external cancellation signal", async () => {
+    const child = createChild();
+    const controller = new AbortController();
+    const pending = runCommand(undefined, undefined, { signal: controller.signal });
+    expect([...parentHandlers.keys()]).toEqual(["exit", "SIGINT", "SIGTERM"]);
+    child.emit("exit", 0, null);
+    child.emit("close", 0, null);
+    await expect(pending).resolves.toMatchObject({ exitCode: 0 });
+    expect(parentHandlers.size).toBe(0);
+  });
+
+  it("joins Lab-owned cooperative cleanup and removes its abort listener", async () => {
+    const child = createChild();
+    let alive = true;
+    processKill.mockImplementation((pid, signal) => {
+      if (pid === -42 && signal === 0 && !alive) {
+        throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      }
+      return true;
+    });
+    const controller = new AbortController();
+    const removed = vi.spyOn(controller.signal, "removeEventListener");
+    const pending = runCommand(undefined, undefined, {
+      signal: controller.signal,
+      forwardParentSignals: false,
+      cleanupGraceMs: 13_000,
+    });
+    const settled = vi.fn();
+    void pending.then(settled, settled);
+    expect(parentHandlers.size).toBe(0);
+    controller.abort(new Error("Lab stopping"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(processKill).toHaveBeenCalledWith(-42, "SIGTERM");
+    expect(processKill).not.toHaveBeenCalledWith(-42, "SIGKILL");
+    expect(processKill).not.toHaveBeenCalledWith(process.pid, "SIGTERM");
+    alive = false;
+    child.emit("exit", 143, null);
+    child.emit("close", 143, null);
+    await expect(pending).resolves.toEqual({
+      exitCode: 143,
+      signal: null,
+      observedExit: { exitCode: 143, signal: null },
+      failureMessage: "scenario-command cancelled: Error: Lab stopping",
+      stdout: "",
+      stderr: "",
+    });
+    expect(removed).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["cancel", "timeout"] as const)(
+    "retains the native cleanup-failure exit after %s initiates settlement",
+    async (first) => {
+      const child = createChild();
+      const controller = new AbortController();
+      const pending = runCommand(100, undefined, {
+        signal: controller.signal,
+        forwardParentSignals: false,
+      });
+      if (first === "timeout") {
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      controller.abort(new Error("Lab stopping"));
+      child.emit("exit", 2, null);
+      child.emit("close", 2, null);
+      await expect(pending).resolves.toMatchObject({
+        exitCode: first === "cancel" ? 2 : 1,
+        observedExit: { exitCode: 2, signal: null },
+        failureMessage:
+          first === "cancel"
+            ? "scenario-command cancelled: Error: Lab stopping"
+            : "scenario-command timed out after 100ms",
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   it("preserves the Windows taskkill timeout lifecycle", async () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     const originalSystemRoot = process.env.SystemRoot;
@@ -389,6 +576,8 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
       exitCode: 1,
       failureMessage: "scenario-command timed out after 100ms",
       signal: null,
+      observedExit: { exitCode: null, signal: "SIGKILL" },
+      forceKillRequested: true,
       stdout: "",
       stderr: "",
     });
@@ -449,6 +638,8 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
 
       await expect(resultPromise).resolves.toEqual({
         ...result,
+        forceKillRequested: true,
+        ...(phase !== "exited" ? { observedExit: { exitCode: null, signal: "SIGKILL" } } : {}),
         stdout: "",
         stderr: "",
       });

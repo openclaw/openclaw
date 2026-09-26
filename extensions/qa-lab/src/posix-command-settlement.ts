@@ -8,6 +8,8 @@ type QaPosixCommandPrimary =
   | { type: "spawn-error"; error: Error }
   | { type: "stream-error"; error: Error; stream: "stderr" | "stdout" };
 
+type QaPosixCommandExit = { exitCode: number | null; signal: NodeJS.Signals | null };
+
 type QaPosixCommandSettlementParams = {
   child: ChildProcess;
   settlementFailureMessage: string;
@@ -16,7 +18,12 @@ type QaPosixCommandSettlementParams = {
   forwardParentSignals?: boolean;
   initialSignal: NodeJS.Signals;
   onStderrData?: (chunk: Buffer) => void;
-  onSettled: (outcome: { primary: QaPosixCommandPrimary; settlementFailure?: Error }) => void;
+  onSettled: (outcome: {
+    primary: QaPosixCommandPrimary;
+    observedExit?: QaPosixCommandExit;
+    forceKillRequested?: true;
+    settlementFailure?: Error;
+  }) => void;
   onStdoutData?: (chunk: Buffer) => void;
   processGroupId: number | undefined;
   verifyAfterMs: number;
@@ -37,6 +44,8 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   let drainIdle: NodeJS.Timeout | undefined;
   let drainTimedOut = false;
   let executionTimer: NodeJS.Timeout | undefined;
+  let observedExit: QaPosixCommandExit | undefined;
+  let forceKillRequested = false;
   let parentSignal: "SIGINT" | "SIGTERM" | undefined;
   let primary: QaPosixCommandPrimary | undefined;
   let stdioDrained = false;
@@ -54,6 +63,7 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
       ? true
       : params.processGroupId !== undefined && isQaPosixProcessGroupAlive(params.processGroupId));
   const signal = (nextSignal: NodeJS.Signals) => {
+    forceKillRequested ||= nextSignal === "SIGKILL";
     const error = windows
       ? windows.signal(nextSignal)
       : params.processGroupId === undefined
@@ -89,7 +99,12 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
     const settlementFailure =
       errors.length > 1 ? new AggregateError(errors, params.settlementFailureMessage) : errors[0];
     dispose();
-    params.onSettled({ primary, ...(settlementFailure ? { settlementFailure } : {}) });
+    params.onSettled({
+      primary,
+      ...(primary.type !== "exit" && observedExit ? { observedExit } : {}),
+      ...(forceKillRequested ? { forceKillRequested: true } : {}),
+      ...(settlementFailure ? { settlementFailure } : {}),
+    });
     if (parentSignal) {
       process.kill(process.pid, parentSignal);
     }
@@ -100,6 +115,10 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
       params.child.stdout?.destroy();
       params.child.stderr?.destroy();
       stdioDrained = true;
+    } else {
+      // Group disappearance does not guarantee exit/close delivery. Escaped
+      // descendants may still retain inherited pipes after cleanup completes.
+      armDrainDeadline();
     }
     settle();
   };
@@ -156,9 +175,8 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   const freeze = (nextPrimary: QaPosixCommandPrimary, initialSignal = params.initialSignal) => {
     primary ??= nextPrimary;
     clearTimeout(executionTimer);
-    // Every terminal path needs a drain bound: an escaped descendant can retain
-    // inherited stdio even after the original process group is gone.
-    armDrainDeadline();
+    // A live leader gets its cleanup grace before its pipes must drain.
+    // Exit or finishCleanup owns the stdio deadline, not the cancellation request.
     startCleanup(initialSignal);
     settle();
   };
@@ -196,6 +214,7 @@ export function createQaPosixCommandSettlement(params: QaPosixCommandSettlementP
   }
   // `exit` freezes the leader tuple; only `close` can prove stdio drained.
   function onExit(exitCode: number | null, nextSignal: NodeJS.Signals | null) {
+    observedExit ??= { exitCode, signal: nextSignal };
     primary ??= { type: "exit", exitCode, signal: nextSignal };
     clearTimeout(executionTimer);
     armDrainDeadline();

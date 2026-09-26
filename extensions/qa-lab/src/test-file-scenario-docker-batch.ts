@@ -4,6 +4,7 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { z } from "zod";
 import { toRepoArtifactPath } from "./cli-paths.js";
+import { QaSuiteCleanupError } from "./errors.js";
 import type { QaEvidenceOccurrence } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { shellQuote } from "./shell-quote.js";
@@ -14,6 +15,9 @@ import {
 } from "./test-file-scenario-command-lifecycle.js";
 
 const QA_DOCKER_E2E_LANE_SCRIPT = "test/e2e/qa-lab/runtime/docker-e2e-lane.ts";
+// test-docker-all owns a 10s shutdown grace and 1s force-verification window.
+// Let that owner publish its joined-cleanup exit before the enclosing command escalates.
+const DOCKER_AGGREGATE_CLEANUP_GRACE_MS = 13_000;
 const DOCKER_CANDIDATE_ENV_KEY =
   /^(?:OPENCLAW_DOCKER_E2E_SELECTED_SHA|OPENCLAW_CURRENT_PACKAGE_(?:TGZ|VERSION|SHA256)|OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_(?:DIR|CANDIDATE_VERSION|MANIFEST_SHA256))$/u;
 const dockerRegistrySchema = z.strictObject({
@@ -72,12 +76,44 @@ type QaDockerScenario = QaSeedScenarioWithSource & {
 };
 
 type QaDockerBatchResult = {
+  cleanupFailure?: QaSuiteCleanupError;
   durationMs: number;
   failureMessage?: string;
   logPath: string;
   scenario: QaDockerScenario;
   status: "fail" | "pass";
 };
+
+function dockerAggregateCleanupFailure(
+  result: Awaited<ReturnType<typeof runQaScenarioCommandLifecycle>>,
+): QaSuiteCleanupError | undefined {
+  const exit = result.observedExit === undefined ? result : result.observedExit;
+  // Aggregate 130/143 acknowledge joined signal cleanup; 2 is cleanup failure.
+  // A forced or unobserved exit cannot inherit successful per-lane verdicts.
+  if (
+    !result.cleanupFailure &&
+    !result.forceKillRequested &&
+    exit &&
+    !exit.signal &&
+    exit.exitCode !== null &&
+    [0, 1, 130, 143].includes(exit.exitCode)
+  ) {
+    return undefined;
+  }
+  const failure = new Error(
+    `Docker aggregate cleanup not acknowledged (exit=${exit?.exitCode ?? "unobserved"}, signal=${exit?.signal ?? "none"}, forced=${result.forceKillRequested === true})`,
+  );
+  return new QaSuiteCleanupError(
+    [
+      ...(result.error ? [result.error] : []),
+      ...(result.cleanupFailure ? [result.cleanupFailure] : []),
+      failure,
+    ],
+    result.cleanupFailure
+      ? `${failure.message}: ${result.cleanupFailure.message}`
+      : failure.message,
+  );
+}
 
 export function dockerE2eLaneName(scenario: QaSeedScenarioWithSource) {
   const args = scenario.execution.kind === "script" ? scenario.execution.args : undefined;
@@ -139,6 +175,7 @@ export async function prepareDockerE2eEnvironment(params: {
   // overwrite the bytes referenced by an earlier observation's receipt.
   await fs.mkdir(prepDir);
   const result = await (params.runCommand ?? runQaScenarioCommandLifecycle)({
+    cleanupGraceMs: DOCKER_AGGREGATE_CLEANUP_GRACE_MS,
     command: process.execPath,
     args: ["scripts/test-docker-all.mjs", `--prepare-only=${manifestPath}`],
     cwd: params.repoRoot,
@@ -149,6 +186,10 @@ export async function prepareDockerE2eEnvironment(params: {
       OPENCLAW_DOCKER_E2E_REPO_ROOT: params.repoRoot,
     },
   });
+  const cleanupFailure = dockerAggregateCleanupFailure(result);
+  if (cleanupFailure) {
+    throw cleanupFailure;
+  }
   if (result.exitCode !== 0) {
     throw new Error(
       result.failureMessage || result.stderr.trim() || "Docker candidate prep failed",
@@ -272,6 +313,7 @@ export async function runDockerE2eBatch(params: {
   let commandResult: Awaited<ReturnType<typeof runQaScenarioCommandLifecycle>>;
   try {
     commandResult = await params.runCommand({
+      cleanupGraceMs: DOCKER_AGGREGATE_CLEANUP_GRACE_MS,
       command: process.execPath,
       args: ["scripts/test-docker-all.mjs"],
       cwd: params.repoRoot,
@@ -293,15 +335,27 @@ export async function runDockerE2eBatch(params: {
     commandResult = {
       exitCode: 1,
       failureMessage: formatErrorMessage(error),
+      ...(error instanceof QaSuiteCleanupError ? { cleanupFailure: error } : {}),
       stderr: `${formatErrorMessage(error)}\n`,
       stdout: "",
     };
   }
-  await fs.writeFile(
-    logPath,
-    `$ ${shellQuote(process.execPath)} scripts/test-docker-all.mjs\n${formatQaScenarioCommandOutput(commandResult)}`,
-    "utf8",
-  );
+  const cleanupFailure = dockerAggregateCleanupFailure(commandResult);
+  try {
+    await fs.writeFile(
+      logPath,
+      `$ ${shellQuote(process.execPath)} scripts/test-docker-all.mjs\n${formatQaScenarioCommandOutput(commandResult)}`,
+      "utf8",
+    );
+  } catch (error) {
+    if (cleanupFailure) {
+      throw new QaSuiteCleanupError(
+        [cleanupFailure, error],
+        `Docker aggregate cleanup and log publication failed: ${formatErrorMessage(error)}`,
+      );
+    }
+    throw error;
+  }
 
   let summary:
     | {
@@ -318,25 +372,32 @@ export async function runDockerE2eBatch(params: {
   const lanes = summary?.lanes ?? [];
   const failures = summary?.failures ?? [];
   const resolvedLaneNames = summary?.selectedLanes ?? [];
+  const exit = commandResult.observedExit ?? commandResult;
+  const joinedCancellation = !cleanupFailure && [130, 143].includes(exit.exitCode ?? -1);
   const unexplainedFailure =
-    commandResult.exitCode !== 0 &&
-    (failures.length === 0 ||
-      failures.some(
-        (failure) =>
-          !laneNames.some((laneName) => laneMatches(laneName, failure.name, resolvedLaneNames)),
-      ));
+    commandResult.error !== undefined ||
+    (commandResult.exitCode !== 0 &&
+      !joinedCancellation &&
+      (failures.length === 0 ||
+        failures.some(
+          (failure) =>
+            !laneNames.some((laneName) => laneMatches(laneName, failure.name, resolvedLaneNames)),
+        )));
   return selected.map(({ lane, scenario }) => {
     const matchingLanes = lanes.filter((result) =>
       laneMatches(lane, result.name, resolvedLaneNames),
     );
     const failedLane = matchingLanes.find((result) => result.status !== 0);
-    const failureMessage = unexplainedFailure
-      ? commandResult.failureMessage || "Docker E2E scheduler failed before reporting lane results"
-      : failedLane
-        ? `${failedLane.name ?? lane} exited with ${String(failedLane.status ?? 1)}`
-        : matchingLanes.length === 0
-          ? `Docker E2E scheduler returned no result for ${lane}`
-          : undefined;
+    const failureMessage = cleanupFailure
+      ? cleanupFailure.message
+      : unexplainedFailure
+        ? commandResult.failureMessage ||
+          "Docker E2E scheduler failed before reporting lane results"
+        : failedLane
+          ? `${failedLane.name ?? lane} exited with ${String(failedLane.status ?? 1)}`
+          : matchingLanes.length === 0
+            ? `Docker E2E scheduler returned no result for ${lane}`
+            : undefined;
     const result: QaDockerBatchResult = {
       durationMs: Math.max(
         1,
@@ -346,6 +407,9 @@ export async function runDockerE2eBatch(params: {
       scenario,
       status: failureMessage ? "fail" : "pass",
     };
+    if (cleanupFailure) {
+      result.cleanupFailure = cleanupFailure;
+    }
     if (failureMessage) {
       result.failureMessage = failureMessage;
     }

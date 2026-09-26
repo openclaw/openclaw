@@ -95,7 +95,6 @@ vi.mock("./scenario-catalog.js", async (importOriginal) => {
 
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import {
-  runQaLabSelfCheckCommand,
   runQaCredentialsAddCommand,
   runQaDockerBuildImageCommand,
   runQaDockerScaffoldCommand,
@@ -3416,45 +3415,6 @@ describe("qa cli runtime", () => {
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,
     });
-  });
-
-  it("resolves self-check repo-root-relative paths before starting the lab server", async () => {
-    await runQaLabSelfCheckCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      output: ".artifacts/qa/self-check.md",
-    });
-
-    expect(startQaLabServer).toHaveBeenCalledWith({
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      outputPath: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/self-check.md"),
-    });
-  });
-
-  it("fails unsuccessful self-checks after stopping the lab server", async () => {
-    const stop = vi.fn();
-    startQaLabServer.mockResolvedValueOnce({
-      baseUrl: "http://127.0.0.1:58000",
-      runSelfCheck: vi.fn().mockResolvedValue({
-        outputPath: "/tmp/failed-report.md",
-        report: "",
-        checks: [{ name: "QA self-check scenario", status: "fail" }],
-        scenarioResult: {
-          name: "QA self-check scenario",
-          status: "fail",
-          steps: [],
-        },
-      }),
-      stop,
-    });
-
-    await expect(
-      runQaLabSelfCheckCommand({
-        repoRoot: "/tmp/openclaw-repo",
-      }),
-    ).rejects.toThrow("QA self-check failed. See /tmp/failed-report.md.");
-
-    expect(stop).toHaveBeenCalledOnce();
-    expectWriteContains(stdoutWrite, "QA self-check report: /tmp/failed-report.md");
   });
 
   it("rejects oversized credential payload files before broker setup", async () => {

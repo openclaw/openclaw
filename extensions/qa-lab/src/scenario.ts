@@ -2,6 +2,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaTransportActionName, QaTransportState } from "./qa-transport.js";
 
 export type QaScenarioStepContext = {
+  signal?: AbortSignal;
   state: QaTransportState;
   performAction?: (
     action: QaTransportActionName,
@@ -40,7 +41,9 @@ export async function runQaScenario(
 
   for (const step of definition.steps) {
     try {
+      ctx.signal?.throwIfAborted();
       const details = await step.run(ctx);
+      ctx.signal?.throwIfAborted();
       steps.push({
         name: step.name,
         status: "pass",

@@ -14,6 +14,9 @@ import { createQaPosixCommandSettlement } from "./posix-command-settlement.js";
 import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
 export type QaScenarioCommandExecution = {
+  signal?: AbortSignal;
+  forwardParentSignals?: boolean;
+  cleanupGraceMs?: number;
   args: string[];
   command: string;
   cwd: string;
@@ -23,6 +26,7 @@ export type QaScenarioCommandExecution = {
 };
 
 export type QaScenarioCommandResult = {
+  error?: Error;
   exitCode: number;
   failureMessage?: string;
   signal?: NodeJS.Signals | null;
@@ -30,6 +34,11 @@ export type QaScenarioCommandResult = {
   stderr: string;
   stdoutTruncated?: true;
   stderrTruncated?: true;
+  // A requested cancellation/timeout is the primary result, not a child exit.
+  // Preserve its later native tuple, or null when no exit was observed.
+  observedExit?: { exitCode: number | null; signal: NodeJS.Signals | null } | null;
+  forceKillRequested?: true;
+  cleanupFailure?: Error;
 };
 
 type QaScenarioCommandTerminalResult = Pick<
@@ -46,6 +55,7 @@ export function runQaScenarioCommandLifecycle(
   execution: QaScenarioCommandExecution,
 ): Promise<QaScenarioCommandResult> {
   return new Promise((resolve, reject) => {
+    execution.signal?.throwIfAborted();
     const isWindows = process.platform === "win32";
     const child = spawn(execution.command, execution.args, {
       cwd: execution.cwd,
@@ -58,10 +68,11 @@ export function runQaScenarioCommandLifecycle(
     const stdout = createQaChildOutputCapture();
     const stderr = createQaChildOutputTail();
     const commandLabel = path.basename(execution.command);
-    createQaPosixCommandSettlement({
+    const onAbort = () => settlement.requestCleanup();
+    const settlement = createQaPosixCommandSettlement({
       child,
       settlementFailureMessage: `${commandLabel} settlement failed`,
-      forceKillAfterMs: timeoutKillGraceMs,
+      forceKillAfterMs: execution.cleanupGraceMs ?? timeoutKillGraceMs,
       ...(isWindows
         ? {
             windowsCleanup: {
@@ -82,23 +93,26 @@ export function runQaScenarioCommandLifecycle(
           }
         : {}),
       executionTimeoutMs: execution.timeoutMs,
-      forwardParentSignals: true,
+      // A Lab-owned run retains its own interrupt handlers through report
+      // publication; a child must not re-raise a process-wide signal first.
+      forwardParentSignals: execution.forwardParentSignals ?? true,
       initialSignal: "SIGTERM",
       onSettled: (outcome) => {
+        execution.signal?.removeEventListener("abort", onAbort);
         const primary = outcome.primary;
-        if (primary.type === "spawn-error" || primary.type === "stream-error") {
-          reject(
-            outcome.settlementFailure
-              ? new AggregateError(
-                  [primary.error, outcome.settlementFailure],
-                  `${commandLabel} command and settlement failed`,
-                )
-              : primary.error,
-          );
+        const error =
+          primary.type === "spawn-error" || primary.type === "stream-error"
+            ? primary.error
+            : undefined;
+        if (error && child.pid === undefined) {
+          reject(error);
           return;
         }
-        const result: QaScenarioCommandTerminalResult =
-          primary.type === "exit"
+        // Once a child exists, an I/O error must retain its later exit and
+        // cleanup facts; rejecting the error alone would erase those facts.
+        const result: QaScenarioCommandTerminalResult = error
+          ? { exitCode: 1, failureMessage: error.message, signal: null }
+          : primary.type === "exit"
             ? {
                 exitCode: primary.exitCode ?? (primary.signal ? 1 : 0),
                 signal: primary.signal,
@@ -109,17 +123,27 @@ export function runQaScenarioCommandLifecycle(
                   failureMessage: `${commandLabel} interrupted by ${primary.signal}`,
                   signal: primary.signal,
                 }
-              : {
-                  exitCode: 1,
-                  failureMessage: `${commandLabel} timed out after ${execution.timeoutMs}ms`,
-                  signal: null,
-                };
+              : primary.type === "manual"
+                ? {
+                    exitCode: outcome.observedExit?.exitCode || 1,
+                    failureMessage: `${commandLabel} cancelled: ${String(execution.signal?.reason)}`,
+                    signal: outcome.observedExit?.signal ?? null,
+                  }
+                : {
+                    exitCode: 1,
+                    failureMessage: `${commandLabel} timed out after ${execution.timeoutMs}ms`,
+                    signal: null,
+                  };
         const settlementFailure = outcome.settlementFailure?.message;
         resolve({
           ...result,
+          ...(error ? { error } : {}),
           ...(settlementFailure && result.exitCode === 0 ? { exitCode: 1 } : {}),
           stdout: readQaChildOutput(stdout),
           stderr: readQaChildOutputTail(stderr),
+          ...(primary.type !== "exit" ? { observedExit: outcome.observedExit ?? null } : {}),
+          ...(outcome.forceKillRequested ? { forceKillRequested: true } : {}),
+          ...(outcome.settlementFailure ? { cleanupFailure: outcome.settlementFailure } : {}),
           ...(stdout.exceeded ? { stdoutTruncated: true } : {}),
           ...(stderr.truncated ? { stderrTruncated: true } : {}),
           ...(settlementFailure
@@ -142,6 +166,10 @@ export function runQaScenarioCommandLifecycle(
       processGroupId: isWindows ? undefined : child.pid,
       verifyAfterMs: timeoutForceSettleMs,
     });
+    execution.signal?.addEventListener("abort", onAbort, { once: true });
+    if (execution.signal?.aborted) {
+      onAbort();
+    }
   });
 }
 

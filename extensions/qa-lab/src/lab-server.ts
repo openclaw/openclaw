@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import fs from "node:fs";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -13,14 +13,12 @@ import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
   handleQaBusRequest,
-  isQaMalformedJsonBodyError,
   readQaJsonBody,
   writeError,
   writeJson,
-  writeQaRequestBodyLimitError,
 } from "./bus-server.js";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
-import { toQaError } from "./errors.js";
+import { combineQaSuiteErrors, QaSuiteCleanupError, toQaError } from "./errors.js";
 import {
   QaEvidenceGalleryError,
   buildQaEvidenceGalleryModel,
@@ -34,14 +32,17 @@ import {
   mapCaptureEventForQa,
   probeTcpReachability,
 } from "./lab-server-capture.js";
+import { QaLabRunUnavailableError, writeQaLabServerError } from "./lab-server-errors.js";
 import {
   detectContentType,
+  detectQaEvidenceArtifactContentType,
   isControlUiProxyPath,
   missingUiHtml,
   proxyHttpRequest,
   proxyUpgradeRequest,
   resolveAdvertisedBaseUrl,
   resolveUiAssetVersion,
+  sanitizeControlUiPublicUrl,
   tryResolveUiAsset,
 } from "./lab-server-ui.js";
 import type {
@@ -84,25 +85,6 @@ export type {
   QaLabServerHandle,
   QaLabServerStartParams,
 } from "./lab-server.types.js";
-
-async function writeQaLabServerError(
-  req: IncomingMessage,
-  res: Parameters<typeof writeError>[0],
-  error: unknown,
-): Promise<void> {
-  if (await writeQaRequestBodyLimitError(req, res, error)) {
-    return;
-  }
-  if (isQaMalformedJsonBodyError(error)) {
-    writeError(res, 400, error.message);
-    return;
-  }
-  if (error instanceof QaEvidenceGalleryError) {
-    writeError(res, error.statusCode, error.message);
-    return;
-  }
-  writeError(res, 500, error);
-}
 
 function countQaLabScenarioRun(scenarios: QaLabScenarioOutcome[]) {
   return {
@@ -162,91 +144,6 @@ function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefa
   };
 }
 
-const CONTROL_UI_CREDENTIAL_QUERY_KEYS = new Set([
-  "access_token",
-  "api_key",
-  "apikey",
-  "auth",
-  "devicetoken",
-  "id_token",
-  "password",
-  "refresh_token",
-  "token",
-]);
-const CONTROL_UI_CREDENTIAL_QUERY_PATTERN =
-  /([?&])(?:access_token|api_?key|auth|deviceToken|id_token|password|refresh_token|token)=[^&#\s]*&?/gi;
-
-function stripSensitiveQueryParamsFromText(rawUrl: string): string {
-  let sanitized = rawUrl;
-  for (;;) {
-    const next = sanitized
-      .replace(CONTROL_UI_CREDENTIAL_QUERY_PATTERN, (match: string, separator: string) =>
-        match.endsWith("&") ? separator : "",
-      )
-      .replace(/[?&]$/, "")
-      .replace("?&", "?");
-    if (next === sanitized) {
-      return next;
-    }
-    sanitized = next;
-  }
-}
-
-function stripSensitiveQueryParams(rawUrl: string): string {
-  try {
-    const url = new URL(rawUrl);
-    for (const key of Array.from(url.searchParams.keys())) {
-      if (CONTROL_UI_CREDENTIAL_QUERY_KEYS.has(key.toLowerCase())) {
-        url.searchParams.delete(key);
-      }
-    }
-    return url.toString();
-  } catch {
-    return stripSensitiveQueryParamsFromText(rawUrl);
-  }
-}
-
-function sanitizeControlUiPublicUrl(url: string | null): string | null {
-  if (!url) {
-    return null;
-  }
-  const fragmentIndex = url.indexOf("#");
-  const withoutFragment = fragmentIndex === -1 ? url : url.slice(0, fragmentIndex);
-  return stripSensitiveQueryParams(withoutFragment);
-}
-
-function detectQaEvidenceArtifactContentType(filePath: string): string {
-  const lower = filePath.toLowerCase();
-  if (lower.endsWith(".png")) {
-    return "image/png";
-  }
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
-    return "image/jpeg";
-  }
-  if (lower.endsWith(".gif")) {
-    return "image/gif";
-  }
-  if (lower.endsWith(".webp")) {
-    return "image/webp";
-  }
-  if (lower.endsWith(".webm")) {
-    return "video/webm";
-  }
-  if (lower.endsWith(".mp4")) {
-    return "video/mp4";
-  }
-  if (lower.endsWith(".mov")) {
-    return "video/quicktime";
-  }
-  if (lower.endsWith(".json") || lower.endsWith(".jsonl")) {
-    return "application/json; charset=utf-8";
-  }
-  if (lower.endsWith(".md") || lower.endsWith(".txt") || lower.endsWith(".log")) {
-    return "text/plain; charset=utf-8";
-  }
-  return "application/octet-stream";
-}
-
 async function startQaGatewayLoop(params: { baseUrl: string }) {
   const { qaChannelPlugin, setQaChannelRuntime } = await import("openclaw/plugin-sdk/qa-channel");
   const runtime = createQaRunnerRuntime();
@@ -295,8 +192,14 @@ export async function startQaLabServer(
 ): Promise<QaLabServerHandle> {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const captureSettings = resolveDebugProxySettings();
+  let stopPromise: Promise<void> | null = null;
   let captureStoreLease: ReturnType<typeof acquireDebugProxyCaptureStore> | undefined;
-  const getCaptureStore = () => (captureStoreLease ??= acquireDebugProxyCaptureStore()).store;
+  const getCaptureStore = () => {
+    if (stopPromise) {
+      throw new QaLabRunUnavailableError(503, "QA Lab is stopping");
+    }
+    return (captureStoreLease ??= acquireDebugProxyCaptureStore()).store;
+  };
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;
   let latestScenarioRun: QaLabScenarioRun | null = null;
@@ -351,7 +254,44 @@ export async function startQaLabServer(
   };
   let runnerSnapshot = createIdleQaRunnerSnapshot(scorecardReport.profiles);
   runnerSnapshot.plan = await resolveServerRunPlan(runnerSnapshot.selection);
-  let activeSuiteRun: Promise<void> | null = null;
+  let activeRun: { task: Promise<unknown>; controller: AbortController } | null = null;
+  let runCleanupFailure: QaSuiteCleanupError | undefined;
+  const assertRunAvailable = () => {
+    if (stopPromise) {
+      throw new QaLabRunUnavailableError(503, "QA Lab is stopping");
+    }
+    if (runCleanupFailure) {
+      throw new QaLabRunUnavailableError(
+        503,
+        "QA Lab cleanup is unconfirmed; resolve the failure and restart QA Lab.",
+      );
+    }
+    if (activeRun) {
+      throw new QaLabRunUnavailableError(409, "QA run already in progress");
+    }
+  };
+  const runAccepted = <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    assertRunAvailable();
+    const controller = new AbortController();
+    const task = Promise.resolve()
+      .then(() => run(controller.signal))
+      .catch((error: unknown) => {
+        // Settled work releases its active slot, but unconfirmed resources must
+        // keep admission closed and remain observable by a later stop().
+        if (error instanceof QaSuiteCleanupError) {
+          runCleanupFailure = error;
+        }
+        throw error;
+      })
+      .finally(() => {
+        activeRun = null;
+      });
+    activeRun = { task, controller };
+    // HTTP suites return before completion; retain their rejection for shutdown
+    // without creating an unhandled rejection after publishing the failed outcome.
+    void task.catch(() => undefined);
+    return task;
+  };
   let controlUiProxyTarget = params?.controlUiProxyTarget?.trim()
     ? new URL(params.controlUiProxyTarget)
     : null;
@@ -372,7 +312,7 @@ export async function startQaLabServer(
   let runnerModelCatalogPromise: Promise<void> | null = null;
   let runnerModelCatalogAbort: AbortController | null = null;
   const ensureRunnerModelCatalog = () => {
-    if (runnerModelCatalogPromise) {
+    if (stopPromise || runnerModelCatalogPromise) {
       return runnerModelCatalogPromise;
     }
     runnerModelCatalogAbort = new AbortController();
@@ -395,47 +335,73 @@ export async function startQaLabServer(
   };
 
   async function runSelfCheck(): Promise<QaSelfCheckResult> {
-    latestScenarioRun = withQaLabRunCounts({
-      kind: "self-check",
-      status: "running",
-      startedAt: new Date().toISOString(),
-      scenarios: [
-        {
-          id: "qa-self-check",
-          name: "Synthetic Slack-class roundtrip",
-          status: "running",
-        },
-      ],
+    return await runAccepted(async (signal) => {
+      const startedAt = new Date().toISOString();
+      latestReport = null;
+      latestScenarioRun = withQaLabRunCounts({
+        kind: "self-check",
+        status: "running",
+        startedAt,
+        scenarios: [
+          {
+            id: "qa-self-check",
+            name: "Synthetic Slack-class roundtrip",
+            status: "running",
+          },
+        ],
+      });
+      try {
+        const result = await runQaSelfCheckAgainstState({
+          signal,
+          state,
+          cfg: gateway?.cfg ?? createQaChannelGatewayConfig({ baseUrl: listenUrl }),
+          transportId: "qa-channel",
+          outputPath: params?.outputPath,
+          repoRoot,
+          waitTimeoutMs: params?.selfCheckWaitTimeoutMs,
+        });
+        const finishedAt = new Date().toISOString();
+        latestScenarioRun = withQaLabRunCounts({
+          kind: "self-check",
+          status: "completed",
+          startedAt,
+          finishedAt,
+          scenarios: [
+            {
+              id: "qa-self-check",
+              name: result.scenarioResult.name,
+              status: result.scenarioResult.status,
+              details: result.scenarioResult.details,
+              steps: result.scenarioResult.steps,
+            },
+          ],
+        });
+        latestReport = {
+          outputPath: result.outputPath,
+          markdown: result.report,
+          generatedAt: finishedAt,
+        };
+        return result;
+      } catch (error) {
+        const finishedAt = new Date().toISOString();
+        latestScenarioRun = withQaLabRunCounts({
+          kind: "self-check",
+          status: "completed",
+          startedAt,
+          finishedAt,
+          scenarios: [
+            {
+              id: "qa-self-check",
+              name: "Synthetic Slack-class roundtrip",
+              status: "fail",
+              details: formatErrorMessage(error),
+              finishedAt,
+            },
+          ],
+        });
+        throw error;
+      }
     });
-    const result = await runQaSelfCheckAgainstState({
-      state,
-      cfg: gateway?.cfg ?? createQaChannelGatewayConfig({ baseUrl: listenUrl }),
-      transportId: "qa-channel",
-      outputPath: params?.outputPath,
-      repoRoot,
-      waitTimeoutMs: params?.selfCheckWaitTimeoutMs,
-    });
-    latestScenarioRun = withQaLabRunCounts({
-      kind: "self-check",
-      status: "completed",
-      startedAt: latestScenarioRun.startedAt,
-      finishedAt: new Date().toISOString(),
-      scenarios: [
-        {
-          id: "qa-self-check",
-          name: result.scenarioResult.name,
-          status: result.scenarioResult.status,
-          details: result.scenarioResult.details,
-          steps: result.scenarioResult.steps,
-        },
-      ],
-    });
-    latestReport = {
-      outputPath: result.outputPath,
-      markdown: result.report,
-      generatedAt: new Date().toISOString(),
-    };
-    return result;
   }
 
   const server = createServer((req, res) => {
@@ -678,10 +644,7 @@ export async function startQaLabServer(
           return;
         }
         if (req.method === "POST" && url.pathname === "/api/reset") {
-          if (activeSuiteRun) {
-            writeError(res, 409, "QA suite run already in progress");
-            return;
-          }
+          assertRunAvailable();
           state.reset();
           latestReport = null;
           latestScenarioRun = null;
@@ -716,19 +679,12 @@ export async function startQaLabServer(
           return;
         }
         if (req.method === "POST" && url.pathname === "/api/scenario/self-check") {
-          if (activeSuiteRun) {
-            writeError(res, 409, "QA suite run already in progress");
-            return;
-          }
           const result = await runSelfCheck();
           writeJson(res, 200, serializeSelfCheck(result));
           return;
         }
         if (req.method === "POST" && url.pathname === "/api/scenario/suite") {
-          if (activeSuiteRun) {
-            writeError(res, 409, "QA suite run already in progress");
-            return;
-          }
+          assertRunAvailable();
           let selection: ReturnType<typeof normalizeQaRunSelection>;
           let plan: ReturnType<typeof resolveQaLabRunPlan>;
           let adapterFactories: readonly QaTransportAdapterFactory[] | undefined;
@@ -747,15 +703,14 @@ export async function startQaLabServer(
             writeError(res, 400, error);
             return;
           }
+          // Body reads and adapter discovery yield to shutdown or another run.
+          // Admission must still hold at the shared-state reset boundary.
+          assertRunAvailable();
           if (plan.status === "invalid") {
             writeJson(res, 400, {
               error: plan.errors.join(" "),
               plan,
             });
-            return;
-          }
-          if (activeSuiteRun) {
-            writeError(res, 409, "QA suite run already in progress");
             return;
           }
           state.reset();
@@ -780,12 +735,14 @@ export async function startQaLabServer(
             artifacts: null,
             error: null,
           };
-          activeSuiteRun = (async () => {
+          void runAccepted(async (signal) => {
             // Keep generated artifacts visible when authenticated verdict validation fails.
             let artifacts: ReturnType<typeof createIdleQaRunnerSnapshot>["artifacts"] = null;
             try {
               const { runQaSuite } = await import("./suite-launch.runtime.js");
               const runtimeResult = await runQaSuite({
+                signal,
+                forwardParentSignals: false,
                 lab: labHandle ?? undefined,
                 startLab: startQaLabServer,
                 controlUiEnabled: true,
@@ -866,10 +823,9 @@ export async function startQaLabServer(
                 artifacts,
                 error: message,
               };
-            } finally {
-              activeSuiteRun = null;
+              throw error;
             }
-          })();
+          });
           writeJson(res, 202, {
             ok: true,
             plan,
@@ -919,24 +875,45 @@ export async function startQaLabServer(
     captureStoreLease = undefined;
   };
 
-  const stopLabServerResources = async (): Promise<Error | undefined> => {
+  const stopLabServerResources = async (): Promise<void> => {
     runnerModelCatalogAbort?.abort();
-    await runnerModelCatalogPromise?.catch(() => undefined);
-    let cleanupError: Error | undefined;
-    // Gateway shutdown can flush completed work through this server, so the
-    // bus must remain reachable until the gateway has fully stopped.
-    try {
-      await gateway?.stop();
-    } catch (error) {
-      cleanupError = toQaError(error);
+    const run = activeRun;
+    run?.controller.abort(new DOMException("QA Lab run cancelled during shutdown", "AbortError"));
+    const errors: Error[] = !run && runCleanupFailure ? [runCleanupFailure] : [];
+    // Accepted runs own their workers, report writes and terminal publication.
+    // Cancel execution first, then keep the Gateway and bus alive through its drain.
+    const cancelledRun = run?.task.catch((error: unknown) => {
+      if (error !== run.controller.signal.reason) {
+        throw error;
+      }
+    });
+    for (const result of await Promise.allSettled([cancelledRun, runnerModelCatalogPromise])) {
+      if (result.status === "rejected") {
+        errors.push(toQaError(result.reason));
+      }
     }
-    const results = await Promise.allSettled([
-      serverListening ? closeQaHttpServer(server, state) : undefined,
-      Promise.resolve().then(releaseCaptureStore),
-    ]);
-    const failed = results.find((result) => result.status === "rejected");
-    return cleanupError ?? (failed ? toQaError(failed.reason) : undefined);
+    // Gateway shutdown can still flush through the bus. Close HTTP before
+    // releasing capture storage so late body readers cannot reacquire it.
+    for (const cleanup of [
+      () => gateway?.stop(),
+      () => (serverListening ? closeQaHttpServer(server, state) : undefined),
+      releaseCaptureStore,
+    ]) {
+      try {
+        await Promise.resolve().then(cleanup);
+      } catch (error) {
+        errors.push(toQaError(error));
+      }
+    }
+    const [firstError] = errors;
+    if (firstError) {
+      throw errors.length === 1
+        ? firstError
+        : combineQaSuiteErrors(errors, "QA Lab shutdown failed", { cause: firstError });
+    }
   };
+  // Fence admission synchronously, before any shutdown callback can run.
+  const stop = () => (stopPromise ??= Promise.resolve().then(stopLabServerResources));
 
   try {
     await once(server.listen(params?.port ?? 0, params?.host ?? "127.0.0.1"), "listening");
@@ -1003,17 +980,22 @@ export async function startQaLabServer(
         latestReport = next;
       },
       runSelfCheck,
-      async stop() {
-        const cleanupError = await stopLabServerResources();
-        if (cleanupError) {
-          throw cleanupError;
-        }
-      },
+      stop,
     };
     labHandle = lab;
     return lab;
   } catch (error) {
-    await stopLabServerResources().catch(() => undefined);
+    const failures: unknown[] = [error];
+    try {
+      await stop();
+    } catch (cleanupError) {
+      failures.push(cleanupError);
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "QA Lab startup and cleanup failed", {
+        cause: error,
+      });
+    }
     throw error;
   }
 }

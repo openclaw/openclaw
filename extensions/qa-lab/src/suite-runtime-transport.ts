@@ -15,32 +15,38 @@ async function waitForOutboundMessage(
   state: QaTransportState,
   predicate: (message: QaBusMessage) => boolean,
   timeoutMs = 15_000,
-  options?: { accountId?: string; sinceIndex?: number },
+  options?: { accountId?: string; sinceIndex?: number; signal?: AbortSignal },
 ) {
-  return await waitForQaTransportCondition(() => {
-    const failureMessage = findFailureOutboundMessage(state, options);
-    if (failureMessage) {
-      throw new Error(extractQaFailureReplyText(failureMessage) ?? failureMessage.text);
-    }
-    const match = state
-      .getSnapshot()
-      .messages.filter((message: QaBusMessage) => message.direction === "outbound")
-      .slice(options?.sinceIndex ?? 0)
-      .find(
-        (message) =>
-          !message.deleted &&
-          (!options?.accountId || message.accountId === options.accountId) &&
-          predicate(message),
-      );
-    if (!match) {
-      return undefined;
-    }
-    const failureReply = extractQaFailureReplyText(match);
-    if (failureReply) {
-      throw new Error(failureReply);
-    }
-    return match;
-  }, timeoutMs);
+  return await waitForQaTransportCondition(
+    () => {
+      const failureMessage = findFailureOutboundMessage(state, options);
+      if (failureMessage) {
+        throw new Error(extractQaFailureReplyText(failureMessage) ?? failureMessage.text);
+      }
+      const match = state
+        .getSnapshot()
+        .messages.filter((message: QaBusMessage) => message.direction === "outbound")
+        .slice(options?.sinceIndex ?? 0)
+        .find(
+          (message) =>
+            !message.deleted &&
+            (!options?.accountId || message.accountId === options.accountId) &&
+            predicate(message),
+        );
+      if (!match) {
+        return undefined;
+      }
+      const failureReply = extractQaFailureReplyText(match);
+      if (failureReply) {
+        throw new Error(failureReply);
+      }
+      return match;
+    },
+    timeoutMs,
+    undefined,
+    undefined,
+    options?.signal,
+  );
 }
 
 async function waitForNoOutbound(

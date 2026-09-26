@@ -172,11 +172,15 @@ export async function waitForQaTransportCondition<T>(
   timeoutMs = 15_000,
   intervalMs = 100,
   describeTimeout?: () => string,
+  signal?: AbortSignal,
 ): Promise<T> {
   const pollIntervalMs = resolveTimerTimeoutMs(intervalMs, 100, 0);
   const startedAt = Date.now();
+  signal?.throwIfAborted();
   while (Date.now() - startedAt < timeoutMs) {
+    signal?.throwIfAborted();
     const value = await check();
+    signal?.throwIfAborted();
     if (value !== null && value !== undefined) {
       return value;
     }
@@ -184,7 +188,7 @@ export async function waitForQaTransportCondition<T>(
     if (remainingMs <= 0) {
       break;
     }
-    await sleep(Math.min(pollIntervalMs, remainingMs));
+    await sleep(Math.min(pollIntervalMs, remainingMs), undefined, { signal });
   }
   const details = describeTimeout?.().trim();
   throw new Error(`timed out after ${timeoutMs}ms${details ? `; ${details}` : ""}`);

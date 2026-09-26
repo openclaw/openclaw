@@ -46,6 +46,7 @@ describe("POSIX command settlement", () => {
   function start(
     params: {
       executionTimeoutMs?: number;
+      forceKillAfterMs?: number;
       onSettled?: (outcome: TestOutcome) => void;
     } = {},
   ) {
@@ -56,7 +57,7 @@ describe("POSIX command settlement", () => {
       child,
       settlementFailureMessage: "settlement failed",
       executionTimeoutMs: params.executionTimeoutMs,
-      forceKillAfterMs: 20,
+      forceKillAfterMs: params.forceKillAfterMs ?? 20,
       initialSignal: "SIGTERM",
       onSettled: settled,
       processGroupId: 42,
@@ -107,6 +108,7 @@ describe("POSIX command settlement", () => {
     expect(stdoutDestroy).toHaveBeenCalledOnce();
     expect(stderrDestroy).toHaveBeenCalledOnce();
     expect(settled).toHaveBeenCalledWith({
+      forceKillRequested: true,
       settlementFailure: expect.objectContaining({ message: "stdio-drain-timeout" }),
       primary: { type: "exit", exitCode: 0, signal: null },
     });
@@ -148,6 +150,50 @@ describe("POSIX command settlement", () => {
       settlementFailure: expect.objectContaining({ message: "stdio-drain-timeout" }),
       primary: { type: "timeout" },
     });
+  });
+
+  it("lets a live command finish cooperative cleanup before bounding its pipes", async () => {
+    processGroupAlive = true;
+    const { child, controller, settled, stdoutDestroy, stderrDestroy } = start({
+      forceKillAfterMs: 13_000,
+    });
+    controller.requestCleanup();
+    expect(processKill).toHaveBeenCalledWith(-42, "SIGTERM");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(stdoutDestroy).not.toHaveBeenCalled();
+    expect(stderrDestroy).not.toHaveBeenCalled();
+    expect(processKill).not.toHaveBeenCalledWith(-42, "SIGKILL");
+
+    processGroupAlive = false;
+    child.emit("exit", 143, null);
+    child.emit("close", 143, null);
+    expect(settled).toHaveBeenCalledOnce();
+    expect(settled.mock.calls[0]?.[0]).toMatchObject({
+      primary: { type: "manual" },
+      observedExit: { exitCode: 143, signal: null },
+    });
+    expect(settled.mock.calls[0]?.[0].settlementFailure).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds pipes when the group disappears during grace without exit or close", async () => {
+    processGroupAlive = true;
+    const { controller, settled, stdoutDestroy, stderrDestroy } = start();
+    controller.requestCleanup();
+    await vi.advanceTimersByTimeAsync(10);
+    processGroupAlive = false;
+    await vi.advanceTimersByTimeAsync(1_009);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledWith({
+      primary: { type: "manual" },
+      settlementFailure: expect.objectContaining({ message: "stdio-drain-timeout" }),
+    });
+    expect(stdoutDestroy).toHaveBeenCalledOnce();
+    expect(stderrDestroy).toHaveBeenCalledOnce();
+    expect(processKill).not.toHaveBeenCalledWith(-42, "SIGKILL");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("preserves a stream failure that follows a successful exit", async () => {

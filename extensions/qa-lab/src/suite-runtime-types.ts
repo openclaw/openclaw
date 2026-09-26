@@ -39,6 +39,7 @@ type QaRuntimeGatewayClient = {
 };
 
 export type QaSuiteRuntimeEnv = {
+  signal?: AbortSignal;
   gateway: QaRuntimeGatewayClient;
   outputDir: string;
   transport: QaTransportAdapter;

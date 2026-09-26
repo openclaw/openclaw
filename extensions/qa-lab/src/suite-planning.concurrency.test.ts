@@ -172,6 +172,85 @@ describe("qa suite concurrency", () => {
     expect(sleepImpl).toHaveBeenCalledExactlyOnceWith(25);
   });
 
+  it("cancels the owned stagger but joins started workers before returning", async () => {
+    const controller = new AbortController();
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    const mapper = vi.fn(async (item: number) => {
+      started.resolve();
+      await release.promise;
+      return item;
+    });
+    let settled = false;
+    const run = mapQaSuiteWithConcurrency([1, 2, 3], 3, mapper, {
+      signal: controller.signal,
+      startStaggerMs: 60_000,
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      await started.promise;
+      controller.abort(new Error("stop the suite"));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(mapper).toHaveBeenCalledExactlyOnceWith(1, 0);
+      expect(settled).toBe(false);
+    } finally {
+      controller.abort();
+      release.resolve();
+    }
+    expect(await run).toEqual([1]);
+    expect(mapper).toHaveBeenCalledOnce();
+  });
+
+  it("does not admit workers when already cancelled", async () => {
+    const mapper = vi.fn(async (item: number) => item);
+    expect(
+      await mapQaSuiteWithConcurrency([1, 2], 2, mapper, {
+        signal: AbortSignal.abort(new Error("already stopped")),
+      }),
+    ).toEqual([]);
+    expect(mapper).not.toHaveBeenCalled();
+  });
+
+  it("rechecks admission after the stagger while a started worker drains", async () => {
+    const started = createDeferred<void>();
+    const stagger = createDeferred<void>();
+    const drained = createDeferred<void>();
+    let canStart = true;
+    const mapper = vi.fn(async (item: number) => {
+      started.resolve();
+      await drained.promise;
+      return item;
+    });
+    const settled = vi.fn();
+    const run = mapQaSuiteWithConcurrency([1, 2, 3], 3, mapper, {
+      canStart: () => canStart,
+      startStaggerMs: 25,
+      sleepImpl: () => stagger.promise,
+    }).then((result) => {
+      settled();
+      return result;
+    });
+    try {
+      await started.promise;
+      canStart = false;
+      stagger.resolve();
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      expect(mapper).toHaveBeenCalledExactlyOnceWith(1, 0);
+      drained.resolve();
+      expect(await run).toEqual([1]);
+      expect(mapper).toHaveBeenCalledOnce();
+    } finally {
+      stagger.resolve();
+      drained.resolve();
+      await run;
+    }
+  });
+
   it("staggers scenario starts without reducing mapped concurrency", async () => {
     const sleeps: number[] = [];
     const releaseSleeps: Array<() => void> = [];

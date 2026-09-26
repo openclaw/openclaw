@@ -16,8 +16,10 @@ import { qaMaturityTaxonomyIdentity, readQaMaturityTaxonomySource } from "./scor
 import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
 import { runQaSuiteWithInfraRetry } from "./suite-launch.runtime.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
+import { findQaSuiteSummaryAccountingError } from "./suite-summary.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type { QaSuiteResolvedRunContext, QaSuiteResult, QaSuiteRunParams } from "./suite-types.js";
+import * as qaSuite from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const tempDirs = createTempDirHarness();
@@ -537,20 +539,50 @@ describe("runtime parity Control UI ownership", () => {
     });
     let evidence: QaEvidenceSummaryV3Json | undefined;
     const lab = createControlUiTestLab();
-    await expect(
-      runQaFlowSuiteFromRuntime({
-        repoRoot,
-        outputDir,
-        providerMode: "mock-openai",
-        scenarioIds: ["runtime-channel"],
-        runtimePair: ["openclaw", "codex"],
-        lab,
-        startLab: async () => lab,
-        onEvidence: (summary) => {
-          evidence = structuredClone(summary);
-        },
-      }),
-    ).rejects.toBe(failure);
+    const events: string[] = [];
+    const cleanup = qaSuite.runQaSuiteCleanupSteps;
+    const cleanupSpy = vi
+      .spyOn(qaSuite, "runQaSuiteCleanupSteps")
+      .mockImplementation(async (steps) => {
+        const failures = await cleanup(steps);
+        events.push("cleanup");
+        return failures;
+      });
+    const writeArtifacts = mocks.writeQaSuiteArtifacts.getMockImplementation()!;
+    mocks.writeQaSuiteArtifacts.mockImplementationOnce(async (params) => {
+      const result = await writeArtifacts(params);
+      events.push("artifacts");
+      return result;
+    });
+    vi.mocked(lab.setLatestReport).mockImplementation(() => {
+      events.push("report");
+    });
+    vi.mocked(lab.setScenarioRun).mockImplementation((next) => {
+      if (next?.status === "completed") {
+        events.push("progress");
+      }
+    });
+    try {
+      await expect(
+        runQaFlowSuiteFromRuntime({
+          repoRoot,
+          outputDir,
+          providerMode: "mock-openai",
+          scenarioIds: ["runtime-channel"],
+          runtimePair: ["openclaw", "codex"],
+          lab,
+          startLab: async () => lab,
+          onEvidence: (summary) => {
+            evidence = structuredClone(summary);
+          },
+        }).catch((rejection: unknown) => {
+          events.push("rejection");
+          throw rejection;
+        }),
+      ).rejects.toBe(failure);
+    } finally {
+      cleanupSpy.mockRestore();
+    }
     expect(evidence?.entries.map((entry) => entry.result.status)).toEqual(["pass", "fail"]);
     expect(evidence?.entries.at(-1)?.coverage).toEqual([]);
     for (const occurrence of evidence!.occurrences) {
@@ -559,6 +591,44 @@ describe("runtime parity Control UI ownership", () => {
     expect(projectQaEvidenceScenarioOutcomes(evidence!)).toEqual([
       expect.objectContaining({ scenarioId: "runtime-channel", status: "fail" }),
     ]);
-    expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+    expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledOnce();
+    const written = mocks.writeQaSuiteArtifacts.mock.calls[0]![0];
+    const selected = projectQaEvidenceScenarioOutcomes(evidence!)[0]!;
+    expect(written.scenarios).toEqual([
+      {
+        name: scenario.title,
+        status: "fail",
+        details: failure.message,
+        steps: [{ name: "runtime parity", status: "fail", details: failure.message }],
+        evidenceOccurrenceId: selected.occurrenceId,
+      },
+    ]);
+    expect(written.recordedEvidence).toMatchObject({
+      entries: evidence!.entries,
+      occurrences: evidence!.occurrences,
+    });
+    const { buildQaSuiteSummaryJson } =
+      await vi.importActual<typeof import("./suite-artifacts.js")>("./suite-artifacts.js");
+    const report = buildQaSuiteSummaryJson({ ...written, evidence: written.recordedEvidence });
+    expect(report.counts).toEqual({ total: 1, passed: 0, failed: 1, skipped: 0 });
+    expect(findQaSuiteSummaryAccountingError(report)).toBeUndefined();
+    expect(lab.setScenarioRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "completed",
+        finishedAt: expect.any(String),
+        scenarios: [
+          expect.objectContaining({
+            id: scenario.id,
+            status: "fail",
+            details: failure.message,
+            steps: [{ name: "runtime parity", status: "fail", details: failure.message }],
+            finishedAt: expect.any(String),
+          }),
+        ],
+      }),
+    );
+    expect(lab.setLatestReport).toHaveBeenCalledOnce();
+    expect(lab.stop).not.toHaveBeenCalled();
+    expect(events).toEqual(["cleanup", "artifacts", "report", "progress", "rejection"]);
   });
 });

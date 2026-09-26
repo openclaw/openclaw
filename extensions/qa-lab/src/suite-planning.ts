@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -415,20 +416,28 @@ async function mapQaSuiteWithConcurrency<T, U>(
   concurrency: number,
   mapper: (item: T, index: number) => Promise<U>,
   opts?: {
+    signal?: AbortSignal;
+    canStart?: () => boolean;
     startStaggerMs?: number;
     sleepImpl?: (ms: number) => Promise<unknown>;
     shouldStop?: (result: U, index: number) => boolean;
   },
 ) {
   let stopped = false;
+  const admissionClosed = () => stopped || opts?.signal?.aborted || opts?.canStart?.() === false;
   let nextStartGate = Promise.resolve();
   const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
   const sleepImpl =
     opts?.sleepImpl ??
-    ((ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+    (async (ms: number) => {
+      try {
+        await sleep(ms, undefined, { signal: opts?.signal });
+      } catch (error) {
+        if (!opts?.signal?.aborted) {
+          throw error;
+        }
+      }
+    });
   async function waitForStartSlot(shouldReleaseNextSlot: boolean) {
     const currentGate = nextStartGate;
     let releaseNextSlot: (() => void) | undefined;
@@ -443,7 +452,7 @@ async function mapQaSuiteWithConcurrency<T, U>(
     }
     void (async () => {
       try {
-        if (!stopped && startStaggerMs > 0) {
+        if (!admissionClosed() && startStaggerMs > 0) {
           await sleepImpl(startStaggerMs);
         }
       } finally {
@@ -453,11 +462,11 @@ async function mapQaSuiteWithConcurrency<T, U>(
   }
   const { results, hasError, firstError } = await runTasksWithConcurrency({
     tasks: items.map((item, index) => async () => {
-      if (stopped) {
+      if (admissionClosed()) {
         return undefined;
       }
       await waitForStartSlot(index < items.length - 1);
-      if (stopped) {
+      if (admissionClosed()) {
         return undefined;
       }
       const result = await mapper(item, index);
@@ -486,6 +495,90 @@ async function mapQaSuiteWithConcurrency<T, U>(
   return completed;
 }
 
+async function runWeightedQaSuiteTasks<Result>(
+  tasks: readonly { weight: number; exclusiveKey?: string; run(): Promise<Result> }[],
+  maxWeight: number,
+  opts?: { signal?: AbortSignal; canStart?: () => boolean },
+) {
+  if (tasks.length === 0) {
+    return [];
+  }
+  const limit = Math.max(1, Math.floor(maxWeight));
+  const results: Result[] = [];
+  const pending = tasks.map((task, index) => ({ index, task }));
+  const activeExclusiveKeys = new Set<string>();
+  let activeWeight = 0;
+  return await new Promise<Result[]>((resolve, reject) => {
+    let firstError: Error | undefined;
+    let finished = false;
+    const finishIfSettled = () => {
+      if (finished || activeWeight > 0) {
+        return;
+      }
+      finished = true;
+      if (firstError) {
+        reject(firstError);
+        return;
+      }
+      resolve(results.filter((result) => result !== undefined));
+    };
+    const launch = () => {
+      if (firstError || opts?.signal?.aborted || opts?.canStart?.() === false) {
+        finishIfSettled();
+        return;
+      }
+      while (pending.length > 0 && !opts?.signal?.aborted && opts?.canStart?.() !== false) {
+        const pendingIndex = pending.findIndex(({ task }) => {
+          const taskWeight = Math.max(1, Math.min(limit, Math.floor(task.weight)));
+          return (
+            (activeWeight === 0 || activeWeight + taskWeight <= limit) &&
+            (!task.exclusiveKey || !activeExclusiveKeys.has(task.exclusiveKey))
+          );
+        });
+        if (pendingIndex === -1) {
+          return;
+        }
+        const pendingTask = pending.splice(pendingIndex, 1)[0];
+        if (!pendingTask) {
+          throw new Error("failed to select a pending QA suite partition task");
+        }
+        const { index, task } = pendingTask;
+        const taskWeight = Math.max(1, Math.min(limit, Math.floor(task.weight)));
+        activeWeight += taskWeight;
+        if (task.exclusiveKey) {
+          activeExclusiveKeys.add(task.exclusiveKey);
+        }
+        task.run().then(
+          (result) => {
+            results[index] = result;
+            activeWeight -= taskWeight;
+            if (task.exclusiveKey) {
+              activeExclusiveKeys.delete(task.exclusiveKey);
+            }
+            if (pending.length === 0 && activeWeight === 0) {
+              finishIfSettled();
+              return;
+            }
+            launch();
+          },
+          (error: unknown) => {
+            firstError = error instanceof Error ? error : new Error(String(error));
+            activeWeight -= taskWeight;
+            if (task.exclusiveKey) {
+              activeExclusiveKeys.delete(task.exclusiveKey);
+            }
+            finishIfSettled();
+          },
+        );
+      }
+      if (activeWeight === 0) {
+        finishIfSettled();
+      }
+    };
+    launch();
+  });
+}
+
 async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
   const targetDir = !outputDir
     ? path.join(repoRoot, ".artifacts", "qa-e2e", `suite-${createQaArtifactRunId()}`)
@@ -511,6 +604,7 @@ export {
   collectQaSuiteTransportPolicy,
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
+  runWeightedQaSuiteTasks,
   normalizeQaSuiteConcurrency,
   normalizeQaSuiteScenarioChannel,
   resolveQaSuiteScenarioChannel,

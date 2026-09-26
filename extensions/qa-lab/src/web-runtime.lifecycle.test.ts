@@ -205,7 +205,7 @@ describe("QA web acquisition ownership", () => {
   );
 
   it.each(["ready", "failure"] as const)(
-    "detaches the signal after %s settlement without closing ready pages on later abort",
+    "retains cancellation ownership through %s resource settlement",
     async (settlement) => {
       const fixture = makeBrowser();
       const controller = new AbortController();
@@ -214,6 +214,8 @@ describe("QA web acquisition ownership", () => {
       const owner = new Set<string>();
       const open = webRuntime.createQaWebPageOpener(owner, controller.signal);
       const error = new Error("navigation failed");
+      const closing = createDeferred<void>();
+      const releaseClose = createDeferred<void>();
       launch.mockResolvedValueOnce(fixture.browser);
       if (settlement === "failure") {
         fixture.page.goto.mockRejectedValueOnce(error);
@@ -221,12 +223,27 @@ describe("QA web acquisition ownership", () => {
       try {
         if (settlement === "ready") {
           const opened = await open(pageParams);
-          controller.abort(new Error("later scenario timeout"));
-          await expect(webRuntime.qaWebSnapshot({ pageId: opened.pageId })).resolves.toMatchObject({
-            text: "page body",
+          expect(removed).not.toHaveBeenCalled();
+          fixture.browser.close.mockImplementationOnce(async () => {
+            fixture.closeOrder.push("browser");
+            closing.resolve();
+            await releaseClose.promise;
           });
+          controller.abort(new Error("later scenario timeout"));
+          await closing.promise;
+          let closed = false;
+          const close = webRuntime.closeQaWebSessions(owner).then(() => {
+            closed = true;
+          });
+          await Promise.resolve();
+          expect(closed).toBe(false);
           expect(owner.has(opened.pageId)).toBe(true);
-          expect(fixture.closeOrder).toEqual([]);
+          expect(removed).not.toHaveBeenCalled();
+          releaseClose.resolve();
+          await close;
+          expect(owner.size).toBe(0);
+          await expect(webRuntime.qaWebSnapshot({ pageId: opened.pageId })).rejects.toThrow();
+          expect(fixture.closeOrder).toEqual(["context", "browser"]);
         } else {
           await expect(open(pageParams)).rejects.toBe(error);
           controller.abort(new Error("later scenario timeout"));
@@ -241,6 +258,7 @@ describe("QA web acquisition ownership", () => {
         expect(removed).toHaveBeenCalledOnce();
         expect(removed).toHaveBeenCalledWith("abort", added.mock.calls[0]?.[1]);
       } finally {
+        releaseClose.resolve();
         added.mockRestore();
         removed.mockRestore();
       }

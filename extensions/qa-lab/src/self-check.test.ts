@@ -1,11 +1,23 @@
 // Qa Lab tests cover self check plugin behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import * as registry from "./qa-transport-registry.js";
+import type { QaTransportState } from "./qa-transport.js";
 import { runQaScenario } from "./scenario.js";
 import { createQaSelfCheckScenario } from "./self-check-scenario.js";
 import type { QaSelfCheckResult } from "./self-check.js";
-import { isQaSelfCheckSuccessful, resolveQaSelfCheckOutputPath } from "./self-check.js";
+import {
+  isQaSelfCheckSuccessful,
+  resolveQaSelfCheckOutputPath,
+  runQaSelfCheckAgainstState,
+} from "./self-check.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 function makeSelfCheckResult(params: {
   scenarioStatus: "pass" | "fail";
@@ -75,7 +87,7 @@ describe("createQaSelfCheckScenario", () => {
   }) {
     const state = createQaBusState();
     const targets: unknown[] = [];
-    const testState = {
+    const testState: QaTransportState = {
       ...state,
       addInboundMessage: (input: Parameters<typeof state.addInboundMessage>[0]) => {
         const inbound = state.addInboundMessage(input);
@@ -97,7 +109,7 @@ describe("createQaSelfCheckScenario", () => {
         return inbound;
       },
     };
-    const performAction = async (action: string, args: Record<string, unknown>) => {
+    const performAction = vi.fn(async (action: string, args: Record<string, unknown>) => {
       if (action === "thread-create") {
         const thread = state.createThread({
           conversationId: String(args.channelId),
@@ -132,13 +144,16 @@ describe("createQaSelfCheckScenario", () => {
         return state.deleteMessage({ messageId: String(args.messageId) });
       }
       throw new Error(`unexpected action: ${action}`);
-    };
+    });
 
     return {
       state,
+      testState,
+      performAction,
       targets,
-      run: async () =>
+      run: async (signal?: AbortSignal) =>
         await runQaScenario(createQaSelfCheckScenario({ waitTimeoutMs: 20 }), {
+          signal,
           state: testState,
           performAction,
         }),
@@ -199,5 +214,161 @@ describe("createQaSelfCheckScenario", () => {
       expect.objectContaining({ name: "Thread create and threaded echo", status: "fail" }),
     );
     expect(targets).toHaveLength(0);
+  });
+
+  it.each([1, 2, 3])(
+    "fences later actions after cancellation during state read %i",
+    async (read) => {
+      const { state, testState, performAction, run } = createSelfCheckHarness();
+      const controller = new AbortController();
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      let reads = 0;
+      vi.spyOn(testState, "readMessage").mockImplementation(async (input) => {
+        const message = state.readMessage(input);
+        if (++reads === read) {
+          entered.resolve();
+          await release.promise;
+        }
+        return message;
+      });
+      const pending = run(controller.signal);
+      try {
+        await Promise.race([
+          entered.promise,
+          pending.then(() => {
+            throw new Error("self-check settled before the state read");
+          }),
+        ]);
+        controller.abort(new Error("self-check cancelled"));
+        release.resolve();
+        expect(await pending).toMatchObject({
+          status: "fail",
+          details: "self-check cancelled",
+        });
+        expect(performAction.mock.calls.map(([action]) => action)).toEqual(
+          ["thread-create", "react", "edit", "delete"].slice(0, read + 1),
+        );
+        expect(reads).toBe(read);
+      } finally {
+        controller.abort();
+        release.resolve();
+        await pending;
+      }
+    },
+  );
+});
+
+describe("runQaSelfCheckAgainstState cancellation", () => {
+  it.each([true, false])(
+    "publishes cancellation through the real adapter (pre-aborted: %s)",
+    async (preAborted) => {
+      const state = createQaBusState();
+      const controller = new AbortController();
+      const reason = new Error("self-check cancelled");
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const outputPath = path.join(tempDirs.make("qa-self-check-cancel-"), "report.md");
+      const factory = await registry.createQaTransportAdapter({
+        channelId: "qa-channel",
+        driver: "qa-channel",
+        outputDir: path.dirname(outputPath),
+        state,
+      });
+      vi.spyOn(registry, "createQaTransportAdapter").mockResolvedValue(factory);
+      const action = vi
+        .spyOn(factory.adapter, "handleAction")
+        .mockImplementation(async ({ args }) => {
+          entered.resolve();
+          await release.promise;
+          const thread = state.createThread({
+            conversationId: String(args.channelId),
+            title: String(args.title),
+          });
+          return {
+            details: {
+              target: `channel:${thread.conversationId}`,
+              threadId: thread.id,
+              thread,
+            },
+          };
+        });
+      const addInbound = state.addInboundMessage.bind(state);
+      const inbound = vi.spyOn(state, "addInboundMessage").mockImplementation((input) => {
+        const message = addInbound(input);
+        state.addOutboundMessage({ to: "dm:alice", text: `qa-echo: ${input.text}` });
+        return message;
+      });
+      const reset = vi.spyOn(state, "reset");
+      const cleanup = vi.spyOn(factory, "cleanupWithoutGateway");
+      if (preAborted) {
+        controller.abort(reason);
+      }
+      const run = runQaSelfCheckAgainstState({
+        state,
+        cfg: {},
+        outputPath,
+        signal: controller.signal,
+      });
+      void run.catch(() => undefined);
+      try {
+        if (!preAborted) {
+          await Promise.race([
+            entered.promise,
+            run.then(() => {
+              throw new Error("self-check settled before the action");
+            }),
+          ]);
+          controller.abort(reason);
+          expect(cleanup).not.toHaveBeenCalled();
+          release.resolve();
+        }
+        const result = await run;
+        expect(result.scenarioResult).toMatchObject({
+          status: "fail",
+          details: reason.message,
+        });
+        expect(action.mock.calls.map(([input]) => input.action)).toEqual(
+          preAborted ? [] : ["thread-create"],
+        );
+        expect(inbound).toHaveBeenCalledTimes(preAborted ? 0 : 1);
+        expect(reset).toHaveBeenCalledTimes(preAborted ? 0 : 1);
+        expect(await fs.readFile(outputPath, "utf8")).toBe(result.report);
+        expect(result.report).toContain(reason.message);
+        expect(cleanup).toHaveBeenCalledOnce();
+      } finally {
+        controller.abort(reason);
+        release.resolve();
+        await Promise.allSettled([run]);
+      }
+    },
+  );
+
+  it("retains report and adapter-cleanup failures after cancellation", async () => {
+    const state = createQaBusState();
+    const outputPath = path.join(tempDirs.make("qa-self-check-cleanup-"), "report.md");
+    const factory = await registry.createQaTransportAdapter({
+      channelId: "qa-channel",
+      driver: "qa-channel",
+      outputDir: path.dirname(outputPath),
+      state,
+    });
+    const reportError = new Error("report write failed");
+    const cleanupError = new Error("adapter cleanup failed");
+    vi.spyOn(registry, "createQaTransportAdapter").mockResolvedValue(factory);
+    vi.spyOn(fs, "writeFile").mockRejectedValueOnce(reportError);
+    const cleanup = vi.spyOn(factory, "cleanupWithoutGateway").mockRejectedValueOnce(cleanupError);
+    await expect(
+      runQaSelfCheckAgainstState({
+        state,
+        cfg: {},
+        outputPath,
+        signal: AbortSignal.abort(new Error("self-check cancelled")),
+      }),
+    ).rejects.toMatchObject({
+      cause: reportError,
+      errors: [reportError, cleanupError],
+    });
+    expect(cleanup).toHaveBeenCalledOnce();
   });
 });

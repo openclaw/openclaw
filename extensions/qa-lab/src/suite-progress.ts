@@ -63,6 +63,18 @@ export function createQaSuiteProgressController(params: {
     };
   };
 
+  const commitScenarioResult = (scenarioIndex: number, result: QaSuiteProgressResult["result"]) => {
+    // Runner outcomes retain catalog titles and assign even empty details.
+    // Aggregate results below instead merge names/details from child reports.
+    outcomes[scenarioIndex] = {
+      ...outcomes[scenarioIndex]!,
+      status: result.status,
+      details: result.details,
+      steps: result.steps,
+      finishedAt: new Date().toISOString(),
+    };
+  };
+
   return {
     start() {
       emit("running");
@@ -78,16 +90,9 @@ export function createQaSuiteProgressController(params: {
       }
       emit("running");
     },
+    commitScenarioResult,
     recordScenarioResult(scenarioIndex: number, result: QaSuiteProgressResult["result"]) {
-      // Runner outcomes retain catalog titles and assign even empty details.
-      // Aggregate results below instead merge names/details from child reports.
-      outcomes[scenarioIndex] = {
-        ...outcomes[scenarioIndex]!,
-        status: result.status,
-        details: result.details,
-        steps: result.steps,
-        finishedAt: new Date().toISOString(),
-      };
+      commitScenarioResult(scenarioIndex, result);
       emit("running");
     },
     recordResults(entries: readonly QaSuiteProgressResult[]) {

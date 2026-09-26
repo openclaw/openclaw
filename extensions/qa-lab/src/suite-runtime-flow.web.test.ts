@@ -203,6 +203,8 @@ describe("QA web acquisition across the real scenario DSL", () => {
       try {
         const retried = runQaScenarioWithFlakeRetry(() => runAttempt());
         runs.push(retried);
+        const completed = vi.fn();
+        void retried.then(completed);
         await Promise.race([
           started.promise,
           retried.then(() => {
@@ -210,21 +212,23 @@ describe("QA web acquisition across the real scenario DSL", () => {
           }),
         ]);
         await vi.advanceTimersByTimeAsync(5_030);
-        expect(await retried).toMatchObject({
-          status: "pass",
-          details: expect.stringContaining(
-            "passed on retry; first attempt: QA scenario flow timed out after 30ms",
-          ),
-        });
+        expect(completed).not.toHaveBeenCalled();
+        expect(captures).toHaveLength(1);
         expect(first.context.close).toHaveBeenCalledOnce();
         expect(first.browser.close).toHaveBeenCalledOnce();
         expect(captures[0]?.vars).not.toHaveProperty("normalPage");
         released.resolve();
+        expect(await retried).toMatchObject({
+          status: "pass",
+          details: expect.stringContaining(
+            "passed on retry; first attempt: web page open and cleanup failed",
+          ),
+        });
         const reason = captures[0]?.api.signal?.reason;
         expect(reason).toBeInstanceOf(Error);
         expect(reason).toHaveProperty("message", "QA scenario flow timed out after 30ms");
-        await expect(rawSteps[0]).resolves.toBe(reason);
         const failedOpen = await openings[0];
+        await expect(rawSteps[0]).resolves.toBe(failedOpen);
         expect(failedOpen).toBeInstanceOf(AggregateError);
         if (!(failedOpen instanceof AggregateError)) {
           throw failedOpen;
@@ -281,4 +285,142 @@ describe("QA web acquisition across the real scenario DSL", () => {
       }
     },
   );
+
+  it("cancels a ready page read and joins usable finally helpers before returning", async () => {
+    const web = await import("./web-runtime.js");
+    const runtime = await import("./suite-runtime-flow.js");
+    const actualFlow = await vi.importActual<typeof import("./scenario-flow-runner.js")>(
+      "./scenario-flow-runner.js",
+    );
+    const controller = new AbortController();
+    const env = { ...makeEnv(), signal: controller.signal };
+    const normal = makeBrowser();
+    const cleanup = makeBrowser();
+    const reading = createDeferred<void>();
+    const title = createDeferred<string>();
+    const cleanupEntered = createDeferred<void>();
+    const finishCleanup = createDeferred<void>();
+    normal.page.title.mockResolvedValueOnce("QA").mockImplementationOnce(() => {
+      reading.resolve();
+      return title.promise;
+    });
+    normal.context.close.mockImplementation(async () => {
+      title.reject(new Error("page closed"));
+    });
+    launch.mockResolvedValueOnce(normal.browser).mockResolvedValueOnce(cleanup.browser);
+    let captured: Parameters<typeof RunScenarioFlow>[0] | undefined;
+    runScenarioFlow.mockImplementation((params) => {
+      captured = params;
+      return actualFlow.runScenarioFlow({
+        ...params,
+        cleanupApi: {
+          ...params.cleanupApi!,
+          finishCleanup: async () => {
+            cleanupEntered.resolve();
+            await finishCleanup.promise;
+          },
+        },
+      });
+    });
+    const scenario = makeQaSuiteTestScenario("cancel-ready-page", { config: {} });
+    if (scenario.execution.kind !== "flow") {
+      throw new Error("expected flow scenario");
+    }
+    scenario.execution.flow = {
+      steps: [
+        {
+          name: "Read and clean up",
+          actions: [
+            {
+              try: {
+                actions: [
+                  {
+                    call: "webOpenPage",
+                    args: [{ url: normal.page.url(), channel: "chrome" }],
+                    saveAs: "normalPage",
+                  },
+                  {
+                    call: "webSnapshot",
+                    args: [{ pageId: { ref: "normalPage.pageId" } }],
+                  },
+                ],
+                finally: [
+                  {
+                    call: "webOpenPage",
+                    args: [{ url: cleanup.page.url(), channel: "chrome" }],
+                    saveAs: "cleanupPage",
+                  },
+                  {
+                    call: "webSnapshot",
+                    args: [{ pageId: { ref: "cleanupPage.pageId" } }],
+                    saveAs: "cleanupSnapshot",
+                  },
+                  {
+                    call: "waitForOutboundMessage",
+                    args: [
+                      { ref: "state" },
+                      { lambda: { params: ["message"], expr: "message.text === 'cleanup-ready'" } },
+                      1_000,
+                    ],
+                    saveAs: "cleanupReply",
+                  },
+                  { call: "sleep", args: [0] },
+                  { call: "finishCleanup" },
+                  { set: "cleanupComplete", value: true },
+                ],
+              },
+            },
+            { set: "laterAction", value: true },
+          ],
+        },
+      ],
+    };
+    env.transport.state.addOutboundMessage({
+      accountId: "qa-channel",
+      to: "dm:qa-operator",
+      text: "cleanup-ready",
+    });
+    const pending = runtime.runQaSuiteScenarioDefinition({
+      env,
+      scenario,
+      runScenario: runtime.runQaSuiteScenarioSteps,
+      splitModelRef: (raw) => parseModelRef(raw, "openai"),
+      formatErrorMessage: String,
+      liveTurnTimeoutMs: () => 60_000,
+      resolveQaLiveTurnTimeoutMs: () => 60_000,
+      constants: {
+        imageUnderstandingPngBase64: "small",
+        imageUnderstandingLargePngBase64: "large",
+        imageUnderstandingValidPngBase64: "valid",
+      },
+    });
+    const completed = vi.fn();
+    void pending.then(completed, completed);
+    try {
+      await reading.promise;
+      controller.abort(new Error("Lab stopping"));
+      await cleanupEntered.promise;
+      expect(completed).not.toHaveBeenCalled();
+      expect(normal.context.close).toHaveBeenCalledOnce();
+      expect(captured?.api.signal?.reason).toBe(controller.signal.reason);
+      expect(captured?.cleanupApi?.signal).toBeUndefined();
+      expect(captured?.vars?.cleanupSnapshot).toMatchObject({ text: "page body" });
+      expect(captured?.vars?.cleanupReply).toMatchObject({ text: "cleanup-ready" });
+      finishCleanup.resolve();
+      await expect(pending).resolves.toMatchObject({ status: "fail", details: "Lab stopping" });
+      expect(captured?.vars).toHaveProperty("cleanupComplete", true);
+      expect(captured?.vars).not.toHaveProperty("laterAction");
+    } finally {
+      controller.abort();
+      title.resolve("released");
+      finishCleanup.resolve();
+      await Promise.allSettled([pending]);
+      await web.closeQaWebSessions(env.webSessionIds);
+    }
+    for (const fixture of [normal, cleanup]) {
+      expect(fixture.context.close).toHaveBeenCalledOnce();
+      expect(fixture.browser.close).toHaveBeenCalledOnce();
+    }
+    expect(env.webSessionIds.size).toBe(0);
+  });
 });

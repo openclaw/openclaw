@@ -3,9 +3,16 @@ import { parseModelRef } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { runScenarioFlow as RunScenarioFlow } from "./scenario-flow-runner.js";
 
 const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
-const runScenarioFlow = vi.hoisted(() => vi.fn(async (params: { api: unknown }) => params.api));
+const runScenarioFlow = vi.hoisted(() =>
+  vi.fn<typeof RunScenarioFlow>(async ({ scenarioTitle }) => ({
+    name: scenarioTitle,
+    status: "pass",
+    steps: [],
+  })),
+);
 const waitForOutboundMessage = vi.hoisted(() => vi.fn());
 const runRuntimeToolFixture = vi.hoisted(() => vi.fn());
 const { webOpenPage, createWebPageOpener } = vi.hoisted(() => {
@@ -47,22 +54,20 @@ vi.mock("./runtime-tool-fixture.js", async (importOriginal) => ({
 import * as browserRuntime from "./browser-runtime.js";
 import * as cronRunWait from "./cron-run-wait.js";
 import * as discoveryEval from "./discovery-eval.js";
-import { QaSuiteScenarioSkipError } from "./errors.js";
+import { QaSuiteScenarioSkipError, toQaError } from "./errors.js";
 import * as extractToolPayload from "./extract-tool-payload.js";
 import * as modelSwitchEval from "./model-switch-eval.js";
 import * as suiteRuntimeAgent from "./suite-runtime-agent.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
+import {
+  createQaSuiteRuntimeFlowTestEnv,
+  qaSuiteRuntimeFlowTestConstants,
+} from "./suite-runtime-flow.test-support.js";
 import * as suiteRuntimeGateway from "./suite-runtime-gateway.js";
 import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import * as webRuntime from "./web-runtime.js";
-
-const qaSuiteRuntimeFlowTestConstants = {
-  imageUnderstandingPngBase64: "small",
-  imageUnderstandingLargePngBase64: "large",
-  imageUnderstandingValidPngBase64: "valid",
-};
 
 type QaGatewayLogDeps = {
   assertNoGatewayLogSentinels: (options?: { since?: number }) => unknown;
@@ -73,52 +78,6 @@ type QaGatewayLogDeps = {
     line: number;
   }>;
 };
-
-function createQaSuiteRuntimeFlowTestEnv(
-  transportOverrides: Partial<QaSuiteRuntimeEnv["transport"]> = {},
-) {
-  return {
-    lab: { baseUrl: "http://127.0.0.1:4444" },
-    webSessionIds: new Set<string>(),
-    gateway: {} as QaSuiteRuntimeEnv["gateway"],
-    transport: {
-      id: "qa-channel",
-      label: "QA Channel",
-      accountId: "qa-channel",
-      waitReady: vi.fn(),
-      createGatewayConfig: vi.fn(),
-      buildAgentDelivery: vi.fn(),
-      requiredPluginIds: [],
-      supportedActions: [],
-      handleAction: vi.fn(),
-      createReportNotes: vi.fn(),
-      reset: vi.fn(),
-      sendInbound: vi.fn(),
-      sendNativeCommand: vi.fn(),
-      waitForNoOutbound: vi.fn(),
-      waitForOutbound: vi.fn(),
-      waitForOutboundSequence: vi.fn(),
-      state: {
-        reset: vi.fn(),
-        getSnapshot: vi.fn(),
-        addInboundMessage: vi.fn(),
-        addOutboundMessage: vi.fn(),
-        readMessage: vi.fn(),
-        searchMessages: vi.fn(),
-        waitFor: vi.fn(),
-      },
-      waitForCondition: vi.fn(),
-      ...transportOverrides,
-    },
-    outputDir: "/artifacts",
-    repoRoot: "/repo",
-    providerMode: "mock-openai",
-    primaryModel: "openai/gpt-5.6-luna",
-    alternateModel: "openai/gpt-5.6-luna-mini",
-    mock: null,
-    cfg: {},
-  } satisfies Parameters<typeof runQaSuiteScenarioDefinition>[0]["env"];
-}
 
 async function captureQaGatewayLogDeps(
   gateway: Partial<QaSuiteRuntimeEnv["gateway"]>,
@@ -266,8 +225,12 @@ describe("qa suite runtime flow", () => {
       constants: qaSuiteRuntimeFlowTestConstants,
     });
 
-    expect(result).toMatchObject({ api: "ok", signal: expect.any(AbortSignal) });
-    expect(createQaScenarioRuntimeApi).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ name: scenario.title, status: "pass", steps: [] });
+    expect(runScenarioFlow.mock.calls[0]?.[0].api).toMatchObject({
+      api: "ok",
+      signal: expect.any(AbortSignal),
+    });
+    expect(createQaScenarioRuntimeApi).toHaveBeenCalledTimes(2);
     const call = createQaScenarioRuntimeApi.mock.calls[0]?.[0] as {
       env: typeof env;
       scenario: typeof scenario;
@@ -289,7 +252,11 @@ describe("qa suite runtime flow", () => {
         imageUnderstandingValidPngBase64: string;
       };
     };
-    expect(call.env).toBe(env);
+    expect(call.env).toEqual({ ...env, signal: expect.any(AbortSignal) });
+    expect(createQaScenarioRuntimeApi.mock.calls[1]?.[0].env).toEqual({
+      ...env,
+      signal: undefined,
+    });
     expect(call.scenario).toBe(scenario);
     expect(call.deps.runScenario).toBeTypeOf("function");
     for (const dependencyModule of [
@@ -345,7 +312,7 @@ describe("qa suite runtime flow", () => {
       env.transport.state,
       outboundPredicate,
       123,
-      { accountId: "qa-channel" },
+      { accountId: "qa-channel", signal: expect.any(AbortSignal) },
     );
     expect(call.deps.markGatewayLogCursor()).toBe(-1);
     expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
@@ -476,7 +443,7 @@ describe("qa suite runtime flow", () => {
       constants: qaSuiteRuntimeFlowTestConstants,
     });
 
-    expect(createQaScenarioRuntimeApi).toHaveBeenCalledTimes(1);
+    expect(createQaScenarioRuntimeApi).toHaveBeenCalledTimes(2);
     const capturedCall = createQaScenarioRuntimeApi.mock.calls[0]?.[0];
     if (!capturedCall) {
       throw new Error("expected QA scenario runtime API call");
@@ -635,7 +602,11 @@ describe("qa suite runtime flow", () => {
         let preparationSignal: AbortSignal | undefined;
         const prepareFlow = vi.fn(async (input: { signal?: AbortSignal }) => {
           preparationSignal = input.signal;
-          await new Promise<void>(() => {});
+          await new Promise<void>((_resolve, reject) => {
+            input.signal?.addEventListener("abort", () => reject(toQaError(input.signal?.reason)), {
+              once: true,
+            });
+          });
         });
         const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
         const scenario = makeQaSuiteTestScenario("stuck-preparation", { config: {} });
@@ -711,9 +682,11 @@ describe("qa suite runtime flow", () => {
           {
             name: "Never settles without abort",
             run: async () =>
-              await new Promise<void>(() => {
+              await new Promise<void>((_resolve, reject) => {
                 actionSignal = api.signal;
-                api.signal?.addEventListener("abort", () => {}, { once: true });
+                api.signal?.addEventListener("abort", () => reject(toQaError(api.signal?.reason)), {
+                  once: true,
+                });
               }),
           },
         ]);
@@ -745,9 +718,14 @@ describe("qa suite runtime flow", () => {
     }
   });
 
-  it.each(["preparation", "action"])(
-    "stops %s on transport loss and rejects later actions",
-    async (phase) => {
+  it.each([
+    ["preparation", "resolves"],
+    ["preparation", "rejects"],
+    ["action", "resolves"],
+    ["action", "rejects"],
+  ])(
+    "stops %s when transport health %s and rejects later actions",
+    async (phase, healthSettlement) => {
       const failure = Promise.withResolvers<Error>();
       const entered = Promise.withResolvers<void>();
       let nativeSignal: AbortSignal | undefined;
@@ -756,7 +734,11 @@ describe("qa suite runtime flow", () => {
         nativeSignal = input.signal;
         if (phase === "preparation") {
           entered.resolve();
-          await new Promise<void>(() => {});
+          await new Promise<void>((_resolve, reject) => {
+            input.signal?.addEventListener("abort", () => reject(toQaError(input.signal?.reason)), {
+              once: true,
+            });
+          });
         }
       };
       const env = createQaSuiteRuntimeFlowTestEnv({
@@ -769,13 +751,20 @@ describe("qa suite runtime flow", () => {
         }),
       );
       runScenarioFlow.mockImplementationOnce(async (params) => {
-        const api = params.api as { runScenario: typeof runQaSuiteScenarioSteps };
+        const api = params.api as {
+          runScenario: typeof runQaSuiteScenarioSteps;
+          signal: AbortSignal;
+        };
         return api.runScenario("Transport loss", [
           {
             name: "Pending native action",
             run: async () => {
               entered.resolve();
-              await new Promise<void>(() => {});
+              await new Promise<void>((_resolve, reject) => {
+                api.signal.addEventListener("abort", () => reject(toQaError(api.signal.reason)), {
+                  once: true,
+                });
+              });
             },
           },
           { name: "Must not send", run: laterAction },
@@ -792,7 +781,11 @@ describe("qa suite runtime flow", () => {
         constants: qaSuiteRuntimeFlowTestConstants,
       });
       await entered.promise;
-      failure.resolve(new Error("owned lease lost"));
+      if (healthSettlement === "rejects") {
+        failure.reject(new Error("owned lease lost"));
+      } else {
+        failure.resolve(new Error("owned lease lost"));
+      }
       expect(await pending).toMatchObject({
         status: "fail",
         details: expect.stringContaining("owned lease lost"),

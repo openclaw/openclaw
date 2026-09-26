@@ -18,6 +18,7 @@ import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
+import { runInterruptibleServer } from "./cli-server-lifecycle.js";
 import {
   buildQaConfidenceReport,
   readQaConfidenceManifestFile,
@@ -98,7 +99,6 @@ import {
   type QaScorecardChannelDriver,
   type QaScorecardEvidenceMode,
 } from "./scorecard-taxonomy.js";
-import { isQaSelfCheckSuccessful } from "./self-check.js";
 import {
   runQaFlowSuiteFromRuntime,
   runQaSuite,
@@ -129,14 +129,10 @@ const QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_
 const DEFAULT_QA_CREDENTIAL_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const QA_HARNESS_ROOT_MAX_PARENT_HOPS = 8;
 
-type InterruptibleServer = {
-  baseUrl: string;
-  stop(): Promise<void>;
-};
-export type QaLabSelfCheckCommandOptions = {
-  repoRoot?: string;
-  output?: string;
-};
+export {
+  runQaLabSelfCheckCommand,
+  type QaLabSelfCheckCommandOptions,
+} from "./self-check-runner.js";
 type QaScenarioProviderCommandOptions = {
   transportId?: string;
   providerMode?: QaProviderModeInput;
@@ -546,26 +542,6 @@ function parseQaModelSpecs(label: string, entries: readonly string[] | undefined
   };
 }
 
-async function runInterruptibleServer(label: string, server: InterruptibleServer) {
-  process.stdout.write(`${label}: ${server.baseUrl}\n`);
-  process.stdout.write("Press Ctrl+C to stop.\n");
-
-  const shutdown = async () => {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    await server.stop();
-    process.exit(0);
-  };
-
-  const onSignal = () => {
-    void shutdown();
-  };
-
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
-  await new Promise(() => {});
-}
-
 function resolveQaCredentialPayloadFileMaxBytes(env: NodeJS.ProcessEnv = process.env) {
   const raw = env[QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV]?.trim();
   if (!raw) {
@@ -651,23 +627,6 @@ function printQaCredentialDoctorTable(
     process.stdout.write(
       `${check.name.padEnd(nameWidth)}  ${check.status.padEnd(4)}  ${check.details ?? ""}\n`,
     );
-  }
-}
-
-export async function runQaLabSelfCheckCommand(opts: QaLabSelfCheckCommandOptions) {
-  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  const server = await startQaLabServer({
-    repoRoot,
-    outputPath: opts.output ? path.resolve(repoRoot, opts.output) : undefined,
-  });
-  try {
-    const result = await server.runSelfCheck();
-    process.stdout.write(`QA self-check report: ${result.outputPath}\n`);
-    if (!isQaSelfCheckSuccessful(result)) {
-      throw new Error(`QA self-check failed. See ${result.outputPath}.`);
-    }
-  } finally {
-    await server.stop();
   }
 }
 

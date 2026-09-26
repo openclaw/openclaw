@@ -11,7 +11,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import * as browserRuntime from "./browser-runtime.js";
 import * as cronRunWait from "./cron-run-wait.js";
 import * as discoveryEval from "./discovery-eval.js";
-import { QaSuiteScenarioSkipError } from "./errors.js";
+import { combineQaSuiteErrors, QaSuiteScenarioSkipError } from "./errors.js";
 import * as extractToolPayload from "./extract-tool-payload.js";
 import { assertNoGatewayLogSentinels, scanGatewayLogSentinels } from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
@@ -37,7 +37,6 @@ type QaSuiteScenarioFlowEnv = {
 const qaSuiteScenarioIdentityDeps = {
   fs,
   path,
-  sleep,
   randomUUID,
   ...suiteRuntimeAgent,
   ...suiteRuntimeGateway,
@@ -150,6 +149,7 @@ function createQaSuiteScenarioDeps(
     suiteRuntimeTransport.waitForOutboundMessage(state, predicate, timeoutMs, {
       ...options,
       accountId: params.env.transport.accountId,
+      signal: params.env.signal,
     });
   const markLogs = params.env.gateway.markLogs;
   const readLogsSince = params.env.gateway.readLogsSince;
@@ -180,6 +180,7 @@ function createQaSuiteScenarioDeps(
   };
   return {
     ...qaSuiteScenarioIdentityDeps,
+    sleep: (ms?: number) => sleep(ms, undefined, { signal: params.env.signal }),
     runScenario: params.runScenario,
     waitForOutboundMessage: waitForAccountOutboundMessage,
     browserRequest: browserRuntime.callQaBrowserRequest,
@@ -248,54 +249,72 @@ function createQaSuiteScenarioFlowApi(
     return (webParams: Parameters<typeof webRuntime.qaWebOpenPage>[0]) =>
       open({ ...webParams, repoRoot: params.env.repoRoot });
   };
-  const api = {
-    ...createQaScenarioRuntimeApi({
-      env: params.env,
-      scenario: params.scenario,
-      deps: createQaSuiteScenarioDeps(params, createWebPageOpener(params.signal)),
-      constants: params.constants,
-    }),
-    signal: params.signal,
+  const createApi = (signal?: AbortSignal) => {
+    const scopedParams = { ...params, env: { ...params.env, signal } };
+    return {
+      ...createQaScenarioRuntimeApi({
+        env: scopedParams.env,
+        scenario: params.scenario,
+        deps: createQaSuiteScenarioDeps(scopedParams, createWebPageOpener(signal)),
+        constants: params.constants,
+      }),
+      signal,
+    };
   };
-  // DSL finally actions may need a new page after the scenario deadline.
-  // They share the suite owner and seal, but not the expired acquisition signal.
-  return { api, cleanupApi: { ...api, webOpenPage: createWebPageOpener() } };
+  // Finally shares resource ownership, not the cancelled environment or helpers.
+  // Cleanup may still need transport reads and new pages before the owner closes.
+  return { api: createApi(params.signal), cleanupApi: createApi() };
 }
 
-function createQaScenarioDeadline(timeoutMs?: number, whenUnhealthy?: Promise<Error>) {
+function createQaScenarioDeadline(
+  timeoutMs?: number,
+  whenUnhealthy?: Promise<Error>,
+  parentSignal?: AbortSignal,
+) {
   const controller = new AbortController();
+  const signal = parentSignal
+    ? AbortSignal.any([controller.signal, parentSignal])
+    : controller.signal;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadlineTimeoutMs = resolveQaGatewayTimeoutWithGraceMs(timeoutMs);
-  let deadline: Promise<never> | undefined;
   let disposed = false;
-  const transportFailure = whenUnhealthy?.then((error) => {
+  const interrupt = (error: unknown) => {
     if (!disposed) {
       controller.abort(error);
     }
-    throw error;
-  });
-  // Transport loss may precede the first step; run() still observes the rejection.
-  void transportFailure?.catch(() => {});
+  };
+  void whenUnhealthy?.then(interrupt, interrupt);
   return {
-    signal: controller.signal,
+    signal,
     run: async <T>(operation: () => Promise<T>) => {
-      controller.signal.throwIfAborted();
-      if (deadlineTimeoutMs !== undefined) {
-        deadline ??= new Promise<never>((_resolve, reject) => {
-          const timeoutError = new Error(`QA scenario flow timed out after ${timeoutMs}ms`);
-          // Start at this owner's first operation. Preparation has a separate
-          // budget and must not consume a scenario's complete observation window.
-          timer = setTimeout(() => {
-            controller.abort(timeoutError);
-            reject(timeoutError);
-          }, deadlineTimeoutMs);
-        });
+      signal.throwIfAborted();
+      if (deadlineTimeoutMs !== undefined && !timer) {
+        // Preparation has a separate budget; start at the first owned operation.
+        timer = setTimeout(
+          () => controller.abort(new Error(`QA scenario flow timed out after ${timeoutMs}ms`)),
+          deadlineTimeoutMs,
+        );
       }
-      // In-flight calls abort cooperatively. The flow runner fences later actions and
-      // preserves DSL finally cleanup; the suite owner then tears down runtime resources.
-      const pending = operation();
-      const bounded = deadline ? Promise.race([pending, deadline]) : pending;
-      return transportFailure ? await Promise.race([bounded, transportFailure]) : await bounded;
+      try {
+        // Cancellation releases owned resources; it is not proof that the raw
+        // operation or its DSL finally has settled. Join both before publication.
+        const result = await operation();
+        signal.throwIfAborted();
+        return result;
+      } catch (error) {
+        if (
+          signal.aborted &&
+          error !== signal.reason &&
+          !(error instanceof AggregateError && error.errors.includes(signal.reason))
+        ) {
+          throw combineQaSuiteErrors(
+            [signal.reason, error],
+            `QA flow interrupted: ${formatQaErrorMessage(signal.reason)}; operation failed: ${formatQaErrorMessage(error)}`,
+            { cause: signal.reason },
+          );
+        }
+        throw error;
+      }
     },
     dispose: () => {
       disposed = true;
@@ -333,11 +352,12 @@ function createQaSuiteScenarioStepRunner(
                 const preparationDeadline = createQaScenarioDeadline(
                   Math.max(execution.timeoutMs ?? 0, fallbackTimeoutMs),
                   env.transport.whenUnhealthy,
+                  deadline.signal,
                 );
                 try {
                   const prepared = await preparationDeadline.run(() =>
                     prepareFlow({
-                      signal: AbortSignal.any([preparationDeadline.signal, deadline.signal]),
+                      signal: preparationDeadline.signal,
                       config: execution.config ?? {},
                       gateway: env.gateway,
                       outputDir: env.outputDir,
@@ -380,6 +400,7 @@ export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowAp
   const deadline = createQaScenarioDeadline(
     params.scenario.execution.timeoutMs,
     params.env.transport.whenUnhealthy,
+    params.env.signal,
   );
   try {
     const { api, cleanupApi } = createQaSuiteScenarioFlowApi({

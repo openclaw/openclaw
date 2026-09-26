@@ -245,11 +245,8 @@ async function runFlowAction(
   options: QaFlowActionOptions = {},
 ) {
   throwIfFlowAborted(api, options);
-  try {
-    await runFlowActionBody(action, api, vars, options);
-  } finally {
-    throwIfFlowAborted(api, options);
-  }
+  await runFlowActionBody(action, api, vars, options);
+  throwIfFlowAborted(api, options);
 }
 
 async function runFlowActionBody(
@@ -431,23 +428,20 @@ export async function runScenarioFlow(params: {
         return undefined;
       }
       throwIfFlowAborted(params.api);
-      try {
-        const details = step.detailsExpr
-          ? formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars))
-          : undefined;
-        const rtt = step.resultExpr
-          ? resolveFlowResultRtt(await evalExpr(step.resultExpr, params.api, vars))
-          : undefined;
-        if (!rtt) {
-          return details === undefined ? undefined : { details };
-        }
-        return {
-          ...(details === undefined ? {} : { details }),
-          ...rtt,
-        } satisfies QaSuiteStepOutcome;
-      } finally {
-        throwIfFlowAborted(params.api);
+      const details = step.detailsExpr
+        ? formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars))
+        : undefined;
+      const rtt = step.resultExpr
+        ? resolveFlowResultRtt(await evalExpr(step.resultExpr, params.api, vars))
+        : undefined;
+      throwIfFlowAborted(params.api);
+      if (!rtt) {
+        return details === undefined ? undefined : { details };
       }
+      return {
+        ...(details === undefined ? {} : { details }),
+        ...rtt,
+      } satisfies QaSuiteStepOutcome;
     },
   }));
   const result = await params.api.runScenario(params.scenarioTitle, steps);

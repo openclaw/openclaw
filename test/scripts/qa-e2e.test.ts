@@ -1,4 +1,5 @@
 // Qa E2E tests cover qa e2e script behavior.
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { QaSelfCheckResult } from "../../extensions/qa-lab/api.js";
 import { enablePrivateQaScriptEnv, main, parseQaE2eArgs } from "../../scripts/qa-e2e.js";
@@ -150,5 +151,56 @@ describe("qa-e2e script", () => {
     ).resolves.toBe(0);
 
     expect(runQaE2eSelfCheck.mock.calls[0]).toEqual([]);
+  });
+
+  it("prints both self-check and shutdown failures with redaction and a nonzero exit", async () => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    const checkError = new Error(`self-check failed: Authorization: Bearer ${token}`);
+    const shutdownError = new Error("Gateway shutdown failed");
+    const runQaE2eSelfCheck = vi.fn().mockRejectedValue(
+      new AggregateError([checkError, shutdownError], "QA self-check and shutdown failed", {
+        cause: checkError,
+      }),
+    );
+    const originalArgv = process.argv;
+    const originalExitCode = process.exitCode;
+    const writeStderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    for (const key of [
+      "OPENCLAW_BUILD_PRIVATE_QA",
+      "OPENCLAW_ENABLE_PRIVATE_QA_CLI",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+    ]) {
+      vi.stubEnv(key, process.env[key]);
+    }
+    vi.resetModules();
+    vi.doMock("../../extensions/qa-lab/api.js", () => ({
+      isQaSelfCheckSuccessful: vi.fn(),
+      runQaE2eSelfCheck,
+    }));
+    process.argv = [
+      process.execPath,
+      fileURLToPath(new URL("../../scripts/qa-e2e.ts", import.meta.url)),
+    ];
+    process.exitCode = 0;
+    try {
+      await import("../../scripts/qa-e2e.js");
+
+      expect(process.exitCode).toBe(1);
+      expect(runQaE2eSelfCheck).toHaveBeenCalledOnce();
+      expect(writeStderr).toHaveBeenCalledOnce();
+      const diagnostic = String(writeStderr.mock.calls[0]?.[0]);
+      expect(diagnostic).toContain("QA self-check and shutdown failed");
+      expect(diagnostic).toContain("self-check failed: Authorization: Bearer");
+      expect(diagnostic).toContain("Gateway shutdown failed");
+      expect(diagnostic).not.toContain(token);
+    } finally {
+      process.argv = originalArgv;
+      // Bun cannot clear a nonzero exitCode by assigning undefined.
+      process.exitCode = originalExitCode ?? 0;
+      vi.doUnmock("../../extensions/qa-lab/api.js");
+      vi.resetModules();
+      vi.unstubAllEnvs();
+      writeStderr.mockRestore();
+    }
   });
 });

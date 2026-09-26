@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QaSuiteCleanupError } from "./errors.js";
 import {
   projectQaEvidenceScenarioOutcomes,
+  type QaEvidenceSummaryV3Json,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
@@ -13,6 +16,7 @@ import {
 import {
   QA_TEST_RUNNER_DEFAULTS,
   createScenarioRunnerTestHarness,
+  makeDockerE2eScenario,
   makeTestFileScenario,
   writeNativeVitestReport,
 } from "./test-file-scenario-runner.test-support.js";
@@ -25,6 +29,187 @@ afterEach(async () => {
 });
 
 describe("qa test file scenario runner", () => {
+  it.each([
+    { kind: "vitest", phase: "attempts root", failure: "cancel" },
+    { kind: "vitest", phase: "attempt", failure: "cancel" },
+    { kind: "playwright", phase: "attempt", failure: "cancel" },
+    { kind: "script", phase: "producer", failure: "cancel" },
+    { kind: "docker", phase: "producer", failure: "cancel" },
+    { kind: "vitest", phase: "attempt", failure: "mkdir" },
+    { kind: "docker", phase: "producer", failure: "mkdir" },
+  ] as const)(
+    "does not report a $kind dispatch when $failure interrupts $phase setup",
+    async ({ kind, phase, failure }) => {
+      const repoRoot = await makeTempRepo("qa-native-unstarted-");
+      const outputDir = path.join(repoRoot, "out");
+      const attemptsDir = path.join(outputDir, "occurrences");
+      const scenarios =
+        kind === "docker"
+          ? [makeDockerE2eScenario("first", "onboard"), makeDockerE2eScenario("second", "gateway")]
+          : [makeTestFileScenario(kind, kind === "script" ? "fixture.ts" : "test/native.test.ts")];
+      const controller = new AbortController();
+      const reason = new Error(`${failure} during ${phase} setup`);
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const started = vi.fn();
+      const runCommand = vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
+      const mkdir = fs.mkdir.bind(fs);
+      let held = false;
+      const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (directory, options) => {
+        const target = typeof directory === "string" ? directory : "";
+        const matches =
+          phase === "attempts root"
+            ? target === attemptsDir
+            : phase === "attempt"
+              ? path.dirname(target) === attemptsDir
+              : path.dirname(path.dirname(target)) === attemptsDir &&
+                (kind === "docker"
+                  ? path.basename(target).startsWith("docker-e2e-")
+                  : path.basename(target) === scenarios[0]!.id);
+        if (!held && matches) {
+          held = true;
+          entered.resolve();
+          await release.promise;
+          if (failure === "mkdir") {
+            throw reason;
+          }
+        }
+        return mkdir(directory, options);
+      });
+      const settled = vi.fn((value: unknown) => value);
+      const run = runQaTestFileScenarios({
+        ...QA_TEST_RUNNER_DEFAULTS,
+        repoRoot,
+        outputDir,
+        signal: controller.signal,
+        scenarios,
+        onScenarioStarted: started,
+        runCommand,
+      }).then(settled, settled);
+      try {
+        await Promise.race([entered.promise, run]);
+        expect(held).toBe(true);
+        expect(settled).not.toHaveBeenCalled();
+        expect(started).not.toHaveBeenCalled();
+        if (failure === "cancel") {
+          controller.abort(reason);
+        }
+        release.resolve();
+        const terminal = await run;
+        expect(runCommand).not.toHaveBeenCalled();
+        expect(started).not.toHaveBeenCalled();
+        if (failure === "mkdir") {
+          expect(terminal).toBe(reason);
+        } else {
+          expect(terminal).toMatchObject({
+            results:
+              phase === "attempts root"
+                ? []
+                : scenarios.map(() => ({
+                    status: "fail",
+                    failureMessage: expect.stringContaining(reason.message),
+                  })),
+          });
+        }
+      } finally {
+        release.resolve();
+        await run;
+        mkdirSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["script", "docker"] as const)(
+    "records each %s instance once at its shared command dispatch",
+    async (kind) => {
+      const repoRoot = await makeTempRepo("qa-native-command-admission-");
+      const scenarios =
+        kind === "docker"
+          ? [makeDockerE2eScenario("first", "onboard"), makeDockerE2eScenario("second", "gateway")]
+          : [makeTestFileScenario("script", "fixture.ts")];
+      const started = vi.fn();
+      const committed = vi.fn();
+      const runCommand = vi.fn(async () => {
+        expect(started).toHaveBeenCalledTimes(scenarios.length);
+        expect(committed).not.toHaveBeenCalled();
+        return { exitCode: 1, stdout: "", stderr: "command failed\n" };
+      });
+      const result = await runQaTestFileScenarios({
+        ...QA_TEST_RUNNER_DEFAULTS,
+        repoRoot,
+        outputDir: path.join(repoRoot, "out"),
+        scenarios,
+        onScenarioStarted: started,
+        onResultCommitted: committed,
+        runCommand,
+      });
+      expect(runCommand).toHaveBeenCalledOnce();
+      expect(started.mock.calls.flat()).toEqual(
+        projectQaEvidenceScenarioOutcomes(result.evidence).map(
+          ({ scenarioInstanceId }) => scenarioInstanceId,
+        ),
+      );
+      expect(committed.mock.calls.map(([value]) => value)).toEqual(result.results);
+      expect(result.results.map(({ status }) => status)).toEqual(scenarios.map(() => "fail"));
+    },
+  );
+
+  it.each(["cancel", "cleanup"] as const)(
+    "reports native dispatch before %s settlement without starting its same-label tail",
+    async (mode) => {
+      const repoRoot = await makeTempRepo("qa-native-started-settlement-");
+      const controller = new AbortController();
+      const failure = new Error(`${mode} after native dispatch`);
+      const started = vi.fn();
+      const committed = vi.fn();
+      const scenario = makeTestFileScenario("vitest", "test/native.test.ts");
+      let evidence: QaEvidenceSummaryV3Json | undefined;
+      const runCommand = vi.fn(async () => {
+        expect(started).toHaveBeenCalledExactlyOnceWith(evidence!.occurrences[0]!.id);
+        if (mode === "cancel") {
+          controller.abort(failure);
+        }
+        return {
+          exitCode: 0,
+          stdout: "native command entered\n",
+          stderr: "",
+          ...(mode === "cleanup"
+            ? { cleanupFailure: failure }
+            : { failureMessage: failure.message }),
+        };
+      });
+      const result = await runQaTestFileScenarios({
+        ...QA_TEST_RUNNER_DEFAULTS,
+        repoRoot,
+        outputDir: path.join(repoRoot, "out"),
+        signal: controller.signal,
+        scenarios: [scenario, scenario],
+        onScenarioStarted: started,
+        onResultCommitted: committed,
+        onEvidence: (summary) => {
+          evidence = structuredClone(summary);
+        },
+        runCommand,
+      }).catch((error: unknown) => error);
+
+      expect(runCommand).toHaveBeenCalledOnce();
+      expect(started).toHaveBeenCalledOnce();
+      expect(committed).toHaveBeenCalledOnce();
+      const outcomes = projectQaEvidenceScenarioOutcomes(evidence!);
+      expect(outcomes.map(({ status }) => status)).toEqual(["fail", null]);
+      expect(started).toHaveBeenCalledWith(outcomes[0]!.scenarioInstanceId);
+      expect(outcomes[0]!.scenarioInstanceId).not.toBe(outcomes[1]!.scenarioInstanceId);
+      if (mode === "cleanup") {
+        expect(result).toBeInstanceOf(QaSuiteCleanupError);
+        expect(result).toMatchObject({ cause: failure, errors: [failure] });
+      } else {
+        expect(result).toMatchObject({
+          results: [{ status: "fail", failureMessage: failure.message }],
+        });
+      }
+    },
+  );
+
   it("keeps every Playwright scenario pattern aligned with an executable test", async () => {
     for (const scenario of readQaScenarioPack().scenarios) {
       const execution = scenario.execution;
@@ -43,11 +228,13 @@ describe("qa test file scenario runner", () => {
 
   it("runs Playwright scenarios with the repo UI e2e command and writes Playwright evidence", async () => {
     const repoRoot = await makeTempRepo("qa-playwright-scenario-");
+    const started = vi.fn();
     const commands: QaScenarioCommandExecution[] = [];
     const result = await runQaTestFileScenarios({
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
       ...QA_TEST_RUNNER_DEFAULTS,
+      onScenarioStarted: started,
       scenarios: [
         makeTestFileScenario(
           "playwright",
@@ -56,6 +243,7 @@ describe("qa test file scenario runner", () => {
         ),
       ],
       runCommand: async (command) => {
+        expect(started).toHaveBeenCalledOnce();
         commands.push(command);
         await writeNativeVitestReport(command, {
           passed: 1,
@@ -74,6 +262,9 @@ describe("qa test file scenario runner", () => {
     });
 
     expect(result.executionKind).toBe("playwright");
+    expect(started).toHaveBeenCalledExactlyOnceWith(
+      projectQaEvidenceScenarioOutcomes(result.evidence)[0]!.scenarioInstanceId,
+    );
     expect(commands.map((command) => command.args)).toEqual([
       ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"],
       [

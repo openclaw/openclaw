@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { combineQaSuiteErrors, QaSuiteCleanupError } from "./errors.js";
 import type { QaGatewayChild, QaGatewayStopResult } from "./gateway-child.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
@@ -198,10 +199,14 @@ export async function runQaFlowSuiteCleanupPlan(params: {
   const stopGatewayAndMark = async () => {
     const result = await params.stopGateway();
     gatewayStopped = result.process !== "unconfirmed";
+    if (!gatewayStopped) {
+      throw new QaSuiteCleanupError(result.errors, "qa gateway child termination is unconfirmed");
+    }
     if (result.errors.length) {
       throw new AggregateError(
         result.errors,
         `qa gateway child cleanup failed: ${result.errors.map((error) => String(error)).join("; ")}`,
+        { cause: result.errors[0] },
       );
     }
   };
@@ -269,13 +274,41 @@ export function throwQaSuiteCleanupErrors(params: {
       : []),
   ].join("\n");
   const errors = params.cleanupFailures.map((failure) => failure.error);
-  if (params.runFailed) {
-    throw new AggregateError([params.runError, ...errors], message, { cause: params.runError });
+  throw combineQaSuiteErrors(
+    params.runFailed ? [params.runError, ...errors] : errors,
+    message,
+    params.runFailed
+      ? { cause: params.runError }
+      : errors.length === 1
+        ? { cause: errors[0] }
+        : undefined,
+  );
+}
+
+export async function publishQaSuiteTerminalResult(
+  params: Parameters<typeof throwQaSuiteCleanupErrors>[0] & {
+    publish?: () => Promise<QaSuiteResult>;
+  },
+) {
+  let result: QaSuiteResult | undefined;
+  let { runFailed, runError } = params;
+  try {
+    result = await params.publish?.();
+  } catch (error) {
+    runError = runFailed
+      ? combineQaSuiteErrors([runError, error], "QA run and publication failed", {
+          cause: runError,
+        })
+      : error;
+    runFailed = true;
   }
-  if (errors.length === 1) {
-    throw new AggregateError(errors, message, { cause: errors[0] });
+  // Publish completed observations even when cleanup failed, then preserve every
+  // failure without a throwing finally replacing the original run error.
+  throwQaSuiteCleanupErrors({ ...params, result, runFailed, runError });
+  if (runFailed) {
+    throw runError;
   }
-  throw new AggregateError(errors, message);
+  return result;
 }
 
 export function requireQaSuiteStartLab(startLab: QaSuiteStartLabFn | undefined): QaSuiteStartLabFn {

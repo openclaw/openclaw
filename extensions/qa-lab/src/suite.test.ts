@@ -1,5 +1,6 @@
 // Qa Lab tests cover suite plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QaSuiteCleanupError } from "./errors.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
@@ -15,6 +16,7 @@ import {
   buildQaSuiteRuntimeMetrics,
   createQaSuiteTransportAdapter,
   formatQaSuiteRunStartProgress,
+  publishQaSuiteTerminalResult,
   resolveQaSuiteTransportReadyTimeoutMs,
   runQaFlowSuite,
   runQaFlowSuiteCleanupPlan,
@@ -145,6 +147,31 @@ describe("qa suite", () => {
     expect((thrown as Error).cause).toBe(cleanupError);
   });
 
+  it.each([false, true])(
+    "preserves the original run and failed publication without cleanup failures (unconfirmed=%s)",
+    async (unconfirmed) => {
+      const original = new Error("first failure");
+      const runError = unconfirmed
+        ? new QaSuiteCleanupError([original], "worker did not settle")
+        : original;
+      const publicationError = new Error("terminal publication failed");
+      const publish = vi.fn<() => Promise<QaSuiteResult>>().mockRejectedValue(publicationError);
+      const thrown = await publishQaSuiteTerminalResult({
+        runFailed: true,
+        runError,
+        cleanupFailures: [],
+        publish,
+      }).catch((error: unknown) => error);
+
+      expect(publish).toHaveBeenCalledOnce();
+      expect(thrown).toMatchObject({
+        cause: runError,
+        errors: [runError, publicationError],
+      });
+      expect(thrown instanceof QaSuiteCleanupError).toBe(unconfirmed);
+    },
+  );
+
   it("reports completed counts, labeled failures, and only written artifact paths", () => {
     const result = {
       outputDir: "/qa-output\nretained",
@@ -189,23 +216,31 @@ describe("qa suite", () => {
     expect((thrown as Error).message).not.toContain("evidence=");
   });
 
-  it.each(["never-spawned", "confirmed-stopped", "unconfirmed"] as const)(
-    "gates after-stop cleanup on %s, independently of diagnostic errors",
-    async (process) => {
+  it.each(
+    (["never-spawned", "confirmed-stopped", "unconfirmed"] as const).flatMap((process) =>
+      [false, true].map((withErrors) => ({ process, withErrors })),
+    ),
+  )(
+    "gates after-stop cleanup on $process, independently of diagnostic errors ($withErrors)",
+    async ({ process, withErrors }) => {
       const diagnostic = new Error("cleanup diagnostic failed");
+      const errors = withErrors ? [diagnostic] : [];
       const release = vi.fn(async () => {});
       const finishLab = vi.fn(async () => {});
       const failures = await runQaFlowSuiteCleanupPlan({
         cleanupTransportBeforeGatewayStop: async () => {},
         cleanupTransportAfterGatewayStop: release,
-        stopGateway: async () => ({ process, errors: [diagnostic] }),
+        stopGateway: async () => ({ process, errors }),
         disposeAgentHarnesses: async () => {},
         finishLab,
       });
-      expect(release).toHaveBeenCalledTimes(process === "unconfirmed" ? 0 : 1);
-      expect(failures).toEqual([
-        { phase: "gateway stop", error: expect.objectContaining({ errors: [diagnostic] }) },
-      ]);
+      const unconfirmed = process === "unconfirmed";
+      expect(release).toHaveBeenCalledTimes(unconfirmed ? 0 : 1);
+      expect(failures).toHaveLength(unconfirmed || withErrors ? 1 : 0);
+      if (failures.length) {
+        expect(failures[0]).toMatchObject({ phase: "gateway stop", error: { errors } });
+        expect(failures[0]!.error instanceof QaSuiteCleanupError).toBe(unconfirmed);
+      }
       expect(finishLab).toHaveBeenCalledOnce();
     },
   );

@@ -33,6 +33,7 @@ import {
 } from "./suite.js";
 
 export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
+  params?.signal?.throwIfAborted();
   const startedAt = new Date();
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const scenarios = params?.scenarioDefinitions ?? readQaBootstrapScenarioCatalog().scenarios;
@@ -88,6 +89,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
       }),
     }),
   };
+  params?.signal?.throwIfAborted();
   // Preparation copies params, so carry the child's publication ownership to the new object.
   if (isQaSuiteNestedRun(params)) {
     markQaSuiteNestedRun(preparedParams);
@@ -151,6 +153,8 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
   });
   if (params?.runtimePair) {
     return await runQaRuntimeParitySuite({
+      signal: params.signal,
+      forwardParentSignals: params.forwardParentSignals,
       runQaFlowSuite: runQaFlowSuiteFromRuntime,
       adapterFactories: preparedParams.adapterFactories,
       adapterOptions: params.adapterOptions,
@@ -182,6 +186,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
       evidenceAnchors: params.evidenceAnchors,
       evidenceContinuation: params.evidenceContinuation,
       onEvidence: params.onEvidence,
+      onScenarioStarted: params.onScenarioStarted,
     });
   }
   return useIsolatedScenarioWorkers

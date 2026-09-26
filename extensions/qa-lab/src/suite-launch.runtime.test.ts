@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveQaArtifactPath } from "./cli-paths.js";
 import { QaSuiteInfraError } from "./errors.js";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
@@ -18,6 +17,7 @@ import * as scenarioCatalog from "./scenario-catalog.js";
 import type { QaTestFileScenario } from "./scenario-catalog.js";
 import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
+import { runQaSuite, runQaSuiteWithInfraRetry } from "./suite-launch.runtime.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type { QaSuiteRunParams, QaSuiteScenarioResult } from "./suite.js";
 import { throwQaSuiteCleanupErrors } from "./suite.js";
@@ -29,122 +29,21 @@ import {
   writeNativeVitestReport,
 } from "./test-file-scenario-runner.test-support.js";
 
+// Register shared mocks before production imports, independent of import sorting.
 const {
+  blockNextQaFlowSuite,
+  blockNextQaTestFileRun,
   crablineRuntimeLoads,
+  createDeferred,
+  makeTempRepo,
   prepareDockerE2eEnvironment,
   replaceFileAtomicMock,
+  requireDefaultQaFlowSuiteImplementation,
+  requireDefaultQaTestFileImplementation,
   runPluginCommandWithTimeout,
   runQaFlowSuite,
   runQaTestFileScenarios,
-} = vi.hoisted(() => ({
-  crablineRuntimeLoads: vi.fn(),
-  prepareDockerE2eEnvironment: vi.fn(),
-  replaceFileAtomicMock: vi.fn(),
-  runPluginCommandWithTimeout: vi.fn(),
-  runQaFlowSuite: vi.fn(),
-  runQaTestFileScenarios: vi.fn(),
-}));
-
-vi.mock("@openclaw/crabline", async (importOriginal) => {
-  crablineRuntimeLoads();
-  return await importOriginal<typeof import("@openclaw/crabline")>();
-});
-
-vi.mock("./suite.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./suite.js")>()),
-  runQaFlowSuite,
-}));
-
-vi.mock("./test-file-scenario-runner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./test-file-scenario-runner.js")>()),
-  runQaTestFileScenarios,
-}));
-
-vi.mock("./test-file-scenario-docker-batch.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./test-file-scenario-docker-batch.js")>()),
-  prepareDockerE2eEnvironment,
-}));
-
-vi.mock("openclaw/plugin-sdk/run-command", () => ({ runPluginCommandWithTimeout }));
-
-vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
-  replaceFileAtomicMock.mockImplementation(actual.replaceFileAtomic);
-  return { ...actual, replaceFileAtomic: replaceFileAtomicMock };
-});
-
-import { runQaSuite, runQaSuiteWithInfraRetry } from "./suite-launch.runtime.js";
-
-const tempRoots: string[] = [];
-
-async function makeTempRepo(prefix: string) {
-  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempRoots.push(repoRoot);
-  return repoRoot;
-}
-
-async function writeEvidence(pathLocal: string, writeFile = true) {
-  const evidence = {
-    kind: "openclaw.qa.evidence-summary",
-    schemaVersion: 2,
-    generatedAt: "2026-06-14T00:00:00.000Z",
-    evidenceMode: "full",
-    entries: [],
-  };
-  if (writeFile) {
-    await fs.mkdir(path.dirname(pathLocal), { recursive: true });
-    await fs.writeFile(pathLocal, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
-  }
-  return evidence;
-}
-
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-function requireDefaultQaFlowSuiteImplementation() {
-  const implementation = runQaFlowSuite.getMockImplementation();
-  if (!implementation) {
-    throw new Error("expected default QA flow suite mock implementation");
-  }
-  return implementation;
-}
-
-function requireDefaultQaTestFileImplementation() {
-  const implementation = runQaTestFileScenarios.getMockImplementation();
-  if (!implementation) {
-    throw new Error("expected default QA test-file mock implementation");
-  }
-  return implementation;
-}
-
-function blockNextQaFlowSuite() {
-  const implementation = requireDefaultQaFlowSuiteImplementation();
-  const started = createDeferred();
-  const blocked = createDeferred();
-  runQaFlowSuite.mockImplementationOnce(async (params) => {
-    started.resolve();
-    await blocked.promise;
-    return await implementation(params);
-  });
-  return { started: started.promise, release: blocked.resolve };
-}
-
-function blockNextQaTestFileRun() {
-  const implementation = requireDefaultQaTestFileImplementation();
-  const started = createDeferred();
-  const blocked = createDeferred();
-  runQaTestFileScenarios.mockImplementationOnce(async (params) => {
-    started.resolve();
-    await blocked.promise;
-    return await implementation(params);
-  });
-  return { started: started.promise, release: blocked.resolve };
-}
+} = await vi.hoisted(() => import("./suite-launch.runtime.test-support.js"));
 
 async function runFailFastQaSuite(label: string, overrides: QaSuiteRunParams = {}) {
   return await runQaSuite({
@@ -270,77 +169,6 @@ describe("qa suite runtime launcher", () => {
         ),
       ),
     ).rejects.toThrow("channelDriverSelection was removed");
-  });
-
-  beforeEach(() => {
-    replaceFileAtomicMock.mockClear();
-    runQaFlowSuite.mockReset();
-    runQaTestFileScenarios.mockReset();
-    prepareDockerE2eEnvironment.mockReset();
-    prepareDockerE2eEnvironment.mockResolvedValue(undefined);
-    runPluginCommandWithTimeout.mockReset();
-    runPluginCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
-    runQaFlowSuite.mockImplementation(
-      async (
-        params:
-          | { outputDir?: string; scenarioIds?: string[]; writeEvidenceFile?: boolean }
-          | undefined,
-      ) => {
-        const outputDir = params?.outputDir ?? "/tmp/qa-flow";
-        const evidencePath = path.join(outputDir, "qa-evidence.json");
-        const evidence = await writeEvidence(evidencePath, params?.writeEvidenceFile);
-        const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
-        return {
-          evidence,
-          outputDir,
-          evidencePath,
-          reportPath: path.join(outputDir, "qa-suite-report.md"),
-          summaryPath: path.join(outputDir, "qa-suite-summary.json"),
-          report: "# QA Suite Report\n",
-          scenarios: scenarioIds.map((scenarioId) => ({
-            name: scenarioId,
-            status: "pass",
-            steps: [],
-          })),
-          startedScenarioIds: scenarioIds,
-          watchUrl: "http://127.0.0.1:43124",
-        };
-      },
-    );
-    runQaTestFileScenarios.mockImplementation(
-      async (params: {
-        outputDir: string;
-        scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
-        writeEvidenceFile?: boolean;
-      }) => {
-        const [scenario] = params.scenarios;
-        if (!scenario) {
-          throw new Error("expected scenario");
-        }
-        const evidencePath = path.join(params.outputDir, "qa-evidence.json");
-        const evidence = await writeEvidence(evidencePath, params.writeEvidenceFile);
-        return {
-          evidence,
-          outputDir: params.outputDir,
-          executionKind: scenario.execution.kind,
-          evidencePath,
-          results: params.scenarios.map((scenarioItem) => ({
-            durationMs: 1,
-            logPath: path.join(params.outputDir, `${scenarioItem.id}.log`),
-            scenario: scenarioItem,
-            status: "pass",
-          })),
-        };
-      },
-    );
-  });
-
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    await Promise.all(
-      tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-    );
   });
 
   it("preserves interleaved repeated requests through the real native invocation boundary", async () => {
@@ -574,63 +402,76 @@ describe("qa suite runtime launcher", () => {
     },
   );
 
-  it("projects only started root flow instances before collapsing repeated execution cells", async () => {
-    const repoRoot = await makeTempRepo("qa-flow-root-cells-");
-    const first = makeQaSuiteTestScenario("first-flow");
-    const second = makeQaSuiteTestScenario("second-flow");
-    vi.spyOn(scenarioCatalog, "readQaBootstrapScenarioCatalog").mockReturnValue({
-      agentIdentityMarkdown: "fixture",
-      kickoffTask: "fixture",
-      scenarios: [first, second],
-    });
-    const defaultFlow = requireDefaultQaFlowSuiteImplementation();
-    runQaFlowSuite.mockImplementation(async (params: QaSuiteRunParams) => {
-      const base = await defaultFlow(params);
-      expect(params.scenarioIds).toEqual([first.id, second.id, first.id]);
-      const recorded = await createQaSuiteEvidenceInvocation(params, {
+  it.each([
+    { channelDriver: "qa-channel", channel: "qa-channel" },
+    { channelDriver: "live", channel: null },
+  ] as const)(
+    "projects only started $channelDriver root flow instances onto planned cells",
+    async ({ channelDriver, channel }) => {
+      const repoRoot = await makeTempRepo("qa-flow-root-cells-");
+      const first = makeQaSuiteTestScenario("first-flow");
+      const second = makeQaSuiteTestScenario("second-flow");
+      vi.spyOn(scenarioCatalog, "readQaBootstrapScenarioCatalog").mockReturnValue({
+        agentIdentityMarkdown: "fixture",
+        kickoffTask: "fixture",
+        scenarios: [first, second],
+      });
+      const defaultFlow = requireDefaultQaFlowSuiteImplementation();
+      runQaFlowSuite.mockImplementation(async (params: QaSuiteRunParams) => {
+        const base = await defaultFlow(params);
+        expect(params.scenarioIds).toEqual([first.id, second.id, first.id]);
+        const recorded = await createQaSuiteEvidenceInvocation(params, {
+          repoRoot,
+          outputDir: base.outputDir,
+          selectedScenarios: [first, second, first],
+          providerMode: "mock-openai",
+          primaryModel: "mock-openai/gpt-5.6-luna",
+          transportId: "qa-channel",
+        });
+        expect(recorded.invocation.anchors.map(({ parentCell }) => parentCell?.channel)).toEqual([
+          "qa-channel",
+          "qa-channel",
+          "qa-channel",
+        ]);
+        const id = recorded.invocation.begin(0);
+        const result = await recorded.record(0, id, {
+          name: first.title,
+          status: "fail",
+          steps: [],
+          details: "first failed",
+        });
+        return {
+          ...base,
+          evidence: recorded.snapshot(),
+          scenarios: [result],
+          startedScenarioIds: [first.id],
+          startedScenarioInstanceIds: [recorded.invocation.anchors[0]!.id],
+        };
+      });
+      const result = await runQaSuite({
         repoRoot,
-        outputDir: base.outputDir,
-        selectedScenarios: [first, second, first],
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        transportId: "qa-channel",
+        outputDir: "out",
+        channelDriver,
+        scenarioIds: [first.id, second.id, first.id],
+        failFast: true,
       });
-      const id = recorded.invocation.begin(0);
-      const result = await recorded.record(0, id, {
-        name: first.title,
-        status: "fail",
-        steps: [],
-        details: "first failed",
-      });
-      return {
-        ...base,
-        evidence: recorded.snapshot(),
-        scenarios: [result],
-        startedScenarioIds: [first.id],
-      };
-    });
-    const result = await runQaSuite({
-      repoRoot,
-      outputDir: "out",
-      scenarioIds: [first.id, second.id, first.id],
-      failFast: true,
-    });
-    expect(result.expectedCells).toHaveLength(3);
-    expect(result.observedCells).toEqual([
-      {
-        scenarioId: first.id,
-        executionKind: "flow",
-        channel: "qa-channel",
-      },
-    ]);
-    if (result.executionKind !== "flow" || !result.result.evidence) {
-      throw new Error("expected recorded flow evidence");
-    }
-    expect(
-      projectQaEvidenceScenarioOutcomes(result.result.evidence).map((item) => item.status),
-    ).toEqual(["fail", null, null]);
-    expect(result.result.scenarios).toHaveLength(1);
-  });
+      expect(result.expectedCells).toHaveLength(3);
+      expect(result.observedCells).toEqual([
+        {
+          scenarioId: first.id,
+          executionKind: "flow",
+          channel,
+        },
+      ]);
+      if (result.executionKind !== "flow" || !result.result.evidence) {
+        throw new Error("expected recorded flow evidence");
+      }
+      expect(
+        projectQaEvidenceScenarioOutcomes(result.result.evidence).map((item) => item.status),
+      ).toEqual(["fail", null, null]);
+      expect(result.result.scenarios).toHaveLength(1);
+    },
+  );
 
   it("retains child evidence but rejects a returned result from a foreign observation", async () => {
     const repoRoot = await makeTempRepo("qa-aggregate-foreign-result-");
@@ -1151,6 +992,8 @@ describe("qa suite runtime launcher", () => {
         { scenarioId: "thread-isolation", executionKind: "flow", channel: "matrix" },
       ]),
     );
+    expect(result.observedCells).toHaveLength(result.expectedCells.length);
+    expect(result.observedCells).toEqual(expect.arrayContaining(result.expectedCells));
   });
 
   it("uses one eligible channel outside profile execution", async () => {

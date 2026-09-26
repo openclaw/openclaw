@@ -67,6 +67,8 @@ export function rejectRemovedQaChannelDriverSelection(value: unknown): void {
 }
 
 export type QaSuiteRunParams = {
+  signal?: AbortSignal;
+  forwardParentSignals?: boolean;
   adapterOptions?: QaTransportFactoryContext["adapterOptions"];
   adapterFactories?: readonly QaTransportAdapterFactory[];
   channelId?: string;
@@ -76,6 +78,8 @@ export type QaSuiteRunParams = {
   evidenceContinuation?: QaEvidenceSummaryV3Json;
   // Parents retain child observations even when result publication later throws.
   onEvidence?: (summary: QaEvidenceSummaryV3Json) => void;
+  // Dispatch facts survive rejected cleanup; diagnostic observations are not starts.
+  onScenarioStarted?: (instanceId: string) => void;
   repoRoot?: string;
   sutOpenClawCommand?: QaGatewayChildCommand;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
@@ -116,6 +120,8 @@ export type QaSuiteResult = {
   report: string;
   scenarios: QaSuiteScenarioResult[];
   startedScenarioIds: string[];
+  // Recorded v3 dispatch facts exclude terminal diagnostics for unstarted work.
+  startedScenarioInstanceIds?: string[];
   watchUrl: string;
   runtimeParityCell?: RuntimeParityCell;
 };
