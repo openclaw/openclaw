@@ -281,7 +281,7 @@ export async function listPinsMSTeams(
 
 type GraphReaction = {
   reactionType?: string;
-  user?: { id?: string; displayName?: string };
+  user?: { user?: { id?: string; displayName?: string | null } | null } | null;
   createdDateTime?: string;
 };
 
@@ -361,10 +361,11 @@ export async function listReactionsMSTeams(
     // Count every reaction regardless of whether the user ID is present
     // (deleted accounts, guests, or anonymous users may lack a user ID)
     group.count++;
-    if (reaction.user?.id) {
+    const user = reaction.user?.user;
+    if (user?.id) {
       group.users.push({
-        id: reaction.user.id,
-        displayName: reaction.user.displayName,
+        id: user.id,
+        displayName: user.displayName ?? undefined,
       });
     }
   }
