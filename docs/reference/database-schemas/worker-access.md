@@ -26,6 +26,13 @@ or `withOpenClawAgentDatabaseReadOnly` alone, does not move execution off thread
 `readWithCanonicalSessionAdmission` validates session reads on the executing
 thread; invoke it inside the worker's admitted reader.
 
+Channel setup awaits a fresh policy read after the agent-selection prompt.
+Deferred plugin migration rows are read by the shared-state worker, and setup
+rechecks its config owner after the read before using the selected agent. Each
+policy read obtains current rows; it does not retain migration exclusions across
+later operations. The updater and plugin source-cleanup synchronous effect guards
+retain their existing fresh-read contracts in their CLI or child-process owners.
+
 Writers use the SQLite worker broker's `state.write` or `agent.write` operation
 through their existing domain adapter, such as
 `runOpenClawStateWorkerOperation`. The connection-bound Kysely kernel and

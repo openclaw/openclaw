@@ -28,6 +28,7 @@ import { createConfigIO } from "./io.factory.js";
 import * as configHealth from "./io.health-state.js";
 import * as pluginMetadata from "./io.plugin-metadata.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
+import { readCurrentConfigForPolicyCheckAsync } from "./io.runtime.js";
 import * as snapshotPreparation from "./io.snapshot-preparation.js";
 import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
 import { getConfigResolutionFacts } from "./resolution-facts.js";
@@ -170,7 +171,7 @@ it.each(["sync", "async"] as const)(
   },
 );
 
-it.each(["load", "snapshot"] as const)(
+it.each(["load", "snapshot", "policy"] as const)(
   "%s reads retained migration inputs without synchronous SQLite work or artifact changes",
   async (method) => {
     const raw = JSON.stringify({
@@ -203,6 +204,9 @@ it.each(["load", "snapshot"] as const)(
     try {
       const config = await withArtifactPreservingStateReads(() =>
         withPluginCache(createPluginCache(), async () => {
+          if (method === "policy") {
+            return await readCurrentConfigForPolicyCheckAsync(options);
+          }
           const io = createConfigIO({ ...options, observe: false });
           if (method === "load") {
             return await io.loadConfigAsync();
@@ -225,6 +229,17 @@ it.each(["load", "snapshot"] as const)(
       familyBefore,
     );
     expect(readDeferredPluginMigrations({ env: options.env })).toEqual([pending]);
+    if (method === "policy") {
+      recordDeferredPluginMigrations({
+        env: options.env,
+        pending: [],
+        resolvedPluginIds: [pending.pluginId],
+      });
+      await expect(readCurrentConfigForPolicyCheckAsync(options)).resolves.toHaveProperty(
+        "session.store",
+        "/srv/synthetic-session-state/sessions.json",
+      );
+    }
   },
 );
 
