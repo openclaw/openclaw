@@ -903,6 +903,11 @@ extension MacNodeRuntime {
 
     func shutdown() async {
         await self.codexThreadCatalogClient.shutdown()
+        // Snapshot-manager cleanup is operation-driven (pruning happens on the
+        // next observation), so the native shutdown chain sweeps the window
+        // executor's persisted observation artifacts through the shared services
+        // after in-flight actions settle (#153622 review).
+        await self.cachedMainActorServices?.discardWindowObservationArtifacts()
     }
 }
 

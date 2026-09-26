@@ -320,12 +320,37 @@ struct MacNodeRuntimeTests {
             self.receivedReleaseGenerations.append(lifecycleGeneration)
             self.releaseCallCount += 1
         }
+
+        var discardObservationArtifactCallCount = 0
+
+        func discardWindowObservationArtifacts() async {
+            self.discardObservationArtifactCallCount += 1
+        }
     }
 
     @Test func `handle invoke rejects unknown command`() async {
         let runtime = MacNodeRuntime()
         let response = await invoke(runtime, "req-1", "unknown.command")
         #expect(response.ok == false)
+    }
+
+    @MainActor
+    @Test func `shutdown sweeps persisted window observation artifacts through the shared services`() async throws {
+        let services = await MainActor.run { MainActorServicesProbe() }
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
+
+        // Any services-backed command caches the shared services instance; the
+        // shutdown sweep must reach that same instance (#153622 review).
+        let response = try await invoke(
+            runtime, "req-shutdown", MacNodeScreenCommand.record.rawValue, params: MacNodeScreenRecordParams(durationMs: 0))
+        #expect(response.ok)
+        #expect(services.discardObservationArtifactCallCount == 0)
+
+        await runtime.shutdown()
+
+        #expect(services.discardObservationArtifactCallCount == 1)
     }
 
     @Test func `handle invoke returns injected Codex thread catalog`() async {

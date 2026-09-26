@@ -145,6 +145,17 @@ final class ComputerActionExecutionQueue {
         try? await self.waitForLifecycleRelease(lifecycleGeneration: lifecycleGeneration)
     }
 
+    /// Settles the active and queued computer actions with terminal-stop
+    /// semantics, then removes the window executor's persisted observation
+    /// artifacts from its owned output directory. Snapshot-manager cleanup is
+    /// operation-driven (pruning runs on the next observation), so the native
+    /// shutdown chain must sweep the directory explicitly — otherwise private
+    /// window captures persist past node stop (#153622 review).
+    func discardWindowObservationArtifacts() async {
+        await self.releaseHeldInput(lifecycleGeneration: self.lifecycleGeneration + 1)
+        WindowObservationArtifacts.removeAllArtifacts(in: WindowObservationArtifacts.outputDirectory)
+    }
+
     func releaseHeldInput(inputScopeId: UUID) async {
         let generation = self.lifecycleGeneration
         let activeTask = self.currentActionScopeId == inputScopeId ? self.currentActionTask : nil
@@ -625,6 +636,13 @@ final class ComputerActionService {
 
     func releaseHeldInput(inputScopeId: UUID?) async {
         await self.executionQueue.releaseHeldInput(inputScopeId: inputScopeId ?? self.defaultInputScopeId)
+    }
+
+    /// Removes the window executor's persisted observation artifacts after
+    /// settling in-flight/queued computer actions. Called by the native node
+    /// shutdown chain; see `ComputerActionExecutionQueue.discardWindowObservationArtifacts()`.
+    func discardWindowObservationArtifacts() async {
+        await self.executionQueue.discardWindowObservationArtifacts()
     }
 
     #if DEBUG

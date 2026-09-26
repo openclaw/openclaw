@@ -315,6 +315,24 @@ struct ComputerActionServiceTests {
             leftButtonDown: true)
     }
 
+    /// The native shutdown chain sweeps the window executor's owned output
+    /// directory through `ComputerActionService.discardWindowObservationArtifacts()`
+    /// after settling in-flight/queued actions — persisted window captures must
+    /// not survive node stop (#153622 review).
+    @Test func `discardWindowObservationArtifacts removes persisted window observation artifacts`() async throws {
+        let service = ComputerActionService(screen: ComputerScreenActionExecutor { _, _, _ in })
+        let directory = WindowObservationArtifacts.outputDirectory
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let capture = directory.appendingPathComponent("peekaboo-observation-\(UUID().uuidString).png")
+        try Data([0x89, 0x50]).write(to: capture)
+        #expect(FileManager.default.fileExists(atPath: capture.path))
+
+        await service.discardWindowObservationArtifacts()
+
+        #expect(!FileManager.default.fileExists(atPath: capture.path))
+        #expect(!FileManager.default.fileExists(atPath: directory.path))
+    }
+
     @Test func `left mouse up requires a service owned split hold`() throws {
         #expect(throws: ComputerActionService.ComputerActionError.self) {
             try ComputerScreenActionExecutor.validateHeldButtonTransition(

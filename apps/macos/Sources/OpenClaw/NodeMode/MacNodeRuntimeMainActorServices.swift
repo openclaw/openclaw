@@ -32,6 +32,7 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         desktopPermit: MacDesktopAvailabilityCoordinator.Permit) async throws -> OpenClawComputerActResult
     func releaseExecutionInput(_ permit: MacDesktopAvailabilityCoordinator.Permit) async
     func releaseHeldInput(lifecycleGeneration: UInt64) async
+    func discardWindowObservationArtifacts() async
 }
 
 @MainActor
@@ -113,5 +114,9 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
 
     func releaseHeldInput(lifecycleGeneration: UInt64) async {
         await self.computerAction.releaseHeldInput(lifecycleGeneration: lifecycleGeneration)
+    }
+
+    func discardWindowObservationArtifacts() async {
+        await self.computerAction.discardWindowObservationArtifacts()
     }
 }
