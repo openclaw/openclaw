@@ -17,7 +17,6 @@ import {
   maxAsk,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalsLocked,
-  resolveExecApprovalsTranscriptPath,
   type ExecAsk,
   type ExecApprovalDecision,
   type ExecApprovalsResolved,
@@ -422,22 +421,23 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }): string {
   const runLabel = params.trigger === "cron" ? "Automation runs" : "Headless runs";
+  const approvalTarget = params.host === "node" ? "--node <id|name|ip>" : "--gateway";
   // The TUI and chat channels never receive automation approval cards
   // (server-request-context canDeliverApprovals), so only name surfaces that
   // can actually answer this run's approval.
   const approvalSurfaceFix =
     params.trigger === "cron" && params.host === "gateway"
       ? "- keep the Control UI or a macOS/iOS/Android app connected and answer the next run's approval card; Allow Always mints a standing grant"
-      : "- rerun interactively and approve when prompted (Control UI, TUI, or a chat channel with exec approvals)";
+      : "- rerun interactively and approve when prompted (Control UI or a chat channel with exec approvals)";
   return [
     `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
     `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
-    `Stricter values from tools.exec and ${resolveExecApprovalsTranscriptPath()} both apply.`,
+    "Stricter values from tools.exec and the execution host's approvals policy both apply.",
     "Fix one of these:",
-    '- align both files to security="full" and ask="off" for trusted local automation',
+    '- set tools.exec.mode="full" and align host approvals to security="full" and ask="off" for trusted local automation',
     "- keep allowlist mode and add an explicit allowlist entry for this command",
     approvalSurfaceFix,
-    'Tip: run "openclaw doctor" and "openclaw approvals get --gateway" to inspect the effective policy.',
+    `Tip: run "openclaw doctor" and "openclaw approvals get ${approvalTarget}" to inspect the effective policy.`,
   ].join("\n");
 }
 
