@@ -5,7 +5,10 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord as asParamRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isGoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
 import {
   resolveGoogleMeetGatewayOperationTimeoutMs,
@@ -79,6 +82,8 @@ type GoogleMeetGatewayToolAction =
   | "create"
   | "status"
   | "transcript"
+  | "participation_context"
+  | "participate"
   | "recover_current_tab"
   | "setup_status"
   | "leave"
@@ -89,6 +94,8 @@ type GoogleMeetGatewayToolAction =
 
 function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolAction): string {
   switch (action) {
+    case "participation_context":
+      return "googlemeet.participationContext";
     case "recover_current_tab":
       return "googlemeet.recoverCurrentTab";
     case "setup_status":
@@ -102,6 +109,46 @@ function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolActio
     default:
       return `googlemeet.${action}`;
   }
+}
+
+export function readGoogleMeetParticipationParams(raw: Record<string, unknown>): {
+  sessionId: string;
+  request: Parameters<GoogleMeetRuntime["participate"]>[1];
+} {
+  const sessionId = normalizeOptionalString(raw.sessionId);
+  if (!sessionId) {
+    throw new Error("sessionId required");
+  }
+  const requestId = normalizeOptionalString(raw.requestId);
+  if (!requestId) {
+    throw new Error("requestId required");
+  }
+  for (const name of ["sourceId", "correctionOf"] as const) {
+    if (raw[name] !== undefined && !normalizeOptionalString(raw[name])) {
+      throw new Error(`${name} must be a non-empty string`);
+    }
+  }
+  const action = asParamRecord(raw.participationAction);
+  const type = normalizeOptionalString(action.type);
+  if (!type) {
+    throw new Error("participationAction.type required");
+  }
+  for (const name of ["text", "reaction"] as const) {
+    if (action[name] !== undefined && typeof action[name] !== "string") {
+      throw new Error(`participationAction.${name} must be a string`);
+    }
+  }
+  return {
+    sessionId,
+    request: {
+      requestId,
+      ...(raw.sourceId !== undefined ? { sourceId: normalizeOptionalString(raw.sourceId) } : {}),
+      ...(raw.correctionOf !== undefined
+        ? { correctionOf: normalizeOptionalString(raw.correctionOf) }
+        : {}),
+      action: { ...action, type },
+    },
+  };
 }
 
 function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {

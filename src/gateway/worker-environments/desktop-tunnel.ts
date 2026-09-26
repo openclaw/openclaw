@@ -45,7 +45,6 @@ type DesktopAcquireResult = Awaited<ReturnType<DesktopSessionRegistry["acquire"]
 
 type DesktopAppLaunchEntry = {
   environmentId: string;
-  appId: WorkerDesktopApp["id"];
   ownerEpoch: number;
   abortController: AbortController;
   operation: Promise<void>;
@@ -340,7 +339,6 @@ export function createWorkerDesktopTunnels(deps: {
     });
     const completeEntry: DesktopAppLaunchEntry = {
       environmentId: request.environmentId,
-      appId: request.app.id,
       ownerEpoch: request.ownerEpoch,
       abortController,
       operation,

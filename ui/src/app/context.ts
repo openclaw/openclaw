@@ -10,6 +10,7 @@ import type {
   ChatAttachment,
   ChatComposerMemoryFallback,
   ChatGoalDraftMode,
+  ChatReplyTarget,
 } from "../lib/chat/chat-types.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
@@ -92,6 +93,7 @@ export type ApplicationChatAttachmentHandoff = {
       message?: string;
       draftRevision?: number;
       goalMode?: ChatGoalDraftMode | null;
+      replyTarget?: ChatReplyTarget | null;
       mentions?: readonly HumanMention[];
       newSessionDraft?: NewSessionDraftHandoff;
       incognito?: boolean;
@@ -104,6 +106,7 @@ export type ApplicationChatAttachmentHandoff = {
     message?: string;
     draftRevision?: number;
     goalMode?: ChatGoalDraftMode | null;
+    replyTarget?: ChatReplyTarget | null;
     mentions?: readonly HumanMention[];
     newSessionDraft?: NewSessionDraftHandoff;
   } | null;

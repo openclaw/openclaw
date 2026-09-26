@@ -21,11 +21,6 @@ type ChannelSummaryOptions = {
   sourceConfig?: OpenClawConfig;
 };
 
-const DEFAULT_OPTIONS: Omit<Required<ChannelSummaryOptions>, "plugins" | "sourceConfig"> = {
-  colorize: false,
-  includeAllowFrom: false,
-};
-
 type ChannelAccountEntry = ChannelAccountInspectionResult & {
   accountId: string;
 };
@@ -71,20 +66,16 @@ const buildAccountDetails = (params: {
   if (snapshot.dmPolicy) {
     details.push(`dm:${snapshot.dmPolicy}`);
   }
-  if (snapshot.tokenSource && snapshot.tokenSource !== "none") {
-    details.push(`token:${snapshot.tokenSource}`);
-  }
-  if (snapshot.botTokenSource && snapshot.botTokenSource !== "none") {
-    details.push(`bot:${snapshot.botTokenSource}`);
-  }
-  if (snapshot.appTokenSource && snapshot.appTokenSource !== "none") {
-    details.push(`app:${snapshot.appTokenSource}`);
-  }
-  if (
-    snapshot.signingSecretSource &&
-    snapshot.signingSecretSource !== "none" /* pragma: allowlist secret */
-  ) {
-    details.push(`signing:${snapshot.signingSecretSource}`);
+  for (const [key, label] of [
+    ["tokenSource", "token"],
+    ["botTokenSource", "bot"],
+    ["appTokenSource", "app"],
+    ["signingSecretSource", "signing"],
+  ] as const) {
+    const source = snapshot[key];
+    if (source && source !== "none") {
+      details.push(`${label}:${source}`);
+    }
   }
   if (
     params.entry.kind === "unavailable" ||
@@ -125,9 +116,9 @@ export async function buildChannelSummary(
 ): Promise<string[]> {
   const effective = cfg ?? (await loadChannelSummaryConfig());
   const lines: string[] = [];
-  const resolved = { ...DEFAULT_OPTIONS, ...options };
+  const { colorize = false, includeAllowFrom = false } = options ?? {};
   const tint = (value: string, color?: (input: string) => string) =>
-    resolved.colorize && color ? color(value) : value;
+    colorize && color ? color(value) : value;
   const sourceConfig = options?.sourceConfig ?? effective;
 
   const plugins =
@@ -213,24 +204,22 @@ export async function buildChannelSummary(
 
     lines.push(tint(line, statusColor));
 
-    if (configuredEntries.length > 0) {
-      for (const entry of configuredEntries) {
-        const details = buildAccountDetails({
-          entry,
-          plugin,
-          cfg: effective,
-          includeAllowFrom: resolved.includeAllowFrom,
-        });
-        lines.push(
-          accountLine(
-            formatAccountLabel({
-              accountId: entry.accountId,
-              name: entry.snapshot.name,
-            }),
-            details,
-          ),
-        );
-      }
+    for (const entry of configuredEntries) {
+      const details = buildAccountDetails({
+        entry,
+        plugin,
+        cfg: effective,
+        includeAllowFrom,
+      });
+      lines.push(
+        accountLine(
+          formatAccountLabel({
+            accountId: entry.accountId,
+            name: entry.snapshot.name,
+          }),
+          details,
+        ),
+      );
     }
   }
 

@@ -31,7 +31,6 @@ import {
 } from "./group-access.js";
 import {
   createTelegramIngressResolver,
-  createTelegramIngressSubject,
   resolveTelegramCommandIngressAuthorization,
   resolveTelegramNativeCommandAdmission,
   resolveTelegramEventIngressAuthorization,
@@ -94,7 +93,6 @@ export function createTelegramHandlerAuthorization({
   const shouldSkipGroupMessage = (params: Parameters<typeof shouldSkipTelegramGroupMessage>[0]) =>
     shouldSkipTelegramGroupMessage(params, { logger, resolveGroupPolicy });
 
-  type TelegramEventAuthorizationContextValue = TelegramEventAuthorizationContext;
   const TELEGRAM_EVENT_AUTH_RULES: Record<
     TelegramEventAuthorizationMode,
     {
@@ -134,14 +132,9 @@ export function createTelegramHandlerAuthorization({
 
   // Authorization owns one ingress snapshot. The agent turn intentionally
   // captures again after batching so reloads during debounce apply to execution.
-  const resolveTelegramEventAuthorizationContext = async (params: {
-    cfg: OpenClawConfig;
-    chatId: number;
-    isGroup: boolean;
-    senderId?: string;
-    threadSpec: TelegramThreadSpec;
-    msg?: Message;
-  }): Promise<TelegramEventAuthorizationContextValue> => {
+  const resolveTelegramEventAuthorizationContext = async (
+    params: Parameters<TelegramHandlerAuthorization["resolveTelegramEventAuthorizationContext"]>[0],
+  ): Promise<TelegramEventAuthorizationContext> => {
     const authorizationCfg = params.cfg;
     const authorizationTelegramCfg = resolveTelegramAccount({
       cfg: authorizationCfg,
@@ -195,15 +188,9 @@ export function createTelegramHandlerAuthorization({
     };
   };
 
-  const authorizeTelegramEventSender = async (params: {
-    chatId: number;
-    chatTitle?: string;
-    isGroup: boolean;
-    senderId: string;
-    senderUsername: string;
-    mode: TelegramEventAuthorizationMode;
-    context: TelegramEventAuthorizationContextValue;
-  }): Promise<boolean> => {
+  const authorizeTelegramEventSender = async (
+    params: Parameters<TelegramHandlerAuthorization["authorizeTelegramEventSender"]>[0],
+  ): Promise<boolean> => {
     const { chatId, chatTitle, isGroup, senderId, senderUsername, mode, context } = params;
     const {
       dmPolicy,
@@ -302,13 +289,9 @@ export function createTelegramHandlerAuthorization({
     return true;
   };
 
-  const isTelegramModelCallbackAuthorized = async (params: {
-    chatId: number;
-    isGroup: boolean;
-    senderId: string;
-    senderUsername: string;
-    context: TelegramEventAuthorizationContextValue;
-  }): Promise<boolean> => {
+  const isTelegramModelCallbackAuthorized = async (
+    params: Parameters<TelegramHandlerAuthorization["isTelegramModelCallbackAuthorized"]>[0],
+  ): Promise<boolean> => {
     const { chatId, isGroup, senderId, context } = params;
     const cfgLocal = context.cfg;
     const dmAllowFrom = context.groupAllowOverride ?? context.allowFrom;
@@ -343,16 +326,9 @@ export function createTelegramHandlerAuthorization({
   // before any cache/dedupe side effect so blocked content is never recorded.
   // dmAccess "challenge" may send a pairing reply; "silent" only decides (edits
   // must never reply).
-  const authorizeInboundMessage = async (params: {
-    msg: Message;
-    chatId: number;
-    isGroup: boolean;
-    isForum: boolean;
-    senderId: string;
-    senderUsername: string;
-    requireConfiguredGroup: boolean;
-    dmAccess: "challenge" | "silent";
-  }): Promise<TelegramInboundGate> => {
+  const authorizeInboundMessage = async (
+    params: Parameters<TelegramHandlerAuthorization["authorizeInboundMessage"]>[0],
+  ): Promise<TelegramInboundGate> => {
     const authorizationCfg = telegramDeps.getRuntimeConfig();
     const context = await resolveTelegramEventAuthorizationContext({
       cfg: authorizationCfg,
@@ -467,7 +443,7 @@ export function createTelegramHandlerAuthorization({
               command: { commandOwnerAllowFrom: [params.senderId] },
             }
           : {}),
-        subject: createTelegramIngressSubject(params.senderId),
+        subject: { stableId: params.senderId },
         conversation: {
           kind: params.isGroup ? "group" : "direct",
           id: String(params.chatId),

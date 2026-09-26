@@ -44,11 +44,26 @@ describe("Doctor JSON runtime failures", () => {
       },
     });
 
+    const message = expect.stringContaining(
+      "health check already registered: core/doctor/collision",
+    );
     expect(JSON.parse(result.stdout)).toEqual({
+      schemaVersion: 1,
       ok: false,
+      checksRun: 0,
+      checksSkipped: 0,
+      findings: [
+        {
+          checkId: "core/doctor/lint-inspection",
+          severity: "error",
+          source: "doctor",
+          message,
+          fixHint: "Resolve this inspection error, then rerun `openclaw doctor --lint`.",
+        },
+      ],
       error: {
         type: "cli_error",
-        message: expect.stringContaining("health check already registered: core/doctor/collision"),
+        message,
       },
     });
     expect(result.stdout).not.toContain(token);

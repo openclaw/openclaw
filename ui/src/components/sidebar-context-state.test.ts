@@ -17,7 +17,7 @@ describe("sidebar route state", () => {
 
     // A cold import keeps the current main page, so its contextual list stays too.
     state.pendingMatches = [
-      { ...state.matches[0]!, routeId: "tasks", status: "pending", module: undefined },
+      { ...state.matches[0]!, routeId: "cron", status: "pending", module: undefined },
     ];
     expect(selectSidebarContext(state)?.key).toBe("systems");
     Object.assign(state.pendingMatches[0]!, { status: "error", error: new Error("Route failed") });

@@ -289,6 +289,30 @@ describe("telegram ingress supersede policy", () => {
     expect(unauthorized).toBe(false);
   });
 
+  it.each([
+    { senderId: OWNER_ID, messageSenderId: STRANGER_ID, expected: true },
+    { senderId: STRANGER_ID, messageSenderId: OWNER_ID, expected: false },
+  ])("authorizes callback sender $senderId independently of its message author", async (entry) => {
+    const update = {
+      update_id: 2,
+      callback_query: {
+        data: "/new",
+        from: { id: Number(entry.senderId) },
+        message: messageUpdate({
+          updateId: 2,
+          text: "controls",
+          senderId: entry.messageSenderId,
+        }).message,
+      },
+    };
+    expect(
+      await shouldSupersede(
+        record("2", update),
+        claim("1", messageUpdate({ updateId: 1, text: "prior", senderId: OWNER_ID })),
+      ),
+    ).toBe(entry.expected);
+  });
+
   it("gates ambient room-event supersede on authorized sender", async () => {
     expect(
       await shouldSupersede(

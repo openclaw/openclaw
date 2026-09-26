@@ -15,6 +15,10 @@ import type {
   ExecutionIdentityInspectionQuery,
   ExecutionIdentityInspectionOutcome,
 } from "../audit/execution-identity-inspection.types.js";
+import type {
+  ChannelIngressReadCommand,
+  ChannelIngressReadReply,
+} from "../channels/message/ingress-queue-read-contract.js";
 import type { ConfigSnapshotAuditRecord } from "../config/config-journal-snapshot.kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronRunReceiptOwnerObservation } from "../cron/store/run-receipt.types.js";
@@ -112,6 +116,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | ChannelIngressReadCommand
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
@@ -210,6 +215,7 @@ export type OpenClawStateReadRequest = {
   command: OpenClawStateReadCommand | { type: "admit" };
 };
 export type OpenClawStateReadReply = (
+  | ChannelIngressReadReply
   | {
       ok: true;
       type: "agentDeletionJournal.status";

@@ -187,21 +187,13 @@ async function tryRunGatewayRunFastPath(
     throw err;
   });
   const beforeRun = async (opts: { force?: boolean; reset?: boolean }) => {
-    let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
-    let skipPristineStartupStateMigrations = false;
-    let skipPristineCoreStateMigrations = false;
+    let beforeStatePreparation: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
     const shouldBootstrap = await startupTrace.measure("gateway-run-pre-bootstrap", async () => {
-      const {
-        prepareGatewayRunBootstrap,
-        recheckGatewayRunBootstrap,
-        wasPreparedGatewayRunCoreStatePristine,
-        wasPreparedGatewayRunStatePristine,
-      } = await import("./gateway-cli/pre-bootstrap.js");
+      const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =
+        await import("./gateway-cli/pre-bootstrap.js");
       const prepared = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
       if (prepared) {
-        skipPristineStartupStateMigrations = wasPreparedGatewayRunStatePristine();
-        skipPristineCoreStateMigrations = wasPreparedGatewayRunCoreStatePristine();
-        beforeStateMigrations = (snapshot) =>
+        beforeStatePreparation = (snapshot) =>
           recheckGatewayRunBootstrap({
             opts,
             runtime: defaultRuntime,
@@ -219,9 +211,7 @@ async function tryRunGatewayRunFastPath(
         commandPath,
         startupPolicy,
         loadPlugins: false,
-        ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
-        ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
-        ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
+        ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
       });
       const { reloadTrustedGatewayRunEnvironment } = await import("./gateway-cli/pre-bootstrap.js");
       await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });

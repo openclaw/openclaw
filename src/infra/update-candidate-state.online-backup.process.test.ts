@@ -49,7 +49,7 @@ async function readWriterGeneration(file: string): Promise<number> {
   return Number(generations.at(-2) ?? -1);
 }
 
-it.for(["inventory", "snapshot"] as const)(
+it.for(["inventory", "snapshot", "discover", "versions"] as const)(
   "%s acquires coherent rehearsal copies while an independent WAL writer commits",
   { timeout: 30_000 },
   async (mode, { signal }) => {
@@ -88,6 +88,7 @@ it.for(["inventory", "snapshot"] as const)(
         }
       }
       await fs.mkdir(candidateRoot);
+      await fs.mkdir(targetStateDir);
       await fs.writeFile(path.join(candidateRoot, "package.json"), '{"type":"module"}');
       const ready = path.join(root, "writer-ready");
       const stop = path.join(root, "writer-stop");
@@ -102,7 +103,7 @@ it.for(["inventory", "snapshot"] as const)(
       const files = ${JSON.stringify([shared, agent])};
       const stores = files.map(file => new DatabaseSync(file));
       try {
-        for (const db of stores) db.exec("PRAGMA busy_timeout = 1000; PRAGMA wal_autocheckpoint = 128;");
+        for (const db of stores) db.exec("PRAGMA busy_timeout = 1000; PRAGMA wal_autocheckpoint = 1;");
         fs.writeFileSync(${JSON.stringify(progress)}, "");
         fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
         let generation = 0;
@@ -167,6 +168,7 @@ it.for(["inventory", "snapshot"] as const)(
       const input = {
         stateDir,
         targetStateDir,
+        stagingRoot: targetStateDir,
         candidateRoot,
         config: {},
         env: {
@@ -209,6 +211,19 @@ it.for(["inventory", "snapshot"] as const)(
         const before = await readWriterGeneration(progress);
         const result = await runWorker({ mode, ...admission });
         expect(result.code, result.stderr.toString()).toBe(0);
+        const progressFrames = result.stderr
+          .toString()
+          .split("\n")
+          .filter((line) => line.startsWith("State schema progress: "))
+          .map((line) => JSON.parse(line.slice("State schema progress: ".length)));
+        const completed = progressFrames.filter((entry) => entry.snapshot?.status === "completed");
+        expect(completed).toHaveLength(mode === "snapshot" ? 2 : 1);
+        for (const { snapshot } of completed) {
+          expect(snapshot.copiedBytes).toBeGreaterThan(4194304);
+          expect(snapshot.copiedPages).toBeGreaterThan(0);
+          expect(snapshot.copiedPages).toBe(snapshot.totalPages);
+          expect(snapshot.elapsedMs).toBeGreaterThanOrEqual(0);
+        }
         // One fresh materialization per source; verification consumes that private image.
         expect((await fs.readFile(backups, "utf8")).split("\n").filter(Boolean)).toHaveLength(
           mode === "snapshot" ? 2 : 1,
@@ -224,6 +239,17 @@ it.for(["inventory", "snapshot"] as const)(
             JSON.parse(result.stdout.toString()),
           );
           expect([...inventory.databases.keys()]).toEqual(expect.arrayContaining([shared, agent]));
+        } else if (mode === "discover") {
+          expect(JSON.parse(result.stdout.toString())).toMatchObject({
+            sharedVersion: { path: shared, userVersion: 3 },
+          });
+        } else if (mode === "versions") {
+          expect(JSON.parse(result.stdout.toString())).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ path: shared, userVersion: 3 }),
+              expect.objectContaining({ path: agent, userVersion: 3 }),
+            ]),
+          );
         } else {
           const snapshot = UpdateCandidateStateSnapshotSchema.parse(
             JSON.parse(result.stdout.toString()),

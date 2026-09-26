@@ -19,18 +19,19 @@ transient runs are never restored from them.
 
 ## Legacy state migration
 
-`openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
+`openclaw doctor --fix` owns general persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Gateway, node-host, and local CLI startup leave general legacy repair to Doctor. Normal versioned database opening, native initialization, and recovery of valid current config remain available. The narrow [restart-notice importer](/gateway/restart-recovery#agent-requested-restarts) also serves the late update notices written by shipped June updaters, through the same migration owner and receipts.
 
-Gateway startup invokes the same migration owners under exclusive maintenance
-ownership before checking runtime readiness. This lets container image upgrades
-complete agent schema, shared-state, session, and workspace migrations without
-an offline operator command. Startup preserves verified SQLite copies before
-schema upgrades, plus Doctor's normal config backups and legacy-file archives.
+The container image entrypoint automatically runs `openclaw doctor --fix --non-interactive`
+against the mounted state and config before starting the Gateway. If you override
+that entrypoint, run Doctor explicitly against the same mounts. Doctor performs
+the required legacy repairs under exclusive maintenance ownership and preserves
+verified SQLite copies before schema upgrades, along with its normal config
+backups and legacy-file archives. Gateway startup then checks runtime readiness.
 An unsafe required store exits with code 78 and its specific reason. Refused default
 or system agents never produce a healthy readiness response. Unused legacy stores,
 including loose `agent/settings.json` files without an agent owner, remain untouched
-and deferred. Startup records an advisory and continues independent migrations;
-Doctor reports the retained source for follow-up. An advisory never hides a separate
+and deferred. Doctor reports the retained source and continues independent migrations;
+startup reports remaining readiness advisories. An advisory never hides a separate
 required-store refusal.
 
 A step blocked solely by an earlier refusal keeps

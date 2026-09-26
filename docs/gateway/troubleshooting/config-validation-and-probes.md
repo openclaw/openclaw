@@ -37,7 +37,7 @@ Look for:
 <AccordionGroup>
   <Accordion title="What happened">
     - The config did not validate during startup, hot reload, or an OpenClaw-owned write.
-    - Gateway startup leaves `openclaw.json` unchanged and fails closed when safe legacy-key migration cannot produce a fully valid config.
+    - Gateway startup leaves legacy keys unchanged and refuses config that needs their repair, with an `openclaw doctor --fix` hint.
     - Hot reload skips invalid external edits and keeps the current runtime config active.
     - OpenClaw-owned writes reject invalid/destructive payloads before commit and save `.rejected.*`.
     - `openclaw doctor --fix` owns repairs beyond automatic legacy-key migration. It can remove non-JSON prefixes or restore the last-known-good copy; a recovery attempts to preserve the replaced payload as `.clobbered.*` (best effort, the snapshot can be skipped under disk or rotation limits).

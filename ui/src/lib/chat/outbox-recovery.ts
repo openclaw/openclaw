@@ -106,7 +106,7 @@ export function restoreChatOutboxRecovery(
     }
     const key = storedChatOutboxScopeKey(scope);
     const existing = store.sessions[key];
-    if (existing?.draft || existing?.goalMode || existing?.queue?.length) {
+    if (existing?.draft || existing?.goalMode || existing?.replyTarget || existing?.queue?.length) {
       return "conflict";
     }
     const session = entry.session;

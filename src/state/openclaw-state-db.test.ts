@@ -98,6 +98,7 @@ import {
 import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
 import {
   collectSqliteSchemaShape,
+  hashSqliteSchema,
   normalizeSqliteSchemaShapeSql,
   replaceNamedIndexesWithNoncanonicalIndexes,
 } from "./sqlite-schema-shape.test-support.js";
@@ -143,18 +144,6 @@ function createTempStateDir(): string {
 
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
-}
-
-function hashSqliteSchema(database: DatabaseSync): string {
-  const schema = database
-    .prepare(
-      `SELECT type, name, tbl_name, sql
-         FROM sqlite_schema
-        WHERE name NOT LIKE 'sqlite_%'
-        ORDER BY type, name`,
-    )
-    .all();
-  return sha256(JSON.stringify(schema));
 }
 
 function materializeV2026_7_1_2StateDatabase(stateDir: string): {
@@ -6508,7 +6497,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     },
   );
 
-  it.each(["unrelated foreign key", "trigger", "generated column"])(
+  it.each(["unrelated foreign key", "trigger", "generated column", "foreign role"])(
     "refuses orphan delivery recovery with %s without changing data",
     (variant) => {
       const stateDir = createTempStateDir();
@@ -6527,6 +6516,8 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
           seed.exec(
             "CREATE TRIGGER unknown_delivery_cleanup AFTER DELETE ON task_delivery_state BEGIN DELETE FROM task_runs; END",
           );
+        } else if (variant === "foreign role") {
+          seed.exec("UPDATE schema_meta SET role = 'agent' WHERE meta_key = 'primary'");
         } else {
           seed.exec(
             "ALTER TABLE task_delivery_state ADD COLUMN extra TEXT GENERATED ALWAYS AS (task_id) VIRTUAL",
@@ -6538,7 +6529,9 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         expect(result.warnings.join("\n")).toMatch(
           variant === "unrelated foreign key"
             ? /foreign_key_check failed/
-            : /refused an unrecognized/,
+            : variant === "foreign role"
+              ? /schema role agent; expected global/
+              : /refused an unrecognized/,
         );
         expect(
           seed

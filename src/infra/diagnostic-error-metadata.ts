@@ -73,11 +73,7 @@ function normalizeProviderRequestId(value: unknown): string | undefined {
     const trimmed = value.trim();
     return PROVIDER_REQUEST_ID_RE.test(trimmed) ? trimmed : undefined;
   }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const normalized = String(value);
-    return PROVIDER_REQUEST_ID_RE.test(normalized) ? normalized : undefined;
-  }
-  if (typeof value === "bigint") {
+  if ((typeof value === "number" && Number.isFinite(value)) || typeof value === "bigint") {
     const normalized = String(value);
     return PROVIDER_REQUEST_ID_RE.test(normalized) ? normalized : undefined;
   }

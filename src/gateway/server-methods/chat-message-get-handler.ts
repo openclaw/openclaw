@@ -1,4 +1,3 @@
-// Single-message lookup applies the same visibility and display projection as chat.history.
 import {
   ErrorCodes,
   errorShape,
@@ -154,8 +153,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const effectiveMaxChars =
-      typeof maxChars === "number" ? maxChars : Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
+    const effectiveMaxChars = maxChars ?? Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
     if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
       // Pending IDs have their own owner. A transcript miss must never widen
       // into pending custody or an archived physical session.

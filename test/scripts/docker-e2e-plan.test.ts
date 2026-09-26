@@ -482,6 +482,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
       1,
       "must force a local image build",
     ],
+    [
+      "container activation reused image",
+      "container-image-upgrade",
+      { command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:container-image-upgrade" },
+      1,
+      "must force a local image build",
+    ],
     ["unapproved live package", "live-models", { needsPackage: true }, 1, "must not require"],
     [
       "shared package image",
@@ -544,6 +551,14 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     expect(selected.needs.e2eImage).toBe(false);
     expect(selected.needs.prepublishPluginRegistry).toBe(false);
     expect(findLaneByName("fleet-cache")?.name).toBe("fleet-cache");
+  });
+
+  it("builds the container activation image without preparing a package image", () => {
+    const plan = planFor({ selectedLaneNames: ["container-image-upgrade"] });
+    expect(plan.lanes.map((lane) => lane.name)).toEqual(["container-image-upgrade"]);
+    expect(plan.needs.package).toBe(false);
+    expect(plan.needs.e2eImage).toBe(false);
+    expect(plan.needs.liveImage).toBe(false);
   });
 
   it("plans the package-backed sandbox browser sidecar lane", () => {
