@@ -6,7 +6,10 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import type { SessionEntry } from "../config/sessions/types.js";
 import { saveCronStore } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
@@ -929,8 +932,6 @@ describe("tasks commands", () => {
     async (apply) => {
       await withTaskCommandStateDir(async (state) => {
         const now = Date.now();
-        vi.useFakeTimers();
-        vi.setSystemTime(now - 8 * 24 * 60 * 60_000);
         const staleTask = createTaskRecord({
           runtime: "cli",
           ownerKey: "agent:main:main",
@@ -939,8 +940,9 @@ describe("tasks commands", () => {
           task: "Task that maintenance would prune",
           status: "succeeded",
           deliveryStatus: "not_applicable",
+          lastEventAt: now - 8 * 24 * 60 * 60_000,
         });
-        vi.setSystemTime(now);
+        expect(staleTask.cleanupAfter).toBeLessThan(now);
         const storePath = path.join(state.sessionsDir("main"), "sessions.json");
         const staleSessionKey = "agent:main:cron:done-job:run:old-run";
         await writeSessionEntries(storePath, {
@@ -949,6 +951,8 @@ describe("tasks commands", () => {
             updatedAt: Date.now() - 8 * 24 * 60 * 60_000,
           },
         });
+        await closeOpenClawAgentDatabasesAsync(state.root);
+        resetTaskFlowRegistryForTests({ persist: false });
         const loadSnapshot = vi.fn(() => {
           throw new Error("SQLITE_CORRUPT: task-flow maintenance restore failed");
         });

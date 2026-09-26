@@ -4,10 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   loadSessionEntry,
   onSessionIdentityMutation,
@@ -31,8 +35,10 @@ import type { InternalSessionEntry } from "./types.js";
 
 const tempDirs = createTempDirTracker();
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
@@ -137,6 +143,7 @@ describe("SQLite session row persistence", () => {
               : await patchSessionEntryTarget(
                   {
                     agentId: "main",
+                    env,
                     storePath: database.path,
                     target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
                   },
