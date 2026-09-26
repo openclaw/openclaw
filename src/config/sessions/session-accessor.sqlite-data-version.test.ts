@@ -1,16 +1,13 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   appendTranscriptEventSync,
   appendTranscriptMessage,
@@ -22,11 +19,13 @@ import {
   openSessionEntryReadView,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { useSessionEntryCacheFixture } from "./session-accessor.sqlite-data-version.test-support.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import { captureSessionEntryRead } from "./session-accessor.sqlite-entry-read-lifetime.js";
 import {
   readSessionEntryCount,
   iterateSessionEntryKeys,
+  writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -48,27 +47,11 @@ vi.mock("./session-accessor.sqlite-status.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const createSessionScope = useSessionEntryCacheFixture();
 
 beforeEach(() => {
   parseSessionEntryCalls.mockClear();
 });
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  vi.useRealTimers();
-});
-
-function createSessionScope(label: string) {
-  const stateDir = tempDirs.make(`openclaw-entry-cache-${label}-`);
-  return {
-    agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    sessionKey: `agent:main:${label}`,
-    projection: "list" as const,
-  };
-}
 
 describe("exact session entry read lifetimes", () => {
   it("keeps a selected read through sibling writes and full-list expansion", async () => {
@@ -102,6 +85,7 @@ describe("exact session entry read lifetimes", () => {
       const scope = createSessionScope("selected-read-aba");
       await upsertSessionEntryCore(scope, { sessionId: "same-id", label: "A", updatedAt: 1 });
       const database = openOpenClawAgentDatabase(scope);
+      loadSessionEntry(scope);
       const read = captureSessionEntryRead(database, scope.sessionKey);
       const connection =
         writer === "same connection" ? database.db : new DatabaseSync(database.path);
@@ -655,7 +639,7 @@ describe("SQLite session entry cache", () => {
     expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
   });
 
-  it("scales tracked projection work with changed keys without parsing saved prompts", async () => {
+  it("scales native tracked projection work with changed keys without parsing saved prompts", async () => {
     const scope = createSessionScope("changed-key-scaling");
     const rowCount = 24;
     for (let index = 0; index < rowCount; index++) {
@@ -679,7 +663,9 @@ describe("SQLite session entry cache", () => {
         updatedAt: 1_000 + index,
         skillsSnapshot: { prompt: "large skill prompt".repeat(8192), skills: [] },
       };
-      await upsertSessionEntryCore({ ...scope, sessionKey }, entry);
+      runOpenClawAgentWriteTransaction((database) => {
+        writeSessionEntry(database, sessionKey, entry);
+      }, scope);
     }
 
     const entries = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
@@ -691,7 +677,7 @@ describe("SQLite session entry cache", () => {
     ).toBe(true);
   });
 
-  it("patches only the tracked row after a same-process upsert", async () => {
+  it("patches only the tracked row after a native write", async () => {
     const scope = createSessionScope("write-through");
     const siblingScope = { ...scope, sessionKey: "agent:main:write-through-sibling" };
     await upsertSessionEntryCore(scope, {
@@ -712,11 +698,14 @@ describe("SQLite session entry cache", () => {
     const siblingEntryBefore = cachedBefore.entries.get(siblingScope.sessionKey);
 
     parseSessionEntryCalls.mockClear();
-    await upsertSessionEntryCore(scope, {
-      label: "projection-probe-after",
-      updatedAt: 2,
-      skillsSnapshot: { prompt: "updated skill prompt", skills: [] },
-    });
+    runOpenClawAgentWriteTransaction((current) => {
+      writeSessionEntry(current, scope.sessionKey, {
+        sessionId: "write-through",
+        label: "projection-probe-after",
+        updatedAt: 2,
+        skillsSnapshot: { prompt: "updated skill prompt", skills: [] },
+      });
+    }, scope);
     parseSessionEntryCalls.mockClear();
     const after = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
 
@@ -738,7 +727,7 @@ describe("SQLite session entry cache", () => {
     expect(loadSessionEntry(scope)?.skillsSnapshot?.prompt).toBe("updated skill prompt");
   });
 
-  it("adds a tracked upsert to a warm snapshot without reparsing siblings", async () => {
+  it("adds a native write to a warm snapshot without reparsing siblings", async () => {
     const scope = createSessionScope("write-through-insert");
     await upsertSessionEntryCore(scope, {
       label: "projection-probe-existing",
@@ -753,11 +742,13 @@ describe("SQLite session entry cache", () => {
     const insertedScope = { ...scope, sessionKey: "agent:main:write-through-inserted" };
 
     parseSessionEntryCalls.mockClear();
-    await upsertSessionEntryCore(insertedScope, {
-      label: "projection-probe-inserted",
-      sessionId: "write-through-inserted",
-      updatedAt: 2,
-    });
+    runOpenClawAgentWriteTransaction((current) => {
+      writeSessionEntry(current, insertedScope.sessionKey, {
+        label: "projection-probe-inserted",
+        sessionId: "write-through-inserted",
+        updatedAt: 2,
+      });
+    }, scope);
     parseSessionEntryCalls.mockClear();
     const after = listSessionEntriesCore({ ...scope, clone: false, projection: "list" });
 

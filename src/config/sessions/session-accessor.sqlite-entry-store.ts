@@ -144,7 +144,8 @@ export function readUnchangedLifecycleTargetSnapshot(
       .where("session_key", "in", sqliteStringSet(persisted.lookupKeys))
       .orderBy("session_key", "asc"),
   ).rows;
-  return isDeepStrictEqual(rows, persisted.rows) ? prepared : undefined;
+  // Worker transfer normalizes SQLite row prototypes; only persisted column values matter.
+  return isDeepStrictEqual(rows, persisted.rows, { skipPrototype: true }) ? prepared : undefined;
 }
 
 export function resolveLifecyclePrimaryEntry(

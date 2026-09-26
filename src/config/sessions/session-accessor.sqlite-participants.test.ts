@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -70,8 +71,8 @@ describe("SQLite session participants", () => {
           },
           { skipMaintenance: true },
         );
-        // Gateway row projections borrow this committed cache without another freshness read.
-        expect(readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey)).toMatchObject({
+        expect(readCommittedSessionEntryCache(database.db)).toBeUndefined();
+        expect(listSessionEntriesCore({ ...scope, projection: "list" })[0]?.entry).toMatchObject({
           label: "committed",
           participants: [{ identity: remote("after") }],
           participantCount: 1,
@@ -635,6 +636,7 @@ describe("SQLite session participants", () => {
           identity: remote("same-id", "other-workspace"),
           promptedAt: 40,
         });
+        await closeOpenClawAgentDatabasesAsync(state.root);
         closeOpenClawAgentDatabasesForTest();
         const records = listSessionParticipantsReadOnly(scope).get(scope.sessionKey) ?? [];
         expect(records).toHaveLength(4);

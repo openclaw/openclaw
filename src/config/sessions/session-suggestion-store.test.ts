@@ -1,9 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import {
@@ -17,6 +14,10 @@ import {
 
 const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
 const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
+const suggestionFixture = {
+  prefix: "openclaw-session-suggestions-",
+  layout: "state-only",
+} as const;
 
 function resolvePendingSuggestion(params: {
   scope: { agentId: string; env: NodeJS.ProcessEnv; sessionKey: string };
@@ -39,12 +40,9 @@ function resolvePendingSuggestion(params: {
     : null;
 }
 
-afterEach(() => closeOpenClawAgentDatabasesForTest());
-
 describe("session suggestion store", () => {
   it("keeps deterministic rows and resolves only pending suggestions", async () => {
-    await withTestDir({ prefix: "openclaw-session-suggestions-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState(suggestionFixture, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
 
@@ -92,8 +90,7 @@ describe("session suggestion store", () => {
   });
 
   it("does not recreate a missing canonical suggestions table", async () => {
-    await withTestDir({ prefix: "openclaw-session-suggestions-missing-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState(suggestionFixture, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
       const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -111,8 +108,7 @@ describe("session suggestion store", () => {
   });
 
   it("binds writes to the session instance and clears rows on replacement", async () => {
-    await withTestDir({ prefix: "openclaw-session-suggestions-reset-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState(suggestionFixture, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
       addSessionSuggestion(scope, {
@@ -135,8 +131,7 @@ describe("session suggestion store", () => {
   });
 
   it("skips suggestion identity checks only when the expected instance is omitted", async () => {
-    await withTestDir({ prefix: "openclaw-session-suggestions-identity-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState(suggestionFixture, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
       const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -188,8 +183,7 @@ describe("session suggestion store", () => {
     ["embedded NUL", "a\0b", true],
     ["lone surrogate", "\ud800", false],
   ] as const)("bounds pending suggestions for %s author IDs", async (_, authorId, capped) => {
-    await withTestDir({ prefix: "openclaw-session-suggestions-limit-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState(suggestionFixture, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
       for (let index = 0; index < MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR; index += 1) {
@@ -229,8 +223,7 @@ describe("session suggestion store", () => {
   });
 
   it("checks the session cap before the author cap and frees admission after resolution", async () => {
-    await withTestDir({ prefix: "openclaw-session-suggestions-session-limit-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState(suggestionFixture, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
       for (let index = 0; index < 100; index += 1) {
@@ -257,8 +250,7 @@ describe("session suggestion store", () => {
   });
 
   it("prunes old resolved suggestions on subsequent writes", async () => {
-    await withTestDir({ prefix: "openclaw-session-suggestions-retention-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState(suggestionFixture, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
       for (let index = 0; index <= MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS; index += 1) {
@@ -287,8 +279,7 @@ describe("session suggestion store", () => {
   });
 
   it("durably claims dispatch and permits only same-action stale recovery", async () => {
-    await withTestDir({ prefix: "openclaw-session-suggestions-claim-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+    await withOpenClawTestState(suggestionFixture, async ({ env }) => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
       addSessionSuggestion(scope, {
