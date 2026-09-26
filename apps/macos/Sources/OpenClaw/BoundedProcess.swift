@@ -36,7 +36,7 @@ enum BoundedProcess {
         let configuration = Configuration(
             executable: .path(.init(path)),
             arguments: Arguments(arguments),
-            environment: environment.map(ManagedProcess.environment(from:)) ?? .inherit,
+            environment: environment.map(self.environment(from:)) ?? .inherit,
             workingDirectory: workingDirectory.map { .init($0) },
             platformOptions: platformOptions)
         let executionResult = try await Subprocess.run(
@@ -91,5 +91,15 @@ enum BoundedProcess {
             Int32(code)
         }
         return BoundedProcessResult(output: data, terminationStatus: terminationStatus)
+    }
+
+    private static func environment(from values: [String: String]) -> Environment {
+        var converted: [Environment.Key: String] = [:]
+        converted.reserveCapacity(values.count)
+        for (key, value) in values {
+            guard let environmentKey = Environment.Key(rawValue: key) else { continue }
+            converted[environmentKey] = value
+        }
+        return .custom(converted)
     }
 }
