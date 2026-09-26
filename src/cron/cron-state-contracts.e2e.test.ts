@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { reloadTaskRegistryFromStoreAsync } from "../tasks/task-registry-state.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
@@ -13,9 +17,10 @@ import { cronStoreKey } from "./store/key.js";
 const BASE_TIME_ISO = "2026-01-15T13:55:00.000Z";
 const logger = createNoopLogger();
 
-installCronTestHooks({ logger, baseTimeIso: BASE_TIME_ISO });
+installCronTestHooks({ logger, fakeTimers: false });
 
 function createService(params: {
+  scheduler: CronServiceDeps["scheduler"];
   storePath: string;
   enqueueSystemEvent?: CronServiceDeps["enqueueSystemEvent"];
   requestHeartbeat?: CronServiceDeps["requestHeartbeat"];
@@ -23,6 +28,7 @@ function createService(params: {
   onEvent?: CronServiceDeps["onEvent"];
 }) {
   return new CronService({
+    scheduler: params.scheduler,
     storePath: params.storePath,
     cronEnabled: true,
     log: logger,
@@ -42,6 +48,8 @@ describe("cron state contracts", () => {
         resetTaskRegistryForTests({ persist: false });
         const storePath = state.path("cron", "jobs.json");
         const baseTimeMs = Date.parse(BASE_TIME_ISO);
+        const clock = createGatewaySchedulerClock(baseTimeMs);
+        const scheduler = createTestGatewayScheduler(clock.clock);
         const atMs = baseTimeMs + 1_000;
         let resolveSystemEvent!: () => void;
         const systemEventEnqueued = new Promise<void>((resolve) => {
@@ -67,7 +75,7 @@ describe("cron state contracts", () => {
         let reloaded: CronService | undefined;
 
         try {
-          first = createService({ storePath, enqueueSystemEvent, requestHeartbeat });
+          first = createService({ scheduler, storePath, enqueueSystemEvent, requestHeartbeat });
           await first.start();
 
           const atJob = await first.add({
@@ -131,6 +139,7 @@ describe("cron state contracts", () => {
           first = undefined;
 
           restarted = createService({
+            scheduler,
             storePath,
             enqueueSystemEvent,
             requestHeartbeat,
@@ -161,7 +170,7 @@ describe("cron state contracts", () => {
             ]),
           );
 
-          await vi.advanceTimersByTimeAsync(1_005);
+          await clock.advanceBy(1_005);
           await restarted.status();
           await systemEventEnqueued;
           await finished;
@@ -183,7 +192,7 @@ describe("cron state contracts", () => {
           restarted.stop();
           restarted = undefined;
 
-          reloaded = createService({ storePath, enqueueSystemEvent, requestHeartbeat });
+          reloaded = createService({ scheduler, storePath, enqueueSystemEvent, requestHeartbeat });
           await reloaded.start();
           expect(
             (await reloaded.list({ includeDisabled: true })).map((job) => job.id).toSorted(),
@@ -205,6 +214,8 @@ describe("cron state contracts", () => {
         resetTaskRegistryForTests({ persist: false });
         const storePath = state.path("cron", "jobs.json");
         const atMs = Date.parse(BASE_TIME_ISO) + 1_000;
+        const firstClock = createGatewaySchedulerClock(Date.parse(BASE_TIME_ISO));
+        const secondClock = createGatewaySchedulerClock(Date.parse(BASE_TIME_ISO));
         const runIsolatedAgentJob = vi.fn(async () => ({
           status: "ok" as const,
           summary: "isolated state contract completed",
@@ -225,7 +236,12 @@ describe("cron state contracts", () => {
         let restarted: CronService | undefined;
 
         try {
-          first = createService({ storePath, runIsolatedAgentJob, onEvent });
+          first = createService({
+            scheduler: createTestGatewayScheduler(firstClock.clock),
+            storePath,
+            runIsolatedAgentJob,
+            onEvent,
+          });
           await first.start();
           const job = await first.add({
             id: "state-contract-isolated-dedup",
@@ -239,10 +255,15 @@ describe("cron state contracts", () => {
             delivery: { mode: "none" },
           });
 
-          second = createService({ storePath, runIsolatedAgentJob, onEvent });
+          second = createService({
+            scheduler: createTestGatewayScheduler(secondClock.clock),
+            storePath,
+            runIsolatedAgentJob,
+            onEvent,
+          });
           await second.start();
 
-          await vi.advanceTimersByTimeAsync(1_005);
+          await Promise.all([firstClock.advanceBy(1_005), secondClock.advanceBy(1_005)]);
           await first.status();
           await second.status();
           await finished;
@@ -281,7 +302,12 @@ describe("cron state contracts", () => {
           });
           expect(reloadedHistory.entries).toEqual([persistedEntry]);
 
-          restarted = createService({ storePath, runIsolatedAgentJob, onEvent });
+          restarted = createService({
+            scheduler: createTestGatewayScheduler(firstClock.clock),
+            storePath,
+            runIsolatedAgentJob,
+            onEvent,
+          });
           await restarted.start();
           expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
           expect(

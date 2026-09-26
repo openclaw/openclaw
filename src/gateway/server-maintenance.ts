@@ -26,7 +26,7 @@ import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkInspectors,
 } from "../infra/gateway-active-work.js";
-import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { generateSecureInt } from "../infra/secure-random.js";
@@ -37,7 +37,6 @@ import {
   isGatewayWorkAdmissionClosed,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
 import {
@@ -130,7 +129,23 @@ export function startGatewayMaintenanceTimers(params: {
   skillUsageCleanup: () => Promise<void>;
 } {
   const restartDrainSignal = getGatewayRestartDrainSignal();
-  const periodicWork = new AsyncWorkScope();
+  const { scheduler } = params;
+  const periodicJobs: GatewayScheduledJob[] = [];
+  const schedulePeriodic = (
+    id: string,
+    everyMs: number,
+    run: () => void | Promise<unknown>,
+    immediate = false,
+  ) => {
+    periodicJobs.push(
+      scheduler.schedule({
+        id: `maintenance:${id}`,
+        atMs: scheduler.now() + (immediate ? 0 : everyMs),
+        everyMs,
+        run,
+      }),
+    );
+  };
   let periodicTasksStopPromise: Promise<void> | undefined;
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
@@ -177,7 +192,7 @@ export function startGatewayMaintenanceTimers(params: {
   };
 
   const hostThawRecovery = createHostThawRecovery({
-    nowMs: Date.now,
+    nowMs: () => scheduler.now(),
     restartChannelsIfIdle,
     refreshHealth: async () => {
       await params.refreshGatewayHealthSnapshot({ probe: true });
@@ -188,58 +203,58 @@ export function startGatewayMaintenanceTimers(params: {
     logger: params.logHealth,
   });
 
-  let nextTelemetryCheckAtMs = Date.now() + generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS);
-  let telemetryCheckInFlight: Promise<void> | undefined;
-  const performTelemetryCheck = () => {
-    telemetryCheckInFlight ??= periodicWork
-      .track(() => checkTelemetryUpdate(params.getRuntimeConfig, { surface: "gateway" }))
-      .then(() => undefined)
-      .catch(() => {})
-      .finally(() => {
-        telemetryCheckInFlight = undefined;
-      });
+  let telemetryJob: GatewayScheduledJob | undefined;
+  const scheduleTelemetry = (delayMs: number) => {
+    telemetryJob = scheduler.schedule({
+      id: "maintenance:telemetry",
+      delayMs,
+      run: async () => {
+        try {
+          await checkTelemetryUpdate(params.getRuntimeConfig, { surface: "gateway" });
+        } catch {
+          // Telemetry retries on its next jittered maintenance deadline.
+        } finally {
+          if (!periodicTasksStopPromise) {
+            scheduleTelemetry(
+              TELEMETRY_MAINTENANCE_INTERVAL_MS +
+                generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS),
+            );
+          }
+        }
+      },
+    });
   };
-  // periodic keepalive
-  const tickInterval = setInterval(() => {
-    void periodicWork
-      .track(checkGatewayInstallationReplacement)
-      .catch((error: unknown) =>
-        params.logHealth.error(`installation check failed: ${formatError(error)}`),
-      );
-    void periodicWork
-      .track(() => hostThawRecovery.tick())
+  if (!params.isNixMode) {
+    scheduleTelemetry(generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS));
+  }
+  schedulePeriodic("installation", TICK_INTERVAL_MS, () =>
+    checkGatewayInstallationReplacement().catch((error: unknown) =>
+      params.logHealth.error(`installation check failed: ${formatError(error)}`),
+    ),
+  );
+  schedulePeriodic("host-thaw", TICK_INTERVAL_MS, () =>
+    hostThawRecovery
+      .tick()
       .catch((error: unknown) =>
         params.logHealth.error(`host thaw recovery failed: ${formatError(error)}`),
-      );
-    const now = Date.now();
-    if (!params.isNixMode && now >= nextTelemetryCheckAtMs) {
-      nextTelemetryCheckAtMs =
-        now +
-        TELEMETRY_MAINTENANCE_INTERVAL_MS +
-        generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS);
-      performTelemetryCheck();
-    }
-    const payload = { ts: now };
+      ),
+  );
+  schedulePeriodic("tick", TICK_INTERVAL_MS, () => {
+    const payload = { ts: scheduler.now() };
     params.broadcast("tick", payload);
     params.nodeSendToAllSubscribed("tick", payload);
-  }, TICK_INTERVAL_MS);
+  });
 
-  // Keep cached health warm without request-time live channel probes. Explicit
-  // status/doctor probe paths still pass probe=true when the operator asks.
-  const healthInterval = setInterval(() => {
-    void periodicWork
-      .track(() => params.refreshGatewayHealthSnapshot({ probe: false }))
-      .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
-  }, HEALTH_REFRESH_INTERVAL_MS);
-
-  // Prime cache so first client gets a snapshot without waiting.
-  if (!restartDrainSignal.aborted) {
-    void periodicWork
-      .track(() => params.refreshGatewayHealthSnapshot({ probe: false }))
-      .catch((err: unknown) =>
-        params.logHealth.error(`initial refresh failed: ${formatError(err)}`),
-      );
-  }
+  // Automatic refresh warms the cache; explicit status and Doctor requests own live probes.
+  schedulePeriodic(
+    "health",
+    HEALTH_REFRESH_INTERVAL_MS,
+    () =>
+      params
+        .refreshGatewayHealthSnapshot({ probe: false })
+        .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`)),
+    true,
+  );
 
   const runWorktreeGc =
     params.runWorktreeGc ??
@@ -252,10 +267,9 @@ export function startGatewayMaintenanceTimers(params: {
         limits: resolveWorktreeCleanupLimits(),
       });
     });
-  let worktreeGcInFlight: Promise<void> | undefined;
-  const performWorktreeGc = () =>
-    (worktreeGcInFlight ??= periodicWork
-      .track(runWorktreeGc)
+  // Retention is hourly best-effort work; leave the first hour free for Gateway warmup.
+  schedulePeriodic("worktrees", WORKTREE_GC_INTERVAL_MS, () =>
+    runWorktreeGc()
       .then((result) => {
         if (!result) {
           return;
@@ -268,12 +282,8 @@ export function startGatewayMaintenanceTimers(params: {
       })
       .catch((err: unknown) => {
         params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);
-      })
-      .finally(() => {
-        worktreeGcInFlight = undefined;
-      }));
-  // Retention is hourly best-effort work; leave the first hour free for Gateway warmup.
-  const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
+      }),
+  );
 
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
@@ -326,34 +336,22 @@ export function startGatewayMaintenanceTimers(params: {
   };
   void performDeliveryQueueMediaGc();
 
-  let devicePairSetupCompletionGcInFlight: Promise<void> | null = null;
-  const performDevicePairSetupCompletionGc = (nowMs: number) => {
-    if (devicePairSetupCompletionGcInFlight) {
-      return devicePairSetupCompletionGcInFlight;
-    }
-    devicePairSetupCompletionGcInFlight = periodicWork
-      .track(() => pruneExpiredDevicePairSetupCompletions({ nowMs }))
-      .then(() => undefined)
-      .catch((error: unknown) => {
+  schedulePeriodic(
+    "device-pair-setup",
+    60_000,
+    () =>
+      pruneExpiredDevicePairSetupCompletions({ nowMs: scheduler.now() }).catch((error: unknown) => {
         params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
-      })
-      .finally(() => {
-        devicePairSetupCompletionGcInFlight = null;
-      });
-    return devicePairSetupCompletionGcInFlight;
-  };
-  if (!restartDrainSignal.aborted) {
-    void performDevicePairSetupCompletionGc(Date.now());
-  }
+      }),
+    true,
+  );
 
   const skillUsageCleanup = registerSkillUsageTracking();
 
-  // dedupe cache cleanup
-  const dedupeCleanup = setInterval(() => {
+  schedulePeriodic("dedupe", 60_000, () => {
     const AGENT_RUN_SEQ_MAX = 10_000;
-    const now = Date.now();
+    const now = scheduler.now();
     params.chatRunState.toolEventRecipients.pruneExpired(now);
-    void performDevicePairSetupCompletionGc(now);
     if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
       void performDeliveryQueueMediaGc();
     }
@@ -504,7 +502,7 @@ export function startGatewayMaintenanceTimers(params: {
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();
-  }, 60_000);
+  });
 
   const playbackTranscodeCacheCleanupLoader = createMediaCleanupLoader(
     "playback transcode cache cleanup",
@@ -616,17 +614,9 @@ export function startGatewayMaintenanceTimers(params: {
   const stopPeriodicTasks = () => {
     if (!periodicTasksStopPromise) {
       restartDrainSignal.removeEventListener("abort", onRestartDrain);
-      clearInterval(tickInterval);
-      clearInterval(healthInterval);
-      clearInterval(dedupeCleanup);
-      clearInterval(worktreeCleanup);
       periodicTasksStopPromise = Promise.allSettled([
-        // Retire producers first, then let admitted callbacks and their cleanup
-        // finish before closing their scope or aborting its cancellation signal.
-        AsyncWorkScope.runWhenAllIdle(
-          () => [periodicWork],
-          () => periodicWork.drain(),
-        ),
+        ...periodicJobs.map((job) => job.stop()),
+        telemetryJob?.stop(),
         sessionColdStorageMaintenance.stop(),
         stopMediaCleanup(),
       ]).then((results) => {
