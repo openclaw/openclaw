@@ -405,8 +405,54 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       const agentPath = window.location.pathname.match(
         /^\/settings\/agents\/([^/]+)\/(overview|files|tools|skills|channels|cron)$/u,
       );
+      const groupMode = document.querySelector<HTMLElement>(
+        "wa-dropdown.session-group-defaults__mode-dropdown",
+      );
+      const groupMenu = groupMode?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const groupPopup = groupMode?.shadowRoot?.querySelector<HTMLElement>("wa-popup");
+      const groupPopupSurface =
+        groupPopup?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
+      const groupFolderPicker = document.querySelector<HTMLElement>(
+        "wa-popover.session-group-defaults__folder-popover",
+      );
       return {
         failureSummary: {
+          sessionGroupDefaults: groupMode
+            ? {
+                open: Reflect.get(groupMode, "open") === true,
+                expanded: safeValue(
+                  groupMode.querySelector('[slot="trigger"]')?.getAttribute("aria-expanded"),
+                  ["true", "false"],
+                ),
+                menuInert: groupMenu?.inert ?? null,
+                menuVisible: groupMenu?.checkVisibility({ visibilityProperty: true }) ?? null,
+                popupActive: groupPopup ? Reflect.get(groupPopup, "active") === true : null,
+                nativePopupOpen: groupPopupSurface?.matches(":popover-open") ?? null,
+                folderPickerOpen: groupFolderPicker
+                  ? Reflect.get(groupFolderPicker, "open") === true
+                  : null,
+                folderDialogOpen:
+                  groupFolderPicker?.shadowRoot?.querySelector<HTMLDialogElement>("dialog")?.open ??
+                  null,
+                items: ["local", "worktree"].map((value) => {
+                  const item = groupMode.querySelector<HTMLElement>(
+                    `wa-dropdown-item[value="${value}"]`,
+                  );
+                  return {
+                    value,
+                    present: Boolean(item),
+                    role: safeValue(item?.getAttribute("role"), [
+                      "menuitem",
+                      "menuitemcheckbox",
+                      "menuitemradio",
+                    ]),
+                    visible: item?.checkVisibility({ visibilityProperty: true }) ?? null,
+                    rectCount: item?.getClientRects().length ?? 0,
+                    iconCount: item?.querySelectorAll('[slot="icon"]').length ?? 0,
+                  };
+                }),
+              }
+            : null,
           canvasWidgets: [...document.querySelectorAll("openclaw-canvas-widget-view")]
             .slice(0, 8)
             .map((widget) => ({

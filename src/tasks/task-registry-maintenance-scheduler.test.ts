@@ -1,20 +1,50 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createTaskMaintenanceScheduler } from "./task-registry-maintenance-scheduler.js";
 
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let gatewayScheduler: GatewayScheduler;
 beforeEach(() => {
   gatewayWork.resetGatewayWorkAdmission();
-  vi.useFakeTimers();
+  clock = createGatewaySchedulerClock();
+  gatewayScheduler = createTestGatewayScheduler(clock.clock);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await gatewayScheduler.stop();
   vi.restoreAllMocks();
   gatewayWork.resetGatewayWorkAdmission();
-  vi.useRealTimers();
 });
 
 describe("task maintenance admission diagnostics", () => {
+  it("joins scheduler shutdown while maintenance is still waiting behind suspension", async () => {
+    const run = vi.fn(async () => {});
+    const onError = vi.fn();
+    const scheduler = createTaskMaintenanceScheduler(run, onError);
+    const suspension = gatewayWork.tryBeginGatewaySuspendAdmission(() => {});
+    if (!suspension?.commit()) {
+      throw new Error("Expected to suspend task admission");
+    }
+    try {
+      scheduler.start(gatewayScheduler);
+      const tick = clock.advanceBy(5_000);
+      await gatewayScheduler.stop();
+      await tick;
+      expect(run).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+      expect(gatewayWork.getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      await scheduler.stop();
+      suspension.release();
+    }
+  });
+
   it.each([false, true])(
     "does not report a refused sweep when restart begins after suspension=%s",
     async (suspended) => {
@@ -26,12 +56,11 @@ describe("task maintenance admission diagnostics", () => {
         throw new Error("Expected to suspend task admission");
       }
       try {
-        scheduler.start();
-        if (suspended) {
-          await vi.advanceTimersByTimeAsync(5_000);
-        }
+        scheduler.start(gatewayScheduler);
+        const pending = suspended ? clock.advanceBy(5_000) : undefined;
         gatewayWork.markGatewayRestartDraining();
-        await vi.advanceTimersByTimeAsync(60_000);
+        await pending;
+        await clock.advanceBy(60_000);
         expect(run).not.toHaveBeenCalled();
         expect(onError).not.toHaveBeenCalled();
         expect(gatewayWork.getActiveGatewayRootWorkCount()).toBe(0);
@@ -52,8 +81,8 @@ describe("task maintenance admission diagnostics", () => {
     const scheduler = createTaskMaintenanceScheduler(run, onError);
     try {
       gatewayWork.markGatewayRestartDraining();
-      scheduler.start();
-      await vi.advanceTimersByTimeAsync(5_000);
+      scheduler.start(gatewayScheduler);
+      await clock.advanceBy(5_000);
       expect(run).not.toHaveBeenCalled();
       expect(onError).toHaveBeenCalledExactlyOnceWith(failure);
     } finally {
@@ -73,18 +102,20 @@ describe("task maintenance admission diagnostics", () => {
     const onError = vi.fn();
     const scheduler = createTaskMaintenanceScheduler(run, onError);
     try {
-      scheduler.start();
-      await vi.advanceTimersByTimeAsync(5_000);
+      scheduler.start(gatewayScheduler);
+      const tick = clock.advanceBy(5_000);
       expect(run).toHaveBeenCalledOnce();
       gatewayWork.markGatewayRestartDraining();
+      const gatewayStopping = gatewayScheduler.stop();
       let stopped = false;
       const stopping = scheduler.stop().then(() => {
         stopped = true;
       });
-      await vi.advanceTimersByTimeAsync(0);
       expect(stopped).toBe(false);
       sweep.reject(failure);
       await stopping;
+      await gatewayStopping;
+      await tick;
       expect(onError).toHaveBeenCalledExactlyOnceWith(failure);
       expect(gatewayWork.getActiveGatewayRootWorkCount()).toBe(0);
     } finally {

@@ -5,13 +5,16 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createRequestReceipt,
   createTelegramFailureDiagnostic,
   requestIdentitySchema,
 } from "../../scripts/mantis/request-proof.ts";
 import { startTelegramProofIngress } from "../../scripts/mantis/telegram-proof-ingress.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const identity = requestIdentitySchema.parse({
   request_id: "a".repeat(64),
@@ -134,7 +137,8 @@ describe("Telegram failure diagnostics", () => {
   ] as const)(
     "records %s through the real ingress without raw error or request data",
     async (expected) => {
-      const root = await mkdtemp(path.join(os.tmpdir(), "tg-diagnostic-ingress-"));
+      // Keep the socket below Darwin's 104-byte limit inside the worker temp namespace.
+      const root = tempDirs.make("sock-");
       const socket =
         process.platform === "win32"
           ? `\\\\.\\pipe\\mantis-${randomUUID()}`
@@ -206,7 +210,6 @@ describe("Telegram failure diagnostics", () => {
         expect(ingress.getDiagnostics()).toHaveLength(16);
       } finally {
         await ingress.close();
-        await rm(root, { recursive: true, force: true });
       }
     },
   );

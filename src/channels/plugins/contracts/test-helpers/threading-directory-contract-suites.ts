@@ -88,13 +88,6 @@ function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
   expect(binding.labelNoun.trim()).not.toBe("");
 }
 
-/** Asserts that a plugin declares the threading adapter under test. */
-export function expectChannelThreadingBaseContract(
-  plugin: Pick<ChannelPlugin, "id" | "threading">,
-) {
-  expect(plugin.threading).toBeDefined();
-}
-
 /** Exercises optional threading hooks and checks normalized return shapes. */
 export function expectChannelThreadingReturnValuesNormalized(
   plugin: Pick<ChannelPlugin, "id" | "threading">,

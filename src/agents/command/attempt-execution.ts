@@ -83,6 +83,7 @@ import {
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import { resolveHarnessAuthProfileSelection } from "./attempt-auth-selection.js";
+import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -175,13 +176,6 @@ export function runAgentAttempt(params: {
     authProfileIdSource?: "auto" | "user";
   }) => void;
 }) {
-  const onRuntimeActivity = (info: { phase: string }) => {
-    // CLI preparation and child launch do not prove a native turn. Parsed
-    // assistant/tool activity does, even when the backend omits lifecycle events.
-    if (info.phase === "assistant_output_started" || info.phase === "tool_execution_started") {
-      void params.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
-    }
-  };
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
   const sessionAuthProfileSource = resolveCollapsedSessionAuthPinSource(params.sessionEntry);
   // An explicit session choice owns the conversation. Otherwise the profile
@@ -489,13 +483,16 @@ export function runAgentAttempt(params: {
       runTimeoutOverrideMs: params.runTimeoutOverrideMs,
       runId: params.runId,
       lifecycleGeneration: params.lifecycleGeneration,
-      onExecutionPhase: onRuntimeActivity,
+      onExecutionPhase: (info) => emitAgentAttemptRuntimeStart(info, params.onAgentEvent),
       lane: params.opts.lane,
       swarmExecutionLane: params.opts.swarmExecutionLane,
       extraSystemPrompt: params.opts.extraSystemPrompt,
       inputProvenance: params.opts.inputProvenance,
       skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
       sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+      taskSuggestionDeliveryMode: params.opts.taskSuggestionDeliveryMode,
+      clientCaps: params.opts.clientCaps,
+      gatewayUiCommandTarget: params.opts.gatewayUiCommandTarget,
       media: params.opts.media,
       skillsSnapshot: params.skillsSnapshot,
       streamParams: params.opts.streamParams,
@@ -894,6 +891,7 @@ export function runAgentAttempt(params: {
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
     clientTools: params.opts.clientTools,
+    toolBindings: params.opts.toolBindings,
     provider: embeddedAgentProvider,
     requestedRouteResolution: "resolved",
     modelThinkingCapability: params.modelThinkingCapability,

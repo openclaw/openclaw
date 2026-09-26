@@ -1,8 +1,9 @@
-// Cron store load tests cover invalid persisted main job recovery.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Cron store load tests cover invalid persisted main job recovery.
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import {
   createNoopLogger,
@@ -55,6 +56,8 @@ describe("CronService store load", () => {
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
 
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       log: noopLogger,

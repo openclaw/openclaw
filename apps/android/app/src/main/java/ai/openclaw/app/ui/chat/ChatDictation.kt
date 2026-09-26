@@ -190,10 +190,7 @@ internal class AndroidChatDictationRecognizer(
     retireRecognizer()
   }
 
-  override fun destroy() {
-    generation += 1
-    retireRecognizer()
-  }
+  override fun destroy() = cancel()
 
   private fun emit(
     operation: Long,

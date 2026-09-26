@@ -1,7 +1,7 @@
 // Timer regression tests cover historical cron timer scheduling failures.
 import { describe, expect, it, vi } from "vitest";
 import {
-  createCronRegressionState,
+  createCronRegressionState as createCronServiceState,
   createAbortAwareIsolatedRunner,
   createDefaultIsolatedRunner,
   createDueIsolatedJob,
@@ -22,6 +22,10 @@ import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import { cancelTaskById, listTaskRecords } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
+import {
   advanceCronActiveJobGeneration,
   clearCronJobActive,
   isCronJobActive,
@@ -41,7 +45,7 @@ import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-
 import { computeJobNextRunAtMs, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { stop } from "./ops-lifecycle.js";
 import { run as runManualCronJob } from "./ops-run.js";
-import type { CronEvent } from "./state.js";
+import type { CronEvent, CronServiceDeps } from "./state.js";
 import { executeJobCoreWithTimeout, runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
 
@@ -49,19 +53,6 @@ const FAST_TIMEOUT_SECONDS = 1;
 const timerRegressionFixtures = setupCronRegressionFixtures({
   prefix: "cron-service-timer-regressions-",
 });
-
-type CronStateParams = Parameters<typeof createCronRegressionState>[0] & {
-  testAdmissionLimit?: number;
-};
-
-function createCronServiceState(params: CronStateParams) {
-  const { testAdmissionLimit, ...stateParams } = params;
-  const state = createCronRegressionState(stateParams);
-  if (testAdmissionLimit !== undefined) {
-    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - testAdmissionLimit;
-  }
-  return state;
-}
 
 function requireJob(state: { store?: { jobs?: CronJob[] } | null }, id: string): CronJob {
   const job = state.store?.jobs?.find((candidate) => candidate.id === id);
@@ -104,16 +95,15 @@ vi.mock("../../tasks/task-registry-control.runtime.js", async () => {
 
 describe("cron service timer regressions", () => {
   it("caps timer delay to 60s for far-future schedules", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clock = createGatewaySchedulerClock(Date.now());
     const store = timerRegressionFixtures.makeStorePath();
     const state = createCronServiceState({
       storePath: store.storePath,
+      scheduler: createTestGatewayScheduler(clock.clock),
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
 
     state.store = { version: 1, jobs: [] };
-    await saveCronStore(store.storePath, state.store);
-
     state.store.jobs.push({
       id: "far-future",
       name: "far-future",
@@ -126,14 +116,11 @@ describe("cron service timer regressions", () => {
       payload: { kind: "systemEvent", text: "future" },
       state: { nextRunAtMs: Date.parse("2035-01-01T00:00:00.000Z") },
     });
+    await saveCronStore(store.storePath, state.store);
 
     await onTimer(state);
 
-    const delays = timeoutSpy.mock.calls
-      .map(([, delay]) => delay)
-      .filter((delay): delay is number => typeof delay === "number");
-    expect(delays).toContain(60_000);
-    timeoutSpy.mockRestore();
+    expect(clock.armedAtMs).toBe(clock.clock.now() + 60_000);
   });
 
   it("#24355: one-shot job retries then succeeds", async () => {
@@ -1983,7 +1970,7 @@ describe("cron service timer regressions", () => {
         async ({
           job,
           onExecutionStarted,
-        }: Parameters<CronStateParams["runIsolatedAgentJob"]>[0]) => {
+        }: Parameters<CronServiceDeps["runIsolatedAgentJob"]>[0]) => {
           if (job.id === stalled.id) {
             return await runnerResult.promise;
           }
@@ -2228,6 +2215,7 @@ describe("cron service timer regressions", () => {
     vi.useFakeTimers();
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-05-10T08:58:00.000Z");
+    const clock = createGatewaySchedulerClock(scheduledAt);
     const manualJob = createDueIsolatedJob({
       id: "manual-setup-timeout-rearm",
       nowMs: scheduledAt,
@@ -2251,6 +2239,7 @@ describe("cron service timer regressions", () => {
     const state = createCronServiceState({
       storePath: store.storePath,
       nowMs: () => now,
+      scheduler: createTestGatewayScheduler(clock.clock),
       onIsolatedAgentSetupTimeout,
       runIsolatedAgentJob: vi.fn(async ({ job }) => {
         if (job.id === manualJob.id) {
@@ -2265,10 +2254,11 @@ describe("cron service timer regressions", () => {
     const manualRun = runManualCronJob(state, manualJob.id, "force");
     try {
       await manualStarted.promise;
+      await clock.advanceBy(60_100);
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
       await manualRun;
-      await vi.advanceTimersByTimeAsync(1);
+      await clock.advanceBy(1);
 
       expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
       expect(state.timer).not.toBeNull();

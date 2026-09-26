@@ -1,9 +1,19 @@
 // Azure Speech tests cover speech provider plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { azureSpeechTTSMock, listAzureSpeechVoicesMock } = vi.hoisted(() => ({
-  azureSpeechTTSMock: vi.fn(async () => Buffer.from("audio-bytes")),
-  listAzureSpeechVoicesMock: vi.fn(async () => [{ id: "en-US-JennyNeural", name: "Jenny" }]),
+const { azureSpeechTTSMock, listAzureSpeechVoicesMock, resolveGeneratedMediaMaxBytesMock } =
+  vi.hoisted(() => ({
+    azureSpeechTTSMock: vi.fn(async () => Buffer.from("audio-bytes")),
+    listAzureSpeechVoicesMock: vi.fn(async () => [{ id: "en-US-JennyNeural", name: "Jenny" }]),
+    resolveGeneratedMediaMaxBytesMock:
+      vi.fn<
+        typeof import("openclaw/plugin-sdk/media-generation-runtime").resolveGeneratedMediaMaxBytes
+      >(),
+  }));
+
+// The SDK facade imports host worker declarations that trigger unrelated test-worker compilation.
+vi.mock("openclaw/plugin-sdk/media-generation-runtime", () => ({
+  resolveGeneratedMediaMaxBytes: resolveGeneratedMediaMaxBytesMock,
 }));
 
 vi.mock("./tts.js", async (importOriginal) => {
@@ -28,6 +38,7 @@ describe("buildAzureSpeechProvider", () => {
   ] as const;
 
   beforeEach(() => {
+    resolveGeneratedMediaMaxBytesMock.mockReset().mockReturnValue(16 * 1024 * 1024);
     for (const key of envKeys) {
       vi.stubEnv(key, undefined);
     }
@@ -42,6 +53,7 @@ describe("buildAzureSpeechProvider", () => {
 
   afterAll(() => {
     vi.doUnmock("./tts.js");
+    vi.doUnmock("openclaw/plugin-sdk/media-generation-runtime");
     vi.resetModules();
   });
 
@@ -236,18 +248,20 @@ describe("buildAzureSpeechProvider", () => {
     });
   });
 
-  it("applies the configured media byte cap to synthesis requests", async () => {
+  it("forwards the configured media byte cap to synthesis requests", async () => {
     const provider = buildAzureSpeechProvider();
+    const cfg = {
+      agents: {
+        defaults: {
+          mediaMaxMb: 2,
+        },
+      },
+    };
+    resolveGeneratedMediaMaxBytesMock.mockReturnValue(2 * 1024 * 1024);
 
     await provider.synthesize({
       text: "hello",
-      cfg: {
-        agents: {
-          defaults: {
-            mediaMaxMb: 2,
-          },
-        },
-      } as never,
+      cfg,
       providerConfig: {
         apiKey: "key",
         region: "eastus",
@@ -257,6 +271,7 @@ describe("buildAzureSpeechProvider", () => {
       timeoutMs: 30_000,
     });
 
+    expect(resolveGeneratedMediaMaxBytesMock).toHaveBeenCalledExactlyOnceWith(cfg, "audio");
     expect(azureSpeechTTSMock).toHaveBeenCalledWith(
       expect.objectContaining({
         maxBytes: 2 * 1024 * 1024,

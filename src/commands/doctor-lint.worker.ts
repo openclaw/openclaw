@@ -31,7 +31,7 @@ async function runDoctorLintWorker(): Promise<void> {
     withCliCommandCleanup(false, async (cleanup) => {
       let exitCode: number;
       try {
-        const { runDoctorLintCliInProcess } = await import("./doctor-lint.js");
+        const { runDoctorLintCliInProcess } = await import("./doctor-lint-runner.js");
         exitCode = await runDoctorLintCliInProcess(defaultRuntime, opts, true);
       } finally {
         await closeCliResources(cleanup);

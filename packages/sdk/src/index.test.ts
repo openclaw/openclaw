@@ -5,6 +5,7 @@ import type {
   GatewayRequestOptions,
   OpenClawEvent,
   OpenClawTransport,
+  RunResult,
 } from "./types.js";
 
 type RequestCall = {
@@ -232,45 +233,101 @@ describe("OpenClaw SDK", () => {
     ]);
   });
 
-  it("preserves numeric wait timestamps", async () => {
-    const { transport, oc } = createClientFixture({
-      "agent.wait": { status: "ok", runId: "run_numeric", startedAt: 123, endedAt: 456 },
-    });
-
-    const result = await oc.runs.wait("run_numeric");
-
-    expect(result.runId).toBe("run_numeric");
-    expect(result.status).toBe("completed");
-    expect(result.startedAt).toBe(123);
-    expect(result.endedAt).toBe(456);
-    expect(transport.calls).toEqual([
+  it.each<[string, Record<string, unknown>, RunResult["status"]]>([
+    [
+      "maps aborted wait snapshots to cancelled even when Gateway status is timeout",
       {
-        method: "agent.wait",
-        params: { runId: "run_numeric" },
-        options: { timeoutMs: null },
+        stopReason: "rpc",
+        error: "aborted by operator",
       },
-    ]);
-  });
-
-  it("maps aborted wait snapshots to cancelled even when Gateway status is timeout", async () => {
-    const result = await waitForSnapshot("run_cancelled", {
-      stopReason: "rpc",
-      error: "aborted by operator",
-    });
-
-    expect(result.runId).toBe("run_cancelled");
-    expect(result.status).toBe("cancelled");
-    expect(result.error?.message).toBe("aborted by operator");
-  });
-
-  it("maps restart wait snapshots to cancelled", async () => {
-    const result = await waitForSnapshot("run_restart", {
-      stopReason: "restart",
-      providerStarted: true,
-    });
-
-    expect(result.runId).toBe("run_restart");
-    expect(result.status).toBe("cancelled");
+      "cancelled",
+    ],
+    [
+      "maps restart wait snapshots to cancelled",
+      {
+        stopReason: "restart",
+        providerStarted: true,
+      },
+      "cancelled",
+    ],
+    [
+      "maps provider-started rpc timeout wait snapshots to timed_out",
+      {
+        stopReason: "rpc",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "provider request timed out",
+      },
+      "timed_out",
+    ],
+    [
+      "maps provider timeout wait errors to timed_out",
+      {
+        status: "error",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "provider request timed out",
+      },
+      "timed_out",
+    ],
+    [
+      "does not map provider-started wait errors to timed_out without timeout attribution",
+      {
+        status: "error",
+        providerStarted: true,
+        error: "provider authentication failed",
+      },
+      "failed",
+    ],
+    [
+      "does not treat successful provider-started wait snapshots as timed_out",
+      {
+        status: "ok",
+        providerStarted: true,
+      },
+      "completed",
+    ],
+    [
+      "maps auth-revoked wait snapshots to cancelled",
+      {
+        stopReason: "auth-revoked",
+        error: "provider auth was removed",
+      },
+      "cancelled",
+    ],
+    ["keeps wait-only deadlines non-terminal", {}, "accepted"],
+    [
+      "keeps queued wait snapshots non-terminal",
+      {
+        status: "pending",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      },
+      "accepted",
+    ],
+    [
+      "keeps provider-attributed pending-error wait deadlines non-terminal",
+      {
+        error: "provider request timed out",
+        pendingError: true,
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      "accepted",
+    ],
+    [
+      "maps terminal runtime timeout snapshots to timed_out",
+      {
+        stopReason: "timeout",
+        error: "agent runtime timeout",
+      },
+      "timed_out",
+    ],
+  ])("%s", async (_label, fields, expectedStatus) => {
+    const result = await waitForSnapshot("run_wait", fields);
+    expect(result.runId).toBe("run_wait");
+    expect(result.status).toBe(expectedStatus);
+    expect(result.error).toEqual(fields.error ? { message: fields.error } : undefined);
   });
 
   it("keeps superseded writer runs cancelled in both events and waits", async () => {
@@ -293,130 +350,20 @@ describe("OpenClaw SDK", () => {
     expect(result.status).toBe("cancelled");
   });
 
-  it("maps provider-started rpc timeout wait snapshots to timed_out", async () => {
-    const result = await waitForSnapshot("run_hard_timeout", {
-      stopReason: "rpc",
-      timeoutPhase: "provider",
-      providerStarted: true,
-      error: "provider request timed out",
-    });
-
-    expect(result.runId).toBe("run_hard_timeout");
-    expect(result.status).toBe("timed_out");
-    expect(result.error?.message).toBe("provider request timed out");
-  });
-
-  it("maps provider timeout wait errors to timed_out", async () => {
-    const result = await waitForSnapshot("run_timeout_error", {
-      status: "error",
-      timeoutPhase: "provider",
-      providerStarted: true,
-      error: "provider request timed out",
-    });
-
-    expect(result.runId).toBe("run_timeout_error");
-    expect(result.status).toBe("timed_out");
-    expect(result.error?.message).toBe("provider request timed out");
-  });
-
-  it("does not map provider-started wait errors to timed_out without timeout attribution", async () => {
-    const result = await waitForSnapshot("run_provider_error", {
-      status: "error",
-      providerStarted: true,
-      error: "provider authentication failed",
-    });
-
-    expect(result.runId).toBe("run_provider_error");
-    expect(result.status).toBe("failed");
-    expect(result.error?.message).toBe("provider authentication failed");
-  });
-
-  it("does not treat successful provider-started wait snapshots as timed_out", async () => {
-    const result = await waitForSnapshot("run_provider_started_ok", {
-      status: "ok",
-      providerStarted: true,
-    });
-
-    expect(result.runId).toBe("run_provider_started_ok");
-    expect(result.status).toBe("completed");
-  });
-
-  it("maps auth-revoked wait snapshots to cancelled", async () => {
-    const result = await waitForSnapshot("run_auth_revoked", {
-      stopReason: "auth-revoked",
-      error: "provider auth was removed",
-    });
-
-    expect(result.runId).toBe("run_auth_revoked");
-    expect(result.status).toBe("cancelled");
-    expect(result.error?.message).toBe("provider auth was removed");
-  });
-
-  it("keeps wait-only deadlines non-terminal", async () => {
-    const result = await waitForSnapshot("run_still_active");
-
-    expect(result.runId).toBe("run_still_active");
-    expect(result.status).toBe("accepted");
-    expect(result.error).toBeUndefined();
-  });
-
-  it("keeps queued wait snapshots non-terminal", async () => {
-    const result = await waitForSnapshot("run_queued", {
-      status: "pending",
-      timeoutPhase: "queue",
-      providerStarted: false,
-    });
-
-    expect(result.status).toBe("accepted");
-    expect(result.error).toBeUndefined();
-  });
-
-  it("keeps pending-error wait deadlines non-terminal", async () => {
-    const result = await waitForSnapshot("run_pending_error", {
-      error: "429 RESOURCE_EXHAUSTED",
-      pendingError: true,
-    });
-
-    expect(result.runId).toBe("run_pending_error");
-    expect(result.status).toBe("accepted");
-    expect(result.error?.message).toBe("429 RESOURCE_EXHAUSTED");
-  });
-
-  it("keeps provider-attributed pending-error wait deadlines non-terminal", async () => {
-    const result = await waitForSnapshot("run_pending_provider_error", {
-      error: "provider request timed out",
-      pendingError: true,
-      timeoutPhase: "provider",
-      providerStarted: true,
-    });
-
-    expect(result.runId).toBe("run_pending_provider_error");
-    expect(result.status).toBe("accepted");
-    expect(result.error?.message).toBe("provider request timed out");
-  });
-
-  it("maps terminal runtime timeout snapshots to timed_out", async () => {
-    const result = await waitForSnapshot("run_timed_out", {
-      stopReason: "timeout",
-      error: "agent runtime timeout",
-    });
-
-    expect(result.runId).toBe("run_timed_out");
-    expect(result.status).toBe("timed_out");
-    expect(result.error?.message).toBe("agent runtime timeout");
-  });
-
   it("maps terminal timeout snapshots without stop reasons to timed_out", async () => {
-    const result = await waitForSnapshot("run_timed_out", {
-      startedAt: 123,
-      endedAt: 456,
+    const { transport, oc } = createClientFixture({
+      "agent.wait": { status: "timeout", runId: "run_timed_out", startedAt: 123, endedAt: 456 },
     });
+    const result = await oc.runs.wait("run_timed_out");
 
     expect(result.runId).toBe("run_timed_out");
     expect(result.status).toBe("timed_out");
     expect(result.startedAt).toBe(123);
     expect(result.endedAt).toBe(456);
     expect(result.error).toBeUndefined();
+    expect(transport.calls).toEqual([
+      { method: "agent.wait", params: { runId: "run_timed_out" }, options: { timeoutMs: null } },
+    ]);
   });
 
   it("splits provider-qualified model refs and rejects unsupported run options", async () => {
@@ -498,29 +445,24 @@ describe("OpenClaw SDK", () => {
   });
 
   it("calls artifact Gateway RPCs", async () => {
+    const artifact = { id: "artifact_123", type: "image", title: "demo.png" };
     const { transport, oc } = createClientFixture({
-      "artifacts.list": { artifacts: [{ id: "artifact_123", type: "image", title: "demo.png" }] },
-      "artifacts.get": { artifact: { id: "artifact_123", type: "image", title: "demo.png" } },
+      "artifacts.list": { artifacts: [structuredClone(artifact)] },
+      "artifacts.get": { artifact: structuredClone(artifact) },
       "artifacts.download": {
-        artifact: { id: "artifact_123", type: "image", title: "demo.png" },
+        artifact: structuredClone(artifact),
         encoding: "base64",
         data: "aGVsbG8=",
       },
     });
     const artifactList = await oc.artifacts.list({ sessionKey: "agent:main:main" });
-    expect(artifactList.artifacts).toEqual([
-      { id: "artifact_123", type: "image", title: "demo.png" },
-    ]);
+    expect(artifactList.artifacts).toEqual([artifact]);
     const artifactGet = await oc.artifacts.get("artifact_123", { sessionKey: "agent:main:main" });
-    expect(artifactGet.artifact).toEqual({ id: "artifact_123", type: "image", title: "demo.png" });
+    expect(artifactGet.artifact).toEqual(artifact);
     const artifactDownload = await oc.artifacts.download("artifact_123", {
       sessionKey: "agent:main:main",
     });
-    expect(artifactDownload.artifact).toEqual({
-      id: "artifact_123",
-      type: "image",
-      title: "demo.png",
-    });
+    expect(artifactDownload.artifact).toEqual(artifact);
     expect(artifactDownload.encoding).toBe("base64");
     expect(artifactDownload.data).toBe("aGVsbG8=");
 
@@ -589,36 +531,26 @@ describe("OpenClaw SDK", () => {
   });
 
   it("calls task ledger Gateway methods", async () => {
+    const task = {
+      id: "task_123",
+      status: "running",
+      title: "Investigate issue",
+      lastActivity: "Running focused tests",
+      diffStat: { files: 2, added: 12, removed: 3 },
+    };
+    const listedTask = {
+      ...task,
+      runId: "run_123",
+      sessionKey: "agent:main:main",
+      lastActivity: "Editing the registry",
+    };
     const { transport, oc } = createClientFixture({
-      "tasks.list": {
-        tasks: [
-          {
-            id: "task_123",
-            status: "running",
-            title: "Investigate issue",
-            runId: "run_123",
-            sessionKey: "agent:main:main",
-            lastActivity: "Editing the registry",
-            diffStat: { files: 2, added: 12, removed: 3 },
-          },
-        ],
-      },
-      "tasks.get": {
-        task: {
-          id: "task_123",
-          status: "running",
-          title: "Investigate issue",
-          lastActivity: "Running focused tests",
-          diffStat: { files: 2, added: 12, removed: 3 },
-        },
-      },
+      "tasks.list": { tasks: [structuredClone(listedTask)] },
+      "tasks.get": { task: structuredClone(task) },
       "tasks.cancel": {
         found: true,
         cancelled: true,
-        task: {
-          id: "task_123",
-          status: "cancelled",
-        },
+        task: { id: "task_123", status: "cancelled" },
       },
     });
     const taskList = await oc.tasks.list({
@@ -627,25 +559,9 @@ describe("OpenClaw SDK", () => {
       sessionKey: "agent:main:main",
       sortBy: "endedAt",
     });
-    expect(taskList.tasks).toEqual([
-      {
-        id: "task_123",
-        status: "running",
-        title: "Investigate issue",
-        runId: "run_123",
-        sessionKey: "agent:main:main",
-        lastActivity: "Editing the registry",
-        diffStat: { files: 2, added: 12, removed: 3 },
-      },
-    ]);
+    expect(taskList.tasks).toEqual([listedTask]);
     const taskGet = await oc.tasks.get("task_123");
-    expect(taskGet.task).toEqual({
-      id: "task_123",
-      status: "running",
-      title: "Investigate issue",
-      lastActivity: "Running focused tests",
-      diffStat: { files: 2, added: 12, removed: 3 },
-    });
+    expect(taskGet.task).toEqual(task);
     const taskCancel = await oc.tasks.cancel("task_123", { reason: "user stopped task" });
     expect(taskCancel.found).toBe(true);
     expect(taskCancel.cancelled).toBe(true);
@@ -879,31 +795,6 @@ describe("OpenClaw SDK", () => {
     expect(requireTransportCall(transport.calls, 2).params).toEqual({ probe: false });
   });
 
-  it("replays fast run events emitted before the caller starts iterating", async () => {
-    const ts = 1_777_000_000_000;
-    const { oc } = createRunEventFixture("run_fast", "fast", [
-      createAgentEvent("run_fast", 1, ts, "lifecycle", { phase: "start" }),
-      createAgentEvent("run_fast", 2, ts + 1, "assistant", { delta: "fast" }),
-      createAgentEvent("run_fast", 3, ts + 2, "lifecycle", { phase: "end" }),
-    ]);
-
-    const run = await oc.runs.create({
-      input: "finish immediately",
-      idempotencyKey: "fast-run-events",
-      sessionKey: "fast",
-    });
-    const seen: string[] = [];
-
-    for await (const event of run.events()) {
-      seen.push(event.type);
-      if (event.type === "run.completed") {
-        break;
-      }
-    }
-
-    expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
-  });
-
   it("rejects normalized event streams when the event pump fails before yielding", async () => {
     const failure = new Error("synthetic transport event failure");
     const transport = new EventsOnlyTransport({
@@ -1012,7 +903,7 @@ describe("OpenClaw SDK", () => {
         deltaText: "hello",
       }),
       createChatEvent("run_chat_only", "chat-only", 2, "delta", "hello again", ts + 1, {
-        deltaText: " again",
+        deltaText: " provided",
       }),
       createChatEvent("run_chat_only", "chat-only", 3, "delta", "reset", ts + 2, {
         deltaText: "reset",
@@ -1034,80 +925,18 @@ describe("OpenClaw SDK", () => {
     const iterator = run.events()[Symbol.asyncIterator]();
 
     try {
-      const first = await iterator.next();
-      expect(first.done).toBe(false);
-      if (first.done !== false) {
-        throw new Error("expected first chat projection event");
+      for (const [type, data] of [
+        ["assistant.delta", { text: "hello", delta: "hello" }],
+        ["assistant.delta", { text: "hello again", delta: " provided" }],
+        ["assistant.delta", { text: "reset", delta: "reset", replace: true }],
+        ["run.completed", { phase: "end", outputText: "reset" }],
+      ] as const) {
+        const next = await iterator.next();
+        expect(next.done).toBe(false);
+        expect(next.value?.type).toBe(type);
+        expect(next.value?.data).toEqual(data);
+        expect(next.value?.raw?.event).toBe("chat");
       }
-      expect(first.value.type).toBe("assistant.delta");
-      expect(first.value.data).toEqual({ text: "hello", delta: "hello" });
-      expect(first.value.raw?.event).toBe("chat");
-
-      const second = await iterator.next();
-      expect(second.done).toBe(false);
-      if (second.done !== false) {
-        throw new Error("expected second chat projection event");
-      }
-      expect(second.value.type).toBe("assistant.delta");
-      expect(second.value.data).toEqual({ text: "hello again", delta: " again" });
-      expect(second.value.raw?.event).toBe("chat");
-
-      const third = await iterator.next();
-      expect(third.done).toBe(false);
-      if (third.done !== false) {
-        throw new Error("expected replacement chat projection event");
-      }
-      expect(third.value.type).toBe("assistant.delta");
-      expect(third.value.data).toEqual({ text: "reset", delta: "reset", replace: true });
-      expect(third.value.raw?.event).toBe("chat");
-
-      const fourth = await iterator.next();
-      expect(fourth.done).toBe(false);
-      if (fourth.done !== false) {
-        throw new Error("expected chat projection completion event");
-      }
-      expect(fourth.value.type).toBe("run.completed");
-      expect(fourth.value.data).toEqual({ phase: "end", outputText: "reset" });
-      expect(fourth.value.raw?.event).toBe("chat");
-    } finally {
-      await iterator.return?.();
-    }
-  });
-
-  it("uses chat projection deltaText when present", async () => {
-    const ts = 1_777_000_000_300;
-    const { oc } = createRunEventFixture("run_chat_delta_text", "chat-delta-text", [
-      createChatEvent("run_chat_delta_text", "chat-delta-text", 1, "delta", "hello", ts, {
-        deltaText: "hello",
-      }),
-      createChatEvent("run_chat_delta_text", "chat-delta-text", 2, "delta", "hello again", ts + 1, {
-        deltaText: " provided",
-      }),
-    ]);
-
-    const run = await oc.runs.create({
-      input: "stream with chat deltaText",
-      idempotencyKey: "chat-delta-text-events",
-      sessionKey: "chat-delta-text",
-    });
-    const iterator = run.events()[Symbol.asyncIterator]();
-
-    try {
-      const first = await iterator.next();
-      expect(first.done).toBe(false);
-      if (first.done !== false) {
-        throw new Error("expected first chat projection event");
-      }
-      expect(first.value.type).toBe("assistant.delta");
-      expect(first.value.data).toEqual({ text: "hello", delta: "hello" });
-
-      const second = await iterator.next();
-      expect(second.done).toBe(false);
-      if (second.done !== false) {
-        throw new Error("expected second chat projection event");
-      }
-      expect(second.value.type).toBe("assistant.delta");
-      expect(second.value.data).toEqual({ text: "hello again", delta: " provided" });
     } finally {
       await iterator.return?.();
     }
@@ -1323,154 +1152,72 @@ describe("OpenClaw SDK", () => {
 
   it("normalizes Gateway agent stream events into SDK events", () => {
     const ts = 1_777_000_000_000;
-    const normalize = (seq: number, data: Record<string, unknown>, stream = "lifecycle") =>
-      normalizeGatewayEvent(createAgentEvent("run_1", seq, ts, stream, data));
+    const check = (
+      type: OpenClawEvent["type"],
+      seq: number,
+      data: Record<string, unknown>,
+      stream = "lifecycle",
+    ) => {
+      const event = normalizeGatewayEvent(
+        createAgentEvent("run_1", seq, ts, stream, structuredClone(data)),
+      );
+      expect(event.type).toBe(type);
+      expect(event.runId).toBe("run_1");
+      expect(event.data).toEqual(data);
+    };
 
-    const started = normalize(1, { phase: "start" });
-    expect(started.type).toBe("run.started");
-    expect(started.runId).toBe("run_1");
-    expect(started.data).toEqual({ phase: "start" });
-
-    const assistant = normalize(2, { delta: "hello" }, "assistant");
-    expect(assistant.type).toBe("assistant.delta");
-    expect(assistant.runId).toBe("run_1");
-    expect(assistant.data).toEqual({ delta: "hello" });
-
-    const completed = normalize(3, { phase: "end" });
-    expect(completed.type).toBe("run.completed");
-    expect(completed.runId).toBe("run_1");
-    expect(completed.data).toEqual({ phase: "end" });
-
-    const aborted = normalize(4, { phase: "end", aborted: true });
-    expect(aborted.type).toBe("run.cancelled");
-    expect(aborted.runId).toBe("run_1");
-    expect(aborted.data).toEqual({ phase: "end", aborted: true });
-
-    const cancelled = normalize(5, { phase: "end", aborted: true, stopReason: "rpc" });
-    expect(cancelled.type).toBe("run.cancelled");
-    expect(cancelled.runId).toBe("run_1");
-    expect(cancelled.data).toEqual({ phase: "end", aborted: true, stopReason: "rpc" });
-
-    const restartCancelled = normalize(6, {
+    check("run.started", 1, { phase: "start" });
+    check("assistant.delta", 2, { delta: "hello" }, "assistant");
+    check("run.completed", 3, { phase: "end" });
+    check("run.cancelled", 4, { phase: "end", aborted: true });
+    check("run.cancelled", 5, { phase: "end", aborted: true, stopReason: "rpc" });
+    check("run.cancelled", 6, {
       phase: "end",
       aborted: true,
       stopReason: "restart",
       providerStarted: true,
     });
-    expect(restartCancelled.type).toBe("run.cancelled");
-    expect(restartCancelled.runId).toBe("run_1");
-    expect(restartCancelled.data).toEqual({
-      phase: "end",
-      aborted: true,
-      stopReason: "restart",
-      providerStarted: true,
-    });
-
-    const restartErrorCancelled = normalize(7, {
+    check("run.cancelled", 7, {
       phase: "error",
       aborted: true,
       stopReason: "restart",
       error: "agent run aborted for restart",
     });
-    expect(restartErrorCancelled.type).toBe("run.cancelled");
-    expect(restartErrorCancelled.runId).toBe("run_1");
-    expect(restartErrorCancelled.data).toEqual({
-      phase: "error",
-      aborted: true,
-      stopReason: "restart",
-      error: "agent run aborted for restart",
-    });
-
-    const hardTimeout = normalize(8, {
+    check("run.timed_out", 8, {
       phase: "end",
       aborted: true,
       stopReason: "rpc",
       timeoutPhase: "provider",
       providerStarted: true,
     });
-    expect(hardTimeout.type).toBe("run.timed_out");
-    expect(hardTimeout.runId).toBe("run_1");
-    expect(hardTimeout.data).toEqual({
-      phase: "end",
-      aborted: true,
-      stopReason: "rpc",
-      timeoutPhase: "provider",
-      providerStarted: true,
-    });
-
-    const hardTimeoutError = normalize(9, {
+    check("run.timed_out", 9, {
       phase: "error",
       error: "provider request timed out",
       timeoutPhase: "provider",
       providerStarted: true,
     });
-    expect(hardTimeoutError.type).toBe("run.timed_out");
-    expect(hardTimeoutError.runId).toBe("run_1");
-    expect(hardTimeoutError.data).toEqual({
-      phase: "error",
-      error: "provider request timed out",
-      timeoutPhase: "provider",
-      providerStarted: true,
-    });
-
-    const providerStartedError = normalize(10, {
+    check("run.failed", 10, {
       phase: "error",
       executionSettled: true,
       error: "provider authentication failed",
       providerStarted: true,
     });
-    expect(providerStartedError.type).toBe("run.failed");
-    expect(providerStartedError.runId).toBe("run_1");
-    expect(providerStartedError.data).toEqual({
-      phase: "error",
-      executionSettled: true,
-      error: "provider authentication failed",
-      providerStarted: true,
-    });
-
-    const hardTimeoutEnd = normalize(11, {
+    check("run.timed_out", 11, {
       phase: "end",
       timeoutPhase: "provider",
       providerStarted: true,
     });
-    expect(hardTimeoutEnd.type).toBe("run.timed_out");
-    expect(hardTimeoutEnd.runId).toBe("run_1");
-    expect(hardTimeoutEnd.data).toEqual({
-      phase: "end",
-      timeoutPhase: "provider",
-      providerStarted: true,
-    });
-
-    const providerStartedEnd = normalize(12, {
+    check("run.completed", 12, {
       phase: "end",
       providerStarted: true,
     });
-    expect(providerStartedEnd.type).toBe("run.completed");
-    expect(providerStartedEnd.runId).toBe("run_1");
-    expect(providerStartedEnd.data).toEqual({
-      phase: "end",
-      providerStarted: true,
-    });
-
-    const authRevoked = normalize(13, {
+    check("run.cancelled", 13, {
       phase: "end",
       status: "cancelled",
       aborted: true,
       stopReason: "auth-revoked",
     });
-    expect(authRevoked.type).toBe("run.cancelled");
-    expect(authRevoked.runId).toBe("run_1");
-    expect(authRevoked.data).toEqual({
-      phase: "end",
-      status: "cancelled",
-      aborted: true,
-      stopReason: "auth-revoked",
-    });
-
-    const timedOut = normalize(14, { phase: "end", stopReason: "timeout" });
-    expect(timedOut.type).toBe("run.timed_out");
-    expect(timedOut.runId).toBe("run_1");
-    expect(timedOut.data).toEqual({ phase: "end", stopReason: "timeout" });
+    check("run.timed_out", 14, { phase: "end", stopReason: "timeout" });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -84,29 +84,20 @@ export function getProgressDraftLineText(line: string | ChannelProgressDraftLine
   const displayStatus = status === "completed" ? undefined : status;
   if (detail) {
     const compactCommandLine = isShellToolDisplayName(line.toolName);
-    if (
+    const showStatus =
       displayStatus &&
       detail !== displayStatus &&
-      (line.kind === "command-output" || isChannelProgressAttentionLine(line))
-    ) {
-      const outputDetail = detail.startsWith(`${displayStatus};`)
-        ? detail
-        : `${displayStatus}; ${detail}`;
-      if (compactCommandLine) {
-        return `${prefix}${outputDetail}`;
-      }
-      return label ? `${prefix}${label}: ${outputDetail}` : `${prefix}${outputDetail}`;
-    }
-    if (line.kind !== "patch" && label && !compactCommandLine) {
-      return `${prefix}${label}: ${detail}`;
-    }
-    return `${prefix}${detail}`;
+      (line.kind === "command-output" || isChannelProgressAttentionLine(line));
+    const text =
+      showStatus && !detail.startsWith(`${displayStatus};`)
+        ? `${displayStatus}; ${detail}`
+        : detail;
+    return label && !compactCommandLine && (showStatus || line.kind !== "patch")
+      ? `${prefix}${label}: ${text}`
+      : `${prefix}${text}`;
   }
   if (displayStatus) {
-    if (label) {
-      return `${prefix}${label}: ${displayStatus}`;
-    }
-    return `${prefix}${displayStatus}`;
+    return label ? `${prefix}${label}: ${displayStatus}` : `${prefix}${displayStatus}`;
   }
   const text = line.text.trim();
   if (!icon && text && text !== label) {

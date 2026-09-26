@@ -19,7 +19,6 @@ import kotlinx.serialization.json.contentOrNull
 private const val NOTIFICATION_CHANNEL_BASE_ID = "openclaw.system.notify"
 private const val NOTIFICATION_CONTENT_REQUEST_CODE = 3
 
-/** Parsed payload for system.notify invocations. */
 internal data class SystemNotifyRequest(
   val title: String,
   val body: String,
@@ -117,13 +116,11 @@ internal fun buildSystemNotification(
     .setSilent(isSilentSound(request.sound))
     .build()
 
-/** Handles system-level node.invoke commands implemented by Android services. */
 class SystemHandler internal constructor(
   private val poster: SystemNotificationPoster,
 ) {
   constructor(appContext: Context) : this(poster = AndroidSystemNotificationPoster(appContext))
 
-  /** Posts an Android notification from the gateway system.notify command. */
   fun handleSystemNotify(paramsJson: String?): GatewaySession.InvokeResult {
     val params =
       parseNotifyRequest(paramsJson)

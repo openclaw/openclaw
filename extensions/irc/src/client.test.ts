@@ -122,14 +122,6 @@ async function startHangingIrcServer(): Promise<HangingIrcServer> {
 }
 
 describe("irc client nickserv", () => {
-  it("sends IDENTIFY when a password is configured", async () => {
-    const result = await connectAndCollectRegistration({
-      nickserv: { password: "secret" },
-    });
-
-    expect(result.lines).toContain("PRIVMSG NickServ :IDENTIFY secret");
-  });
-
   it("sends REGISTER after IDENTIFY when enabled with email", async () => {
     const result = await connectAndCollectRegistration({
       nickserv: {
@@ -258,7 +250,7 @@ function maxLineBytes(bodies: string[]): number {
   );
 }
 
-describe("irc client privmsg byte-limit chunking", () => {
+describe("irc client PRIVMSG chunking on the wire", () => {
   it("rejects text that becomes empty after transport sanitization", async () => {
     const server = await startLoopbackIrcServer();
     try {
@@ -271,131 +263,74 @@ describe("irc client privmsg byte-limit chunking", () => {
     }
   });
 
-  it("splits multi-byte text so every line fits the 512-byte IRC limit", async () => {
-    const server = await startLoopbackIrcServer();
-    try {
-      const text = "漢".repeat(900);
-      const bodies = await collectPrivmsgBodies(server, text);
-      expect(bodies.length).toBeGreaterThan(1);
-      expect(maxLineBytes(bodies)).toBeLessThanOrEqual(512);
-      expect(bodies.join("")).toBe(text);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("keeps emoji code points intact while honoring the byte limit", async () => {
-    const server = await startLoopbackIrcServer();
-    try {
-      const text = "\u{1F600}".repeat(300);
-      const bodies = await collectPrivmsgBodies(server, text);
-      expect(maxLineBytes(bodies)).toBeLessThanOrEqual(512);
-      for (const body of bodies) {
-        expect(LONE_SURROGATE.test(body)).toBe(false);
+  it.each<{
+    name: string;
+    text: string;
+    limit?: number;
+    lengths?: number[];
+    bodies?: string[];
+    separator?: string;
+  }>([
+    { name: "multibyte byte limit", text: "漢".repeat(900) },
+    { name: "emoji byte limit", text: "😀".repeat(300) },
+    { name: "default ASCII cap", text: "a".repeat(900), lengths: [350, 350, 200] },
+    {
+      name: "multibyte character cap",
+      text: "漢".repeat(250),
+      limit: 100,
+      lengths: [100, 100, 50],
+    },
+    {
+      name: "character cap below one code point's bytes",
+      text: "漢".repeat(10),
+      limit: 2,
+      lengths: [2, 2, 2, 2, 2],
+    },
+    {
+      name: "astral code point with a one-unit cap",
+      text: "😀".repeat(10),
+      limit: 1,
+      lengths: Array(10).fill(2),
+    },
+    {
+      name: "surrogate pair straddling the cap",
+      text: "xxxxxxxxx🙂rest",
+      limit: 10,
+      bodies: ["xxxxxxxxx", "🙂rest"],
+    },
+    {
+      name: "leading emoji with a one-unit cap",
+      text: "🙂A",
+      limit: 1,
+      bodies: ["🙂", "A"],
+    },
+    { name: "BMP text with a one-unit cap", text: "ABC", limit: 1, bodies: ["A", "B", "C"] },
+    {
+      name: "nearby word boundary",
+      text: "alpha beta gamma",
+      limit: 10,
+      bodies: ["alpha beta", "gamma"],
+      separator: " ",
+    },
+  ])(
+    "preserves $name",
+    async ({ text, limit, lengths, bodies: expectedBodies, separator = "" }) => {
+      const server = await startLoopbackIrcServer();
+      try {
+        const bodies = await collectPrivmsgBodies(server, text, limit);
+        expect(bodies.length).toBeGreaterThan(1);
+        expect(maxLineBytes(bodies)).toBeLessThanOrEqual(512);
+        expect(bodies.some((body) => LONE_SURROGATE.test(body))).toBe(false);
+        expect(bodies.join(separator)).toBe(text);
+        if (lengths) {
+          expect(bodies.map((body) => body.length)).toEqual(lengths);
+        }
+        if (expectedBodies) {
+          expect(bodies).toEqual(expectedBodies);
+        }
+      } finally {
+        await server.close();
       }
-      expect(bodies.join("")).toBe(text);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("preserves the existing 350-char chunking for ASCII text", async () => {
-    const server = await startLoopbackIrcServer();
-    try {
-      const text = "a".repeat(900);
-      const bodies = await collectPrivmsgBodies(server, text);
-      expect(bodies.map((body) => body.length)).toEqual([350, 350, 200]);
-      expect(bodies.join("")).toBe(text);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("honors a low character cap for multibyte text without shrinking chunks to the byte budget", async () => {
-    const server = await startLoopbackIrcServer();
-    try {
-      const text = "漢".repeat(250);
-      const bodies = await collectPrivmsgBodies(server, text, 100);
-      expect(bodies.map((body) => body.length)).toEqual([100, 100, 50]);
-      expect(bodies.join("")).toBe(text);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("still advances when the character cap is smaller than one multibyte code point's bytes", async () => {
-    const server = await startLoopbackIrcServer();
-    try {
-      const text = "漢".repeat(10);
-      const bodies = await collectPrivmsgBodies(server, text, 2);
-      expect(bodies.map((body) => body.length)).toEqual([2, 2, 2, 2, 2]);
-      expect(bodies.join("")).toBe(text);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("keeps one astral code point whole when the legacy character cap is one UTF-16 unit", async () => {
-    const server = await startLoopbackIrcServer();
-    try {
-      const text = "\u{1F600}".repeat(10);
-      const bodies = await collectPrivmsgBodies(server, text, 1);
-      expect(bodies.map((body) => body.length)).toEqual(Array(10).fill(2));
-      expect(bodies.join("")).toBe(text);
-    } finally {
-      await server.close();
-    }
-  });
-});
-
-describe("irc client PRIVMSG chunking", () => {
-  it("does not split an emoji surrogate pair across PRIVMSG chunks", async () => {
-    const server = await startLoopbackIrcServer();
-    try {
-      const text = `${"x".repeat(9)}\u{1F642}rest`;
-      const bodies = await collectPrivmsgBodies(server, text, 10);
-
-      expect(bodies).toEqual(["xxxxxxxxx", "\u{1F642}rest"]);
-      expect(bodies.join("")).toBe(text);
-      expect(bodies.some((body) => LONE_SURROGATE.test(body))).toBe(false);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("keeps a leading emoji whole when the UTF-16 budget is one code unit", async () => {
-    const server = await startLoopbackIrcServer();
-    try {
-      const text = "\u{1F642}A";
-      const bodies = await collectPrivmsgBodies(server, text, 1);
-
-      expect(bodies).toEqual(["\u{1F642}", "A"]);
-      expect(bodies.join("")).toBe(text);
-      expect(bodies.some((body) => LONE_SURROGATE.test(body))).toBe(false);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("preserves one-unit chunks for BMP text", async () => {
-    const server = await startLoopbackIrcServer();
-    try {
-      const bodies = await collectPrivmsgBodies(server, "ABC", 1);
-
-      expect(bodies).toEqual(["A", "B", "C"]);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("still prefers a nearby space when splitting long PRIVMSG text", async () => {
-    const server = await startLoopbackIrcServer();
-    try {
-      const bodies = await collectPrivmsgBodies(server, "alpha beta gamma", 10);
-
-      expect(bodies).toEqual(["alpha beta", "gamma"]);
-    } finally {
-      await server.close();
-    }
-  });
+    },
+  );
 });

@@ -20,7 +20,7 @@ struct GatewayDiscoveryDebugLogView: View {
             } else {
                 ForEach(self.gatewayController.discoveryDebugLog) { entry in
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(Self.formatTime(entry.ts))
+                        Text(Self.timeFormatter.string(from: entry.ts))
                             .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                         Text(entry.message)
@@ -47,7 +47,7 @@ struct GatewayDiscoveryDebugLogView: View {
 
     private func formattedLog() -> String {
         self.gatewayController.discoveryDebugLog
-            .map { "\(Self.formatISO($0.ts)) \($0.message)" }
+            .map { "\(Self.isoFormatter.string(from: $0.ts)) \($0.message)" }
             .joined(separator: "\n")
     }
 
@@ -62,12 +62,4 @@ struct GatewayDiscoveryDebugLogView: View {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
-
-    private static func formatTime(_ date: Date) -> String {
-        self.timeFormatter.string(from: date)
-    }
-
-    private static func formatISO(_ date: Date) -> String {
-        self.isoFormatter.string(from: date)
-    }
 }

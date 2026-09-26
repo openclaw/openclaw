@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import * as channelOutbound from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -413,8 +414,19 @@ describe("Microsoft Teams durable ingress", () => {
           active -= 1;
         }
       });
-      const listPending = vi.spyOn(queue, "listPending");
-      const ingress = makeIngress(queue, dispatch);
+      const factory = vi.spyOn(channelOutbound, "createChannelIngressMonitor");
+      let ingress: ReturnType<typeof makeIngress>;
+      let monitor: ReturnType<typeof channelOutbound.createChannelIngressMonitor>;
+      try {
+        ingress = makeIngress(queue, dispatch);
+        const result = factory.mock.results[0];
+        if (result?.type !== "return") {
+          throw new Error("Microsoft Teams ingress did not create its ingress monitor");
+        }
+        monitor = result.value;
+      } finally {
+        factory.mockRestore();
+      }
       ingress.start();
       try {
         for (let index = 0; index < 8; index += 1) {
@@ -423,15 +435,9 @@ describe("Microsoft Teams durable ingress", () => {
           );
         }
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(8));
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-
-        const drainScansBeforeNinth = listPending.mock.calls.length;
+        await monitor.waitForPumpIdle();
         await ingress.accept(activity({ id: "activity-concurrency-8", conversationId: "lane-8" }));
-        await vi.waitFor(() =>
-          expect(listPending.mock.calls.length).toBeGreaterThan(drainScansBeforeNinth),
-        );
+        await monitor.waitForPumpIdle();
 
         expect(dispatch).toHaveBeenCalledTimes(8);
         expect(maxActive).toBe(8);

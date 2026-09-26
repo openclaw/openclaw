@@ -57,6 +57,7 @@ import {
 } from "./installed-plugin-index.js";
 import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
 import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identity.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 
@@ -202,8 +203,8 @@ function writePersistedInstalledPluginIndexRow(
 
 function writePersistedInstalledPluginIndexToSqlite(
   index: InstalledPluginIndex,
-  options: InstalledPluginIndexStoreOptions = {},
-  lease?: InstalledPluginIndexWriteLease,
+  options: InstalledPluginIndexStoreOptions,
+  lease: InstalledPluginIndexWriteLease,
   preserveAdmissions = false,
 ): InstalledPluginIndexWriteReceipt {
   assertWritableInstalledPluginIndexStoreOptions(options);
@@ -224,7 +225,7 @@ function writePersistedInstalledPluginIndexToSqlite(
         );
       }
     }
-    lease?.assertOwnedInTransaction(db);
+    lease.assertOwnedInTransaction(db);
     if (preserveAdmissions) {
       preservePluginSourceAdmissions(
         previousRow ? parseInstalledPluginIndex(previousRow.index) : null,
@@ -297,7 +298,11 @@ export async function writePersistedInstalledPluginIndex(
   index: InstalledPluginIndex,
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<string> {
-  return writePersistedInstalledPluginIndexSync(index, options);
+  assertWritableInstalledPluginIndexStoreOptions(options);
+  return await withPluginLifecycleLease(
+    resolveInstalledPluginIndexStateDatabaseOptions(options),
+    async (lease) => writePersistedInstalledPluginIndexWithLeaseSync(index, { ...options, lease }),
+  );
 }
 
 /** Restore a snapshot only while the caller's tentative write is still current. */
@@ -342,16 +347,6 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
   // this process's cached metadata stale.
   clearPersistedInstalledPluginIndexCaches();
   return restored;
-}
-
-export function writePersistedInstalledPluginIndexSync(
-  index: InstalledPluginIndex,
-  options: InstalledPluginIndexStoreOptions = {},
-): string {
-  const filePath = resolveInstalledPluginIndexStorePath(options);
-  writePersistedInstalledPluginIndexToSqlite(index, options);
-  clearPersistedInstalledPluginIndexCaches();
-  return filePath;
 }
 
 export function writePersistedInstalledPluginIndexWithLeaseSync(
@@ -487,17 +482,33 @@ function resolveRefreshedPersistedInstalledPluginIndex(
   });
 }
 
-export function refreshPersistedInstalledPluginIndex(
+export async function refreshPersistedInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams &
     InstalledPluginIndexStoreOptions & {
       lease?: InstalledPluginIndexWriteLease;
     },
-): InstalledPluginIndex {
-  const { lease, ...storeParams } = params;
-  const index = resolveRefreshedPersistedInstalledPluginIndex(storeParams);
-  writePersistedInstalledPluginIndexToSqlite(index, storeParams, lease, true);
-  clearPersistedInstalledPluginIndexCaches();
-  return index;
+): Promise<InstalledPluginIndex> {
+  const { lease: callerLease, ...storeParams } = params;
+  assertWritableInstalledPluginIndexStoreOptions(storeParams);
+  return await withPluginLifecycleLease(
+    resolveInstalledPluginIndexStateDatabaseOptions(storeParams),
+    async (lease) => {
+      const index = resolveRefreshedPersistedInstalledPluginIndex(storeParams);
+      writePersistedInstalledPluginIndexToSqlite(
+        index,
+        storeParams,
+        {
+          assertOwnedInTransaction(database) {
+            lease.assertOwnedInTransaction(database);
+            callerLease?.assertOwnedInTransaction(database);
+          },
+        },
+        true,
+      );
+      clearPersistedInstalledPluginIndexCaches();
+      return index;
+    },
+  );
 }
 
 export function refreshPersistedInstalledPluginIndexWithLeaseSync(

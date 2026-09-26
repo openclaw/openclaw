@@ -577,9 +577,13 @@ describe("Plugin SDK API baseline", () => {
     expect(fixtureError).not.toContain("return this.status");
   });
 
-  it.each(["source project creation", "declaration diagnostics"])(
-    "rejects source changes after %s while accepting linked external types",
-    async (timing) => {
+  it.each(
+    ["source project creation", "declaration emission"].flatMap((timing) =>
+      [0, 60_000].map((clockSkewMs) => ({ timing, clockSkewMs })),
+    ),
+  )(
+    "rejects source changes after $timing with clock skew $clockSkewMs while accepting linked external types",
+    async ({ timing, clockSkewMs }) => {
       const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-mutation-");
       const external = tempDirs.make("openclaw-plugin-sdk-api-linked-");
       const entry = path.join(repoRoot, "src/plugin-sdk/fixture.ts");
@@ -639,7 +643,8 @@ describe("Plugin SDK API baseline", () => {
         .join("/");
       const createProject = nativeTypeScript.createNativeTypeScriptProject;
       const create = vi.spyOn(nativeTypeScript, "createNativeTypeScriptProject");
-      const diagnose = vi.spyOn(Program.prototype, "getDeclarationDiagnostics");
+      // Declaration errors come from the emit result, the last compiler stage before publication.
+      const emit = vi.spyOn(Program.prototype, "emitToString");
       if (timing === "source project creation") {
         create.mockImplementationOnce(function intercept(options) {
           const native = createProject(options);
@@ -652,24 +657,35 @@ describe("Plugin SDK API baseline", () => {
           return native;
         });
       } else {
-        diagnose.mockImplementationOnce(async function (this: Program, ...args) {
-          diagnose.mockRestore();
-          const result = await this.getDeclarationDiagnostics(...args);
+        emit.mockImplementationOnce(async function (this: Program, ...args) {
+          emit.mockRestore();
+          const result = await this.emitToString(...args);
           expect(
             (await this.getSourceFileNames()).some((file) => path.resolve(file) === entry),
           ).toBe(true);
-          expect(result).toEqual([]);
+          expect(result.emitSkipped).toBe(false);
+          expect(result.diagnostics).toEqual([]);
           changeSource();
           return result;
         });
       }
+      const now = Date.now;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + clockSkewMs);
       try {
-        await expect(render()).rejects.toThrow(/Boundary .*changed during compilation/u);
+        const failure = await render().then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        expect(changed).toBe(true);
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toMatchObject({
+          message: expect.stringMatching(/Boundary .*changed during compilation/u),
+        });
       } finally {
+        clock.mockRestore();
         create.mockRestore();
-        diagnose.mockRestore();
+        emit.mockRestore();
       }
-      expect(changed).toBe(true);
       expect(fs.readFileSync(entry, "utf8")).toBe(source("changed"));
       expect(fs.readdirSync(path.join(repoRoot, ".artifacts"))).toEqual([]);
     },

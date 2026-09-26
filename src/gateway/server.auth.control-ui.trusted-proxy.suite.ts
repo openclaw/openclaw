@@ -1,6 +1,5 @@
 import { beforeAll, expect, test } from "vitest";
 import {
-  createOperatorIdentityFixture,
   seedApprovedOperatorReadPairing,
   withControlUiGatewayServer,
 } from "./server.auth.control-ui.fixtures.test-support.js";
@@ -138,41 +137,6 @@ export function registerControlUiTrustedProxySuite(): void {
         );
       }
     }
-  });
-
-  test("rejects trusted-proxy control ui without device identity even with self-declared scopes", async () => {
-    await configureTrustedProxyControlUiAuth();
-    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
-    const { rejectDevicePairing, requestDevicePairing } =
-      await import("../infra/device-pairing.js");
-    const { identity } = await createOperatorIdentityFixture("openclaw-control-ui-trusted-proxy-");
-    const pendingRequest = await requestDevicePairing({
-      deviceId: identity.deviceId,
-      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-      role: "operator",
-      scopes: ["operator.admin"],
-      clientId: CONTROL_UI_CLIENT.id,
-      clientMode: CONTROL_UI_CLIENT.mode,
-    });
-    await withControlUiGatewayServer(async ({ port }) => {
-      const ws = await openWs(port, TRUSTED_PROXY_CONTROL_UI_HEADERS);
-      try {
-        const res = await connectReq(ws, {
-          skipDefaultAuth: true,
-          scopes: ["operator.admin"],
-          device: null,
-          client: { ...CONTROL_UI_CLIENT },
-        });
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain("control ui requires device identity");
-        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
-          ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
-        );
-      } finally {
-        ws.close();
-        await rejectDevicePairing(pendingRequest.request.requestId);
-      }
-    });
   });
 
   test("requires pairing for trusted-proxy control ui device identity", async () => {

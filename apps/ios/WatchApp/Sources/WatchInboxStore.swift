@@ -190,10 +190,6 @@ import WatchKit
         self.appCommandStatus?.localizedText()
     }
 
-    func persistVoiceTurnState() {
-        self.persistState()
-    }
-
     init(
         defaults: UserDefaults = .standard,
         requestNotificationAuthorization: Bool = true,

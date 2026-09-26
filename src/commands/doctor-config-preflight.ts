@@ -313,7 +313,7 @@ async function runDoctorConfigPreflightOperation(
     );
   }
   // Import retired locators before removing them from the authored config.
-  if (pluginMigrations.complete()) {
+  if (await pluginMigrations.complete()) {
     configSnapshotRead = await readConfigSnapshotForPreflight(false);
     snapshot = configSnapshotRead.snapshot;
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
