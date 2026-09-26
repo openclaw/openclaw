@@ -82,6 +82,7 @@ export async function handleChatHistoryRequest({
     sessionId: string;
     run?: { id: string; maxBytes: number };
     requireCurrentSession?: boolean;
+    verifyRetainedState?: () => Promise<boolean>;
   };
 }) {
   if (!assertValidParams(params, validateChatHistoryParams, method, respond)) {
@@ -640,7 +641,9 @@ export async function handleChatHistoryRequest({
       if (retainedTranscript) {
         return () =>
           selection.publishRetainedTranscript({
-            verify: readTranscriptOwner,
+            verify: async () =>
+              (await readTranscriptOwner()) &&
+              ((await retainedTranscript.verifyRetainedState?.()) ?? true),
             requireCurrentSession: retainedTranscript.requireCurrentSession === true,
             sharing: currentSharing,
             publish: () => respond(true, projectOperatorModelRead(modelReadScope, payload)),

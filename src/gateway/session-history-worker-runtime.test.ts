@@ -32,9 +32,17 @@ vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
       assertCurrent: () => void;
     }) => unknown,
   ) => {
-    const result = operation({ generation: 1, run: runWorker, assertCurrent: () => {} });
-    readerAdmitted();
-    return result;
+    let admitted = false;
+    return operation({
+      generation: 1,
+      run: runWorker,
+      assertCurrent: () => {
+        if (!admitted) {
+          admitted = true;
+          readerAdmitted();
+        }
+      },
+    });
   },
 }));
 vi.mock("../config/sessions/session-cold-storage-read.js", () => ({

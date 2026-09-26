@@ -27,10 +27,6 @@ enum TalkAudioInputError: LocalizedError {
 }
 
 enum TalkRecognitionCaptureLifecycle {
-    static func configure(_ request: SFSpeechAudioBufferRecognitionRequest) {
-        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
-    }
-
     static func start<Capture>(
         isCurrent: () -> Bool,
         prepare: (_ enableVoiceProcessing: Bool) throws -> Capture,

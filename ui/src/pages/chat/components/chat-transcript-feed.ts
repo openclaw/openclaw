@@ -2,6 +2,7 @@ import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdow
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
+import "../../../styles/chat/transcript-feed.css";
 import { repeat } from "lit/directives/repeat.js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import {
@@ -36,7 +37,7 @@ import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
 import { FULL_MESSAGE_RETRY_REVISION_LIMIT } from "./chat-message-markdown.ts";
 import { renderMessageMarkdown, type AssistantMessageDisclosure } from "./chat-message-text.ts";
 
-type TaskMessageRecovery = {
+type TranscriptMessageRecovery = {
   getState: (messageId: string) => AssistantMessageExpansionState | undefined;
   request: (messageId: string) => void;
 };
@@ -239,7 +240,7 @@ function renderToolGroup(entry: Extract<Entry, { kind: "tools" }>) {
 
 function messageDisclosure(
   entry: Entry,
-  recovery?: TaskMessageRecovery,
+  recovery?: TranscriptMessageRecovery,
 ): AssistantMessageDisclosure | undefined {
   const messageId = entry.kind === "assistant" ? entry.cappedMessageId : undefined;
   if (!messageId || !recovery) {
@@ -258,9 +259,9 @@ function messageDisclosure(
   };
 }
 
-export function renderTaskActivityFeed(
+export function renderChatTranscriptFeed(
   messages: unknown[],
-  recovery?: TaskMessageRecovery,
+  recovery?: TranscriptMessageRecovery,
 ): TemplateResult {
   return html`<div class="chat-task-feed">
     ${repeat(

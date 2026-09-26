@@ -19,9 +19,6 @@ import {
 } from "./view.shared.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
-/**
- * Truncate a pubkey for display (shows first and last 8 chars)
- */
 function truncatePubkey(pubkey: string | null | undefined): string {
   if (!pubkey) {
     return t("common.na");
@@ -37,11 +34,8 @@ export function renderNostrCard(params: {
   nostr?: NostrStatus | null;
   nostrAccounts: ChannelAccountSnapshot[];
   accountCount?: number;
-  /** Profile form state (optional - if provided, shows form) */
   profileFormState?: NostrProfileFormState | null;
-  /** Profile form callbacks */
   profileFormCallbacks?: NostrProfileFormCallbacks | null;
-  /** Called when Edit Profile is clicked */
   onEditProfile?: () => void;
 }) {
   const {
@@ -85,7 +79,6 @@ export function renderNostrCard(params: {
   };
 
   const renderProfileSection = () => {
-    // If showing form, render the form instead of the read-only view
     if (showingForm && profileFormCallbacks) {
       return renderNostrProfileForm({
         state: profileFormState,
@@ -156,30 +149,17 @@ export function renderNostrCard(params: {
                       `
                     : nothing
                 }
-                ${
-                  name
-                    ? html`<dt>${t("channels.nostr.name")}</dt>
-                        <dd>${name}</dd>`
-                    : nothing
-                }
-                ${
-                  displayName
-                    ? html`<dt>${t("channels.nostr.displayName")}</dt>
-                        <dd>${displayName}</dd>`
-                    : nothing
-                }
-                ${
-                  about
-                    ? html`<dt>${t("channels.nostr.about")}</dt>
-                        <dd>${about}</dd>`
-                    : nothing
-                }
-                ${
-                  nip05
-                    ? html`<dt>NIP-05</dt>
-                        <dd>${nip05}</dd>`
-                    : nothing
-                }
+                ${[
+                  [t("channels.nostr.name"), name],
+                  [t("channels.nostr.displayName"), displayName],
+                  [t("channels.nostr.about"), about],
+                  ["NIP-05", nip05],
+                ].map(([label, value]) =>
+                  value
+                    ? html`<dt>${label}</dt>
+                        <dd>${value}</dd>`
+                    : nothing,
+                )}
               </dl>
             `
           : nothing

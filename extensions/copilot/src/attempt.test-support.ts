@@ -41,6 +41,7 @@ export function makeFailingNativeTaskRuntime(failure: Error): AgentHarnessTaskRu
   return {
     assertTaskAssignmentSupported: () => undefined,
     createRunningTaskRun: () => task,
+    createRunningTaskRunAsync: async () => task,
     tryCreateRunningTaskRun: () => task,
     recordTaskRunProgressByRunId: () => [],
     finalizeTaskRunByRunId: () => {
@@ -48,6 +49,10 @@ export function makeFailingNativeTaskRuntime(failure: Error): AgentHarnessTaskRu
     },
     setDetachedTaskDeliveryStatusByRunId: () => [],
     listTaskRecords: () => [task],
+    prepareTaskRunRead: async () => () => [task],
+    finalizeTaskRunByRunIdAsync: async () => {
+      throw failure;
+    },
   };
 }
 

@@ -1,4 +1,5 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -253,7 +254,7 @@ export function withRecentSessionTranscriptActiveEvents<T>(
   read: (visit: (visitor: (event: TranscriptEvent) => void) => void) => T,
 ): T {
   return withCurrentProjectionSnapshot(scope, (projection) => {
-    const limit = Math.max(0, Math.floor(Number.isFinite(maxEvents) ? maxEvents : 0));
+    const limit = resolveIntegerOption(maxEvents, 0, { min: 0 });
     const db = getActiveTranscriptKysely(projection.database);
     const query = db
       .selectFrom("session_transcript_active_events as active")
@@ -381,7 +382,7 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
           .where("event_seq", "=", cursor.lastEventSeq)
           .where("message_position", "is not", null),
       );
-      if (anchor?.message_position === null || anchor?.message_position === undefined) {
+      if (anchor?.message_position == null) {
         return reset("anchor_missing");
       }
       if (anchor.message_position !== cursor.lastMessagePosition) {
@@ -469,14 +470,11 @@ export function readRecentSessionTranscriptMessageEvents(
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const visible = resolveVisibleMessagePositions(projection);
-    const maxMessages = Math.min(
-      MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-      Math.max(0, Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0)),
-    );
-    const maxLines = Math.max(
-      0,
-      Math.floor(Number.isFinite(options.maxLines) ? options.maxLines : 0),
-    );
+    const maxMessages = resolveIntegerOption(options.maxMessages, 0, {
+      min: 0,
+      max: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+    });
+    const maxLines = resolveIntegerOption(options.maxLines, 0, { min: 0 });
     if (maxMessages === 0 || maxLines === 0) {
       return {
         activeLeafEntryId: projection.state.leafEventId,
@@ -484,10 +482,7 @@ export function readRecentSessionTranscriptMessageEvents(
         totalMessages: visible.total,
       };
     }
-    const maxBytes = Math.max(
-      1024,
-      Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 8 * 1024 * 1024),
-    );
+    const maxBytes = resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 });
     const candidates = iterateVisibleMessageMetadata(
       projection,
       Math.max(0, visible.total - Math.min(maxLines, maxMessages)),
@@ -528,14 +523,8 @@ export function readSessionTranscriptMessageEventPage(
     (projection) => {
       const visible = resolveVisibleMessagePositions(projection);
       const totalMessages = visible.total;
-      const offset = Math.min(
-        Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
-        totalMessages,
-      );
-      const maxMessages = Math.max(
-        0,
-        Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
-      );
+      const offset = resolveIntegerOption(options.offset, 0, { min: 0, max: totalMessages });
+      const maxMessages = resolveIntegerOption(options.maxMessages, 0, { min: 0 });
       const endExclusive =
         options.offsetFrom === "start"
           ? Math.min(totalMessages, offset + maxMessages)
@@ -567,18 +556,12 @@ export function readSessionTranscriptBoundedMessageTailPage(
         indexedSeq: projection.state.indexedSeq,
       };
       const totalMessages = visible.total;
-      const offset = Math.min(
-        Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
-        totalMessages,
-      );
-      const maxMessages = Math.min(
-        MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-        Math.max(0, Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0)),
-      );
-      const maxBytes = Math.max(
-        0,
-        Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 0),
-      );
+      const offset = resolveIntegerOption(options.offset, 0, { min: 0, max: totalMessages });
+      const maxMessages = resolveIntegerOption(options.maxMessages, 0, {
+        min: 0,
+        max: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
+      });
+      const maxBytes = resolveIntegerOption(options.maxBytes, 0, { min: 0 });
       const endExclusive = Math.max(0, totalMessages - offset);
       const start = Math.max(0, endExclusive - maxMessages);
       const scannedMessages = endExclusive - start;

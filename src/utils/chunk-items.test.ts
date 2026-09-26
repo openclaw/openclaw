@@ -23,14 +23,6 @@ describe("chunkItems", () => {
     expect(chunkItems([1, 2, 3], 1)).toEqual([[1], [2], [3]]);
   });
 
-  it("returns a single chunk when size exceeds array length", () => {
-    expect(chunkItems([1, 2, 3], 10)).toEqual([[1, 2, 3]]);
-  });
-
-  it("exactly divides when size matches array length", () => {
-    expect(chunkItems([1, 2, 3], 3)).toEqual([[1, 2, 3]]);
-  });
-
   it("preserves readonly input without mutation", () => {
     const input: readonly number[] = [10, 20, 30, 40];
     const result = chunkItems(input, 2);

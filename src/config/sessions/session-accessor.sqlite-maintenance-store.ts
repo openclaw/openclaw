@@ -92,9 +92,6 @@ function canSkipSessionEntryMaintenanceInDatabase(
   params: Pick<SessionEntryMaintenanceInput, "maintenance" | "forceMaintenance">,
   entryCount: number,
 ): boolean {
-  if (params.maintenance.mode === "warn") {
-    return true;
-  }
   if (params.forceMaintenance) {
     return false;
   }
