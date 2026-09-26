@@ -2180,45 +2180,38 @@ describe("spawnAcpDirect", () => {
     }
   });
 
-  it("binds LINE ACP sessions to the current conversation when the channel has no native threads", async () => {
-    enableLineCurrentConversationBindings();
-    mockConversationBinding("line");
-
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex",
-        mode: "session",
-        thread: true,
-      },
-      {
+  it.each([
+    {
+      channel: "line",
+      enable: enableLineCurrentConversationBindings,
+      ctx: {
         agentSessionKey: "agent:main:line:direct:U1234567890abcdef1234567890abcdef",
         agentChannel: "line",
         agentAccountId: "default",
         agentTo: "U1234567890abcdef1234567890abcdef",
       },
+    },
+    {
+      channel: "telegram",
+      enable: enableTelegramCurrentConversationBindings,
+      ctx: {
+        agentSessionKey: "agent:main:telegram:direct:6098642967",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:6098642967",
+      },
+    },
+  ])("refuses to hand the current $channel conversation to a spawned worker", async (row) => {
+    row.enable();
+
+    const result = await spawnAcpDirect(
+      { task: "Investigate flaky tests", agentId: "codex", mode: "session", thread: true },
+      row.ctx,
     );
 
-    expect(result.status, JSON.stringify(result)).toBe("accepted");
-    expectBindingCallFields({
-      placement: "current",
-      conversation: {
-        channel: "line",
-        accountId: "default",
-        conversationId: "U1234567890abcdef1234567890abcdef",
-      },
-    });
-    expectAgentGatewayCall({
-      deliver: true,
-      channel: "line",
-      to: "U1234567890abcdef1234567890abcdef",
-      threadId: undefined,
-    });
-    const transcriptCalls = hoisted.resolveSessionTranscriptFileMock.mock.calls.map(
-      (call: unknown[]) => call[0] as { threadId?: string },
-    );
-    expect(transcriptCalls).toHaveLength(1);
-    expect(transcriptCalls[0]?.threadId).toBeUndefined();
+    expect(result).toMatchObject({ status: "error", errorCode: "thread_binding_invalid" });
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+    expect(gatewayRequests().some((request) => request.method === "agent")).toBe(false);
   });
 
   it("binds ACP sessions through the configured default account when accountId is omitted", async () => {
@@ -2243,7 +2236,7 @@ describe("spawnAcpDirect", () => {
         },
       },
     });
-    registerBindingAdapter("custom", "work", ["current"]);
+    registerBindingAdapter("custom", "work", ["child"]);
     mockConversationBinding("custom");
 
     const result = await spawnAcpDirect(
@@ -2262,7 +2255,7 @@ describe("spawnAcpDirect", () => {
 
     expect(result.status).toBe("accepted");
     expectBindingCallFields({
-      placement: "current",
+      placement: "child",
       conversation: {
         channel: "custom",
         accountId: "work",
@@ -2362,37 +2355,6 @@ describe("spawnAcpDirect", () => {
       },
       { assertCurrent: undefined },
     );
-  });
-
-  it("preserves LINE fallback conversation precedence when groupId is present", async () => {
-    enableLineCurrentConversationBindings();
-    mockConversationBinding("line");
-
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex",
-        mode: "session",
-        thread: true,
-      },
-      {
-        agentSessionKey: "agent:main:line:direct:R1234567890abcdef1234567890abcdef",
-        agentChannel: "line",
-        agentAccountId: "default",
-        agentTo: "line:user:U1234567890abcdef1234567890abcdef",
-        agentGroupId: "line:room:R1234567890abcdef1234567890abcdef",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    expectBindingCallFields({
-      placement: "current",
-      conversation: {
-        channel: "line",
-        accountId: "default",
-        conversationId: "R1234567890abcdef1234567890abcdef",
-      },
-    });
   });
 
   it.each([
@@ -3083,115 +3045,6 @@ describe("spawnAcpDirect", () => {
     expect(expectDefined(notifyOrder[0], "notifyOrder[0] test invariant") > agentCallOrder).toBe(
       true,
     );
-  });
-
-  it("binds Telegram forum-topic ACP sessions to the current topic", async () => {
-    enableTelegramCurrentConversationBindings();
-
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex",
-        mode: "session",
-        thread: true,
-      },
-      {
-        agentSessionKey: "agent:main:telegram:group:-1003342490704:topic:2",
-        agentChannel: "telegram",
-        agentAccountId: "default",
-        agentTo: "telegram:-1003342490704",
-        agentThreadId: "2",
-        agentGroupId: "-1003342490704",
-      },
-    );
-
-    const accepted = expectAcceptedSpawn(result);
-    expect(accepted.mode).toBe("session");
-    const binding = expectBindingCallFields({
-      placement: "current",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-      },
-    });
-    const conversation = expectRecordFields(binding.conversation, {});
-    const conversationId =
-      typeof conversation.conversationId === "string" ? conversation.conversationId : "";
-    const parentConversationId =
-      typeof conversation.parentConversationId === "string"
-        ? conversation.parentConversationId
-        : undefined;
-    const canonicalTopicId = parentConversationId
-      ? `${parentConversationId}:topic:${conversationId}`
-      : conversationId;
-    expect(canonicalTopicId).toBe("-1003342490704:topic:2");
-    const agentCall = hoisted.callGatewayMock.mock.calls
-      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
-      .find((request) => request.method === "agent");
-    expect(agentCall?.params?.deliver).toBe(true);
-    expect(agentCall?.params?.channel).toBe("telegram");
-  });
-
-  it("drops self-parent Telegram current-conversation refs before binding", async () => {
-    enableTelegramCurrentConversationBindings();
-
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex",
-        mode: "session",
-        thread: true,
-      },
-      {
-        agentSessionKey: "agent:main:telegram:direct:6098642967",
-        agentChannel: "telegram",
-        agentAccountId: "default",
-        agentTo: "telegram:6098642967",
-      },
-    );
-
-    const accepted = expectAcceptedSpawn(result);
-    expect(accepted.mode).toBe("session");
-    expectBindingCallFields({
-      placement: "current",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "6098642967",
-      },
-    });
-    const bindCall = latestBindingInput();
-    const conversation = expectRecordFields(bindCall.conversation, {});
-    expect(conversation.parentConversationId).toBeUndefined();
-  });
-
-  it("preserves topic-qualified Telegram targets without a separate threadId", async () => {
-    enableTelegramCurrentConversationBindings();
-
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex",
-        mode: "session",
-        thread: true,
-      },
-      {
-        agentSessionKey: "agent:main:telegram:group:-1003342490704:topic:2",
-        agentChannel: "telegram",
-        agentAccountId: "default",
-        agentTo: "telegram:group:-1003342490704:topic:2",
-      },
-    );
-
-    expect(result.status).toBe("accepted");
-    expectBindingCallFields({
-      placement: "current",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-1003342490704:topic:2",
-      },
-    });
   });
 
   it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {

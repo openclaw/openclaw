@@ -9,19 +9,25 @@ read_when:
 
 ## Thread-bound sessions
 
-When thread bindings are enabled for a channel, a sub-agent can stay bound
-to a thread so follow-up user messages in that thread keep routing to the
-same sub-agent session.
+When thread bindings are enabled for a channel, a spawned sub-agent can get
+its own new thread. Follow-up user messages in that thread keep routing to the
+same sub-agent session, while the conversation you spawned it from stays with
+your agent.
 
 ### Thread supporting channels
 
-A channel supports persistent thread-bound subagent sessions
-(`sessions_spawn` with `thread: true`) when it registers a conversation
-binding adapter. Bundled channels with that support: **Discord**,
-**iMessage**, **Matrix**, and **Telegram**. Discord and Matrix default to
-creating a child thread; Telegram and iMessage default to binding the
-current conversation. Use the per-channel `threadBindings` config keys for
-enablement, timeouts, and `spawnSessions`.
+`sessions_spawn` with `thread: true` always opens a new child thread; it never
+hands the current conversation to the worker. Bundled channels that can open
+one: **Discord** and **Matrix**. On channels that would bind the current
+conversation instead (for example Telegram, iMessage, Feishu, and LINE),
+`thread: true` is rejected; spawn with `mode: "run"` and the result is
+announced back to the conversation. Use the per-channel `threadBindings` config
+keys for enablement, timeouts, and `spawnSessions`.
+
+Worker bindings created by older versions on the current conversation are
+ignored: messages there route to your agent again, and the stale binding
+expires through its normal idle timeout. To hand a conversation to an ACP
+session deliberately, use `/acp spawn --bind here`.
 
 ### Quick flow
 
@@ -30,7 +36,7 @@ enablement, timeouts, and `spawnSessions`.
     `sessions_spawn` with `thread: true` (and optionally `mode: "session"`).
   </Step>
   <Step title="Bind">
-    OpenClaw creates or binds a thread to that session target in the active channel.
+    OpenClaw opens a new child thread in the active channel and binds it to that session.
   </Step>
   <Step title="Route follow-ups">
     Replies and follow-up messages in that thread route to the bound session.

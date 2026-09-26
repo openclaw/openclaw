@@ -517,7 +517,10 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       context: "isolated",
     });
 
-    expectErrorResultMessage(result, /only available on channels that expose thread bindings/i);
+    expectErrorResultMessage(
+      result,
+      /only available on channels that open a separate thread for the worker/i,
+    );
     expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
     expectSessionsDeleteWithoutAgentStart();
   });

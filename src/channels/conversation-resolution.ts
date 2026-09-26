@@ -16,6 +16,7 @@ import {
 } from "../infra/outbound/channel-target-prefix.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import { normalizeConversationTargetRef } from "../infra/outbound/session-binding-normalization.js";
+import type { SessionBindingPlacement } from "../infra/outbound/session-binding.types.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getLoadedChannelPluginForRead } from "./plugins/registry-loaded.js";
 import {
@@ -243,19 +244,23 @@ export function resolveChannelDefaultBindingPlacement(
   return pluginPlacement ?? resolveBundledChannelThreadBindingDefaultPlacement(channel);
 }
 
+/**
+ * Placement for a binding created by an agent-spawned worker. Only "child" (a new thread)
+ * is admissible: "current" would hand the user's conversation to the worker.
+ */
+export function resolveSpawnThreadBindingPlacement(
+  rawChannel: string,
+  supportedPlacements: readonly SessionBindingPlacement[],
+): SessionBindingPlacement {
+  return (
+    resolveChannelDefaultBindingPlacement(rawChannel) ??
+    (supportedPlacements.includes("child") ? "child" : "current")
+  );
+}
+
 /** Explicit spawn discovery is separate from automatic command placement. */
 export function supportsThreadBindingSpawn(rawChannel: string): boolean {
-  const channel = resolveChannelId(rawChannel);
-  if (!channel) {
-    return false;
-  }
-  const placement = resolveChannelDefaultBindingPlacement(channel);
-  return (
-    placement === "child" ||
-    (placement === "current" &&
-      getLoadedChannelPluginForRead(channel)?.conversationBindings
-        ?.supportsCurrentConversationBinding === true)
-  );
+  return resolveChannelDefaultBindingPlacement(rawChannel) === "child";
 }
 
 /**
