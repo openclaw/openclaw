@@ -209,16 +209,23 @@ export default definePluginEntry({
     const activateRuntimeGeneration = (generation: VoiceCallRuntimeGeneration) =>
       activateVoiceCallRuntimeGeneration(runtimeCoordinator, runtimeRegistration, generation);
 
-    const ensureRuntimeForGeneration = async (
-      runtimeGeneration: VoiceCallRuntimeGeneration,
-    ): Promise<VoiceCallRuntime> => {
-      activateRuntimeGeneration(runtimeGeneration);
+    // The current registration's policy, asserted before any runtime (including a predecessor's
+    // still-running one) is handed out: a registration that disabled voice calling or carries
+    // invalid provider config must never reach another runtime's call authority.
+    const assertRuntimePolicy = (): void => {
       if (!config.enabled) {
         throw new Error("Voice call disabled in plugin config");
       }
       if (!validation.valid) {
         throw new Error(validation.errors.join("; "));
       }
+    };
+
+    const ensureRuntimeForGeneration = async (
+      runtimeGeneration: VoiceCallRuntimeGeneration,
+    ): Promise<VoiceCallRuntime> => {
+      activateRuntimeGeneration(runtimeGeneration);
+      assertRuntimePolicy();
 
       while (true) {
         activateRuntimeGeneration(runtimeGeneration);
@@ -295,7 +302,19 @@ export default definePluginEntry({
       }
     };
 
-    const commands = createVoiceCallCommandService(ensureRuntime);
+    const ensureRuntimeForCommands = async (): Promise<VoiceCallRuntime> => {
+      // This registration's enabled/validation policy applies before any runtime is selected, so a
+      // reload that disabled or misconfigured voice calling cannot act through a predecessor's
+      // still-running runtime.
+      assertRuntimePolicy();
+      // Reuse the live runtime while a call is in flight instead of forcing a fresh
+      // ensureRuntime() pass: the latter can spawn a second runtime (and its webhook
+      // listener) while the first is still serving the active call.
+      const liveSlot = runtimeCoordinator.slot;
+      if (liveSlot && liveSlot.state === "running") return liveSlot.runtime;
+      return ensureRuntime();
+    };
+    const commands = createVoiceCallCommandService(ensureRuntimeForCommands);
     const registerGatewayCommand = (
       method: string,
       handler: (options: GatewayRequestHandlerOptions) => unknown,
