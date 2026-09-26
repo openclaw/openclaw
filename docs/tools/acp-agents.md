@@ -24,8 +24,10 @@ Codex app-server plugin owns `/codex ...` controls and the default
 and `sessions_spawn({ runtime: "acp" })` sessions.
 
 An agent `sessions_spawn({ runtime: "acp" })` call is always a one-shot
-background run and never binds a thread. Only a user `/acp spawn` command
-(`--thread ...` or `--bind here`) makes a persistent, thread-bound ACP session.
+background run and never binds a conversation. Its result returns to the
+parent, which owns the user-facing reply. Explicit user-owned ACP sessions can
+bind with `/acp spawn` (`--thread ...` or `--bind here`), and configured
+persistent ACP bindings remain supported.
 
 To let Codex or Claude Code connect as an external MCP client directly to
 existing OpenClaw channel conversations, use

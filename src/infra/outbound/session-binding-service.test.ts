@@ -12,11 +12,18 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import {
+  updateCurrentConversationBindingRecord,
+  inspectCurrentConversationBindingRecord,
+} from "./current-conversation-bindings.js";
+import { buildBindingId } from "./current-conversation-bindings.kernel.js";
 import { readSessionBindingInspectionConversation } from "./session-binding-normalization.js";
 import {
   testing,
   getSessionBindingService,
   isSessionBindingError,
+  listSessionBindingsBySessionAsync,
+  readSessionBindingSelectionCurrent,
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
   type SessionBindingAdapter,
@@ -195,6 +202,59 @@ describe("session binding service", () => {
     await tempDirs.cleanup();
   });
 
+  it.each([
+    { targetSessionKey: "agent:main:subagent:legacy", targetKind: "session" as const },
+    {
+      targetSessionKey: "agent:main:acp:legacy",
+      targetKind: "session" as const,
+      metadata: { boundBy: "system" },
+    },
+  ])(
+    "ignores generic saved worker bindings without deleting them: $targetSessionKey",
+    async (target) => {
+      const service = getSessionBindingService();
+      const conversation = {
+        channel: "workspace",
+        accountId: "default",
+        conversationId: "legacy-room",
+      };
+      await expect(
+        service.bind({ ...target, conversation, placement: "current" }),
+      ).rejects.toMatchObject({ code: "BINDING_CAPABILITY_UNSUPPORTED" });
+      expect(inspectCurrentConversationBindingRecord(conversation)).toBeNull();
+      const saved: SessionBindingRecord = {
+        ...target,
+        bindingId: buildBindingId(conversation),
+        conversation,
+        status: "active",
+        boundAt: 1,
+      };
+      updateCurrentConversationBindingRecord(conversation, () => saved);
+      const persisted = inspectCurrentConversationBindingRecord(conversation);
+      expect(persisted?.targetSessionKey).toBe(target.targetSessionKey);
+      expect(service.resolveByConversation(conversation)).toBeNull();
+      expect(service.listBySession(target.targetSessionKey)).toEqual([]);
+      expect(inspectSessionBindingByConversation(conversation)).toMatchObject({
+        status: "available",
+        binding: null,
+      });
+      expect(await service.resolveByConversationAsync(conversation)).toBeNull();
+      expect(await service.inspectByConversationAsync(conversation)).toMatchObject({
+        status: "available",
+        binding: null,
+      });
+      expect(await readSessionBindingSelectionCurrent([conversation])).toEqual([null]);
+      expect(await listSessionBindingsBySessionAsync(target.targetSessionKey)).toEqual([]);
+      expect(inspectCurrentConversationBindingRecord(conversation)).toEqual(persisted);
+      expect(
+        await service.unbind({
+          targetSessionKey: target.targetSessionKey,
+          reason: "manual-cleanup",
+        }),
+      ).toHaveLength(1);
+    },
+  );
+
   it("awaits async adapter persistence without calling its legacy mutation", async () => {
     const gate = createDeferredCore();
     const touch = vi.fn();
@@ -302,8 +362,8 @@ describe("session binding service", () => {
     });
 
     const result = await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:child-1",
-      targetKind: "subagent",
+      targetSessionKey: "agent:main:session:child-1",
+      targetKind: "session",
       conversation: {
         channel: "Demo-Binding",
         accountId: "DEFAULT",
@@ -450,8 +510,8 @@ describe("session binding service", () => {
   it("returns structured errors when adapter is unavailable", async () => {
     await expectSessionBindingError(
       getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-1",
-        targetKind: "subagent",
+        targetSessionKey: "agent:main:session:child-1",
+        targetKind: "session",
         conversation: {
           channel: "demo-binding",
           accountId: "default",
@@ -560,8 +620,8 @@ describe("session binding service", () => {
 
     await expectSessionBindingError(
       getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-1",
-        targetKind: "subagent",
+        targetSessionKey: "agent:main:session:child-1",
+        targetKind: "session",
         conversation: {
           channel: "demo-binding",
           accountId: "default",
@@ -833,8 +893,8 @@ describe("session binding service", () => {
     expect(second.testing.getRegisteredAdapterKeys()).toEqual(["demo-binding:default"]);
 
     const secondBound = await second.getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:child-1",
-      targetKind: "subagent",
+      targetSessionKey: "agent:main:session:child-1",
+      targetKind: "session",
       conversation: {
         channel: "demo-binding",
         accountId: "default",
@@ -856,8 +916,8 @@ describe("session binding service", () => {
     });
 
     const firstBound = await second.getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:child-2",
-      targetKind: "subagent",
+      targetSessionKey: "agent:main:session:child-2",
+      targetKind: "session",
       conversation: {
         channel: "demo-binding",
         accountId: "default",
@@ -880,8 +940,8 @@ describe("session binding service", () => {
 
     await expectSessionBindingError(
       second.getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-3",
-        targetKind: "subagent",
+        targetSessionKey: "agent:main:session:child-3",
+        targetKind: "session",
         conversation: {
           channel: "demo-binding",
           accountId: "default",

@@ -1,5 +1,5 @@
 /**
- * Canonical conversation resolution for command and inbound channel flows.
+ * Canonical conversation resolution for channel commands.
  * This module turns channel targets, thread ids, aliases, and plugin hooks into stable binding ids.
  */
 import {
@@ -18,10 +18,7 @@ import { resolveConversationIdFromTargets } from "../infra/outbound/conversation
 import { normalizeConversationTargetRef } from "../infra/outbound/session-binding-normalization.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getLoadedChannelPluginForRead } from "./plugins/registry-loaded.js";
-import {
-  resolveBundledChannelThreadBindingDefaultPlacement,
-  resolveBundledChannelThreadBindingInboundConversation,
-} from "./plugins/thread-binding-api.js";
+import { resolveBundledChannelThreadBindingDefaultPlacement } from "./plugins/thread-binding-api.js";
 import type { ChannelCommandConversationContext } from "./plugins/types.adapters.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "./registry.js";
@@ -54,19 +51,6 @@ export type ResolveCommandConversationResolutionInput = {
   fallbackTo?: string | null;
   from?: string | null;
   nativeChannelId?: string | null;
-};
-
-type ResolveInboundConversationResolutionInput = {
-  cfg: OpenClawConfig;
-  channel?: string | null;
-  accountId?: string | null;
-  to?: string | null;
-  threadId?: string | number | null;
-  threadParentId?: string | number | null;
-  conversationId?: string | null;
-  groupId?: string | null;
-  from?: string | null;
-  isGroup?: boolean;
 };
 
 const CANONICAL_TARGET_PREFIXES = ["user:", "spaces/"] as const;
@@ -134,7 +118,6 @@ function resolveBindingAccountId(params: {
 function resolveFallbackConversationTargetId(params: {
   rawTarget: string;
   allowNumericTopicShorthand?: boolean;
-  preserveExplicitTopicSuffix?: boolean;
 }): string | undefined {
   const { allowNumericTopicShorthand = false } = params;
   const target = normalizeOptionalString(params.rawTarget);
@@ -142,12 +125,9 @@ function resolveFallbackConversationTargetId(params: {
     return undefined;
   }
   const withoutKind = stripOutboundTargetKindPrefix(target);
-  const withoutTopic =
-    params.preserveExplicitTopicSuffix && /:topic:/iu.test(withoutKind)
-      ? withoutKind
-      : stripTargetTopicSuffix(withoutKind, {
-          allowNumericShorthand: allowNumericTopicShorthand,
-        });
+  const withoutTopic = stripTargetTopicSuffix(withoutKind, {
+    allowNumericShorthand: allowNumericTopicShorthand,
+  });
   return (
     resolveConversationIdFromTargets({
       targets: [withoutTopic],
@@ -163,7 +143,6 @@ function resolveChannelTargetId(params: {
   channel: string;
   plugin?: ChannelPlugin;
   target?: string | null;
-  preserveExplicitTopicSuffix?: boolean;
 }): string | undefined {
   const target = normalizeOptionalString(params.target);
   if (!target) {
@@ -188,7 +167,6 @@ function resolveChannelTargetId(params: {
     const explicitConversationId = resolveFallbackConversationTargetId({
       rawTarget: target,
       allowNumericTopicShorthand: messaging?.numericTopicShorthand === true,
-      preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
     });
     if (explicitConversationId) {
       return explicitConversationId;
@@ -201,7 +179,6 @@ function resolveChannelTargetId(params: {
     const conversationId = resolveFallbackConversationTargetId({
       rawTarget: withoutProvider,
       allowNumericTopicShorthand: messaging?.numericTopicShorthand === true,
-      preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
     });
     return conversationId || withoutProvider || normalizedTarget;
   }
@@ -331,97 +308,6 @@ export function resolveCommandConversationResolution(
     conversation: {
       conversationId,
       parentConversationId,
-    },
-    threadId,
-    plugin,
-  });
-}
-
-/**
- * Resolves inbound message context into the canonical binding conversation tuple.
- */
-export function resolveInboundConversationResolution(
-  params: ResolveInboundConversationResolutionInput,
-): ConversationResolution | null {
-  const channel = resolveChannelId(params.channel);
-  if (!channel) {
-    return null;
-  }
-  const plugin = getLoadedChannelPluginForRead(channel);
-  const accountId = resolveBindingAccountId({
-    rawAccountId: params.accountId,
-    plugin,
-    cfg: params.cfg,
-  });
-  const threadId = stringifyRouteThreadId(params.threadId);
-  const resolverParams = {
-    from: normalizeOptionalString(params.from),
-    to: normalizeOptionalString(params.to),
-    conversationId:
-      normalizeOptionalString(params.conversationId) ??
-      normalizeOptionalString(params.groupId) ??
-      normalizeOptionalString(params.to),
-    threadId,
-    threadParentId: stringifyRouteThreadId(params.threadParentId),
-    isGroup: params.isGroup ?? true,
-  };
-
-  const providerConversation = plugin?.messaging?.resolveInboundConversation?.(resolverParams);
-  const providerResolution = normalizeResolutionTarget({
-    channel,
-    accountId,
-    conversation: providerConversation,
-    threadId,
-    plugin,
-  });
-  if (providerResolution || providerConversation === null) {
-    // A null provider response is an explicit rejection, not a signal to try
-    // bundled/fallback parsing for the same inbound target.
-    return providerResolution;
-  }
-
-  const artifactConversation = resolveBundledChannelThreadBindingInboundConversation({
-    channelId: channel,
-    ...resolverParams,
-  });
-  const artifactResolution = normalizeResolutionTarget({
-    channel,
-    accountId,
-    conversation: artifactConversation,
-    threadId,
-    plugin,
-  });
-  if (artifactResolution || artifactConversation === null) {
-    // Lightweight bundled artifacts can also reject targets before full plugin loading.
-    return artifactResolution;
-  }
-
-  const resolveTarget = (target?: string | null) =>
-    resolveChannelTargetId({
-      channel,
-      plugin,
-      target,
-      preserveExplicitTopicSuffix: threadId == null,
-    });
-  const parentConversationId =
-    resolveTarget(params.threadParentId == null ? undefined : String(params.threadParentId)) ??
-    resolveTarget(params.to) ??
-    resolveTarget(params.conversationId) ??
-    resolveTarget(params.groupId);
-  const genericConversationId =
-    threadId ??
-    resolveTarget(params.conversationId) ??
-    resolveTarget(params.groupId) ??
-    parentConversationId;
-  if (!genericConversationId) {
-    return null;
-  }
-  return normalizeResolutionTarget({
-    channel,
-    accountId,
-    conversation: {
-      conversationId: genericConversationId,
-      parentConversationId: threadId != null ? parentConversationId : undefined,
     },
     threadId,
     plugin,

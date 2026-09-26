@@ -55,17 +55,17 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
   "session.threadBindings":
-    "Shared defaults for thread-bound session spawning and routing across supported channels. Configure global defaults here and override per channel only when behavior differs.",
+    "Shared defaults for explicit user-owned session bindings across supported channels, including ACP sessions. Delegated workers never bind conversations. Configure global defaults here and override per channel only when behavior differs.",
   "session.threadBindings.enabled":
-    "Global master switch for thread-bound session spawning, routing, and delivery. Disable to turn off thread binding globally.",
+    "Global master switch for supported user-owned session binding, routing, and delivery. Disable to turn off session bindings globally; ordinary channel threads and replies remain available.",
   "session.threadBindings.idleHours":
     "Default inactivity window in hours for thread-bound sessions across providers/channels (0 disables idle expiry). Default: 24.",
   "session.threadBindings.maxAgeHours":
     "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
   "session.threadBindings.spawnSessions":
-    "Global default gate for user thread spawns (/subagents spawn --thread, /acp spawn --thread) that create or bind thread-bound work sessions. Agent-started spawns never bind a conversation. Default: true when thread bindings are enabled.",
+    "Global default gate for user ACP thread spawns (/acp spawn --thread) that create or bind thread-bound work sessions. Native sub-agents and agent-spawned ACP children never bind a conversation. Default: true when thread bindings are enabled.",
   "session.threadBindings.defaultSpawnContext":
-    'Default context for subagents started with /subagents spawn --thread: "fork" starts from the requester transcript, "isolated" starts clean. Default: "fork". Agent-started spawns start isolated unless the caller passes context="fork"."fork".',
+    "Deprecated and ignored; accepted for existing config compatibility. Native sub-agents never bind conversations. Use context on individual sessions_spawn calls to choose isolated or forked context.",
   "session.sharing":
     "Controls which collaboration modes session owners and administrators may select. Omitted booleans default to enabled; set a mode false to remove it from the picker and reject new selections.",
   "session.sharing.readOnly":

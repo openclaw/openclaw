@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   getSessionBindingService,
+  inspectRuntimeConversationBindingRoute,
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
   resolveRuntimeConversationBindingRouteAsync,
@@ -211,6 +212,23 @@ export function inspectTelegramConversationRoute(
   );
 }
 
+/** Native/plugin commands need policy-bearing admission before choosing their session. */
+export async function inspectTelegramConversationRouteAsync(
+  params: ResolveTelegramConversationRouteParams,
+): Promise<TelegramConversationRouteResult> {
+  const prepared = prepareTelegramConversationRoute(params);
+  const inspection = await getSessionBindingService().inspectByConversationAsync(
+    prepared.conversation,
+  );
+  return applyTelegramRuntimeRoute(
+    prepared,
+    inspectRuntimeConversationBindingRoute({
+      route: prepared.route,
+      inspection,
+    }),
+  );
+}
+
 /** Extend only the inspected binding after native command authorization. */
 export async function touchTelegramConversationRoute(
   inspected: TelegramConversationRouteResult,
@@ -220,8 +238,8 @@ export async function touchTelegramConversationRoute(
     return;
   }
   const bindings = getSessionBindingService();
-  const assertRouteCurrent = () => {
-    const current = bindings.resolveByConversation(captured.conversation);
+  const assertRouteCurrent = async () => {
+    const current = await bindings.resolveByConversationAsync(captured.conversation);
     if (
       !current ||
       current.bindingId !== captured.bindingId ||
@@ -233,9 +251,9 @@ export async function touchTelegramConversationRoute(
       throw new Error("Telegram command route changed; send a new request.");
     }
   };
-  assertRouteCurrent();
+  await assertRouteCurrent();
   await bindings.touchAsync(captured.bindingId, undefined, captured.conversation);
-  assertRouteCurrent();
+  await assertRouteCurrent();
 }
 
 export function resolveTelegramConversationBaseSessionKey(

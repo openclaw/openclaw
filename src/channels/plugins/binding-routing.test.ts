@@ -70,7 +70,11 @@ describe("runtime conversation binding route", () => {
   it("rechecks the binding after awaiting activity persistence and keeps inspection pure", async () => {
     let binding = createBinding();
     const gate = createDeferredCore();
-    const touchAsync = vi.fn(() => gate.promise);
+    const entered = createDeferredCore();
+    const touchAsync = vi.fn(() => {
+      entered.resolve();
+      return gate.promise;
+    });
     const touch = vi.fn();
     registerSessionBindingAdapter({
       channel: "demo",
@@ -94,7 +98,7 @@ describe("runtime conversation binding route", () => {
       settled = true;
       return result;
     });
-    await Promise.resolve();
+    await entered.promise;
     expect(settled).toBe(false);
     binding = createBinding({ targetSessionKey: "agent:replacement:acp:session-2" });
     gate.resolve();
@@ -161,13 +165,18 @@ describe("runtime conversation binding route", () => {
       await failure;
     } else {
       const result = await pending;
-      expect(result.boundSessionKey).toBe(replacement.targetSessionKey);
-      expect(result.bindingRecord?.metadata?.lastActivityAt).toBe(1234);
+      if (replacement.targetKind === "subagent") {
+        expect(result.boundSessionKey).toBeUndefined();
+        expect(result.bindingRecord).toBeNull();
+        expect(result.route.sessionKey).toBe(createRoute().sessionKey);
+      } else {
+        expect(result.boundSessionKey).toBe(replacement.targetSessionKey);
+        expect(result.bindingRecord?.metadata?.lastActivityAt).toBe(1234);
+      }
     }
-    expect(touchAsync.mock.calls.map(([bindingId]) => bindingId)).toEqual([
-      "binding-1",
-      replacement.bindingId,
-    ]);
+    expect(touchAsync.mock.calls.map(([bindingId]) => bindingId)).toEqual(
+      replacement.targetKind === "subagent" ? ["binding-1"] : ["binding-1", replacement.bindingId],
+    );
   });
 
   it("rewrites the route and touches only the owning channel account's binding", () => {
@@ -343,8 +352,16 @@ describe("ensureConfiguredBindingRouteReady", () => {
     });
 
     const resultPromise = ensureConfiguredBindingRouteReady({
-      cfg: {} as never,
-      bindingResolution: { statefulTarget: { driverId: "slow" } } as never,
+      cfg: {},
+      bindingResolution: {
+        record: createBinding({ targetSessionKey: "agent:slow:binding" }),
+        statefulTarget: {
+          kind: "stateful",
+          driverId: "slow",
+          agentId: "slow",
+          sessionKey: "agent:slow:binding",
+        },
+      } as never,
     });
 
     await vi.advanceTimersByTimeAsync(30_000);

@@ -121,7 +121,7 @@ describe("registerSlackChannelEvents", () => {
       enterpriseId: "E_GRID",
     };
     const resolveSessionKey = vi.fn(
-      (input: Parameters<typeof ctx.resolveSlackSystemEventRoute>[0]) => ({
+      async (input: Parameters<typeof ctx.resolveSlackSystemEventRoute>[0]) => ({
         agentId: "main",
         sessionKey: `session:${input.eventScope?.teamId ?? "workspace"}`,
       }),

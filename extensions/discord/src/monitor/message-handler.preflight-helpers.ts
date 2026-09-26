@@ -55,6 +55,8 @@ export function isDiscordThreadChannelMessage(params: {
   );
 }
 
+// Raw records here only suppress webhook echoes/bot system messages; they never
+// grant routing or mention bypass. The canonical route resolver owns admission.
 export function resolveInjectedBoundThreadLookupRecord(params: {
   threadBindings: DiscordMessagePreflightParams["threadBindings"];
   threadId: string;

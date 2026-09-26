@@ -6,7 +6,6 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import {
   resolveChannelDefaultBindingPlacement,
   resolveCommandConversationResolution,
-  resolveInboundConversationResolution,
 } from "./conversation-resolution.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
 
@@ -295,122 +294,6 @@ describe("conversation resolution", () => {
         channel: "test-chat",
         accountId: "default",
         originatingTo: "test-chat:channel:parent-room",
-        threadId: 42.9,
-      }),
-    ).toEqual({
-      channel: "test-chat",
-      accountId: "default",
-      conversationId: "42",
-      parentConversationId: "parent-room",
-      threadId: "42",
-    });
-  });
-
-  it("uses the runtime inbound resolver and preserves provider canonical ids", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
-      messaging: {
-        resolveInboundConversation: ({ conversationId, to }) => {
-          const source = (conversationId ?? to ?? "").trim();
-          const normalized = source.replace(/^discord:/i, "");
-          return normalized ? { conversationId: normalized } : null;
-        },
-      },
-    });
-
-    expect(
-      resolveInboundConversationResolution({
-        cfg: testConfig,
-        channel: "discord",
-        accountId: "default",
-        to: "discord:channel:123",
-      }),
-    ).toEqual({
-      channel: "discord",
-      accountId: "default",
-      conversationId: "channel:123",
-    });
-  });
-
-  it("keeps Matrix room casing when the channel resolver returns a child thread", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
-      messaging: {
-        resolveInboundConversation: ({ threadId, to }) => {
-          const parent = to?.trim().replace(/^(?:matrix:)?(?:channel:|room:)/iu, "");
-          return threadId && parent
-            ? { conversationId: String(threadId), parentConversationId: parent }
-            : null;
-        },
-      },
-    });
-
-    expect(
-      resolveInboundConversationResolution({
-        cfg: testConfig,
-        channel: "matrix",
-        to: "room:!Room:Example.org",
-        threadId: "$thread-root",
-      }),
-    ).toEqual({
-      channel: "matrix",
-      accountId: "default",
-      conversationId: "$thread-root",
-      parentConversationId: "!Room:Example.org",
-      threadId: "$thread-root",
-    });
-  });
-
-  it("does not fall through when a channel explicitly rejects an inbound target", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
-      messaging: {
-        resolveInboundConversation: () => null,
-      },
-    });
-
-    expect(
-      resolveInboundConversationResolution({
-        cfg: testConfig,
-        channel: "matrix",
-        to: "room:!Room:Example.org",
-      }),
-    ).toBeNull();
-  });
-
-  it("falls back from inbound context to channel-prefixed parent plus explicit thread", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "test-chat", label: "Test chat" }),
-    });
-
-    expect(
-      resolveInboundConversationResolution({
-        cfg: testConfig,
-        channel: "test-chat",
-        accountId: "default",
-        to: "test-chat:channel:parent-room",
-        threadId: "child-thread",
-      }),
-    ).toEqual({
-      channel: "test-chat",
-      accountId: "default",
-      conversationId: "child-thread",
-      parentConversationId: "parent-room",
-      threadId: "child-thread",
-    });
-  });
-
-  it("normalizes numeric inbound thread ids through the shared route contract", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({ id: "test-chat", label: "Test chat" }),
-    });
-
-    expect(
-      resolveInboundConversationResolution({
-        cfg: testConfig,
-        channel: "test-chat",
-        accountId: "default",
-        to: "test-chat:channel:parent-room",
         threadId: 42.9,
       }),
     ).toEqual({

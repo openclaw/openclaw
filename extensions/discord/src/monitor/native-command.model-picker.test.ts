@@ -300,10 +300,10 @@ function createBoundThreadBindingManager(params: {
             accountId: params.accountId,
             channelId: "parent-1",
             threadId: params.threadId,
-            targetKind: "subagent",
+            targetKind: "acp",
             targetSessionKey: params.targetSessionKey,
             agentId: params.agentId,
-            boundBy: "system",
+            boundBy: "owner",
             boundAt: now,
             lastActivityAt: now,
             idleTimeoutMs: 24 * 60 * 60 * 1000,
@@ -1334,7 +1334,7 @@ describe("Discord model picker interactions", () => {
     const context = createModelPickerContext();
     const effectiveRoute = createResolvedAgentRoute({
       agentId: "worker",
-      sessionKey: "agent:worker:subagent:bound",
+      sessionKey: "agent:worker:acp:user-bound",
       mainSessionKey: "agent:worker:main",
     });
     const seenRoutes: unknown[] = [];
@@ -1422,13 +1422,13 @@ describe("Discord model picker interactions", () => {
     };
     await upsertSessionEntry({
       storePath: path.join(tempDir, "sessions.json"),
-      sessionKey: "agent:worker:subagent:bound",
+      sessionKey: "agent:worker:acp:user-bound",
       entry,
     });
     context.threadBindings = createBoundThreadBindingManager({
       accountId: "default",
       threadId: "thread-bound",
-      targetSessionKey: "agent:worker:subagent:bound",
+      targetSessionKey: "agent:worker:acp:user-bound",
       agentId: "worker",
     });
     const loadSpy = vi

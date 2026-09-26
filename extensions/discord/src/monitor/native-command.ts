@@ -366,27 +366,29 @@ async function dispatchDiscordCommandInteraction(params: {
       directUserId: user.id,
       conversationId: rawChannelId || "unknown",
       parentConversationId: threadParentId,
-      threadBinding: isThreadChannel ? threadBindings.getByThreadId(rawChannelId) : undefined,
+      readThreadBinding: isThreadChannel
+        ? () => threadBindings.getByThreadId(rawChannelId)
+        : undefined,
     }));
-  const canBypassConfiguredAcpGuildGuards = () => {
+  const canBypassConfiguredAcpGuildGuards = async () => {
     if (!interaction.guild || !shouldBypassConfiguredAcpGuildGuards(commandName)) {
       return false;
     }
-    const routeState = getNativeRouteState();
+    const routeState = await getNativeRouteState();
     return (
       routeState.effectiveRoute.matchedBy === "binding.channel" ||
       routeState.boundSessionKey != null ||
       routeState.configuredBinding != null
     );
   };
-  if (channelConfig?.enabled === false && !canBypassConfiguredAcpGuildGuards()) {
+  if (channelConfig?.enabled === false && !(await canBypassConfiguredAcpGuildGuards())) {
     await respond("This channel is disabled.");
     return { accepted: false };
   }
   if (
     interaction.guild &&
     channelConfig?.allowed === false &&
-    !canBypassConfiguredAcpGuildGuards()
+    !(await canBypassConfiguredAcpGuildGuards())
   ) {
     await respond("This channel is not allowed.");
     return { accepted: false };
@@ -402,7 +404,7 @@ async function dispatchDiscordCommandInteraction(params: {
       guildInfo,
       channelConfig,
     });
-    if (!policyAuthorizer.allowed && !canBypassConfiguredAcpGuildGuards()) {
+    if (!policyAuthorizer.allowed && !(await canBypassConfiguredAcpGuildGuards())) {
       await respond("This channel is not allowed.");
       return { accepted: false };
     }
@@ -492,7 +494,7 @@ async function dispatchDiscordCommandInteraction(params: {
       ownerAllowListConfigured,
       ownerAllowed: ownerOk,
     });
-    if (!commandAuthorized && !canBypassConfiguredAcpGuildGuards()) {
+    if (!commandAuthorized && !(await canBypassConfiguredAcpGuildGuards())) {
       await respond("You are not authorized to use this command.", { ephemeral: true });
       return { accepted: false };
     }
@@ -502,7 +504,7 @@ async function dispatchDiscordCommandInteraction(params: {
     await respond("Access policy changed. Try this interaction again.", { ephemeral: true });
     return { accepted: false };
   }
-  const routeState = getNativeRouteState();
+  const routeState = await getNativeRouteState();
   const effectiveRoute = routeState.effectiveRoute;
   const { ctxPayload, sessionKey, commandTargetSessionKey } =
     await buildDiscordNativeInteractionContext({
@@ -644,9 +646,7 @@ async function dispatchDiscordCommandInteraction(params: {
     const messageThreadId = !isDirectMessage && isThreadChannel ? channelId : undefined;
     const pluginThreadParentId = !isDirectMessage && isThreadChannel ? threadParentId : undefined;
     const pluginCommandAgentId =
-      (isThreadChannel ? threadBindings.getByThreadId(rawChannelId)?.agentId : undefined) ||
-      routeState.configuredBinding?.statefulTarget.agentId ||
-      effectiveRoute.agentId;
+      routeState.configuredBinding?.statefulTarget.agentId ?? effectiveRoute.agentId;
     const targetSessionEntry = nativeCommandRuntime.getSessionEntry({
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,

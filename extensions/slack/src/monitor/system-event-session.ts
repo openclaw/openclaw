@@ -1,6 +1,6 @@
 // Slack plugin module owns session routing for non-message events.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveRuntimeConversationBindingRouteAsync } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackMessageEvent } from "../types.js";
@@ -31,7 +31,7 @@ export function createSlackSystemEventRouteResolver(params: {
     eventScope?: SlackEventScope,
   ) => SlackMessageEvent["channel_type"] | undefined;
 }) {
-  return (event: SlackSystemEventSessionKeyParams) => {
+  return async (event: SlackSystemEventSessionKeyParams) => {
     const channelId = normalizeOptionalString(event.channelId) ?? "";
     const senderId = normalizeOptionalString(event.senderId) ?? "";
     // System events can omit channel_type too; prefer a type already seen on events
@@ -82,9 +82,11 @@ export function createSlackSystemEventRouteResolver(params: {
       isDirectMessage ? `user:${senderId}` : channelId,
       event.eventScope,
     );
+    // These events enqueue directly rather than passing through reply admission.
+    // Resolve durable target provenance and current binding ownership first.
     const threadBindingRoute =
       !event.eventScope && threadTs
-        ? resolveRuntimeConversationBindingRoute({
+        ? await resolveRuntimeConversationBindingRouteAsync({
             route,
             conversation: {
               channel: "slack",
@@ -94,11 +96,14 @@ export function createSlackSystemEventRouteResolver(params: {
             },
           })
         : null;
+    if (threadBindingRoute?.bindingOwnerAvailable === false) {
+      throw new Error("Slack system event binding owner is unavailable. Retry the event.");
+    }
     const runtimeRoute = event.eventScope
-      ? { route, bindingRecord: null, boundSessionKey: undefined }
+      ? { route, bindingRecord: null, boundSessionKey: undefined, bindingOwnerAvailable: true }
       : threadBindingRoute?.boundSessionKey || threadBindingRoute?.bindingRecord
         ? threadBindingRoute
-        : resolveRuntimeConversationBindingRoute({
+        : await resolveRuntimeConversationBindingRouteAsync({
             route,
             conversation: {
               channel: "slack",
@@ -106,6 +111,9 @@ export function createSlackSystemEventRouteResolver(params: {
               conversationId: baseConversationId,
             },
           });
+    if (runtimeRoute.bindingOwnerAvailable === false) {
+      throw new Error("Slack system event binding owner is unavailable. Retry the event.");
+    }
     if (runtimeRoute.boundSessionKey) {
       return runtimeRoute.route;
     }

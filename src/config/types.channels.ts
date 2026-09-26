@@ -109,11 +109,11 @@ export type ExtensionChannelConfig = {
   /** Plugin-owned native exec approval routing config. */
   execApprovals?: Record<string, unknown>;
   threadBindings?: {
-    /** Enables thread-bound session routing for this channel. */
+    /** Enables supported user-owned session bindings for this channel, not delegated worker bindings. */
     enabled?: boolean;
-    /** Allows user thread spawns (/subagents spawn --thread, /acp spawn --thread). */
+    /** Allows user ACP thread spawns (/acp spawn --thread). */
     spawnSessions?: boolean;
-    /** Default context for /subagents spawn --thread sessions. */
+    /** @deprecated Accepted for config compatibility; ignored. Sub-agents never bind conversations. */
     defaultSpawnContext?: "isolated" | "fork";
   };
   /** Channel-specific bot loop guard settings. */

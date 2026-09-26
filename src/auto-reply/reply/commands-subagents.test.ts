@@ -56,18 +56,16 @@ function commandReadContext(runs: SubagentRunRecord[]) {
   };
 }
 
-describe("/subagents spawn authority", () => {
-  it("is owner-only: an authorized non-owner cannot start a thread-bound subagent", async () => {
+describe("retired subagent binding command", () => {
+  it("does not bind or spawn a worker even for an owner", async () => {
     callGatewayMock.mockReset();
     const params = buildCommandTestParams(
       "/subagents spawn --thread Research the release notes",
       baseCommandTestConfig,
     );
-    params.command.senderIsOwner = false;
-
+    params.command.senderIsOwner = true;
     const result = await handleSubagentsCommand(params, true);
-
-    expect(requireReplyText(result?.reply)).toContain("owner-only command");
+    expect(requireReplyText(result?.reply)).not.toContain("/subagents spawn");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 });

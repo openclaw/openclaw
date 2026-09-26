@@ -890,14 +890,14 @@ async function resolveSlackBlockActionCommandAuthorized(params: {
   return commandIngress.commandAccess.authorized;
 }
 
-function enqueueSlackBlockActionEvent(params: {
+async function enqueueSlackBlockActionEvent(params: {
   ctx: SlackMonitorContext;
   eventScope?: SlackEventScope;
   teamId?: string;
   parsed: ParsedSlackBlockAction;
   auth: { channelType?: "im" | "mpim" | "channel" | "group" };
   formatSystemEvent: (payload: Record<string, unknown>) => string;
-}): void {
+}): Promise<void> {
   const targetKind = params.auth.channelType === "im" ? "user" : "channel";
   const targetId = targetKind === "user" ? params.parsed.userId : params.parsed.channelId;
   const deferredTarget = targetId
@@ -923,7 +923,7 @@ function enqueueSlackBlockActionEvent(params: {
   params.ctx.runtime.log?.(
     `slack:interaction action=${params.parsed.actionId} type=${params.parsed.actionSummary.actionType ?? "unknown"} user=${params.parsed.userId} channel=${params.parsed.channelId}`,
   );
-  const route = params.ctx.resolveSlackSystemEventRoute({
+  const route = await params.ctx.resolveSlackSystemEventRoute({
     channelId: params.parsed.channelId,
     channelType: params.auth.channelType,
     senderId: params.parsed.userId,
@@ -1160,7 +1160,7 @@ async function handleSlackBlockAction(params: {
       return;
     }
   }
-  enqueueSlackBlockActionEvent({
+  await enqueueSlackBlockActionEvent({
     ctx: runtimeContext,
     eventScope,
     teamId: params.args.context.teamId,

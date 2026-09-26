@@ -3,7 +3,7 @@ summary: "Index of the OpenClaw sub-agent documentation, one page per reader job
 read_when:
   - You want background or parallel work via the agent
   - You are changing sessions_spawn or sub-agent tool policy
-  - You are implementing or troubleshooting thread-bound subagent sessions
+  - You need to understand why sub-agents cannot bind conversations
   - You are looking for the sub-agent page that matches your task
 title: "Sub-agents"
 sidebarTitle: "Sub-agents"
@@ -27,9 +27,9 @@ default. For heavy or repetitive tasks, set a cheaper model for sub-agents
 and keep your main agent on a higher-quality model via
 `agents.defaults.subagents.model` or per-agent overrides. When a child
 genuinely needs the requester's current transcript, spawn it with
-`context: "fork"`. Agent spawns otherwise start with isolated context. Sessions
-from `/subagents spawn --thread` follow `threadBindings.defaultSpawnContext`,
-which defaults to `fork`.
+`context: "fork"`. Agent spawns otherwise start with isolated context.
+Sub-agents never bind channel conversations; delegated results return through
+the parent.
 </Note>
 
 A subagent run ends; a session does not. When you open a subagent run in the
@@ -54,7 +54,7 @@ reader job. Open the page that matches your task.
 | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | [Sub-agent slash command](/tools/subagents/slash-command)                    | You want to inspect a run from chat, or need the completion-delivery rules.             |
 | [Sub-agent tool reference](/tools/subagents/tool-reference)                  | You are calling `sessions_spawn`, `sessions_yield`, or `subagents` and need parameters. |
-| [Thread-bound sub-agent sessions](/tools/subagents/thread-bound-sessions)    | You are binding a sub-agent to a channel thread, or need allowlist and archive rules.   |
+| [Sub-agent routing and lifecycle](/tools/subagents/thread-bound-sessions)    | You need routing policy, user-owned ACP bindings, or allowlist and archive rules.       |
 | [Nested sub-agents and authentication](/tools/subagents/nesting)             | You are building an orchestrator and need depth caps, the announce chain, or auth.      |
 | [Sub-agent announce](/tools/subagents/announce)                              | You are debugging how a child result reaches the requester.                             |
 | [Sub-agent tool policy](/tools/subagents/tool-policy)                        | You need the tools a sub-agent always loses, or want to narrow them further.            |

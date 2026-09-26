@@ -60,6 +60,7 @@ describe("Feishu thread bindings", () => {
       placement: "current",
       metadata: {
         label: "codex-main",
+        boundBy: "user-1",
       },
     });
 
@@ -85,7 +86,7 @@ describe("Feishu thread bindings", () => {
       metadata: {
         agentId: "codex",
         label: "codex-main",
-        boundBy: undefined,
+        boundBy: "user-1",
         deliveryTo: undefined,
         deliveryThreadId: undefined,
         lastActivityAt: 1_700_000_000_000,
@@ -112,6 +113,7 @@ describe("Feishu thread bindings", () => {
       targetKind: "session",
       conversation,
       placement: "current",
+      metadata: { boundBy: "user-1" },
     });
     await service.bind({
       targetSessionKey,
@@ -121,6 +123,7 @@ describe("Feishu thread bindings", () => {
         conversationId: "oc_group_chat:topic:om_expired_list_root",
       },
       placement: "current",
+      metadata: { boundBy: "user-1" },
     });
     const expiresAt = startedAt + 86_400_000;
     expect(binding.expiresAt).toBe(expiresAt);
@@ -160,6 +163,7 @@ describe("Feishu thread bindings", () => {
       targetKind: "session",
       conversation,
       placement: "current",
+      metadata: { boundBy: "user-1" },
     });
 
     now.mockReturnValue(startedAt + 30 * 60_000);
@@ -186,6 +190,7 @@ describe("Feishu thread bindings", () => {
       targetKind: "session",
       conversation,
       placement: "current",
+      metadata: { boundBy: "user-1" },
     });
     const expiresAt = startedAt + 86_400_000;
     expect(binding.expiresAt).toBe(expiresAt);
@@ -212,6 +217,7 @@ describe("Feishu thread bindings", () => {
       targetKind: "session",
       conversation,
       placement: "current",
+      metadata: { boundBy: "user-1" },
     });
 
     now.mockReturnValue(startedAt + 1_000);
@@ -241,6 +247,7 @@ describe("Feishu thread bindings", () => {
       placement: "current",
       metadata: {
         agentId: "codex",
+        boundBy: "user-1",
       },
     });
 
@@ -264,6 +271,7 @@ describe("Feishu thread bindings", () => {
       conversation,
       targetSessionKey: "agent:codex:acp:replacement",
       targetKind: "session",
+      metadata: { boundBy: "user-1" },
     });
 
     manager.stop();
@@ -284,12 +292,13 @@ describe("Feishu thread bindings", () => {
       manager.bindConversation({
         conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
         parentConversationId: "oc_group_chat",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
+        // Seed the retired kind only to prove replacing it drops the former owner.
+        targetKind: change === "kind" ? "subagent" : "session",
+        targetSessionKey: "agent:main:session:original",
         metadata: {
           agentId: "previous-agent",
           label: "child",
-          boundBy: "system",
+          boundBy: "previous-user",
           deliveryTo: "user:ou_sender_1",
           deliveryThreadId: "om_topic_root",
           pluginBindingOwner: "plugin",
@@ -301,8 +310,8 @@ describe("Feishu thread bindings", () => {
 
       await getSessionBindingService().bind({
         targetSessionKey:
-          change === "session" ? "agent:main:subagent:replacement" : "agent:main:subagent:child",
-        targetKind: change === "kind" ? "session" : "subagent",
+          change === "session" ? "agent:main:session:replacement" : "agent:main:session:original",
+        targetKind: "session",
         conversation: {
           channel: "feishu",
           accountId: "default",
@@ -324,8 +333,8 @@ describe("Feishu thread bindings", () => {
       ).toEqual({
         bindingId: "default:oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
         targetSessionKey:
-          change === "session" ? "agent:main:subagent:replacement" : "agent:main:subagent:child",
-        targetKind: change === "kind" ? "session" : "subagent",
+          change === "session" ? "agent:main:session:replacement" : "agent:main:session:original",
+        targetKind: "session",
         conversation: {
           channel: "feishu",
           accountId: "default",
@@ -346,7 +355,7 @@ describe("Feishu thread bindings", () => {
             : {}),
           agentId: replace ? "main" : "previous-agent",
           label: "child",
-          boundBy: replace ? undefined : "system",
+          boundBy: replace ? undefined : "previous-user",
           deliveryTo: "user:ou_sender_1",
           deliveryThreadId: "om_topic_root",
           lastActivityAt: 1_700_000_100_000,

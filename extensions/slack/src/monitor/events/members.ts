@@ -70,7 +70,7 @@ export function registerSlackMemberEvents(params: {
             accountId: runtimeContext.accountId,
             conversationId: channelId,
             deliverTo: `channel:${channelId}`,
-            route: runtimeContext.resolveSlackSystemEventRoute({
+            route: await runtimeContext.resolveSlackSystemEventRoute({
               channelId,
               channelType: roomType,
               eventScope,

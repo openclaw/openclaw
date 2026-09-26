@@ -59,7 +59,7 @@ export const discordChannelConfigUiHints = {
   },
   "threadBindings.enabled": {
     label: "Discord Thread Binding Enabled",
-    help: "Enable Discord thread-bound session spawning, routing, and delivery. Overrides session.threadBindings.enabled when set.",
+    help: "Enable user-owned Discord session binding, routing, and delivery, including ACP sessions. Delegated workers never bind conversations. Ordinary Discord threads and replies remain available. Overrides session.threadBindings.enabled when set.",
   },
   "threadBindings.idleHours": {
     label: "Discord Thread Binding Idle Timeout (hours)",
@@ -71,11 +71,11 @@ export const discordChannelConfigUiHints = {
   },
   "threadBindings.spawnSessions": {
     label: "Discord Thread-Bound Session Spawn",
-    help: "Allow /subagents spawn --thread and /acp spawn --thread to create and bind Discord threads (default: true). Set false to disable for this account/channel. Agent-started spawns never bind a thread.",
+    help: "Allow user-run /acp spawn --thread to create and bind Discord threads (default: true). Set false to disable for this account/channel. Native sub-agents and agent-spawned ACP children never bind a conversation.",
   },
   "threadBindings.defaultSpawnContext": {
-    label: "Discord Thread Spawn Context",
-    help: 'Default context for subagents started with /subagents spawn --thread: "fork" starts from the requester transcript, "isolated" starts clean. Default: "fork". Agent-started spawns start isolated unless the caller passes context="fork"."fork".',
+    label: "Discord Thread Spawn Context (Deprecated)",
+    help: "Deprecated and ignored; accepted for existing config compatibility. Native sub-agents never bind conversations. Set context on individual sessions_spawn calls to choose isolated or forked context.",
   },
   "agentComponents.ttlMs": {
     label: "Discord Component TTL (ms)",

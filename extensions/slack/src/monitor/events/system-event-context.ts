@@ -40,7 +40,7 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
     channelId,
     channelName: auth.channelName,
   });
-  const route = ctx.resolveSlackSystemEventRoute({
+  const route = await ctx.resolveSlackSystemEventRoute({
     channelId,
     channelType: auth.channelType,
     senderId,

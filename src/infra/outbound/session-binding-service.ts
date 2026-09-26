@@ -31,6 +31,15 @@ import {
   normalizeConversationRef,
   withSessionBindingInspectionConversation,
 } from "./session-binding-normalization.js";
+import {
+  isDelegatedChannelBindingTarget,
+  isDelegatedChannelBindingTargetAsync,
+  bindingPolicyIdentity,
+  assertBindingPolicyIdentity,
+  routableBinding,
+  routableBindingAsync,
+  routableBindingsAsync,
+} from "./session-binding-policy.js";
 import type {
   ConversationRef,
   SessionBindingBindInput,
@@ -149,28 +158,6 @@ const ADAPTERS_BY_CHANNEL_ACCOUNT = resolveGlobalMap<string, SessionBindingAdapt
   SESSION_BINDING_ADAPTERS_KEY,
 );
 
-type SessionBindingAdapterRegisteredListener = (ref: {
-  channel: string;
-  accountId: string;
-}) => void;
-const ADAPTER_REGISTERED_LISTENERS = resolveGlobalMap<
-  string,
-  SessionBindingAdapterRegisteredListener
->(Symbol.for("openclaw.sessionBinding.adapterRegisteredListeners"));
-
-/** Observes adapter registration, when a channel account's persisted bindings become readable. */
-export function onSessionBindingAdapterRegistered(
-  id: string,
-  listener: SessionBindingAdapterRegisteredListener,
-): () => void {
-  ADAPTER_REGISTERED_LISTENERS.set(id, listener);
-  return () => {
-    if (ADAPTER_REGISTERED_LISTENERS.get(id) === listener) {
-      ADAPTER_REGISTERED_LISTENERS.delete(id);
-    }
-  };
-}
-
 export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): void {
   const normalizedAdapter: NativeCapableSessionBindingAdapter = {
     ...adapter,
@@ -190,9 +177,6 @@ export function registerSessionBindingAdapter(adapter: SessionBindingAdapter): v
     normalizedAdapter,
   });
   ADAPTERS_BY_CHANNEL_ACCOUNT.set(key, registrations);
-  for (const listener of ADAPTER_REGISTERED_LISTENERS.values()) {
-    listener({ channel: normalizedAdapter.channel, accountId: normalizedAdapter.accountId });
-  }
 }
 
 export function unregisterSessionBindingAdapter(params: {
@@ -318,29 +302,43 @@ export async function listSessionBindingsBySessionAsync(
       );
     }
   };
-  const prepared = new Map<NativeCapableSessionBindingAdapter, SessionBindingRecord[]>();
-  for (const adapter of adapters) {
-    const nativeList = adapter[nativeSessionBindingListBySession];
-    if (!nativeList) {
-      continue;
+  const readBindings = async () => {
+    const prepared = new Map<NativeCapableSessionBindingAdapter, SessionBindingRecord[]>();
+    for (const adapter of adapters) {
+      const nativeList = adapter[nativeSessionBindingListBySession];
+      if (!nativeList) {
+        continue;
+      }
+      assertCurrent();
+      prepared.set(adapter, await nativeList.call(adapter, key));
+      assertCurrent();
     }
+    const generic = await listGenericCurrentConversationBindingsBySessionAsync(key, {
+      assertCurrent,
+    });
     assertCurrent();
-    prepared.set(adapter, await nativeList.call(adapter, key));
-    assertCurrent();
+    const results: SessionBindingRecord[] = [];
+    for (const adapter of adapters) {
+      results.push(...(prepared.get(adapter) ?? adapter.listBySession(key)));
+      assertCurrent();
+    }
+    return dedupeBindings([...results, ...generic]);
+  };
+  const records = await readBindings();
+  const identities = records.map(bindingPolicyIdentity);
+  const allowed = await routableBindingsAsync(records, assertCurrent);
+  const current = await readBindings();
+  if (current.length !== identities.length) {
+    throw new SessionBindingError(
+      "BINDING_ADAPTER_UNAVAILABLE",
+      "Conversation bindings changed during target inspection. Retry delivery.",
+    );
   }
-  const generic = await listGenericCurrentConversationBindingsBySessionAsync(key, {
-    assertCurrent,
-  });
+  current.forEach((binding, index) =>
+    assertBindingPolicyIdentity(identities[index] ?? null, binding),
+  );
   assertCurrent();
-  const results: SessionBindingRecord[] = [];
-  for (const adapter of adapters) {
-    // Hydrated channel projections and the shipped external adapter contract stay synchronous.
-    const entries = prepared.get(adapter) ?? adapter.listBySession(key);
-    assertCurrent();
-    results.push(...entries);
-  }
-  results.push(...generic);
-  return dedupeBindings(results);
+  return current.filter((_binding, index) => allowed[index] !== null);
 }
 
 export function inspectSessionBindingByConversation(
@@ -375,7 +373,7 @@ function availableBindingInspection(
   binding: SessionBindingRecord | null,
 ) {
   return withSessionBindingInspectionConversation(
-    { status: "available" as const, binding },
+    { status: "available" as const, binding: routableBinding(binding) },
     conversation,
   );
 }
@@ -392,20 +390,29 @@ async function inspectSessionBindingByConversationAsync(
   if (!adapter && requiresRegisteredSessionBindingAdapter(normalized)) {
     return withSessionBindingInspectionConversation({ status: "unavailable" as const }, normalized);
   }
-  const binding = adapter
-    ? adapter.inspectByConversationAsync
-      ? await adapter.inspectByConversationAsync(normalized)
-      : adapter.inspectByConversation
-        ? adapter.inspectByConversation(normalized)
-        : adapter.resolveByConversation(normalized)
-    : await inspectGenericCurrentConversationBindingAsync(normalized);
+  const readBinding = async () =>
+    adapter
+      ? adapter.inspectByConversationAsync
+        ? await adapter.inspectByConversationAsync(normalized)
+        : adapter.inspectByConversation
+          ? adapter.inspectByConversation(normalized)
+          : adapter.resolveByConversation(normalized)
+      : await inspectGenericCurrentConversationBindingAsync(normalized);
+  const binding = await readBinding();
+  const identity = bindingPolicyIdentity(binding);
   if (
     resolveAdapterForChannelAccount(normalized) !== adapter ||
     (!adapter && requiresRegisteredSessionBindingAdapter(normalized))
   ) {
     return withSessionBindingInspectionConversation({ status: "unavailable" as const }, normalized);
   }
-  return availableBindingInspection(normalized, binding);
+  const allowed = await routableBindingAsync(binding, () =>
+    assertAdapterSelectionCurrent(normalized, adapter),
+  );
+  const current = await readBinding();
+  assertAdapterSelectionCurrent(normalized, adapter);
+  assertBindingPolicyIdentity(identity, current);
+  return availableBindingInspection(normalized, allowed ? current : null);
 }
 
 /** Legacy adapters retain their synchronous owner view after asynchronous preparation. */
@@ -448,16 +455,36 @@ export async function readSessionBindingSelectionCurrent(
   };
   assertCurrent();
   const nativeRead = adapter?.[nativeSessionBindingSelection];
-  const records = !adapter
-    ? await readGenericCurrentConversationBindingSelectionAsync(conversations, { assertCurrent })
-    : nativeRead
-      ? await nativeRead.call(adapter, conversations)
-      : await readLegacyAdapterSelection(adapter, conversations, assertCurrent);
+  const readSelection = async () => {
+    const records = !adapter
+      ? await readGenericCurrentConversationBindingSelectionAsync(conversations, { assertCurrent })
+      : nativeRead
+        ? await nativeRead.call(adapter, conversations)
+        : await readLegacyAdapterSelection(adapter, conversations, assertCurrent);
+    assertCurrent();
+    return records;
+  };
+  const records = await readSelection();
   assertCurrent();
   if (records.length !== conversations.length) {
     throw new Error("Session binding owner returned an incomplete conversation selection");
   }
-  return records;
+  const identities = records.map(bindingPolicyIdentity);
+  const allowed = await routableBindingsAsync(records, assertCurrent);
+  // Provenance inspection yields to a different store. Close that gap by re-reading
+  // the binding owner; never admit an uninspected replacement or a stale absence.
+  const current = await readSelection();
+  if (
+    current.length !== records.length ||
+    current.some((binding, index) => bindingPolicyIdentity(binding) !== identities[index])
+  ) {
+    throw new SessionBindingError(
+      "BINDING_ADAPTER_UNAVAILABLE",
+      "Conversation binding changed during target inspection. Retry the message.",
+    );
+  }
+  assertCurrent();
+  return current.map((binding, index) => (allowed[index] ? binding : null));
 }
 
 function createDefaultSessionBindingService(): AsyncSessionBindingService {
@@ -506,12 +533,29 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
           },
         );
       }
+      const assertBindingCurrent = () => {
+        assertCurrent?.();
+        assertAdapterSelectionCurrent(normalizedConversation, adapter);
+      };
       const bindInput = {
         ...input,
+        metadata: input.metadata ? { ...input.metadata } : undefined,
+        assertCurrent: assertBindingCurrent,
         conversation: normalizedConversation,
         placement,
       };
-      assertCurrent?.();
+      if (await isDelegatedChannelBindingTargetAsync(bindInput, assertBindingCurrent)) {
+        throw new SessionBindingError(
+          "BINDING_CAPABILITY_UNSUPPORTED",
+          "Delegated workers cannot own chat-channel bindings. Use a normal agent or an explicit ACP session.",
+          {
+            channel: normalizedConversation.channel,
+            accountId: normalizedConversation.accountId,
+            placement,
+          },
+        );
+      }
+      assertBindingCurrent();
       const bound = adapter
         ? await adapter.bind!(bindInput)
         : await bindGenericCurrentConversation(bindInput);
@@ -551,7 +595,7 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
         }
       }
       results.push(...listGenericCurrentConversationBindingsBySession(key));
-      return dedupeBindings(results);
+      return dedupeBindings(results.filter((binding) => !isDelegatedChannelBindingTarget(binding)));
     },
     resolveByConversation: (ref) => {
       const normalized = normalizeConversationRef(ref);
@@ -560,9 +604,9 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
       }
       const adapter = resolveAdapterForChannelAccount(normalized);
       if (!adapter) {
-        return resolveGenericCurrentConversationBinding(normalized);
+        return routableBinding(resolveGenericCurrentConversationBinding(normalized));
       }
-      return adapter.resolveByConversation(normalized);
+      return routableBinding(adapter.resolveByConversation(normalized));
     },
     resolveByConversationAsync: async (ref) => {
       const normalized = captureConversationRef(ref);
@@ -571,15 +615,24 @@ function createDefaultSessionBindingService(): AsyncSessionBindingService {
       }
       const adapter = resolveAdapterForChannelAccount(normalized);
       assertAdapterSelectionCurrent(normalized, adapter);
-      const binding = adapter
-        ? adapter.resolveByConversationAsync
-          ? await adapter.resolveByConversationAsync(normalized)
-          : adapter.resolveByConversation(normalized)
-        : await resolveGenericCurrentConversationBindingAsync(normalized, {
-            assertCurrent: () => assertAdapterSelectionCurrent(normalized, null),
-          });
+      const readBinding = async () =>
+        adapter
+          ? adapter.resolveByConversationAsync
+            ? await adapter.resolveByConversationAsync(normalized)
+            : adapter.resolveByConversation(normalized)
+          : await resolveGenericCurrentConversationBindingAsync(normalized, {
+              assertCurrent: () => assertAdapterSelectionCurrent(normalized, null),
+            });
+      const binding = await readBinding();
       assertAdapterSelectionCurrent(normalized, adapter);
-      return binding;
+      const identity = bindingPolicyIdentity(binding);
+      const allowed = await routableBindingAsync(binding, () =>
+        assertAdapterSelectionCurrent(normalized, adapter),
+      );
+      const current = await readBinding();
+      assertAdapterSelectionCurrent(normalized, adapter);
+      assertBindingPolicyIdentity(identity, current);
+      return allowed ? current : null;
     },
     touch: (bindingId, at, scope) => {
       const normalizedBindingId = bindingId.trim();

@@ -238,15 +238,15 @@ export type DiscordAgentComponentsConfig = {
 };
 
 export type DiscordThreadBindingsConfig = {
-  /** Enable Discord thread binding features. Overrides session.threadBindings.enabled. */
+  /** Enable user-owned Discord session bindings. Overrides session.threadBindings.enabled. */
   enabled?: boolean;
   /** Inactivity window in hours. Set 0 to disable. Default: 24. */
   idleHours?: number;
   /** Hard max age in hours. Set 0 to disable. Default: 0. */
   maxAgeHours?: number;
-  /** Allow user thread spawns to create and bind Discord threads. Default: true. */
+  /** Allow user ACP thread spawns to create and bind Discord threads. Default: true. */
   spawnSessions?: boolean;
-  /** Default context for /subagents spawn --thread sessions. */
+  /** @deprecated Accepted for config compatibility; ignored. Sub-agents never bind conversations. */
   defaultSpawnContext?: "isolated" | "fork";
 };
 

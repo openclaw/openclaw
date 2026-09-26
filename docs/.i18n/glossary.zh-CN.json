@@ -4938,5 +4938,9 @@
   {
     "source": "Deploy a team server",
     "target": "部署团队服务器"
+  },
+  {
+    "source": "Sub-agent routing and lifecycle",
+    "target": "子智能体路由与生命周期"
   }
 ]

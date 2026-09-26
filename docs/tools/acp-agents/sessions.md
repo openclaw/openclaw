@@ -162,7 +162,7 @@ config-the-default error).
     - On non-thread binding surfaces, default behavior is effectively `off`.
     - Thread-bound spawn requires channel policy support:
       - Discord/Telegram: `session.threadBindings.spawnSessions=true`
-    - Only this user command creates a thread-bound ACP session. An agent `sessions_spawn({ runtime: "acp" })` call never binds a thread.
+    - This command binds a user-owned ACP session; configured persistent ACP bindings are also supported. An agent `sessions_spawn({ runtime: "acp" })` call never binds a conversation and returns results through its parent.
     - Use `--bind here` when you want to pin the current conversation without creating a child thread.
 
   </Tab>

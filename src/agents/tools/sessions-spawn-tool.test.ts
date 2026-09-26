@@ -1656,7 +1656,7 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(tool.description).toContain("never bind or take over a chat");
-    expect(tool.description).toContain("/subagents spawn --thread <task>");
+    expect(tool.description).not.toContain("/subagents spawn --thread");
     expect(tool.description).not.toContain("thread-bound");
     expect(schema.properties?.thread).toBeUndefined();
     expect(schema.properties?.mode?.enum).toEqual(["run", "session"]);
@@ -1708,7 +1708,7 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs).not.toHaveProperty("thread");
     expect(spawnArgs).not.toHaveProperty("mode");
     expect(result.details).toMatchObject({
-      note: expect.stringContaining("Thread binding is not available for agent-started spawns"),
+      note: expect.stringContaining("Subagents cannot own conversation bindings"),
     });
     expect(spawnArgs.completionTarget).toBeUndefined();
     expect(spawnArgs.cleanup).toBe("keep");
@@ -2023,7 +2023,7 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs).not.toHaveProperty("mode");
     expect(result.details).toMatchObject({
       note: expect.stringContaining(
-        "Thread binding is not available for agent-started spawns; the child runs in the background. A user who wants a separate thread runs /subagents spawn --thread <task>.",
+        "Subagents cannot own conversation bindings; the child runs in the background and returns its result to the requester.",
       ),
     });
     expect(spawnArgs.cleanup).toBe("keep");

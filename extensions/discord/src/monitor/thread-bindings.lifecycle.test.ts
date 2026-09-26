@@ -1134,6 +1134,7 @@ describe("thread binding lifecycle", () => {
       placement: "child",
       metadata: {
         agentId: "codex",
+        boundBy: "user-123",
         label: "Codex ACP bind test",
         threadName: "Codex ACP bind test",
       },
@@ -1189,6 +1190,7 @@ describe("thread binding lifecycle", () => {
         conversationId: "channel:1491611525914558667",
       },
       placement: "current",
+      metadata: { boundBy: "user-123" },
     });
 
     const boundConversation = requireRecord(
@@ -1314,7 +1316,7 @@ describe("thread binding lifecycle", () => {
       });
 
       await getSessionBindingService().bind({
-        targetSessionKey: replace ? "agent:main:acp:replacement" : "plugin-binding:owner-plugin:dm",
+        targetSessionKey: replace ? "agent:main:replacement" : "plugin-binding:owner-plugin:dm",
         targetKind: "session",
         conversation: {
           channel: "discord",

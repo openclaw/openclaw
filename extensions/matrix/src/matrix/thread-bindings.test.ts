@@ -107,8 +107,8 @@ describe("matrix thread bindings", () => {
     metadata?: { introText?: string };
   }) {
     return getSessionBindingService().bind({
-      targetSessionKey: params?.targetSessionKey ?? "agent:ops:subagent:child",
-      targetKind: "subagent",
+      targetSessionKey: params?.targetSessionKey ?? "agent:ops:session:child",
+      targetKind: "session",
       conversation: currentThreadConversation({
         conversationId: params?.conversationId,
         parentConversationId: params?.parentConversationId,
@@ -222,8 +222,8 @@ describe("matrix thread bindings", () => {
     await createBindingManager();
 
     const binding = await getSessionBindingService().bind({
-      targetSessionKey: "agent:ops:subagent:child",
-      targetKind: "subagent",
+      targetSessionKey: "agent:ops:session:child",
+      targetKind: "session",
       conversation: {
         channel: "matrix",
         accountId: "ops",
@@ -253,8 +253,8 @@ describe("matrix thread bindings", () => {
 
     await expect(
       getSessionBindingService().bind({
-        targetSessionKey: "agent:ops:subagent:child",
-        targetKind: "subagent",
+        targetSessionKey: "agent:ops:session:child",
+        targetKind: "session",
         conversation: { channel: "matrix", accountId: "ops", conversationId: "!room:example" },
         placement: "child",
         metadata: { introText: "intro root" },
@@ -264,7 +264,7 @@ describe("matrix thread bindings", () => {
       }),
     ).rejects.toThrow("owner authority revoked");
     expect(sendMessageMatrixMock).not.toHaveBeenCalled();
-    expect(getSessionBindingService().listBySession("agent:ops:subagent:child")).toEqual([]);
+    expect(getSessionBindingService().listBySession("agent:ops:session:child")).toEqual([]);
   });
 
   it("posts intro messages inside existing Matrix threads for current placement", async () => {
@@ -272,7 +272,7 @@ describe("matrix thread bindings", () => {
     await createBindingManager({ cfg });
 
     const binding = await bindCurrentThread({
-      targetSessionKey: "agent:molty:subagent:child",
+      targetSessionKey: "agent:molty:session:child",
       metadata: {
         introText: "intro thread",
       },
@@ -291,7 +291,7 @@ describe("matrix thread bindings", () => {
       parentConversationId: "!room:example",
     });
     expect(resolved?.bindingId).toBe(binding.bindingId);
-    expect(resolved?.targetSessionKey).toBe("agent:molty:subagent:child");
+    expect(resolved?.targetSessionKey).toBe("agent:molty:session:child");
     expect(binding.metadata?.agentId).toBe("molty");
   });
 
@@ -306,8 +306,8 @@ describe("matrix thread bindings", () => {
       });
 
       await getSessionBindingService().bind({
-        targetSessionKey: "agent:ops:subagent:child",
-        targetKind: "subagent",
+        targetSessionKey: "agent:ops:session:child",
+        targetKind: "session",
         conversation: {
           channel: "matrix",
           accountId: "ops",
@@ -348,8 +348,8 @@ describe("matrix thread bindings", () => {
       });
 
       await getSessionBindingService().bind({
-        targetSessionKey: "agent:ops:subagent:first",
-        targetKind: "subagent",
+        targetSessionKey: "agent:ops:session:first",
+        targetKind: "session",
         conversation: {
           channel: "matrix",
           accountId: "ops",
@@ -359,8 +359,8 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
       await getSessionBindingService().bind({
-        targetSessionKey: "agent:ops:subagent:second",
-        targetKind: "subagent",
+        targetSessionKey: "agent:ops:session:second",
+        targetKind: "session",
         conversation: {
           channel: "matrix",
           accountId: "ops",
@@ -402,8 +402,8 @@ describe("matrix thread bindings", () => {
     });
 
     const binding = await getSessionBindingService().bind({
-      targetSessionKey: "agent:ops:subagent:child",
-      targetKind: "subagent",
+      targetSessionKey: "agent:ops:session:child",
+      targetKind: "session",
       conversation: {
         channel: "matrix",
         accountId: "ops",
@@ -500,7 +500,7 @@ describe("matrix thread bindings", () => {
     const initialBindingsPath = path.join(initialStoragePaths.rootDir, "thread-bindings.json");
     await expectPersistedThreadBinding(initialBindingsPath, {
       conversationId: "$thread",
-      targetSessionKey: "agent:ops:subagent:child",
+      targetSessionKey: "agent:ops:session:child",
     });
 
     await initialManager.stop();
@@ -515,7 +515,7 @@ describe("matrix thread bindings", () => {
         conversationId: "$thread",
         parentConversationId: "!room:example",
       })?.targetSessionKey,
-    ).toBe("agent:ops:subagent:child");
+    ).toBe("agent:ops:session:child");
 
     const rotatedBindingsPath = path.join(
       (
@@ -557,17 +557,17 @@ describe("matrix thread bindings", () => {
     ).toBeNull();
 
     await bindCurrentThread({
-      targetSessionKey: "agent:ops:subagent:replacement",
+      targetSessionKey: "agent:ops:session:replacement",
       conversationId: "$thread-2",
     });
 
     await expectPersistedThreadBinding(await resolveBindingsFilePath(replacementStateDir), {
       conversationId: "$thread-2",
-      targetSessionKey: "agent:ops:subagent:replacement",
+      targetSessionKey: "agent:ops:session:replacement",
     });
     await expectPersistedThreadBinding(await resolveBindingsFilePath(initialStateDir), {
       conversationId: "$thread",
-      targetSessionKey: "agent:ops:subagent:child",
+      targetSessionKey: "agent:ops:session:child",
     });
 
     await initialManager.stop();
@@ -577,7 +577,7 @@ describe("matrix thread bindings", () => {
         conversationId: "$thread-2",
         parentConversationId: "!room:example",
       })?.targetSessionKey,
-    ).toBe("agent:ops:subagent:replacement");
+    ).toBe("agent:ops:session:replacement");
   });
 
   it("updates lifecycle windows by session key and refreshes activity", async () => {
@@ -590,8 +590,8 @@ describe("matrix thread bindings", () => {
       });
 
       await getSessionBindingService().bind({
-        targetSessionKey: "agent:ops:subagent:child",
-        targetKind: "subagent",
+        targetSessionKey: "agent:ops:session:child",
+        targetKind: "session",
         conversation: {
           channel: "matrix",
           accountId: "ops",
@@ -600,20 +600,20 @@ describe("matrix thread bindings", () => {
         },
         placement: "current",
       });
-      const original = manager.listBySessionKey("agent:ops:subagent:child")[0];
+      const original = manager.listBySessionKey("agent:ops:session:child")[0];
       if (original === undefined) {
         throw new Error("expected original matrix thread binding");
       }
 
       const idleUpdated = setMatrixThreadBindingIdleTimeoutBySessionKey({
         accountId: "ops",
-        targetSessionKey: "agent:ops:subagent:child",
+        targetSessionKey: "agent:ops:session:child",
         idleTimeoutMs: 2 * 60 * 60 * 1000,
       });
       vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
       const maxAgeUpdated = setMatrixThreadBindingMaxAgeBySessionKey({
         accountId: "ops",
-        targetSessionKey: "agent:ops:subagent:child",
+        targetSessionKey: "agent:ops:session:child",
         maxAgeMs: 6 * 60 * 60 * 1000,
       });
 
@@ -625,10 +625,10 @@ describe("matrix thread bindings", () => {
       expect(maxAgeUpdated[0]?.metadata?.lastActivityAt).toBe(
         Date.parse("2026-03-06T12:00:00.000Z"),
       );
-      expect(manager.listBySessionKey("agent:ops:subagent:child")[0]?.maxAgeMs).toBe(
+      expect(manager.listBySessionKey("agent:ops:session:child")[0]?.maxAgeMs).toBe(
         6 * 60 * 60 * 1000,
       );
-      expect(manager.listBySessionKey("agent:ops:subagent:child")[0]?.lastActivityAt).toBe(
+      expect(manager.listBySessionKey("agent:ops:session:child")[0]?.lastActivityAt).toBe(
         Date.parse("2026-03-06T12:00:00.000Z"),
       );
     } finally {

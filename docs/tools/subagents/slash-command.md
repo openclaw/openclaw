@@ -1,32 +1,26 @@
 ---
-summary: "Inspect sub-agent runs with /subagents, use the thread-binding commands, and follow the completion-delivery path"
+summary: "Inspect sub-agent runs with /subagents and follow the parent-owned completion-delivery path"
 title: "Sub-agent slash command"
 read_when:
   - You want to inspect or log a sub-agent run from chat
-  - You need the thread-binding slash commands
+  - You need to distinguish delegated workers from user-owned ACP bindings
   - You are debugging how a completed child reaches the requester
 ---
 
 ## Slash command
 
-`/subagents` inspects sub-agent runs for the **current session**, and starts a
-sub-agent in a new thread:
+`/subagents` inspects sub-agent runs for the **current session**:
 
 ```text
 /subagents list
 /subagents log <id|#> [limit] [tools]
 /subagents info <id|#>
-/subagents spawn --thread [--agent <id>] <task>
 ```
 
-`/subagents spawn --thread` creates a new thread or topic and binds a
-persistent sub-agent session there. The sub-agent answers in the new thread,
-and your follow-ups there go to it. The conversation where you ran the command
-does not change. `--thread` is required. `--agent <id>` picks another agent
-that `subagents.allowAgents` allows. It works in Discord channels, Matrix
-rooms, and Telegram forum groups. In a DM or a group that cannot hold threads,
-it stops with a message and starts nothing. See
-[Thread-bound sessions](/tools/subagents/thread-bound-sessions#thread-bound-sessions).
+Native sub-agents cannot be bound to a conversation, including through manual
+commands. Their results return to the parent/requester. For explicit user-owned
+ACP bindings, use `/acp`; see
+[ACP bindings](/tools/acp-agents/bindings).
 
 `/subagents info` shows run metadata (status, timestamps, session id,
 transcript path, cleanup). `/subagents log` prints recent chat turns for a
@@ -61,8 +55,8 @@ successful run clears the previous failure reason.
 
 ### Thread binding controls
 
-These commands work on channels with persistent thread bindings, such as a
-thread from `/subagents spawn --thread`. See
+These commands manage supported user-owned session bindings, such as an ACP
+session bound with `/acp`. They do not bind delegated workers. See
 [Thread supporting channels](/tools/subagents/thread-bound-sessions#thread-supporting-channels).
 
 ```text
@@ -83,8 +77,6 @@ described in the accepted receipt:
 - [Swarm collectors](/tools/swarm) return results through explicit collection,
   not completion notifications; reserve them for large parallel fan-out (several
   similar children, about five or more), and use ordinary spawns for one or a few.
-- Thread-bound sessions from `/subagents spawn --thread` reply directly in their
-  new thread, without a separate parent announcement.
 - Caller-managed quiet runs send no completion notification.
 
 When [execution identity auditing](/gateway/audit#run-identity-inspection) is
@@ -120,7 +112,7 @@ explicitly unsupported even though the ACP spawn and child are observable.
     - If an outbound hook intentionally suppresses a completion, the child can remain completed while its task delivery is marked `failed` with the suppression reason. OpenClaw does not retry or start another requester turn to bypass that decision. Inspect the task error and hook policy before manually retrying.
     - Blocked canonical results are retained for 7 days. Operators can retry or intentionally dismiss them from the Tasks page or with `openclaw tasks retry` / `openclaw tasks dismiss`; retry can duplicate a visible result after an ambiguous provider acknowledgement.
     - If a pending completion's task record is gone, OpenClaw records `task-missing` and stops retrying across restarts. The retained sub-agent record keeps its result; `/subagents info <runId>` shows the delivery disposition and retirement time. Its normal cleanup window starts at retirement, so an old execution deadline does not immediately erase that history.
-    - Delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available. If the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's recorded delivery context so direct delivery still works.
+    - Delivery keeps the resolved requester route: the parent's thread-bound or conversation-bound route wins when available, never a binding to the delegated child. If the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's recorded delivery context so direct delivery still works.
 
   </Accordion>
   <Accordion title="Completion handoff metadata">
@@ -137,7 +129,7 @@ explicitly unsupported even though the ACP spawn and child are observable.
 
   </Accordion>
   <Accordion title="Modes and ACP runtime">
-    - `--model` and `--thinking` override defaults for that specific run.
+    - The `sessions_spawn` parameters `model` and `thinking` override defaults for that specific run.
     - Use `info`/`log` to inspect details and output after completion.
     - Native sub-agents never bind a thread or take over a chat. They run as one-shot background runs, and results return to the requester. A `thread: true` or `mode: "session"` sub-agent request runs unbound, with a note in the result.
     - For ACP harness sessions (Claude Code, Gemini CLI, OpenCode, or explicit Codex ACP/acpx), use `sessions_spawn` with `runtime: "acp"` when the tool advertises that runtime. See [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops. When the `codex` plugin is enabled, Codex chat/thread control should prefer `/codex ...` over ACP unless the user explicitly asks for ACP/acpx.

@@ -440,8 +440,8 @@ describe("preflightDiscordMessage", () => {
     const preflight = expectPreflightResult(result);
     expect(preflight.threadBinding).toEqual({
       bindingId: "default:thread-1",
-      targetSessionKey: "agent:main:subagent:child-1",
-      targetKind: "subagent",
+      targetSessionKey: "agent:main:acp:user-thread",
+      targetKind: "session",
       conversation: {
         channel: "discord",
         accountId: "default",
@@ -2992,8 +2992,9 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
     const binding = await manager.bindTarget({
       threadId: "thread-1",
       channelId: "parent-1",
-      targetKind: "subagent",
-      targetSessionKey: "agent:main:subagent:child-1",
+      targetKind: "acp",
+      targetSessionKey: "agent:main:acp:user-thread",
+      boundBy: "owner-1",
       agentId: "main",
       webhookId: "wh-1",
       webhookToken: "tok-1",

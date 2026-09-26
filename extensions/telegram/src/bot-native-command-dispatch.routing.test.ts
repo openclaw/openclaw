@@ -182,7 +182,7 @@ describe("registered native command routing through the message pipeline", () =>
   );
 
   it.for(["ordinary message", "native command"] as const)(
-    "awaits durable worker activity before dispatching a bound %s",
+    "awaits durable database-worker activity before dispatching a bound %s",
     async (kind, { signal }) => {
       const runtime = getTelegramRuntime();
       const entered = createDeferred<void>();
@@ -241,10 +241,11 @@ describe("registered native command routing through the message pipeline", () =>
           accountId: "default",
           conversationId: "-42001:topic:42",
         };
-        const sessionKey = "agent:main:subagent:worker-touch";
+        // This fixture proves database-write ordering, not delegated-worker routing.
+        const sessionKey = "agent:main:bound-topic-owner";
         await getSessionBindingService().bind({
           conversation,
-          targetKind: "subagent",
+          targetKind: "session",
           targetSessionKey: sessionKey,
         });
         const store = createPluginStateKeyedStoreForTests<TelegramThreadBindingRecord>("telegram", {

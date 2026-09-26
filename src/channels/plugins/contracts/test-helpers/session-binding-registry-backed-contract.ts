@@ -47,7 +47,7 @@ function installSessionBindingContractSuite(params: {
       expect(binding.bindingId.trim()).not.toBe("");
       expect(typeof binding.targetSessionKey).toBe("string");
       expect(binding.targetSessionKey.trim()).not.toBe("");
-      expect(["session", "subagent"]).toContain(binding.targetKind);
+      expect(binding.targetKind).toBe("session");
       expect(typeof binding.conversation.channel).toBe("string");
       expect(typeof binding.conversation.accountId).toBe("string");
       expect(typeof binding.conversation.conversationId).toBe("string");

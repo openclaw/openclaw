@@ -94,10 +94,11 @@ failed chunk may have been delivered, so inspect the thread before retrying.
 
   </Accordion>
 
-  <Accordion title="Thread-bound sessions for subagents">
-    Discord can bind a thread to a session target so follow-up messages in that thread keep routing to the same session (including subagent sessions).
+  <a id="thread-bound-sessions-for-subagents" />
+  <Accordion title="Thread-bound user-owned sessions">
+    Discord can bind a thread to a user-owned session target so follow-up messages in that thread keep routing to that session. Native sub-agents and agent-spawned ACP children never bind a conversation; all delegated results return through the parent.
 
-    Only a user command binds a thread. Run `/subagents spawn --thread [--agent <id>] <task>` in a server channel. OpenClaw creates a new thread and binds a persistent subagent session there. The subagent answers in that thread, and follow-ups there go to it. The channel where you ran the command does not change. In a DM, the command stops and starts nothing. Agent-started spawns (native subagents and ACP) never bind a thread.
+    For an explicit user-owned ACP session, run `/acp spawn <harness> --thread auto` or `--bind here`, or configure a persistent ACP binding. There is no manual native sub-agent binding command. Ordinary Discord thread creation, auto-thread replies, and replies within existing threads continue to work.
 
     Commands:
 
@@ -124,9 +125,9 @@ failed chunk may have been delivered, so inspect the thread before retrying.
     Notes:
 
     - `session.threadBindings.*` is the canonical policy for Discord and Telegram.
-    - `spawnSessions` gates user thread spawns: `/subagents spawn --thread` and `/acp spawn --thread`. Default: `true`.
-    - `defaultSpawnContext` sets the default context for sub-agents started with `/subagents spawn --thread` (`"fork"` by default). Agent-started spawns start with isolated context unless the spawn passes `context: "fork"`.
-    - On upgrade, OpenClaw removes old bindings that agent spawns put on your own chat. It does this when the gateway starts and when each Discord account starts. Bindings you made stay.
+    - `spawnSessions` gates user ACP thread spawns: `/acp spawn --thread`. Default: `true`. It does not gate `--bind here` when thread bindings are enabled.
+    - `defaultSpawnContext` is deprecated and ignored. It remains accepted for existing config compatibility. Native sub-agents start with isolated context unless the spawn passes `context: "fork"`.
+    - Saved legacy bindings to native sub-agents or agent-spawned ACP children are ignored by runtime routing and delivery, including native bindings originally made by a user command. No startup or background sweep migrates or deletes them. Explicit user-owned ACP bindings remain supported.
     - Deprecated `spawnSubagentSessions`/`spawnAcpSessions` keys are migrated by `openclaw doctor --fix`.
     - If thread bindings are disabled, thread-bound spawns are unavailable.
 

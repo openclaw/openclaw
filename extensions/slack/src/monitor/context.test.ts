@@ -220,11 +220,11 @@ describe("createSlackMonitorContext isChannelAllowed", () => {
 });
 
 describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
-  it("routes threaded interaction events to the Slack thread session", () => {
+  it("routes threaded interaction events to the Slack thread session", async () => {
     const ctx = createTestContext();
 
     expect(
-      ctx.resolveSlackSystemEventRoute({
+      await ctx.resolveSlackSystemEventRoute({
         channelId: "C_THREAD",
         channelType: "channel",
         senderId: "U_CLICKER",
@@ -236,30 +236,30 @@ describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
     });
   });
 
-  it("routes channel-less direct interactions to the sender session", () => {
+  it("routes channel-less direct interactions to the sender session", async () => {
     const ctx = createTestContext({ dmScope: "per-channel-peer" });
 
     expect(
-      ctx.resolveSlackSystemEventRoute({
+      await ctx.resolveSlackSystemEventRoute({
         channelType: "im",
         senderId: "U_SHORTCUT",
       }),
     ).toEqual({ agentId: "main", sessionKey: "agent:main:slack:direct:u_shortcut" });
   });
 
-  it("routes typeless system events through an event-carried mpDM type", () => {
+  it("routes typeless system events through an event-carried mpDM type", async () => {
     const ctx = createTestContext();
     ctx.rememberSlackChannelType("C0MPDM42", "mpim");
 
     expect(
-      ctx.resolveSlackSystemEventRoute({
+      await ctx.resolveSlackSystemEventRoute({
         channelId: "C0MPDM42",
         senderId: "U_ACTOR",
       }),
     ).toEqual({ agentId: "main", sessionKey: "agent:main:slack:group:c0mpdm42" });
   });
 
-  it("partitions enterprise channel system events by workspace", () => {
+  it("partitions enterprise channel system events by workspace", async () => {
     const ctx = createTestContext();
     const resolveForTeam = (teamId: string) =>
       ctx.resolveSlackSystemEventRoute({
@@ -269,17 +269,17 @@ describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
         eventScope: createEnterpriseEventScope(teamId),
       });
 
-    expect(resolveForTeam("T111")).toEqual({
+    expect(await resolveForTeam("T111")).toEqual({
       agentId: "main",
       sessionKey: "agent:main:slack:channel:team:t111:channel:c_shared",
     });
-    expect(resolveForTeam("T222")).toEqual({
+    expect(await resolveForTeam("T222")).toEqual({
       agentId: "main",
       sessionKey: "agent:main:slack:channel:team:t222:channel:c_shared",
     });
   });
 
-  it("partitions enterprise main DM system events by workspace", () => {
+  it("partitions enterprise main DM system events by workspace", async () => {
     const ctx = createTestContext({ dmScope: "main" });
     const resolveForTeam = (teamId: string) =>
       ctx.resolveSlackSystemEventRoute({
@@ -289,11 +289,11 @@ describe("createSlackMonitorContext resolveSlackSystemEventRoute", () => {
         eventScope: createEnterpriseEventScope(teamId),
       });
 
-    expect(resolveForTeam("T111")).toEqual({
+    expect(await resolveForTeam("T111")).toEqual({
       agentId: "main",
       sessionKey: "agent:main:main:account:default:team:t111",
     });
-    expect(resolveForTeam("T222")).toEqual({
+    expect(await resolveForTeam("T222")).toEqual({
       agentId: "main",
       sessionKey: "agent:main:main:account:default:team:t222",
     });

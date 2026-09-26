@@ -29,6 +29,18 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/conversation-binding-runtime")
+  >("openclaw/plugin-sdk/conversation-binding-runtime");
+  return {
+    ...actual,
+    isDelegatedChannelBindingTargetAsync: async (
+      target: Parameters<typeof actual.isDelegatedChannelBindingTarget>[0],
+    ) => actual.isDelegatedChannelBindingTarget(target),
+  };
+});
+
 vi.mock("../send.js", async () => {
   const actual = await vi.importActual<typeof import("../send.js")>("../send.js");
   return {
@@ -678,7 +690,7 @@ describe("deliverDiscordReply", () => {
           accountId: "default",
           channelId: "parent-1",
           threadId: "thread-1",
-          targetSessionKey: "agent:main:subagent:child",
+          targetSessionKey: "agent:main:main",
           agentId: "main",
           label: "child",
           webhookId: "wh_1",
@@ -689,7 +701,7 @@ describe("deliverDiscordReply", () => {
     };
 
     await deliverDiscordReply({
-      replies: [{ text: "Hello from subagent" }],
+      replies: [{ text: "Hello from the configured agent" }],
       target: "channel:thread-1",
       token: "token",
       accountId: "default",
@@ -697,7 +709,7 @@ describe("deliverDiscordReply", () => {
       cfg,
       textLimit: 2000,
       replyToId: "reply-1",
-      sessionKey: "agent:main:subagent:child",
+      sessionKey: "agent:main:main",
       threadBindings,
       kind: "final",
     });
@@ -708,7 +720,7 @@ describe("deliverDiscordReply", () => {
     expect(params.replyToId).toBe("reply-1");
     expect(recordField(params.identity, "identity").name).toBe("🤖 child");
     const session = recordField(params.session, "session");
-    expect(session.key).toBe("agent:main:subagent:child");
+    expect(session.key).toBe("agent:main:main");
     expect(session.agentId).toBe("main");
   });
 
@@ -719,7 +731,7 @@ describe("deliverDiscordReply", () => {
           accountId: "default",
           channelId: "parent-1",
           threadId: "thread-1",
-          targetSessionKey: "agent:main:subagent:child",
+          targetSessionKey: "agent:main:main",
           agentId: "main",
           label: `${"a".repeat(76)}🚀tail`,
           webhookId: "wh_1",
@@ -729,14 +741,14 @@ describe("deliverDiscordReply", () => {
     };
 
     await deliverDiscordReply({
-      replies: [{ text: "Hello from subagent" }],
+      replies: [{ text: "Hello from the configured agent" }],
       target: "channel:thread-1",
       token: "token",
       accountId: "default",
       runtime,
       cfg,
       textLimit: 2000,
-      sessionKey: "agent:main:subagent:child",
+      sessionKey: "agent:main:main",
       threadBindings,
       kind: "final",
     });
@@ -744,5 +756,36 @@ describe("deliverDiscordReply", () => {
     expect(recordField(firstDeliverParams().identity, "identity").name).toBe(
       `🤖 ${"a".repeat(76)}`,
     );
+  });
+
+  it("does not revive a legacy native binding through the raw Discord reply lookup", async () => {
+    await deliverDiscordReply({
+      cfg,
+      replies: [{ text: "Parent-owned result" }],
+      target: "channel:thread-1",
+      token: "token",
+      accountId: "default",
+      runtime,
+      textLimit: 2000,
+      kind: "final",
+      sessionKey: "agent:main:subagent:child",
+      threadBindings: {
+        listBySessionKey: () => [
+          {
+            accountId: "default",
+            channelId: "parent-1",
+            threadId: "thread-1",
+            targetSessionKey: "agent:main:subagent:child",
+            targetKind: "subagent",
+            agentId: "main",
+            label: "retired worker",
+          },
+        ],
+      },
+    });
+    const params = firstDeliverParams();
+    expect(params.to).toBe("channel:thread-1");
+    expect(params.threadId).toBeUndefined();
+    expect(params.identity).toBeUndefined();
   });
 });

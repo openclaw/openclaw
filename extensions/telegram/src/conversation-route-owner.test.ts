@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  getSessionBindingService,
   registerSessionBindingAdapter,
   type SessionBindingAdapter,
   testing,
@@ -14,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectTelegramConversationRouteOwner } from "./conversation-route-owner.js";
 import {
   inspectTelegramConversationRoute,
+  inspectTelegramConversationRouteAsync,
   touchTelegramConversationRoute,
 } from "./conversation-route.js";
 
@@ -148,6 +150,77 @@ describe("inspectTelegramConversationRouteOwner", () => {
     }
     expect(touchAsync).toHaveBeenCalledTimes(change.endsWith("during touch") ? 1 : 0);
     expect(inspected.route.sessionKey).toBe("agent:original:bound");
+  });
+
+  it("native command admission honors async policy instead of the synchronous projection", async () => {
+    const legacy = {
+      bindingId: "legacy-visible-worker",
+      targetSessionKey: "agent:main:dashboard:worker",
+      targetKind: "session" as const,
+      status: "active" as const,
+      boundAt: 1,
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-100123:topic:42",
+      },
+    };
+    const touch = vi.fn();
+    registerSessionBindingAdapter({ ...adapter, resolveByConversation: () => legacy, touch });
+    const params = {
+      cfg: { channels: { telegram: { accounts: { default: {} } } } },
+      accountId: "default",
+      chatId: -100123,
+      isGroup: true,
+      threadSpec: { scope: "forum" as const, id: 42 },
+    };
+    expect(inspectTelegramConversationRoute(params).route.sessionKey).toBe(legacy.targetSessionKey);
+    const admitted = vi
+      .spyOn(getSessionBindingService(), "inspectByConversationAsync")
+      .mockResolvedValueOnce({ status: "available", binding: null });
+    try {
+      const result = await inspectTelegramConversationRouteAsync(params);
+      expect(result.route.sessionKey).not.toBe(legacy.targetSessionKey);
+      expect(result.bindingMode.kind).toBe("none");
+      expect(admitted).toHaveBeenCalledWith(legacy.conversation);
+      expect(touch).not.toHaveBeenCalled();
+    } finally {
+      admitted.mockRestore();
+    }
+  });
+
+  it("rejects a command route filtered by async admission before touching it", async () => {
+    const touch = vi.fn();
+    registerSessionBindingAdapter({
+      ...adapter,
+      resolveByConversation: (conversation) => ({
+        bindingId: "legacy-visible-worker",
+        targetSessionKey: "agent:main:dashboard:worker",
+        targetKind: "session",
+        status: "active",
+        boundAt: 1,
+        conversation,
+      }),
+      touch,
+    });
+    const inspected = inspectTelegramConversationRoute({
+      cfg: { channels: { telegram: { accounts: { default: {} } } } },
+      accountId: "default",
+      chatId: -100123,
+      isGroup: true,
+      threadSpec: { scope: "forum", id: 42 },
+    });
+    const admitted = vi
+      .spyOn(getSessionBindingService(), "resolveByConversationAsync")
+      .mockResolvedValueOnce(null);
+    try {
+      await expect(touchTelegramConversationRoute(inspected)).rejects.toThrow(
+        "command route changed",
+      );
+      expect(touch).not.toHaveBeenCalled();
+    } finally {
+      admitted.mockRestore();
+    }
   });
 
   it("reports a temporary adapter gap only while thread bindings are enabled", () => {

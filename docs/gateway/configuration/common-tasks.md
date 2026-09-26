@@ -194,7 +194,7 @@ read_when:
     ```
 
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
-    - `threadBindings`: global defaults for thread-bound session routing. Bind with `/subagents spawn --thread <task>`, `/acp spawn --thread auto`, or `--bind here`; agent-started spawns never bind a conversation. `spawnSessions: false` blocks `/subagents spawn --thread` and `/acp spawn --thread`. Use `/session unbind`, `/agents`, `/session idle`, and `/session max-age` to detach, list, and tune bindings (Discord binds threads, Telegram binds topics/conversations).
+    - `threadBindings`: global defaults for supported user-owned session bindings. Bind an ACP session with `/acp spawn <harness> --thread auto` or `--bind here`; native sub-agents and agent-spawned ACP children never bind a conversation. `spawnSessions: false` blocks `/acp spawn --thread`, not `--bind here`. Use `/session unbind`, `/agents`, `/session idle`, and `/session max-age` to detach, list, and tune bindings (Discord binds threads, Telegram binds topics/conversations).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
     - See [full reference](/gateway/config-agents/sessions#session) for all fields.
 

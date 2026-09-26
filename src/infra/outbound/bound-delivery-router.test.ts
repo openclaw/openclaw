@@ -16,7 +16,7 @@ import {
   type SessionBindingRecord,
 } from "./session-binding-service.js";
 
-const TARGET_SESSION_KEY = "agent:main:subagent:child";
+const TARGET_SESSION_KEY = "agent:main:session:bound";
 
 function createRuntimeBinding(
   targetSessionKey: string,
@@ -27,7 +27,7 @@ function createRuntimeBinding(
   return {
     bindingId: `runtime:${conversationId}`,
     targetSessionKey,
-    targetKind: "subagent",
+    targetKind: "session",
     conversation: {
       channel: "richchat",
       accountId: "runtime",
@@ -97,7 +97,7 @@ describe("bound delivery router", () => {
     },
     {
       name: "falls back when no active binding exists",
-      targetSessionKey: "agent:main:subagent:missing",
+      targetSessionKey: "agent:main:session:missing",
       requesterConversationId: "parent-1",
       expected: {
         binding: null,

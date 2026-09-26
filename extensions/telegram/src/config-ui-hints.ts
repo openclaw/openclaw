@@ -128,7 +128,7 @@ export const telegramChannelConfigUiHints = {
   },
   "threadBindings.enabled": {
     label: "Telegram Thread Binding Enabled",
-    help: "Enable Telegram conversation-bound session spawning, routing, and delivery. Manage bindings with /agents and /session unbind|idle|max-age. Overrides session.threadBindings.enabled when set.",
+    help: "Enable user-owned Telegram session binding, routing, and delivery, including ACP sessions. Delegated workers never bind conversations. Manage bindings with /agents and /session unbind|idle|max-age. Overrides session.threadBindings.enabled when set.",
   },
   "threadBindings.idleHours": {
     label: "Telegram Thread Binding Idle Timeout (hours)",
@@ -140,10 +140,10 @@ export const telegramChannelConfigUiHints = {
   },
   "threadBindings.spawnSessions": {
     label: "Telegram Thread-Bound Session Spawn",
-    help: "Allow /subagents spawn --thread and /acp spawn --thread to create or bind Telegram topics when supported. Agent-started spawns never bind a conversation.",
+    help: "Allow user-run /acp spawn --thread to bind Telegram topics when supported. Native sub-agents and agent-spawned ACP children never bind a conversation.",
   },
   "threadBindings.defaultSpawnContext": {
-    label: "Telegram Thread Spawn Context",
-    help: 'Default context for subagents started with /subagents spawn --thread: "fork" starts from the requester transcript, "isolated" starts clean. Default: "fork". Agent-started spawns start isolated unless the caller passes context="fork"."fork".',
+    label: "Telegram Thread Spawn Context (Deprecated)",
+    help: "Deprecated and ignored; accepted for existing config compatibility. Native sub-agents never bind conversations. Set context on individual sessions_spawn calls to choose isolated or forked context.",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

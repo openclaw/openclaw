@@ -13,6 +13,7 @@ import type {
   OpenClawConfig,
   ReplyToMode,
 } from "openclaw/plugin-sdk/config-contracts";
+import { isDelegatedChannelBindingTargetAsync } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
@@ -30,6 +31,9 @@ type DiscordThreadBindingLookupRecord = {
   threadId: string;
   agentId: string;
   label?: string;
+  targetKind?: "subagent" | "acp";
+  targetSessionKey?: string;
+  boundBy?: string;
   webhookId?: string;
   webhookToken?: string;
 };
@@ -79,11 +83,13 @@ function resolveTargetChannelId(target: string): string | undefined {
   return channelId || undefined;
 }
 
-function resolveBoundThreadBinding(params: {
+async function resolveBoundThreadBinding(params: {
+  cfg: OpenClawConfig;
+  assertCurrent?: () => void;
   threadBindings?: DiscordThreadBindingLookup;
   sessionKey?: string;
   target: string;
-}): DiscordThreadBindingLookupRecord | undefined {
+}): Promise<DiscordThreadBindingLookupRecord | undefined> {
   const sessionKey = params.sessionKey?.trim();
   if (!params.threadBindings || !sessionKey) {
     return undefined;
@@ -92,9 +98,50 @@ function resolveBoundThreadBinding(params: {
   if (!targetChannelId) {
     return undefined;
   }
-  return params.threadBindings
-    .listBySessionKey(sessionKey)
-    .find((entry) => entry.threadId === targetChannelId);
+  const threadBindings = params.threadBindings;
+  const readBinding = () =>
+    threadBindings.listBySessionKey(sessionKey).find((entry) => entry.threadId === targetChannelId);
+  const binding = readBinding();
+  if (!binding) {
+    return undefined;
+  }
+  // Raw Discord manager records must obey the same delegated-target policy as
+  // inbound routing and the default bound-delivery service.
+  const identity = (record: DiscordThreadBindingLookupRecord | undefined) =>
+    record &&
+    JSON.stringify([
+      record.accountId,
+      record.channelId,
+      record.threadId,
+      record.targetSessionKey,
+      record.targetKind,
+      record.agentId,
+      record.boundBy,
+      record.label,
+    ]);
+  const selected = identity(binding);
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    if (identity(readBinding()) !== selected) {
+      throw new Error("Discord reply binding changed during target inspection; retry delivery.");
+    }
+  };
+  if (
+    await isDelegatedChannelBindingTargetAsync(
+      {
+        conversation: { channel: "discord" },
+        targetSessionKey: binding.targetSessionKey ?? sessionKey,
+        targetKind: binding.targetKind === "subagent" ? "subagent" : "session",
+        metadata: { agentId: binding.agentId, boundBy: binding.boundBy },
+      },
+      assertCurrent,
+      params.cfg,
+    )
+  ) {
+    return undefined;
+  }
+  assertCurrent();
+  return binding;
 }
 
 function resolveBindingIdentity(
@@ -161,7 +208,8 @@ type DiscordDeliveryOptions = {
   formatting: OutboundDeliveryFormattingOptions;
 };
 
-function resolveDiscordDeliveryOptions(params: {
+async function resolveDiscordDeliveryOptions(params: {
+  assertPlatformSendAuthorized?: () => void;
   cfg: OpenClawConfig;
   target: string;
   sessionKey?: string;
@@ -172,8 +220,10 @@ function resolveDiscordDeliveryOptions(params: {
   chunkMode?: ChunkMode;
   replyToMode?: ReplyToMode;
   mediaLocalRoots?: readonly string[];
-}): DiscordDeliveryOptions {
-  const binding = resolveBoundThreadBinding({
+}): Promise<DiscordDeliveryOptions> {
+  const binding = await resolveBoundThreadBinding({
+    cfg: params.cfg,
+    assertCurrent: params.assertPlatformSendAuthorized,
     threadBindings: params.threadBindings,
     sessionKey: params.sessionKey,
     target: params.target,
@@ -234,7 +284,7 @@ export async function deliverDiscordReply(params: {
 }) {
   void params.runtime;
 
-  const delivery = resolveDiscordDeliveryOptions(params);
+  const delivery = await resolveDiscordDeliveryOptions(params);
   const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, {
     kind: params.kind,
   })

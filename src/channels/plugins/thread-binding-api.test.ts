@@ -14,10 +14,6 @@ const { loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock } = vi.hoist
       if (dirName === "matrix" && artifactBasename === "thread-binding-api.js") {
         return {
           defaultTopLevelPlacement: "child",
-          resolveInboundConversation: () => ({
-            conversationId: " $thread ",
-            parentConversationId: " !room:example ",
-          }),
         };
       }
       if (dirName === "invalid" && artifactBasename === "thread-binding-api.js") {
@@ -41,10 +37,7 @@ vi.mock("../../plugins/public-surface-loader.js", () => ({
     loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock,
 }));
 
-import {
-  resolveBundledChannelThreadBindingDefaultPlacement,
-  resolveBundledChannelThreadBindingInboundConversation,
-} from "./thread-binding-api.js";
+import { resolveBundledChannelThreadBindingDefaultPlacement } from "./thread-binding-api.js";
 
 describe("bundled channel thread binding fast path", () => {
   beforeEach(() => {
@@ -59,45 +52,12 @@ describe("bundled channel thread binding fast path", () => {
     });
   });
 
-  it("loads inbound conversation resolution from the narrow artifact", () => {
-    expect(
-      resolveBundledChannelThreadBindingInboundConversation({
-        channelId: " matrix ",
-        to: "room:!room:example",
-        threadId: "$thread",
-        isGroup: true,
-      }),
-    ).toEqual({
-      conversationId: " $thread ",
-      parentConversationId: " !room:example ",
-    });
-  });
-
   it("treats missing artifacts as absent hints", () => {
-    // "absent" is a synthetic channel; real bundled artifacts are covered by
-    // the thread-binding artifact parity contract test.
     expect(resolveBundledChannelThreadBindingDefaultPlacement("absent")).toBeUndefined();
-    expect(
-      resolveBundledChannelThreadBindingInboundConversation({
-        channelId: "absent",
-        to: "channel:general",
-        isGroup: true,
-      }),
-    ).toBeUndefined();
   });
 
   it("ignores invalid placement values", () => {
     expect(resolveBundledChannelThreadBindingDefaultPlacement("invalid")).toBeUndefined();
-  });
-
-  it("distinguishes a present artifact without an inbound resolver from a missing artifact", () => {
-    expect(
-      resolveBundledChannelThreadBindingInboundConversation({
-        channelId: "empty",
-        to: "channel:general",
-        isGroup: true,
-      }),
-    ).toBeUndefined();
   });
 
   it("surfaces errors from present thread binding artifacts", () => {

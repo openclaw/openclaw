@@ -302,7 +302,7 @@ describe("registerSlackReactionEvents", () => {
     const harness = createSlackSystemEventTestHarness();
     const resolveSessionKey = vi
       .fn()
-      .mockReturnValue({ agentId: "ops", sessionKey: "agent:ops:main" });
+      .mockResolvedValue({ agentId: "ops", sessionKey: "agent:ops:main" });
     harness.ctx.resolveSlackSystemEventRoute = resolveSessionKey;
     registerSlackReactionEvents({ ctx: harness.ctx });
     const handler = requireReactionHandler(
@@ -332,7 +332,7 @@ describe("registerSlackReactionEvents", () => {
     const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
     const resolveUserName = vi.fn(harness.ctx.resolveUserName);
     const resolveSessionKey = vi.fn(
-      (input: Parameters<typeof harness.ctx.resolveSlackSystemEventRoute>[0]) => ({
+      async (input: Parameters<typeof harness.ctx.resolveSlackSystemEventRoute>[0]) => ({
         agentId: "main",
         sessionKey: `session:${input.eventScope?.teamId ?? "workspace"}`,
       }),

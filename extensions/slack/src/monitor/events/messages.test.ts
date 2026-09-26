@@ -858,19 +858,19 @@ describe("registerSlackMessageEvents", () => {
       });
 
       const eventScope = enterprise ? { teamId: "T_GRID", client: listenerClient } : undefined;
-      const parentSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+      const { sessionKey: parentSessionKey } = await harness.ctx.resolveSlackSystemEventRoute({
         channelId,
         channelType,
         senderId,
         eventScope,
-      }).sessionKey;
-      const threadSessionKey = harness.ctx.resolveSlackSystemEventRoute({
+      });
+      const { sessionKey: threadSessionKey } = await harness.ctx.resolveSlackSystemEventRoute({
         channelId,
         channelType,
         senderId,
         threadTs,
         eventScope,
-      }).sessionKey;
+      });
 
       expect(actualSystemEvents.peekSystemEventEntries(parentSessionKey)).toHaveLength(
         denied || threadSession ? 0 : 1,

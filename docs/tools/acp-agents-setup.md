@@ -189,9 +189,10 @@ Thread binding config is shared across supported channel adapters:
 }
 ```
 
-Thread-bound ACP sessions come only from a user `/acp spawn ... --thread ...`
-or `--bind here` command. An agent `sessions_spawn({ runtime: "acp" })` call
-never binds a thread.
+User-owned ACP sessions can bind through `/acp spawn ... --thread ...`,
+`--bind here`, or configured persistent ACP bindings. An agent
+`sessions_spawn({ runtime: "acp" })` call never binds a conversation and
+returns results through its parent.
 
 If `/acp spawn ... --thread ...` does not work, verify the adapter feature flag first:
 

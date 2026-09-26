@@ -119,7 +119,7 @@ function recordAcceptedSessionSpawn(
 }
 
 const THREAD_BINDING_UNAVAILABLE_NOTE =
-  "Thread binding is not available for agent-started spawns; the child runs in the background. A user who wants a separate thread runs /subagents spawn --thread <task>.";
+  "Subagents cannot own conversation bindings; the child runs in the background and returns its result to the requester.";
 
 /** Older callers may still ask for a thread-bound child: it runs unbound and says so. */
 function withThreadBindingNote<T extends { status: string; note?: string }>(

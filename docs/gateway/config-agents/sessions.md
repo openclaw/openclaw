@@ -106,8 +106,8 @@ title: "Configuration — agent sessions"
   - `enabled`: master switch for supported channel thread bindings
   - `idleHours`: default inactivity auto-unbind in hours (`0` disables; providers can override)
   - `maxAgeHours`: default hard max age in hours (`0` disables; providers can override)
-  - `spawnSessions`: default gate for user thread spawns (`/subagents spawn --thread` and `/acp spawn --thread`). Defaults to `true` when thread bindings are enabled; providers/accounts can override. Agent-started spawns (`sessions_spawn`, native and ACP) never bind a conversation.
-  - `defaultSpawnContext`: sets the default context for sub-agents started with `/subagents spawn --thread` (`"fork"` by default). Agent-started spawns start with isolated context unless the spawn passes `context: "fork"`.
+  - `spawnSessions`: default gate for user ACP thread spawns (`/acp spawn --thread`). Defaults to `true` when thread bindings are enabled; providers/accounts can override. It does not gate `--bind here`. Native sub-agents and agent-spawned ACP children never bind a conversation.
+  - `defaultSpawnContext`: deprecated and ignored at all accepted config scopes; retained for existing config compatibility. Native sub-agents start with isolated context unless the spawn passes `context: "fork"`.
 - **`sharing`**: controls which per-session collaboration modes owners and `operator.admin` connections may select. Every flag defaults to `true`; setting one to `false` removes that choice from the Control UI and makes create-time visibility or `session.visibility.set` reject it. New sessions start `shared` unless the Control UI starts one as a draft.
   - `readOnly`: allow `read-only`, where non-members can watch but cannot send, steer, abort, approve, or mutate session state.
   - `suggest`: allow `suggest`, where viewers can submit suggestions for the session owner or an `operator.admin` connection to send, queue, edit, or dismiss without granting direct access to send or manage the session.

@@ -103,7 +103,7 @@ async function handleSlackShortcut(params: {
     messageText: messageBody?.message.text,
     responseUrl: messageBody?.response_url,
   };
-  const route = runtimeContext.resolveSlackSystemEventRoute({
+  const route = await runtimeContext.resolveSlackSystemEventRoute({
     channelId,
     channelType: auth.channelType,
     senderId: userId,

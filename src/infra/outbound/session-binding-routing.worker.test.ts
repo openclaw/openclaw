@@ -7,6 +7,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveBoundAcpDispatchSessionKey } from "../../auto-reply/reply/dispatch-from-config.context.js";
 import { resolveIngressFailureDisposition } from "../../channels/message/ingress-retry-policy.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { buildChannelInboundEventContext } from "../../plugin-sdk/channel-inbound.js";
 import {
   getSessionBindingService,
@@ -22,11 +23,17 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { inspectCurrentConversationBindingRecord } from "./current-conversation-bindings.js";
-import { readSessionBindingSelectionCurrent, testing } from "./session-binding-service.js";
+import {
+  readSessionBindingSelectionCurrent,
+  registerSessionBindingAdapter,
+  testing,
+  type SessionBindingRecord,
+} from "./session-binding-service.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const stateKey = Symbol("binding-routing-worker-proof");
@@ -37,6 +44,7 @@ beforeEach(() => {
 afterEach(async () => {
   resetAccountScopedConversationBindingsForTests({ stateKey });
   testing.resetSessionBindingAdaptersForTests();
+  await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   vi.unstubAllEnvs();
 });
@@ -223,5 +231,71 @@ it.each(
   } finally {
     manager?.stop();
     restoreActivePluginRegistrySnapshot(previousRegistry);
+  }
+});
+
+it("reads durable delegation without run records or parent SQLite calls", async () => {
+  const conversation = { channel: "policy-proof", accountId: "default", conversationId: "room" };
+  const workerKeys = [
+    "agent:worker:acp:delegated",
+    "agent:worker:dashboard:visible",
+    "agent:worker:renamed-child",
+  ];
+  const userKey = "agent:worker:acp:interactive";
+  for (const sessionKey of [...workerKeys, userKey]) {
+    replaceSessionEntrySync(
+      { agentId: "worker", sessionKey },
+      {
+        sessionId: sessionKey.split(":").at(-1)!,
+        updatedAt: 1,
+        ...(sessionKey === userKey
+          ? { parentSessionKey: "agent:main:main" }
+          : {
+              spawnDepth: 1,
+              spawnedBy: "agent:main:main",
+              subagentRole: "leaf" as const,
+            }),
+      },
+    );
+  }
+  const initialBinding: SessionBindingRecord = {
+    bindingId: "stored-worker",
+    conversation,
+    targetSessionKey: workerKeys[0]!,
+    targetKind: "session",
+    metadata: { boundBy: "human-1" },
+    status: "active",
+    boundAt: 1,
+  };
+  let saved = initialBinding;
+  const bind = vi.fn(async () => saved);
+  registerSessionBindingAdapter({
+    ...conversation,
+    bind,
+    listBySession: () => [saved],
+    resolveByConversation: () => saved,
+    inspectByConversation: () => saved,
+  });
+  const observer = observeParentSqlite();
+  try {
+    const service = getSessionBindingService();
+    for (const targetSessionKey of workerKeys) {
+      saved = { ...initialBinding, targetSessionKey };
+      await expect(service.bind({ ...saved, placement: "current" })).rejects.toMatchObject({
+        code: "BINDING_CAPABILITY_UNSUPPORTED",
+      });
+      expect(bind).not.toHaveBeenCalled();
+      expect(await service.inspectByConversationAsync(conversation)).toMatchObject({
+        status: "available",
+        binding: null,
+      });
+      expect(await readSessionBindingSelectionCurrent([conversation])).toEqual([null]);
+    }
+    saved = { ...saved, targetSessionKey: userKey };
+    expect(await service.bind({ ...saved, placement: "current" })).toEqual(saved);
+    expect(await readSessionBindingSelectionCurrent([conversation])).toEqual([saved]);
+    expect(observer.counts).toEqual(emptyCounts());
+  } finally {
+    observer.restore();
   }
 });

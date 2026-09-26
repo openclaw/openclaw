@@ -26,18 +26,21 @@ type BindInput = {
 
 describe("sessions_spawn subagent thread requests", () => {
   let createSessionsSpawnTool: CreateTool;
+  let spawnSubagentDirect: Awaited<
+    ReturnType<typeof loadSubagentSpawnModuleForTest>
+  >["spawnSubagentDirect"];
   const config: OpenClawConfig = {
     session: { mainKey: "main", scope: "per-sender", threadBindings: { enabled: true } },
     agents: { defaults: { workspace: os.tmpdir() } },
   };
 
   beforeAll(async () => {
-    await loadSubagentSpawnModuleForTest({
+    ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
       getRuntimeConfig: () => config,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
-    });
+    }));
     ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
     // Real binding service with adapters offering every placement, so any
     // remaining agent binding path would reach bind().
@@ -148,7 +151,7 @@ describe("sessions_spawn subagent thread requests", () => {
     const details = result.details as Record<string, unknown>;
     expect(details.status).toBe("accepted");
     expect(details.mode).toBe("run");
-    expect(details.note).toMatch(/Thread binding is not available for agent-started spawns/);
+    expect(details.note).toMatch(/Subagents cannot own conversation bindings/);
     expect(hoisted.bind).not.toHaveBeenCalled();
 
     const agentCall = hoisted.callGatewayMock.mock.calls
@@ -183,5 +186,28 @@ describe("sessions_spawn subagent thread requests", () => {
     // Older callers still validate against the schema before the tool runs.
     expect(Value.Check(tool.parameters, { task: "x", mode: "session", thread: true })).toBe(true);
     expect(tool.description).toContain("never bind or take over a chat");
+  });
+
+  it("cannot recover direct-core binding with retired command-only fields", async () => {
+    const retiredRequest = {
+      task: "Run in the background",
+      thread: true,
+      mode: "session",
+      childThread: { boundBy: "owner" },
+    };
+    const result = await spawnSubagentDirect(retiredRequest, {
+      agentSessionKey: "agent:main:telegram:group:chat",
+      agentChannel: "telegram",
+      agentAccountId: "default",
+      agentTo: "telegram:-1001234567890",
+      agentThreadId: 1,
+    });
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    expect(hoisted.bind).not.toHaveBeenCalled();
+    const launch = hoisted.callGatewayMock.mock.calls
+      .map(([call]) => call as { method?: string; params?: Record<string, unknown> })
+      .find((call) => call.method === "agent");
+    expect(launch?.params?.deliver).toBe(false);
   });
 });

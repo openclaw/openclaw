@@ -48,9 +48,11 @@ export async function resolveDiscordDmPreflightAccess(params: {
       isDirectMessage: true,
       userId: params.author.id,
     }) ?? `user:${params.author.id}`;
-  const directBindingRecord = (await loadConversationRuntime())
+  const directBindingRecord = await (
+    await loadConversationRuntime()
+  )
     .getSessionBindingService()
-    .resolveByConversation({
+    .resolveByConversationAsync({
       channel: "discord",
       accountId: params.preflight.accountId,
       conversationId: directBindingConversationId,

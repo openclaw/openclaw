@@ -7,6 +7,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { readSessionBindingInspectionConversation } from "../../infra/outbound/session-binding-normalization.js";
 import {
+  isDelegatedChannelBindingTarget,
+  isDelegatedChannelBindingTargetAsync,
+} from "../../infra/outbound/session-binding-policy.js";
+import {
   getSessionBindingService,
   inspectSessionBindingByConversation,
   type ConversationRef,
@@ -88,7 +92,14 @@ export function resolveConfiguredBindingRoute(
       cfg: params.cfg,
       conversation: resolveConfiguredBindingConversationRef(params),
     }) ?? null;
-  if (!bindingResolution) {
+  if (
+    !bindingResolution ||
+    isDelegatedChannelBindingTarget(bindingResolution.record) ||
+    isDelegatedChannelBindingTarget({
+      ...bindingResolution.record,
+      targetSessionKey: bindingResolution.statefulTarget.sessionKey,
+    })
+  ) {
     return {
       bindingResolution: null,
       route: projectConfiguredConversationBindingRouteFacts(params.route),
@@ -273,7 +284,24 @@ export async function ensureConfiguredBindingRouteReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  const readyPromise = ensureConfiguredBindingTargetReady(params);
+  const readyPromise = (async () => {
+    const resolution = params.bindingResolution;
+    if (
+      resolution &&
+      (await isDelegatedChannelBindingTargetAsync(
+        {
+          ...resolution.record,
+          targetSessionKey: resolution.statefulTarget.sessionKey,
+        },
+        () => params.assertActive?.(),
+        params.cfg,
+      ))
+    ) {
+      return { ok: false as const, error: "Delegated workers cannot own chat-channel bindings." };
+    }
+    params.assertActive?.();
+    return ensureConfiguredBindingTargetReady(params);
+  })();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutToken = Symbol("configured-binding-route-ready-timeout");
   const timeoutPromise = new Promise<typeof timeoutToken>((resolve) => {

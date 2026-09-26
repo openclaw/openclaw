@@ -429,7 +429,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
       allowNameMatching,
     }).ownerAllowed
   ) {
-    const routeState = resolveDiscordNativeInteractionRouteState({
+    const routeState = await resolveDiscordNativeInteractionRouteState({
       cfg,
       accountId,
       guildId: interaction.guild?.id,
@@ -439,8 +439,8 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
       directUserId: user.id,
       conversationId: rawChannelId,
       parentConversationId: threadParentId,
-      threadBinding: isThreadChannel
-        ? params.threadBindings?.getByThreadId(rawChannelId)
+      readThreadBinding: isThreadChannel
+        ? () => params.threadBindings?.getByThreadId(rawChannelId)
         : undefined,
     });
     const { ctxPayload } = await buildDiscordNativeInteractionContext({

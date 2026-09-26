@@ -1,6 +1,5 @@
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export function createSubagentSpawnLifecycleEmitter(params: {
   hookRunner: SubagentLifecycleHookRunner | null;
@@ -17,8 +16,6 @@ export function createSubagentSpawnLifecycleEmitter(params: {
   targetAgentId: string;
   label?: string;
   requesterOrigin?: DeliveryContext;
-  requestThreadBinding: boolean;
-  spawnMode: SpawnSubagentMode;
   resolvedModelMetadata: {
     resolvedModel?: string;
     resolvedProvider?: string;
@@ -60,8 +57,8 @@ export function createSubagentSpawnLifecycleEmitter(params: {
               to: params.requesterOrigin?.to,
               threadId: params.requesterOrigin?.threadId,
             },
-            threadRequested: params.requestThreadBinding,
-            mode: params.spawnMode,
+            threadRequested: false,
+            mode: "run",
             ...params.resolvedModelMetadata,
           },
           {

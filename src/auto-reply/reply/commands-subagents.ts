@@ -1,4 +1,4 @@
-// Dispatches subagent inspection commands and user-started thread spawns.
+// Dispatches subagent inspection commands.
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { commandReply, defineAuthorizedTextCommand, matchCommandPrefix } from "./command-gates.js";
 import { buildSubagentsHelp, resolveRequesterSessionKey } from "./commands-subagents/shared.js";
@@ -14,9 +14,6 @@ const actionListLoader = createLazyImportLoader(
   () => import("./commands-subagents/action-list.js"),
 );
 const actionLogLoader = createLazyImportLoader(() => import("./commands-subagents/action-log.js"));
-const actionSpawnLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-spawn.js"),
-);
 const controlRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/subagents/registry/subagent-control-scope.js"),
 );
@@ -26,19 +23,13 @@ export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextComman
     label: "/subagents",
     match: (
       body,
-    ): {
-      action: "agents" | "list" | "info" | "log" | "spawn" | "help";
-      restTokens: string[];
-    } | null => {
+    ): { action: "agents" | "list" | "info" | "log" | "help"; restTokens: string[] } | null => {
       const rest = matchCommandPrefix(body, "/subagents");
       if (rest !== null) {
         const [rawAction = "list", ...restTokens] = rest.split(/\s+/).filter(Boolean);
         const action = rawAction.toLowerCase();
         return {
-          action:
-            action === "list" || action === "info" || action === "log" || action === "spawn"
-              ? action
-              : "help",
+          action: action === "list" || action === "info" || action === "log" ? action : "help",
           restTokens,
         };
       }
@@ -46,8 +37,6 @@ export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextComman
         ? null
         : { action: "agents", restTokens: [] };
     },
-    // Binding a new thread to a persistent child is an owner action, like /acp spawn.
-    ownerOnly: (_params, match) => match.action === "spawn",
     silentUnauthorized: true,
   },
   async (params, { action, restTokens }) => {
@@ -58,10 +47,6 @@ export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextComman
     const requesterKey = resolveRequesterSessionKey(params);
     if (!requesterKey) {
       return commandReply("⚠️ Missing session key.");
-    }
-    if (action === "spawn") {
-      const { handleSubagentsSpawnAction } = await actionSpawnLoader.load();
-      return await handleSubagentsSpawnAction({ params, requesterKey, restTokens });
     }
 
     const actionHandler =

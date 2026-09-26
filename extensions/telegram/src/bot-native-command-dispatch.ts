@@ -29,7 +29,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import {
-  inspectTelegramConversationRoute,
+  inspectTelegramConversationRouteAsync,
   resolveTelegramTargetSession,
   touchTelegramConversationRoute,
 } from "./conversation-route.js";
@@ -96,7 +96,7 @@ export type TelegramCommandDispatch = TelegramCommandExecutorParams &
     runtimeTelegramCfg: TelegramAccountConfig;
     turnSettings: ReturnType<typeof resolveTelegramMessageTurnSettings>;
     threadParams: ReturnType<typeof buildTelegramThreadParams>;
-    route: ReturnType<typeof inspectTelegramConversationRoute>["route"];
+    route: Awaited<ReturnType<typeof inspectTelegramConversationRouteAsync>>["route"];
     mediaLocalRoots: readonly string[] | undefined;
     targetSessionKey: string;
     nativeCommandRuntime: TelegramNativeCommandRuntime;
@@ -159,7 +159,7 @@ async function resolveTelegramCommandAuth(params: {
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const senderUsername = msg.from?.username ?? "";
   const scopedConfig = params.resolveTelegramGroupConfig(chatId, threadSpec.id, cfg);
-  const inspectedRoute = inspectTelegramConversationRoute({
+  const inspectedRoute = await inspectTelegramConversationRouteAsync({
     cfg,
     accountId,
     chatId,

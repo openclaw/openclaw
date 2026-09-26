@@ -47,9 +47,10 @@ Examples:
   <Accordion title="Thread-bound sessions">
     When thread bindings are enabled for a channel adapter:
 
-    - A user command (`/acp spawn ... --thread ...` or `--bind here`) binds a thread to a target ACP session. An agent `sessions_spawn({ runtime: "acp" })` call never binds a thread; it runs as a one-shot background run.
-    - Follow-up messages in that thread route to the bound ACP session.
-    - ACP output is delivered back to the same thread.
+    - A user command (`/acp spawn ... --thread ...` or `--bind here`) binds a conversation to a user-owned ACP session. Configured persistent ACP bindings are also supported. An agent `sessions_spawn({ runtime: "acp" })` call never binds a conversation; it runs as a one-shot background child and returns results through its parent.
+    - Follow-up messages in that thread route to the bound user-owned ACP session.
+    - User-owned ACP output is delivered back to the same thread.
+    - Saved legacy bindings to agent-spawned ACP children or native sub-agents are ignored by runtime routing and delivery, not migrated or deleted by a startup or background sweep.
     - `/session unbind`, close, archive, idle timeout, or max-age expiry removes the binding. `/session unbind` detaches only the current conversation and leaves the ACP session running.
     - `/acp close`, `/acp cancel`, `/acp status`, `/status`, and `/session` are Gateway commands, not prompts to the ACP harness.
 
@@ -248,6 +249,6 @@ its current reasoning effort or conversation.
 - Messages in that channel, topic, or chat route to the configured ACP session.
 - Configured ACP bindings own their session route. Channel broadcast fan-out does not replace the configured ACP session for a matched binding.
 - In bound conversations, `/new` and `/reset` reset the same ACP session key in place.
-- Runtime bindings created by thread-bound spawns still apply where present.
+- Runtime bindings created by user-run `/acp` commands still apply where present; bindings to delegated children are ignored.
 - For cross-agent ACP spawns without an explicit `cwd`, OpenClaw inherits the target agent workspace from agent config.
 - Missing inherited workspace paths fall back to the backend default cwd; non-missing access failures surface as spawn errors.

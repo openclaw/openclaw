@@ -3,10 +3,7 @@ import {
   asNonNegativeFiniteNumber,
   MAX_DATE_TIMESTAMP_MS,
 } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import {
@@ -26,11 +23,9 @@ type SessionThreadBindingsConfigShape = {
   idleHours?: unknown;
   maxAgeHours?: unknown;
   spawnSessions?: unknown;
-  defaultSpawnContext?: unknown;
 };
 
 type ChannelThreadBindingsContainerShape = {
-  defaultAccount?: unknown;
   threadBindings?: SessionThreadBindingsConfigShape;
   accounts?: Record<string, { threadBindings?: SessionThreadBindingsConfigShape } | undefined>;
 };
@@ -44,11 +39,7 @@ type ThreadBindingSpawnPolicy = {
   accountId: string;
   enabled: boolean;
   spawnEnabled: boolean;
-  defaultSpawnContext: ThreadBindingSpawnContext;
 };
-
-/** Starting transcript mode for a spawned thread-bound session. */
-type ThreadBindingSpawnContext = "isolated" | "fork";
 
 /** Returns true when top-level commands should spawn in a child thread by default. */
 export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
@@ -129,23 +120,6 @@ function resolveChannelThreadBindings(params: {
   };
 }
 
-function normalizeSpawnContext(value: unknown): ThreadBindingSpawnContext | undefined {
-  return value === "isolated" || value === "fork" ? value : undefined;
-}
-
-/** Resolves the channel account a thread binding uses: explicit, then the channel default. */
-export function resolveThreadBindingAccountId(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  accountId?: string;
-}): string {
-  return (
-    normalizeOptionalString(params.accountId) ??
-    normalizeOptionalString(readChannelConfig(params.cfg, params.channel)?.defaultAccount) ??
-    "default"
-  );
-}
-
 /** Resolves effective spawn policy from account, channel, then global thread-binding config. */
 export function resolveThreadBindingSpawnPolicy(params: {
   cfg: OpenClawConfig;
@@ -166,17 +140,11 @@ export function resolveThreadBindingSpawnPolicy(params: {
     asBoolean(root?.spawnSessions) ??
     asBoolean(params.cfg.session?.threadBindings?.spawnSessions);
   const spawnEnabled = spawnEnabledRaw ?? true;
-  const defaultSpawnContext =
-    normalizeSpawnContext(account?.defaultSpawnContext) ??
-    normalizeSpawnContext(root?.defaultSpawnContext) ??
-    normalizeSpawnContext(params.cfg.session?.threadBindings?.defaultSpawnContext) ??
-    "fork";
   return {
     channel,
     accountId,
     enabled,
     spawnEnabled,
-    defaultSpawnContext,
   };
 }
 

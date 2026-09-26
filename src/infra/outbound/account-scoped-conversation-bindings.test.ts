@@ -44,8 +44,8 @@ function bindConversation(
 ) {
   const binding = manager.bindConversation({
     conversationId: params.conversationId ?? "chat:ttl-owner",
-    targetKind: "subagent",
-    targetSessionKey: params.targetSessionKey ?? "agent:main:subagent:ttl-owner",
+    targetKind: "session",
+    targetSessionKey: params.targetSessionKey ?? "agent:main:session:ttl-owner",
     ...(params.label ? { metadata: { label: params.label } } : {}),
   });
   if (!binding) {
@@ -101,7 +101,7 @@ describe("account-scoped conversation binding expiry", () => {
     expect(restarted.getByConversationId(binding.conversationId)).toEqual(binding);
     expect(getSessionBindingService().resolveByConversation(conversation)).toMatchObject({
       bindingId: "ttl-owner:chat:durable-owner",
-      targetKind: "subagent",
+      targetKind: "session",
       targetSessionKey: binding.targetSessionKey,
     });
   });
@@ -166,7 +166,7 @@ describe("account-scoped conversation binding expiry", () => {
     const manager = createManager();
     const original = bindConversation(manager, {
       conversationId: "chat:write-failure",
-      targetSessionKey: "agent:main:subagent:committed-owner",
+      targetSessionKey: "agent:main:session:committed-owner",
     });
     const { db } = openOpenClawStateDatabase();
     db.exec("PRAGMA query_only = ON");
@@ -175,7 +175,7 @@ describe("account-scoped conversation binding expiry", () => {
         manager.bindConversation({
           conversationId: original.conversationId,
           targetKind: "session",
-          targetSessionKey: "agent:main:acp:uncommitted-owner",
+          targetSessionKey: "agent:main:session:uncommitted-owner",
           metadata: { label: "must-not-leak" },
         }),
       ).toThrow();
@@ -218,7 +218,7 @@ describe("account-scoped conversation binding expiry", () => {
         conversation,
         metadata,
       });
-      const targetSessionKey = replace ? "agent:main:acp:replacement" : originalTarget;
+      const targetSessionKey = replace ? "agent:main:session:replacement" : originalTarget;
 
       await service.bind({
         targetSessionKey,
@@ -318,11 +318,11 @@ describe("account-scoped conversation binding expiry", () => {
 
     const replacement = bindConversation(manager, {
       conversationId: expired.conversationId,
-      targetSessionKey: "agent:main:subagent:replacement",
+      targetSessionKey: "agent:main:session:replacement",
     });
 
     expect(replacement.label).toBeUndefined();
-    expect(replacement.targetSessionKey).toBe("agent:main:subagent:replacement");
+    expect(replacement.targetSessionKey).toBe("agent:main:session:replacement");
     expect(manager.getByConversationId(expired.conversationId)).toEqual(replacement);
   });
 
@@ -368,7 +368,7 @@ describe("account-scoped conversation binding expiry", () => {
     });
 
     const binding = bindConversation(manager, {
-      targetSessionKey: "agent:molty:subagent:binding-owner",
+      targetSessionKey: "agent:molty:session:binding-owner",
     });
 
     expect(binding.agentId).toBe("molty");

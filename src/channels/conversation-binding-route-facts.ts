@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isDelegatedChannelBindingTarget } from "../infra/outbound/session-binding-policy.js";
 import type {
   ConversationRef,
   SessionBindingRecord,
@@ -20,7 +21,7 @@ export function resolveConversationBindingSelection(
   binding: SessionBindingRecord | null,
 ): BindingSelection {
   const sessionKey = binding?.targetSessionKey?.trim();
-  if (!binding || !sessionKey) {
+  if (!binding || !sessionKey || isDelegatedChannelBindingTarget(binding)) {
     return { kind: "none" };
   }
   if (isCronRunSessionKey(sessionKey)) {

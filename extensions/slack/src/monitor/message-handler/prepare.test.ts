@@ -4832,7 +4832,7 @@ describe("prepareSlackMessage sender prefix", () => {
       mediaMaxBytes: 1000,
       logger: { info: vi.fn(), warn: vi.fn() },
       shouldDropMismatchedSlackEvent: () => false,
-      resolveSlackSystemEventRoute: () => ({
+      resolveSlackSystemEventRoute: async () => ({
         agentId: "main",
         sessionKey: "agent:main:slack:channel:c1",
       }),

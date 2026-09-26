@@ -112,7 +112,7 @@ async function createStatusCommand(cfg: OpenClawConfig, pluginExecute?: ReturnTy
 }
 
 function setDefaultRouteState() {
-  nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = (params) => ({
+  nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = async (params) => ({
     route: {
       agentId: "main",
       channel: "discord",

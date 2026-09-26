@@ -40,16 +40,15 @@ describe("thread binding spawn policy helpers", () => {
     expect(supportsAutomaticThreadBindingSpawn("unknown-chat")).toBe(false);
   });
 
-  it("enables unified thread-bound session spawns by default", () => {
+  it("enables user ACP thread spawns by default", () => {
     const policy = resolveThreadBindingSpawnPolicy({
       cfg: {},
       channel: "discord",
-      kind: "subagent",
+      kind: "acp",
     });
 
     expect(policy.enabled).toBe(true);
     expect(policy.spawnEnabled).toBe(true);
-    expect(policy.defaultSpawnContext).toBe("fork");
   });
 
   it("preserves long lifecycle hour values while capping unsafe conversions", () => {
@@ -67,7 +66,7 @@ describe("thread binding spawn policy helpers", () => {
     ).toBe(MAX_DATE_TIMESTAMP_MS);
   });
 
-  it("uses spawnSessions for both subagent and ACP spawn policy", () => {
+  it("uses spawnSessions to gate user ACP thread spawns", () => {
     const cfg = {
       channels: {
         discord: {
@@ -80,32 +79,23 @@ describe("thread binding spawn policy helpers", () => {
       resolveThreadBindingSpawnPolicy({
         cfg,
         channel: "discord",
-        kind: "subagent",
-      }).spawnEnabled,
-    ).toBe(false);
-    expect(
-      resolveThreadBindingSpawnPolicy({
-        cfg,
-        channel: "discord",
         kind: "acp",
       }).spawnEnabled,
     ).toBe(false);
   });
 
-  it("lets account config override channel spawnSessions and spawn context", () => {
+  it("lets account config override channel spawnSessions", () => {
     const policy = resolveThreadBindingSpawnPolicy({
       cfg: {
         channels: {
           discord: {
             threadBindings: {
               spawnSessions: false,
-              defaultSpawnContext: "fork",
             },
             accounts: {
               work: {
                 threadBindings: {
                   spawnSessions: true,
-                  defaultSpawnContext: "isolated",
                 },
               },
             },
@@ -114,10 +104,9 @@ describe("thread binding spawn policy helpers", () => {
       },
       channel: "discord",
       accountId: "work",
-      kind: "subagent",
+      kind: "acp",
     });
 
     expect(policy.spawnEnabled).toBe(true);
-    expect(policy.defaultSpawnContext).toBe("isolated");
   });
 });

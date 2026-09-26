@@ -25,9 +25,8 @@ replacement for writing a clear task prompt.
 
 Starts a sub-agent run on the spawning session's sub-agent queue, with
 [per-session concurrency](/tools/subagents/operations#concurrency). Ordinary one-shot runs
-use `deliver: false` and return through an announce step; collectors, quiet
-runs, and user-started thread sessions use the
-[completion paths](/tools/subagents/slash-command#spawn-behavior).
+use `deliver: false` and return through an announce step; collectors and quiet
+runs use the [completion paths](/tools/subagents/slash-command#spawn-behavior).
 
 Availability depends on the caller's effective tool policy. The built-in
 `coding` and `messaging` profiles include `sessions_spawn`,
@@ -181,10 +180,10 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Override thinking level for the sub-agent run. Not available with `visible: true`.
 </ParamField>
 <ParamField path="thread" type="boolean" default="false">
-  Not offered. Agent-started spawns never bind a chat thread or conversation, for native sub-agents and ACP alike. An older call with `thread: true` still succeeds: the child runs as a one-shot background run, its result returns to the requester, and the result `note` says that thread binding is not available for agent-started spawns. To start a sub-agent in a new thread, the user runs `/subagents spawn --thread <task>`.
+  Not offered. Agent-started spawns never bind a chat thread or conversation, for native sub-agents and ACP alike. An older call with `thread: true` still succeeds: the child runs as a one-shot background run, its result returns to the requester, and the result `note` says that thread binding is not available for agent-started spawns. Native sub-agents cannot be bound manually either; explicit user-owned ACP bindings use `/acp`.
 </ParamField>
 <ParamField path="mode" type='"run"' default="run">
-  Only `"run"` (one-shot). An older call with `mode: "session"` (also with `runtime: "acp"`) runs as a one-shot background run and says so in the result `note`. Agent-started ACP spawns are always one-shot.
+  `"run"` starts a one-shot run; `"session"` is accepted as a legacy alias. An older call with `mode: "session"` (also with `runtime: "acp"`) runs as a one-shot background run and says so in the result `note`. Agent-started ACP spawns are always one-shot.
   With `visible: true`, omit `mode` or use the default `"run"`; the visible session remains persistent.
 </ParamField>
 <ParamField path="cleanup" type='"delete" | "keep"' default="keep">

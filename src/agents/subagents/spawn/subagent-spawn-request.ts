@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveThreadBindingSpawnPolicy } from "../../../channels/thread-bindings-policy.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
 import { listAgentIds } from "../../agent-scope-config.js";
@@ -53,8 +52,8 @@ export function resolveSubagentSpawnRequest(
       `Invalid agentId "${requestedAgentId}". Agent IDs must match [a-z0-9][a-z0-9_-]{0,63}.`,
     );
   }
-  // Agent-started subagents never own a chat; only a user command asks for a child thread.
-  const spawnMode: SpawnSubagentMode = params.childThread ? "session" : "run";
+  // Delegated workers never own conversation routing, regardless of their caller.
+  const spawnMode: SpawnSubagentMode = "run";
   if (
     params.completionTarget === "parent" &&
     (params.collect || params.expectsCompletionMessage === false)
@@ -64,8 +63,7 @@ export function resolveSubagentSpawnRequest(
       'sessions_spawn completionTarget="parent" requires collect=false and completion notifications enabled.',
     );
   }
-  const cleanup: "delete" | "keep" =
-    spawnMode === "run" && params.cleanup === "delete" ? "delete" : "keep";
+  const cleanup: "delete" | "keep" = params.cleanup === "delete" ? "delete" : "keep";
   const expectsCompletionMessage = params.collect
     ? false
     : params.expectsCompletionMessage !== false;
@@ -79,17 +77,7 @@ export function resolveSubagentSpawnRequest(
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
   });
-  // Only a user thread spawn follows the saved threadBindings.defaultSpawnContext.
-  const contextMode =
-    params.context ??
-    (params.childThread && ctx.agentChannel
-      ? resolveThreadBindingSpawnPolicy({
-          cfg,
-          channel: ctx.agentChannel,
-          accountId: ctx.agentAccountId,
-          kind: "subagent",
-        }).defaultSpawnContext
-      : "isolated");
+  const contextMode = params.context ?? "isolated";
   const ownership = resolveSubagentSpawnOwnership({
     cfg,
     agentSessionKey: ctx.agentSessionKey,

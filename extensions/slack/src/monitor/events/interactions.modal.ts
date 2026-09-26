@@ -1,4 +1,5 @@
 import type { AllMiddlewareArgs } from "@slack/bolt";
+import { isDelegatedChannelBindingTargetAsync } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
@@ -26,7 +27,7 @@ type SlackModalBody = {
   is_cleared?: boolean;
 };
 
-type SlackModalEventBase = ReturnType<typeof resolveSlackModalEventBase>;
+type SlackModalEventBase = Awaited<ReturnType<typeof resolveSlackModalEventBase>>;
 
 type SlackModalInteractionKind = "view_submission" | "view_closed";
 type SlackModalEventHandlerArgs = { ack: () => Promise<void>; body: unknown } & Pick<
@@ -102,17 +103,36 @@ function resolveSlackPluginSystemEventPayload(
   return Object.keys(output).length > 0 ? output : undefined;
 }
 
-function resolveModalSessionRouting(params: {
+async function resolveModalSessionRouting(params: {
   ctx: SlackMonitorContext;
   metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
   userId?: string;
   eventScope?: SlackEventScope;
-}): { agentId: string; sessionKey: string; channelId?: string; channelType?: string } {
+}): Promise<{ agentId: string; sessionKey: string; channelId?: string; channelType?: string }> {
   const metadata = params.metadata;
   const metadataAgentId = metadata.sessionKey
     ? resolveAgentIdFromSessionKey(metadata.sessionKey)
     : undefined;
   if (metadata.sessionKey && metadataAgentId && !params.eventScope) {
+    const assertCurrent = () => {
+      if (!params.ctx.isRuntimePolicyCurrent()) {
+        throw new Error("Slack modal routing policy changed; retry the interaction.");
+      }
+    };
+    if (
+      await isDelegatedChannelBindingTargetAsync(
+        {
+          conversation: { channel: "slack" },
+          targetSessionKey: metadata.sessionKey,
+          targetKind: "session",
+        },
+        assertCurrent,
+        params.ctx.cfg,
+      )
+    ) {
+      throw new Error("Slack modal events cannot target delegated workers.");
+    }
+    assertCurrent();
     return {
       agentId: metadataAgentId,
       sessionKey: metadata.sessionKey,
@@ -122,21 +142,21 @@ function resolveModalSessionRouting(params: {
   }
   const routing = metadata.channelId
     ? {
-        ...params.ctx.resolveSlackSystemEventRoute({
+        ...(await params.ctx.resolveSlackSystemEventRoute({
           channelId: metadata.channelId,
           channelType: metadata.channelType,
           senderId: params.userId,
           eventScope: params.eventScope,
-        }),
+        })),
         channelId: metadata.channelId,
         channelType: metadata.channelType,
       }
     : {
-        ...params.ctx.resolveSlackSystemEventRoute({
+        ...(await params.ctx.resolveSlackSystemEventRoute({
           channelType: "im",
           senderId: params.userId,
           eventScope: params.eventScope,
-        }),
+        })),
         channelType: params.eventScope ? "im" : undefined,
       };
   if (
@@ -150,7 +170,7 @@ function resolveModalSessionRouting(params: {
   return routing;
 }
 
-function resolveSlackModalEventBase(params: {
+async function resolveSlackModalEventBase(params: {
   ctx: SlackMonitorContext;
   body: SlackModalBody;
   eventScope?: SlackEventScope;
@@ -162,7 +182,7 @@ function resolveSlackModalEventBase(params: {
   const userId = params.body.user?.id ?? "unknown";
   const viewId = params.body.view?.id;
   const inputs = params.summarizeViewState(params.body.view?.state?.values);
-  const sessionRouting = resolveModalSessionRouting({
+  const sessionRouting = await resolveModalSessionRouting({
     ctx: params.ctx,
     metadata,
     userId,
@@ -278,7 +298,7 @@ async function emitSlackModalLifecycleEvent(params: {
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): Promise<void> {
   const { callbackId, userId, metadata, viewId, sessionRouting, stateValues, payload } =
-    resolveSlackModalEventBase({
+    await resolveSlackModalEventBase({
       ctx: params.ctx,
       body: params.body,
       eventScope: params.eventScope,

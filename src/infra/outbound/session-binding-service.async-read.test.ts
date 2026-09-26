@@ -108,7 +108,12 @@ describe("awaited binding read ownership", () => {
         );
       }
       expect(legacyRead).not.toHaveBeenCalled();
-      expect(read).toHaveBeenCalledExactlyOnceWith(record.conversation);
+      // A stable owner is re-read after the awaited target-provenance inspection.
+      expect(read).toHaveBeenCalledTimes(change === "keep" ? 2 : 1);
+      expect(read).toHaveBeenNthCalledWith(1, record.conversation);
+      if (change === "keep") {
+        expect(read).toHaveBeenNthCalledWith(2, record.conversation);
+      }
     },
   );
 
@@ -129,6 +134,6 @@ describe("awaited binding read ownership", () => {
       binding: record,
     });
     expect(await service.resolveByConversationAsync(record.conversation)).toEqual(record);
-    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(resolve).toHaveBeenCalledTimes(4);
   });
 });

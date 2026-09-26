@@ -337,7 +337,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
     // The `/subagents` slash command hint is user-facing, not the unauthorized status tool.
     expect(tool?.description).not.toMatch(/(?<!\/)subagents/);
     expect(tool?.description).toContain("never bind or take over a chat");
-    expect(tool?.description).toContain("`/subagents spawn --thread <task>`");
+    expect(tool?.description).not.toContain("/subagents spawn --thread");
     expect(tool?.description).toContain("(self: current session only)");
     // Transcript access alone does not expose execution/delivery diagnostics.
     expect(tool?.description).not.toContain("When diagnosing a missing result");

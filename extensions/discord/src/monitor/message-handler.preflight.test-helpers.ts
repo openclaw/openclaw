@@ -180,8 +180,8 @@ export function createThreadBinding(
 ) {
   return {
     bindingId: "default:thread-1",
-    targetSessionKey: "agent:main:subagent:child-1",
-    targetKind: "subagent",
+    targetSessionKey: "agent:main:acp:user-thread",
+    targetKind: "session",
     conversation: {
       channel: "discord",
       accountId: "default",

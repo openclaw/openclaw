@@ -4,12 +4,10 @@ import { normalizeSpawnedRunMetadata } from "../../spawned-context.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { resolveSubagentAgentGatewayTimeoutMs } from "./subagent-spawn-gateway.js";
 import { AGENT_LANE_SUBAGENT } from "./subagent-spawn.runtime.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 import type { SubagentCompletionMode } from "./subagent-system-prompt.js";
 
 export function buildSubagentLaunchRequest(params: {
   completionMode: SubagentCompletionMode;
-  spawnMode: SpawnSubagentMode;
   message: string;
   spawnedByKey: string;
   toolSpawnMetadata: Parameters<typeof normalizeSpawnedRunMetadata>[0];
@@ -69,12 +67,13 @@ export function buildSubagentLaunchRequest(params: {
               : undefined,
         }),
     idempotencyKey: params.childIdem,
-    deliver: params.completionMode === "thread-direct",
+    // Worker output belongs to the parent completion path, never a bound chat.
+    deliver: false,
     lane: AGENT_LANE_SUBAGENT,
     disableMessageTool: true,
     swarmCollector: collect,
     swarmOutputSchema: params.outputSchema,
-    cleanupBundleMcpOnRunEnd: params.spawnMode !== "session",
+    cleanupBundleMcpOnRunEnd: true,
     extraSystemPrompt: params.childSystemPrompt,
     thinking: params.thinkingOverride,
     timeout: params.runTimeoutSeconds,

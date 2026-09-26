@@ -23,8 +23,6 @@ export type SpawnSubagentParams = {
   swarmLaunchRequestFingerprint?: string;
   cwd?: string;
   runTimeoutSeconds?: number;
-  /** User command only: run a persistent child bound to a new thread owned by this sender. */
-  childThread?: { boundBy: string };
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
   context?: SpawnSubagentContextMode;

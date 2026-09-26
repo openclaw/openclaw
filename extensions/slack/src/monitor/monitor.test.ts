@@ -357,28 +357,28 @@ describe("normalizeSlackChannelType", () => {
 });
 
 describe("resolveSlackSystemEventRoute", () => {
-  it("defaults missing channel_type to channel sessions", () => {
+  it("defaults missing channel_type to channel sessions", async () => {
     const ctx = createSlackMonitorContext(baseParams());
-    expect(ctx.resolveSlackSystemEventRoute({ channelId: "C123" })).toEqual({
+    expect(await ctx.resolveSlackSystemEventRoute({ channelId: "C123" })).toEqual({
       agentId: "main",
       sessionKey: "agent:main:slack:channel:c123",
     });
   });
 
-  it("uses the configured default agent for fallback system-event sessions", () => {
+  it("uses the configured default agent for fallback system-event sessions", async () => {
     const ctx = createSlackMonitorContext({
       ...baseParams(),
       cfg: {
         agents: { list: [{ id: "ops", default: true }] },
       },
     });
-    expect(ctx.resolveSlackSystemEventRoute({ channelId: "C123" })).toEqual({
+    expect(await ctx.resolveSlackSystemEventRoute({ channelId: "C123" })).toEqual({
       agentId: "ops",
       sessionKey: "agent:ops:slack:channel:c123",
     });
   });
 
-  it("routes channel system events through account bindings", () => {
+  it("routes channel system events through account bindings", async () => {
     const ctx = createSlackMonitorContext({
       ...baseParams(),
       accountId: "work",
@@ -394,12 +394,12 @@ describe("resolveSlackSystemEventRoute", () => {
         ],
       },
     });
-    expect(ctx.resolveSlackSystemEventRoute({ channelId: "C123", channelType: "channel" })).toEqual(
-      { agentId: "ops", sessionKey: "agent:ops:slack:channel:c123" },
-    );
+    expect(
+      await ctx.resolveSlackSystemEventRoute({ channelId: "C123", channelType: "channel" }),
+    ).toEqual({ agentId: "ops", sessionKey: "agent:ops:slack:channel:c123" });
   });
 
-  it("routes DM system events through direct-peer bindings when sender is known", () => {
+  it("routes DM system events through direct-peer bindings when sender is known", async () => {
     const ctx = createSlackMonitorContext({
       ...baseParams(),
       accountId: "work",
@@ -417,7 +417,7 @@ describe("resolveSlackSystemEventRoute", () => {
       },
     });
     expect(
-      ctx.resolveSlackSystemEventRoute({
+      await ctx.resolveSlackSystemEventRoute({
         channelId: "D123",
         channelType: "im",
         senderId: "U123",
