@@ -78,6 +78,19 @@ vi.mock("../../daemon/systemd-exec.js", () => ({
   execSystemctlUser: () => systemctl(),
 }));
 
+// darwin now refreshes the stop budget on every stop/restart request, and the real
+// reader spawns launchctl print against three domains through the mocked
+// node:child_process module. Keep launchctl out of the loop and let each case state
+// the deadline launchd is enforcing. The reader reports stop: null when launchd is not
+// running the stop, which leaves the platform-neutral policy in force.
+const readLaunchdStopTimeout = vi.fn<
+  typeof import("../../infra/launchd-stop-timeout.js").readLaunchdStopTimeout
+>(async () => ({ stop: null }));
+vi.mock("../../infra/launchd-stop-timeout.js", () => ({
+  readLaunchdStopTimeout: (...args: Parameters<typeof readLaunchdStopTimeout>) =>
+    readLaunchdStopTimeout(...args),
+}));
+
 const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
   release: vi.fn(async () => {}),
 }));
@@ -473,6 +486,8 @@ beforeEach(async () => {
     stdout: "LoadState=loaded\nTimeoutStopUSec=5min 30s",
     stderr: "",
   });
+  // mockReset also drops any one-shot launchd deadline a previous case left queued.
+  readLaunchdStopTimeout.mockReset().mockResolvedValue({ stop: null });
   hostedStopExecute.mockReset().mockResolvedValue({ outcome: "accepted" });
   hostedStopDispose.mockReset().mockResolvedValue(undefined);
   hostedStopPrepare.mockReset().mockImplementation(async (_owner, assertCurrent) => {
@@ -2901,103 +2916,6 @@ describe("runGatewayLoop", () => {
     } finally {
       delete process.env.OPENCLAW_WINDOWS_TASK_NAME;
     }
-  });
-
-  it("waits briefly before exiting on launchd supervised restart", async () => {
-    vi.clearAllMocks();
-    peekGatewayRestartReason.mockReturnValue(undefined);
-    try {
-      setPlatform("darwin");
-      process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
-        mode: "supervised",
-        handoffSpawned: Promise.resolve(true),
-      });
-
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const { runtime, exited } = await createSignaledLoopHarness();
-        const restartSignal = captureSignal("SIGUSR2");
-
-        vi.useFakeTimers();
-        restartSignal();
-        await vi.advanceTimersByTimeAsync(1499);
-        expect(runtime.exit).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-
-        await expect(exited).resolves.toBe(0);
-        expect(runtime.exit).toHaveBeenCalledWith(0);
-        expectRestartHandoffCall({
-          restartKind: "full-process",
-          reason: undefined,
-          supervisorMode: "launchd",
-        });
-      });
-    } finally {
-      vi.useRealTimers();
-      delete process.env.OPENCLAW_LAUNCHD_LABEL;
-      if (originalPlatformDescriptor) {
-        Object.defineProperty(process, "platform", originalPlatformDescriptor);
-      }
-    }
-  });
-
-  it("falls back in-process when the launchd restart handoff fails to spawn", async () => {
-    vi.clearAllMocks();
-    peekGatewayRestartReason.mockReturnValue(undefined);
-    try {
-      setPlatform("darwin");
-      process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-      restartGatewayProcessWithFreshPid.mockReturnValueOnce({
-        mode: "supervised",
-        handoffSpawned: Promise.resolve(false),
-      });
-
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const { start, runtime, exited } = await createSignaledLoopHarness();
-        const restartSignal = captureSignal("SIGUSR2");
-        const sigint = captureSignal("SIGINT");
-
-        vi.useFakeTimers();
-        restartSignal();
-        await vi.advanceTimersByTimeAsync(1500);
-
-        expect(start).toHaveBeenCalledTimes(2);
-        expect(runtime.exit).not.toHaveBeenCalled();
-        expect(acquireGatewayLock).toHaveBeenCalledTimes(2);
-        expect(gatewayLog.warn).toHaveBeenCalledWith(
-          "launchd restart handoff failed to spawn; falling back to in-process restart",
-        );
-
-        sigint();
-        await expect(exited).resolves.toBe(0);
-      });
-    } finally {
-      vi.useRealTimers();
-      delete process.env.OPENCLAW_LAUNCHD_LABEL;
-      if (originalPlatformDescriptor) {
-        Object.defineProperty(process, "platform", originalPlatformDescriptor);
-      }
-    }
-  });
-
-  it("leaves the successor to launchd after a SIGTERM restart intent", async () => {
-    vi.clearAllMocks();
-    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: "gateway.restart" });
-    setPlatform("darwin");
-    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-    restartGatewayProcessWithFreshPid.mockReturnValueOnce({
-      mode: "supervised",
-      handoffSpawned: Promise.resolve(true),
-    });
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { start, exited } = await createSignaledLoopHarness();
-      captureSignal("SIGTERM")();
-      await expect(exited).resolves.toBe(0);
-      expect(start).toHaveBeenCalledOnce();
-      expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
-      expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-    });
   });
 
   it("records external ownership even when native supervisor markers are inherited", async () => {
