@@ -297,6 +297,11 @@ restore cold history, while ordinary reads retain their existing restoration
 owner. Process-held incognito data and native callback visitors retain their
 current owners. Schemas, stored bytes, retention, and update behavior are unchanged.
 
+History source discovery retries registry metadata reads up to twice when a
+concurrent agent registration invalidates them. Retries retain the captured
+state admission and source paths; changed lifetimes, physical sources, or
+discovered topology still reject stale reads.
+
 Exact message membership reads for managed attachments also use the history
 worker. The worker validates the entire visible JSON range on every lookup,
 including unchanged projection revisions, and returns only matching messages.

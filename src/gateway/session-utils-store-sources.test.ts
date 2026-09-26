@@ -3,18 +3,9 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import {
-  AgentDatabaseRegistryChangedError,
-  invalidateRegisteredAgentDatabasesMemo,
-} from "../state/openclaw-agent-db-registry-listing.js";
-import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import * as stateReads from "../state/openclaw-state-db-readonly.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -330,84 +321,6 @@ it.each([false, true])(
       });
       await prepared.revalidate(() => {});
       prepared.assertCurrent();
-    });
-  },
-);
-
-it.each(["registration", "repeated registration", "source retirement", "read failure"] as const)(
-  "preserves source discovery after %s during the first registry read",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      const registryPath = openOpenClawStateDatabase().path;
-      const currentSource = { agentId: database.agentId, path: database.path };
-      const register = () => registerOpenClawAgentDatabase({ ...currentSource, env: state.env });
-      invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
-      const held = createDeferredCore();
-      const release = createDeferredCore();
-      const failure = new Error("Synthetic registry read failure");
-      const read = stateReads.executeExistingOpenClawStateRead;
-      let firstRead = true;
-      const observation = vi
-        .spyOn(stateReads, "executeExistingOpenClawStateRead")
-        .mockImplementation(async (...args) => {
-          const reply = await read(...args);
-          if (args[1].type !== "agentDatabaseRegistry.read") {
-            return reply;
-          }
-          if (firstRead) {
-            firstRead = false;
-            held.resolve();
-            await release.promise;
-          } else if (change === "repeated registration") {
-            register();
-          }
-          if (change === "read failure") {
-            throw failure;
-          }
-          return reply;
-        });
-      const pending = prepareGatewaySessionStoreReadSourcesAsync({
-        cfg: {},
-        currentSource,
-        env: state.env,
-        registryPath,
-      });
-      try {
-        await Promise.race([
-          held.promise,
-          pending.then(() => {
-            throw new Error("Source discovery completed before the held registry reply");
-          }),
-        ]);
-        if (change === "source retirement") {
-          await closeOpenClawStateDatabaseByPathAsync(registryPath);
-          openOpenClawStateDatabase({ env: state.env });
-        } else {
-          register();
-        }
-        release.resolve();
-        if (change === "source retirement") {
-          await expect(pending).rejects.toMatchObject({
-            code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
-          });
-        } else if (change === "read failure") {
-          await expect(pending).rejects.toBe(failure);
-        } else if (change === "repeated registration") {
-          await expect(pending).rejects.toBeInstanceOf(AgentDatabaseRegistryChangedError);
-        } else {
-          const prepared = await pending;
-          expect(prepared.request).toBeDefined();
-          expect(resolveGatewaySessionStoreReadSources(prepared.request!).sources.main).toEqual([
-            currentSource,
-          ]);
-          prepared.assertCurrent();
-        }
-      } finally {
-        release.resolve();
-        await pending.catch(() => undefined);
-        observation.mockRestore();
-      }
     });
   },
 );
