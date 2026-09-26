@@ -13,6 +13,10 @@ import {
   findOpenClawAgentDatabaseIdentity,
   readOpenClawAgentDatabaseIdentity,
 } from "./openclaw-agent-db-identity.js";
+import {
+  matchesAgentDatabaseReadCandidatePath,
+  type OpenClawAgentDatabaseReadCandidateResource,
+} from "./openclaw-agent-db-resources.js";
 
 export type OpenClawAgentDatabaseValidation = {
   agentId: string;
@@ -371,6 +375,19 @@ export function clearOpenClawAgentDatabaseValidationCache(rootPath?: string): vo
   for (const pathname of validatedPaths.keys()) {
     if (rootPath === undefined || isPathInside(rootPath, pathname)) {
       invalidateOpenClawAgentDatabaseValidation(pathname);
+      validatedPaths.delete(pathname);
+    }
+  }
+}
+
+/** Reader cleanup releases local metadata without revoking its parent's shared proof. */
+export function releaseOpenClawAgentDatabaseReadValidation(
+  candidates: readonly Pick<OpenClawAgentDatabaseReadCandidateResource, "path" | "scope">[],
+): void {
+  for (const pathname of validatedPaths.keys()) {
+    if (
+      candidates.some((candidate) => matchesAgentDatabaseReadCandidatePath(candidate, pathname))
+    ) {
       validatedPaths.delete(pathname);
     }
   }
