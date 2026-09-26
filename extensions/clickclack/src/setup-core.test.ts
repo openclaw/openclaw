@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveClickClackAccount } from "./accounts.js";
-import type { CoreConfig } from "./types.js";
+import type { ClickClackSetupCodeClaim, CoreConfig } from "./types.js";
 
 const claimClickClackSetupCode = vi.hoisted(() => vi.fn());
 const verifyClickClackAccountAfterSetup = vi.hoisted(() => vi.fn());
@@ -22,7 +22,6 @@ import {
   clickClackSetupContract,
   normalizeClickClackBaseUrl,
 } from "./setup-core.js";
-import type { ClickClackSetupCodeClaim } from "./types.js";
 
 type ClickClackSetupInput = ChannelSetupInput & {
   baseUrl?: string;
