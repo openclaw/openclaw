@@ -1,4 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { isImplicitSameChatApprovalAuthorization } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
@@ -74,6 +75,12 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
   });
   if (!authorization?.authorized) {
     ignored(`unauthorized actor ${senderId || "unknown"}`);
+    return true;
+  }
+  // Card submits skip message admission, so the empty-approver fallback meant for
+  // command-authorized `/approve` senders cannot authorize them.
+  if (isImplicitSameChatApprovalAuthorization(authorization)) {
+    ignored("card submits require explicit approvers");
     return true;
   }
 
