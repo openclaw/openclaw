@@ -1168,10 +1168,14 @@ src/process/windows-command.ts
 src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts
 src/proxy-capture/paths.ts
+src/proxy-capture/runtime-cleanup.ts
+src/proxy-capture/runtime-fetch-patch.ts
 src/proxy-capture/runtime-owner.ts
+src/proxy-capture/runtime-response-body.ts
 src/proxy-capture/runtime.ts
 src/proxy-capture/store-lifecycle.ts
 src/proxy-capture/store-readonly.ts
+src/proxy-capture/store.async.ts
 src/proxy-capture/store.kernel.ts
 src/proxy-capture/store.sqlite.ts
 src/routing/account-id.ts
@@ -1337,7 +1341,9 @@ src/state/openclaw-state-worker-context.capture.ts
 src/state/openclaw-state-worker-context.ts
 src/state/openclaw-state-worker-error-identity.ts
 src/state/openclaw-state-worker-error.ts
+src/state/openclaw-state-worker-lease.ts
 src/state/openclaw-state-worker-operation.ts
+src/state/openclaw-state-worker-owner.ts
 src/state/openclaw-state-worker-store.ts
 src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts

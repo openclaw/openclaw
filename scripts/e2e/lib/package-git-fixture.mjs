@@ -35,6 +35,8 @@ function ensureDependencyIgnores(root) {
     "node_modules",
     "**/node_modules/",
     "pnpm-lock.yaml",
+    // Match source checkouts while the updater holds its runtime artifact owner.
+    ".artifacts/",
     // Runtime promotion stages destination siblings before its final clean check.
     "*.openclaw-update-*.tmp/",
     PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,

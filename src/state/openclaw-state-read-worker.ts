@@ -257,6 +257,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (isChannelIngressReadCommand(command)) {
     return bytes + Buffer.byteLength(JSON.stringify(command.input ?? null), "utf8");
   }
+  if (command.type === "capture.readOnlyEvents") {
+    return bytes + Buffer.byteLength(command.sessionId, "utf8") + 8;
+  }
+  if (command.type === "capture.readOnlyBlob") {
+    return bytes + Buffer.byteLength(command.blobId, "utf8");
+  }
   if (command.type === "cron.jobNames") {
     return command.jobIds.reduce(
       (sum, id) => sum + Buffer.byteLength(id, "utf8"),

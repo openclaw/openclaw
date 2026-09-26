@@ -3040,7 +3040,6 @@ src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
 src/provider-runtime/operation-retry.ts	3
 src/proxy-capture/env.ts	1
-src/proxy-capture/runtime.ts	5
 src/proxy-capture/store.sqlite.ts	2
 src/realtime-transcription/websocket-session.ts	2
 src/routing/binding-scope.ts	1

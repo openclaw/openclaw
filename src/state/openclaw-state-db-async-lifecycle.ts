@@ -116,6 +116,48 @@ export function getOpenClawDatabaseMaintenanceResourceScope(
   return maintenanceResources.claims.get(resource)?.scope;
 }
 
+function runMaintenance<T>(scope: OpenClawDatabaseMaintenanceScope, operation: () => T): T {
+  const accepted = { scope, active: true };
+  try {
+    const result = maintenanceResources.current.run(accepted, operation);
+    if (result instanceof Promise) {
+      const settled = () => {
+        accepted.active = false;
+      };
+      void result.then(settled, settled);
+      void scope.track(result);
+    } else {
+      accepted.active = false;
+    }
+    return result;
+  } catch (error) {
+    accepted.active = false;
+    throw error;
+  }
+}
+
+/** Retain one exact resource claim for finite commands while its maintenance scope drains. */
+export function captureOpenClawDatabaseMaintenanceResource(
+  resource: object,
+  expectedScope: OpenClawDatabaseMaintenanceScope,
+) {
+  const claim = maintenanceResources.claims.get(resource);
+  const assertCurrent = () => {
+    expectedScope.assertOwnerCurrent();
+    if (claim?.scope !== expectedScope || maintenanceResources.claims.get(resource) !== claim) {
+      throw new Error("Database maintenance resource owner changed");
+    }
+  };
+  assertCurrent();
+  return {
+    assertCurrent,
+    async run<T>(operation: () => Promise<T>): Promise<T> {
+      assertCurrent();
+      return runMaintenance(expectedScope, operation);
+    },
+  };
+}
+
 /** A cached handle used by an independent caller remains with the ordinary cache owner. */
 export function observeOpenClawDatabaseMaintenanceResource(resource: object | undefined): void {
   if (!resource) {
@@ -248,23 +290,7 @@ export function createOpenClawDatabaseMaintenanceScope(
     },
     run(operation) {
       scope.assertAdmission();
-      const accepted = { scope, active: true };
-      try {
-        const result = maintenanceResources.current.run(accepted, operation);
-        if (result instanceof Promise) {
-          const settled = () => {
-            accepted.active = false;
-          };
-          void result.then(settled, settled);
-          void scope.track(result);
-        } else {
-          accepted.active = false;
-        }
-        return result;
-      } catch (error) {
-        accepted.active = false;
-        throw error;
-      }
+      return runMaintenance(scope, operation);
     },
     track(operation) {
       assertOpen();
