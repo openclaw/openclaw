@@ -60,6 +60,7 @@ type ReplacementProjectionOptions = {
   assertCommitAllowed?: () => void;
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
   ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
+  checkPendingArchiveRecovery?: boolean;
   onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
   env?: NodeJS.ProcessEnv;
   activeSessionKey?: string;
@@ -252,6 +253,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
             includeLabelOwners: params.includeLabelOwners,
             validationKeys: [...validationKeys],
             replacements: applicable,
+            checkPendingArchiveRecovery: params.checkPendingArchiveRecovery,
             consumePendingReset: params.consumePendingReset,
             ownerAssignment: params.ownerAssignment,
             maintenance,

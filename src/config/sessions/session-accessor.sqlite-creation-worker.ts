@@ -191,6 +191,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
             withCommit,
             ownerAssignment: owner ? { sessionKey: normalizedKey, owner } : undefined,
             onLifecycleCommitted,
+            checkPendingArchiveRecovery: true,
             afterCommitted: options.afterCommitted
               ? (_result, source) => options.afterCommitted!(created.entry, source)
               : undefined,
@@ -241,6 +242,7 @@ export async function createSessionEntryWithTranscriptInWorker<TError>(
                   labelOwnerKeys: replacement.labelOwnerKeys,
                   validationKeys: [normalizedKey],
                   replacements: [{ sessionKey: normalizedKey, entry: created.entry }],
+                  checkPendingArchiveRecovery: true,
                   ...(owner ? { ownerAssignment: { sessionKey: normalizedKey, owner } } : {}),
                 },
                 assertHeld,

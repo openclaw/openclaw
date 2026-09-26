@@ -136,7 +136,10 @@ export function commitSessionEntryReplacementsInDatabase(
       : emptySessionEntryMaintenancePlan();
   return {
     // Fresh creation must not retry another session's failed export.
-    pendingArchiveRecovery: previous.size > 0 && hasPendingSessionTranscriptArchives(database),
+    pendingArchiveRecovery:
+      input.checkPendingArchiveRecovery === true &&
+      previous.size > 0 &&
+      hasPendingSessionTranscriptArchives(database),
     previous,
     current,
     maintenancePlans: [maintenancePlan],
