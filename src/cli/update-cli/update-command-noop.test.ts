@@ -78,7 +78,6 @@ it.each([
       root,
       managedServiceRoot,
       managedServiceRootRedirect: null,
-      packageInstallSpec: "openclaw@2026.9.5",
       opts: { yes: true, json: true },
       result: {
         status: "skipped",
@@ -103,8 +102,8 @@ it.each([
     });
 
     expect(refuseUpdate).not.toHaveBeenCalled();
-    expect(boundary.maintenance).toHaveBeenCalledTimes(foreground ? 0 : 2);
-    for (const [index, phase] of (foreground ? [] : ["inspect", "refresh"]).entries()) {
+    expect(boundary.maintenance).toHaveBeenCalledTimes(foreground ? 0 : 1);
+    for (const [index, phase] of (foreground ? [] : ["refresh"]).entries()) {
       expect(boundary.maintenance).toHaveBeenNthCalledWith(
         index + 1,
         expect.objectContaining({

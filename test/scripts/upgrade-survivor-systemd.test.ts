@@ -458,7 +458,10 @@ setInterval(() => {}, 1000);
     };
     try {
       expect(systemctl("enable", "openclaw-gateway.service").status).toBe(0);
-      expect(systemctl("is-enabled", "openclaw-gateway.service").status).toBe(0);
+      expect(systemctl("is-enabled", "openclaw-gateway.service")).toMatchObject({
+        status: 0,
+        stdout: "enabled\n",
+      });
       const restarted = spawnSync(
         "python3",
         [

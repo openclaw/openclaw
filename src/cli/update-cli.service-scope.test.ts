@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
+import * as serviceMembership from "../daemon/service-process-membership.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
@@ -44,6 +45,7 @@ import {
   runUpdateFailureTriage,
   updateCommand,
   updateGitCheckout,
+  updateStatusCommand,
 } from "./update-cli-modules.test-support.js";
 import { recoveryVerificationStep } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import { writeOpenClawPackageFixture } from "./update-cli/update-cli-package.test-support.js";
@@ -225,6 +227,59 @@ describe("update-cli", () => {
     });
     expect(doctorCommandCall()).toBeUndefined();
   });
+
+  it.each(["linux", "darwin"] as const)(
+    "names an external-terminal recovery path when native membership is unverified on %s",
+    async (platform) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const root = await mockPackageInstallAtCaseDir();
+      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue("unknown");
+      mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set([process.pid, 1]));
+
+      await expect(invokeUpdateCli({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+
+      expect(getErrorOutput()).toContain(
+        "From an interactive external shell not started by the service",
+      );
+      expect(getErrorOutput()).toContain("With native helper support (systemd-run on Linux)");
+      expect(lastWriteJsonCall()).toMatchObject({
+        reason: "managed-service-preflight",
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            failureFacts: [
+              expect.objectContaining({
+                code: "service-membership-unverified",
+                message: expect.stringContaining(
+                  "openclaw gateway stop && openclaw update --yes && openclaw gateway start",
+                ),
+              }),
+            ],
+          }),
+        ]),
+      });
+      expectNoSideEffects(serviceStop, serviceRestart, serviceStart);
+      expect(packageInstallCommandCall()).toBeUndefined();
+      await updateStatusCommand({ json: true });
+      expect(lastWriteJsonCall()).toMatchObject({
+        lastRun: {
+          reason: "managed-service-preflight",
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              failureFacts: [
+                expect.objectContaining({
+                  code: "service-membership-unverified",
+                  message: expect.stringContaining(
+                    "openclaw gateway stop && openclaw update --yes && openclaw gateway start",
+                  ),
+                }),
+              ],
+            }),
+          ]),
+        },
+      });
+    },
+  );
 
   it.each<{
     platform: "linux" | "darwin";

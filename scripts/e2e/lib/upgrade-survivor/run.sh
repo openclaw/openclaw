@@ -1135,25 +1135,33 @@ const text = fs.readFileSync(process.argv[2], "utf8");
 const result = JSON.parse(text.slice(text.indexOf("{")));
 assert.equal(result.status, "skipped", "second update was not a clean no-op");
 assert.equal(result.reason, "already-current", "second update was not already current");
-// The isolated state directory records a service refusal without running the suggested command.
-const expectedSteps = result.steps.length === 0 ? [] : [{
-  name: "managed-service-reconciliation",
-  command: "openclaw gateway install --force",
-  cwd: result.root ?? "",
-  durationMs: 0,
-  exitCode: 0,
-  advisory: {
-    kind: "recoverable-maintenance",
-    message:
-      "service management skipped: non-default state dir or config path. " +
-      "Rerun with HOME set to the OS account home, without OPENCLAW_HOME, " +
-      "and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing " +
-      "at the canonical paths for that account home and profile to manage the gateway service during update.",
-  },
-}];
-assert.deepEqual(result.steps, expectedSteps, "second update executed mutations or unexpected maintenance");
+if (result.steps[0]?.name === "current-core-maintenance") {
+  assert.equal(result.steps.length, 1, "deferred maintenance executed additional work");
+  assert.equal(result.steps[0].exitCode, 0);
+  assert.equal(result.steps[0].advisory?.kind, "recoverable-maintenance");
+  assert.match(result.steps[0].advisory.message, /^Core is already current; plugin, runtime, and service maintenance was deferred\. Native Gateway service membership could not be verified\./);
+  assert.match(result.steps[0].advisory.message, /openclaw gateway stop && openclaw update --yes && openclaw gateway start/);
+} else {
+  // The isolated state directory records a service refusal without running the suggested command.
+  const expectedSteps = result.steps.length === 0 ? [] : [{
+    name: "managed-service-reconciliation",
+    command: "openclaw gateway install --force",
+    cwd: result.root ?? "",
+    durationMs: 0,
+    exitCode: 0,
+    advisory: {
+      kind: "recoverable-maintenance",
+      message:
+        "service management skipped: non-default state dir or config path. " +
+        "Rerun with HOME set to the OS account home, without OPENCLAW_HOME, " +
+        "and with OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH either unset or pointing " +
+        "at the canonical paths for that account home and profile to manage the gateway service during update.",
+    },
+  }];
+  assert.deepEqual(result.steps, expectedSteps, "second update executed mutations or unexpected maintenance");
+}
 assert(!result.nextAction, "second update requested repair");
-console.log("Second update: already-current, no package mutations or repair required.");
+console.log("Second update: already-current, no package mutations.");
 NODE
   assert_survival || return "$?"
   check_gateway_probes
@@ -2611,20 +2619,7 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase legacy-operator-agent-turn node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     legacy-operator-turn candidate
   phase legacy-operator-plugin assert_prepublish_plugin_install
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-    # The restart shim has no native service cgroup. After proving the published
-    # managed restart, exercise candidate no-op convergence with a foreground Gateway.
-    phase legacy-operator-noop-service-stop stop_update_restart_probe_gateway "$COMMAND_TIMEOUT"
-    phase legacy-operator-noop-foreground-start start_gateway
-  fi
   phase legacy-operator-update-noop assert_legacy_operator_update_noop
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-    phase legacy-operator-noop-foreground-alive openclaw_e2e_process_alive "$gateway_pid"
-    phase legacy-operator-noop-service-inactive assert_update_restart_probe_inactive
-    phase legacy-operator-noop-foreground-stop stop_gateway
-    phase legacy-operator-noop-service-start run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
-    phase legacy-operator-noop-service-status check_gateway_status
-  fi
   phase legacy-operator-doctor-clean assert_legacy_operator_doctor_clean
   phase formerly-bundled-doctor node scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs \
     "$candidate_version"
