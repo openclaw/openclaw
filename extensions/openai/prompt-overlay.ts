@@ -1,4 +1,3 @@
-// Openai plugin module implements prompt overlay behavior.
 import {
   isGpt5ModelId,
   resolveGpt5PromptOverlayMode,
@@ -6,27 +5,16 @@ import {
 } from "openclaw/plugin-sdk/provider-model-metadata";
 import type { Gpt5PromptOverlayMode } from "openclaw/plugin-sdk/provider-model-shared";
 
-const OPENAI_PROVIDER_IDS = new Set(["openai"]);
-
-type OpenAIPromptOverlayMode = Gpt5PromptOverlayMode;
-
 export function resolveOpenAIPromptOverlayMode(
   pluginConfig?: Record<string, unknown>,
-): OpenAIPromptOverlayMode {
+): Gpt5PromptOverlayMode {
   return resolveGpt5PromptOverlayMode(undefined, pluginConfig);
-}
-
-function shouldApplyOpenAIPromptOverlay(params: {
-  modelProviderId?: string;
-  modelId?: string;
-}): boolean {
-  return OPENAI_PROVIDER_IDS.has(params.modelProviderId ?? "") && isGpt5ModelId(params.modelId);
 }
 
 export function resolveOpenAISystemPromptContribution(params: {
   config?: Parameters<typeof resolveGpt5SystemPromptContribution>[0]["config"];
   legacyPluginConfig?: Record<string, unknown>;
-  mode?: OpenAIPromptOverlayMode;
+  mode?: Gpt5PromptOverlayMode;
   modelProviderId?: string;
   modelId?: string;
   trigger?: Parameters<typeof resolveGpt5SystemPromptContribution>[0]["trigger"];
@@ -37,9 +25,6 @@ export function resolveOpenAISystemPromptContribution(params: {
       params.mode === undefined ? params.legacyPluginConfig : { personality: params.mode },
     modelId: params.modelId,
     trigger: params.trigger,
-    enabled: shouldApplyOpenAIPromptOverlay({
-      modelProviderId: params.modelProviderId,
-      modelId: params.modelId,
-    }),
+    enabled: params.modelProviderId === "openai" && isGpt5ModelId(params.modelId),
   });
 }

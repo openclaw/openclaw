@@ -253,7 +253,6 @@ export type ThreadStatusRevision = {
 export type TaskRecoveryCandidate = NativeSubagentAssignment & {
   expectedTask: AgentHarnessTaskAssignment;
   completionCustody?: AgentHarnessCompletionCustody;
-  readonly taskId: string;
   terminal: boolean;
   observedTurns: NativeTurnObservation[];
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;

@@ -33,14 +33,6 @@ describe("Checkout chip state", () => {
     {
       destination: "remote",
       worktree: true,
-      worktreeAvailable: true,
-      headBranch: "main",
-      baseRef: "main",
-      label: "New worktree from main",
-    },
-    {
-      destination: "remote",
-      worktree: true,
       worktreeAvailable: false,
       baseRef: "",
       label: "New worktree",
@@ -68,20 +60,6 @@ describe("Checkout chip state", () => {
       headBranch: "feature",
       baseRef: "main",
       label: "New worktree from main",
-    },
-    {
-      destination: "local",
-      worktree: true,
-      worktreeAvailable: true,
-      baseRef: "release",
-      label: "New worktree from release",
-    },
-    {
-      destination: "local",
-      worktree: true,
-      worktreeAvailable: true,
-      baseRef: "",
-      label: "New worktree",
     },
     {
       destination: "local",

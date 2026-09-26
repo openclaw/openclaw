@@ -74,6 +74,13 @@ You can also enable the global rolling-history detectors in **Settings → Agent
 | `enabled`            | `false` | Master switch for the rolling-history detectors. `false` also disables the post-compaction guard.                                                                                                                                 |
 | `semanticNoProgress` | `off`   | With `enabled: true`, `shadow` asks the Decision model for a bounded observation only after deterministic loop evidence; `replan` additionally permits one fixed instruction for a current stalled judgment at ≥0.95 probability. |
 
+Semantic observation and replanning also require the **Decision assistance**
+Labs opt-in (`agents.defaults.experimental.decisionAssistance: true`) and an
+effective Decision model for the owning agent. Model selection alone does not
+activate either mode; an empty agent override disables both. Published Labs
+opt-out stops new observation, discards in-flight classifications, and retires
+retained replan guidance without changing deterministic loop behavior.
+
 Semantic no-progress handling keeps at most a small run-local trajectory and
 one outstanding Decision request. It records only aggregate, content-free
 metrics; the raw trajectory is not written to routine logs. `shadow` never

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
@@ -16,6 +17,8 @@ describe("cron trigger cadence", () => {
       return { kind: "evaluated" as const, fire };
     });
     const deps: CronServiceDeps = {
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       log: logger,
@@ -67,6 +70,8 @@ describe("cron trigger cadence", () => {
         return result;
       });
       const deps: CronServiceDeps = {
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: true,
         log: logger,
@@ -140,6 +145,8 @@ describe("cron trigger cadence", () => {
     });
     const evaluateCronTrigger = vi.fn(async () => ({ kind: "evaluated" as const, fire: false }));
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: true,
       log: logger,

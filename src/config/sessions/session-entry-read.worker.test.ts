@@ -97,6 +97,53 @@ it("publishes exact-read admission only after commit and reuses it on the retain
   });
 });
 
+it("keeps pending archive facts in the lifecycle snapshot and observes later commits", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:archive-admission";
+    writeSessionEntry(database, sessionKey, { sessionId: "live-session", updatedAt: 1 });
+    const target = { agentId: database.agentId, path: database.path };
+    await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+    const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
+    const retained = new OpenClawAgentDatabaseReadOnlyScope();
+    const readEntries = entryCache.readExactSessionEntryCandidatesInDatabase;
+    const concurrentCommit = vi
+      .spyOn(entryCache, "readExactSessionEntryCandidatesInDatabase")
+      .mockImplementationOnce((...args) => {
+        const selected = readEntries(...args);
+        peer
+          .prepare(
+            "INSERT INTO session_transcript_archives (session_id, generation, session_key, reason, encoding, archive_blob, archive_sha256, archive_name, created_at) VALUES ('deleted-session', 'generation', ?, 'deleted', 'identity', X'', ?, 'pending.jsonl', 1)",
+          )
+          .run(sessionKey, "0".repeat(64));
+        return selected;
+      });
+    try {
+      retained.run(target, () => {
+        const read = () =>
+          readExactSessionEntriesWithLifecycle({
+            kind: "session-exact-entries",
+            database: target,
+            env,
+            sessionKeys: [sessionKey],
+            projection: "lifecycle",
+          });
+        expect(read()).toMatchObject({
+          entries: [{ sessionKey, entry: { sessionId: "live-session" } }],
+          pendingArchives: false,
+        });
+        expect(read().pendingArchives).toBe(true);
+        peer.exec("UPDATE session_transcript_archives SET published_at = 2");
+        expect(read().pendingArchives).toBe(false);
+      });
+    } finally {
+      concurrentCommit.mockRestore();
+      retained.close();
+      peer.close();
+    }
+  });
+});
+
 it("reads row metadata, board presence, and cold summary position from one snapshot", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });

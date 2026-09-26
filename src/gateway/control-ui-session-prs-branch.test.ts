@@ -195,6 +195,7 @@ describe("session branch diff stats", () => {
           branch: layout === "detached" ? null : "feature",
           defaultBranch: "main",
         });
+        expect(reads.mock.calls).toHaveLength(1);
         expect(reads.mock.calls.filter(([, args]) => args[0] === "rev-parse")).toHaveLength(0);
         await runGitReadOperation(
           {
@@ -205,11 +206,59 @@ describe("session branch diff stats", () => {
         );
         expect(reads.mock.calls.filter(([, args]) => args[0] === "rev-parse")).toHaveLength(0);
         expect(reads.mock.calls.filter(([, args]) => args[0] === "for-each-ref")).toHaveLength(0);
+        await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release");
+        reads.mockClear();
+        expect(
+          await runGitReadOperation(
+            { type: "checkout.context", input: { root: cwd } },
+            { refresh: true },
+          ),
+        ).toMatchObject({ defaultBranch: "release" });
+        expect(reads.mock.calls).toHaveLength(1);
+        await git("symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
+        reads.mockClear();
+        expect(
+          await runGitReadOperation(
+            { type: "checkout.context", input: { root: cwd } },
+            { refresh: true },
+          ),
+        ).not.toHaveProperty("defaultBranch");
+        expect(reads.mock.calls).toHaveLength(1);
       } finally {
         reads.mockRestore();
       }
     },
   );
+
+  it.each([
+    "symbolic chain",
+    "ambiguous name",
+    ...(process.platform === "win32" ? [] : ["symlink"]),
+  ])("preserves Git's default branch discovery with a %s", async (layout) => {
+    await initializeRepo();
+    await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+    await trackRemote("main");
+    await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    if (layout === "symbolic chain") {
+      await git("symbolic-ref", "refs/remotes/origin/main", "refs/heads/main");
+    } else if (layout === "ambiguous name") {
+      await git("tag", "origin/main");
+    } else {
+      await git(
+        "-c",
+        "core.preferSymlinkRefs=true",
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+      );
+    }
+    const defaultRef = (
+      await git("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    ).stdout.trim();
+    expect(
+      await runGitReadOperation({ type: "checkout.context", input: { root } }, { refresh: true }),
+    ).toMatchObject({ defaultBranch: defaultRef.replace(/^origin\//, "") });
+  });
 
   it.each(["loose", "packed", "symbolic", ...(process.platform === "win32" ? [] : ["symlink"])])(
     "refreshes branch stats after %s remote refs advance and disappear",
@@ -596,18 +645,23 @@ describe("session branch diff stats", () => {
     });
   });
 
-  it("skips non-regular and binary untracked files without blocking", async () => {
+  it("counts only bounded regular untracked text, including hardlinks", async () => {
     await initializeFeatureWork({ trackFeature: true });
     await writeFile("text.txt", "alpha\nbeta\n");
     await writeFile("blob.bin", Buffer.from([0x50, 0x00, 0x4b, 0x03]));
+    await writeFile("empty.txt", "");
+    await writeFile("oversized.txt", "not counted\n");
+    await fs.truncate(path.join(root, "oversized.txt"), 512 * 1024 + 1);
+    await fs.link(path.join(root, "text.txt"), path.join(root, "hardlink.txt"));
     if (process.platform !== "win32") {
       // A named pipe must not block the stats path until the git timeout.
       await execFileAsync("mkfifo", [path.join(root, "pipe")]);
+      await fs.symlink("text.txt", path.join(root, "symlink.txt"));
     }
 
     const result = await loadBranchState();
-    // 1 committed line + 2 untracked text lines; binary and pipe count 0.
-    expect(result.branch).toMatchObject({ additions: 3, deletions: 0 });
+    // One committed line and two two-line regular files; hardlinks are allowed for counts.
+    expect(result.branch).toMatchObject({ additions: 5, deletions: 0 });
   });
 
   it.each(["none", "uncommitted", "unpushed"])(

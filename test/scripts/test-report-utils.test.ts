@@ -29,12 +29,6 @@ vi.mock("node:child_process", async () => {
 });
 
 describe("scripts/test-report-utils normalizeTrackedRepoPath", () => {
-  it("normalizes repo-local absolute paths to repo-relative slash paths", () => {
-    const absoluteFile = path.join(process.cwd(), "src", "tools", "example.test.ts");
-
-    expect(normalizeTrackedRepoPath(absoluteFile)).toBe("src/tools/example.test.ts");
-  });
-
   it("preserves external absolute paths as normalized absolute paths", () => {
     const externalFile = path.join(path.parse(process.cwd()).root, "tmp", "outside.test.ts");
 

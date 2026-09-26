@@ -1,5 +1,3 @@
-// Control UI chat module owns bounded camera-frame capture for realtime Talk transports.
-
 export type RealtimeTalkVideoFrame = {
   data: string;
   mimeType: "image/jpeg";

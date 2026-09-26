@@ -5,16 +5,12 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
 import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
-import { loadCronStoreFromDatabase } from "./store/load.kernel.js";
 import { resolveCronJobsStorePath } from "./store/paths.js";
 import {
   deleteCronQuarantinedJobsFromDatabase,
@@ -99,16 +95,6 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
   }
 }
 
-function loadMutableCronStore(storePath: string): LoadedCronStore {
-  const database = openOpenClawStateDatabase();
-  const storeKey = cronStoreKey(path.resolve(storePath));
-  return loadCronStoreFromDatabase(database.db, storeKey, {
-    write: (operation, operationLabel) =>
-      runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }, { operationLabel }),
-    committed: () => noteCronJobsStoreCommit(storeKey),
-  });
-}
-
 export function assertCronJobsStoreUnchanged(
   db: DatabaseSync,
   storePath: string,
@@ -145,11 +131,6 @@ export async function removeStaleCronJobFamilyRows(
 /** Loads only the persisted cron job store payload. */
 export async function loadCronJobsStore(storePath: string): Promise<CronStoreFile> {
   return (await loadCronJobsStoreWithConfigJobs(storePath)).store;
-}
-
-/** Synchronously loads only the persisted cron job store payload. */
-export function loadCronJobsStoreSync(storePath: string): CronStoreFile {
-  return loadMutableCronStore(storePath).store;
 }
 
 type SaveCronStoreOptions = {

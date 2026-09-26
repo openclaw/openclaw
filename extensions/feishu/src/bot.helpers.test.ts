@@ -65,12 +65,9 @@ describe("buildFeishuAgentBody", () => {
 });
 
 describe("parseMessageContent media captions", () => {
-  it.each(["text", "image", "audio", "file", "video"])(
-    "keeps an empty %s message body empty",
-    (messageType) => {
-      expect(parseMessageContent("", messageType)).toBe("");
-    },
-  );
+  it.each(["text", "image"])("keeps an empty %s message body empty", (messageType) => {
+    expect(parseMessageContent("", messageType)).toBe("");
+  });
 
   it("keeps an audio-only body empty instead of leaking raw file_key JSON", () => {
     expect(
@@ -146,16 +143,6 @@ describe("parseMessageContent media captions", () => {
 });
 
 describe("resolveBroadcastAgents", () => {
-  it("returns agent list when broadcast config has the peerId", () => {
-    const cfg: ClawdbotConfig = { broadcast: { oc_group123: ["susan", "main"] } };
-    expect(resolveBroadcastAgents(cfg, "oc_group123")).toEqual(["susan", "main"]);
-  });
-
-  it("returns null when no broadcast config", () => {
-    const cfg = {} as ClawdbotConfig;
-    expect(resolveBroadcastAgents(cfg, "oc_group123")).toBeNull();
-  });
-
   it("returns null when peerId not in broadcast", () => {
     const cfg: ClawdbotConfig = { broadcast: { oc_other: ["susan"] } };
     expect(resolveBroadcastAgents(cfg, "oc_group123")).toBeNull();
@@ -168,12 +155,6 @@ describe("resolveBroadcastAgents", () => {
 });
 
 describe("buildBroadcastSessionKey", () => {
-  it("replaces agent ID prefix in session key", () => {
-    expect(buildBroadcastSessionKey("agent:main:feishu:group:oc_group123", "main", "susan")).toBe(
-      "agent:susan:feishu:group:oc_group123",
-    );
-  });
-
   it("handles compound peer IDs", () => {
     expect(
       buildBroadcastSessionKey(

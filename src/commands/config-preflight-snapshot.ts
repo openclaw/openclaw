@@ -162,46 +162,71 @@ export async function persistRefreshedPluginIndex(params: {
   readPersistedSnapshot: () => Promise<ConfigPreflightSnapshotRead>;
   snapshotRead: ConfigPreflightSnapshotRead;
   lease: StartupMigrationLease | undefined;
+  assertCurrent?: () => void;
 }): Promise<{
   snapshotRead: ConfigPreflightSnapshotRead;
 }> {
-  const derivedPluginMetadataSnapshot = params.snapshotRead.pluginMetadataSnapshot;
-  if (!derivedPluginMetadataSnapshot || !derivedPluginMetadataSnapshot.configFingerprint?.trim()) {
-    throwPluginRegistryPersistenceFailed("derived metadata was incomplete");
-  }
   const lease = params.lease;
   if (!lease) {
     throwPluginRegistryPersistenceFailed("startup migration lease was not acquired");
   }
-  const { writePersistedInstalledPluginIndexWithLeaseSync } = await params.measure(
-    "plugin-index-store-import",
-    loadInstalledPluginIndexStoreWrite,
+  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  // Startup precedes plugin ownership; derive again after any pending installer settles.
+  return await withPluginLifecycleLease(
+    { env: params.env, assertCurrent: params.assertCurrent },
+    async (pluginLease) => {
+      const fresh = await params.readPersistedSnapshot();
+      assertPreflightConfigUnchanged(params.snapshotRead.snapshot, fresh.snapshot);
+      pluginLease.assertOwned();
+      if (!needsRefreshedPluginIndexPersistence(fresh)) {
+        if (fresh.pluginMetadataSnapshot?.registrySource !== "persisted") {
+          throwPluginRegistryPersistenceFailed("fresh metadata was not persisted or derived");
+        }
+        return { snapshotRead: fresh };
+      }
+      const derivedPluginMetadataSnapshot = fresh.pluginMetadataSnapshot;
+      if (!derivedPluginMetadataSnapshot?.configFingerprint?.trim()) {
+        throwPluginRegistryPersistenceFailed("derived metadata was incomplete");
+      }
+      const { writePersistedInstalledPluginIndexWithLeaseSync } = await params.measure(
+        "plugin-index-store-import",
+        loadInstalledPluginIndexStoreWrite,
+      );
+      // Persist the original workspace scope; a config-wide union cannot pass scoped freshness checks.
+      await params.measure("plugin-index-persistence", () =>
+        writePersistedInstalledPluginIndexWithLeaseSync(
+          derivedPluginMetadataSnapshot.registryIndex,
+          {
+            env: params.env,
+            lease: {
+              assertOwnedInTransaction(database) {
+                lease.assertOwnedInTransaction(database);
+                pluginLease.assertOwnedInTransaction(database);
+              },
+            },
+          },
+        ),
+      );
+      const persistedSnapshotRead = await params.readPersistedSnapshot();
+      const persistedPluginMetadataSnapshot = persistedSnapshotRead.pluginMetadataSnapshot;
+      // The registry selector owns freshness and returns "persisted" only after accepting the
+      // durable index. Persisted parsing intentionally canonicalizes non-runtime package metadata.
+      if (persistedPluginMetadataSnapshot?.registrySource !== "persisted") {
+        const diagnosticCodes = persistedPluginMetadataSnapshot?.registryDiagnostics.map(
+          (diagnostic) => diagnostic.code,
+        );
+        const differences = formatPluginRegistryDifferences(persistedPluginMetadataSnapshot);
+        throwPluginRegistryPersistenceFailed(
+          `reread source was ${persistedPluginMetadataSnapshot?.registrySource ?? "missing"}${
+            differences ? `; differences: ${differences}` : ""
+          }${diagnosticCodes?.length ? `; diagnostics: ${diagnosticCodes.join(", ")}` : ""}`,
+          'Stop plugin package changes, run "openclaw plugins registry --refresh", then retry.',
+        );
+      }
+      assertPreflightConfigUnchanged(params.snapshotRead.snapshot, persistedSnapshotRead.snapshot);
+      return { snapshotRead: persistedSnapshotRead };
+    },
   );
-  // Persist the original workspace scope; a config-wide union cannot pass scoped freshness checks.
-  await params.measure("plugin-index-persistence", () =>
-    writePersistedInstalledPluginIndexWithLeaseSync(derivedPluginMetadataSnapshot.registryIndex, {
-      env: params.env,
-      lease,
-    }),
-  );
-  const persistedSnapshotRead = await params.readPersistedSnapshot();
-  const persistedPluginMetadataSnapshot = persistedSnapshotRead.pluginMetadataSnapshot;
-  // The registry selector owns freshness and returns "persisted" only after accepting the
-  // durable index. Persisted parsing intentionally canonicalizes non-runtime package metadata.
-  if (persistedPluginMetadataSnapshot?.registrySource !== "persisted") {
-    const diagnosticCodes = persistedPluginMetadataSnapshot?.registryDiagnostics.map(
-      (diagnostic) => diagnostic.code,
-    );
-    const differences = formatPluginRegistryDifferences(persistedPluginMetadataSnapshot);
-    throwPluginRegistryPersistenceFailed(
-      `reread source was ${persistedPluginMetadataSnapshot?.registrySource ?? "missing"}${
-        differences ? `; differences: ${differences}` : ""
-      }${diagnosticCodes?.length ? `; diagnostics: ${diagnosticCodes.join(", ")}` : ""}`,
-      'Stop plugin package changes, run "openclaw plugins registry --refresh", then retry.',
-    );
-  }
-  assertPreflightConfigUnchanged(params.snapshotRead.snapshot, persistedSnapshotRead.snapshot);
-  return { snapshotRead: persistedSnapshotRead };
 }
 
 /** Admit the same config and state before the lease and again before persistent writes. */

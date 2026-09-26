@@ -286,24 +286,12 @@ export {
   resolveClaudeThinkingProfile,
 } from "../plugins/provider-claude-thinking.js";
 
-function getModelProviderHint(modelId: string): string | null {
-  const trimmed = normalizeOptionalLowercaseString(modelId);
-  if (!trimmed) {
-    return null;
-  }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0) {
-    return null;
-  }
-  return trimmed.slice(0, slashIndex) || null;
-}
-
 /** @deprecated Proxy provider-owned model helper; do not use from third-party plugins. */
 export function isProxyReasoningUnsupportedModelHint(
   /** Model id that may include a provider prefix such as `x-ai/model`. */
   modelId: string,
 ): boolean {
-  return getModelProviderHint(modelId) === "x-ai";
+  return normalizeOptionalLowercaseString(modelId)?.startsWith("x-ai/") ?? false;
 }
 
 /**

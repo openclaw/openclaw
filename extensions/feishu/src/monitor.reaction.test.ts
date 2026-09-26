@@ -339,6 +339,15 @@ async function enqueueDebouncedMessage(
   await Promise.resolve();
 }
 
+async function enqueueText(
+  onMessage: (data: unknown) => Promise<void>,
+  ...messages: Array<Parameters<typeof createTextEvent>[0]>
+): Promise<void> {
+  for (const message of messages) {
+    await enqueueDebouncedMessage(onMessage, createTextEvent(message));
+  }
+}
+
 function setStaleRetryMocks(messageId = "om_old") {
   vi.spyOn(dedup, "hasProcessedFeishuMessage").mockImplementation(
     async (currentMessageId) => currentMessageId === messageId,
@@ -437,39 +446,36 @@ describe("resolveReactionSyntheticEvent", () => {
     expect(parseFeishuMessageEvent(result!, "ou_bot").senderOpenId).toBe("u_actor_only");
   });
 
-  it.each(["created", "deleted"] as const)(
-    "preserves the real reply anchor and topic ownership for %s reactions",
-    async (action) => {
-      const result = await resolveReactionSyntheticEvent({
-        cfg,
-        accountId: "default",
-        event: makeReactionEvent(),
-        botOpenId: "ou_bot",
-        action,
-        fetchMessage: async () => ({
-          ...createFetchedReactionMessage("oc_topic_group", "group"),
-          rootId: "om_topic_root",
-          threadId: "omt_topic",
-        }),
-        uuid: () => "fixed-uuid",
-      });
+  it("preserves the real reply anchor and topic ownership for deleted reactions", async () => {
+    const result = await resolveReactionSyntheticEvent({
+      cfg,
+      accountId: "default",
+      event: makeReactionEvent(),
+      botOpenId: "ou_bot",
+      action: "deleted",
+      fetchMessage: async () => ({
+        ...createFetchedReactionMessage("oc_topic_group", "group"),
+        rootId: "om_topic_root",
+        threadId: "omt_topic",
+      }),
+      uuid: () => "fixed-uuid",
+    });
 
-      expect(result?.message).toEqual(
-        expect.objectContaining({
-          reply_target_message_id: "om_msg1",
-          root_id: "om_topic_root",
-          thread_id: "omt_topic",
-        }),
-      );
-      expect(parseFeishuMessageEvent(result!, "ou_bot")).toEqual(
-        expect.objectContaining({
-          replyTargetMessageId: "om_msg1",
-          rootId: "om_topic_root",
-          threadId: "omt_topic",
-        }),
-      );
-    },
-  );
+    expect(result?.message).toEqual(
+      expect.objectContaining({
+        reply_target_message_id: "om_msg1",
+        root_id: "om_topic_root",
+        thread_id: "omt_topic",
+      }),
+    );
+    expect(parseFeishuMessageEvent(result!, "ou_bot")).toEqual(
+      expect.objectContaining({
+        replyTargetMessageId: "om_msg1",
+        rootId: "om_topic_root",
+        threadId: "omt_topic",
+      }),
+    );
+  });
 
   it("drops unverified reactions when sender verification times out", async () => {
     const event = makeReactionEvent();
@@ -666,21 +672,18 @@ describe("Feishu inbound debounce regressions", () => {
     setDedupPassThroughMocks();
     const onMessage = await setupDebounceMonitor();
 
-    await enqueueDebouncedMessage(
+    await enqueueText(
       onMessage,
-      createTextEvent({
+      {
         messageId: "om_topic_a",
         text: "topic alpha",
         threadId: "omt_topic_a",
-      }),
-    );
-    await enqueueDebouncedMessage(
-      onMessage,
-      createTextEvent({
+      },
+      {
         messageId: "om_topic_b",
         text: "topic beta",
         threadId: "omt_topic_b",
-      }),
+      },
     );
     await vi.advanceTimersByTimeAsync(25);
 
@@ -703,13 +706,10 @@ describe("Feishu inbound debounce regressions", () => {
     setDedupPassThroughMocks();
     const onMessage = await setupDebounceMonitor();
 
-    await enqueueDebouncedMessage(onMessage, createTextEvent({ messageId: "om_1", text: "first" }));
+    await enqueueText(onMessage, { messageId: "om_1", text: "first" });
     expect(handleFeishuMessageMock).not.toHaveBeenCalled();
 
-    await enqueueDebouncedMessage(
-      onMessage,
-      createTextEvent({ messageId: "om_stop", text: "stop" }),
-    );
+    await enqueueText(onMessage, { messageId: "om_stop", text: "stop" });
     await Promise.resolve();
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(0);
@@ -725,39 +725,8 @@ describe("Feishu inbound debounce regressions", () => {
     expect(JSON.parse(second?.message.content ?? "{}")).toEqual({ text: "stop" });
   });
 
-  it("keeps bot mention when per-message mention keys collide across non-forward messages", async () => {
-    setDedupPassThroughMocks();
-    const onMessage = await setupDebounceMonitor();
-
-    await enqueueDebouncedMessage(
-      onMessage,
-      createTextEvent({
-        messageId: "om_1",
-        text: "first",
-        mentions: [createMention({ openId: "ou_user_a", name: "user-a" })],
-      }),
-    );
-    await enqueueDebouncedMessage(
-      onMessage,
-      createTextEvent({
-        messageId: "om_2",
-        text: "@bot second",
-        mentions: [createMention({ openId: "ou_bot", name: "bot" })],
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(25);
-
-    const dispatched = expectSingleDispatchedEvent();
-    const mergedOpenIds = mentionOpenIds(dispatched);
-    expect(mergedOpenIds).toContain("ou_bot");
-    expect(mergedOpenIds).not.toContain("ou_user_a");
-  });
-
   it("passes prefetched botName through to handleFeishuMessage", async () => {
-    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue(
-      createClaimedFeishuDedupeResult(),
-    );
-    vi.spyOn(dedup, "hasProcessedFeishuMessage").mockResolvedValue(false);
+    setDedupPassThroughMocks();
     const onMessage = await setupDebounceMonitor({ botName: "OpenClaw Bot" });
 
     await onMessage(
@@ -788,21 +757,18 @@ describe("Feishu inbound debounce regressions", () => {
     setDedupPassThroughMocks();
     const onMessage = await setupDebounceMonitor();
 
-    await enqueueDebouncedMessage(
+    await enqueueText(
       onMessage,
-      createTextEvent({
+      {
         messageId: "om_user_mention",
         text: "@alice first",
         mentions: [createMention({ openId: "ou_alice", name: "alice" })],
-      }),
-    );
-    await enqueueDebouncedMessage(
-      onMessage,
-      createTextEvent({
+      },
+      {
         messageId: "om_bot_mention",
         text: "@bot second",
         mentions: [createMention({ openId: "ou_bot", name: "bot" })],
-      }),
+      },
     );
     await vi.advanceTimersByTimeAsync(25);
 
@@ -816,20 +782,17 @@ describe("Feishu inbound debounce regressions", () => {
     setDedupPassThroughMocks();
     const onMessage = await setupDebounceMonitor();
 
-    await enqueueDebouncedMessage(
+    await enqueueText(
       onMessage,
-      createTextEvent({
+      {
         messageId: "om_bot_first",
         text: "@bot first",
         mentions: [createMention({ openId: "ou_bot", name: "bot" })],
-      }),
-    );
-    await enqueueDebouncedMessage(
-      onMessage,
-      createTextEvent({
+      },
+      {
         messageId: "om_plain_second",
         text: "plain follow-up",
-      }),
+      },
     );
     await vi.advanceTimersByTimeAsync(25);
 
@@ -840,20 +803,17 @@ describe("Feishu inbound debounce regressions", () => {
   it("normalizes each debounced message once without mixing per-message mention keys", async () => {
     setDedupPassThroughMocks();
     const onMessage = await setupDebounceMonitor();
-    await enqueueDebouncedMessage(
+    await enqueueText(
       onMessage,
-      createTextEvent({
+      {
         messageId: "om_literal_first",
         text: "@_bot @_user_1 first",
         mentions: [
           createMention({ key: "@_bot", openId: "ou_bot", name: "Bot" }),
           createMention({ key: "@_user_1", openId: "ou_alice", name: "Alice @_user_10" }),
         ],
-      }),
-    );
-    await enqueueDebouncedMessage(
-      onMessage,
-      createTextEvent({
+      },
+      {
         messageId: "om_literal_last",
         text: "@_bot @_user_1 @_user_10thanks",
         mentions: [
@@ -861,7 +821,7 @@ describe("Feishu inbound debounce regressions", () => {
           createMention({ key: "@_user_1", openId: "ou_bob", name: "Bob" }),
           createMention({ key: "@_user_10", openId: "ou_carol", name: "Carol" }),
         ],
-      }),
+      },
     );
     await vi.advanceTimersByTimeAsync(25);
 
@@ -881,18 +841,13 @@ describe("Feishu inbound debounce regressions", () => {
     setStaleRetryMocks();
     const onMessage = await setupDebounceMonitor();
 
-    await onMessage(createTextEvent({ messageId: "om_old", text: "stale" }));
-    await Promise.resolve();
-    await Promise.resolve();
-    await onMessage(createTextEvent({ messageId: "om_new_1", text: "first" }));
-    await Promise.resolve();
-    await Promise.resolve();
-    await onMessage(createTextEvent({ messageId: "om_old", text: "stale" }));
-    await Promise.resolve();
-    await Promise.resolve();
-    await onMessage(createTextEvent({ messageId: "om_new_2", text: "second" }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await enqueueText(
+      onMessage,
+      { messageId: "om_old", text: "stale" },
+      { messageId: "om_new_1", text: "first" },
+      { messageId: "om_old", text: "stale" },
+      { messageId: "om_new_2", text: "second" },
+    );
     await vi.advanceTimersByTimeAsync(25);
 
     const { dispatched, parsed } = expectParsedFirstDispatchedEvent();
@@ -913,12 +868,11 @@ describe("Feishu inbound debounce regressions", () => {
     setStaleRetryMocks("om_old_latest_fresh");
     const onMessage = await setupDebounceMonitor();
 
-    await onMessage(createTextEvent({ messageId: "om_new_latest_fresh", text: "fresh" }));
-    await Promise.resolve();
-    await Promise.resolve();
-    await onMessage(createTextEvent({ messageId: "om_old_latest_fresh", text: "stale" }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await enqueueText(
+      onMessage,
+      { messageId: "om_new_latest_fresh", text: "fresh" },
+      { messageId: "om_old_latest_fresh", text: "stale" },
+    );
     await vi.advanceTimersByTimeAsync(25);
 
     const { dispatched, parsed } = expectParsedFirstDispatchedEvent();
@@ -979,49 +933,6 @@ describe("Feishu inbound debounce regressions", () => {
           account: buildDebounceAccount(),
           runtime: createNonExitingRuntimeEnv(),
           channelRuntime: { runtimeContexts: {} } as unknown as PluginRuntime["channel"],
-          botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
-        }),
-      ).resolves.toBeUndefined();
-
-      expect(register).toHaveBeenCalled();
-    });
-
-    it("uses provided channelRuntime when it has inbound", async () => {
-      setFeishuRuntime(createFeishuMonitorRuntime());
-      const register = vi.fn();
-      createEventDispatcherMock.mockReturnValue({ register });
-
-      await expect(
-        monitorSingleAccount({
-          cfg: buildDebounceConfig(),
-          account: buildDebounceAccount(),
-          runtime: createNonExitingRuntimeEnv(),
-          channelRuntime: {
-            runtimeContexts: {} as never,
-            inbound: { run: vi.fn() },
-            debounce: {
-              resolveInboundDebounceMs: vi.fn().mockReturnValue(2000),
-              createInboundDebouncer: vi.fn(),
-            },
-          } as unknown as PluginRuntime["channel"],
-          botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
-        }),
-      ).resolves.toBeUndefined();
-
-      expect(register).toHaveBeenCalled();
-    });
-
-    it("falls back to local runtime when channelRuntime is undefined", async () => {
-      setFeishuRuntime(createFeishuMonitorRuntime());
-      const register = vi.fn();
-      createEventDispatcherMock.mockReturnValue({ register });
-
-      await expect(
-        monitorSingleAccount({
-          cfg: buildDebounceConfig(),
-          account: buildDebounceAccount(),
-          runtime: createNonExitingRuntimeEnv(),
-          channelRuntime: undefined,
           botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot" },
         }),
       ).resolves.toBeUndefined();

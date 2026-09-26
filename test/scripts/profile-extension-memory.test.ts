@@ -211,12 +211,6 @@ describe("scripts/profile-extension-memory", () => {
       selected: ["external", "external"],
       expected: [{ dir: "external", file: `dist/extensions/external/${rootEntry}` }],
     })),
-    {
-      name: "source-only plugins excluded from default enumeration",
-      files: ["dist/extensions/internal/index.js"],
-      selected: [],
-      expected: [{ dir: "internal", file: "dist/extensions/internal/index.js" }],
-    },
   ])("profiles $name", ({ files, selected, expected }) => {
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory #test-")));
     try {

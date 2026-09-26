@@ -78,7 +78,7 @@ type SessionFactsRequest = {
   agentId: string;
   storageReady?: Promise<void>;
 };
-type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
+export type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
   readonly storageTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
   bindCreation(this: void, operation: SessionEntryCreationOperation): void;
   readCurrent(this: void, cfg: OpenClawConfig): Facts;
@@ -354,7 +354,7 @@ export async function prepareSessionMutationFacts(
               env: inventory.env,
               targetDiscoveryCache,
             },
-            async (reads) => {
+            async (reads, select) => {
               for (const read of reads) {
                 assertActive();
                 const loaded = await readSessionEntriesFromStoreInWorker({
@@ -394,6 +394,7 @@ export async function prepareSessionMutationFacts(
                   }
                 }
               }
+              return select();
             },
           );
           discovery.assertCurrent();

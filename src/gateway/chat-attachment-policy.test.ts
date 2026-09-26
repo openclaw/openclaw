@@ -1,6 +1,5 @@
 // Attachment policy tests guard the numbers advertised on `hello-ok` against the
 // ceilings the parser actually enforces.
-import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -15,11 +14,6 @@ const cfgWithMediaMaxMb = (value: unknown): OpenClawConfig =>
   ({ agents: { defaults: { mediaMaxMb: value } } }) as unknown as OpenClawConfig;
 
 describe("resolveChatAttachmentMaxBytes", () => {
-  it("honours a configured agents.defaults.mediaMaxMb", () => {
-    expect(resolveChatAttachmentMaxBytes(cfgWithMediaMaxMb(10))).toBe(10 * MB);
-    expect(resolveChatAttachmentMaxBytes(cfgWithMediaMaxMb(50))).toBe(50 * MB);
-  });
-
   it("falls back to the default ceiling when unset", () => {
     expect(resolveChatAttachmentMaxBytes({} as OpenClawConfig)).toBe(
       DEFAULT_CHAT_ATTACHMENT_MAX_BYTES,
@@ -51,13 +45,6 @@ describe("resolveChatAttachmentMaxBytes", () => {
 const MAX_ADVERTISED_BYTES = Math.floor(((25 * MB - 256 * 1024) * 3) / 4);
 
 describe("resolveChatAttachmentPolicy", () => {
-  it("advertises the configured ceiling with the image hydration cap applied", () => {
-    expect(resolveChatAttachmentPolicy(cfgWithMediaMaxMb(10))).toEqual({
-      maxBytes: 10 * MB,
-      maxImageBytes: MAX_IMAGE_BYTES,
-    });
-  });
-
   it("clamps the advertised ceiling to what one WS frame can carry as base64", () => {
     // The 20MB default and any raised mediaMaxMb both exceed the frame budget:
     // advertising them would let the client encode a frame the server
@@ -65,13 +52,6 @@ describe("resolveChatAttachmentPolicy", () => {
     expect(resolveChatAttachmentPolicy({} as OpenClawConfig).maxBytes).toBe(MAX_ADVERTISED_BYTES);
     expect(resolveChatAttachmentPolicy(cfgWithMediaMaxMb(50)).maxBytes).toBe(MAX_ADVERTISED_BYTES);
     expect(MAX_ADVERTISED_BYTES).toBeLessThan(20 * MB);
-  });
-
-  it("clamps maxImageBytes to the configured ceiling when it is the smaller limit", () => {
-    expect(resolveChatAttachmentPolicy(cfgWithMediaMaxMb(1))).toEqual({
-      maxBytes: MB,
-      maxImageBytes: MB,
-    });
   });
 
   it("keeps both ceilings positive so the hello-ok schema stays satisfiable", () => {

@@ -23,7 +23,6 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
-  normalizeOptionalString as normalizeSlackApiString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
@@ -194,12 +193,12 @@ function formatSlackWebApiErrorMessage(err: unknown): string | undefined {
     return undefined;
   }
   const data = getSlackWebApiErrorData(err);
-  const code = normalizeSlackApiString(data?.error);
+  const code = normalizeOptionalString(data?.error);
   if (!code) {
     return undefined;
   }
   const details: string[] = [];
-  const needed = normalizeSlackApiString(data?.needed);
+  const needed = normalizeOptionalString(data?.needed);
   if (needed) {
     details.push(`needed: ${needed}`);
   }
@@ -1035,6 +1034,8 @@ export async function sendMessageSlack(
       account,
       blocks,
       delivery,
+    }).catch((err: unknown) => {
+      throw enrichSlackWebApiError(err);
     }),
   );
   const threadTs = result.threadTs ?? normalizeSlackThreadTsCandidate(queuedOpts.threadTs);
@@ -1046,17 +1047,7 @@ export async function sendMessageSlack(
   return result;
 }
 
-async function sendMessageSlackQueued(
-  params: Parameters<typeof sendMessageSlackQueuedInner>[0],
-): Promise<SlackSendResult> {
-  try {
-    return await sendMessageSlackQueuedInner(params);
-  } catch (err) {
-    throw enrichSlackWebApiError(err);
-  }
-}
-
-async function sendMessageSlackQueuedInner(params: {
+async function sendMessageSlackQueued(params: {
   trimmedMessage: string;
   opts: SlackSendOpts;
   cfg: OpenClawConfig;

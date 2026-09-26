@@ -49,6 +49,7 @@ import type {
   PluginMetadataSnapshotOwnerMaps,
   ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
+import { preparePluginNativeAdmissions } from "./plugin-native-admission-state.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
 import {
   canReusePluginRegistrySnapshot,
@@ -134,6 +135,7 @@ export function finalizePluginMetadataSnapshot(
   freezeSnapshotValue(snapshot);
   bindPluginMetadataSnapshotCache(snapshot);
   const cache = getPluginMetadataSnapshotCache(snapshot);
+  preparePluginNativeAdmissions(snapshot.index, cache);
   registerProviderPolicyOwnerIndexes(snapshot, cache);
   return snapshot;
 }

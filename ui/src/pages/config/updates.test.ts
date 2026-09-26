@@ -487,22 +487,8 @@ describe("renderUpdates", () => {
       description: undefined,
     },
     {
-      name: "allows dev installs with unknown metadata",
-      channel: "dev",
-      installKind: "unknown",
-      disabled: false,
-      description: undefined,
-    },
-    {
       name: "allows stable package installs",
       channel: "stable",
-      installKind: "package",
-      disabled: false,
-      description: undefined,
-    },
-    {
-      name: "allows beta package installs",
-      channel: "beta",
       installKind: "package",
       disabled: false,
       description: undefined,

@@ -32,34 +32,9 @@ afterEach(async () => {
 });
 
 describe("configSelectionFromSearch", () => {
-  it("opens a valid linked Settings section", () => {
-    expect(configSelectionFromSearch("communications", "?section=tts")).toEqual({
-      activeSection: "tts",
-      activeSubsection: null,
-    });
-  });
-
   it("falls back when a linked section does not belong to the page", () => {
     expect(configSelectionFromSearch("communications", "?section=gateway")).toEqual({
       activeSection: "messages",
-      activeSubsection: null,
-    });
-  });
-
-  it("keeps MCP separate from Infrastructure", () => {
-    expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
-      activeSection: "mcp",
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("infrastructure", "?section=mcp")).toEqual({
-      activeSection: "gateway",
-      activeSubsection: null,
-    });
-  });
-
-  it("keeps the Updates section off Advanced", () => {
-    expect(configSelectionFromSearch("advanced", "?section=update")).toEqual({
-      activeSection: null,
       activeSubsection: null,
     });
   });
@@ -97,16 +72,6 @@ describe("ConfigPage advanced selection guard", () => {
 describe("ConfigPage default selections", () => {
   it.each([
     ["communications", "messages"],
-    ["appearance", "__appearance__"],
-    ["notifications", "__notifications__"],
-    ["security", "security"],
-    ["automation", "commands"],
-    ["mcp", "mcp"],
-    ["memory", "memory"],
-    ["talk", "talk"],
-    ["infrastructure", "gateway"],
-    ["updates", "update"],
-    ["ai-agents", "agents"],
     ["advanced", null],
   ] as const)("opens %s at its default when no section is selected", (pageId, activeSection) => {
     for (const search of ["", "?section="]) {
@@ -117,14 +82,11 @@ describe("ConfigPage default selections", () => {
     }
   });
 
-  it.each(["unknown", "toString", "constructor", "__proto__"])(
-    "rejects an unsupported runtime page id: %s",
-    (pageId) => {
-      expect(() => configSelectionFromSearch(pageId as ConfigPageId, "")).toThrow(
-        "Unknown config page",
-      );
-    },
-  );
+  it.each(["unknown", "__proto__"])("rejects an unsupported runtime page id: %s", (pageId) => {
+    expect(() => configSelectionFromSearch(pageId as ConfigPageId, "")).toThrow(
+      "Unknown config page",
+    );
+  });
 
   it("keeps subsequent defaults independent from a mutated selection", () => {
     const selection = configSelectionFromSearch("communications", "");

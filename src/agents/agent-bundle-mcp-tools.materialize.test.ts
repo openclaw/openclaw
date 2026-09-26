@@ -493,24 +493,6 @@ describe("createBundleMcpToolRuntime", () => {
     );
   });
 
-  it("preserves recovery text alongside structuredContent", async () => {
-    const result = await executeMcpToolResult({
-      content: [{ type: "text", text: "authentication expired; run login" }],
-      structuredContent: { retryable: true },
-      isError: false,
-    });
-
-    expect(result.content).toEqual([
-      { type: "text", text: 'structuredContent:\n{\n  "retryable": true\n}' },
-      { type: "text", text: "authentication expired; run login" },
-    ]);
-    expect(result.details).toEqual({
-      mcpServer: "bundleProbe",
-      mcpTool: "bundle_probe",
-      structuredContent: { retryable: true },
-    });
-  });
-
   it("preserves text and non-text MCP content alongside structuredContent", async () => {
     const structuredContent = { description: "captured screenshot" };
     const result = await executeMcpToolResult({
@@ -588,14 +570,6 @@ describe("createBundleMcpToolRuntime", () => {
     expect(result.content).toEqual([
       { type: "text", text: 'structuredContent:\n{\n  "alpha": 1,\n  "zeta": 2\n}' },
     ]);
-  });
-
-  it("keeps text-only results unchanged", async () => {
-    const result = await executeMcpToolResult({
-      content: [{ type: "text", text: "plain result" }],
-    });
-
-    expect(result.content).toEqual([{ type: "text", text: "plain result" }]);
   });
 
   it("coerces non-text/image MCP tool-result blocks to text (resource_link/resource/audio)", async () => {

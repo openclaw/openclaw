@@ -39,7 +39,7 @@ describe("cron service ops: disable + list round-trip", () => {
       );
     } finally {
       if (state.timer) {
-        clearTimeout(state.timer);
+        state.timer.cancel();
       }
     }
   });

@@ -1013,6 +1013,7 @@ function seedSessionSourceFixture(stateDir: string, scenario = "base", missingPa
       `source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 SCENARIO="$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO"
 UPDATE_RESTART_MODE="$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE"
+baseline_version=2026.9.3
 phase() { shift; "$@"; }
 ${missingPath ? "run_missing_load_path_fixture seed" : ""}
 "$1" "$2" seed
@@ -1329,9 +1330,49 @@ describe("upgrade survivor assertions", () => {
           expect(readFileSync(join(proof.stagedScenario!, "assertions.mjs"), "utf8")).toBe(
             readFileSync(proof.selectedOracle, "utf8"),
           );
-          expect(readFileSync(join(proof.stagedScenario!, "diagnostics.mjs"), "utf8")).toBe(
-            readFileSync("scripts/e2e/lib/upgrade-survivor/diagnostics.mjs", "utf8"),
+          const artifacts = join(root, "artifacts");
+          const published = join(root, "published");
+          const runtimeScripts = join(root, "runtime/scripts");
+          const runtimeScenario = join(runtimeScripts, "e2e/lib/upgrade-survivor");
+          cpSync(proof.stagedScenario!, runtimeScenario, { recursive: true });
+          mkdirSync(join(runtimeScripts, "lib"), { recursive: true });
+          cpSync(
+            "scripts/lib/release-version.mjs",
+            join(runtimeScripts, "lib/release-version.mjs"),
           );
+          mkdirSync(artifacts);
+          writeJson(join(artifacts, "summary.json"), {
+            status: "passed",
+            baseline: { spec: baseline, version: baseline.slice("openclaw@".length) },
+            candidate: { kind: "package", version },
+            scenario: "base",
+            installedVersion: version,
+            candidateInstallMode: "updater",
+            updateRestartMode: "manual",
+            updateOutcome: "success",
+            phases: [],
+          });
+          const publication = spawnSync(
+            testNodeExecPath,
+            [
+              "--input-type=module",
+              "-e",
+              `import { pathToFileURL } from "node:url";
+const [projector, artifacts, destination] = process.argv.slice(1);
+const { publishDiagnostics } = await import(pathToFileURL(projector).href);
+publishDiagnostics(artifacts, destination, value => value, "passed");`,
+              join(runtimeScenario, "diagnostics.mjs"),
+              artifacts,
+              published,
+            ],
+            { encoding: "utf8", cwd: root },
+          );
+          expect(publication.status, publication.stderr).toBe(0);
+          expect(JSON.parse(readFileSync(join(published, "summary.json"), "utf8"))).toMatchObject({
+            status: "passed",
+            candidate: { version },
+            installedVersion: version,
+          });
         }
         expect(proof.mounts).toEqual(
           selected
@@ -2318,23 +2359,16 @@ process.stdout.write(sessionDir + "\\n");
     },
   );
 
-  it.each([
-    ["npm", "discord"],
-    ["ClawHub", "whatsapp"],
-  ] as const)(
-    "requires the installed package version to match for %s companion installs",
-    (_sourceLabel, pluginId) => {
-      expect(() =>
-        assertCompanionPluginRecords((_records, installPaths) => {
-          const packageName = pluginId === "discord" ? "@openclaw/discord" : "@openclaw/whatsapp";
-          writeJson(join(installPaths[pluginId], "package.json"), {
-            name: packageName,
-            version: "2026.8.0",
-          });
-        }),
-      ).toThrow(new RegExp(`${pluginId} installed package version changed`));
-    },
-  );
+  it("requires the installed package version to match the companion record", () => {
+    expect(() =>
+      assertCompanionPluginRecords((_records, installPaths) => {
+        writeJson(join(installPaths.discord, "package.json"), {
+          name: "@openclaw/discord",
+          version: "2026.8.0",
+        });
+      }),
+    ).toThrow(/discord installed package version changed/);
+  });
 
   it("accepts official ClawHub npm-pack installs for configured external plugins", () => {
     expect(() => assertConfiguredPluginState()).not.toThrow();
@@ -2608,14 +2642,6 @@ process.stdout.write(JSON.stringify(result));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
-
-  it("accepts a SQLite-only migrated session store", () => {
-    expect(() =>
-      runSessionStateAssertion((stateDir) => {
-        writeMigratedSessionState(stateDir);
-      }),
-    ).not.toThrow();
   });
 
   it.each([

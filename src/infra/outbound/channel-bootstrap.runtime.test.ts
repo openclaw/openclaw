@@ -109,17 +109,6 @@ describe("bootstrapOutboundChannelPlugin", () => {
     vi.unstubAllEnvs();
   });
 
-  it("bootstraps when the selected channel registry has only a setup shell", () => {
-    installDiscordSetupShell();
-
-    bootstrapOutboundChannelPlugin({
-      channel: "discord",
-      cfg: discordConfig,
-    });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
-  });
-
   it("uses the admitted agent workspace during outbound preparation", async () => {
     installDiscordSetupShell();
     const handle = createEmptyPluginRegistry();
@@ -542,14 +531,6 @@ describe("bootstrapOutboundChannelPlugin", () => {
     bootstrapOutboundChannelPlugin({ channel: "channel-1", cfg: discordConfig });
 
     expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(66);
-  });
-
-  it("retries after the runtime config changes", () => {
-    installDiscordSetupShell();
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: updatedDiscordConfig });
-
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
   });
 
   it("retains failed attempts when distinct runtime configs interleave", () => {

@@ -278,29 +278,29 @@ class GatewayDiscovery(
     val port = resolved.port
     if (port <= 0) return
 
-    val rawServiceName = resolved.serviceName
-    val serviceName = BonjourEscapes.decode(rawServiceName)
-    val displayName = BonjourEscapes.decode(txt(resolved, "displayName") ?: serviceName)
-    val lanHost = txt(resolved, "lanHost")
-    val tailnetDns = txt(resolved, "tailnetDns")
-    val gatewayPort = txtInt(resolved, "gatewayPort")
-    val tlsEnabled = parseTxtBool(txt(resolved, "gatewayTls"))
-    val tlsFingerprint = txt(resolved, "gatewayTlsSha256")
-    val id = stableId(serviceName, "local.")
     // Local NSD gives the socket host/port; TXT ports are retained as gateway metadata only.
-    localById[id] =
-      GatewayEndpoint(
-        stableId = id,
-        name = displayName,
-        host = host,
-        port = port,
-        lanHost = lanHost,
-        tailnetDns = tailnetDns,
-        gatewayPort = gatewayPort,
-        tlsEnabled = tlsEnabled,
-        tlsFingerprintSha256 = tlsFingerprint,
-      )
+    val endpoint = discoveredEndpoint(BonjourEscapes.decode(resolved.serviceName), "local.", host, port) { txt(resolved, it) }
+    localById[endpoint.stableId] = endpoint
   }
+
+  private fun discoveredEndpoint(
+    serviceName: String,
+    domain: String,
+    host: String,
+    port: Int,
+    readTxt: (String) -> String?,
+  ): GatewayEndpoint =
+    GatewayEndpoint(
+      stableId = stableId(serviceName, domain),
+      name = BonjourEscapes.decode(readTxt("displayName") ?: serviceName),
+      host = host,
+      port = port,
+      lanHost = readTxt("lanHost"),
+      tailnetDns = readTxt("tailnetDns"),
+      gatewayPort = readTxt("gatewayPort")?.toIntOrNull(),
+      tlsEnabled = parseTxtBool(readTxt("gatewayTls")),
+      tlsFingerprintSha256 = readTxt("gatewayTlsSha256"),
+    )
 
   private fun resolvedHostAddress(resolved: NsdServiceInfo): String? {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -346,11 +346,6 @@ class GatewayDiscovery(
     }
   }
 
-  private fun txtInt(
-    info: NsdServiceInfo,
-    key: String,
-  ): Int? = txt(info, key)?.toIntOrNull()
-
   private fun parseTxtBool(value: String?): Boolean {
     val raw = value?.trim()?.lowercase() ?: return false
     return raw == "1" || raw == "true" || raw == "yes"
@@ -383,8 +378,7 @@ class GatewayDiscovery(
 
       // Wide-area DNS-SD may put TXT in additional records; fall back to a direct TXT query.
       val txtFromPtr =
-        recordsByName(ptrMsg, Section.ADDITIONAL)[keyName(instanceFqdn)]
-          .orEmpty()
+        recordsForName(ptrMsg, Section.ADDITIONAL, instanceFqdn)
           .mapNotNull { it as? TXTRecord }
       val txt =
         if (txtFromPtr.isNotEmpty()) {
@@ -394,25 +388,8 @@ class GatewayDiscovery(
           records(msg, Section.ANSWER).mapNotNull { it as? TXTRecord }
         }
       val instanceName = BonjourEscapes.decode(decodeInstanceName(instanceFqdn, domain))
-      val displayName = BonjourEscapes.decode(txtValue(txt, "displayName") ?: instanceName)
-      val lanHost = txtValue(txt, "lanHost")
-      val tailnetDns = txtValue(txt, "tailnetDns")
-      val gatewayPort = txtIntValue(txt, "gatewayPort")
-      val tlsEnabled = parseTxtBool(txtValue(txt, "gatewayTls"))
-      val tlsFingerprint = txtValue(txt, "gatewayTlsSha256")
-      val id = stableId(instanceName, domain)
-      next[id] =
-        GatewayEndpoint(
-          stableId = id,
-          name = displayName,
-          host = host,
-          port = port,
-          lanHost = lanHost,
-          tailnetDns = tailnetDns,
-          gatewayPort = gatewayPort,
-          tlsEnabled = tlsEnabled,
-          tlsFingerprintSha256 = tlsFingerprint,
-        )
+      val endpoint = discoveredEndpoint(instanceName, domain, host, port) { txtValue(txt, it) }
+      next[endpoint.stableId] = endpoint
     }
 
     updateDiscovery {
@@ -439,10 +416,8 @@ class GatewayDiscovery(
       } else {
         instanceFqdn.substringBefore(serviceType)
       }
-    return normalizeName(stripTrailingDot(withoutSuffix))
+    return normalizeName(withoutSuffix.removeSuffix("."))
   }
-
-  private fun stripTrailingDot(raw: String): String = raw.removeSuffix(".")
 
   private suspend fun lookupUnicastMessage(
     name: String,
@@ -497,39 +472,28 @@ class GatewayDiscovery(
 
   private fun keyName(raw: String): String = raw.trim().lowercase()
 
-  private fun recordsByName(
-    msg: Message,
+  private fun recordsForName(
+    msg: Message?,
     section: Int,
-  ): Map<String, List<Record>> {
-    val next = LinkedHashMap<String, MutableList<Record>>()
-    for (r in records(msg, section)) {
-      val name = r.name?.toString() ?: continue
-      next.getOrPut(keyName(name)) { mutableListOf() }.add(r)
-    }
-    return next
+    fqdn: String,
+  ): List<Record> {
+    val key = keyName(fqdn)
+    return records(msg, section).filter { it.name?.toString()?.let(::keyName) == key }
   }
 
   private fun recordByName(
     msg: Message,
     fqdn: String,
     type: Int,
-  ): Record? {
-    val key = keyName(fqdn)
-    val byNameAnswer = recordsByName(msg, Section.ANSWER)
-    val fromAnswer = byNameAnswer[key].orEmpty().firstOrNull { it.type == type }
-    if (fromAnswer != null) return fromAnswer
-
-    val byNameAdditional = recordsByName(msg, Section.ADDITIONAL)
-    return byNameAdditional[key].orEmpty().firstOrNull { it.type == type }
-  }
+  ): Record? =
+    recordsForName(msg, Section.ANSWER, fqdn).firstOrNull { it.type == type }
+      ?: recordsForName(msg, Section.ADDITIONAL, fqdn).firstOrNull { it.type == type }
 
   private fun resolveHostFromMessage(
     msg: Message?,
     hostname: String,
   ): String? {
-    val m = msg ?: return null
-    val key = keyName(hostname)
-    val additional = recordsByName(m, Section.ADDITIONAL)[key].orEmpty()
+    val additional = recordsForName(msg, Section.ADDITIONAL, hostname)
     val a = additional.mapNotNull { it as? ARecord }.mapNotNull { it.address?.hostAddress }
     val aaaa = additional.mapNotNull { it as? AAAARecord }.mapNotNull { it.address?.hostAddress }
     return a.firstOrNull() ?: aaaa.firstOrNull()
@@ -646,11 +610,6 @@ class GatewayDiscovery(
     }
     return null
   }
-
-  private fun txtIntValue(
-    records: List<TXTRecord>,
-    key: String,
-  ): Int? = txtValue(records, key)?.toIntOrNull()
 
   private fun decodeDnsTxtString(raw: String): String {
     // dnsjava treats TXT as opaque bytes and decodes as ISO-8859-1 to preserve bytes.

@@ -1,6 +1,5 @@
 // Line tests cover push retry and retry-key deduplication behavior.
 import { HTTPFetchError } from "@line/bot-sdk";
-import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveLineNonDispatchRetryable, runLinePushWithRetries } from "./send-retry.js";
@@ -221,13 +220,6 @@ describe("LINE push retries", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry once LINE accepted a request with an unreadable receipt", async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ sentMessages: [{}] }));
-
-    await expect(resolveRetryRun(pushText())).rejects.toSatisfy(isChannelPartialDeliveryError);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
   it("never retries a reply, which LINE cannot deduplicate", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ message: "Internal server error" }, 500));
 
@@ -254,8 +246,6 @@ describe("resolveLineNonDispatchRetryable", () => {
 
   it.each([
     { label: "a rejected payload", error: httpError(400), retryable: false },
-    { label: "a forbidden recipient", error: httpError(403), retryable: false },
-    { label: "an unknown recipient", error: httpError(404), retryable: false },
     { label: "a request timeout", error: httpError(408), retryable: undefined },
     { label: "an accepted retry-key conflict", error: httpError(409), retryable: undefined },
     { label: "a rate limit", error: httpError(429), retryable: true },

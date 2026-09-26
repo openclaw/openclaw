@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentMainSessionKey } from "../config/sessions.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
   drainSystemEventEntries,
@@ -9,6 +10,10 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import {
@@ -87,8 +92,10 @@ async function createCronHarness(options: CronHarnessOptions = {}) {
     : vi.fn();
   const requestHeartbeat = vi.fn();
   const events = options.withEvents === false ? undefined : createCronEventHarness();
+  const clock = createGatewaySchedulerClock(Date.now());
 
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(clock.clock),
     storePath: store.storePath,
     cronEnabled: true,
     log: noopLogger,
@@ -100,14 +107,11 @@ async function createCronHarness(options: CronHarnessOptions = {}) {
       ? { requestHeartbeatAndWait: options.requestHeartbeatAndWait }
       : {}),
     runIsolatedAgentJob:
-      options.runIsolatedAgentJob ??
-      (vi.fn(async (_params: { job: unknown; message: string }) => ({
-        status: "ok",
-      })) as unknown as CronServiceDeps["runIsolatedAgentJob"]),
+      options.runIsolatedAgentJob ?? vi.fn(async () => ({ status: "ok" as const })),
     ...(events ? { onEvent: events.onEvent } : {}),
   });
   await cron.start();
-  return { store, cron, enqueueSystemEvent, requestHeartbeat, events };
+  return { store, cron, clock, enqueueSystemEvent, requestHeartbeat, events };
 }
 
 async function createMainOneShotHarness() {
@@ -157,12 +161,13 @@ async function addDefaultIsolatedAnnounceJob(cron: CronService, name: string) {
 
 async function runIsolatedAnnounceJobAndWait(params: {
   cron: CronService;
+  clock: ReturnType<typeof createGatewaySchedulerClock>;
   events: ReturnType<typeof createCronEventHarness>;
   name: string;
   status: "ok" | "error";
 }) {
   const { job, runAt } = await addDefaultIsolatedAnnounceJob(params.cron, params.name);
-  await vi.advanceTimersByTimeAsync(runAt.getTime() - Date.now());
+  await params.clock.advanceTo(runAt.getTime());
   await params.events.waitFor(
     (evt) => evt.jobId === job.id && evt.action === "finished" && evt.status === params.status,
   );
@@ -171,12 +176,14 @@ async function runIsolatedAnnounceJobAndWait(params: {
 
 async function runIsolatedAnnounceScenario(params: {
   cron: CronService;
+  clock: ReturnType<typeof createGatewaySchedulerClock>;
   events: ReturnType<typeof createCronEventHarness>;
   name: string;
   status?: "ok" | "error";
 }) {
   await runIsolatedAnnounceJobAndWait({
     cron: params.cron,
+    clock: params.clock,
     events: params.events,
     name: params.name,
     status: params.status ?? "ok",
@@ -252,8 +259,10 @@ async function stopCronAndCleanup(cron: CronService, store: { cleanup: () => Pro
 function createStartedCronService(
   storePath: string,
   runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"],
+  scheduler: GatewayScheduler = createTestGatewayScheduler(),
 ) {
   return new CronService({
+    scheduler,
     storePath,
     cronEnabled: true,
     log: noopLogger,
@@ -278,10 +287,11 @@ async function expectNoMainSummaryForIsolatedRun(params: {
   runIsolatedAgentJob: CronServiceDeps["runIsolatedAgentJob"];
   name: string;
 }) {
-  const { store, cron, enqueueSystemEvent, requestHeartbeat, events } =
+  const { store, cron, clock, enqueueSystemEvent, requestHeartbeat, events } =
     await createIsolatedAnnounceHarness(params.runIsolatedAgentJob);
   await runIsolatedAnnounceScenario({
     cron,
+    clock,
     events,
     name: params.name,
   });
@@ -292,7 +302,7 @@ async function expectNoMainSummaryForIsolatedRun(params: {
 
 describe("CronService", () => {
   it("runs a one-shot main job and disables it after success when requested", async () => {
-    const { store, cron, enqueueSystemEvent, requestHeartbeat, events, atMs, job } =
+    const { store, cron, clock, enqueueSystemEvent, requestHeartbeat, events, atMs, job } =
       await createMainOneShotJobHarness({
         name: "one-shot hello",
         deleteAfterRun: false,
@@ -300,7 +310,7 @@ describe("CronService", () => {
 
     expect(job.state.nextRunAtMs).toBe(atMs);
 
-    await vi.advanceTimersByTimeAsync(Date.parse("2025-12-13T00:00:02.000Z") - Date.now());
+    await clock.advanceTo(atMs);
     await events.waitFor((evt) => evt.jobId === job.id && evt.action === "finished");
 
     const jobs = await cron.list({ includeDisabled: true });
@@ -311,19 +321,19 @@ describe("CronService", () => {
 
     const reenabled = await cron.update(job.id, { enabled: true });
     expect(reenabled.state.nextRunAtMs).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(1_000);
+    await clock.advanceBy(1_000);
     expect(enqueueSystemEvent).toHaveBeenCalledOnce();
     await cron.list({ includeDisabled: true });
     await stopCronAndCleanup(cron, store);
   });
 
   it("runs a one-shot job and deletes it after success by default", async () => {
-    const { store, cron, enqueueSystemEvent, requestHeartbeat, events, job } =
+    const { store, cron, clock, enqueueSystemEvent, requestHeartbeat, events, atMs, job } =
       await createMainOneShotJobHarness({
         name: "one-shot delete",
       });
 
-    await vi.advanceTimersByTimeAsync(Date.parse("2025-12-13T00:00:02.000Z") - Date.now());
+    await clock.advanceTo(atMs);
     await events.waitFor((evt) => evt.jobId === job.id && evt.action === "removed");
 
     const jobs = await cron.list({ includeDisabled: true });
@@ -373,7 +383,7 @@ describe("CronService", () => {
         unknown || reason ? undefined : "error" in testCase ? testCase.error : "delivery rejected",
       deliverySuppressionReason: reason,
     }));
-    const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const { store, cron, clock, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
     const runAt = new Date("2025-12-13T00:00:03.000Z");
     const job = await cron.add({
       name: "required one-shot",
@@ -385,7 +395,7 @@ describe("CronService", () => {
       delivery: { mode: "announce", bestEffort: testCase.bestEffort },
     });
 
-    await vi.advanceTimersByTimeAsync(runAt.getTime() - Date.now());
+    await clock.advanceTo(runAt.getTime());
     const event = await events.waitFor(
       (candidate) => candidate.jobId === job.id && candidate.action === "finished",
     );
@@ -414,9 +424,13 @@ describe("CronService", () => {
 
     cron.stop();
     const restartedRun = vi.fn(async () => ({ status: "ok" as const }));
-    const restarted = createStartedCronService(store.storePath, restartedRun);
+    const restarted = createStartedCronService(
+      store.storePath,
+      restartedRun,
+      createTestGatewayScheduler(clock.clock),
+    );
     await restarted.start();
-    await vi.runOnlyPendingTimersAsync();
+    await clock.advanceBy(60_000);
     expect(restartedRun).not.toHaveBeenCalled();
     if (shouldDelete) {
       expect(restarted.getJob(job.id)).toBeUndefined();
@@ -439,7 +453,7 @@ describe("CronService", () => {
         status: "error" as const,
         error: "provider overloaded",
       });
-    const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const { store, cron, clock, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
     const job = await cron.add({
       name: "delivery then execution error",
       enabled: true,
@@ -451,7 +465,7 @@ describe("CronService", () => {
     });
 
     const firstAt = job.state.nextRunAtMs!;
-    await vi.advanceTimersByTimeAsync(firstAt - Date.now());
+    await clock.advanceTo(firstAt);
     await events.waitFor(
       (candidate) => candidate.jobId === job.id && candidate.action === "finished",
     );
@@ -459,8 +473,8 @@ describe("CronService", () => {
     expect(secondAt).toBeTypeOf("number");
     expect(cron.getJob(job.id)?.state.consecutiveErrors).toBe(0);
 
-    await vi.advanceTimersByTimeAsync(secondAt! - Date.now());
-    await vi.waitFor(() => expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2));
+    await clock.advanceTo(secondAt!);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
     await events.waitFor(
       (evt) => evt.jobId === job.id && evt.action === "finished" && evt.status === "error",
     );
@@ -478,7 +492,7 @@ describe("CronService", () => {
   });
 
   it("deletes a recurring job converted to at when retention is omitted", async () => {
-    const { store, cron, events } = await createMainOneShotHarness();
+    const { store, cron, clock, events } = await createMainOneShotHarness();
     const job = await cron.add({
       name: "converted one-shot delete",
       enabled: true,
@@ -495,7 +509,7 @@ describe("CronService", () => {
     });
     expect(updated.deleteAfterRun).toBe(true);
 
-    await vi.advanceTimersByTimeAsync(atMs - Date.now());
+    await clock.advanceTo(atMs);
     await events.waitFor((evt) => evt.jobId === job.id && evt.action === "removed");
 
     const jobs = await cron.list({ includeDisabled: true });
@@ -504,7 +518,7 @@ describe("CronService", () => {
   });
 
   it("keeps a recurring job converted to at when explicitly requested", async () => {
-    const { store, cron, events } = await createMainOneShotHarness();
+    const { store, cron, clock, events } = await createMainOneShotHarness();
     const job = await cron.add({
       name: "converted one-shot keep",
       enabled: true,
@@ -521,7 +535,7 @@ describe("CronService", () => {
     });
     expect(updated.deleteAfterRun).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(atMs - Date.now());
+    await clock.advanceTo(atMs);
     await events.waitFor((evt) => evt.jobId === job.id && evt.action === "finished");
 
     const jobs = await cron.list({ includeDisabled: true });
@@ -680,9 +694,9 @@ describe("CronService", () => {
 
   it("runs an isolated job without posting a fallback summary to main", async () => {
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
-    const { store, cron, enqueueSystemEvent, requestHeartbeat, events } =
+    const { store, cron, clock, enqueueSystemEvent, requestHeartbeat, events } =
       await createIsolatedAnnounceHarness(runIsolatedAgentJob);
-    await runIsolatedAnnounceScenario({ cron, events, name: "weekly" });
+    await runIsolatedAnnounceScenario({ cron, clock, events, name: "weekly" });
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
@@ -722,10 +736,11 @@ describe("CronService", () => {
       summary: "last output",
       error: "boom",
     }));
-    const { store, cron, enqueueSystemEvent, requestHeartbeat, events } =
+    const { store, cron, clock, enqueueSystemEvent, requestHeartbeat, events } =
       await createIsolatedAnnounceHarness(runIsolatedAgentJob);
     await runIsolatedAnnounceJobAndWait({
       cron,
+      clock,
       events,
       name: "isolated error test",
       status: "error",
@@ -741,9 +756,10 @@ describe("CronService", () => {
       status: "error" as const,
       error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
     }));
-    const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const { store, cron, clock, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
     const job = await runIsolatedAnnounceJobAndWait({
       cron,
+      clock,
       events,
       name: "one-shot lifecycle claim retry",
       status: "error",
@@ -765,9 +781,10 @@ describe("CronService", () => {
       error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
       executionStarted: true,
     }));
-    const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const { store, cron, clock, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
     const job = await runIsolatedAnnounceJobAndWait({
       cron,
+      clock,
       events,
       name: "post-execution lifecycle claim conflict",
       status: "error",
@@ -790,10 +807,11 @@ describe("CronService", () => {
       error: "Channel is required when multiple channels are configured: telegram, discord",
       errorKind: "delivery-target" as const,
     }));
-    const { store, cron, enqueueSystemEvent, requestHeartbeat, events } =
+    const { store, cron, clock, enqueueSystemEvent, requestHeartbeat, events } =
       await createIsolatedAnnounceHarness(runIsolatedAgentJob);
     await runIsolatedAnnounceJobAndWait({
       cron,
+      clock,
       events,
       name: "isolated delivery target error test",
       status: "error",
@@ -809,9 +827,7 @@ describe("CronService", () => {
 
     const cron = createStartedCronService(
       store.storePath,
-      vi.fn(async (_params: { job: unknown; message: string }) => ({
-        status: "ok" as const,
-      })) as unknown as CronServiceDeps["runIsolatedAgentJob"],
+      vi.fn(async () => ({ status: "ok" as const })),
     );
 
     await cron.start();

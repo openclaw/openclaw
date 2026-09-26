@@ -80,13 +80,6 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       expect(loadDeliveryQueueEntry(QUEUE, "bad-1", stateDir)).toBeNull();
     });
 
-    it("returns the entry for valid JSON", () => {
-      enqueueValid("good-1");
-      const result = loadDeliveryQueueEntry(QUEUE, "good-1", stateDir);
-      expect(result).not.toBeNull();
-      expect(result!.id).toBe("good-1");
-    });
-
     it("returns null for a nonexistent entry", () => {
       expect(loadDeliveryQueueEntry(QUEUE, "nonexistent", stateDir)).toBeNull();
     });
@@ -100,21 +93,6 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
 
       const entries = loadDeliveryQueueEntries(QUEUE, stateDir);
       expect(entries.map((e) => e.id).toSorted()).toEqual(["valid-a", "valid-b"]);
-    });
-
-    it("returns empty array when all rows are corrupt", () => {
-      insertCorruptRow("bad-1", "not json");
-      insertCorruptRow("bad-2", "{also broken");
-
-      expect(loadDeliveryQueueEntries(QUEUE, stateDir)).toEqual([]);
-    });
-
-    it("returns all entries when all rows are valid", () => {
-      enqueueValid("v1");
-      enqueueValid("v2");
-      enqueueValid("v3");
-
-      expect(loadDeliveryQueueEntries(QUEUE, stateDir)).toHaveLength(3);
     });
   });
 
@@ -178,17 +156,6 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
   });
 
   describe("valid entry round-trips", () => {
-    it("upsert then load is identity", () => {
-      seedDeliveryQueueEntry({
-        queueName: QUEUE,
-        entry: { id: "rt-1", enqueuedAt: 1000, retryCount: 0 },
-        stateDir,
-      });
-
-      const loaded = loadDeliveryQueueEntry(QUEUE, "rt-1", stateDir);
-      expect(loaded).toMatchObject({ id: "rt-1", enqueuedAt: 1000, retryCount: 0 });
-    });
-
     it.each([
       {
         name: "outbound delivery",

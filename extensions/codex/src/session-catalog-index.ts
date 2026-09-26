@@ -700,6 +700,7 @@ export class CodexCatalogIndex {
           return await this.nativePages.list(params, cursor, this.options, request);
         }
         if (page) {
+          void this.currency.refreshNativeIfDue();
           return page;
         }
         await this.availability.next(expiresAt);

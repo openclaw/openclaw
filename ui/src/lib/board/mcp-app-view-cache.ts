@@ -5,10 +5,7 @@ import type { BoardWidgetAppViewState } from "./view-types.ts";
 type AppViewRequest = () => Promise<BoardWidgetAppViewResult>;
 
 export class BoardMcpAppViewCache {
-  private readonly entries = new Map<
-    string,
-    Promise<BoardWidgetAppViewState> | BoardWidgetAppViewState
-  >();
+  private readonly entries = new Map<string, Promise<BoardWidgetAppViewState>>();
 
   clear(): void {
     this.entries.clear();
@@ -47,11 +44,7 @@ export class BoardMcpAppViewCache {
         error: formatUiError(error),
       }));
     this.entries.set(key, pending);
-    const resolved = await pending;
-    if (this.entries.get(key) === pending) {
-      this.entries.set(key, resolved);
-    }
-    return resolved;
+    return await pending;
   }
 
   private key(widget: BoardWidget): string {

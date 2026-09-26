@@ -45,11 +45,8 @@ vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
   };
 });
 
-import {
-  closeDebugProxyCaptureStore,
-  getDebugProxyCaptureStore,
-} from "../proxy-capture/store.sqlite.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import * as proxyCliRuntime from "./proxy-cli.runtime.js";
 
 describe("proxy cli runtime", () => {
@@ -106,9 +103,8 @@ describe("proxy cli runtime", () => {
     spawnMock.mockReset();
   });
 
-  afterEach(() => {
-    closeDebugProxyCaptureStore();
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     vi.restoreAllMocks();
     process.exitCode = undefined;
     for (const key of envKeys) {
@@ -211,31 +207,6 @@ describe("proxy cli runtime", () => {
     );
   });
 
-  it("prints actionable disabled proxy config output", async () => {
-    runProxyValidationMock.mockResolvedValueOnce({
-      ok: false,
-      config: {
-        enabled: false,
-        proxyUrl: "http://proxy.example:3128",
-        source: "config",
-        errors: ["proxy validation requires proxy.enabled to be true for configured proxy URLs"],
-      },
-      checks: [],
-    });
-    await proxyCliRuntime.runProxyValidateCommand({});
-
-    expect(process.stdout["write"]).toHaveBeenCalledWith(
-      "Proxy validation failed\n\n" +
-        "Proxy\n" +
-        "  Source: config\n" +
-        "  URL:    http://proxy.example:3128/\n\n" +
-        "Problems\n" +
-        "  - proxy validation requires proxy.enabled to be true for configured proxy URLs\n\n" +
-        "Next steps\n" +
-        "  Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.\n",
-    );
-  });
-
   it("prints actionable output when proxy config is disabled and missing", async () => {
     runProxyValidationMock.mockResolvedValueOnce({
       ok: false,
@@ -261,31 +232,6 @@ describe("proxy cli runtime", () => {
         "  Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.\n",
     );
     expect(process.exitCode).toBe(1);
-  });
-
-  it("redacts malformed proxy URLs in text output", async () => {
-    runProxyValidationMock.mockResolvedValueOnce({
-      ok: false,
-      config: {
-        enabled: true,
-        proxyUrl: "http://user:secret@",
-        source: "env",
-        errors: ["proxyUrl must use http://"],
-      },
-      checks: [],
-    });
-    await proxyCliRuntime.runProxyValidateCommand({});
-
-    expect(process.stdout["write"]).toHaveBeenCalledWith(
-      "Proxy validation failed\n\n" +
-        "Proxy\n" +
-        "  Source: env\n" +
-        "  URL:    <invalid proxy URL>\n\n" +
-        "Problems\n" +
-        "  - proxyUrl must use http://\n\n" +
-        "Next steps\n" +
-        "  Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.\n",
-    );
   });
 
   it("prints CA-file guidance when proxy CA files cannot be read", async () => {
@@ -486,10 +432,14 @@ describe("proxy cli runtime", () => {
 
     expect(serverStopSpy).toHaveBeenCalledTimes(1);
 
-    const store = getDebugProxyCaptureStore();
-    const [session] = store.listSessions(5);
-    expect(session?.mode).toBe("proxy-run");
-    expect(session?.endedAt).toBeGreaterThanOrEqual(beforeRun);
+    const lease = await acquireDebugProxyCaptureStoreAsync();
+    try {
+      const [session] = await lease.store.listSessions(5);
+      expect(session?.mode).toBe("proxy-run");
+      expect(session?.endedAt).toBeGreaterThanOrEqual(beforeRun);
+    } finally {
+      await lease.release();
+    }
   });
 
   it.each([

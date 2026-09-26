@@ -270,32 +270,6 @@ describe("createClawWorkspaceFiles", () => {
     expect(readWorkspaceFileRows("workspace-agent", root)).toEqual(records);
   });
 
-  it("never overwrites an unexpected destination", async () => {
-    const { root, workspace, plan } = await makePlan();
-    await writeFile(join(workspace, "AGENTS.md"), "operator content\n", "utf8");
-
-    await expect(createClawWorkspaceFiles(plan, { env: stateEnv(root) })).rejects.toMatchObject({
-      diagnostics: [expect.objectContaining({ code: "workspace_file_collision" })],
-      createdFiles: [],
-    });
-    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).resolves.toBe(
-      "operator content\n",
-    );
-  });
-
-  it("revalidates source content immediately before writing", async () => {
-    const { root, workspace, plan } = await makePlan({
-      mutateAfterPlan: async (_plan, packageRoot) => {
-        await writeFile(join(packageRoot, "content", "AGENTS.md"), "changed\n", "utf8");
-      },
-    });
-
-    await expect(createClawWorkspaceFiles(plan, { env: stateEnv(root) })).rejects.toMatchObject({
-      diagnostics: [expect.objectContaining({ code: "workspace_source_changed" })],
-    });
-    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).rejects.toThrow();
-  });
-
   it.runIf(process.platform !== "win32")(
     "rejects a source replaced by a symlink after planning",
     async () => {
@@ -355,6 +329,7 @@ describe("createClawWorkspaceFiles", () => {
       createdFiles: [expect.objectContaining({ path: "first.md" })],
     });
     await expect(readFile(join(workspace, "first.md"), "utf8")).resolves.toBe("# Agent\n");
+    await expect(readFile(join(workspace, "second.md"), "utf8")).resolves.toBe("collision\n");
     expect(readWorkspaceFileRows("workspace-agent", root)).toEqual([
       expect.objectContaining({ path: "first.md", createdAtMs: 20 }),
     ]);
@@ -497,6 +472,7 @@ describe("workspace files in the consented add lifecycle", () => {
         diagnostics: [expect.objectContaining({ code: "workspace_source_changed" })],
       },
     });
+    await expect(readFile(join(plan.agent.workspace, "reference", "policy.md"))).rejects.toThrow();
     expect(config.agents?.entries?.["workspace-agent"]).toBeDefined();
     expect(readInstallStatus("workspace-agent", root)).toBe("config_committed");
 

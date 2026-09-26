@@ -16,9 +16,6 @@ import { resolveLocalAgentAvatarPath } from "./identity-avatar-file.js";
 import { loadAgentIdentityFromWorkspace } from "./identity-file.js";
 import { resolveAgentIdentity } from "./identity.js";
 
-// Agent avatar resolution for UI/public surfaces. Remote/data sources are
-// allowed directly; local files must stay inside the agent workspace and satisfy
-// shared avatar policy limits.
 export type AgentAvatarResolution =
   | { kind: "none"; reason: string; source?: string }
   | { kind: "local"; filePath: string; source: string }
@@ -41,12 +38,7 @@ function resolveAvatarSource(cfg: OpenClawConfig, agentId: string): string | nul
     return fromConfig;
   }
   const workspace = resolveAgentWorkspaceDir(cfg, normalizedAgentId);
-  const fromIdentity =
-    normalizeOptionalString(loadAgentIdentityFromWorkspace(workspace)?.avatar) ?? null;
-  if (fromIdentity) {
-    return fromIdentity;
-  }
-  return null;
+  return normalizeOptionalString(loadAgentIdentityFromWorkspace(workspace)?.avatar) ?? null;
 }
 
 function isSafeRelativeAvatarSource(source: string): boolean {
@@ -55,7 +47,7 @@ function isSafeRelativeAvatarSource(source: string): boolean {
     source.startsWith("~") ||
     path.isAbsolute(source) ||
     isWindowsAbsolutePath(source) ||
-    (hasAvatarUriScheme(source) && !isWindowsAbsolutePath(source)) ||
+    hasAvatarUriScheme(source) ||
     source.includes("\0")
   ) {
     return false;

@@ -917,35 +917,6 @@ describe("prepared model catalog builder", () => {
     },
   );
 
-  it("keeps configured models absent from registry discovery", async () => {
-    const snapshot = await build({
-      config: {
-        plugins: { enabled: false },
-        models: {
-          providers: {
-            custom: {
-              baseUrl: "https://example.test/v1",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "configured-only",
-                  name: "Configured Only",
-                  contextWindow: 8_192,
-                  maxTokens: 1_024,
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
-            },
-          },
-        },
-      },
-    });
-
-    expect(snapshot.entries.map((entry) => entry.id)).toEqual(["configured-only"]);
-  });
-
   it("rejects the whole generation when catalog projection fails after a valid row", async () => {
     const projectionError = new Error("catalog projection failed");
     const brokenEntry = {

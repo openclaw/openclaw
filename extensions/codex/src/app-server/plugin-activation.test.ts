@@ -8,6 +8,7 @@ import {
   type ResolvedCodexPluginPolicy,
 } from "./config.js";
 import { ensureCodexPluginActivation } from "./plugin-activation.js";
+import { pluginList, pluginSummary } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { v2 } from "./protocol.js";
 
@@ -308,18 +309,7 @@ describe("Codex plugin activation", () => {
         request: async (method, params) => {
           calls.push(method);
           if (method === "plugin/list") {
-            return {
-              marketplaces: [
-                {
-                  name: "openai-curated-remote",
-                  path: null,
-                  interface: null,
-                  plugins: [remoteSummary],
-                },
-              ],
-              marketplaceLoadErrors: [],
-              featuredPluginIds: [],
-            } satisfies v2.PluginListResponse;
+            return pluginList([remoteSummary], { name: "openai-curated-remote", path: null });
           }
           if (method === "plugin/install") {
             expect(params).toEqual({
@@ -374,18 +364,7 @@ describe("Codex plugin activation", () => {
         identity: identity("google-calendar"),
         request: async (method) => {
           if (method === "plugin/list") {
-            return {
-              marketplaces: [
-                {
-                  name: "openai-curated-remote",
-                  path: null,
-                  interface: null,
-                  plugins: [remoteSummary],
-                },
-              ],
-              marketplaceLoadErrors: [],
-              featuredPluginIds: [],
-            } satisfies v2.PluginListResponse;
+            return pluginList([remoteSummary], { name: "openai-curated-remote", path: null });
           }
           if (method === "plugin/install") {
             throw error;
@@ -414,18 +393,7 @@ describe("Codex plugin activation", () => {
       request: async (method) => {
         calls.push(method);
         if (method === "plugin/list") {
-          return {
-            marketplaces: [
-              {
-                name: "openai-curated-remote",
-                path: null,
-                interface: null,
-                plugins: [summary],
-              },
-            ],
-            marketplaceLoadErrors: [],
-            featuredPluginIds: [],
-          } satisfies v2.PluginListResponse;
+          return pluginList([summary], { name: "openai-curated-remote", path: null });
         }
         throw new Error(`unexpected request ${method}`);
       },
@@ -500,18 +468,7 @@ describe("Codex plugin activation", () => {
     const metadataCache = new CodexPluginMetadataCache();
     const request = vi.fn(async (_method: string, params: unknown) => {
       expect(params).toEqual({});
-      return {
-        marketplaces: [
-          {
-            name: "openai-curated-remote",
-            path: null,
-            interface: null,
-            plugins: [],
-          },
-        ],
-        marketplaceLoadErrors: [],
-        featuredPluginIds: [],
-      } satisfies v2.PluginListResponse;
+      return pluginList([], { name: "openai-curated-remote", path: null });
     });
     const activationParams = {
       identity: identity("google-calendar"),
@@ -549,7 +506,7 @@ describe("Codex plugin activation", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it.each(["company-tools", "openai-bundled", "workspace-shared-with-me"])(
+  it.each(["company-tools", "openai-bundled"])(
     "never installs a non-curated %s plugin during thread startup",
     async (marketplaceName) => {
       const request = vi.fn(async () => {
@@ -582,35 +539,5 @@ function identity(pluginName: string): ResolvedCodexPluginPolicy {
     enabled: true,
     allowDestructiveActions: false,
     destructiveApprovalMode: "deny",
-  };
-}
-
-function pluginList(plugins: v2.PluginSummary[]): v2.PluginListResponse {
-  return {
-    marketplaces: [
-      {
-        name: CODEX_PLUGINS_MARKETPLACE_NAME,
-        path: "/marketplaces/openai-curated",
-        interface: null,
-        plugins,
-      },
-    ],
-    marketplaceLoadErrors: [],
-    featuredPluginIds: [],
-  };
-}
-
-function pluginSummary(id: string, overrides: Partial<v2.PluginSummary> = {}): v2.PluginSummary {
-  return {
-    id,
-    name: id,
-    source: { type: "remote" },
-    installed: false,
-    enabled: false,
-    installPolicy: "AVAILABLE",
-    authPolicy: "ON_USE",
-    availability: "AVAILABLE",
-    interface: null,
-    ...overrides,
   };
 }

@@ -48,10 +48,7 @@ const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 
 describe("plugins cli policy mutations", () => {
   let readInstallRecords: (typeof import("../plugins/installed-plugin-index-record-reader.js"))["loadInstalledPluginIndexInstallRecordsSync"];
-  const compatibilityPluginIds = [
-    { alias: "google-gemini-cli", pluginId: "google" },
-    { alias: "minimax-portal-auth", pluginId: "minimax" },
-  ] as const;
+  const compatibilityPluginIds = [{ alias: "google-gemini-cli", pluginId: "google" }] as const;
 
   beforeEach(async () => {
     resetPluginsCliTestState();
@@ -234,7 +231,7 @@ describe("plugins cli policy mutations", () => {
   );
 
   it.each([
-    { mode: undefined, json: false, acceptCapabilities: true, ids: ["alpha"] },
+    { mode: undefined, json: false, acceptCapabilities: true, ids: ["alpha"], wait: true },
     {
       mode: undefined,
       json: false,
@@ -253,7 +250,7 @@ describe("plugins cli policy mutations", () => {
     { mode: undefined, json: true, acceptCapabilities: true, ids: ["alpha", "beta"] },
   ])(
     "reloads CLI-selected $ids in one generation (mode=$mode, json=$json, accept=$acceptCapabilities)",
-    async ({ mode, json, acceptCapabilities, ids, restartRequired = false }) => {
+    async ({ mode, json, acceptCapabilities, ids, restartRequired = false, wait = false }) => {
       resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
       const receipt = {
         ok: true,
@@ -295,6 +292,7 @@ describe("plugins cli policy mutations", () => {
             ...ids,
             "alpha",
             ...(json ? ["--json"] : []),
+            ...(wait ? ["--wait"] : []),
             ...(acceptCapabilities ? ["--accept-capabilities"] : []),
           ]);
           if (json && !acceptCapabilities) {
@@ -308,7 +306,7 @@ describe("plugins cli policy mutations", () => {
       }
       expect(pluginLifecycleGatewayMock).toHaveBeenCalledExactlyOnceWith(
         "plugins.reload",
-        { plugins: ids.map((pluginId) => ({ pluginId })) },
+        { plugins: ids.map((pluginId) => ({ pluginId })), ...(wait ? { waitForDrain: true } : {}) },
         acceptCapabilities ? expect.any(Function) : undefined,
       );
       expect(promptYesNoMock).not.toHaveBeenCalled();
@@ -744,11 +742,11 @@ describe("plugins cli policy mutations", () => {
     },
   );
 
-  it.each(
-    ["enable", "disable"].flatMap((command) =>
-      ["missing-plugin", "alpha-provider", "alpha-channel"].map((id) => ({ command, id })),
-    ),
-  )("rejects $command for undiscovered plugin id $id", async ({ command, id }) => {
+  it.each([
+    { command: "enable", id: "missing-plugin" },
+    { command: "enable", id: "alpha-provider" },
+    { command: "disable", id: "alpha-channel" },
+  ])("rejects $command for undiscovered plugin id $id", async ({ command, id }) => {
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
         {

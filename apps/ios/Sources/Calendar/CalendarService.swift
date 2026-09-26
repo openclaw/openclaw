@@ -15,7 +15,7 @@ final class CalendarService: CalendarServicing {
 
     func events(params: OpenClawCalendarEventsParams) async throws -> OpenClawCalendarEventsPayload {
         let status = self.eventAuthorizationStatus()
-        guard EventKitAuthorization.allowsRead(status: status) else {
+        guard DevicePermissionStatusMap.eventKitRead(status) == .granted else {
             throw NSError(domain: "Calendar", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
             ])
@@ -28,10 +28,8 @@ final class CalendarService: CalendarServicing {
         let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
         let events = store.events(matching: predicate)
         let limit = max(1, min(params.limit ?? 50, 500))
-        let selected = Array(events.prefix(limit))
-
         let formatter = ISO8601DateFormatter()
-        let payload = selected.map { event in
+        let payload = events.prefix(limit).map { event in
             OpenClawCalendarEventPayload(
                 identifier: event.eventIdentifier ?? UUID().uuidString,
                 title: event.title ?? "(untitled)",
@@ -47,7 +45,7 @@ final class CalendarService: CalendarServicing {
 
     func add(params: OpenClawCalendarAddParams) async throws -> OpenClawCalendarAddPayload {
         let status = self.eventAuthorizationStatus()
-        guard EventKitAuthorization.allowsWrite(status: status) else {
+        guard DevicePermissionStatusMap.eventKitWrite(status) == .granted else {
             throw NSError(domain: "Calendar", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
             ])

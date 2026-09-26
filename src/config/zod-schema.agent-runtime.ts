@@ -622,6 +622,18 @@ const CommonToolPolicyFields = {
   toolsBySender: ToolPolicyBySenderSchema,
 };
 
+const NestedToolPolicySchema = z.object({ tools: ToolPolicySchema }).strict().optional();
+
+const ElevatedToolsSchema = z
+  .object({
+    /** Enable or disable elevated mode (default: true). */
+    enabled: z.boolean().optional(),
+    /** Approved senders for /elevated (per-provider allowlists). */
+    allowFrom: ElevatedAllowFromSchema,
+  })
+  .strict()
+  .optional();
+
 const MessageToolConfigSchema = z
   .object({
     crossContext: z
@@ -689,15 +701,7 @@ const AgentToolsSchema = z
     /** Per-agent swarm override; merges over the top-level tools.swarm config. */
     swarm: SwarmSchema,
     /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
-    elevated: z
-      .object({
-        /** Enable or disable elevated mode for this agent (default: true). */
-        enabled: z.boolean().optional(),
-        /** Approved senders for /elevated (per-provider allowlists). */
-        allowFrom: ElevatedAllowFromSchema,
-      })
-      .strict()
-      .optional(),
+    elevated: ElevatedToolsSchema,
     /** Exec tool defaults for this agent. */
     exec: ToolExecSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
@@ -708,12 +712,7 @@ const AgentToolsSchema = z
     loopDetection: ToolLoopDetectionSchema,
     /** Message tool configuration for this agent. */
     message: MessageToolConfigSchema,
-    sandbox: z
-      .object({
-        tools: ToolPolicySchema,
-      })
-      .strict()
-      .optional(),
+    sandbox: NestedToolPolicySchema,
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -792,31 +791,14 @@ export const ToolsSchema = z
       .strict()
       .optional(),
     /** Elevated exec permissions for the host machine. */
-    elevated: z
-      .object({
-        /** Enable or disable elevated mode (default: true). */
-        enabled: z.boolean().optional(),
-        allowFrom: ElevatedAllowFromSchema,
-      })
-      .strict()
-      .optional(),
+    elevated: ElevatedToolsSchema,
     /** Exec tool defaults. */
     exec: ToolExecSchema,
     fs: ToolFsSchema,
     /** Sub-agent tool policy defaults (deny wins; progress_card is always denied). */
-    subagents: z
-      .object({
-        tools: ToolPolicySchema,
-      })
-      .strict()
-      .optional(),
+    subagents: NestedToolPolicySchema,
     /** Sandbox tool policy defaults (deny wins). */
-    sandbox: z
-      .object({
-        tools: ToolPolicySchema,
-      })
-      .strict()
-      .optional(),
+    sandbox: NestedToolPolicySchema,
     /** sessions_spawn tool configuration. */
     sessions_spawn: z
       .object({

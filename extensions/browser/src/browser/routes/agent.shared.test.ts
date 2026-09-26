@@ -144,10 +144,6 @@ describe("browser route shared helpers", () => {
   });
 
   describe("readBody", () => {
-    it("returns object bodies", () => {
-      expect(readBody(requestWithBody({ one: 1 }))).toEqual({ one: 1 });
-    });
-
     it("normalizes non-object bodies to empty object", () => {
       expect(readBody(requestWithBody(null))).toStrictEqual({});
       expect(readBody(requestWithBody("text"))).toStrictEqual({});

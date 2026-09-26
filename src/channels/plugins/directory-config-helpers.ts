@@ -1,8 +1,3 @@
-/**
- * Directory config helper utilities.
- *
- * Builds user/group directory entries from plugin config with query and limit filtering.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -69,13 +64,11 @@ export function collectNormalizedDirectoryIds(params: {
   normalizeId: (entry: string) => string | null | undefined;
 }): string[] {
   // Arbitrary source helpers accept strings only; allowFrom helpers also stringify ids.
-  const ids: string[] = [];
-  for (const source of params.sources) {
-    for (const id of collectDirectoryIds(source, params.normalizeId, normalizeOptionalString)) {
-      ids.push(id);
-    }
-  }
-  return uniqueStrings(ids);
+  return uniqueStrings(
+    params.sources.flatMap((source) =>
+      collectDirectoryIds(source, params.normalizeId, normalizeOptionalString),
+    ),
+  );
 }
 
 /**
@@ -131,15 +124,12 @@ export function listInspectedDirectoryEntriesFromSources<InspectedAccount>(
 /**
  * Builds an async lister around an inspected-account directory source.
  */
-export function createInspectedDirectoryEntriesLister<InspectedAccount>(params: {
-  kind: "user" | "group";
-  inspectAccount: (
-    cfg: OpenClawConfig,
-    accountId?: string | null,
-  ) => InspectedAccount | null | undefined;
-  resolveSources: (account: InspectedAccount) => Iterable<unknown>[];
-  normalizeId: (entry: string) => string | null | undefined;
-}) {
+export function createInspectedDirectoryEntriesLister<InspectedAccount>(
+  params: Omit<
+    Parameters<typeof listInspectedDirectoryEntriesFromSources<InspectedAccount>>[0],
+    keyof DirectoryConfigParams
+  >,
+) {
   return async (configParams: DirectoryConfigParams): Promise<ChannelDirectoryEntry[]> =>
     listInspectedDirectoryEntriesFromSources({
       ...configParams,
@@ -171,12 +161,12 @@ export function listResolvedDirectoryEntriesFromSources<ResolvedAccount>(
 /**
  * Builds an async lister around a required resolved-account directory source.
  */
-export function createResolvedDirectoryEntriesLister<ResolvedAccount>(params: {
-  kind: "user" | "group";
-  resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
-  resolveSources: (account: ResolvedAccount) => Iterable<unknown>[];
-  normalizeId: (entry: string) => string | null | undefined;
-}) {
+export function createResolvedDirectoryEntriesLister<ResolvedAccount>(
+  params: Omit<
+    Parameters<typeof listResolvedDirectoryEntriesFromSources<ResolvedAccount>>[0],
+    keyof DirectoryConfigParams
+  >,
+) {
   return async (configParams: DirectoryConfigParams): Promise<ChannelDirectoryEntry[]> =>
     listResolvedDirectoryEntriesFromSources({
       ...configParams,

@@ -41,6 +41,12 @@ import {
   type PluginRuntime,
 } from "./session-catalog.test-helpers.js";
 
+function continueSource(
+  params: Omit<Parameters<typeof continueLocalCodexSession>[0], "config" | "threadId">,
+) {
+  return continueLocalCodexSession({ config, threadId: "thread-1", ...params });
+}
+
 describe("Codex supervision catalog", () => {
   it("refreshes bulk adoption authority after a generation changes or a binding disappears", async () => {
     const state = createCodexSqliteTestBindingStateStore({
@@ -479,20 +485,16 @@ describe("Codex supervision actions", () => {
       userMessageCount: number;
     }> = [];
 
-    const first = await continueLocalCodexSession({
+    const first = await continueSource({
       api,
       bindingStore,
-      config,
       control,
-      threadId: "thread-1",
       onContinued: (baseline) => baselines.push(baseline),
     });
-    const second = await continueLocalCodexSession({
+    const second = await continueSource({
       api,
       bindingStore,
-      config,
       control,
-      threadId: "thread-1",
       onContinued: (baseline) => baselines.push(baseline),
     });
 
@@ -656,12 +658,10 @@ describe("Codex supervision actions", () => {
       userMessageCount: number;
     }> = [];
 
-    await continueLocalCodexSession({
+    await continueSource({
       api,
       bindingStore,
-      config,
       control,
-      threadId: "thread-1",
       onContinued: (baseline) => baselines.push(baseline),
     });
 
@@ -731,13 +731,7 @@ describe("Codex supervision actions", () => {
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl();
 
-    const firstContinue = continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    });
+    const firstContinue = continueSource({ api, bindingStore, control });
     const pending: Promise<unknown>[] = [firstContinue];
     try {
       await Promise.race([
@@ -757,13 +751,7 @@ describe("Codex supervision actions", () => {
       expect(duringImport.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
       expect(entries[0]?.entry.initializationPending).toBe(true);
       let secondSettled = false;
-      const secondContinue = continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }).then((result) => {
+      const secondContinue = continueSource({ api, bindingStore, control }).then((result) => {
         secondSettled = true;
         return result;
       });
@@ -815,13 +803,7 @@ describe("Codex supervision actions", () => {
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl();
-    const continued = await continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    });
+    const continued = await continueSource({ api, bindingStore, control });
 
     await expect(archiveTestSession({ control, bindingStore, runtime })).rejects.toThrow(
       "cannot be archived until its OpenClaw branch starts",
@@ -866,13 +848,7 @@ describe("Codex supervision actions", () => {
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl();
-    const continuing = continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    });
+    const continuing = continueSource({ api, bindingStore, control });
     const pending: Promise<unknown>[] = [continuing];
     try {
       await Promise.race([

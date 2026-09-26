@@ -130,10 +130,15 @@ export async function runBounded(command, args, options = {}) {
   let terminationReason;
   let terminationStartedAt;
   let terminationError;
+  let groupExitError;
   let closed = false;
+  let ownedProcessGroupRetired = false;
   let forceKillTimer;
 
   const signalOwnedProcess = (signal) => {
+    if (ownsProcessGroup && ownedProcessGroupRetired) {
+      return false;
+    }
     try {
       if (ownsProcessGroup && child.pid) {
         process.kill(-child.pid, signal);
@@ -143,22 +148,33 @@ export async function runBounded(command, args, options = {}) {
       return true;
     } catch (error) {
       if (error?.code === "ESRCH") {
+        ownedProcessGroupRetired = ownsProcessGroup;
         return false;
       }
-      terminationError ??= error;
+      if (ownsProcessGroup && child.pid && error?.code === "EPERM") {
+        groupExitError ??= error;
+      } else {
+        terminationError ??= error;
+      }
       return false;
     }
   };
-  const ownedProcessGroupExists = () => {
-    if (!ownsProcessGroup || !child.pid) {
-      return false;
+  const inspectOwnedProcessGroup = () => {
+    if (!ownsProcessGroup || !child.pid || ownedProcessGroupRetired) {
+      return "dead";
     }
     try {
       process.kill(-child.pid, 0);
-      return true;
+      return "live";
     } catch (error) {
       if (error?.code === "ESRCH") {
-        return false;
+        ownedProcessGroupRetired = true;
+        return "dead";
+      }
+      if (error?.code === "EPERM") {
+        // Darwin can report EPERM for a zombie-only group until it is reaped.
+        groupExitError ??= error;
+        return "indeterminate";
       }
       throw error;
     }
@@ -171,7 +187,7 @@ export async function runBounded(command, args, options = {}) {
     terminationStartedAt = Date.now();
     signalOwnedProcess("SIGTERM");
     forceKillTimer = setTimeout(() => {
-      if (!closed || ownedProcessGroupExists()) {
+      if (!closed) {
         signalOwnedProcess("SIGKILL");
       }
     }, terminateGraceMs);
@@ -196,6 +212,7 @@ export async function runBounded(command, args, options = {}) {
       child.once("error", reject);
       child.once("close", (code, signal) => {
         closed = true;
+        clearTimeout(forceKillTimer);
         resolve({ code, signal });
       });
     });
@@ -211,21 +228,29 @@ export async function runBounded(command, args, options = {}) {
           setTimeout(resolve, graceRemaining);
         });
       }
-      if (ownedProcessGroupExists()) {
-        signalOwnedProcess("SIGKILL");
+      const groupState = inspectOwnedProcessGroup();
+      if (groupState !== "dead") {
+        if (groupState === "live") {
+          signalOwnedProcess("SIGKILL");
+        }
         const joinDeadline = Date.now() + 2_000;
-        while (ownedProcessGroupExists() && Date.now() < joinDeadline) {
+        while (inspectOwnedProcessGroup() !== "dead" && Date.now() < joinDeadline) {
           await new Promise((resolve) => {
             setTimeout(resolve, 10);
           });
         }
-        if (ownedProcessGroupExists()) {
-          throw new Error(`${command} owned process group did not terminate`);
+        if (inspectOwnedProcessGroup() !== "dead") {
+          throw new Error(`${command} owned process group did not terminate`, {
+            cause: terminationError ?? groupExitError,
+          });
         }
       }
     }
     if (terminationError) {
       throw terminationError;
+    }
+    if (groupExitError && !ownedProcessGroupRetired) {
+      throw groupExitError;
     }
     if (terminationReason) {
       throw new Error(`${command} ${terminationReason}`);

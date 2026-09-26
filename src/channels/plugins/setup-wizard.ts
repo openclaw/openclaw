@@ -1,8 +1,3 @@
-/**
- * Channel setup wizard adapter.
- *
- * Adapts declarative wizard definitions into imperative setup adapters used by onboarding.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
@@ -33,8 +28,6 @@ export type {
   ChannelSetupWizardStatus,
   ChannelSetupWizardTextInput,
 } from "./setup-wizard-types.js";
-
-type ChannelSetupWizardPlugin = ChannelSetupPlugin;
 
 type ChannelSectionWithAccounts = Record<string, unknown> & {
   accounts?: Record<string, unknown>;
@@ -93,7 +86,7 @@ function createWizardAccountScope(params: {
 }
 
 async function buildStatus(
-  plugin: ChannelSetupWizardPlugin,
+  plugin: ChannelSetupPlugin,
   wizard: ChannelSetupWizard,
   ctx: ChannelSetupStatusContext,
 ): Promise<ChannelSetupStatus> {
@@ -130,7 +123,7 @@ async function buildStatus(
 // Channel-owned contracts own config writes; released legacy adapters remain
 // supported through the single setup execution compatibility boundary.
 function applySetupInput(params: {
-  plugin: ChannelSetupWizardPlugin;
+  plugin: ChannelSetupPlugin;
   cfg: OpenClawConfig;
   accountId: string;
   input: ChannelSetupInput;
@@ -202,7 +195,7 @@ function collectCredentialValues(params: {
 // Text inputs can either update custom config state or reuse the same generic
 // setup input contract as credential steps.
 async function applyWizardTextInputValue(params: {
-  plugin: ChannelSetupWizardPlugin;
+  plugin: ChannelSetupPlugin;
   input: ChannelSetupWizardTextInput;
   cfg: OpenClawConfig;
   accountId: string;
@@ -240,7 +233,7 @@ function resolveTextInputKeepMessage(
 }
 
 export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
-  plugin: ChannelSetupWizardPlugin;
+  plugin: ChannelSetupPlugin;
   wizard: ChannelSetupWizard;
 }): ChannelSetupWizardAdapter {
   const { plugin, wizard } = params;
@@ -468,11 +461,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
 
       const runTextInputSteps = async () => {
         for (const textInput of wizard.textInputs ?? []) {
-          let currentValue = normalizeOptionalString(
-            typeof credentialValues[textInput.inputKey] === "string"
-              ? credentialValues[textInput.inputKey]
-              : undefined,
-          );
+          let currentValue = normalizeOptionalString(credentialValues[textInput.inputKey]);
           if (!currentValue && textInput.currentValue) {
             currentValue = normalizeOptionalString(
               await textInput.currentValue({

@@ -55,6 +55,7 @@ type SessionActionContext = {
   invalidateRunOwnership?: () => void;
   clearLocalRunIds?: () => void;
   rememberSessionKey?: (sessionKey: string) => void | Promise<void>;
+  onSessionSelection?: () => void;
 };
 
 export function createSessionActions(context: SessionActionContext) {
@@ -76,6 +77,7 @@ export function createSessionActions(context: SessionActionContext) {
     invalidateRunOwnership,
     clearLocalRunIds,
     rememberSessionKey,
+    onSessionSelection,
   } = context;
   let historyLoadGeneration = 0;
   let lastSessionDefaults: SessionInfoDefaults | null = null;
@@ -646,7 +648,9 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const setSession = async (rawKey: string, agentId?: string) => {
-    if (applySessionSelection(resolveSessionSelection(rawKey, agentId)) || !state.historyLoaded) {
+    const changed = applySessionSelection(resolveSessionSelection(rawKey, agentId));
+    onSessionSelection?.();
+    if (changed || !state.historyLoaded) {
       await loadHistory();
     }
   };

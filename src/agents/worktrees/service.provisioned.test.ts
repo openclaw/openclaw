@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -523,7 +524,7 @@ describe("ManagedWorktreeService provisioned state", () => {
     expect(await service.removeIfLossless(created.id)).toBe(true);
     await fs.writeFile(path.join(repo, "large.local"), Buffer.from("new source"));
     const restored = await service.restore({ id: created.id });
-    expect(await fs.readFile(path.join(restored.path, "large.local"))).toEqual(copy);
+    deepStrictEqual(await fs.readFile(path.join(restored.path, "large.local")), copy);
   });
 
   it("keeps provisioned files protected after manifest removal or pattern changes", async () => {

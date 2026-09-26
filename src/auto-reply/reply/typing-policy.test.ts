@@ -1,62 +1,43 @@
-// Tests typing indicator policy across internal, quiet, and visible channels.
 import { describe, expect, it } from "vitest";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 describe("resolveRunTypingPolicy", () => {
-  it("forces heartbeat policy for heartbeat runs", () => {
-    const resolved = resolveRunTypingPolicy({
-      requestedPolicy: "user_message",
-      isHeartbeat: true,
-    });
-    expect(resolved).toEqual({
+  it.each([
+    {
+      name: "forces heartbeat policy for heartbeat runs",
+      input: { requestedPolicy: "user_message", isHeartbeat: true },
       typingPolicy: "heartbeat",
       suppressTyping: true,
-    });
-  });
-
-  it("forces internal webchat policy", () => {
-    const resolved = resolveRunTypingPolicy({
-      requestedPolicy: "user_message",
-      originatingChannel: "webchat",
-    });
-    expect(resolved).toEqual({
+    },
+    {
+      name: "forces internal webchat policy",
+      input: { requestedPolicy: "user_message", originatingChannel: "webchat" },
       typingPolicy: "internal_webchat",
       suppressTyping: true,
-    });
-  });
-
-  it("forces system event policy for routed turns", () => {
-    const resolved = resolveRunTypingPolicy({
-      requestedPolicy: "user_message",
-      systemEvent: true,
-      originatingChannel: "quietchat",
-    });
-    expect(resolved).toEqual({
+    },
+    {
+      name: "forces system event policy for routed turns",
+      input: {
+        requestedPolicy: "user_message",
+        systemEvent: true,
+        originatingChannel: "quietchat",
+      },
       typingPolicy: "system_event",
       suppressTyping: true,
-    });
-  });
-
-  it("preserves requested policy for regular user turns", () => {
-    const resolved = resolveRunTypingPolicy({
-      requestedPolicy: "user_message",
-      originatingChannel: "quietchat",
-    });
-    expect(resolved).toEqual({
+    },
+    {
+      name: "preserves requested policy for regular user turns",
+      input: { requestedPolicy: "user_message", originatingChannel: "quietchat" },
       typingPolicy: "user_message",
       suppressTyping: false,
-    });
-  });
-
-  it("respects explicit suppressTyping", () => {
-    const resolved = resolveRunTypingPolicy({
-      requestedPolicy: "auto",
-      originatingChannel: "quietchat",
-      suppressTyping: true,
-    });
-    expect(resolved).toEqual({
+    },
+    {
+      name: "respects explicit suppressTyping",
+      input: { requestedPolicy: "auto", originatingChannel: "quietchat", suppressTyping: true },
       typingPolicy: "auto",
       suppressTyping: true,
-    });
+    },
+  ] as const)("$name", ({ input, typingPolicy, suppressTyping }) => {
+    expect(resolveRunTypingPolicy(input)).toEqual({ typingPolicy, suppressTyping });
   });
 });

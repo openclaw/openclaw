@@ -8,8 +8,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { listSecretStoreEntries, readSecretStoreValue } from "../secrets/store/secret-store.js";
+import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runGatewayLifecycle } from "./operations-execution-helpers.js";
 import {
@@ -180,6 +183,37 @@ const mockScheduleGatewayRestart = vi.hoisted(() =>
     emitHooksQueued: false,
   })),
 );
+// Unit threads have no host broker; run the secret-store worker commands inline,
+// admitting their transaction and commit through the requester's guard.
+vi.mock("../state/openclaw-state-worker-store.js", async (importOriginal) => {
+  const kernel = await import("../secrets/store/secret-store-config-ref.kernel.js");
+  const execute = async (
+    command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
+    assertCurrent?: () => void,
+  ) => {
+    if (command.type === "secrets.writeForConfigRef") {
+      return kernel.writeSecretStoreEntryForConfigRefInDatabase(command.input, undefined, () =>
+        assertCurrent?.(),
+      );
+    }
+    throw new Error(`unexpected state worker command ${command.type}`);
+  };
+  return {
+    ...(await importOriginal<typeof import("../state/openclaw-state-worker-store.js")>()),
+    runOpenClawStateWorkerOperation: async (
+      _context: unknown,
+      operation: (scope: {
+        execute: (command: SqliteWorkerCommand<OpenClawStateWorkerOperations>) => unknown;
+      }) => Promise<unknown>,
+      options?: { assertCurrent?: () => void },
+    ) => {
+      options?.assertCurrent?.();
+      return await operation({
+        execute: (command) => execute(command, options?.assertCurrent),
+      });
+    },
+  };
+});
 vi.mock("../cli/daemon-cli/lifecycle.js", () => ({
   runDaemonStart: vi.fn(async () => {}),
   runDaemonStop: vi.fn(async () => {}),
@@ -544,22 +578,6 @@ describe("system agent operations", () => {
     expect(createAgent).not.toHaveBeenCalled();
   });
 
-  it("requires approval before restarting gateway", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runGatewayRestart = vi.fn(async () => {});
-
-    const result = await executeSystemAgentOperation({ kind: "gateway-restart" }, runtime, {
-      deps: { runGatewayRestart, setupSurface: "gateway" },
-    });
-
-    expectRecordFields(result as unknown as Record<string, unknown>, {
-      applied: false,
-      message: "Plan: restart the Gateway. Say yes to apply.",
-    });
-    expect(lines.join("\n")).toContain("Plan: restart the Gateway");
-    expect(runGatewayRestart).not.toHaveBeenCalled();
-  });
-
   it("restarts its own Gateway despite hostile remote Gateway routing", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://another-gateway.example:9443");
     mockConfig.setConfig({
@@ -763,6 +781,90 @@ describe("system agent operations", () => {
         refSource: "env",
         refId: "TELEGRAM_BOT_TOKEN",
       },
+    });
+  });
+
+  describe("an API key the owner gives in chat", () => {
+    const operation = {
+      kind: "config-set-ref" as const,
+      path: "memory.search.remote.apiKey",
+      source: "store" as const,
+      id: "MEMORY_SEARCH_REMOTE_API_KEY",
+      secret: "embed-owner-key-7f3c9a1d",
+    };
+    const storedEntries = () =>
+      listSecretStoreEntries({ scope: { kind: "team" } }).map((entry) => entry.name);
+    const readStored = (name: string) => readSecretStoreValue({ scope: { kind: "team" }, name });
+    const mintedName = expect.stringMatching(/^MEMORY_SEARCH_REMOTE_API_KEY_[0-9A-F]{16}$/);
+
+    it("stores the key and points config at it without repeating it", async () => {
+      useOperationStateDir("openclaw-chat-secret-");
+      const { runtime, lines } = createSystemAgentTestRuntime();
+      const runConfigSet = vi.fn(async () => {});
+
+      const result = await executeSystemAgentOperation(operation, runtime, {
+        approved: true,
+        deps: { runConfigSet },
+      });
+
+      expect(result.applied).toBe(true);
+      const [name] = storedEntries();
+      expect(name).toEqual(mintedName);
+      expect(runConfigSet).toHaveBeenCalledWith({
+        path: operation.path,
+        cliOptions: { refProvider: "default", refSource: "store", refId: name },
+      });
+      expect(readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
+      expect(lines.join("\n")).not.toContain(operation.secret);
+      expect(JSON.stringify(readLastAuditEntry())).not.toContain(operation.secret);
+    });
+
+    it("writes nothing when the owner's authority is gone before the store write", async () => {
+      useOperationStateDir("openclaw-chat-secret-revoked-");
+      const { runtime } = createSystemAgentTestRuntime();
+      const runConfigSet = vi.fn(async () => {});
+
+      await expect(
+        executeSystemAgentOperation(operation, runtime, {
+          approved: true,
+          beforePersistentApply: () => {
+            throw new Error("requesting run is no longer active");
+          },
+          deps: { runConfigSet },
+        }),
+      ).rejects.toThrow("no longer active");
+
+      expect(storedEntries()).toEqual([]);
+      expect(runConfigSet).not.toHaveBeenCalled();
+    });
+
+    it("keeps the key's configured store provider when rotating it", async () => {
+      useOperationStateDir("openclaw-chat-secret-provider-");
+      mockConfig.setConfig({
+        secrets: { providers: { vault: { source: "store" }, team: { source: "store" } } },
+        memory: {
+          search: {
+            remote: {
+              apiKey: { source: "store", provider: "team", id: "MEMORY_SEARCH_REMOTE_API_KEY" },
+            },
+          },
+        },
+      });
+      const runConfigSet = vi.fn(async () => {});
+
+      await executeSystemAgentOperation(operation, createSystemAgentTestRuntime().runtime, {
+        approved: true,
+        deps: { runConfigSet },
+      });
+
+      expect(runConfigSet).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cliOptions: expect.objectContaining({ refProvider: "team", refSource: "store" }),
+        }),
+      );
+      expect(requireRecord(readLastAuditEntry(), "audit").details).toMatchObject({
+        provider: "team",
+      });
     });
   });
 

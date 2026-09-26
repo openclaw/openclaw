@@ -133,9 +133,6 @@ function normalizeResetAtHour(value: number | undefined): number {
     return DEFAULT_RESET_AT_HOUR;
   }
   const normalized = Math.floor(value);
-  if (!Number.isFinite(normalized)) {
-    return DEFAULT_RESET_AT_HOUR;
-  }
   if (normalized < 0) {
     return 0;
   }

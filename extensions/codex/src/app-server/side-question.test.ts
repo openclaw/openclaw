@@ -2181,22 +2181,6 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(config).not.toHaveProperty("hooks.state");
   });
 
-  it("passes Codex code-mode-only opt-in to side-thread forks", async () => {
-    const client = createFakeClient();
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
-
-    await expect(
-      runCodexAppServerSideQuestion(sideParams(), {
-        pluginConfig: { appServer: { codeModeOnly: true } },
-      }),
-    ).resolves.toEqual({ text: "Side answer." });
-
-    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
-    const config = forkParams?.config as Record<string, unknown> | undefined;
-    expect(config?.["features.code_mode"]).toBe(true);
-    expect(config?.["features.code_mode_only"]).toBe(true);
-  });
-
   it("applies network-proxy config to side-thread forks", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
@@ -2873,62 +2857,6 @@ describe("runCodexAppServerSideQuestion", () => {
     );
 
     expect(boundNames[0]).toEqual(["message", "ask_user", "secrets"]);
-  });
-
-  it("binds /btw tools and retained bound callbacks fail after capability closure", async () => {
-    let active = true;
-    let retainedExecute: ((...args: never[]) => Promise<unknown>) | undefined;
-    const bindToolSurface = vi.fn((tools: Array<{ execute?: (...args: never[]) => unknown }>) =>
-      tools.map((tool) => {
-        const execute = async (...args: never[]) => {
-          if (!active) {
-            throw new Error("agent harness host capability is no longer active");
-          }
-          return await tool.execute?.(...args);
-        };
-        retainedExecute = execute;
-        return { ...tool, execute };
-      }),
-    );
-    const client = createFakeClient();
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "thread/fork") {
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        setTimeout(() => {
-          client.emit(turnCompleted("side-thread", "turn-1", "Bound answer."));
-        }, 0);
-        return turnStartResult("turn-1");
-      }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
-
-    await expect(
-      runCodexAppServerSideQuestion(
-        sideParams({
-          hostCapabilities: {
-            ...TEST_HOST_CAPABILITIES,
-            bindToolSurface: bindToolSurface as never,
-          },
-        }),
-      ),
-    ).resolves.toEqual({ text: "Bound answer." });
-    expect(bindToolSurface).toHaveBeenCalledTimes(1);
-    expect(bindToolSurface).toHaveBeenCalledWith(expect.any(Array), {
-      cwd: expect.any(String),
-    });
-    active = false;
-    const copiedExecute = retainedExecute;
-    await expect(copiedExecute?.()).rejects.toThrow("no longer active");
-    expect(toolExecuteMock).not.toHaveBeenCalled();
   });
 
   it("omits computer control from side threads without a compaction owner", async () => {

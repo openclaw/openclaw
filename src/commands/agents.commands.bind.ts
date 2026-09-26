@@ -269,37 +269,19 @@ export async function agentsUnbindCommand(
   if (opts.all) {
     const existing = listRouteBindings(cfg);
     const removed = existing.filter((binding) => normalizeAgentId(binding.agentId) === agentId);
-    const keptRoutes = existing.filter((binding) => normalizeAgentId(binding.agentId) !== agentId);
-    const nonRoutes = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
-    if (removed.length === 0) {
-      if (
-        emitJsonPayload({
-          runtime,
-          json: opts.json,
-          payload: {
-            agentId,
-            removed: [] as string[],
-            missing: [] as string[],
-            conflicts: [] as string[],
-          },
-        })
-      ) {
-        return;
+    if (removed.length > 0) {
+      const keptRoutes = existing.filter(
+        (binding) => normalizeAgentId(binding.agentId) !== agentId,
+      );
+      const nonRoutes = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
+      const remaining = [...keptRoutes, ...nonRoutes];
+      await replaceConfigFile({
+        sourceConfig: { ...cfg, bindings: remaining.length > 0 ? remaining : undefined },
+        ...writeSnapshot,
+      });
+      if (!opts.json) {
+        logConfigUpdated(runtime);
       }
-      runtime.log(`No bindings to remove for agent "${agentId}".`);
-      return;
-    }
-    const next = {
-      ...cfg,
-      bindings:
-        [...keptRoutes, ...nonRoutes].length > 0 ? [...keptRoutes, ...nonRoutes] : undefined,
-    };
-    await replaceConfigFile({
-      sourceConfig: next,
-      ...writeSnapshot,
-    });
-    if (!opts.json) {
-      logConfigUpdated(runtime);
     }
     const payload = {
       agentId,
@@ -310,7 +292,11 @@ export async function agentsUnbindCommand(
     if (emitJsonPayload({ runtime, json: opts.json, payload })) {
       return;
     }
-    runtime.log(`Removed ${removed.length} binding(s) for "${agentId}".`);
+    runtime.log(
+      removed.length > 0
+        ? `Removed ${removed.length} binding(s) for "${agentId}".`
+        : `No bindings to remove for agent "${agentId}".`,
+    );
     return;
   }
 

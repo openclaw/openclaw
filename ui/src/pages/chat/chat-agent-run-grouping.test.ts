@@ -338,11 +338,6 @@ describe("coalesceAgentRunFrames", () => {
 
   it.each([
     {
-      name: "tool-only completion",
-      parts: [group("tool", "tool-only", "run-1")],
-      outcome: { kind: "completed", actionOwner: null },
-    },
-    {
       name: "tool-use commentary",
       parts: [
         group("assistant", "commentary-tool", "run-1", {

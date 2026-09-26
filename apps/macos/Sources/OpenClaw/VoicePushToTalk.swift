@@ -26,7 +26,7 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
 
     func setEnabled(_ enabled: Bool) {
         if ProcessInfo.processInfo.isRunningTests { return }
-        self.withMainThread { [weak self] in
+        DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if enabled {
                 self.startMonitoring()
@@ -37,7 +37,6 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 
     private func startMonitoring() {
-        // assert(Thread.isMainThread) - Removed for Swift 6
         guard self.globalMonitor == nil, self.localMonitor == nil else { return }
         // Listen-only global monitor; we rely on Input Monitoring permission to receive events.
         self.globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
@@ -55,7 +54,6 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 
     private func stopMonitoring() {
-        // assert(Thread.isMainThread) - Removed for Swift 6
         if let globalMonitor {
             NSEvent.removeMonitor(globalMonitor)
             self.globalMonitor = nil
@@ -69,18 +67,12 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 
     private func handleFlagsChanged(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
-        self.withMainThread { [weak self] in
+        DispatchQueue.main.async { [weak self] in
             self?.updateModifierState(keyCode: keyCode, modifierFlags: modifierFlags)
         }
     }
 
-    private func withMainThread(_ block: @escaping @Sendable () -> Void) {
-        DispatchQueue.main.async(execute: block)
-    }
-
     private func updateModifierState(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
-        // assert(Thread.isMainThread)  - Removed for Swift 6
-
         // Right Option (keyCode 61) acts as a hold-to-talk modifier.
         if keyCode == 61 {
             self.optionDown = modifierFlags.contains(.option)
@@ -130,14 +122,12 @@ actor VoicePushToTalk {
     private var volatile: String = ""
     private var activeConfig: Config?
     private var isCapturing = false
-    private var triggerChimePlayed = false
     private var finalized = false
     private var timeoutTask: Task<Void, Never>?
     private var overlayToken: UUID?
     private var adoptedPrefix: String = ""
 
     private struct Config {
-        let micID: String?
         let localeID: String?
         let triggerChime: VoiceWakeChime
         let sendChime: VoiceWakeChime
@@ -151,14 +141,12 @@ actor VoicePushToTalk {
         let sessionID = UUID()
         self.sessionID = sessionID
 
-        // Ensure permissions up front.
         let granted = await PermissionManager.ensureVoiceWakePermissions(interactive: true)
         guard granted else { return }
 
         let config = await MainActor.run { self.makeConfig() }
         self.activeConfig = config
         self.isCapturing = true
-        self.triggerChimePlayed = false
         self.finalized = false
         self.timeoutTask?.cancel()
         self.timeoutTask = nil
@@ -166,7 +154,6 @@ actor VoicePushToTalk {
         self.adoptedPrefix = snapshot.visible ? snapshot.text.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         self.logger.info("ptt begin adopted_prefix_len=\(self.adoptedPrefix.count, privacy: .public)")
         if config.triggerChime != .none {
-            self.triggerChimePlayed = true
             await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime, reason: "ptt.trigger") }
         }
         // Pause the always-on wake word recognizer so both pipelines don't fight over the mic tap.
@@ -236,8 +223,8 @@ actor VoicePushToTalk {
                 userInfo: [NSLocalizedDescriptionKey: "Recognizer unavailable"])
         }
 
-        self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let request = self.recognitionRequest else { return }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        self.recognitionRequest = request
         SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
 
         // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
@@ -371,7 +358,6 @@ actor VoicePushToTalk {
         self.committed = ""
         self.volatile = ""
         self.activeConfig = nil
-        self.triggerChimePlayed = false
         self.overlayToken = nil
         self.adoptedPrefix = ""
 
@@ -384,7 +370,6 @@ actor VoicePushToTalk {
     private func makeConfig() -> Config {
         let state = AppStateStore.shared
         return Config(
-            micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
             localeID: state.voiceWakeLocaleID,
             triggerChime: state.voiceWakeTriggerChime,
             sendChime: state.voiceWakeSendChime)

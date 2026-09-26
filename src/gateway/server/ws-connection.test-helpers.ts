@@ -48,6 +48,7 @@ export function createResolvedGatewayTokenAuth(token: string): ResolvedGatewayAu
 export function createGatewayWsTestRequestContext(
   overrides: {
     nodeRegistry?: { unregister: ReturnType<typeof vi.fn> };
+    publishPresence?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   return {
@@ -55,8 +56,7 @@ export function createGatewayWsTestRequestContext(
     nodeRegistry: overrides.nodeRegistry ?? { unregister: vi.fn() },
     nodeUnsubscribeAll: vi.fn(),
     broadcast: vi.fn(),
-    incrementPresenceVersion: vi.fn(() => 1),
-    getHealthVersion: vi.fn(() => 1),
+    publishPresence: overrides.publishPresence ?? vi.fn(),
   };
 }
 

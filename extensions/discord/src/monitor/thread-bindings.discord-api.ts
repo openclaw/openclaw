@@ -45,7 +45,7 @@ export function isThreadArchived(raw: unknown): boolean {
   );
 }
 
-function normalizeDiscordBindingChannelId(raw?: string | null): string | null {
+export function normalizeDiscordBindingChannelId(raw?: string | null): string | null {
   const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
     return null;

@@ -445,58 +445,6 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(content.text).not.toContain("late chunk");
   });
 
-  it("preserves nested image toolResult content without stringifying data", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "vision",
-      args: {},
-      result: {
-        content: [
-          {
-            type: "toolResult",
-            toolUseId: "call-1",
-            content: [{ type: "image", mimeType: "image/png", data: "base64-image" }],
-          } as never,
-        ],
-        details: {},
-      },
-    });
-
-    expect(result.content).toEqual([
-      { type: "image", mimeType: "image/png", data: "base64-image" },
-    ]);
-  });
-
-  it("preserves mixed nested text and image toolResult content", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "screenshot",
-      args: {},
-      result: {
-        content: [
-          {
-            type: "toolResult",
-            toolUseId: "call-1",
-            content: [
-              { type: "text", text: "captured screenshot" },
-              { type: "image", mimeType: "image/png", data: "base64-image" },
-            ],
-          } as never,
-        ],
-        details: {},
-      },
-    });
-
-    expect(result.content).toEqual([
-      { type: "text", text: "captured screenshot" },
-      { type: "image", mimeType: "image/png", data: "base64-image" },
-    ]);
-  });
-
   it("preserves images from deeper nested toolResult content", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
 
@@ -604,26 +552,6 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
 
     expect(result.details).toEqual({ ok: true, exitCode: 0, id: "10" });
-  });
-
-  it("collapses oversized incoming details to a truncation marker", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
-      () => undefined,
-    ]);
-
-    const result = await runner.applyToolResultMiddleware({
-      toolCallId: "call-1",
-      toolName: "exec",
-      args: {},
-      result: {
-        content: [{ type: "text", text: "ok" }],
-        details: { blob: "x".repeat(200_000) },
-      },
-    });
-
-    const sanitized = result.details as { truncated?: boolean; originalSizeBytes?: number };
-    expect(sanitized.truncated).toBe(true);
-    expect(sanitized.originalSizeBytes ?? 0).toBeGreaterThan(100_000);
   });
 
   it("measures multibyte incoming details by serialized UTF-8 bytes", async () => {

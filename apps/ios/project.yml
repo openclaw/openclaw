@@ -222,6 +222,8 @@ targets:
         buildPhase: resources
     dependencies:
       - package: OpenClawKit
+      - package: OpenClawKit
+        product: OpenClawProtocol
       - sdk: AppIntents.framework
     settings:
       base:

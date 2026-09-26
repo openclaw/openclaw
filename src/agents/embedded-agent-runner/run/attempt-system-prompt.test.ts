@@ -207,18 +207,18 @@ describe("buildAttemptSystemPrompt", () => {
   });
 
   it.each([
-    { sandboxSessionKey: "global", mode: "off", sandboxed: false },
-    { sandboxSessionKey: "agent:main:policy", mode: "all", sandboxed: true },
+    { sandboxSessionKey: "global", mode: "off" as const, sandboxed: false },
+    { sandboxSessionKey: "agent:main:policy", mode: "all" as const, sandboxed: true },
   ])(
-    "reports the selected sandbox policy for a global attempt ($sandboxSessionKey)",
+    "reports the prepared sandbox policy even if configuration changes ($sandboxSessionKey)",
     async (testCase) => {
       const workspaceDir = tempDirs.make("openclaw-global-system-prompt-");
       const config = {
         agents: {
           ownership: "explicit" as const,
           list: [
-            { id: "main", sandbox: { mode: "all" as const } },
-            { id: "marketing", sandbox: { mode: "off" as const } },
+            { id: "main", sandbox: { mode: "off" as const } },
+            { id: "marketing", sandbox: { mode: "all" as const } },
           ],
         },
       };
@@ -254,6 +254,7 @@ describe("buildAttemptSystemPrompt", () => {
             prepared: true,
           }),
           sandboxSessionKey: testCase.sandboxSessionKey,
+          sandboxReport: { mode: testCase.mode, sandboxed: testCase.sandboxed },
           sessionAgentId: "marketing",
         }),
         isRawModelRun: true,

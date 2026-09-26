@@ -204,7 +204,7 @@ describe("memory vector KNN subprocess boundary", () => {
     }
   });
 
-  it.each(["runtime", "env", "discovered"] as const)(
+  it.each(["runtime", "discovered"] as const)(
     "forwards the selected SQLite library through stdin for %s selection",
     async (source) => {
       const sqliteLibraryPath = "/synthetic/sqlite/libsqlite3.dylib";

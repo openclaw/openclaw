@@ -32,6 +32,7 @@ import type { OpenClawPluginApi } from "../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createChannelManager } from "./server-channels.js";
 import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
@@ -56,6 +57,8 @@ export async function createPluginReloadRecoveryFixture(
       record: ReturnType<typeof createPluginRecord>,
     ) => void;
     abortOnCandidateStart?: boolean;
+    waitForDrain?: boolean;
+    drainSignal?: AbortSignal;
     checkpoint?: Parameters<typeof reloadGatewayPlugins>[1]["checkpoint"];
     prepareAttached?: () => Promise<void>;
     initialStop?: () => Promise<void>;
@@ -211,7 +214,7 @@ export async function createPluginReloadRecoveryFixture(
   assert(metadataOwners === undefined || metadataOwners instanceof Set);
   const metadataOwnerSet: Set<unknown> | undefined = metadataOwners;
   const precedingMetadataOwners = new Set(metadataOwnerSet);
-  const metadata = retainGatewayPluginMetadata();
+  const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
   const fixtureMetadataOwners = metadataOwnerSet
     ? [...metadataOwnerSet].filter((entry) => !precedingMetadataOwners.has(entry))
     : [];
@@ -321,6 +324,8 @@ export async function createPluginReloadRecoveryFixture(
           prepareConfigEffects: options.prepareConfigEffects ?? (() => rollbackConfigEffects),
           pluginLifecycle: {
             reason: "reload",
+            waitForDrain: options.waitForDrain,
+            drainSignal: options.drainSignal,
             operationId: "service-recovery",
             pluginIds,
           },

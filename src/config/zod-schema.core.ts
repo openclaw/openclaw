@@ -8,6 +8,7 @@ import { normalizeExactAllowedHost } from "../secrets/exact-hostname.js";
 import { ENV_SECRET_REF_ID_RE, SECRET_PROVIDER_ALIAS_PATTERN } from "../secrets/ref-contract.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./model-config-vocabulary.js";
 import { isBuiltInModelProviderOverlayId } from "./model-provider-overlay-ids.js";
+import { AgentRuntimePolicySchema } from "./zod-schema.agent-entry-base.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { DmConfigSchema } from "./zod-schema.messages.js";
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
@@ -433,13 +434,6 @@ const ConfiguredModelProviderRequestSchema = z
   .strict()
   .optional();
 
-const ModelAgentRuntimePolicySchema = z
-  .object({
-    id: z.string().optional(),
-  })
-  .strict()
-  .optional();
-
 const ModelImageInputSchema = z
   .object({
     maxBytes: z.number().int().positive().optional(),
@@ -523,7 +517,7 @@ const ModelDefinitionSchema = z
     /** Provider-specific request/runtime parameters passed through to provider plugins. */
     params: z.record(z.string(), z.unknown()).optional(),
     /** Optional agent execution runtime override for this provider/model pair. */
-    agentRuntime: ModelAgentRuntimePolicySchema,
+    agentRuntime: AgentRuntimePolicySchema,
     /** Static headers merged into requests for this model. */
     headers: z.record(z.string(), z.string()).optional(),
     /** Provider compatibility flags for payload shaping and feature gating. */
@@ -578,7 +572,7 @@ const ModelProviderSchema = z
     /** Provider-specific runtime parameters interpreted by provider plugins. */
     params: z.record(z.string(), z.unknown()).optional(),
     /** Optional default agent execution runtime for models under this provider. */
-    agentRuntime: ModelAgentRuntimePolicySchema,
+    agentRuntime: AgentRuntimePolicySchema,
     /** Optional local service to start before calling this provider. */
     localService: ModelProviderLocalServiceSchema,
     /** Secret-bearing headers merged into provider requests. */
@@ -830,50 +824,34 @@ export const evaluateDmPolicyAllowFromDependency = (params: {
   return null;
 };
 
-export const requireOpenAllowFrom = (params: {
-  policy?: string;
-  allowFrom?: Array<string | number>;
-  ctx: z.RefinementCtx;
-  path: Array<string | number>;
-  message: string;
-}) => {
-  if (
-    evaluateDmPolicyAllowFromDependency({ policy: params.policy, allowFrom: params.allowFrom }) !==
-    "open_requires_wildcard"
-  ) {
-    return;
-  }
-  params.ctx.addIssue({
-    code: z.ZodIssueCode.custom,
-    path: params.path,
-    message: params.message,
-  });
-};
+function createDmPolicyAllowFromValidator(violation: DmPolicyAllowFromViolation) {
+  return (params: {
+    policy?: string;
+    allowFrom?: Array<string | number>;
+    ctx: z.RefinementCtx;
+    path: Array<string | number>;
+    message: string;
+  }) => {
+    if (evaluateDmPolicyAllowFromDependency(params) === violation) {
+      params.ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: params.path,
+        message: params.message,
+      });
+    }
+  };
+}
+
+export const requireOpenAllowFrom = createDmPolicyAllowFromValidator("open_requires_wildcard");
 
 /**
  * Validate that dmPolicy="allowlist" has a non-empty allowFrom array.
  * Without this, all DMs are silently dropped because the allowlist is empty
  * and no senders can match.
  */
-export const requireAllowlistAllowFrom = (params: {
-  policy?: string;
-  allowFrom?: Array<string | number>;
-  ctx: z.RefinementCtx;
-  path: Array<string | number>;
-  message: string;
-}) => {
-  if (
-    evaluateDmPolicyAllowFromDependency({ policy: params.policy, allowFrom: params.allowFrom }) !==
-    "allowlist_requires_entries"
-  ) {
-    return;
-  }
-  params.ctx.addIssue({
-    code: z.ZodIssueCode.custom,
-    path: params.path,
-    message: params.message,
-  });
-};
+export const requireAllowlistAllowFrom = createDmPolicyAllowFromValidator(
+  "allowlist_requires_entries",
+);
 
 export const MSTeamsReplyStyleSchema = z.enum(["thread", "top-level"]);
 
@@ -909,14 +887,11 @@ const ProviderOptionsSchema = z
   .optional();
 
 const MediaUnderstandingRuntimeFields = {
-  /** Optional prompt override for this model entry. */
-  /** Default prompt. */
+  /** Default prompt; model entries can override it. */
   prompt: z.string().optional(),
-  /** Optional timeout override (seconds) for this model entry. */
-  /** Default timeout (seconds). */
+  /** Default timeout (seconds); model entries can override it. */
   timeoutSeconds: z.number().int().positive().optional(),
-  /** Optional language hint for audio transcription. */
-  /** Default language hint (audio). */
+  /** Default language hint for audio transcription; model entries can override it. */
   language: z.string().optional(),
   /** Optional provider-specific query params (merged into requests). */
   providerOptions: ProviderOptionsSchema,

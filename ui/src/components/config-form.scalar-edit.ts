@@ -65,12 +65,6 @@ export function finishScalarEdit(target: HTMLInputElement): void {
   }
 }
 
-export function finishScalarEditFromEvent(event: Event): void {
-  if (event.currentTarget instanceof HTMLInputElement) {
-    finishScalarEdit(event.currentTarget);
-  }
-}
-
 const scalarInputState = new WeakMap<
   HTMLInputElement,
   {

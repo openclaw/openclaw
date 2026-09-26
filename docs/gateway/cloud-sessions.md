@@ -7,7 +7,7 @@ status: active
 doc-schema-version: 1
 ---
 
-A cloud session is an ordinary session whose coding work runs on another machine. It appears in the sidebar, streams into chat, and keeps its transcript exactly like a local session — the Gateway stays the owner of the conversation, the reconciled workspace, model credentials, and placement records, while commands, file edits, and tool work execute remotely. The session and its durable state survive a remote failure. Reclaimed or suspended cloud workers restart on the next message. Gateway updates retain attached cloud machines and refresh their worker runtime in place; failed placements require cleanup and explicit redispatch. An offline paired device keeps its placement and waits for the device to return.
+A cloud session is an ordinary session whose coding work runs on another machine. It appears in the sidebar, streams into chat, and keeps its transcript exactly like a local session — the Gateway stays the owner of the conversation, the reconciled workspace, model credentials, and placement records, while commands, file edits, and tool work execute remotely. The session and its durable state survive a remote failure. Reclaimed or suspended cloud workers restart on the next message. A previously active worker that fails also restarts on the next message once cleanup is complete and its saved workspace is ready. Gateway updates retain attached cloud machines and refresh their worker runtime in place. An offline paired device keeps its placement and waits for the device to return.
 
 Sessions can run in three places, and every one of them uses the same session, the same chat, and the same Place picker:
 

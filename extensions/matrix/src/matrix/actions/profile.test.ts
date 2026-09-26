@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadWebMediaMock = vi.fn();
-const syncMatrixOwnProfileMock = vi.fn();
+const syncMatrixOwnProfileMock = vi.fn<typeof import("../profile.js").syncMatrixOwnProfile>();
 const withResolvedActionClientMock = vi.fn();
 
 vi.mock("../../runtime.js", () => ({
@@ -14,7 +14,7 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 vi.mock("../profile.js", () => ({
-  syncMatrixOwnProfile: (...args: unknown[]) => syncMatrixOwnProfileMock(...args),
+  syncMatrixOwnProfile: syncMatrixOwnProfileMock,
 }));
 
 vi.mock("./client.js", () => ({
@@ -22,22 +22,6 @@ vi.mock("./client.js", () => ({
 }));
 
 const { updateMatrixOwnProfile } = await import("./profile.js");
-
-function mockCallAt(
-  mock: { mock: { calls: Array<readonly unknown[]> } },
-  index: number,
-  label: string,
-): readonly unknown[] {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
-function firstMockArg(mock: { mock: { calls: Array<readonly unknown[]> } }, label: string) {
-  return mockCallAt(mock, 0, label)[0];
-}
 
 describe("matrix profile actions", () => {
   beforeEach(() => {
@@ -72,46 +56,26 @@ describe("matrix profile actions", () => {
       avatarPath: "  /tmp/avatar.png  ",
     });
 
-    expect(withResolvedActionClientMock).toHaveBeenCalledTimes(1);
-    const [wrapperOpts, run, mode] = mockCallAt(
-      withResolvedActionClientMock,
-      0,
-      "Matrix action client wrapper",
+    expect(withResolvedActionClientMock).toHaveBeenCalledExactlyOnceWith(
+      {
+        accountId: "ops",
+        displayName: "  Ops Bot  ",
+        avatarUrl: "  mxc://example/avatar  ",
+        avatarPath: "  /tmp/avatar.png  ",
+      },
+      expect.any(Function),
+      "persist",
     );
-    expect(wrapperOpts).toEqual({
-      accountId: "ops",
-      displayName: "  Ops Bot  ",
-      avatarUrl: "  mxc://example/avatar  ",
-      avatarPath: "  /tmp/avatar.png  ",
-    });
-    expect(typeof run).toBe("function");
-    expect(mode).toBe("persist");
-
-    expect(syncMatrixOwnProfileMock).toHaveBeenCalledTimes(1);
-    const syncCall = firstMockArg(syncMatrixOwnProfileMock, "Matrix profile sync") as
-      | {
-          client: unknown;
-          userId: string;
-          displayName: string;
-          avatarUrl: string;
-          avatarPath: string;
-          loadAvatarFromUrl: unknown;
-          loadAvatarFromPath: unknown;
-        }
-      | undefined;
-    if (!syncCall) {
-      throw new Error("syncMatrixOwnProfile was not called");
-    }
-    const { client, loadAvatarFromUrl, loadAvatarFromPath, ...profileFields } = syncCall;
-    expect(client).toBe(actionClient);
-    expect(typeof loadAvatarFromUrl).toBe("function");
-    expect(typeof loadAvatarFromPath).toBe("function");
-    expect(profileFields).toEqual({
+    expect(syncMatrixOwnProfileMock).toHaveBeenCalledExactlyOnceWith({
+      client: actionClient,
       userId: "@bot:example.org",
       displayName: "Ops Bot",
       avatarUrl: "mxc://example/avatar",
       avatarPath: "/tmp/avatar.png",
+      loadAvatarFromUrl: expect.any(Function),
+      loadAvatarFromPath: expect.any(Function),
     });
+    expect(syncMatrixOwnProfileMock.mock.calls[0]?.[0].client).toBe(actionClient);
   });
 
   it("bridges avatar loaders through Matrix runtime media helpers", async () => {
@@ -126,15 +90,10 @@ describe("matrix profile actions", () => {
       avatarPath: "/tmp/avatar.png",
     });
 
-    const call = firstMockArg(syncMatrixOwnProfileMock, "Matrix profile sync") as
-      | {
-          loadAvatarFromUrl: (url: string, maxBytes: number) => Promise<unknown>;
-          loadAvatarFromPath: (path: string, maxBytes: number) => Promise<unknown>;
-        }
-      | undefined;
+    const call = syncMatrixOwnProfileMock.mock.calls[0]?.[0];
 
-    if (!call) {
-      throw new Error("syncMatrixOwnProfile was not called");
+    if (!call?.loadAvatarFromUrl || !call.loadAvatarFromPath) {
+      throw new Error("Expected profile avatar loaders");
     }
 
     await call.loadAvatarFromUrl("https://cdn.example.org/avatar.png", 123);

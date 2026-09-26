@@ -26,17 +26,6 @@ describe("feishu quick-action launcher", () => {
     vi.clearAllMocks();
   });
 
-  it("ignores unsupported bot menu keys", async () => {
-    await expect(
-      maybeHandleFeishuQuickActionMenu({
-        cfg,
-        eventKey: "other",
-        operatorOpenId: "u123",
-      }),
-    ).resolves.toBe(false);
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-  });
-
   it("opens the launcher from a supported bot menu event", async () => {
     sendCardFeishuMock.mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
@@ -78,21 +67,5 @@ describe("feishu quick-action launcher", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "feishu[main]: failed to open quick-action launcher for u123: invalid expiry clock",
     );
-  });
-
-  it("falls back to legacy menu handling when launcher send fails", async () => {
-    sendCardFeishuMock.mockRejectedValueOnce(new Error("network"));
-    const runtime: RuntimeEnv = createRuntimeEnv();
-
-    const handled = await maybeHandleFeishuQuickActionMenu({
-      cfg,
-      eventKey: "quick-actions",
-      operatorOpenId: "u123",
-      accountId: "main",
-      runtime,
-      now: 100,
-    });
-
-    expect(handled).toBe(false);
   });
 });

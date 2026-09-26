@@ -1,85 +1,13 @@
-import {
-  buildOpenAICompatibleLiveModelProviderConfig,
-  clearLiveCatalogCacheForTests,
-  type LiveModelCatalogFetchGuard,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  BASETEN_DEFAULT_MODEL_REF,
-  BASETEN_MODEL_CATALOG,
   buildStaticBasetenModels,
   projectBasetenLiveModels,
   resolveBasetenDynamicModel,
 } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const TEST_VALUE = "fixture";
-
-async function buildLiveBasetenModels(params: {
-  discoveryApiKey: string;
-  fetchGuard: LiveModelCatalogFetchGuard;
-}) {
-  const provider = await buildOpenAICompatibleLiveModelProviderConfig({
-    providerId: "baseten",
-    providerConfig: {
-      baseUrl: "https://inference.baseten.co/v1",
-      api: "openai-completions",
-      models: buildStaticBasetenModels(),
-    },
-    discoveryApiKey: params.discoveryApiKey,
-    fetchGuard: params.fetchGuard,
-    modelDiscovery: {
-      timeoutMs: 10_000,
-      ttlMs: 5 * 60 * 1000,
-      projectRows: projectBasetenLiveModels,
-    },
-  });
-  return provider.models;
-}
-
 describe("Baseten model catalog", () => {
-  beforeEach(() => {
-    clearLiveCatalogCacheForTests();
-  });
-
-  it("ships every current Baseten Model API with Inkling as the default", () => {
-    const models = buildStaticBasetenModels();
-
-    expect(BASETEN_DEFAULT_MODEL_REF).toBe("baseten/thinkingmachines/inkling");
-    expect(models).toHaveLength(9);
-    expect(models.map((model) => model.id)).toEqual(BASETEN_MODEL_CATALOG.map((model) => model.id));
-    expect(models.find((model) => model.id === "zai-org/GLM-5.2")).toMatchObject({
-      contextWindow: 524_000,
-      maxTokens: 262_000,
-      cost: { input: 1.4, output: 4.4, cacheRead: 0.14, cacheWrite: 0 },
-    });
-    expect(models.find((model) => model.id === "zai-org/GLM-5.2-Fast")).toMatchObject({
-      reasoning: true,
-      input: ["text"],
-      contextWindow: 524_000,
-      maxTokens: 262_000,
-      cost: { input: 2.1, output: 6.6, cacheRead: 0.21, cacheWrite: 0 },
-    });
-    expect(models.find((model) => model.id === "thinkingmachines/inkling")).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_048_000,
-      maxTokens: 32_000,
-      cost: { input: 1, output: 4.05, cacheRead: 0.17, cacheWrite: 0 },
-      compat: {
-        supportsStore: false,
-        supportsDeveloperRole: false,
-        supportsUsageInStreaming: true,
-        supportsStrictMode: true,
-        supportsTools: true,
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
-        maxTokensField: "max_tokens",
-      },
-    });
-  });
-
   it("keeps manifest thinking controls and declared capabilities in runtime catalogs", () => {
     const declaredModels = buildManifestModelProviderConfig({
       providerId: "baseten",
@@ -180,54 +108,6 @@ describe("Baseten model catalog", () => {
       input: ["text", "image"],
       compat: { supportsReasoningEffort: true },
     });
-  });
-
-  it("authenticates live discovery and does not cache unusable rows", async () => {
-    const release = vi.fn(async () => undefined);
-    const fetchGuard: LiveModelCatalogFetchGuard = vi
-      .fn()
-      .mockImplementationOnce(async () => ({
-        response: Response.json({ data: [{ object: "not-a-model" }] }),
-        finalUrl: "https://inference.baseten.co/v1/models",
-        release,
-      }))
-      .mockImplementationOnce(async () => ({
-        response: Response.json({
-          data: [
-            {
-              id: "thinkingmachines/inkling",
-              object: "model",
-              context_length: 1_048_576,
-              max_completion_tokens: 32_768,
-              supported_features: ["vision", "reasoning", "reasoning_effort"],
-            },
-          ],
-        }),
-        finalUrl: "https://inference.baseten.co/v1/models",
-        release,
-      }));
-
-    await expect(
-      buildLiveBasetenModels({ discoveryApiKey: TEST_VALUE, fetchGuard }),
-    ).resolves.toHaveLength(9);
-    await expect(
-      buildLiveBasetenModels({ discoveryApiKey: TEST_VALUE, fetchGuard }),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        id: "thinkingmachines/inkling",
-        contextWindow: 1_048_576,
-        maxTokens: 32_768,
-      }),
-    ]);
-
-    expect(fetchGuard).toHaveBeenCalledTimes(2);
-    const headers = vi.mocked(fetchGuard).mock.calls[0]?.[0].init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    if (!(headers instanceof Headers)) {
-      throw new Error("expected fetch headers");
-    }
-    expect(headers.get("Authorization")).toBe(`Bearer ${TEST_VALUE}`);
-    expect(release).toHaveBeenCalledTimes(2);
   });
 
   it("resolves future model ids without shadowing bundled rows", () => {

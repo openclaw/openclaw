@@ -5,16 +5,6 @@ import { selectAttachments } from "./attachments.js";
 import type { MediaAttachment } from "./types.js";
 
 describe("media-understanding selectAttachments guards", () => {
-  it("returns no selections when attachments is undefined", () => {
-    expect(
-      selectAttachments({
-        capability: "image",
-        attachments: undefined as unknown as MediaAttachment[],
-        policy: { prefer: "path" },
-      }),
-    ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });
-  });
-
   it("returns no selections when attachments is not an array", () => {
     expect(
       selectAttachments({

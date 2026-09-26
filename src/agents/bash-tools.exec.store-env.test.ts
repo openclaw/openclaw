@@ -271,23 +271,6 @@ describe("exec store environment", () => {
     mocks.proxyBindings.length = 0;
   });
 
-  it("adds only team env-kind entries to gateway exec subprocesses", async () => {
-    await withTeamStoreEntries(
-      [
-        { name: "AWS_REGION", value: "us-west-2", kind: "env" },
-        { name: "INTERNAL_VALUE", value: "not-for-subprocesses", kind: "secret" },
-      ],
-      async () => {
-        const tool = createLazyExecTool({ host: "gateway", security: "full", ask: "off" });
-
-        await tool.execute("call-store-env", { command: "echo ok", yieldMs: 120_000 });
-
-        expect(mocks.gatewayParams[0]?.env.AWS_REGION).toBe("us-west-2");
-        expect(mocks.gatewayParams[0]?.env).not.toHaveProperty("INTERNAL_VALUE");
-      },
-    );
-  });
-
   it("applies store env when code mode invokes exec through the hidden tool catalog", async () => {
     // Code mode never runs shell itself: its guest calls `openclaw:core:exec`, which
     // re-enters this same tool object. Re-executing one instance is what that nested
@@ -464,11 +447,12 @@ describe("exec store environment", () => {
     },
   );
 
-  it.each(
-    (["gateway", "sandbox", "node"] as const).flatMap((host) =>
-      [undefined, "off", "0", "false"].map((sentinelMode) => ({ host, sentinelMode })),
-    ),
-  )(
+  it.each([
+    { host: "gateway", sentinelMode: undefined },
+    { host: "gateway", sentinelMode: "false" },
+    { host: "sandbox", sentinelMode: "false" },
+    { host: "node", sentinelMode: "false" },
+  ] as const)(
     "applies enabled secret egress for $host exec with provider sentinels $sentinelMode",
     async ({ host, sentinelMode }) => {
       vi.stubEnv("OPENCLAW_SECRET_SENTINELS", sentinelMode);

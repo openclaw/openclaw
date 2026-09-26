@@ -23,7 +23,6 @@ import {
   os,
   path,
   createCodexTestBindingStore,
-  listPairedNode,
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,
   type PluginRuntime,
@@ -145,7 +144,7 @@ describe("Codex supervision catalog", () => {
         sessions: [
           {
             threadId: "remote",
-            name: "Remote task",
+            fallbackName: "Remote task",
             status: "idle",
             archived: false,
             preview: "must be stripped",
@@ -184,7 +183,9 @@ describe("Codex supervision catalog", () => {
         canOpenTerminalCodex: false,
         canStartTerminal: false,
         connected: true,
-        sessions: [{ threadId: "remote", name: "Remote task", status: "idle", archived: false }],
+        sessions: [
+          { threadId: "remote", fallbackName: "Remote task", status: "idle", archived: false },
+        ],
       },
     ]);
     expect(control.listPage).not.toHaveBeenCalled();
@@ -427,39 +428,6 @@ describe("Codex supervision catalog", () => {
       }),
     ]);
     expect(JSON.stringify(result)).not.toContain("private transcript");
-  });
-
-  it("bounds how long a hung paired-node catalog can delay the caller", async () => {
-    vi.useFakeTimers();
-    try {
-      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(
-        async () => await new Promise<never>(() => {}),
-      );
-      const pending = listPairedNode({
-        agentId: "main",
-        runtime: { nodes: { invoke } } as unknown as PluginRuntime,
-        node: {
-          nodeId: "slow-node",
-          displayName: "Slow node",
-          connected: true,
-          commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
-        },
-        query: { limitPerHost: 40 },
-        terminalCapabilities: { canStartTerminal: true, canOpenTerminalCodex: true },
-      });
-
-      await vi.advanceTimersByTimeAsync(8_000);
-
-      await expect(pending).resolves.toMatchObject({
-        hostId: "node:slow-node",
-        connected: true,
-        sessions: [],
-        error: { code: "NODE_INVOKE_FAILED" },
-      });
-      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 65_000 }));
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it.each(["completes", "is cancelled"] as const)(

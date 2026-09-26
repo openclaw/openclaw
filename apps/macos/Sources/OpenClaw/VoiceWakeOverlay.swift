@@ -15,8 +15,6 @@ final class VoiceWakeOverlayController {
     /// (Menu bar menus typically live at `.popUpMenu`.)
     static let preferredWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue - 4)
 
-    enum Source: String { case wakeWord, pushToTalk }
-
     var model = Model()
     var isVisible: Bool {
         self.model.isVisible
@@ -29,7 +27,6 @@ final class VoiceWakeOverlayController {
         var forwardEnabled: Bool = false
         var isSending: Bool = false
         var attributed: NSAttributedString = .init(string: "")
-        var isOverflowing: Bool = false
         var isEditing: Bool = false
         var level: Double = 0 // normalized 0...1 speech level for UI
     }
@@ -37,9 +34,8 @@ final class VoiceWakeOverlayController {
     var window: NSPanel?
     var hostingView: NSHostingView<VoiceWakeOverlayView>?
     var autoSendTask: Task<Void, Never>?
-    var autoSendToken: UUID?
     var activeToken: UUID?
-    var activeSource: Source?
+    var activeSource: VoiceSessionCoordinator.Source?
     var lastLevelUpdate: TimeInterval = 0
 
     let width: CGFloat = 360

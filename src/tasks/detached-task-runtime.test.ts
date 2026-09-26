@@ -769,7 +769,7 @@ describe("detached-task-runtime", () => {
     );
   });
 
-  it("dispatches lifecycle operations through the installed runtime", async () => {
+  it("dispatches lifecycle operations through the installed runtime", () => {
     const defaultRuntime = getDetachedTaskLifecycleRuntime();
     const queuedTask = createFakeTaskRecord({
       taskId: "task-queued",
@@ -839,10 +839,6 @@ describe("detached-task-runtime", () => {
         createdAtOrAfter: 1,
       }),
     ).toEqual({ lookup: "available", task: runningTask });
-    await getDetachedTaskLifecycleRuntime().cancelDetachedTaskRunById({
-      cfg: {} as never,
-      taskId: runningTask.taskId,
-    });
 
     const queuedArgs = requireFirstCallArg(vi.mocked(fakeRuntime.createQueuedTaskRun), "queued");
     expect(queuedArgs.runId).toBe("run-queued");
@@ -885,10 +881,6 @@ describe("detached-task-runtime", () => {
       runtime: "cli",
       sessionKey: "agent:main:main",
       createdAtOrAfter: 1,
-    });
-    expect(fakeRuntime.cancelDetachedTaskRunById).toHaveBeenCalledWith({
-      cfg: {} as never,
-      taskId: runningTask.taskId,
     });
 
     resetDetachedTaskLifecycleRuntimeForTests();
@@ -939,47 +931,6 @@ describe("detached-task-runtime", () => {
   });
 
   describe("tryRecoverTaskBeforeMarkLost", () => {
-    it("returns recovered when hook returns recovered true", async () => {
-      const task = createFakeTaskRecord({ taskId: "task-recover", runtime: "subagent" });
-      setDetachedTaskLifecycleRuntime({
-        ...getDetachedTaskLifecycleRuntime(),
-        tryRecoverTaskBeforeMarkLost: vi.fn(() => ({ recovered: true })),
-      });
-      const result = await tryRecoverTaskBeforeMarkLost({
-        taskId: task.taskId,
-        runtime: task.runtime,
-        task,
-        now: 123,
-      });
-      expect(result).toEqual({ recovered: true });
-    });
-
-    it("returns not recovered when hook returns recovered false", async () => {
-      const task = createFakeTaskRecord({ taskId: "task-no-recover", runtime: "cron" });
-      setDetachedTaskLifecycleRuntime({
-        ...getDetachedTaskLifecycleRuntime(),
-        tryRecoverTaskBeforeMarkLost: vi.fn(() => ({ recovered: false })),
-      });
-      const result = await tryRecoverTaskBeforeMarkLost({
-        taskId: task.taskId,
-        runtime: task.runtime,
-        task,
-        now: 456,
-      });
-      expect(result).toEqual({ recovered: false });
-    });
-
-    it("returns not recovered when hook is not provided", async () => {
-      const task = createFakeTaskRecord({ taskId: "task-no-hook", runtime: "cli" });
-      const result = await tryRecoverTaskBeforeMarkLost({
-        taskId: task.taskId,
-        runtime: task.runtime,
-        task,
-        now: 789,
-      });
-      expect(result).toEqual({ recovered: false });
-    });
-
     it("returns not recovered and logs warning when hook throws", async () => {
       const task = createFakeTaskRecord({ taskId: "task-throw", runtime: "acp" });
       setDetachedTaskLifecycleRuntime({

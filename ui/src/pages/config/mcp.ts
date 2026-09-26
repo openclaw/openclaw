@@ -26,9 +26,6 @@ export function renderMcpIntro() {
 
 export function renderMcp(props: McpViewProps) {
   const rows = summarizeMcpServers(props.configObject) ?? [];
-  const enabledCount = rows.filter((row) => row.enabled).length;
-  const oauthCount = rows.filter((row) => row.auth === "oauth").length;
-  const filteredCount = rows.filter((row) => row.toolFilter).length;
   return html`
     <section class="mcp-page">
       <div class="settings-page">
@@ -37,22 +34,16 @@ export function renderMcp(props: McpViewProps) {
             <h2 class="settings-section__heading">${t("mcpPage.servers")}</h2>
           </div>
           <div class="settings-group">
-            ${renderSettingsRow({
-              title: t("mcpPage.servers"),
-              control: renderSettingsValue(rows.length),
-            })}
-            ${renderSettingsRow({
-              title: t("common.enabled"),
-              control: renderSettingsValue(enabledCount),
-            })}
-            ${renderSettingsRow({
-              title: t("mcpPage.oauth"),
-              control: renderSettingsValue(oauthCount),
-            })}
-            ${renderSettingsRow({
-              title: t("mcpPage.filtered"),
-              control: renderSettingsValue(filteredCount),
-            })}
+            ${(
+              [
+                ["mcpPage.servers", rows.length],
+                ["common.enabled", rows.filter((row) => row.enabled).length],
+                ["mcpPage.oauth", rows.filter((row) => row.auth === "oauth").length],
+                ["mcpPage.filtered", rows.filter((row) => row.toolFilter).length],
+              ] as const
+            ).map(([label, count]) =>
+              renderSettingsRow({ title: t(label), control: renderSettingsValue(count) }),
+            )}
           </div>
         </section>
 
