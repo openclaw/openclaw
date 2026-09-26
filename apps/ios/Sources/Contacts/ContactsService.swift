@@ -128,46 +128,21 @@ final class ContactsService: ContactsServicing {
         phoneNumbers: [String],
         emails: [String]) throws -> CNContact?
     {
-        var matches: [CNContact] = []
-
-        for phone in phoneNumbers {
-            let predicate = CNContact.predicateForContacts(matching: CNPhoneNumber(stringValue: phone))
-            let contacts = try store.unifiedContacts(matching: predicate, keysToFetch: Self.payloadKeys)
-            matches.append(contentsOf: contacts)
+        let predicates = phoneNumbers.map {
+            CNContact.predicateForContacts(matching: CNPhoneNumber(stringValue: $0))
+        } + emails.map { CNContact.predicateForContacts(matchingEmailAddress: $0) }
+        let contacts = try predicates.flatMap {
+            try store.unifiedContacts(matching: $0, keysToFetch: Self.payloadKeys)
         }
-
-        for email in emails {
-            let predicate = CNContact.predicateForContacts(matchingEmailAddress: email)
-            let contacts = try store.unifiedContacts(matching: predicate, keysToFetch: Self.payloadKeys)
-            matches.append(contentsOf: contacts)
-        }
-
-        return Self.matchContacts(contacts: matches, phoneNumbers: phoneNumbers, emails: emails)
-    }
-
-    private static func matchContacts(
-        contacts: [CNContact],
-        phoneNumbers: [String],
-        emails: [String]) -> CNContact?
-    {
-        let normalizedPhones = Set(phoneNumbers.map { self.normalizePhone($0) }.filter { !$0.isEmpty })
-        let normalizedEmails = Set(emails.map { $0.lowercased() }.filter { !$0.isEmpty })
+        let normalizedPhones = Set(phoneNumbers.map(Self.normalizePhone))
+        let normalizedEmails = Set(emails)
         var seen = Set<String>()
-
-        for contact in contacts {
-            guard seen.insert(contact.identifier).inserted else { continue }
-            let contactPhones = Set(contact.phoneNumbers.map { self.normalizePhone($0.value.stringValue) })
-            let contactEmails = Set(contact.emailAddresses.map { String($0.value).lowercased() })
-
-            if !normalizedPhones.isEmpty, !contactPhones.isDisjoint(with: normalizedPhones) {
-                return contact
-            }
-            if !normalizedEmails.isEmpty, !contactEmails.isDisjoint(with: normalizedEmails) {
-                return contact
-            }
+        return contacts.first { contact in
+            guard seen.insert(contact.identifier).inserted else { return false }
+            return contact.phoneNumbers
+                .contains { normalizedPhones.contains(Self.normalizePhone($0.value.stringValue)) }
+                || contact.emailAddresses.contains { normalizedEmails.contains(String($0.value).lowercased()) }
         }
-
-        return nil
     }
 
     private static func normalizePhone(_ phone: String) -> String {
