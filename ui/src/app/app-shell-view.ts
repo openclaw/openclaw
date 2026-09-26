@@ -352,7 +352,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         mergedChatChrome ? "shell--merged-chat-chrome" : ""
       } ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${
         onboarding ? "shell--onboarding" : ""
-      } ${nativeEmbed ? "shell--embed" : ""} ${embedSettings ? "shell--embed-settings" : ""} ${settingsTakeover ? "shell--settings" : ""}"
+      } ${nativeEmbed ? "shell--embed" : ""} ${embedHost?.navigationChrome === "host" ? "shell--embed-host-navigation" : ""} ${embedSettings ? "shell--embed-settings" : ""} ${settingsTakeover ? "shell--settings" : ""}"
       style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
       @theme-change=${(event: CustomEvent<ThemeModeChangeDetail>) => host.handleThemeChange(event)}
     >
