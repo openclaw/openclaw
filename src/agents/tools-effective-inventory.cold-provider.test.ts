@@ -316,12 +316,12 @@ module.exports = {
     },
     inventoryParams,
     connections,
-    pausePreparation: () => {
+    pausePreparation: async () => {
       const manifestPath = path.join(selected.rootDir, "openclaw.plugin.json");
       const manifest: Record<string, unknown> = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
       manifest.syntheticAuthRefs = [provider];
       fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
-      refreshPersistedInstalledPluginIndex({
+      await refreshPersistedInstalledPluginIndex({
         config,
         workspaceDir,
         stateDir: state.stateDir,
@@ -592,7 +592,7 @@ describe("cold dynamic-model effective inventory", () => {
   it("keeps a cancelled build's database until actual preparation settles before its replacement", async () => {
     await withColdFixture(async (fixture) => {
       const input = fixture.runtimeInput;
-      const gate = fixture.pausePreparation();
+      const gate = await fixture.pausePreparation();
       const metadata = resolvePluginMetadataSnapshot({
         config: fixture.config,
         workspaceDir: input.workspaceDir,

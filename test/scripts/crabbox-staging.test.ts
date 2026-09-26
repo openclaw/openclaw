@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, delimiter, join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -228,7 +229,13 @@ if (plan.gate) {
     );
     return task;
   };
-  const program = (body: string, prelude = "", timeoutMs = 30_000, role = "program") =>
+  const program = (
+    body: string,
+    prelude = "",
+    timeoutMs = 30_000,
+    role = "program",
+    includeCapsule = false,
+  ) =>
     command(
       nodeExecutable,
       [
@@ -247,7 +254,7 @@ import {syncBuiltinESMExports} from 'node:module';
 const ctx = ${JSON.stringify({ root, repository: source, staging, cli, calls })};
 ${prelude}
 syncBuiltinESMExports();
-const {prepareCrabboxSourceCapsule} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxSourceCapsule).href)});
+${includeCapsule ? `const {prepareCrabboxSourceCapsule} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxSourceCapsule).href)});` : ""}
 const {createStaging,createMirrorStaging,discoverStaging,recoverDiscoveredStaging,runStagingCommand} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStaging).href)});
 const {captureClaimNamespace} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStagingClaims).href)});
 const {preserveCrabboxArtifacts} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStagingArtifacts).href)});
@@ -275,6 +282,7 @@ process.kill(process.pid,'SIGKILL');`,
       options.prelude,
       options.before ? 120_000 : 30_000,
       "prepare",
+      true,
     );
     expect(result.signal, result.stderr).toBe("SIGKILL");
     const { nodeArgs: producerNodeArgs, ...stage } = JSON.parse(result.stdout) as Stage & {
@@ -382,7 +390,435 @@ function seed(owner) {
   return source;
 }`;
 
+function holdDatabase(path: string) {
+  const database = new DatabaseSync(path);
+  database.exec("PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE");
+  let released = false;
+  return () => {
+    if (!released) {
+      database.exec("ROLLBACK");
+      database.close();
+      released = true;
+    }
+  };
+}
+
+async function idleMirrors(
+  f: ReturnType<typeof createFixture>,
+  repositories: string[],
+  fillCapacity = false,
+) {
+  const result = await f.program(`${seedMirror}
+const stages=${JSON.stringify(repositories)}.map(repository=>{
+  const owner=createMirrorStaging(ctx.staging,repository);const source=seed(owner);owner.finish();
+  return {root:owner.staging.root,source,receipt:JSON.parse(fs.readFileSync(join(owner.staging.root,'staging.json'),'utf8'))};
+});
+if(${fillCapacity})for(let i=stages.length;i<32;i++)fs.mkdirSync(join(ctx.staging,'mirrors',String(i).padStart(64,'0')),{mode:0o700});
+console.log(JSON.stringify(stages));`);
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout) as Stage[];
+}
+
+function blockingMirrorIo(root: string, hook: string) {
+  return `const {DatabaseSync}=await import('node:sqlite');
+function blockedIo(){
+  const gate=new DatabaseSync(${JSON.stringify(join(root, "io-gate.sqlite"))},{timeout:15000});
+  fs.writeFileSync(${JSON.stringify(join(root, "io-ready"))},'ready');
+  try{gate.exec('BEGIN EXCLUSIVE');gate.exec('ROLLBACK');}finally{gate.close();}
+}
+${hook}`;
+}
+
 describe.skipIf(process.platform === "win32")("Crabbox reusable staging ownership", () => {
+  it("waits for allocation contention and reuses the other repository's warm mirror", async () =>
+    withFixture(async (f) => {
+      const other = join(f.root, "other-repository");
+      mkdirSync(other);
+      f.initialize(other);
+      const [, warm] = await idleMirrors(f, [f.source, other]);
+      const unlock = holdDatabase(join(f.staging, "mirrors", ".allocation.lock"));
+      const ready = join(f.root, "allocation-waiting");
+      try {
+        const pending = f.program(
+          `const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});
+console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();`,
+          `const error=console.error;console.error=(...args)=>{error(...args);if(args.join(' ').includes('waiting for source mirror allocation'))fs.writeFileSync(${JSON.stringify(ready)},'waiting');};`,
+        );
+        await f.waitFor(ready);
+        unlock();
+        const result = await pending;
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual({ reused: true, root: warm!.root });
+        expect(result.stderr.match(/waiting for source mirror allocation/g)).toHaveLength(1);
+        expect(result.stderr).not.toContain("using a fresh capsule");
+      } finally {
+        unlock();
+      }
+    }));
+
+  it("falls back to a fresh capsule only after the bounded allocation wait expires", async () =>
+    withFixture(async (f) => {
+      const [warm] = await idleMirrors(f, [f.source]);
+      const unlock = holdDatabase(join(f.staging, "mirrors", ".allocation.lock"));
+      try {
+        const result = await f.program(
+          `const cap=prepareCrabboxSourceCapsule({repoRoot:ctx.repository,syncRoot:ctx.staging,base:'HEAD',reuseMirror:true,syncPlan:{command:process.execPath,args:['-e','process.stdout.write(JSON.stringify({candidate:{files:1},topFiles:[{path:"source.txt"}]}))']}});
+const receipt=JSON.parse(fs.readFileSync(join(cap.staging.root,'staging.json'),'utf8'));
+console.log(JSON.stringify({budgets,root:cap.staging.root,mirror:Boolean(receipt.mirror),source:fs.readFileSync(join(cap.directory,'source.txt'),'utf8')}));cap.cleanup();`,
+          `const {DatabaseSync}=await import('node:sqlite');const execute=DatabaseSync.prototype.exec;const budgets=[];
+DatabaseSync.prototype.exec=function(sql){const match=/busy_timeout\\s*=\\s*(\\d+)/u.exec(sql);if(match&&Number(match[1])>0){budgets.push(Number(match[1]));sql=sql.replace(match[0],'busy_timeout=1');}return execute.call(this,sql);};`,
+          30_000,
+          "capsule",
+          true,
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          budgets: [120_000],
+          mirror: false,
+          source: "retained source\n",
+        });
+        expect(JSON.parse(result.stdout).root).not.toBe(warm!.root);
+        expect(result.stderr.match(/waiting for source mirror allocation/g)).toHaveLength(1);
+        expect(result.stderr).toContain(
+          "[crabbox] source mirror allocation is busy; using a fresh capsule",
+        );
+        expect(existsSync(warm!.root)).toBe(true);
+      } finally {
+        unlock();
+      }
+    }));
+
+  it("shares the allocation wait budget when a contender wins between SQLite statements", async () =>
+    withFixture(async (f) => {
+      const [warm] = await idleMirrors(f, [f.source]);
+      const result = await f.program(
+        `try{const next=createMirrorStaging(ctx.staging,ctx.repository);console.log(JSON.stringify({allocated:Boolean(next),budgets,journalRetried}));next?.discard();}finally{execute.call(holder,'ROLLBACK');holder.close();}`,
+        `const {DatabaseSync}=await import('node:sqlite');const execute=DatabaseSync.prototype.exec;
+const holder=new DatabaseSync(join(ctx.staging,'mirrors','.allocation.lock'),{timeout:0});
+execute.call(holder,'PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE');
+const budgets=[];let journalRetried=false;
+DatabaseSync.prototype.exec=function(sql){
+  const match=/busy_timeout\\s*=\\s*(\\d+)/u.exec(sql);
+  if(match){budgets.push(Number(match[1]));sql=sql.replace(match[0],'busy_timeout=1');}
+  if(sql==='PRAGMA journal_mode=MEMORY'){
+    execute.call(holder,'ROLLBACK');
+    const result=execute.call(this,sql);journalRetried=true;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);
+    execute.call(holder,'BEGIN EXCLUSIVE');
+    return result;
+  }
+  return execute.call(this,sql);
+};`,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const outcome = JSON.parse(result.stdout) as {
+        allocated: boolean;
+        budgets: number[];
+        journalRetried: boolean;
+      };
+      expect(outcome).toMatchObject({ allocated: false, journalRetried: true });
+      expect(outcome.budgets).toHaveLength(2);
+      expect(outcome.budgets[0]).toBe(120_000);
+      expect(outcome.budgets[1]).toBeGreaterThan(0);
+      expect(outcome.budgets[1]).toBeLessThan(outcome.budgets[0]!);
+      expect(result.stderr.match(/waiting for source mirror allocation/g)).toHaveLength(1);
+      expect(result.stderr).toContain(
+        "[crabbox] source mirror allocation is busy; using a fresh capsule",
+      );
+      expect(existsSync(warm!.root)).toBe(true);
+    }));
+
+  it("keeps other warm mirrors available while a slot's database digest is slow", async () =>
+    withFixture(async (f) => {
+      const other = join(f.root, "other-repository");
+      mkdirSync(other);
+      f.initialize(other);
+      const [slow, warm] = await idleMirrors(f, [f.source, other]);
+      const unlock = holdDatabase(join(f.root, "io-gate.sqlite"));
+      try {
+        const pending = f.program(
+          "const next=createMirrorStaging(ctx.staging,ctx.repository);console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();",
+          blockingMirrorIo(
+            f.root,
+            `const open=fs.openSync,read=fs.readSync;let databaseFd;
+fs.openSync=(path,...args)=>{const fd=open(path,...args);if(path===${JSON.stringify(join(slow!.root, "mirror.sqlite"))})databaseFd=fd;return fd;};
+fs.readSync=(fd,...args)=>{if(fd===databaseFd){databaseFd=undefined;blockedIo();}return read(fd,...args);};`,
+          ),
+        );
+        await f.waitFor(join(f.root, "io-ready"));
+        const concurrent = await f.program(
+          `const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});console.log(JSON.stringify({reused:next?.reused,root:next?.staging.root}));next?.discard();`,
+        );
+        expect(concurrent.status, concurrent.stderr).toBe(0);
+        expect(JSON.parse(concurrent.stdout)).toEqual({ reused: true, root: warm!.root });
+        expect(concurrent.stderr).not.toContain("waiting for source mirror allocation");
+        unlock();
+        const result = await pending;
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual({ reused: true, root: slow!.root });
+      } finally {
+        unlock();
+      }
+    }));
+
+  it("reserves an eviction victim until disposal finishes without blocking another warm slot", async () =>
+    withFixture(async (f) => {
+      const other = join(f.root, "other-repository");
+      const newcomer = join(f.root, "new-repository");
+      for (const sourceRepository of [other, newcomer]) {
+        mkdirSync(sourceRepository);
+        f.initialize(sourceRepository);
+      }
+      const [victim, warm] = await idleMirrors(f, [f.source, other], true);
+      const unlock = holdDatabase(join(f.root, "io-gate.sqlite"));
+      try {
+        const pending = f.program(
+          `const next=createMirrorStaging(ctx.staging,${JSON.stringify(newcomer)});console.log(JSON.stringify({allocated:Boolean(next),reused:next?.reused}));next?.discard();`,
+          blockingMirrorIo(
+            f.root,
+            `const remove=fs.rmSync;fs.rmSync=(path,...args)=>{if(path===${JSON.stringify(join(victim!.root, "payload"))})blockedIo();return remove(path,...args);};`,
+          ),
+        );
+        await f.waitFor(join(f.root, "io-ready"));
+        const concurrent = await f.program(
+          `const victim=createMirrorStaging(ctx.staging,ctx.repository);const next=createMirrorStaging(ctx.staging,${JSON.stringify(other)});
+console.log(JSON.stringify({victimAdopted:Boolean(victim),reused:next?.reused,root:next?.staging.root}));victim?.discard();next?.discard();`,
+        );
+        expect(concurrent.status, concurrent.stderr).toBe(0);
+        expect(JSON.parse(concurrent.stdout)).toEqual({
+          victimAdopted: false,
+          reused: true,
+          root: warm!.root,
+        });
+        expect(concurrent.stderr).not.toContain("waiting for source mirror allocation");
+        expect(existsSync(victim!.root)).toBe(true);
+        unlock();
+        const result = await pending;
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual({ allocated: true, reused: false });
+        expect(existsSync(victim!.root)).toBe(false);
+        expect(
+          readdirSync(join(f.staging, "mirrors")).filter((name) => name !== ".allocation.lock"),
+        ).toHaveLength(32);
+      } finally {
+        unlock();
+      }
+    }));
+
+  it("records interrupted eviction for recovery and rejects changed disposal metadata", async () =>
+    withFixture(async (f) => {
+      const newcomer = join(f.root, "new-repository");
+      mkdirSync(newcomer);
+      f.initialize(newcomer);
+      const [victim] = await idleMirrors(f, [f.source], true);
+      const interrupted = await f.program(
+        `createMirrorStaging(ctx.staging,${JSON.stringify(newcomer)});throw new Error('eviction did not reach disposal');`,
+        `const remove=fs.rmSync;fs.rmSync=(path,...args)=>{if(path===${JSON.stringify(join(victim!.root, "payload"))}){remove(${JSON.stringify(join(victim!.source, "source.txt"))});process.kill(process.pid,'SIGKILL');}return remove(path,...args);};`,
+      );
+      expect(interrupted.signal, interrupted.stderr).toBe("SIGKILL");
+      expect(f.receipt(victim!)).toMatchObject({ mirror: { idle: true, disposing: true } });
+      const unexpected = join(victim!.root, "unrecorded-disposal-data");
+      writeFileSync(unexpected, "preserve unknown bytes");
+      expect((await f.recover(victim!)).report.recovered).toBe(false);
+      expect(readFileSync(unexpected, "utf8")).toBe("preserve unknown bytes");
+      rmSync(unexpected);
+      const recovered = await f.program(
+        `process.exitCode=await runStagingCommand(['recover',${JSON.stringify(victim!.receipt.id)}],ctx.staging,{binary:ctx.cli,cwd:ctx.repository});if(receiptWrites!==0)throw new Error('resuming durable disposal rewrote its receipt');`,
+        `const open=fs.openSync,close=fs.closeSync,flush=fs.fsyncSync;const receiptDescriptors=new Set();let receiptWrites=0;
+fs.openSync=(path,...args)=>{const fd=open(path,...args);if(typeof path==='string'&&basename(path).startsWith('.staging.json.')){receiptWrites++;receiptDescriptors.add(fd);}return fd;};
+fs.closeSync=(fd)=>{receiptDescriptors.delete(fd);return close(fd);};
+fs.fsyncSync=(fd)=>{if(receiptDescriptors.has(fd))throw Object.assign(new Error('fixture receipt flush unavailable'),{code:'EINVAL'});return flush(fd);};`,
+      );
+      expect(recovered.status, recovered.stdout + recovered.stderr).toBe(0);
+      expect((JSON.parse(recovered.stdout) as Recovery).recovered).toBe(true);
+      expect(existsSync(victim!.root)).toBe(false);
+      expect(
+        readdirSync(join(f.staging, "mirrors")).filter((name) => name !== ".allocation.lock"),
+      ).toHaveLength(31);
+    }));
+
+  it.each(["receipt", "root", "stage", "lock", "slot"] as const)(
+    "recovers disposal interrupted after removing the %s while protecting replacements",
+    async (phase) =>
+      withFixture(async (f) => {
+        // Keep both directories live initially so a replacement cannot reuse the original inode.
+        const replacement = join(f.root, "replacement-directory");
+        mkdirSync(replacement, { mode: 0o700 });
+        writeFileSync(join(replacement, "sentinel"), "preserve replacement bytes");
+        const [victim] = await idleMirrors(f, [f.source]);
+        const key = readdirSync(join(f.staging, "mirrors")).find(
+          (name) => name !== ".allocation.lock",
+        )!;
+        const slot = join(f.staging, "mirrors", key);
+        const tombstone = join(
+          f.staging,
+          basename(victim!.root).replace(victim!.receipt.id, "disposal-" + victim!.receipt.id),
+        );
+        const target = {
+          receipt: join(victim!.root, "staging.json"),
+          root: victim!.root,
+          stage: join(slot, "stage"),
+          lock: join(slot, "lock"),
+          slot,
+        }[phase];
+        const args = ["recover", victim!.receipt.id];
+        const invoke = (command: string[]) =>
+          f.program(
+            `process.exitCode=await runStagingCommand(${JSON.stringify(command)},ctx.staging,{binary:ctx.cli,cwd:ctx.repository});`,
+          );
+        const interrupted = await f.program(
+          `process.exitCode=await runStagingCommand(${JSON.stringify(args)},ctx.staging,{binary:ctx.cli,cwd:ctx.repository});`,
+          `for(const method of ['rmSync','rmdirSync','unlinkSync']){const original=fs[method];fs[method]=(path,...args)=>{const result=original(path,...args);if(path===${JSON.stringify(target)})process.kill(process.pid,'SIGKILL');return result;};}`,
+        );
+        expect(interrupted.signal, interrupted.stderr).toBe("SIGKILL");
+        expect(existsSync(tombstone)).toBe(true);
+        const inspection = await invoke(["inspect"]);
+        expect(inspection.status, inspection.stderr).toBe(0);
+        expect((JSON.parse(inspection.stdout) as Inspection).entries).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: victim!.receipt.id, status: "candidate" }),
+          ]),
+        );
+
+        const replaced = phase === "receipt" || phase === "root" ? victim!.root : slot;
+        const retained = join(f.root, "retained-directory");
+        const hadOriginal = existsSync(replaced);
+        if (hadOriginal) {
+          renameSync(replaced, retained);
+        }
+        renameSync(replacement, replaced);
+        const refused = await invoke(args);
+        expect(refused.status, refused.stdout + refused.stderr).toBe(1);
+        expect((JSON.parse(refused.stdout) as Recovery).recovered).toBe(false);
+        expect(readFileSync(join(replaced, "sentinel"), "utf8")).toBe("preserve replacement bytes");
+        expect(existsSync(tombstone)).toBe(true);
+        rmSync(replaced, { recursive: true });
+        if (hadOriginal) {
+          renameSync(retained, replaced);
+        }
+
+        const successor = phase === "slot" ? (await idleMirrors(f, [f.source]))[0] : undefined;
+        const recovered = await invoke(args);
+        expect(recovered.status, recovered.stdout + recovered.stderr).toBe(0);
+        expect((JSON.parse(recovered.stdout) as Recovery).recovered).toBe(true);
+        expect(existsSync(victim!.root)).toBe(false);
+        expect(existsSync(slot)).toBe(Boolean(successor));
+        expect(existsSync(tombstone)).toBe(false);
+        if (successor) {
+          expect(f.receipt(successor)).toEqual(successor.receipt);
+          expect(readFileSync(join(successor.source, "source.txt"), "utf8")).toBe(
+            "uncommitted mirror source\n",
+          );
+        }
+      }),
+  );
+
+  it.each(["before-stage", "stage", "lock", "slot"] as const)(
+    "recovers receipt-less disposal interrupted at %s without adopting replacements",
+    async (phase) =>
+      withFixture(async (f) => {
+        const newcomer = join(f.root, "new-repository");
+        mkdirSync(newcomer);
+        f.initialize(newcomer);
+        const unexpectedRoot = join(f.root, "unexpected-root");
+        const unexpectedSlot = join(f.root, "unexpected-slot");
+        for (const directory of [unexpectedRoot, unexpectedSlot]) {
+          mkdirSync(directory, { mode: 0o700 });
+          writeFileSync(join(directory, "sentinel"), "preserve replacement bytes");
+        }
+        const discarded = await f.program(`${seedMirror}
+const owner=createMirrorStaging(ctx.staging,ctx.repository);const source=seed(owner);
+const stage={root:owner.staging.root,source,receipt:JSON.parse(fs.readFileSync(join(owner.staging.root,'staging.json'),'utf8'))};
+owner.discard();
+for(let i=1;i<32;i++)fs.mkdirSync(join(ctx.staging,'mirrors',String(i).padStart(64,'0')),{mode:0o700});
+console.log(JSON.stringify(stage));`);
+        expect(discarded.status, discarded.stderr).toBe(0);
+        const victim = JSON.parse(discarded.stdout) as Stage;
+        expect(existsSync(victim.root)).toBe(false);
+        const key = readdirSync(join(f.staging, "mirrors")).find((name) =>
+          existsSync(join(f.staging, "mirrors", name, "stage")),
+        )!;
+        const slot = join(f.staging, "mirrors", key);
+        const tombstone = join(
+          f.staging,
+          basename(victim.root).replace(victim.receipt.id, "disposal-" + victim.receipt.id),
+        );
+        const target = {
+          "before-stage": join(slot, "stage"),
+          stage: join(slot, "stage"),
+          lock: join(slot, "lock"),
+          slot,
+        }[phase];
+        const interrupted = await f.program(
+          `createMirrorStaging(ctx.staging,${JSON.stringify(newcomer)});throw new Error('empty-slot eviction did not reach teardown');`,
+          `for(const method of ['rmSync','rmdirSync','unlinkSync']){const original=fs[method];fs[method]=(path,...args)=>{if(${JSON.stringify(phase)}==='before-stage'&&path===${JSON.stringify(target)})process.kill(process.pid,'SIGKILL');const result=original(path,...args);if(path===${JSON.stringify(target)})process.kill(process.pid,'SIGKILL');return result;};}`,
+        );
+        expect(interrupted.signal, interrupted.stderr).toBe("SIGKILL");
+        expect(existsSync(tombstone)).toBe(true);
+        const args = ["recover", victim.receipt.id];
+        const invoke = (command: string[]) =>
+          f.program(
+            `process.exitCode=await runStagingCommand(${JSON.stringify(command)},ctx.staging,{binary:ctx.cli,cwd:ctx.repository});`,
+          );
+        const inspection = await invoke(["inspect"]);
+        expect(inspection.status, inspection.stderr).toBe(0);
+        expect((JSON.parse(inspection.stdout) as Inspection).entries).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: victim.receipt.id, status: "candidate" }),
+          ]),
+        );
+
+        if (phase !== "slot") {
+          const adoption = await f.program(
+            "const owner=createMirrorStaging(ctx.staging,ctx.repository);console.log(JSON.stringify({adopted:Boolean(owner)}));owner?.discard();",
+          );
+          expect(adoption.status, adoption.stdout + adoption.stderr).toBe(0);
+          expect(JSON.parse(adoption.stdout)).toEqual({ adopted: false });
+          expect(existsSync(victim.root)).toBe(false);
+        }
+
+        renameSync(unexpectedRoot, victim.root);
+        const refusedRoot = await invoke(args);
+        expect(refusedRoot.status, refusedRoot.stdout + refusedRoot.stderr).toBe(1);
+        expect((JSON.parse(refusedRoot.stdout) as Recovery).recovered).toBe(false);
+        expect(readFileSync(join(victim.root, "sentinel"), "utf8")).toBe(
+          "preserve replacement bytes",
+        );
+        expect(existsSync(tombstone)).toBe(true);
+        renameSync(victim.root, unexpectedRoot);
+
+        const retainedSlot = join(f.root, "retained-slot");
+        const hadSlot = existsSync(slot);
+        if (hadSlot) {
+          renameSync(slot, retainedSlot);
+        }
+        renameSync(unexpectedSlot, slot);
+        const refusedSlot = await invoke(args);
+        expect(refusedSlot.status, refusedSlot.stdout + refusedSlot.stderr).toBe(1);
+        expect((JSON.parse(refusedSlot.stdout) as Recovery).recovered).toBe(false);
+        expect(readFileSync(join(slot, "sentinel"), "utf8")).toBe("preserve replacement bytes");
+        expect(existsSync(tombstone)).toBe(true);
+        renameSync(slot, unexpectedSlot);
+        if (hadSlot) {
+          renameSync(retainedSlot, slot);
+        }
+
+        const successor = phase === "slot" ? (await idleMirrors(f, [f.source]))[0] : undefined;
+        const recovered = await invoke(args);
+        expect(recovered.status, recovered.stdout + recovered.stderr).toBe(0);
+        expect((JSON.parse(recovered.stdout) as Recovery).recovered).toBe(true);
+        expect(existsSync(victim.root)).toBe(false);
+        expect(existsSync(slot)).toBe(Boolean(successor));
+        expect(existsSync(tombstone)).toBe(false);
+        if (successor) {
+          expect(f.receipt(successor)).toEqual(successor.receipt);
+          expect(readFileSync(join(successor.source, "source.txt"), "utf8")).toBe(
+            "uncommitted mirror source\n",
+          );
+        }
+      }),
+  );
+
   it("seals and reuses a large cache database with bounded read buffers", async () =>
     withFixture(async (f) => {
       const result = await f.program(`${seedMirror}

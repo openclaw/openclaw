@@ -14,7 +14,9 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders } from "./header-redaction.js";
-import { getDebugProxyCaptureStore } from "./store.sqlite.js";
+import { reportCapturePersistenceFailure } from "./runtime-owner.js";
+import { acquireDebugProxyCaptureStoreAsync } from "./store.async.js";
+import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
 import type { CaptureEventRecord } from "./types.js";
 
 const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =
@@ -60,17 +62,28 @@ type ProxyCaptureEventInput = Omit<
 >;
 
 function createProxyCaptureRecorder(params: {
-  store: ReturnType<typeof getDebugProxyCaptureStore>;
+  store: AsyncDebugProxyCaptureStore;
   settings: DebugProxySettings;
+  pending: Set<Promise<void>>;
+  errors: unknown[];
 }) {
-  return (event: ProxyCaptureEventInput): void => {
-    params.store.recordEvent({
+  return (event: ProxyCaptureEventInput): Promise<void> => {
+    const operation = params.store.recordEvent({
       sessionId: params.settings.sessionId,
       ts: Date.now(),
       sourceScope: "openclaw",
       sourceProcess: params.settings.sourceProcess,
       ...event,
     });
+    params.pending.add(operation);
+    void operation.then(
+      () => params.pending.delete(operation),
+      (error: unknown) => {
+        params.pending.delete(operation);
+        reportCapturePersistenceFailure(params, error);
+      },
+    );
+    return operation;
   };
 }
 
@@ -177,10 +190,20 @@ export async function startDebugProxyServer(params: {
   host?: string;
   port?: number;
   settings: DebugProxySettings;
+  env?: NodeJS.ProcessEnv;
 }): Promise<DebugProxyServerHandle> {
-  await ensureDebugProxyCa(params.settings.certDir);
-  const store = getDebugProxyCaptureStore();
-  const recordProxyEvent = createProxyCaptureRecorder({ store, settings: params.settings });
+  const settings = { ...params.settings };
+  const env = { ...(params.env ?? process.env) };
+  await ensureDebugProxyCa(settings.certDir);
+  const lease = await acquireDebugProxyCaptureStoreAsync({ env });
+  const pending = new Set<Promise<void>>();
+  const errors: unknown[] = [];
+  const recordProxyEvent = createProxyCaptureRecorder({
+    store: lease.store,
+    settings,
+    pending,
+    errors,
+  });
   const host = params.host?.trim() || "127.0.0.1";
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -191,7 +214,7 @@ export async function startDebugProxyServer(params: {
         target = normalizeTargetUrl(req);
       } catch (error) {
         const message = "Invalid proxy target URL";
-        recordProxyEvent({
+        void recordProxyEvent({
           protocol: "http",
           direction: "local",
           kind: "error",
@@ -215,7 +238,7 @@ export async function startDebugProxyServer(params: {
       const recordTargetEvent = (
         event: Omit<ProxyCaptureEventInput, "protocol" | "flowId" | "method" | "host" | "path">,
       ) =>
-        recordProxyEvent({
+        void recordProxyEvent({
           protocol: targetProtocol,
           flowId,
           method: req.method,
@@ -373,7 +396,7 @@ export async function startDebugProxyServer(params: {
       hostname = parsed.hostname;
       port = parsed.port;
     } catch (error) {
-      recordProxyEvent({
+      void recordProxyEvent({
         protocol: "connect",
         direction: "local",
         kind: "error",
@@ -385,7 +408,7 @@ export async function startDebugProxyServer(params: {
       clientSocket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
       return;
     }
-    recordProxyEvent({
+    void recordProxyEvent({
       protocol: "connect",
       direction: "local",
       kind: "connect",
@@ -398,7 +421,7 @@ export async function startDebugProxyServer(params: {
       assertDebugProxyDirectUpstreamAllowed();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      recordProxyEvent({
+      void recordProxyEvent({
         protocol: "connect",
         direction: "local",
         kind: "error",
@@ -427,7 +450,7 @@ export async function startDebugProxyServer(params: {
     });
     function onUpstreamConnectTimeout() {
       const message = `CONNECT upstream opening timed out after ${DEBUG_PROXY_CONNECT_TIMEOUT_MS}ms of inactivity`;
-      recordProxyEvent({
+      void recordProxyEvent({
         protocol: "connect",
         direction: "local",
         kind: "error",
@@ -444,7 +467,7 @@ export async function startDebugProxyServer(params: {
     }
     upstreamSocket.setTimeout(DEBUG_PROXY_CONNECT_TIMEOUT_MS, onUpstreamConnectTimeout);
     clientSocket.on("error", (error) => {
-      recordProxyEvent({
+      void recordProxyEvent({
         protocol: "connect",
         direction: "local",
         kind: "error",
@@ -456,7 +479,7 @@ export async function startDebugProxyServer(params: {
       upstreamSocket.destroy();
     });
     upstreamSocket.on("error", (error) => {
-      recordProxyEvent({
+      void recordProxyEvent({
         protocol: "connect",
         direction: "local",
         kind: "error",
@@ -469,28 +492,57 @@ export async function startDebugProxyServer(params: {
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(params.port ?? 0, host, () => {
-      server.off("error", reject);
-      resolve();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(params.port ?? 0, host, () => {
+        server.off("error", reject);
+        resolve();
+      });
     });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Failed to resolve debug proxy server address");
-  }
-  return {
-    proxyUrl: `http://${host}:${address.port}`,
-    stop: async () =>
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Failed to resolve debug proxy server address");
+    }
+    let stopping: Promise<void> | undefined;
+    return {
+      proxyUrl: `http://${host}:${address.port}`,
+      stop: () => {
+        stopping ??= (async () => {
+          try {
+            await new Promise<void>((resolve, reject) => {
+              server.close((error) => {
+                if (error) {
+                  reject(error);
+                  return;
+                }
+                resolve();
+              });
+            });
+          } catch (error) {
+            errors.push(error);
           }
-          resolve();
-        });
-      }),
-  };
+          await Promise.allSettled(pending);
+          try {
+            await lease.release();
+          } catch (error) {
+            errors.push(error);
+          }
+          if (errors.length) {
+            throw new AggregateError(errors, "Debug proxy capture shutdown failed.");
+          }
+        })();
+        return stopping;
+      },
+    };
+  } catch (error) {
+    try {
+      await lease.release();
+    } catch (closeError) {
+      throw new AggregateError([error, closeError], "Debug proxy capture startup failed.", {
+        cause: closeError,
+      });
+    }
+    throw error;
+  }
 }

@@ -489,7 +489,7 @@ export type PluginRegistryParams = {
   coreGatewayMethodNames?: readonly string[];
   runtime: PluginRuntime;
   /** Synchronous factory binding supplied by loaders or direct registry composition roots. */
-  resolveCapabilityCatalogContext?: () => import("./capability-catalog-context.types.js").PluginCapabilityCatalogContext;
+  resolveCapabilityCatalogContext?: () => import("./capability-catalog-context.types.js").PluginCapabilityCatalogHostContext;
   /** Process-owner policy for registering catalogs that may fall back to HOME. */
   allowProcessHomeSessionCatalogs?: boolean;
   hostServices?: {

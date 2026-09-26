@@ -170,7 +170,7 @@ result; use **Copy result** in the Control UI or `openclaw tasks show <lookup>`.
 
 Agent run completion is authoritative for active task records. A successful detached run finalizes as `succeeded`, ordinary run errors finalize as `failed`, timeouts finalize as `timed_out`, and cancel/abort outcomes finalize as `cancelled`. Once a task is terminal, later lifecycle signals do not downgrade it - an operator-cancelled or already-`failed`/`timed_out`/`lost` task stays that way even if a success signal arrives afterwards.
 
-Distinct ACP executions receive separate task and flow IDs even when they share a request ID. Repeated status mirrors of the same execution keep its original task ID. A run-ID lookup selects the latest execution within that ACP session; an exact task-ID lookup still returns the older task and its terminal result. Cancelling one execution does not cancel a queued successor with the same request ID.
+Distinct ACP executions receive separate task and flow IDs even when they share a request ID. Each execution has its own completion notification; duplicate projections of the same execution share one notification. Repeated status mirrors of the same execution keep its original task ID. A run-ID lookup selects the latest execution within that ACP session; an exact task-ID lookup still returns the older task and its terminal result. Cancelling one execution does not cancel a queued successor with the same request ID.
 
 `lost` is runtime-aware:
 

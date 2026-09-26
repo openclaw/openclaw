@@ -32,7 +32,7 @@ describe("resumed Codex session binding migration", () => {
     "honors canonical deletion %s actual plugin migration after deferred import",
     async (timing) => {
       await withOpenClawTestState({ label: `codex-deferred-deletion-${timing}` }, async (state) => {
-        const { cfg, scope, originals } = seedDeferredPluginSessionSource(
+        const { cfg, scope, originals } = await seedDeferredPluginSessionSource(
           state,
           "default",
           "codex",
@@ -134,7 +134,7 @@ describe("resumed Codex session binding migration", () => {
     "does not resurrect an imported session because an unrelated %s source is unimported",
     async (layout) => {
       await withOpenClawTestState({ label: `codex-mixed-source-${layout}` }, async (state) => {
-        const { cfg, scope } = seedDeferredPluginSessionSource(state, "external", "codex");
+        const { cfg, scope } = await seedDeferredPluginSessionSource(state, "external", "codex");
         await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
         const directory =
           layout === "default" ? state.sessionsDir("main") : state.statePath("sessions");
@@ -196,7 +196,7 @@ describe("resumed Codex session binding migration", () => {
       await withOpenClawTestState(
         { label: `codex-first-sidecar-import-${locator}` },
         async (state) => {
-          const { cfg, scope, storePath, originals } = seedDeferredPluginSessionSource(
+          const { cfg, scope, storePath, originals } = await seedDeferredPluginSessionSource(
             state,
             "default",
             "codex",

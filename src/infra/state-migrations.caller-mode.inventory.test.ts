@@ -9,7 +9,7 @@ import {
   resolveLivePluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
-import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
@@ -101,7 +101,7 @@ module.exports = { stateMigrations: [{
     loadInstalledPluginIndex({ config, env }),
   );
   // Older Doctor initialization persisted a projection with otherwise current metadata.
-  writePersistedInstalledPluginIndexSync(
+  await writePersistedInstalledPluginIndex(
     {
       ...fullIndex,
       refreshReason: "migration",

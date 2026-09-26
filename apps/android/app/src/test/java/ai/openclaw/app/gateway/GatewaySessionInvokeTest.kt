@@ -445,7 +445,7 @@ class GatewaySessionInvokeTest {
           )
         for (route in explicitRoutes) {
           advertised.set(route)
-          assertEquals(route, harness.session.refreshCanvasHostUrl())
+          assertEquals(route, harness.session.refreshCanvasHostUrlIfCurrent(harness.session.currentCanvasHostUrl()))
         }
       } finally {
         shutdownHarness(harness, server)
@@ -606,7 +606,8 @@ class GatewaySessionInvokeTest {
           entryGate.select.set { candidate ->
             candidate !in previousChildren && connectionOwner.children.any { it === candidate }
           }
-          harness.session.sendRequestFrame(
+          harness.session.sendRequestFrameForEndpoint(
+            expectedEndpointStableId = harness.session.currentEndpointStableId(),
             method = "fire.and.forget",
             paramsJson = null,
             timeoutMs = 30_000,
@@ -1823,7 +1824,7 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
-  fun sendNodeEventDetailed_sendsPresenceAlivePayloadAndReturnsStructuredResponse() =
+  fun sendNodeEventDetailedForEndpoint_sendsPresenceAlivePayloadAndReturnsStructuredResponse() =
     runBlocking {
       val json = testJson()
       val connected = CompletableDeferred<Unit>()
@@ -1861,7 +1862,8 @@ class GatewaySessionInvokeTest {
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val result =
-          harness.session.sendNodeEventDetailed(
+          harness.session.sendNodeEventDetailedForEndpoint(
+            expectedEndpointStableId = harness.session.currentEndpointStableId(),
             event = "node.presence.alive",
             payloadJson = """{"trigger":"connect","sentAtMs":123}""",
             timeoutMs = TEST_TIMEOUT_MS,

@@ -1,23 +1,16 @@
 import type { SessionEvent } from "@github/copilot-sdk";
 // Copilot tests cover event bridge plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import type {
-  AgentHarnessTaskRecord,
-  AgentHarnessTaskRuntime,
-  AgentHarnessTaskRuntimeScope,
-} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
+import {
+  registerCopilotNativeTaskEventTests,
+  type NativeTaskRuntimeState,
+} from "./event-bridge.native-tasks.test-support.js";
 import { registerCopilotToolEventTests } from "./event-bridge.tools.test-support.js";
-import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 
-const nativeTaskRuntime = vi.hoisted<{
-  current?: Pick<
-    AgentHarnessTaskRuntime,
-    "tryCreateRunningTaskRun" | "finalizeTaskRunByRunId" | "listTaskRecords"
-  >;
-}>(() => ({}));
+const nativeTaskRuntime = vi.hoisted<NativeTaskRuntimeState>(() => ({}));
 
 vi.mock("openclaw/plugin-sdk/agent-harness-task-runtime", async (importOriginal) => {
   const actual =
@@ -124,100 +117,16 @@ function attachTestBridge(
 
 afterEach(() => {
   vi.restoreAllMocks();
+  nativeTaskRuntime.current = undefined;
 });
 
 describe("attachEventBridge", () => {
-  it.each([
-    { terminal: "subagent.completed", failureMode: "empty" },
-    { terminal: "subagent.failed", failureMode: "throw" },
-  ] as const)(
-    "retries the original $terminal result after a swallowed $failureMode callback",
-    async ({ terminal, failureMode }) => {
-      const session = createFakeSession();
-      let now = 100;
-      let task: AgentHarnessTaskRecord | undefined;
-      let attempts = 0;
-      nativeTaskRuntime.current = {
-        tryCreateRunningTaskRun(params) {
-          task = {
-            taskId: "owned-task",
-            runId: params.runId,
-            runtime: "subagent",
-            taskKind: "copilot-native",
-            requesterSessionKey: "agent:parent:session",
-            ownerKey: "agent:parent:session",
-            scopeKind: "session",
-            task: params.task,
-            status: "running",
-            deliveryStatus: "not_applicable",
-            notifyPolicy: "silent",
-            createdAt: now,
-          };
-          return task;
-        },
-        finalizeTaskRunByRunId(params) {
-          attempts += 1;
-          if (attempts === 1) {
-            if (failureMode === "throw") {
-              throw new Error("store unavailable");
-            }
-            return [];
-          }
-          task = {
-            ...expectDefined(task, "persisted native task"),
-            status: params.status,
-            endedAt: params.endedAt,
-            lastEventAt: params.lastEventAt,
-            error: params.error,
-            terminalSummary: params.terminalSummary ?? undefined,
-          };
-          return [task];
-        },
-        listTaskRecords: () => (task ? [task] : []),
-      };
-      const mirror = expectDefined(
-        createCopilotNativeSubagentTaskMirror({
-          now: () => now,
-          scope: {} as AgentHarnessTaskRuntimeScope,
-        }),
-        "native task mirror",
-      );
-      const bridge = attachEventBridge(session, {
-        getSdkSessionId: () => "sdk-session-id",
-        isAborted: () => false,
-        onNativeSubagentEvent: (event) => mirror.handleEvent(event),
-      });
-      const data = {
-        agentDescription: "inspect",
-        agentDisplayName: "Researcher",
-        agentName: "researcher",
-        toolCallId: "call-1",
-      };
-      session.emit("subagent.started", makeEvent("subagent.started", data));
-      session.emit(
-        terminal,
-        makeEvent(terminal, { ...data, error: "child failed", totalTokens: 30 }),
-      );
-      expect(task?.status).toBe("running");
-      expect(attempts).toBe(1);
-      bridge.detach();
-      now = 200;
-      mirror.finalizeActiveRuns();
-      expect(task).toMatchObject({
-        status: terminal === "subagent.completed" ? "succeeded" : "failed",
-        endedAt: 100,
-        lastEventAt: 100,
-        error: terminal === "subagent.failed" ? "child failed" : undefined,
-        terminalSummary:
-          terminal === "subagent.completed"
-            ? "Subagent completed (30 tokens)."
-            : "Subagent failed.",
-      });
-      await session.disconnect();
-      mirror.finalizeActiveRuns();
-      expect(attempts).toBe(2);
-    },
-  );
+  registerCopilotNativeTaskEventTests({
+    createFakeSession,
+    makeEvent,
+    nativeTaskRuntime,
+    flushAsync,
+  });
 
   it("ignores child assistant and usage events but keeps child tool side effects", async () => {
     const session = createFakeSession();
@@ -647,25 +556,6 @@ describe("attachEventBridge", () => {
         selectedAction: "approve",
       },
     });
-  });
-
-  it("forwards native Copilot subagent lifecycle events to the adapter", () => {
-    const session = createFakeSession();
-    const onNativeSubagentEvent = vi.fn();
-    const bridge = attachTestBridge(session, {
-      onNativeSubagentEvent,
-    });
-    const event = makeEvent("subagent.started", {
-      agentDescription: "inspect the repository",
-      agentDisplayName: "Researcher",
-      agentName: "researcher",
-      toolCallId: "call-1",
-    });
-
-    session.emit("subagent.started", event);
-
-    expect(onNativeSubagentEvent).toHaveBeenCalledWith(event);
-    bridge.detach();
   });
 
   it("replaces prior usage and terminal token fallback with an invalid usage zero snapshot", () => {

@@ -1,8 +1,3 @@
-/**
- * Channel binding route resolver.
- *
- * Applies configured and runtime conversation bindings to agent route resolution.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { readSessionBindingInspectionConversation } from "../../infra/outbound/session-binding-normalization.js";
@@ -27,9 +22,6 @@ import { resolveConfiguredBinding } from "./configured-binding-registry.js";
 
 const CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS = 30_000;
 
-/**
- * Route resolution after applying a configured channel binding.
- */
 export type ConfiguredBindingRouteResult = {
   bindingResolution: ConfiguredBindingResolution | null;
   route: ResolvedAgentRoute;
@@ -37,9 +29,6 @@ export type ConfiguredBindingRouteResult = {
   boundAgentId?: string;
 };
 
-/**
- * Route resolution after applying a runtime conversation binding record.
- */
 export type RuntimeConversationBindingRouteResult = {
   /** False only when the authoritative channel-owned binding store is temporarily unavailable. */
   bindingOwnerAvailable?: boolean;
@@ -74,9 +63,6 @@ function resolveConfiguredBindingConversationRef(
   };
 }
 
-/**
- * Rewrites an agent route when the current conversation matches a configured binding.
- */
 export function resolveConfiguredBindingRoute(
   params: {
     cfg: OpenClawConfig;
@@ -240,9 +226,6 @@ export async function resolveRuntimeConversationBindingRouteAsync(
   );
 }
 
-/**
- * Rewrites an agent route using a persisted runtime conversation binding, when applicable.
- */
 export function resolveRuntimeConversationBindingRoute(
   params: {
     route: ResolvedAgentRoute;
@@ -265,9 +248,6 @@ export function resolveRuntimeConversationBindingRoute(
   return result;
 }
 
-/**
- * Ensures a configured binding target is ready without blocking route resolution indefinitely.
- */
 export async function ensureConfiguredBindingRouteReady(params: {
   assertActive?: () => void;
   cfg: OpenClawConfig;

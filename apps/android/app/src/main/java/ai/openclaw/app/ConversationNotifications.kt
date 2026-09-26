@@ -579,6 +579,7 @@ internal class ConversationReplyNotifier(
   private fun userPerson(): Person = Person.Builder().setName(nativeString("You")).build()
 
   private fun canPostNotifications(): Boolean {
+    // Lint needs the API guard here; it cannot follow the callback helper's SDK check.
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
 
     return canPostConversationNotifications(Build.VERSION.SDK_INT) {
@@ -653,7 +654,7 @@ class ConversationReplyReceiver : BroadcastReceiver() {
               }
             },
             wasAdmitted = {
-              runtime?.wasChatOutboxCommandAdmitted(idempotencyKey)
+              runtime?.chat?.wasOutboxCommandAdmitted(idempotencyKey)
             },
           )
         val notifier = ConversationReplyNotifier(context.applicationContext)

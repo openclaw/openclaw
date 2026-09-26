@@ -173,23 +173,14 @@ class TeamReportsDatabase {
   ): Generator<T> {
     // Sort compact identities with the same JS collation as report evidence.
     // Payloads (especially comment bodies) are decoded only 100 rows at a time.
-    const order: Omit<ActivityRow, "source" | "data_json">[] = [];
-    let after: string | undefined;
-    for (;;) {
-      let query = this.query
+    const order = executeSqliteQuerySync(
+      this.db,
+      this.query
         .selectFrom("team_reports_activity")
         .select(["key", "at_ms", "sort_key", "actor"])
-        .where("source", "=", source);
-      if (after !== undefined) {
-        query = query.where("key", ">", after);
-      }
-      const rows = executeSqliteQuerySync(this.db, query.orderBy("key").limit(100)).rows;
-      if (!rows.length) {
-        break;
-      }
-      order.push(...rows);
-      after = rows.at(-1)?.key;
-    }
+        .where("source", "=", source)
+        .orderBy("key"),
+    ).rows;
     order.sort(
       (a, b) =>
         b.at_ms - a.at_ms ||

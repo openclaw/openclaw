@@ -288,29 +288,6 @@ class TranscriptArchiveSelection {
         putNode({ id, node });
       },
     };
-    const putSet = prepareSqliteQuerySync<SelectionDatabase["sets"]>(database, (parameter) =>
-      db
-        .insertInto("sets")
-        .orIgnore()
-        .values({ kind: parameter((row) => row.kind), id: parameter((row) => row.id) }),
-    );
-    const hasSet = prepareSqliteQueryTakeFirstSync<SelectionDatabase["sets"], { id: string }>(
-      database,
-      (parameter) =>
-        db
-          .selectFrom("sets")
-          .select("id")
-          .where(
-            "kind",
-            "=",
-            parameter((row) => row.kind),
-          )
-          .where(
-            "id",
-            "=",
-            parameter((row) => row.id),
-          ),
-    );
     const clearSet = prepareSqliteQuerySync<string>(database, (parameter) =>
       db.deleteFrom("sets").where(
         "kind",
@@ -320,9 +297,9 @@ class TranscriptArchiveSelection {
     );
     const diskSet = (kind: string) => ({
       add: (id: string) => {
-        putSet({ kind, id });
+        this.insertMembership({ kind, id });
       },
-      has: (id: string) => hasSet({ kind, id }) !== undefined,
+      has: (id: string) => this.hasMembership({ kind, id }) !== undefined,
       clear: () => {
         clearSet(kind);
       },

@@ -30,7 +30,7 @@ struct RootTabsSourceGuardTests {
         #expect(controller.contains("requestLocalNetworkAccess(reason: \"connect_discovered_gateway\""))
         #expect(root.contains("maybeRequestLocalNetworkAccess(reason: \"root_appear\")"))
         #expect(root.contains("requestLocalNetworkAccess(reason: \"gateway_setup_deeplink\")"))
-        #expect(onboarding.contains("requestLocalNetworkAccess(reason: \"onboarding_continue\")"))
+        #expect(onboarding.contains("onRequestLocalNetworkAccess(\"onboarding_continue\")"))
         #expect(settings.contains("requestLocalNetworkAccess(reason: \"settings_preflight\")"))
     }
 
@@ -56,15 +56,18 @@ struct RootTabsSourceGuardTests {
         ])
         let settings = try Self.source("Sources/Design/SettingsProTabActions.swift")
 
-        for source in [onboarding, settings] {
+        for (source, tokenStart, tokenEnd) in [
+            (onboarding, "var gatewayTokenBinding: Binding<String>", "var gatewayPasswordBinding: Binding<String>"),
+            (settings, "func persistGatewayToken(_ value: String)", "func persistGatewayPassword(_ value: String)"),
+        ] {
             #expect(source.contains(
                 "if !GatewayStableIdentifier.matches(self.gatewayCredentialFieldStableID, stableID)"))
             #expect(!source.contains("gatewayCredentialFieldStableID == stableID"))
 
             let tokenSetter = try Self.extract(
                 source,
-                from: "func persistGatewayToken(_ value: String)",
-                to: "func persistGatewayPassword(_ value: String)")
+                from: tokenStart,
+                to: tokenEnd)
             let assignment = try #require(tokenSetter.range(of: "self.gatewayToken = value"))
             let owner = try #require(tokenSetter.range(of: "self.gatewayCredentialTargetStableID"))
             #expect(assignment.lowerBound < owner.lowerBound)

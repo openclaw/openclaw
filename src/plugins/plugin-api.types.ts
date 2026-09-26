@@ -10,7 +10,7 @@ import type {
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
 import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
-import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -298,19 +298,19 @@ export type OpenClawPluginApi = {
   registerSpeechProvider: (
     provider:
       | SpeechProviderPlugin
-      | ((context: PluginCapabilityCatalogContext) => SpeechProviderPlugin),
+      | ((context: PluginCapabilityCatalogHostContext) => SpeechProviderPlugin),
   ) => void;
   /** Register a transcription descriptor or synchronous factory bound to native host operations. */
   registerRealtimeTranscriptionProvider: (
     provider:
       | RealtimeTranscriptionProviderPlugin
-      | ((context: PluginCapabilityCatalogContext) => RealtimeTranscriptionProviderPlugin),
+      | ((context: PluginCapabilityCatalogHostContext) => RealtimeTranscriptionProviderPlugin),
   ) => void;
   /** Register a voice descriptor or synchronous factory bound to native host operations. */
   registerRealtimeVoiceProvider: (
     provider:
       | RealtimeVoiceProviderPlugin
-      | ((context: PluginCapabilityCatalogContext) => RealtimeVoiceProviderPlugin),
+      | ((context: PluginCapabilityCatalogHostContext) => RealtimeVoiceProviderPlugin),
   ) => void;
   /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
