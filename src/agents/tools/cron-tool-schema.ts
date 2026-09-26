@@ -313,10 +313,11 @@ function createCronFailureAlertSchema(): TSchema {
           { additionalProperties: true },
         ),
         Type.Literal(false),
+        Type.Null(),
       ],
       {
         description:
-          "Failure alert policy/route override. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice.",
+          "Failure alert policy/route override; null clears. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice.",
       },
     ),
   );

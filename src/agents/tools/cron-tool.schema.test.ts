@@ -412,9 +412,10 @@ describe("createCronToolSchema", () => {
     expect(failureAlert?.anyOf).toContainEqual({ type: "boolean", const: false });
   });
 
-  it("accepts false or policy objects for add and update without accepting other scalar values", () => {
+  it("preserves null clears and accepts false or policy objects for add and update", () => {
     for (const action of ["add", "update"]) {
       for (const [failureAlert, accepted] of [
+        [null, true],
         [false, true],
         [{ after: 3, cooldownMs: 0, includeSkipped: true }, true],
         [undefined, true],
